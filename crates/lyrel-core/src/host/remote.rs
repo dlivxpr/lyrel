@@ -2280,16 +2280,19 @@ mod tests {
             '/',
             &[crate::daemon::control::feature::HERMES_STATISTICS],
             move |_| {
-                let result = if calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let result = if attempt == 0 {
                     Ok(
                         serde_json::json!({"projects":[{"previewSessions":[{"id":"known","source":"cli","input_tokens":9,"actual_cost_usd":1.25}]}],"scoped_session_ids":["known"]}),
                     )
-                } else {
+                } else if attempt == 1 {
                     Err(crate::host::session_operations::SessionOperationError {
                         kind: crate::host::session_operations::SessionErrorKind::Command,
                         message: "runtime failed".into(),
                         retained: None,
                     })
+                } else {
+                    Ok(serde_json::json!({"projects":[],"active_id":null,"scoped_session_ids":[]}))
                 };
                 Some((
                     ControlReply::Ok(ReplyOk::HermesStatistics(Box::new(result))),
@@ -2319,7 +2322,7 @@ mod tests {
             0,
             "missing timestamps must not fabricate activity on the Unix epoch day"
         );
-        let failed = statistics::scan(&*host, &[source], &mut cache).unwrap();
+        let failed = statistics::scan(&*host, &[source.clone()], &mut cache).unwrap();
         assert_eq!(
             failed.aggregate(&DateWindow::all("UTC")).recorded_usd(),
             Some(1.25)
@@ -2330,6 +2333,19 @@ mod tests {
                 .issues()
                 .iter()
                 .any(|i| i.reason().contains("runtime failed"))
+        );
+        let empty = statistics::scan(&*host, &[source], &mut cache).unwrap();
+        assert_eq!(
+            empty.aggregate(&DateWindow::all("UTC")).recorded_usd(),
+            Some(1.25),
+            "ambiguous empty responses must retain dated cached usage, not claim a new zero history"
+        );
+        assert_eq!(empty.updated(), first.updated());
+        assert!(
+            empty
+                .issues()
+                .iter()
+                .any(|i| i.reason().contains("empty response"))
         );
     }
 }

@@ -102,8 +102,18 @@ pub(super) fn scan_source(
         .and_then(|result| parse(source, &result, snapshot.updated));
     match result {
         Ok((files, issues)) => {
-            cache.native.insert(key, files.clone());
-            snapshot.files.extend(files);
+            let ambiguous_empty = files.is_empty()
+                && issues
+                    .iter()
+                    .any(|issue| issue.reason.starts_with("Hermes empty response"));
+            if ambiguous_empty {
+                if let Some(old) = cache.native.get(&key) {
+                    snapshot.files.extend(old.iter().cloned());
+                }
+            } else {
+                cache.native.insert(key, files.clone());
+                snapshot.files.extend(files);
+            }
             snapshot.issues.extend(issues);
         }
         Err(error) => {

@@ -146,7 +146,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Previous period: {tokens} tokens · {cost} · {sessions} main sessions\nToken change: {change}"
         }
         L10nKey::StatisticsEmpty => {
-            "No native activity in this range. Check the selected machine, source and date range, then refresh. Cumulative records crossing the range remain unassigned."
+            "No attributable usage in this range. Check the selected machine, source and date range, then refresh. Cumulative records crossing the range remain unassigned."
         }
         L10nKey::StatisticsPrivacy => {
             "Read-only native history · omp 18.12.1 JSONL / Hermes 0.22.2 public gateway · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Coverage limits and unknown lineage are reported below."

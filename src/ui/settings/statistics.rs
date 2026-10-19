@@ -62,6 +62,12 @@ fn number(value: Option<u64>) -> String {
         .map(|v| group_thousands(v as usize))
         .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into())
 }
+fn session_count(totals: &Totals) -> String {
+    number(
+        (totals.main_sessions() > 0 || totals.calls() > 0 || totals.is_complete())
+            .then_some(totals.main_sessions()),
+    )
+}
 fn money(value: Option<f64>) -> String {
     value
         .map(|v| format!("USD {v:.4}"))
@@ -435,10 +441,7 @@ impl LyrelApp {
                     L10nKey::StatisticsEstimatedCost,
                     money(totals.estimated_usd()),
                 ),
-                (
-                    L10nKey::StatisticsSessions,
-                    number(Some(totals.main_sessions())),
-                ),
+                (L10nKey::StatisticsSessions, session_count(totals)),
                 (L10nKey::StatisticsInput, number(totals.tokens().input())),
                 (L10nKey::StatisticsOutput, number(totals.tokens().output())),
                 (
@@ -490,7 +493,7 @@ impl LyrelApp {
                             &[
                                 ("tokens", &number(previous.tokens().total())),
                                 ("cost", &money(previous.recorded_usd())),
-                                ("sessions", &previous.main_sessions().to_string()),
+                                ("sessions", &session_count(previous)),
                                 ("change", &change),
                             ],
                         ))
