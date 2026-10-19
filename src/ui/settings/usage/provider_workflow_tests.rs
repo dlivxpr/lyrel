@@ -577,6 +577,24 @@ fn kimi_settings_redirect_never_forwards_credentials_or_creates_account(cx: &mut
             assert_eq!(stream.read(&mut b).unwrap(), 1);
             request.push(b[0]);
         }
+        // A close with an unread POST body can reset the TCP connection on
+        // Windows, turning this redirect fixture into a transport failure.
+        let headers = String::from_utf8(request).unwrap();
+        assert!(headers.starts_with("POST /controlled-kimi HTTP/1.1\r\n"));
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .expect("production POST declares its body length");
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"mute_notice":false})
+        );
         write!(stream,"HTTP/1.1 302 Found\r\nLocation: http://{target_address}/must-not-receive-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
     });
     let dir = tempfile::tempdir().unwrap();
@@ -606,9 +624,12 @@ fn kimi_settings_redirect_never_forwards_credentials_or_creates_account(cx: &mut
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
     loop {
         vcx.run_until_parked();
-        if page.read_with(&vcx, |p, _| {
-            !p.submitting && p.error == Some(UsageError::Service)
-        }) {
+        if page.read_with(&vcx, |p, _| !p.submitting) {
+            assert_eq!(
+                page.read_with(&vcx, |p, _| p.error),
+                Some(UsageError::Service),
+                "the completed request must report the rejected redirect, not a transport error"
+            );
             break;
         }
         assert!(std::time::Instant::now() < deadline);
