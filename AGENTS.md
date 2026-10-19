@@ -102,7 +102,7 @@ CLI 操作使用 `skills/lyrel/SKILL.md`；委派其他 coding agent 前，按�
 
 ### 工单跟踪
 
-工单与规格使用本地 Markdown；创建、读取或更新工单前，阅读 `docs/agents/issue-tracker.md`。
+工单与规格使用 GitHub Issues；创建、读取或更新工单前，阅读 `docs/agents/issue-tracker.md`。
 
 ### 分诊标签
 
@@ -110,4 +110,4 @@ CLI 操作使用 `skills/lyrel/SKILL.md`；委派其他 coding agent 前，按�
 
 ### 领域文档
 
-产品术语与工程约束直接维护在相关正式文档中；探索代码前，阅读 `docs/agents/domain.md`。仅在用户明确要求时创建独立规格或工单，不自动生成文档目录。
+领域文档为单上下文布局，产品术语与工程约束直接维护在相关正式文档中；探索代码前，阅读 `docs/agents/domain.md`。仅在用户明确要求时创建独立规格或工单，不自动生成文档目录。
