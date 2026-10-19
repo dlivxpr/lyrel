@@ -128,6 +128,49 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Read-only · omp 18.12.1 JSONL · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Arbitrary undiscoverable custom stores require an explicit source association. Skipped symlinks and unknown lineage limit coverage."
         }
         L10nKey::StatisticsOpen => "Open statistics",
+        L10nKey::StatisticsAnalysisTitle => "Activity and breakdowns",
+        L10nKey::StatisticsAllAgents => "All discovered agents",
+        L10nKey::StatisticsAgents => "Agents",
+        L10nKey::StatisticsModels => "Frequently used models",
+        L10nKey::StatisticsProjects => "Frequently used projects",
+        L10nKey::StatisticsAnalysisValues => {
+            "{tokens} tokens · recorded {cost} · estimated {estimated}\n{sessions} main sessions · {calls} usage records ({cumulative} cumulative) · {unpriced} unpriced records\nInput {input} · output {output} · cache read {read} · cache write {write}\n{status}"
+        }
+        L10nKey::StatisticsAnalysisAgent => "Analysis agent",
+        L10nKey::StatisticsAnalysisScope => {
+            "Applies to this analysis only, within the machine, discovered sources and date range above. Older results remain visible while refreshing."
+        }
+        L10nKey::StatisticsAnalysisMetric => "Heatmap metric",
+        L10nKey::StatisticsMetricScope => {
+            "Changes calendar intensity only. Details always show every metric; cost intensity uses complete recorded costs, never estimates or unpriced calls."
+        }
+        L10nKey::StatisticsAnalysisError => "Could not build the desktop calendar: {error}",
+        L10nKey::StatisticsPreviousYear => "Previous year",
+        L10nKey::StatisticsNextYear => "Next year",
+        L10nKey::StatisticsStreaks => {
+            "Current streak: {current} days · longest: {longest} days. Within the visible year and selected range; current includes yesterday when today has no activity. Unknown sources or cumulative cross-day usage prevent a reliable streak."
+        }
+        L10nKey::StatisticsOutsideRange => {
+            "Outside the selected range — activity is not evaluated here, not reported as zero."
+        }
+        L10nKey::StatisticsCalendarKeys => {
+            "Select a date for details. Arrow keys: day/week · Page Up/Down: month · Home/End: year bounds · Enter: details · Escape: hide details, again to close settings."
+        }
+        L10nKey::StatisticsHeatmapLegend => {
+            "{metric}: lighter → darker = 0 → {max} (maximum known value in this year and range). ? unknown/incomplete; – outside range. Select any date for exact values. Session counts across dates are not additive; cumulative usage is never spread across days."
+        }
+        L10nKey::StatisticsWeekdays => "Mon  Tue  Wed  Thu  Fri  Sat  Sun",
+        L10nKey::StatisticsBreakdowns => "Breakdown",
+        L10nKey::StatisticsBreakdownScope => {
+            "Full selected range, not just the calendar year. Known token totals sort descending; unknowns have no rank. Agent, source scope and provider stay separate. Model/project sessions show participation, not additive totals. Child usage adds no main session."
+        }
+        L10nKey::StatisticsUnattributed => "Unattributed",
+        L10nKey::StatisticsPreviousPage => "Previous page",
+        L10nKey::StatisticsNextPage => "Next page",
+        L10nKey::StatisticsAnalysisSnapshot => "Displayed snapshot analysis agent: {agent}",
+        L10nKey::StatisticsNoAnalysisSources => {
+            "No discovered source matches this analysis agent on the selected machine. Choose another agent or refresh; missing sources are not zero activity."
+        }
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 requires its native extension. --no-extensions/-ne disables discovery; --no-session disables history, resume and fork. Print/JSON/RPC modes are not the native TUI. Missing events never mean Done. Check startup diagnostics and project trust without bypassing consent."
         }
