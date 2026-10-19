@@ -206,6 +206,25 @@ impl Host for RemoteHost {
         }
     }
 
+    fn read_link(&self, p: &Path) -> io::Result<PathBuf> {
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::READ_LINK)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the lyrel-server on this host (build {}) cannot read link targets; update lyrel-server",
+                    self.peer().build
+                ),
+            ));
+        }
+        match self.call(ControlRequest::ReadLink { path: wire_path(p) })? {
+            ReplyOk::Path(target) => Ok(PathBuf::from(target)),
+            other => Err(wrong_shape("a raw link target", &other)),
+        }
+    }
+
     fn search(
         &self,
         roots: &[PathBuf],
@@ -1935,6 +1954,65 @@ mod tests {
             host_with_peer('/', |_| Some((ControlReply::Ok(ReplyOk::Unit), vec![])));
         let shared: SharedHost = host.into_shared();
         assert_eq!(shared.separator(), '/');
+    }
+
+    #[test]
+    fn a_peer_without_read_link_requires_upgrade_without_wire_or_local_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("local-only");
+        std::fs::write(&marker, b"must not inspect this machine").unwrap();
+        let (host, seen) = host_with_peer('/', |req| {
+            panic!("an old peer was sent {req:?}");
+        });
+        let error = host.read_link(&marker).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("update lyrel-server"));
+        assert!(seen.recv_timeout(Duration::from_millis(200)).is_err());
+        assert!(host.is_connected(), "the link survives the refusal");
+        assert_eq!(std::fs::read(&marker).unwrap(), b"must not inspect this machine");
+    }
+
+    #[test]
+    fn remote_read_link_preserves_raw_target_and_peer_path_semantics() {
+        for (separator, target) in [('/', "../shared"), ('\\', r"..\shared")] {
+            let (host, seen) = host_with_peer_announcing(
+                separator,
+                &[crate::daemon::control::feature::READ_LINK],
+                move |_| Some((ControlReply::Ok(ReplyOk::Path(target.into())), vec![])),
+            );
+            assert_eq!(host.read_link(Path::new("private/alias")).unwrap(), Path::new(target));
+            assert_eq!(
+                seen.recv().unwrap(),
+                ControlRequest::ReadLink {
+                    path: "private/alias".into()
+                }
+            );
+            host.client().close();
+        }
+    }
+
+    #[test]
+    fn remote_read_link_reports_wrong_shape_and_connection_loss_without_fallback() {
+        let (host, _seen) = host_with_peer_announcing(
+            '/',
+            &[crate::daemon::control::feature::READ_LINK],
+            |_| Some((ControlReply::Ok(ReplyOk::Unit), vec![])),
+        );
+        assert_eq!(
+            host.read_link(Path::new("/alias")).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        host.client().close();
+        let (host, _seen) = host_with_peer_announcing(
+            '/',
+            &[crate::daemon::control::feature::READ_LINK],
+            |_| None,
+        );
+        assert_eq!(
+            host.read_link(Path::new("/alias")).unwrap_err().kind(),
+            io::ErrorKind::ConnectionReset
+        );
+        assert!(!host.is_connected());
     }
 
     #[test]

@@ -36,6 +36,8 @@ macro_rules! for_each_host_case {
             stat_missing_is_not_found,
             exists_matches_stat,
             canonicalize_resolves_dotdot,
+            read_link_returns_raw_relative_and_dangling_target,
+            read_link_rejects_real_copies_and_missing_entries,
             read_file_roundtrips_bytes,
             read_file_over_max_bytes_errors,
             read_file_on_a_dir_errors,
@@ -466,6 +468,78 @@ pub fn read_dir_symlink_to_dir_is_dir(h: &dyn Host, sb: &dyn Sandbox) {
         .expect("link listed");
     assert!(l.is_dir, "a link to a directory resolves as a directory");
     assert!(l.is_symlink, "and still reports as a link");
+}
+
+pub fn read_link_returns_raw_relative_and_dangling_target(h: &dyn Host, sb: &dyn Sandbox) {
+    let root = sb.path();
+    let shared = h.join(root, "shared");
+    let private = h.join(root, "private");
+    mkdir(h, &shared);
+    mkdir(h, &private);
+    let payload = h.join(&shared, "SKILL.md");
+    write(h, &payload, "shared content");
+    let link = h.join(&private, "alias");
+    let raw = Path::new("../shared");
+    let Some(made) = sb.symlink(raw, &link) else {
+        return;
+    };
+    made.expect("create isolated relative symlink");
+    let other = h.join(root, "other");
+    let copy = h.join(&private, "real-copy");
+    mkdir(h, &other);
+    mkdir(h, &copy);
+    write(h, &h.join(&other, "SKILL.md"), "different target");
+    write(h, &h.join(&copy, "SKILL.md"), "private copy");
+    let unrelated = h.join(&private, "same-name-other-target");
+    sb.symlink(Path::new("../other"), &unrelated)
+        .expect("same sandbox supports symlinks")
+        .unwrap();
+    assert_eq!(h.read_link(&link).unwrap(), raw);
+    assert_eq!(
+        h.read_file(&h.join(&link, "SKILL.md"), 1024).unwrap(),
+        b"shared content"
+    );
+    h.remove(&link, true).unwrap();
+    assert_eq!(h.read_file(&payload, 1024).unwrap(), b"shared content");
+    assert_eq!(
+        h.read_link(&link).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(h.read_link(&unrelated).unwrap(), Path::new("../other"));
+    assert_eq!(
+        h.read_file(&h.join(&unrelated, "SKILL.md"), 1024).unwrap(),
+        b"different target"
+    );
+    assert_eq!(
+        h.read_file(&h.join(&copy, "SKILL.md"), 1024).unwrap(),
+        b"private copy"
+    );
+
+    let dangling = h.join(&private, "dangling");
+    sb.symlink(Path::new("../missing"), &dangling)
+        .expect("same sandbox supports symlinks")
+        .unwrap();
+    assert_eq!(h.read_link(&dangling).unwrap(), Path::new("../missing"));
+    h.remove(&dangling, false).unwrap();
+    assert_eq!(
+        h.read_link(&dangling).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+}
+
+pub fn read_link_rejects_real_copies_and_missing_entries(h: &dyn Host, sb: &dyn Sandbox) {
+    let copy = h.join(sb.path(), "real-copy");
+    mkdir(h, &copy);
+    let payload = h.join(&copy, "SKILL.md");
+    write(h, &payload, "private content");
+    assert!(h.read_link(&copy).is_err(), "a real directory is not a link");
+    assert!(h.read_link(&payload).is_err(), "a real file is not a link");
+    let missing = h.join(sb.path(), "missing");
+    assert_eq!(
+        h.read_link(&missing).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(h.read_file(&payload, 1024).unwrap(), b"private content");
 }
 
 pub fn stat_reports_len_and_mtime(h: &dyn Host, sb: &dyn Sandbox) {

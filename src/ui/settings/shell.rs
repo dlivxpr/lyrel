@@ -967,6 +967,10 @@ impl LyrelApp {
                     cx.stop_propagation();
                     return;
                 }
+                if this.cancel_statistics_editor(window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.cancel_skills_install(window, cx) {
                     cx.stop_propagation();
                     return;
