@@ -1,7 +1,6 @@
 //! macOS 官方 Keychain 授权与 Chromium v10 Cookie 解密；不创建或修改钥匙串条目。
 
 use super::super::{Browser, BrowserError};
-use sha2::{Digest, Sha256};
 use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 use zeroize::Zeroizing;
@@ -108,7 +107,7 @@ impl Drop for Owned {
     }
 }
 
-pub(super) fn password(
+pub(in super::super) fn password(
     browser: Browser,
     interactive: bool,
 ) -> Result<Zeroizing<Vec<u8>>, BrowserError> {
@@ -117,7 +116,7 @@ pub(super) fn password(
         Browser::Edge => ("Microsoft Edge Safe Storage", "Microsoft Edge"),
         Browser::Brave => ("Brave Safe Storage", "Brave"),
         Browser::Chromium => ("Chromium Safe Storage", "Chromium"),
-        Browser::Firefox => return Err(BrowserError::Unsupported),
+        Browser::Firefox | Browser::Safari => return Err(BrowserError::Unsupported),
     };
     let service = Owned::string(service)?;
     let account = Owned::string(account)?;
@@ -239,19 +238,7 @@ pub(super) fn decrypt(
     if status != 0 || length > plaintext.len() {
         return Err(BrowserError::Unreadable);
     }
-    let bytes = &plaintext[..length];
-    let bytes = if version >= 24 {
-        // v24 强制域名绑定：先验证 SHA-256(host_key)，再剥离，不猜前缀。
-        let digest = Sha256::digest(host.as_bytes());
-        if bytes.len() < 32 || bytes[..32] != digest[..] {
-            return Err(BrowserError::Unreadable);
-        }
-        &bytes[32..]
-    } else {
-        bytes
-    };
-    let text = std::str::from_utf8(bytes).map_err(|_| BrowserError::Unreadable)?;
-    Ok(Zeroizing::new(text.to_owned()))
+    super::decode_plaintext(&plaintext[..length], host, version)
 }
 
 #[cfg(test)]

@@ -5743,8 +5743,10 @@ dependencies = [
 name = "lyrel"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async_zip",
+ "base64 0.23.1",
  "chrono",
  "core-foundation 0.10.1",
  "encoding_rs",

@@ -361,11 +361,15 @@ API-key `boosterWallet` 与四类配额分开显示。第一方 CLI 只将 `bala
 
 API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com/command-code@1.84.0/dist/cli.mjs) 请求 `https://api.commandcode.ai/alpha/whoami?limits=1`，并对返回的可选组织请求 `/alpha/billing/credits?orgId=…` 与 `/alpha/billing/subscriptions?orgId=…`，再用订阅的 `currentPeriodStart` 请求 `/alpha/usage/summary?orgId=…&since=…`。服务商用户身份、套餐、月度周期、组织限制与各窗口重置分别展示；月度 Credit、购买 Credit、免费 Credit、5 小时／周滚动窗口、当期费用／请求数及 Sandbox 分钟不相加、不折算为历史费用。滚动窗口与购买 Credit 的规则见[第一方用量限制说明](https://commandcode.ai/docs/resources/usage-limits)。
 
-已添加 Command Code API-key 账户后，点击**手工会话增强…**，从你已授权的该站登录请求中明确复制一个会话 Cookie 的 `name=value`。不猜 Cookie 名称，不接受整段 Cookie、cURL 或 API key 代替会话。先向 `GET https://api.commandcode.ai/auth/get-session` 验证会话身份，只有 `user.id` 与主要 API-key `whoami.user.id` 相同时才查询 `GET https://api.commandcode.ai/internal/billing/subscriptions` 并合并套餐／周期。不会凭空假设订阅响应有 `userId`。两个请求均仅发送该 Cookie，不发送 API key。
+已添加 Command Code API-key 账户后，点击**设置会话增强…**，选择手工会话或浏览器来源。手工来源从你已授权的该站登录请求中明确复制一个会话 Cookie 的 `name=value`；不接受整段 Cookie、cURL 或 API key 代替会话。浏览器来源先明确选择浏览器，再选择 profile，最后确认验证；发现 profile 只读所选浏览器元数据，不扫描会话或替你选择账户。先向 `GET https://api.commandcode.ai/auth/get-session` 验证会话身份，只有 `user.id` 与主要 API-key `whoami.user.id` 相同时才查询 `GET https://api.commandcode.ai/internal/billing/subscriptions` 并合并套餐／周期。不会凭空假设订阅响应有 `userId`。两个增强请求均仅发送所选 Cookie，不发送 API key。
 
 身份端点与基址来自[第一方 auth client](https://commandcode.ai/assets/auth-client-DR7oY-YF.js) 的 `baseURL=https://api.commandcode.ai/auth` 及 [root 会话身份读取](https://commandcode.ai/assets/root-CycwDi3N.js)；账务 endpoint、GET、Cookie 凭据与 `{success,data}` 包装来自[第一方常量](https://commandcode.ai/assets/constants-oAoFBSr8.js)及[第一方订阅 hook](https://commandcode.ai/assets/use-legacy-pro-status-B1iLcEZv.js)。私有接口不等于公开第三方支持保证。
 
-手工增强仅在身份与账务查询均成功后保存到独立系统凭据槽；失败、失配或保存失败不覆盖主要 API key 或旧增强凭据。刷新增强失败单独显示，仍展示成功查询的主要额度；移除只删除该账户自己的主要／增强槽。浏览器 Cookie 自动导入另属 #17，本票不读取真实 Cookie 或绕过系统保护。
+浏览器增强还必须填写**精确会话 Cookie 名称**，只填名称、不填值；该名称是非秘密来源选择器，保存后用于刷新相同来源。仅读取适用于 `api.commandcode.ai` 的 host-only `api.commandcode.ai` 或域 Cookie `.api.commandcode.ai`／`.commandcode.ai`；不会读取 apex host-only `commandcode.ai`、`www.commandcode.ai` 或相似恶意域。未找到指定名称、同名 scope 歧义、过期、锁定或权限拒绝均明确失败，不尝试其他 Cookie 名或 profile。
+
+不能把框架默认名当成服务端事实：[第一方 auth client](https://commandcode.ai/assets/auth-client-DR7oY-YF.js) 带有 BetterAuth 客户端版本 `1.6.23`，但没有公开服务端 Cookie 配置。[正式发布包的 createCookieGetter](https://unpkg.com/better-auth@1.6.23/dist/cookies/index.mjs) 与 [BetterAuth Cookie 文档](https://better-auth.com/docs/concepts/cookies) 说明，默认 `${prefix}.session_token` 与 HTTPS `__Secure-` 前缀可被 `advanced.cookiePrefix`、`advanced.cookies.session_token.name` 或 `advanced.useSecureCookies` 改写；客户端版本也不证明服务端版本完全相同。匿名 `get-session` 不返回可核实名称的 `Set-Cookie`，因此本入口不预填默认名、不建立猜测白名单。自动名称识别仍缺第一方服务端实际配置或经用户授权的真实 `Set-Cookie` 证据；显式名称入口不要求 Lyrel 研究或扫描你的真实浏览器。
+
+手工增强仅在身份与账务查询均成功后保存到独立系统凭据槽。浏览器增强使用独立的非秘密来源引用，Cookie 只在请求期内存中使用，从不调用手工凭据保存路径；来源引用不含原始路径或 Cookie。手工与浏览器增强相互替换，但不替换主要 API key；成功切换至浏览器后清理该账户旧的手工增强槽。失败、身份失配或保存失败保留旧来源。可见期间每次刷新重读同一 profile，并先重新匹配服务商身份，允许同身份的 Cookie 轮换，不会静默切换账户。增强失败单列，仍展示成功查询的主要 API 额度，不用旧增强结果伪装最新完整数据。移除只删除本地账户自己的主要／增强槽；取消、来源替换、关闭页面或删除后的晚到结果不能绑定浏览器来源、复活账户或重启轮询。
 
 真实服务商账户、Windows／macOS 系统凭据库与真实浏览器读取均未获本票授权，因此仍为未验收项；没有发送服务商认证请求，没有读取用户真实浏览器或申请系统权限。
 ## StepFun Plan 与 Xiaomi MiMo 用量账户
@@ -385,8 +389,9 @@ API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com
 StepFun 同时只读所选 profile 中精确 `https://platform.stepfun.com` 的 LocalStorage `web_id`；同名 `Oasis-Webid` Cookie 或 JWT claim 不能替代这个来源。
 
 - Firefox：直接只读 `cookies.sqlite`，尊重锁及已提交 WAL；浏览器 Cookie 不复制到磁盘临时文件。
-- Windows Chromium 系：遇 App-Bound Encryption 或 `v20` 明确拒绝，不注入浏览器、不提权、不改策略、不引导关闭保护；尚未实现的非 ABE 密文也明确不支持。可改为手工会话或受支持的 Firefox profile。
-- macOS Chromium 系：主动导入可调用官方 Keychain 授权读取对应浏览器 Safe Storage；刷新固定使用 `kSecUseAuthenticationUISkip`，绝不后台弹授权。拒绝／需要重新授权时明确失败；不解锁钥匙串或更改 ACL。Safari 不在当前可选来源中，不伪装为已支持。
+- Windows Chromium 系：支持传统同用户 DPAPI 行密文，以及 `Local State` 中 `DPAPI` 主密钥对应的 `v10`／`v11` AES-GCM；对 schema v24 以上校验域名哈希。使用 `CRYPTPROTECT_UI_FORBIDDEN`，不弹授权。遇 App-Bound Encryption 或 `v20` 明确拒绝，不注入浏览器、不提权、不改策略、不引导关闭保护。格式变化、锁定或解密失败明确显示，可改为手工会话或受支持的 Firefox profile。
+- macOS Chromium 系：主动导入可调用官方 Keychain 授权读取对应浏览器 Safe Storage；刷新固定使用 `kSecUseAuthenticationUISkip`，绝不后台弹授权。拒绝／需要重新授权时明确失败；不解锁钥匙串或更改 ACL。
+- macOS Safari：只在显式选择 Safari 来源并确认后，尝试读取所选传统 `Cookies.binarycookies`。该二进制格式没有 Apple 公开规范，解析为有边界的尽力支持，不能保证所有现代 Safari profile／版本适用；不能识别时明确失败，不回退到其他浏览器或来源。读取被系统拒绝会明确提示全盘访问限制；Lyrel 不修改隐私设置、不自动申请全盘访问。系统没有可保证无 UI 的 FDA 文件读取模式，因此后台拒绝重新读取 Safari，需用户主动重新导入；不能以已有授权推断后续访问一定不会弹窗。
 
 浏览器材料仅在请求期间驻留内存、不进入凭据库、配置、快照、日志或临时文件。只保存浏览器/profile 的非秘密引用和来源绑定指纹；每次刷新重读同一来源，材料轮换或身份变化保守要求主动重新导入。关闭页面不再启动新的周期请求。
 

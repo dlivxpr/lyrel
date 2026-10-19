@@ -163,6 +163,8 @@ tray-icon = "0.26.1"
 # PATH comes back mangled. 0.61 is already in the tree (tray-icon pulls it), so
 # this pins no new code.
 [target.'cfg(windows)'.dependencies]
+aes-gcm = { version = "=0.11.0", features = ["zeroize"] }
+base64 = "0.23.1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -172,6 +174,7 @@ windows-sys = { version = "0.61", features = [
     # admin-only DACL (see `create_dir_admin_only` in lyrel-updater).
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
     "Win32_System_Registry",
     "Wdk_System_SystemServices",
     "Win32_System_SystemInformation",

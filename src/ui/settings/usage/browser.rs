@@ -1,10 +1,10 @@
-//! Scoped provider LocalStorage import; no cookies or authorization prompts.
+//! Scoped provider LocalStorage and Cookie import from explicitly selected profiles.
 //! Profile discovery reads only browser metadata; session reads require an explicit profile.
 
 mod chromium;
 mod cookies;
 mod firefox;
-pub(super) use cookies::CookieProvider;
+pub(super) use cookies::{CookieProvider, valid_command_cookie_name};
 #[cfg(test)]
 mod tests;
 
@@ -42,6 +42,8 @@ pub(super) enum Browser {
     Brave,
     Chromium,
     Firefox,
+    #[cfg(target_os = "macos")]
+    Safari,
 }
 
 impl Browser {
@@ -52,6 +54,8 @@ impl Browser {
             Self::Brave,
             Self::Chromium,
             Self::Firefox,
+            #[cfg(target_os = "macos")]
+            Self::Safari,
         ]
     }
 
@@ -62,6 +66,8 @@ impl Browser {
             Self::Brave => "Brave",
             Self::Chromium => "Chromium",
             Self::Firefox => "Firefox",
+            #[cfg(target_os = "macos")]
+            Self::Safari => "Safari",
         }
     }
 }
@@ -76,6 +82,8 @@ pub(super) struct BrowserSelection {
     profile_label: String,
     profile_fingerprint: String,
     token_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cookie_name: Option<String>,
 }
 
 impl BrowserSelection {
@@ -84,6 +92,9 @@ impl BrowserSelection {
     }
     pub(super) fn label(&self) -> &str {
         &self.profile_label
+    }
+    pub(super) fn cookie_name(&self) -> Option<&str> {
+        self.cookie_name.as_deref()
     }
 }
 
@@ -127,6 +138,7 @@ pub(super) enum BrowserError {
     SourceChanged,
     Unreadable,
     Protected,
+    FullDiskAccess,
 }
 
 impl std::fmt::Display for BrowserError {
@@ -134,6 +146,7 @@ impl std::fmt::Display for BrowserError {
         f.write_str(match self {
             Self::Locked => "Browser storage is locked; close the selected browser and try again",
             Self::Denied => "Permission to read the selected browser profile was denied",
+            Self::FullDiskAccess => "Safari requires Full Disk Access and an explicit re-import; background reads will not request authorization",
             Self::NoSession => "The selected profile has no session for this provider",
             Self::Unsupported => "This browser storage format is not supported",
             Self::Protected => "Browser cookies are protected by App-Bound Encryption; protection will not be bypassed",
@@ -151,6 +164,10 @@ impl std::error::Error for BrowserError {}
 pub(super) struct BrowserReader {
     roots: Vec<(Browser, PathBuf)>,
     isolated: bool,
+    #[cfg(target_os = "macos")]
+    cookie_password: cookies::PasswordReader,
+    #[cfg(target_os = "macos")]
+    safari_file: cookies::FileReader,
 }
 
 impl BrowserReader {
@@ -185,6 +202,8 @@ impl BrowserReader {
             ] {
                 roots.push((browser, base.join(relative)));
             }
+            // 发现 profile 只访问普通 Library 根，不探测受保护的 Cookies 目录。
+            roots.push((Browser::Safari, home.join("Library")));
         }
         #[cfg(target_os = "linux")]
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
@@ -216,6 +235,10 @@ impl BrowserReader {
         Self {
             roots,
             isolated: false,
+            #[cfg(target_os = "macos")]
+            cookie_password: cookies::mac_password,
+            #[cfg(target_os = "macos")]
+            safari_file: cookies::read_file,
         }
     }
 
@@ -225,6 +248,10 @@ impl BrowserReader {
         Self {
             roots: vec![(browser, root.into())],
             isolated: true,
+            #[cfg(target_os = "macos")]
+            cookie_password: cookies::mac_password,
+            #[cfg(target_os = "macos")]
+            safari_file: cookies::read_file,
         }
     }
 
@@ -240,6 +267,11 @@ impl BrowserReader {
                 Ok(_) => continue,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(io_error(error)),
+            }
+            #[cfg(target_os = "macos")]
+            if browser == Browser::Safari {
+                profiles.push(make_profile(browser, root.clone(), "Safari".to_owned())?);
+                continue;
             }
             if browser == Browser::Firefox {
                 firefox::profiles(root, self.isolated, &mut profiles)?;
@@ -278,6 +310,7 @@ impl BrowserReader {
             profile_label: current.label,
             profile_fingerprint: current.fingerprint,
             token_fingerprint: material_fingerprint(source, &material),
+            cookie_name: None,
         };
         Ok((selection, material))
     }
@@ -352,6 +385,10 @@ fn material_fingerprint(source: StorageSource, material: &SessionMaterial) -> St
     }
 }
 fn read_session(profile: &Profile, source: StorageSource) -> Result<SessionMaterial, BrowserError> {
+    #[cfg(target_os = "macos")]
+    if profile.browser == Browser::Safari {
+        return Err(BrowserError::Unsupported);
+    }
     let token = if profile.browser == Browser::Firefox {
         firefox::read(&profile.path, source.origin(), source.key())?
     } else {

@@ -24,6 +24,7 @@ pub(super) enum UsageError {
     IdentityMismatch,
     BrowserUnreadable,
     BrowserProtected,
+    BrowserFullDiskAccess,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +121,8 @@ pub(super) struct Account {
     #[serde(default)]
     pub enhancement_slot: Option<Uuid>,
     #[serde(default)]
+    pub enhancement_browser: Option<super::browser::BrowserSelection>,
+    #[serde(default)]
     retired_slots: Vec<Uuid>,
     #[serde(default)]
     pub removing: bool,
@@ -160,6 +163,9 @@ impl Accounts {
                 || account.auth.slot().is_some_and(|slot| !slots.insert(slot))
                 || account.enhancement_slot.is_some_and(|slot| {
                     !slots.insert(slot) || account.provider != Provider::CommandCode
+                })
+                || account.enhancement_browser.as_ref().is_some_and(|_| {
+                    account.provider != Provider::CommandCode || account.enhancement_slot.is_some()
                 })
                 || match &account.auth {
                     Authentication::ManualSession { .. } => account.provider != Provider::DeepSeek,
@@ -361,6 +367,7 @@ impl Accounts {
             account
                 .retired_slots
                 .extend(account.enhancement_slot.take());
+            account.enhancement_browser = None;
             account.snapshot = Some(Snapshot {
                 balance,
                 updated_at: now,
@@ -380,6 +387,7 @@ impl Accounts {
                 }),
                 error: None,
                 enhancement_slot: None,
+                enhancement_browser: None,
                 retired_slots: Vec::new(),
                 removing: false,
                 revision: 0,
@@ -470,6 +478,7 @@ impl Accounts {
         let mut next = self.stored.clone();
         let account = next.accounts.iter_mut().find(|a| a.id == query.id).unwrap();
         account.enhancement_slot = Some(slot);
+        account.enhancement_browser = None;
         account.retired_slots.extend(old);
         account.snapshot = Some(Snapshot {
             balance: Balance::Provider(report),
@@ -487,6 +496,51 @@ impl Accounts {
                     .unwrap()
                     .retired_slots
                     .retain(|s| *s != old);
+            } else {
+                self.account_mut(query.id).unwrap().error = Some(UsageError::Credentials);
+            }
+        }
+        self.persist(&self.stored)
+    }
+    /// Only a verified source reference is persisted. Browser material never enters the vault.
+    pub fn save_browser_enhancement(
+        &mut self,
+        query: Query,
+        selection: super::browser::BrowserSelection,
+        report: ProviderReport,
+        now: u64,
+    ) -> Result<(), UsageError> {
+        let current = self
+            .account(query.id)
+            .filter(|a| {
+                a.revision == query.revision && !a.removing && a.provider == Provider::CommandCode
+            })
+            .ok_or(UsageError::Stale)?;
+        if report.provider != Provider::CommandCode || report.identity.is_none()
+            || current.snapshot.as_ref().is_none_or(|snapshot| {
+                !matches!(&snapshot.balance, Balance::Provider(previous) if previous.identity == report.identity)
+            })
+        {
+            return Err(UsageError::IdentityMismatch);
+        }
+        let mut next = self.stored.clone();
+        let account = next.accounts.iter_mut().find(|a| a.id == query.id).unwrap();
+        let old = account.enhancement_slot.take();
+        account.retired_slots.extend(old);
+        account.enhancement_browser = Some(selection);
+        account.snapshot = Some(Snapshot {
+            balance: Balance::Provider(report),
+            updated_at: now,
+        });
+        account.busy = false;
+        self.persist(&next)?;
+        self.stored = next;
+        if let Some(old) = old {
+            if self.vault.delete(SERVICE, &old.to_string()).is_ok() {
+                self.account_mut(query.id)
+                    .unwrap()
+                    .retired_slots
+                    .retain(|slot| *slot != old);
             } else {
                 self.account_mut(query.id).unwrap().error = Some(UsageError::Credentials);
             }

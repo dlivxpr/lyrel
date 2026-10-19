@@ -339,3 +339,81 @@ fn provider_identity_change_and_failed_vault_replacement_keep_original_account_s
     );
     assert_eq!(vault.inner.len(), 1);
 }
+
+#[test]
+fn browser_enhancement_binding_replaces_only_manual_slot_and_late_material_cannot_restore_changed_account()
+ {
+    use super::super::{
+        browser::BrowserSelection,
+        providers::{Provider, ProviderReport},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let mut accounts = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
+    let report = || ProviderReport {
+        provider: Provider::CommandCode,
+        identity: Some("command-user".into()),
+        plan: Some("Pro".into()),
+        pools: Vec::new(),
+        enhancement: None,
+        overdrawn: None,
+        expired: None,
+        plan_expires: None,
+    };
+    let selection: BrowserSelection = serde_json::from_value(serde_json::json!({
+        "browser":"firefox", "profile_id":"work", "profile_label":"Work",
+        "profile_fingerprint":"nonsecret-profile-reference", "token_fingerprint":"command-cookie:nonsecret-binding"
+    })).unwrap();
+    let id = accounts
+        .save_verified(
+            None,
+            "Command",
+            VerifiedSource::ApiKey("primary-key"),
+            Balance::Provider(report()),
+            100,
+        )
+        .unwrap();
+    let ticket = accounts.begin_replace(id).unwrap();
+    accounts
+        .save_enhancement(ticket, "session=manual-secret", report(), 101)
+        .unwrap();
+    assert_eq!(vault.len(), 2);
+    let ticket = accounts.begin_replace(id).unwrap();
+    accounts
+        .save_browser_enhancement(ticket, selection.clone(), report(), 102)
+        .unwrap();
+    assert_eq!(vault.len(), 1);
+    assert_eq!(accounts.secret(id).unwrap(), "primary-key");
+    assert!(accounts.enhancement_secret(id).unwrap().is_none());
+    let late = accounts.begin_replace(id).unwrap();
+    let newer = accounts.begin_replace(id).unwrap();
+    accounts
+        .save_verified(
+            Some(newer),
+            "Command",
+            VerifiedSource::ApiKey("replacement-key"),
+            Balance::Provider(report()),
+            103,
+        )
+        .unwrap();
+    assert_eq!(
+        accounts.save_browser_enhancement(late, selection.clone(), report(), 104),
+        Err(UsageError::Stale)
+    );
+    assert!(accounts.account(id).unwrap().enhancement_browser.is_none());
+    assert_eq!(accounts.secret(id).unwrap(), "replacement-key");
+    let late = accounts.begin_replace(id).unwrap();
+    accounts.remove(id).unwrap();
+    assert_eq!(
+        accounts.save_browser_enhancement(late, selection, report(), 105),
+        Err(UsageError::Stale)
+    );
+    assert!(
+        Accounts::load(dir.path().join("usage.json"), vault.clone())
+            .unwrap()
+            .stored
+            .accounts
+            .is_empty()
+    );
+    assert!(vault.is_empty());
+}
