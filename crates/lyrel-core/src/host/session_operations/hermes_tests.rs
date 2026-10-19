@@ -343,20 +343,21 @@ fn native_hermes_statistics_real_ssh_host_preserves_profile_and_disconnects() {
     let stdout = child.stdout.take().unwrap();
     let stdin = child.stdin.take().unwrap();
     let closer: Arc<dyn LinkShutdown> = Arc::new(Process(Mutex::new(Some(child))));
-    let host = RemoteHost::connect_with(
+    let remote = RemoteHost::connect_with(
         stdout,
         stdin,
         Some(closer.clone()),
         "hermes-isolated-ssh",
         &ControlHello::host_rpc("hermes-statistics-smoke", "isolated-ssh"),
     )
-    .unwrap()
-    .into_shared();
-    assert!(!host.id().is_local());
+    .unwrap();
     assert!(
-        host.peer()
+        remote
+            .peer()
             .has_feature(crate::daemon::control::feature::HERMES_STATISTICS)
     );
+    let host = remote.into_shared();
+    assert!(!host.id().is_local());
     let launch = std::collections::HashMap::from([(
         "hermes".into(),
         format!("HERMES_HOME='{home}' '{launcher}'"),
