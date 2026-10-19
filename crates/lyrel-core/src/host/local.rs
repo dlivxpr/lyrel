@@ -168,6 +168,12 @@ impl Host for LocalHost {
                 format!("{} is a directory", p.display()),
             ));
         }
+        if !md.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a regular file", p.display()),
+            ));
+        }
         if md.len() > max_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::FileTooLarge,
@@ -740,6 +746,19 @@ mod tests {
     }
 
     crate::host_conformance_suite!(local, sandbox);
+
+    #[cfg(unix)]
+    #[test]
+    fn local_reads_reject_nonregular_entries_without_opening_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let host = LocalHost::new();
+        assert_eq!(host.read_file(&path, 1024).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        let fifo = temp.path().join("fifo");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        assert_eq!(host.read_file(&fifo, 1024).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
 
     #[test]
     fn wsl_shares_are_polled_and_nothing_else_is() {

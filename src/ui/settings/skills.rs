@@ -1,5 +1,5 @@
-//! Explicit-machine readonly skill browsing. The settings session owns the
-//! target, selection and async generation, independently of workspace focus.
+//! Explicit-machine skill browsing and reviewed shared installation. The settings
+//! session owns target, selection and async generation independently of workspace focus.
 use super::{shell::MenuEntry, *};
 use crate::ui::{
     host_ops::{Entry, HostOps},
@@ -22,6 +22,7 @@ use std::{
     },
     time::UNIX_EPOCH,
 };
+mod install;
 
 #[cfg(test)]
 mod tests {
@@ -107,7 +108,7 @@ mod tests {
             original
         );
     }
-    fn isolate_native_roots(home: &Path, cx: &mut Context<LyrelApp>) {
+    pub(super) fn isolate_native_roots(home: &Path, cx: &mut Context<LyrelApp>) {
         std::fs::create_dir_all(home).unwrap();
         let home = home.to_string_lossy();
         cx.global_mut::<Config>().agent_launch=["omp","pi","kimi","opencode","hermes"].into_iter().map(|agent| {
@@ -190,6 +191,7 @@ pub(crate) struct SkillsState {
     page: usize,
     browser: Option<(PathBuf, Vec<Entry>)>,
     browser_generation: u64,
+    install: install::InstallState,
 }
 impl SkillsState {
     pub(crate) fn refresh_locale(&self, window: &mut Window, cx: &mut Context<LyrelApp>) {
@@ -199,6 +201,7 @@ impl SkillsState {
         self.project_input.update(cx, |input, cx| {
             input.set_placeholder(t(L10nKey::SkillsProjectHint), window, cx)
         });
+        self.install.refresh_locale(window, cx);
     }
 }
 fn row_id(path: &Path) -> String {
@@ -267,6 +270,7 @@ impl LyrelApp {
             page: 0,
             browser: None,
             browser_generation: 0,
+            install: install::InstallState::new(subs, window, cx),
         }
     }
     pub(crate) fn skills_section_changed(
@@ -285,6 +289,7 @@ impl LyrelApp {
             s.skills.generation += 1;
             s.skills.browser_generation += 1;
             s.skills.loading = false;
+            s.skills.install.invalidate();
         }
     }
     fn select_skills_host(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
@@ -293,6 +298,7 @@ impl LyrelApp {
                 return;
             }
             s.skills.host = host;
+            s.skills.install.invalidate();
             s.skills.project = None;
             s.skills.snapshot = None;
             s.skills.selected = None;
@@ -314,6 +320,7 @@ impl LyrelApp {
         if let Some(s) = self.active_settings_mut() {
             let project = (!project.is_empty()).then(|| PathBuf::from(project));
             if s.skills.project != project {
+                s.skills.install.invalidate();
                 s.skills.snapshot = None;
                 s.skills.selected = None;
                 s.skills.browser = None;
@@ -358,6 +365,9 @@ impl LyrelApp {
                 };
                 let home=keys.into_iter().find_map(|key|environment.get(key).filter(|v|!v.is_empty())).ok_or_else(||io::Error::new(io::ErrorKind::Unsupported,"selected Host did not report HOME/USERPROFILE; upgrade remote capability"))?;
                 let mut request = ScanRequest::new(home).with_launch_commands(launches);
+                if host.id() == HostId::LOCAL {
+                    request = request.with_working_directory(std::env::current_dir()?);
+                }
                 if let Some(project) = project {
                     request = request.with_project(project);
                 }
@@ -486,6 +496,8 @@ impl LyrelApp {
                 )
                 .into_any_element(),
         ];
+        body.push(self.render_skills_install(cx));
+        if !state.install.open {
         let filter = state.filter;
         let kinds = [
             None,
@@ -653,6 +665,7 @@ impl LyrelApp {
                 .child(t(L10nKey::SkillsRuntimeNote))
                 .into_any_element(),
         );
+        }
         v_flex()
             .gap_4()
             .min_w_0()
@@ -661,7 +674,17 @@ impl LyrelApp {
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     if let Some(s) = this.active_settings_mut().filter(|s| s.menu.is_none()) {
-                        if s.skills.browser.take().is_some() || s.skills.selected.take().is_some() {
+                        if s.skills.install.cancel_review() {
+                            window.focus(&s.skills.install.source.read(cx).focus_handle(cx), cx);
+                            cx.stop_propagation();
+                            cx.notify();
+                        } else if s.skills.install.open && !s.skills.install.busy {
+                            s.skills.install.open = false;
+                            s.skills.install.invalidate();
+                            window.focus(&s.skills.query.read(cx).focus_handle(cx), cx);
+                            cx.stop_propagation();
+                            cx.notify();
+                        } else if s.skills.browser.take().is_some() || s.skills.selected.take().is_some() {
                             if s.skills.selected.is_none() {
                                 window.focus(&s.skills.query.read(cx).focus_handle(cx), cx);
                             }

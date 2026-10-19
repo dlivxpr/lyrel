@@ -1,6 +1,10 @@
 //! Readonly, Host-bound skill discovery. Installation identity is a canonical
 //! directory on one Host, never a frontmatter name. No native runtime is queried
 //! or reconfigured; a discovered file is not evidence of runtime activation.
+#[cfg(feature = "github")]
+pub mod catalog;
+#[cfg(feature = "github")]
+pub mod install;
 mod discovery;
 mod packages;
 mod provenance;
@@ -46,6 +50,7 @@ pub enum DiscoveryState {
 pub struct ScanRequest {
     home: PathBuf,
     project: Option<PathBuf>,
+    working_directory: Option<PathBuf>,
     launch_commands: HashMap<String, String>,
 }
 impl ScanRequest {
@@ -54,6 +59,7 @@ impl ScanRequest {
         Self {
             home: home.into(),
             project: None,
+            working_directory: None,
             launch_commands: HashMap::new(),
         }
     }
@@ -64,6 +70,14 @@ impl ScanRequest {
     pub fn with_launch_commands(mut self, commands: HashMap<String, String>) -> Self {
         self.launch_commands = commands;
         self
+    }
+    /// Explicit CLI working directory for relative XDG state selectors.
+    pub fn with_working_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.working_directory = Some(directory.into());
+        self
+    }
+    pub fn working_directory(&self) -> Option<&Path> {
+        self.working_directory.as_deref()
     }
     pub fn project(&self) -> Option<&Path> {
         self.project.as_deref()

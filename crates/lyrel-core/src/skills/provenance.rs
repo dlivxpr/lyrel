@@ -45,14 +45,14 @@ pub(super) fn attach(
                     .get("XDG_STATE_HOME")
                     .filter(|value| !value.is_empty())
                 {
-                    let state = match absolute_selector(host, &home, state) {
-                        Ok(path) => path,
-                        Err(error) => {
-                            snapshot
-                                .problems
-                                .push(format!("skills CLI source lock: {error}"));
-                            continue;
-                        }
+                    let state = PathBuf::from(state);
+                    let state = if host.is_absolute(&state) {
+                        state
+                    } else if let Some(cwd) = request.working_directory().filter(|cwd| host.is_absolute(cwd)) {
+                        host.join(cwd, &state.to_string_lossy())
+                    } else {
+                        snapshot.problems.push("skills CLI source lock: relative XDG_STATE_HOME needs its explicit Host working directory".into());
+                        continue;
                     };
                     under(host, &state, &["skills", ".skill-lock.json"])
                 } else {
@@ -142,7 +142,7 @@ pub(super) fn attach(
         }
     }
 }
-fn sanitize_name(name: &str) -> String {
+pub(super) fn sanitize_name(name: &str) -> String {
     let mut result = String::new();
     let mut separator = false;
     for ch in name.to_lowercase().chars() {
