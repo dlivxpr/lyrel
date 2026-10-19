@@ -655,6 +655,19 @@ mod tests {
             assert!(!settings.statistics.analysis.detail);
             assert!(settings.section == SettingsSection::Statistics);
         });
+        vcx.simulate_keystrokes("tab");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("statistics-calendar-focus").focused(), Some(true),
+                "one Tab must leave the annual grid instead of visiting every date");
+        });
+        vcx.simulate_keystrokes("shift-tab");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            assert!(app.read(cx).active_settings().unwrap().statistics.analysis.focus.is_focused(window),
+                "Shift-Tab must return to the single keyboard calendar focus");
+        });
         for (locale, width, mode) in [
             ("en", 1120., gpui_kit::component::ThemeMode::Light),
             ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
