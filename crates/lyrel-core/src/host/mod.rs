@@ -491,6 +491,51 @@ pub trait Host: Send + Sync + 'static {
         session_operations::opencode::sessions(&request)
     }
 
+    /// OpenCode metering is always queried on its owning Host, never a GUI fallback.
+    fn opencode_statistics(
+        &self,
+        request: &session_operations::SessionOperation,
+    ) -> Result<
+        session_operations::opencode::OpenCodeStatistics,
+        session_operations::SessionOperationError,
+    > {
+        guard_off_ui();
+        use session_operations::{SessionErrorKind, SessionOperationError};
+        let error = |kind, message: &str| SessionOperationError {
+            kind,
+            message: message.into(),
+            retained: None,
+        };
+        if request.expected_host != self.id().0 {
+            return Err(error(
+                SessionErrorKind::WrongHost,
+                "OpenCode statistics belongs to another Host",
+            ));
+        }
+        if !self.is_connected() {
+            return Err(error(
+                SessionErrorKind::Connection,
+                "OpenCode statistics Host is disconnected",
+            ));
+        }
+        if !self.id().is_local() {
+            return Err(error(
+                SessionErrorKind::Unsupported,
+                "OpenCode statistics requires its data-owning Host transport",
+            ));
+        }
+        if request.agent != crate::core::cli_agent::CLIAgent::OpenCode
+            || !self.is_absolute(&request.cwd)
+            || !self.stat(&request.cwd).is_ok_and(|m| m.is_dir)
+        {
+            return Err(error(
+                SessionErrorKind::Directory,
+                "OpenCode statistics requires a valid native Host directory and agent",
+            ));
+        }
+        session_operations::opencode::statistics(request)
+    }
+
     /// Hermes CLI metadata from this Host's native home/profile.
     fn hermes_sessions(
         &self,

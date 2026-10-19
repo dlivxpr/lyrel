@@ -140,7 +140,7 @@ l10n_keys! {
     StatisticsScope,
     StatisticsAgent,
     StatisticsAgentScope,
-    StatisticsAllAgents,
+    StatisticsReasoning,
     StatisticsRange,
     StatisticsCalendar,
     StatisticsCustomDates,

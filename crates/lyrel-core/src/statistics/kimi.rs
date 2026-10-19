@@ -331,6 +331,7 @@ fn parse(bytes: &[u8], state: &Value, agent: &str) -> io::Result<(NativeSession,
                     tokens: Tokens {
                         input,
                         output,
+                        reasoning: None,
                         cache_read,
                         cache_write,
                         total,
