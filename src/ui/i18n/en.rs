@@ -723,6 +723,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageSubscriptionCredit => "Subscription Credits",
         L10nKey::UsageCreditBucket => "Credit bucket",
         L10nKey::UsageAdd => "Add account…",
+        L10nKey::UsageCodingPlans => "Coding plans",
+        L10nKey::UsageApiAccounts => "API accounts",
+        L10nKey::UsagePageVisible => "Desktop accounts · refresh only while this page is open",
+        L10nKey::UsageProviderEmpty => "No accounts · add an account to see provider usage",
+        L10nKey::UsageOfficialApi => "Official API",
+        L10nKey::UsagePrivateApi => "Private API",
+        L10nKey::UsageMore => "More account actions",
+        L10nKey::UsageSave => "Save",
+        L10nKey::UsageRemoveCommit => "Remove from lyrel",
         L10nKey::UsageRefreshAll => "Refresh all",
         L10nKey::UsageRefresh => "Refresh",
         L10nKey::UsageCadence => "While this page is open:",
@@ -733,16 +742,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageReplace => "Replace source…",
         L10nKey::UsageRemove => "Remove from lyrel…",
         L10nKey::UsageRemoveWarning => {
-            "Only this local query account, its snapshots and its own credential slots are removed. Your DeepSeek account and API key are not revoked."
+            "Only this local query account, its snapshots and its own credential slots are removed. The provider account and its credentials are not revoked."
         }
         L10nKey::UsageName => "Account name",
         L10nKey::UsageCancel => "Cancel",
         L10nKey::UsageVerify => "Verify and save",
-        L10nKey::UsageConfirm => "Confirm",
         L10nKey::UsageLoading => "Query in progress",
-        L10nKey::UsageEmpty => {
-            "No query accounts. Add an official DeepSeek API key, a manual platform session, or an explicitly selected browser source, then verify and save."
-        }
         L10nKey::UsageRemoving => "Local removal incomplete — retry removal",
         L10nKey::UsageDisabled => "Refresh paused",
         L10nKey::UsageEnabled => "Refresh enabled",

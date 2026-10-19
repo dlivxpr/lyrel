@@ -656,6 +656,15 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageSubscriptionCredit => "订阅 Credits",
         L10nKey::UsageCreditBucket => "Credit 额度池",
         L10nKey::UsageAdd => "添加账户…",
+        L10nKey::UsageCodingPlans => "Coding 套餐",
+        L10nKey::UsageApiAccounts => "API 账户",
+        L10nKey::UsagePageVisible => "桌面账户 · 仅此页面可见时刷新",
+        L10nKey::UsageProviderEmpty => "暂无账户 · 添加后查看服务商用量",
+        L10nKey::UsageOfficialApi => "官方 API",
+        L10nKey::UsagePrivateApi => "私有接口",
+        L10nKey::UsageMore => "更多账户操作",
+        L10nKey::UsageSave => "保存",
+        L10nKey::UsageRemoveCommit => "从 lyrel 移除",
         L10nKey::UsageRefreshAll => "全部刷新",
         L10nKey::UsageRefresh => "刷新",
         L10nKey::UsageCadence => "仅页面可见期间：",
@@ -666,16 +675,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageReplace => "替换来源…",
         L10nKey::UsageRemove => "从 lyrel 移除…",
         L10nKey::UsageRemoveWarning => {
-            "仅移除此本地查询账户、快照及其凭据槽，不注销 DeepSeek 账户或撤销 API key。"
+            "仅移除此本地查询账户、快照及其凭据槽，不注销服务商账户或撤销凭据。"
         }
         L10nKey::UsageName => "账户名称",
         L10nKey::UsageCancel => "取消",
         L10nKey::UsageVerify => "验证并保存",
-        L10nKey::UsageConfirm => "确认",
         L10nKey::UsageLoading => "正在查询",
-        L10nKey::UsageEmpty => {
-            "尚无查询账户。添加 DeepSeek 官方 API key、手工平台会话或主动选择浏览器来源，验证后保存。"
-        }
         L10nKey::UsageRemoving => "本地移除未完成，请重试移除",
         L10nKey::UsageDisabled => "刷新已停用",
         L10nKey::UsageEnabled => "刷新已启用",
