@@ -91,6 +91,8 @@ pub struct UsageRecord {
     coverage_start: Option<i64>,
     #[serde(default)]
     estimated_usd: Option<f64>,
+    #[serde(default)]
+    time_unknown: bool,
 }
 impl UsageRecord {
     pub fn timestamp(&self) -> i64 {
@@ -115,10 +117,18 @@ impl UsageRecord {
         self.estimated_usd
     }
     fn overlaps(&self, window: &DateWindow) -> bool {
+        if self.time_unknown {
+            return true;
+        }
         window.start().is_none_or(|s| self.timestamp >= s)
-            && window.end().is_none_or(|e| self.coverage_start.unwrap_or(self.timestamp) < e)
+            && window
+                .end()
+                .is_none_or(|e| self.coverage_start.unwrap_or(self.timestamp) < e)
     }
     fn covered_by(&self, window: &DateWindow) -> bool {
+        if self.time_unknown {
+            return window.start().is_none() && window.end().is_none();
+        }
         window.contains(self.timestamp)
             && window.contains(self.coverage_start.unwrap_or(self.timestamp))
     }
@@ -192,17 +202,21 @@ impl Snapshot {
     pub fn aggregate(&self, window: &DateWindow) -> Totals {
         let mut out = Totals::default();
         let mut main_sessions = 0;
-        let ambiguous = self.visit_usage(None, |file| {
-            if file.active_in(window) {
-                main_sessions += 1;
-            }
-        }, |_, record| {
-            if record.covered_by(window) {
-                out.add_record(record);
-            } else if record.overlaps(window) {
-                out.complete = false;
-            }
-        });
+        let ambiguous = self.visit_usage(
+            None,
+            |file| {
+                if file.active_in(window) {
+                    main_sessions += 1;
+                }
+            },
+            |_, record| {
+                if record.covered_by(window) {
+                    out.add_record(record);
+                } else if record.overlaps(window) {
+                    out.complete = false;
+                }
+            },
+        );
         out.complete &= self.is_complete() && ambiguous == 0;
         out.ambiguous_records = ambiguous;
         out.main_sessions = main_sessions;
@@ -228,7 +242,12 @@ impl Snapshot {
         let mut parents = HashMap::new();
         for file in &self.files {
             let source = (file.source.agent.as_str(), file.source.scope.as_str());
-            if let Some(parent) = file.session.parent.as_deref().and_then(|p| identities.get(&(source, p))) {
+            if let Some(parent) = file
+                .session
+                .parent
+                .as_deref()
+                .and_then(|p| identities.get(&(source, p)))
+            {
                 parents.insert((source, file.session.id.as_str()), *parent);
             }
         }
@@ -237,7 +256,13 @@ impl Snapshot {
         let mut ambiguous = 0;
         // Prefer original roots for inherited record attribution, independently of directory order.
         let mut files: Vec<_> = self.files.iter().collect();
-        files.sort_by(|a, b| (a.session.parent.is_some(), a.child, &a.path).cmp(&(b.session.parent.is_some(), b.child, &b.path)));
+        files.sort_by(|a, b| {
+            (a.session.parent.is_some(), a.child, &a.path).cmp(&(
+                b.session.parent.is_some(),
+                b.child,
+                &b.path,
+            ))
+        });
         for file in files {
             if agent.is_some_and(|a| a != file.source.agent) {
                 continue;
@@ -249,7 +274,9 @@ impl Snapshot {
             let mut lineage = file.session.id.as_str();
             let mut visited = HashSet::new();
             while let Some(parent) = parents.get(&(source, lineage)) {
-                if !visited.insert(lineage) { break; }
+                if !visited.insert(lineage) {
+                    break;
+                }
                 lineage = parent;
             }
             for record in &file.session.records {
@@ -259,7 +286,9 @@ impl Snapshot {
                     }
                     std::collections::hash_map::Entry::Occupied(mut entry) => {
                         let (first, variants) = entry.get_mut();
-                        if *first == record || variants.contains(&record) { continue; }
+                        if *first == record || variants.contains(&record) {
+                            continue;
+                        }
                         ambiguous += 1;
                         variants.push(record);
                     }
@@ -273,9 +302,19 @@ impl Snapshot {
 impl FileFacts {
     fn activity_timestamps(&self) -> impl Iterator<Item = i64> + '_ {
         std::iter::once(self.session.timestamp)
-            .filter(|_| self.source.agent != "opencode")
+            .filter(|timestamp| self.source.agent != "opencode" && *timestamp != i64::MIN)
             .chain(self.session.activity.iter().copied())
-            .chain(self.session.records.iter().filter(|r| r.timestamp >= self.session.timestamp).map(|r| r.timestamp))
+            .chain(
+                self.session
+                    .records
+                    .iter()
+                    .filter(|r| {
+                        self.source.agent != "opencode"
+                            && !r.time_unknown
+                            && r.timestamp >= self.session.timestamp
+                    })
+                    .map(|r| r.timestamp),
+            )
     }
     fn active_in(&self, window: &DateWindow) -> bool {
         self.activity_timestamps().any(|t| window.contains(t))
@@ -289,6 +328,7 @@ pub struct Totals {
     unpriced_calls: u64,
     main_sessions: u64,
     calls: u64,
+    cumulative_records: u64,
     ambiguous_records: u64,
     complete: bool,
 }
@@ -296,6 +336,8 @@ impl Totals {
     fn add_record(&mut self, record: &UsageRecord) {
         self.tokens.add(&record.tokens, self.calls == 0);
         self.calls += 1;
+        self.cumulative_records +=
+            u64::from(record.coverage_start.is_some() || record.time_unknown);
         if let Some(cost) = record.recorded_usd {
             self.recorded_usd = Some(self.recorded_usd.unwrap_or(0.) + cost);
         } else if let Some(cost) = record.estimated_usd {
@@ -322,6 +364,9 @@ impl Totals {
     pub fn calls(&self) -> u64 {
         self.calls
     }
+    pub fn cumulative_records(&self) -> u64 {
+        self.cumulative_records
+    }
     pub fn is_complete(&self) -> bool {
         self.complete
     }
@@ -347,8 +392,17 @@ impl Totals {
 }
 impl Default for Totals {
     fn default() -> Self {
-        Self { tokens: Tokens::default(), recorded_usd: None, estimated_usd: None,
-            unpriced_calls: 0, main_sessions: 0, calls: 0, ambiguous_records: 0, complete: true }
+        Self {
+            tokens: Tokens::default(),
+            recorded_usd: None,
+            estimated_usd: None,
+            unpriced_calls: 0,
+            main_sessions: 0,
+            calls: 0,
+            cumulative_records: 0,
+            ambiguous_records: 0,
+            complete: true,
+        }
     }
 }
 #[derive(Default)]

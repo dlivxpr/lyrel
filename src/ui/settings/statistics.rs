@@ -130,6 +130,10 @@ impl LyrelApp {
             s.statistics.generation = generation;
             s.statistics.loading = true;
             s.statistics.error = None;
+            if s.statistics.analysis.anchor.is_none() {
+                s.statistics.analysis.anchor =
+                    Some(gpui_kit::ScrollAnchor::for_handle(s.content_scroll.clone()));
+            }
         }
         HostOps::run(
             host,
@@ -140,7 +144,12 @@ impl LyrelApp {
                 let snapshot = statistics::scan(host, &sources, &mut cache)?;
                 let totals = snapshot.aggregate(&window);
                 let previous = window.previous().map(|w| snapshot.aggregate(w));
-                let analysis = snapshot.analyze(&window, analysis_now, analysis_agent.as_deref(), analysis_year);
+                let analysis = snapshot.analyze(
+                    &window,
+                    analysis_now,
+                    analysis_agent.as_deref(),
+                    analysis_year,
+                );
                 let (analysis, analysis_error) = match analysis {
                     Ok(value) => (Some(value), None),
                     Err(error) => (None, Some(error)),
@@ -471,8 +480,9 @@ impl LyrelApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Datelike;
     use crate::core::session::Session;
+    use chrono::Datelike;
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
 
     #[gpui_kit::test]
@@ -538,8 +548,19 @@ mod tests {
         }
         app.update_in(&mut vcx, |app, window, cx| {
             let state = &app.active_settings().unwrap().statistics;
-            window.focus(&state.analysis.focus);
-            assert!(state.results.get(&HostId::LOCAL).unwrap().analysis.as_ref().unwrap().days().iter().any(|d| d.totals().tokens().total() == Some(10)));
+            window.focus(&state.analysis.focus, cx);
+            assert!(
+                state
+                    .results
+                    .get(&HostId::LOCAL)
+                    .unwrap()
+                    .analysis
+                    .as_ref()
+                    .unwrap()
+                    .days()
+                    .iter()
+                    .any(|d| d.totals().tokens().total() == Some(10))
+            );
             cx.notify();
         });
         vcx.run_until_parked();
@@ -557,6 +578,68 @@ mod tests {
             assert!(!settings.statistics.analysis.detail);
             assert!(settings.section == SettingsSection::Statistics);
         });
+        for (locale, width, mode) in [
+            ("en", 1120., gpui_kit::component::ThemeMode::Light),
+            ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
+        ] {
+            crate::ui::i18n::set_locale(locale);
+            vcx.simulate_window_resize(window.into(), gpui_kit::size(px(width), px(800.)));
+            app.update_in(&mut vcx, |app, window, cx| {
+                gpui_kit::component::Theme::change(mode, Some(window), cx);
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(18.));
+                app.active_settings_mut()
+                    .unwrap()
+                    .statistics
+                    .analysis
+                    .metric = statistics::analysis::Metric::Tokens;
+                cx.notify();
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let top = window.find("statistics-analysis-metric").bounds().top();
+                let scroll = &app.read(cx).active_settings().unwrap().content_scroll;
+                let offset = scroll.offset();
+                scroll.set_offset(gpui_kit::point(offset.x, offset.y - top + px(180.)));
+                window.render_frame(cx);
+                let trigger = window.find("statistics-analysis-metric");
+                assert!(
+                    trigger.visible(),
+                    "{locale}: heatmap metric must remain reachable"
+                );
+                assert!(trigger.bounds().size.width <= px(width));
+                window.click("statistics-analysis-metric", cx);
+                window.press("escape", cx);
+            });
+            vcx.run_until_parked();
+            let mut found = false;
+            for _ in 0..450 {
+                let focused = vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    window.find("statistics-analysis-metric").focused() == Some(true)
+                });
+                if focused {
+                    found = true;
+                    break;
+                }
+                vcx.simulate_keystrokes("tab");
+            }
+            assert!(
+                found,
+                "{locale}: metric must be reachable in native Tab order"
+            );
+            vcx.simulate_keystrokes("enter down down enter");
+            vcx.run_until_parked();
+            vcx.update(|_, cx| {
+                let settings = app.read(cx).active_settings().unwrap();
+                assert_eq!(
+                    settings.statistics.analysis.metric,
+                    statistics::analysis::Metric::Cost,
+                    "{locale}: native dropdown must support keyboard selection"
+                );
+            });
+        }
+        crate::ui::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             let state = app.active_settings().unwrap();
             assert!(state.section == SettingsSection::Statistics);

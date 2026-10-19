@@ -148,6 +148,8 @@ l10n_keys! {
     StatisticsUnattributed,
     StatisticsPreviousPage,
     StatisticsNextPage,
+    StatisticsAnalysisSnapshot,
+    StatisticsNoAnalysisSources,
     IntegrationPiExtension,
     IntegrationOmpExtension,
     IntegrationKimiHistory,
