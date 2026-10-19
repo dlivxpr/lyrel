@@ -302,6 +302,158 @@ fn statistics_analysis_reconciles_calendar_copies_models_and_unknown_projects() 
 }
 
 #[test]
+fn statistics_repair_filtered_history_preserves_readable_agent_days() {
+    use chrono::{NaiveDate, TimeZone};
+    let temp = tempfile::tempdir().unwrap();
+    let omp = temp.path().join("omp");
+    let pi = temp.path().join("pi");
+    std::fs::create_dir(&omp).unwrap();
+    std::fs::create_dir(&pi).unwrap();
+    std::fs::write(
+        omp.join("native.jsonl"),
+        header("known", None) + &usage("request", 10, Some(0.0)),
+    )
+    .unwrap();
+    std::fs::write(pi.join("broken.jsonl"), "not a native session\n").unwrap();
+    let snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(omp, "readable"), Source::pi(pi, "unreadable")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    assert!(
+        !snapshot.is_complete(),
+        "the failed source must remain visible"
+    );
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let analysis = snapshot
+        .analyze(&DateWindow::all("UTC"), now, Some("omp"), 2026)
+        .unwrap();
+    let day = analysis
+        .days()
+        .iter()
+        .find(|day| day.date() == NaiveDate::from_ymd_opt(2026, 3, 8).unwrap())
+        .unwrap();
+    assert_eq!(
+        day.value(analysis::Metric::Tokens),
+        Some(12.0),
+        "an unrelated failed agent must not erase known daily usage"
+    );
+    assert_eq!(day.value(analysis::Metric::Sessions), Some(1.0));
+    assert_eq!(analysis.streaks().current(), Some(1));
+    for (path, reason) in [
+        (
+            snapshot.sources()[1].root().join("over-budget.jsonl"),
+            "file scan limit reached",
+        ),
+        (temp.path().join("unscoped"), "source discovery incomplete"),
+    ] {
+        let restricted = snapshot.clone().with_issue(path, reason);
+        assert!(
+            !restricted
+                .analyze(&DateWindow::all("UTC"), now, Some("omp"), 2026)
+                .unwrap()
+                .totals()
+                .is_complete()
+        );
+    }
+    assert!(
+        !snapshot
+            .analyze(&DateWindow::all("UTC"), now, None, 2026)
+            .unwrap()
+            .totals()
+            .is_complete()
+    );
+}
+
+#[test]
+fn statistics_repair_all_history_does_not_treat_future_days_as_missing_history() {
+    use chrono::{NaiveDate, TimeZone};
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("native.jsonl"),
+        header("known", None) + &usage("request", 10, Some(0.0)),
+    )
+    .unwrap();
+    let snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(temp.path().into(), "native")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let analysis = snapshot
+        .analyze(&DateWindow::all("UTC"), now, None, 2026)
+        .unwrap();
+    let future = analysis
+        .days()
+        .iter()
+        .find(|day| day.date() == NaiveDate::from_ymd_opt(2026, 3, 9).unwrap())
+        .unwrap();
+    assert!(
+        !future.is_in_range(),
+        "tomorrow is not missing native history"
+    );
+    assert_eq!(future.value(analysis::Metric::Tokens), None);
+}
+
+#[test]
+fn statistics_repair_recent_seven_days_remain_visible_when_today_is_monday() {
+    use chrono::TimeZone;
+    let temp = tempfile::tempdir().unwrap();
+    for day in 13..=19 {
+        let contents = (header(&format!("session-{day}"), None) + &usage("request", 1, Some(0.0)))
+            .replace("2026-03-08", &format!("2026-10-{day:02}"));
+        std::fs::write(temp.path().join(format!("{day}.jsonl")), contents).unwrap();
+    }
+    let snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(temp.path().into(), "native")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let now = chrono::Utc
+        .with_ymd_and_hms(2026, 10, 19, 12, 0, 0)
+        .unwrap();
+    let week = DateWindow::calendar(Period::Week, now, None).unwrap();
+    let recent = DateWindow::calendar(Period::LastSevenDays, now, None).unwrap();
+    assert_eq!(
+        week.start(),
+        DateWindow::calendar(Period::Today, now, None)
+            .unwrap()
+            .start()
+    );
+    assert_eq!(snapshot.aggregate(&week).tokens().total(), Some(3));
+    assert_eq!(snapshot.aggregate(&recent).tokens().total(), Some(21));
+    assert_eq!(snapshot.aggregate(&recent).main_sessions(), 7);
+    let analysis = snapshot.analyze(&recent, now, None, 2026).unwrap();
+    let active_dates: Vec<_> = analysis
+        .days()
+        .iter()
+        .filter(|day| {
+            day.value(analysis::Metric::Sessions)
+                .is_some_and(|count| count > 0.)
+        })
+        .map(|day| day.date().to_string())
+        .collect();
+    assert_eq!(
+        active_dates,
+        (13..=19)
+            .map(|day| format!("2026-10-{day:02}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        recent.previous().unwrap().start(),
+        Some(
+            chrono::Utc
+                .with_ymd_and_hms(2026, 10, 6, 0, 0, 0)
+                .unwrap()
+                .timestamp()
+        )
+    );
+}
+
+#[test]
 fn statistics_analysis_never_spreads_cumulative_or_estimated_cost_across_days() {
     use chrono::TimeZone;
     let temp = tempfile::tempdir().unwrap();
@@ -380,6 +532,23 @@ fn statistics_analysis_isolates_agents_and_preserves_conflicting_native_records(
     let analysis = snapshot.analyze(&all, now, Some("omp"), 2026).unwrap();
     assert_eq!(analysis.totals().tokens().total(), Some(12));
     assert_eq!(analysis.agents().len(), 1);
+    let partial = snapshot
+        .clone()
+        .with_issue(temp.path().join("unavailable.jsonl"), "source unavailable")
+        .analyze(&all, now, Some("omp"), 2026)
+        .unwrap();
+    let day = |number| {
+        partial
+            .days()
+            .iter()
+            .find(|day| day.date() == chrono::NaiveDate::from_ymd_opt(2026, 3, number).unwrap())
+            .unwrap()
+    };
+    assert_eq!(day(8).activity_value(analysis::Metric::Tokens), Some(12.));
+    assert_eq!(day(8).activity_value(analysis::Metric::Sessions), Some(1.));
+    assert_eq!(day(8).activity_value(analysis::Metric::Cost), None);
+    assert_eq!(day(7).activity_value(analysis::Metric::Tokens), None);
+    assert_eq!(day(9).activity_value(analysis::Metric::Tokens), None);
     let mut collision = snapshot.files[0].clone();
     collision.path = temp.path().join("collision.jsonl");
     collision.session.records[0].tokens.total = Some(22);
@@ -389,6 +558,12 @@ fn statistics_analysis_isolates_agents_and_preserves_conflicting_native_records(
     assert!(!analysis.totals().is_complete());
     assert_eq!(analysis.streaks().longest(), None);
     assert_eq!(analysis.maximum(analysis::Metric::Tokens), 0.);
+    let conflict_day = analysis
+        .days()
+        .iter()
+        .find(|day| day.date() == chrono::NaiveDate::from_ymd_opt(2026, 3, 8).unwrap())
+        .unwrap();
+    assert_eq!(conflict_day.activity_value(analysis::Metric::Tokens), None);
 }
 
 #[test]

@@ -8,7 +8,7 @@ use gpui_kit::component::{
     scroll::Scrollbar,
 };
 use gpui_kit::{FocusHandle, rems};
-use lyrel_core::statistics::analysis::{Breakdown, Metric};
+use lyrel_core::statistics::analysis::{Analysis, Breakdown, Metric};
 
 pub(super) struct AnalysisState {
     pub(super) agent: Option<String>,
@@ -33,7 +33,7 @@ enum GroupKind {
 impl AnalysisState {
     pub(super) fn new(cx: &mut Context<LyrelApp>) -> Self {
         let date = chrono::Local::now().date_naive();
-        Self {
+        let state = Self {
             agent: None,
             year: date.year(),
             date,
@@ -47,7 +47,9 @@ impl AnalysisState {
             page: 0,
             expanded: None,
             agent_page: 0,
-        }
+        };
+        state.reveal_date();
+        state
     }
     fn reveal_date(&self) {
         let offset = NaiveDate::from_ymd_opt(self.year, 1, 1)
@@ -55,7 +57,7 @@ impl AnalysisState {
             .weekday()
             .num_days_from_monday();
         self.calendar_scroll
-            .scroll_to_item(((offset + self.date.ordinal0()) / 7 + 1) as usize);
+            .scroll_to_item(((offset + self.date.ordinal0()) / 7) as usize);
     }
 }
 fn agent_label(agent: &str) -> &str {
@@ -87,6 +89,37 @@ fn group_key(group: GroupKind) -> L10nKey {
     match group {
         GroupKind::Models => L10nKey::StatisticsModels,
         GroupKind::Projects => L10nKey::StatisticsProjects,
+    }
+}
+
+// Rows show observed values even when another source limits coverage. These are not
+// comparable complete-period values and must not feed heatmap intensity or deltas.
+fn breakdown_value(totals: &Totals, metric: Metric) -> Option<f64> {
+    match metric {
+        Metric::Tokens => totals.tokens().total().map(|value| value as f64),
+        Metric::Cost => metric.value(totals).or_else(|| {
+            if totals.unpriced_calls() > 0
+                || totals
+                    .estimated_costs()
+                    .iter()
+                    .any(|(currency, estimate)| currency != "USD" || !estimate.is_complete())
+            {
+                return None;
+            }
+            let recorded = totals.recorded_usd();
+            let estimated = totals
+                .estimated_costs()
+                .get("USD")
+                .and_then(|estimate| estimate.total());
+            match (recorded, estimated) {
+                (None, None) => None,
+                (recorded, estimated) => Some(recorded.unwrap_or(0.) + estimated.unwrap_or(0.)),
+            }
+        }),
+        Metric::Sessions => {
+            (totals.main_sessions() > 0 || totals.calls() > 0 || totals.is_complete())
+                .then_some(totals.main_sessions() as f64)
+        }
     }
 }
 pub(super) fn detail(totals: &Totals) -> String {
@@ -241,6 +274,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if date > chrono::Local::now().date_naive() {
+            return;
+        }
         if let Some(s) = self.active_settings_mut() {
             s.statistics.analysis.date = date;
             s.statistics.analysis.detail = true;
@@ -278,7 +314,8 @@ impl LyrelApp {
             "pageup" => date.checked_sub_months(Months::new(1)),
             "pagedown" => date.checked_add_months(Months::new(1)),
             "home" => NaiveDate::from_ymd_opt(state.year, 1, 1),
-            "end" => NaiveDate::from_ymd_opt(state.year, 12, 31),
+            "end" => NaiveDate::from_ymd_opt(state.year, 12, 31)
+                .map(|end| end.min(chrono::Local::now().date_naive())),
             "enter" | "space" => {
                 state.detail = true;
                 Some(date)
@@ -289,7 +326,9 @@ impl LyrelApp {
             }
             _ => return,
         };
-        if let Some(date) = moved.filter(|d| d.year() == state.year) {
+        if let Some(date) =
+            moved.filter(|d| d.year() == state.year && *d <= chrono::Local::now().date_naive())
+        {
             state.date = date;
         }
         state.reveal_date();
@@ -299,14 +338,44 @@ impl LyrelApp {
         cx.stop_propagation();
         cx.notify();
     }
+    // Keep each region's builder temporaries off the same Windows Debug stack frame.
     pub(super) fn render_statistics_analysis(
         &self,
         p: &Presentation,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let activity = self.render_statistics_activity(p, cx);
+        let Some(analysis) = &p.analysis else {
+            return activity;
+        };
+        v_flex()
+            .min_w_0()
+            .gap_3()
+            .child(activity)
+            .when(!analysis.totals().is_complete(), |section| {
+                section.child(
+                    div()
+                        .text_xs()
+                        .text_color(Tk::of(cx).k5)
+                        .child(t(L10nKey::StatisticsObservedValues)),
+                )
+            })
+            .child(
+                h_flex()
+                    .items_stretch()
+                    .flex_wrap()
+                    .gap_3()
+                    .child(self.render_statistics_agents(analysis, cx))
+                    .child(self.render_statistics_common(analysis, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_statistics_activity(&self, p: &Presentation, cx: &mut Context<Self>) -> AnyElement {
         let state = &self.active_settings().unwrap().statistics.analysis;
         let tk = Tk::of(cx);
         let accent = cx.theme().primary;
+        let today = chrono::Local::now().date_naive();
         let mut agents: Vec<_> = p
             .snapshot
             .sources()
@@ -331,7 +400,7 @@ impl LyrelApp {
         )];
         entries.extend(agents.into_iter().map(|agent| {
             MenuEntry::item(
-                agent.clone(),
+                agent_label(&agent).to_owned(),
                 state.agent.as_deref() == Some(&agent),
                 move |this, _, cx| {
                     this.change_analysis(
@@ -349,8 +418,9 @@ impl LyrelApp {
             "statistics-analysis-agent",
             state
                 .agent
-                .clone()
-                .unwrap_or_else(|| t(L10nKey::StatisticsAllAgents).into()),
+                .as_deref()
+                .map(agent_label)
+                .unwrap_or(t(L10nKey::StatisticsAllAgents)),
             entries,
             cx,
         );
@@ -399,49 +469,65 @@ impl LyrelApp {
                     )
                 })
                 .accessibility_label(t(L10nKey::StatisticsNextYear))
-                .disabled(year >= 9998),
+                .disabled(year >= today.year()),
             );
         let mut activity = v_flex()
             .id("statistics-activity")
             .min_w_0()
             .w_full()
             .gap_2()
-            .p_3()
-            .border_1()
+            .py_3()
+            .border_b_1()
             .border_color(cx.theme().border)
-            .rounded_xl()
             .child(
                 h_flex()
                     .min_w_0()
                     .flex_wrap()
                     .gap_2()
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(t(L10nKey::StatisticsActivity)),
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(t(L10nKey::StatisticsActivity)),
+                            )
+                            .child(div().text_xs().text_color(tk.k5).child(t_fmt(
+                                L10nKey::StatisticsActivityCaption,
+                                &[("metric", t(metric_key(state.metric)))],
+                            ))),
                     )
-                    .child(year_controls)
-                    .child(div().flex_1())
                     .child(metric),
             )
-            .child(h_flex().min_w_0().flex_wrap().gap_2().child(agent).when(
-                p.analysis.as_ref().and_then(|a| a.agent_filter()) != state.agent.as_deref(),
-                |row| {
-                    row.child(
-                        div().text_xs().text_color(tk.k5).child(t_fmt(
-                            L10nKey::StatisticsAnalysisSnapshot,
-                            &[(
-                                "agent",
-                                p.analysis
-                                    .as_ref()
-                                    .and_then(|a| a.agent_filter())
-                                    .unwrap_or(t(L10nKey::StatisticsAllAgents)),
-                            )],
-                        )),
-                    )
-                },
-            ));
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(agent)
+                    .child(year_controls)
+                    .when(
+                        p.analysis.as_ref().and_then(|a| a.agent_filter())
+                            != state.agent.as_deref(),
+                        |row| {
+                            row.child(
+                                div().text_xs().text_color(tk.k5).child(t_fmt(
+                                    L10nKey::StatisticsAnalysisSnapshot,
+                                    &[(
+                                        "agent",
+                                        p.analysis
+                                            .as_ref()
+                                            .and_then(|a| a.agent_filter())
+                                            .unwrap_or(t(L10nKey::StatisticsAllAgents)),
+                                    )],
+                                )),
+                            )
+                        },
+                    ),
+            );
         if let Some(error) = &p.analysis_error {
             activity = activity.child(
                 div()
@@ -457,11 +543,146 @@ impl LyrelApp {
             activity = activity.child(
                 div()
                     .text_xs()
-                    .text_color(tk.warn_text)
+                    .text_color(tk.k5)
                     .child(t(L10nKey::StatisticsNoAnalysisSources)),
             );
         }
-        let maximum = analysis.maximum(state.metric);
+        let grid = self.render_statistics_calendar(analysis, today, cx);
+        let date = state.date;
+        let selected = analysis.days().iter().find(|d| d.date() == date);
+        let has_unknown = analysis.days().iter().any(|day| {
+            day.date() <= today && day.is_in_range() && day.value(state.metric).is_none()
+        });
+        let peak = analysis
+            .days()
+            .iter()
+            .filter(|day| day.date() <= today)
+            .filter_map(|day| {
+                day.activity_value(state.metric)
+                    .map(|value| (day.date(), value))
+            })
+            .filter(|(_, value)| *value > 0.)
+            .max_by(|a, b| a.1.total_cmp(&b.1));
+        let peak_value = peak.map(|(date, value)| {
+            let value = match state.metric {
+                Metric::Cost => format!("USD {value:.2}"),
+                Metric::Tokens => dashboard::compact(Some(value as u64)),
+                Metric::Sessions => number(Some(value as u64)),
+            };
+            t_fmt(
+                if has_unknown {
+                    L10nKey::StatisticsKnownPeak
+                } else {
+                    L10nKey::StatisticsPeak
+                },
+                &[
+                    ("date", &date.format("%m-%d").to_string()),
+                    ("value", &value),
+                ],
+            )
+        });
+        activity = activity
+            .child(grid)
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .flex_wrap()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(tk.k5)
+                    .child(t_fmt(
+                        L10nKey::StatisticsActivityStreaks,
+                        &[
+                            (
+                                "current",
+                                &dashboard::compact(analysis.streaks().current().map(u64::from)),
+                            ),
+                            (
+                                "longest",
+                                &dashboard::compact(analysis.streaks().longest().map(u64::from)),
+                            ),
+                        ],
+                    ))
+                    .when_some(peak_value, |row, peak| row.child(peak))
+                    .child(div().flex_1())
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(t(L10nKey::StatisticsLess))
+                            .children([0., 0.25, 0.5, 0.75, 1.].map(|level| {
+                                div().size_2().rounded_sm().bg(if level == 0. {
+                                    tk.k06
+                                } else {
+                                    accent.opacity(level)
+                                })
+                            }))
+                            .child(t(L10nKey::StatisticsMore)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("statistics-date-anchor")
+                            .anchor_scroll(state.anchor.clone())
+                            .child(
+                                self.analysis_button(
+                                    "statistics-calendar-focus",
+                                    date.to_string(),
+                                    cx,
+                                    move |this, window, cx| {
+                                        this.select_analysis_date(date, window, cx)
+                                    },
+                                )
+                                .tooltip(format!(
+                                    "{}\n{}",
+                                    t(L10nKey::StatisticsCalendarKeys),
+                                    t(L10nKey::StatisticsMetricScope)
+                                )),
+                            ),
+                    )
+                    .when(has_unknown, |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(tk.k5)
+                                .child(t(L10nKey::StatisticsHeatmapLowerBound)),
+                        )
+                    }),
+            );
+        if state.detail {
+            let text = selected
+                .map(|d| {
+                    if d.is_in_range() {
+                        detail(d.totals())
+                    } else {
+                        t(L10nKey::StatisticsOutsideRange).into()
+                    }
+                })
+                .unwrap_or_else(|| t(L10nKey::StatisticsLoading).into());
+            activity = activity.child(div().text_xs().child(text));
+        }
+        activity.into_any_element()
+    }
+
+    fn render_statistics_calendar(
+        &self,
+        analysis: &Analysis,
+        today: NaiveDate,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = &self.active_settings().unwrap().statistics.analysis;
+        let tk = Tk::of(cx);
+        let accent = cx.theme().primary;
+        let maximum = analysis
+            .days()
+            .iter()
+            .filter(|day| day.date() <= today)
+            .filter_map(|day| day.activity_value(state.metric))
+            .fold(0., f64::max);
         let offset = analysis
             .days()
             .first()
@@ -476,10 +697,12 @@ impl LyrelApp {
                     .filter(|day| week == 0 || (day.date().month() != 1 && day.date().day() <= 7))
                     .map(|day| day.date().format("%m").to_string())
                     .unwrap_or_default();
-                // Keep days square; narrow windows scroll the year instead of crushing it.
+                // Keep square days at the UI scale; narrow windows scroll rather than crush them.
                 v_flex()
+                    .id(("statistics-week", week))
+                    .test_support()
+                    .flex_none()
                     .w_3()
-                    .flex_shrink_0()
                     .gap_0p5()
                     .child(
                         div()
@@ -497,7 +720,10 @@ impl LyrelApp {
                             return div().h_3().w_full().into_any_element();
                         };
                         let date = day.date();
-                        let value = day.value(state.metric);
+                        if date > today {
+                            return div().h_3().w_full().into_any_element();
+                        }
+                        let value = day.activity_value(state.metric);
                         let background = match value {
                             Some(v) if v > 0. && maximum > 0. => {
                                 cx.theme().primary.opacity(0.2 + 0.8 * (v / maximum) as f32)
@@ -520,6 +746,17 @@ impl LyrelApp {
                                 Metric::Sessions => session_count(day.totals()),
                             }
                         };
+                        let description = if !day.totals().is_complete() && value.is_some() {
+                            t_fmt(
+                                L10nKey::StatisticsKnownActivity,
+                                &[
+                                    ("value", &description),
+                                    ("metric", t(metric_key(state.metric))),
+                                ],
+                            )
+                        } else {
+                            description
+                        };
                         let name = format!("{date}\n{description}");
                         Button::new(SharedString::from(format!("statistics-day-{date}")))
                             .ghost()
@@ -534,11 +771,14 @@ impl LyrelApp {
                             .border_1()
                             .border_color(if date == state.date {
                                 cx.theme().primary
+                            } else if day.is_in_range()
+                                && (!day.totals().is_complete() || value.is_none())
+                            {
+                                cx.theme().border
                             } else {
                                 background
                             })
                             .when(!day.is_in_range(), |b| b.opacity(0.35))
-                            .when(day.is_in_range() && value.is_none(), |b| b.label("?"))
                             .accessibility_label(name.clone())
                             .tooltip(name)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -549,6 +789,25 @@ impl LyrelApp {
                     .into_any_element()
             })
             .collect::<Vec<_>>();
+        let weekdays = v_flex()
+            .id("statistics-weekdays")
+            .test_support()
+            .flex_none()
+            .whitespace_nowrap()
+            .gap_0p5()
+            .child(div().h_4())
+            .children(
+                t(L10nKey::StatisticsWeekdays)
+                    .split_whitespace()
+                    .map(|label| {
+                        div()
+                            .h_3()
+                            .line_height(rems(0.75))
+                            .text_xs()
+                            .text_color(tk.k5)
+                            .child(label.to_owned())
+                    }),
+            );
         let grid = v_flex()
             .id("statistics-calendar")
             .relative()
@@ -560,131 +819,56 @@ impl LyrelApp {
             .flex_shrink_0()
             .rounded_md()
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(tk.k06)
             .p_1()
-            .pb_3()
             .focus_visible(move |s| s.border_color(accent))
             .on_key_down(cx.listener(Self::analysis_calendar_key))
             .child(
                 h_flex()
-                    .id("statistics-year-weeks")
                     .w_full()
                     .min_w_0()
                     .items_start()
-                    .overflow_x_scroll()
-                    .track_scroll(&state.calendar_scroll)
                     .gap_0p5()
+                    .child(weekdays)
                     .child(
                         v_flex()
-                            .w_4()
-                            .flex_shrink_0()
+                            .w_full()
+                            .flex_1()
+                            .min_w_0()
                             .gap_0p5()
-                            .child(div().h_4())
-                            .children(t(L10nKey::StatisticsWeekdays).split_whitespace().map(
-                                |label| {
-                                    div()
-                                        .h_3()
-                                        .text_xs()
-                                        .text_color(tk.k5)
-                                        .child(label.to_owned())
-                                },
-                            )),
-                    )
-                    .children(columns),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(Scrollbar::horizontal(&state.calendar_scroll)),
-            );
-        let date = state.date;
-        let selected = analysis.days().iter().find(|d| d.date() == date);
-        activity =
-            activity
-                .child(grid)
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .flex_wrap()
-                        .child(
-                            div()
-                                .id("statistics-date-anchor")
-                                .anchor_scroll(state.anchor.clone())
-                                .child(
-                                    self.analysis_button(
-                                        "statistics-calendar-focus",
-                                        date.to_string(),
-                                        cx,
-                                        move |this, window, cx| {
-                                            this.select_analysis_date(date, window, cx)
-                                        },
-                                    )
-                                    .tooltip(format!(
-                                        "{}\n{}",
-                                        t(L10nKey::StatisticsCalendarKeys),
-                                        t(L10nKey::StatisticsMetricScope)
-                                    )),
-                                ),
-                        )
-                        .child(div().text_xs().text_color(tk.k5).child(t_fmt(
-                            L10nKey::StatisticsActivityStreaks,
-                            &[
-                                (
-                                    "current",
-                                    &number(analysis.streaks().current().map(u64::from)),
-                                ),
-                                (
-                                    "longest",
-                                    &number(analysis.streaks().longest().map(u64::from)),
-                                ),
-                            ],
-                        )))
-                        .child(div().flex_1())
-                        .child(h_flex().gap_0p5().children([0., 0.25, 0.5, 0.75, 1.].map(
-                            |level| {
-                                div().size_2().rounded_sm().bg(if level == 0. {
-                                    tk.k06
-                                } else {
-                                    accent.opacity(level)
-                                })
-                            },
-                        ))),
-                )
-                .child(
-                    div().text_xs().text_color(tk.k5).child(t_fmt(
-                        L10nKey::StatisticsHeatmapLegend,
-                        &[
-                            ("metric", t(metric_key(state.metric))),
-                            (
-                                "max",
-                                &if analysis
-                                    .days()
-                                    .iter()
-                                    .all(|day| day.value(state.metric).is_none())
-                                {
-                                    t(L10nKey::StatisticsUnknown).into()
-                                } else if state.metric == Metric::Cost {
-                                    format!("USD {maximum:.4}")
-                                } else {
-                                    format!("{maximum:.0}")
-                                },
+                            .child(
+                                h_flex()
+                                    .id("statistics-year-weeks")
+                                    .test_support()
+                                    .w_full()
+                                    .min_w_0()
+                                    .items_start()
+                                    .overflow_x_scroll()
+                                    .track_scroll(&state.calendar_scroll)
+                                    .gap_0p5()
+                                    .children(columns),
+                            )
+                            .child(
+                                div()
+                                    .id("statistics-calendar-track")
+                                    .test_support()
+                                    .relative()
+                                    .w_full()
+                                    // The framework's physical hit lane sits below, not over, the days.
+                                    .h(Scrollbar::width())
+                                    .child(
+                                        Scrollbar::horizontal(&state.calendar_scroll)
+                                            .viewport_from_layout(),
+                                    ),
                             ),
-                        ],
-                    )),
-                );
-        if state.detail {
-            let text = selected
-                .map(|d| {
-                    if d.is_in_range() {
-                        detail(d.totals())
-                    } else {
-                        t(L10nKey::StatisticsOutsideRange).into()
-                    }
-                })
-                .unwrap_or_else(|| t(L10nKey::StatisticsLoading).into());
-            activity = activity.child(div().text_xs().child(text));
-        }
+                    ),
+            );
+        grid.into_any_element()
+    }
+
+    fn render_statistics_common(&self, analysis: &Analysis, cx: &mut Context<Self>) -> AnyElement {
+        let state = &self.active_settings().unwrap().statistics.analysis;
+        let tk = Tk::of(cx);
         let groups_menu = self.analysis_menu(
             "statistics-analysis-group",
             t(group_key(state.group)),
@@ -709,13 +893,26 @@ impl LyrelApp {
                 .collect(),
             cx,
         );
-        let groups = match state.group {
+        let mut groups: Vec<_> = match state.group {
             GroupKind::Models => analysis.models(),
             GroupKind::Projects => analysis.projects(),
-        };
+        }
+        .iter()
+        .collect();
+        groups.sort_by(|a, b| {
+            match (
+                breakdown_value(a.totals(), state.metric),
+                breakdown_value(b.totals(), state.metric),
+            ) {
+                (Some(a), Some(b)) => b.total_cmp(&a),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
         let maximum = groups
             .iter()
-            .filter_map(|group| state.metric.value(group.totals()))
+            .filter_map(|group| breakdown_value(group.totals(), state.metric))
             .fold(0., f64::max);
         let pages = groups.len().div_ceil(10).max(1);
         let page = state.page.min(pages - 1);
@@ -723,13 +920,10 @@ impl LyrelApp {
             v_flex()
                 .flex_grow(1.)
                 .flex_shrink(1.)
-                .flex_basis(rems(21.))
+                .flex_basis(rems(17.5))
                 .min_w_0()
                 .gap_2()
-                .p_3()
-                .border_1()
-                .border_color(cx.theme().border)
-                .rounded_xl()
+                .py_3()
                 .child(
                     h_flex()
                         .justify_between()
@@ -788,18 +982,21 @@ impl LyrelApp {
                             ),
                     )
                 });
+        common.into_any_element()
+    }
+
+    fn render_statistics_agents(&self, analysis: &Analysis, cx: &mut Context<Self>) -> AnyElement {
+        let state = &self.active_settings().unwrap().statistics.analysis;
+        let tk = Tk::of(cx);
         let agent_pages = analysis.agents().len().div_ceil(10).max(1);
         let agent_page = state.agent_page.min(agent_pages - 1);
         let agents = v_flex()
             .flex_grow(1.)
             .flex_shrink(1.)
-            .flex_basis(rems(21.))
+            .flex_basis(rems(20.))
             .min_w_0()
             .gap_2()
-            .p_3()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_xl()
+            .py_3()
             .child(
                 div()
                     .text_sm()
@@ -814,12 +1011,13 @@ impl LyrelApp {
                     .overflow_hidden()
                     .bg(tk.k08)
                     .children(analysis.agents().iter().filter_map(|group| {
-                        let total = state.metric.value(analysis.totals()).filter(|v| *v > 0.)?;
-                        let value = state.metric.value(group.totals())?;
+                        let total =
+                            breakdown_value(analysis.totals(), state.metric).filter(|v| *v > 0.)?;
+                        let value = breakdown_value(group.totals(), state.metric)?;
                         Some(
                             div()
                                 .h_full()
-                                .w(gpui_kit::relative((value / total) as f32))
+                                .w(gpui_kit::relative((value / total).clamp(0., 1.) as f32))
                                 .bg(cx.theme().primary.opacity(agent_opacity(group.agent()))),
                         )
                     })),
@@ -909,19 +1107,7 @@ impl LyrelApp {
                         ),
                 )
             });
-        v_flex()
-            .min_w_0()
-            .gap_4()
-            .child(activity)
-            .child(
-                h_flex()
-                    .items_start()
-                    .flex_wrap()
-                    .gap_3()
-                    .child(agents)
-                    .child(common),
-            )
-            .into_any_element()
+        agents.into_any_element()
     }
 
     fn render_statistics_breakdown(
@@ -954,20 +1140,46 @@ impl LyrelApp {
             group.provider().unwrap_or("")
         );
         let expanded = state.expanded.as_deref() == Some(&key);
-        let metric_value = state.metric.value(totals);
+        let metric_value = breakdown_value(totals, state.metric);
         let share = metric_value
-            .zip(state.metric.value(analysis.totals()))
+            .zip(breakdown_value(analysis.totals(), state.metric))
             .filter(|(_, total)| *total > 0.)
             .map(|(value, total)| format!("{:.0}%", value / total * 100.))
             .unwrap_or_else(|| "—".into());
-        let cost = totals
-            .recorded_usd()
-            .map(|v| format!("${v:.2}"))
+        let cost = breakdown_value(totals, Metric::Cost)
+            .map(|v| {
+                let estimated = totals
+                    .estimated_costs()
+                    .get("USD")
+                    .and_then(|estimate| estimate.total())
+                    .is_some();
+                format!("{}${v:.2}", if estimated { "≈ " } else { "" })
+            })
             .unwrap_or_else(|| "—".into());
         let primary_value = match state.metric {
             Metric::Tokens => dashboard::compact(totals.tokens().total()),
             Metric::Cost => cost.clone(),
             Metric::Sessions => session_count(totals),
+        };
+        let secondary = match state.metric {
+            Metric::Tokens => t_fmt(
+                L10nKey::StatisticsRankContext,
+                &[("cost", &cost), ("sessions", &session_count(totals))],
+            ),
+            Metric::Cost => t_fmt(
+                L10nKey::StatisticsRankUsage,
+                &[
+                    ("tokens", &dashboard::compact(totals.tokens().total())),
+                    ("sessions", &session_count(totals)),
+                ],
+            ),
+            Metric::Sessions => t_fmt(
+                L10nKey::StatisticsRankSpend,
+                &[
+                    ("tokens", &dashboard::compact(totals.tokens().total())),
+                    ("cost", &cost),
+                ],
+            ),
         };
         let identity = h_flex()
             .flex_1()
@@ -1019,13 +1231,11 @@ impl LyrelApp {
                 .child(
                     h_flex()
                         .min_w_0()
-                        .gap_2()
+                        .gap_1()
                         .text_xs()
+                        .flex_wrap()
                         .child(identity)
-                        .child(div().text_color(tk.k5).child(t_fmt(
-                            L10nKey::StatisticsRankContext,
-                            &[("cost", &cost), ("sessions", &session_count(totals))],
-                        )))
+                        .child(div().text_color(tk.k5).child(secondary))
                         .child(div().child(primary_value.clone())),
                 )
                 .child(
@@ -1039,7 +1249,7 @@ impl LyrelApp {
                             bar.child(
                                 div()
                                     .h_full()
-                                    .w(gpui_kit::relative((value / maximum) as f32))
+                                    .w(gpui_kit::relative((value / maximum).clamp(0., 1.) as f32))
                                     .bg(tk.k5),
                             )
                         }),

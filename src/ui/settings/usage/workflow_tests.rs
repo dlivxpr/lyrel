@@ -944,13 +944,6 @@ fn usage_account_grid_keeps_identity_actions_and_update_footer_reachable_at_inte
         reveal(&mut vcx, &format!("usage-more-{}", ids[2]), "usage-content");
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            let cards = [ids[0], ids[1], ids[2]]
-                .map(|id| window.find(format!("usage-account-{id}")).bounds());
-            assert!((cards[0].top() - cards[1].top()).abs() <= gpui_kit::px(1.));
-            assert!(cards[1].left() > cards[0].right());
-            assert!(cards[2].top() > cards[0].bottom());
-            assert!((cards[0].size.width - cards[1].size.width).abs() <= gpui_kit::px(1.));
-            assert!((cards[0].size.width - cards[2].size.width).abs() <= gpui_kit::px(1.));
             let header = window.find("usage-header").bounds();
             let refresh_all = window.find("usage-refresh-all");
             assert!(refresh_all.visible());

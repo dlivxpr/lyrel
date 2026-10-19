@@ -3,6 +3,7 @@ use chrono::{DateTime, Datelike, Days, NaiveDate, TimeZone};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Period {
     Today,
+    LastSevenDays,
     Week,
     Month,
     Year,
@@ -60,6 +61,12 @@ impl DateWindow {
             .ok_or("date overflow")?;
         let (start, end) = match period {
             Period::Today => (today, tomorrow),
+            Period::LastSevenDays => (
+                today
+                    .checked_sub_days(Days::new(6))
+                    .ok_or("date overflow")?,
+                tomorrow,
+            ),
             Period::Week => (
                 today
                     .checked_sub_days(Days::new(u64::from(today.weekday().num_days_from_monday())))

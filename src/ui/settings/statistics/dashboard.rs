@@ -9,8 +9,9 @@ pub(super) fn compact(value: Option<u64>) -> String {
     match value {
         Some(v) if v >= 1_000_000_000 => format!("{:.2}B", v as f64 / 1_000_000_000.),
         Some(v) if v >= 1_000_000 => format!("{:.1}M", v as f64 / 1_000_000.),
-        Some(v) if v >= 10_000 => format!("{:.1}K", v as f64 / 1_000.),
-        other => number(other),
+        Some(v) if v >= 1_000 => format!("{:.1}K", v as f64 / 1_000.),
+        Some(value) => number(Some(value)),
+        None => "—".into(),
     }
 }
 
@@ -42,8 +43,8 @@ fn comparison(totals: &Totals, previous: Option<&Totals>, metric: Metric) -> Opt
 }
 
 impl LyrelApp {
-    pub(super) fn statistics_range_label(&self, p: &Presentation) -> String {
-        match (p.window.start(), p.window.end()) {
+    pub(super) fn statistics_range_label(&self, window: &DateWindow) -> String {
+        match (window.start(), window.end()) {
             (Some(start), Some(end)) => format!(
                 "{} — {}",
                 chrono::DateTime::from_timestamp(start, 0)
@@ -83,7 +84,6 @@ impl LyrelApp {
             .iter()
             .try_fold(0_u64, |sum, (_, value)| sum.checked_add((*value)?));
         let total = totals
-            .filter(|v| v.is_complete())
             .and_then(|v| v.tokens().total())
             .filter(|v| *v > 0 && Some(*v) == sum);
         let colors = [
@@ -98,7 +98,14 @@ impl LyrelApp {
             .aria_label(
                 total
                     .map(|value| {
-                        format!("{}: {}", t(L10nKey::StatisticsTokens), number(Some(value)))
+                        if totals.is_some_and(|totals| !totals.is_complete()) {
+                            t_fmt(
+                                L10nKey::StatisticsObservedTokens,
+                                &[("value", &number(Some(value)))],
+                            )
+                        } else {
+                            format!("{}: {}", t(L10nKey::StatisticsTokens), number(Some(value)))
+                        }
                     })
                     .unwrap_or_else(|| t(L10nKey::StatisticsCompositionUnavailable).into()),
             )
@@ -190,7 +197,7 @@ impl LyrelApp {
             .any(|pair| pair.iter().all(|(_, value)| value.is_some()));
         let caption = if has_segment {
             t_fmt(
-                L10nKey::StatisticsDailyTrend,
+                L10nKey::StatisticsDailyTrendCompact,
                 &[
                     ("start", &days.first().unwrap().0.to_string()),
                     ("end", &days.last().unwrap().0.to_string()),
@@ -263,12 +270,7 @@ impl LyrelApp {
             region = region.child(div().h_7());
         }
         region
-            .child(
-                div()
-                    .text_size(rems(10. / 16.))
-                    .text_color(tk.k5)
-                    .child(caption),
-            )
+            .child(div().text_xs().text_color(tk.k5).child(caption))
             .test_support()
             .into_any_element()
     }
@@ -316,10 +318,8 @@ impl LyrelApp {
                         Metric::Cost => totals
                             .and_then(Totals::recorded_usd)
                             .map(|v| format!("USD {v:.2}"))
-                            .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
-                        Metric::Sessions => totals
-                            .map(session_count)
-                            .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
+                            .unwrap_or_else(|| "—".into()),
+                        Metric::Sessions => totals.map(session_count).unwrap_or_else(|| "—".into()),
                     };
                     let change = totals
                         .and_then(|t| comparison(t, previous, selected_metric))
@@ -379,17 +379,19 @@ impl LyrelApp {
                     let content = v_flex()
                         .w_full()
                         .min_w_0()
-                        .min_h(rems(8.5))
+                        .min_h(rems(7.25))
                         .gap_1()
                         .whitespace_normal()
                         .text_left()
                         .child(
                             h_flex()
+                                .w_full()
+                                .justify_between()
                                 .gap_1()
                                 .text_xs()
                                 .text_color(tk.k5)
                                 .child(t(key))
-                                .child(div().child(change.unwrap_or_else(|| "—".into()))),
+                                .when_some(change, |row, change| row.child(change)),
                         )
                         .child(
                             div()
@@ -399,17 +401,17 @@ impl LyrelApp {
                                 .child(value),
                         )
                         .child(div().text_xs().text_color(tk.k5).child(subtitle))
-                        .child(div().mt_auto().pt_3().child(visualization));
+                        .child(div().mt_auto().pt_2().child(visualization));
                     Button::new(id)
                         .ghost()
                         .h_auto()
                         .flex_grow(1.)
                         .flex_shrink(1.)
-                        .flex_basis(rems(13.))
+                        .flex_basis(rems(11.))
                         .min_w_0()
-                        .min_h(rems(10.))
+                        .min_h(rems(8.75))
                         .p_3()
-                        .rounded_xl()
+                        .rounded_lg()
                         .bg(tk.k06)
                         .selected(metric == selected_metric)
                         .accessibility_label(t(key))
