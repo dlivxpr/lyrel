@@ -33,13 +33,22 @@ pub(crate) const AGENT_ENVIRONMENT_KEYS: &[&str] = &[
     "HERMES_DATA_DIR_SUFFIX",
     "HERMES_RUNTIME_DIR",
     "OPENCODE_DB",
+    "OPENCODE_CONFIG_DIR",
+    "OPENCODE_CONFIG",
+    "PI_PACKAGE_DIR",
+    "CLAUDE_CONFIG_DIR",
+    "PROGRAMDATA",
+    "LYREL_HOST_OS",
 ];
 
 pub(crate) fn local_agent_environment() -> std::collections::BTreeMap<String, String> {
-    AGENT_ENVIRONMENT_KEYS
+    let mut environment: std::collections::BTreeMap<String, String> = AGENT_ENVIRONMENT_KEYS
         .iter()
         .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).into(), value)))
-        .collect()
+        .collect();
+    // Host metadata, not a user-supplied override or arbitrary environment RPC.
+    environment.insert("LYREL_HOST_OS".into(), std::env::consts::OS.into());
+    environment
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]

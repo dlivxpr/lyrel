@@ -828,6 +828,7 @@ impl LyrelApp {
                 SettingsSection::KeyboardMouse => self.render_settings_input(cx),
                 SettingsSection::Ssh => self.render_settings_ssh(cx),
                 SettingsSection::Agents => self.render_settings_agents(cx),
+                SettingsSection::Skills => self.render_settings_skills(cx),
                 SettingsSection::Statistics => self.render_settings_statistics(cx),
                 SettingsSection::Usage => self.render_settings_usage(cx),
                 SettingsSection::Keybindings => self.render_settings_keybindings(cx),
@@ -1452,6 +1453,7 @@ impl LyrelApp {
                     self.render_settings_about(cx);
                 }
                 SettingsSection::Keybindings => {}
+                SettingsSection::Skills => {}
             }
         }
         let mut controls = self

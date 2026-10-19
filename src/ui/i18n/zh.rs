@@ -2,6 +2,65 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::SkillsHelpOmp => {
+            "omp 18.12.2：使用 /skill:name。skills.enabled、来源开关和名称筛选可能阻止加载；原生来源仅在启动时发现一层目录。修改来源后可重新启动原生智能体，lyrel 不代为执行。"
+        }
+        L10nKey::SkillsHelpPi => {
+            "pi 1.3.0：使用 /skill:name [args]；/reload 刷新资源。项目资源受原生项目信任控制。--no-skills 禁止自动来源，但显式 --skill 仍可加载文件。"
+        }
+        L10nKey::SkillsHelpKimi => {
+            "Kimi Code 2.2.0：使用 /skill:name 或 /name；新增技能在新会话可用。--skills-dir 替换自动目录；extra_skill_dirs 追加来源。"
+        }
+        L10nKey::SkillsHelpOpenCode => {
+            "OpenCode 2.0.32：使用 @skill-id 或模型的 skill 工具。权限和 autoinvoke 策略影响可用性；技能列表在模型步骤刷新，不假定存在未被正式文档说明的技能专用重载命令。"
+        }
+        L10nKey::SkillsHelpHermes => {
+            "Hermes 0.22.2：使用 /name 或 /skill name；/reload-skills 重新扫描。用户共享目录须列入 skills.external_dirs；项目发现受原生信任控制，lyrel 不授予信任。"
+        }
+        L10nKey::SettingsNavSkills => "技能",
+        L10nKey::SkillsPageDescription => {
+            "在明确选择的机器和项目中只读浏览 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能，搜索名称与描述，查看共享及私有来源。"
+        }
+        L10nKey::SkillsProject => "项目",
+        L10nKey::SkillsProjectHint => "所选机器上的绝对路径；留空只查看用户作用域",
+        L10nKey::SkillsApplyProject => "应用项目",
+        L10nKey::SkillsSearch => "搜索技能名称与描述",
+        L10nKey::SkillsSource => "来源",
+        L10nKey::SkillsAllSources => "全部来源",
+        L10nKey::SkillsUserShared => "用户共享",
+        L10nKey::SkillsProjectShared => "项目共享",
+        L10nKey::SkillsPrivate => "智能体私有",
+        L10nKey::SkillsRefresh => "刷新",
+        L10nKey::SkillsLoading => "正在扫描所选机器…",
+        L10nKey::SkillsEmpty => {
+            "没有匹配的技能。请检查所选机器、项目、原生 profile 和来源筛选后刷新。不会修改配置。"
+        }
+        L10nKey::SkillsScannedAt => "快照：{time}（UTC Unix 秒）",
+        L10nKey::SkillsIncomplete => "结果不完整或已过期",
+        L10nKey::SkillsUnknown => "未知",
+        L10nKey::SkillsDiscovered => "磁盘已发现",
+        L10nKey::SkillsDisabled => "原生来源选择未启用",
+        L10nKey::SkillsRuntimeNote => {
+            "磁盘发现不代表运行中的智能体已加载。lyrel 不修改原生配置，也不会向终端投递启用或重载命令。"
+        }
+        L10nKey::SkillsOpenFile => "打开 SKILL.md",
+        L10nKey::SkillsCopyPath => "复制路径",
+        L10nKey::SkillsBrowseFiles => "浏览文件…",
+        L10nKey::SkillsOrigin => "声明的来源",
+        L10nKey::SkillsUpdated => "更新时间（UTC Unix 秒）",
+        L10nKey::SkillsCompanions => "伴随文件：{files}；字节：{bytes}{limited}",
+        L10nKey::SkillsInvocation => "参数提示",
+        L10nKey::SkillsNoSource => "无可核实的来源记录",
+        L10nKey::SkillsNativeGuide => "原生文档",
+        L10nKey::SkillsBack => "返回",
+        L10nKey::SkillsNoMachine => "所选机器已断开。请重新连接后刷新，目标不会随工作区改变。",
+        L10nKey::SkillsReadError => "无法读取所选作用域：{error}",
+        L10nKey::SkillsScope => "发现位置与原生状态",
+        L10nKey::SkillsProfileNote => {
+            "使用所选 Host 的环境和智能体启动配置中的有效 profile。项目路径不会随工作区自动改变。"
+        }
+        L10nKey::SkillsFileLimit => "（不完整；链接或扫描上限）",
+        L10nKey::SkillsCopied => "已复制路径",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
             "统计 omp 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
