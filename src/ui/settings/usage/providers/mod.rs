@@ -1,10 +1,11 @@
-//! 私有控制台查询仅通过现有账户与 HTTP seam，不提供推理 API-key 入口。
 use super::{
     BalanceHttp, HttpSource, UsageRequest,
     accounts::{Balance, UsageError},
 };
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
+pub(super) mod command_code;
+pub(super) mod kimi;
 mod mimo;
 mod stepfun;
 
@@ -12,6 +13,8 @@ mod stepfun;
 pub(super) enum Provider {
     #[default]
     DeepSeek,
+    Kimi,
+    CommandCode,
     StepFun,
     MiMo,
 }
@@ -19,6 +22,8 @@ impl Provider {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::DeepSeek => "DeepSeek",
+            Self::Kimi => "Kimi Code",
+            Self::CommandCode => "Command Code",
             Self::StepFun => "StepFun Plan",
             Self::MiMo => "Xiaomi MiMo",
         }
@@ -26,6 +31,8 @@ impl Provider {
     pub(super) fn help(self) -> super::L10nKey {
         match self {
             Self::DeepSeek => super::L10nKey::UsageSessionHelp,
+            Self::Kimi => super::L10nKey::UsageKimiHelp,
+            Self::CommandCode => super::L10nKey::UsageCommandSessionHelp,
             Self::StepFun => super::L10nKey::UsageStepFunHelp,
             Self::MiMo => super::L10nKey::UsageMiMoHelp,
         }
@@ -35,6 +42,21 @@ impl Provider {
 pub(super) enum PoolKind {
     FiveHour,
     Weekly,
+    MonthlyTotal,
+    MonthlyCode,
+    Monthly,
+    Purchased,
+    Free,
+    Booster,
+    Coding,
+    CodeFiveHour,
+    CodeWeekly,
+    BoosterMonthly,
+    BillingUsage,
+    RequestCount,
+    SandboxMinutes,
+    OrganizationLimit,
+    RawBalance,
     Balance,
     Cash,
     Gift,
@@ -42,31 +64,33 @@ pub(super) enum PoolKind {
     Overdraft,
     SubscriptionCredit,
     CreditBucket,
-    Monthly,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Pool {
     pub kind: PoolKind,
-    #[serde(default)]
-    pub name: Option<String>,
+
     pub remaining: Option<String>,
     pub used: Option<String>,
     pub limit: Option<String>,
     pub unit: String,
     pub reset: Option<String>,
     pub expires: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ProviderReport {
     pub provider: Provider,
     pub identity: Option<String>,
     pub plan: Option<String>,
+    pub pools: Vec<Pool>,
+    pub enhancement: Option<UsageError>,
+    #[serde(default)]
+    pub overdrawn: Option<bool>,
     #[serde(default)]
     pub expired: Option<bool>,
     #[serde(default)]
     pub plan_expires: Option<String>,
-    pub pools: Vec<Pool>,
-    pub enhancement: Option<UsageError>,
 }
 pub(super) fn json(status: u16, bytes: &[u8]) -> Result<serde_json::Value, UsageError> {
     match status {
@@ -80,10 +104,46 @@ pub(super) fn json(status: u16, bytes: &[u8]) -> Result<serde_json::Value, Usage
     }
     serde_json::from_slice(bytes).map_err(|_| UsageError::Response)
 }
+pub(super) fn number(v: &serde_json::Value) -> Result<f64, UsageError> {
+    let n = v
+        .as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        .ok_or(UsageError::Response)?;
+    if !n.is_finite() || n < 0.0 {
+        return Err(UsageError::Response);
+    }
+    Ok(n)
+}
 pub(super) fn text(v: Option<&serde_json::Value>) -> Option<String> {
     v.and_then(|v| v.as_str())
         .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
         .map(str::to_owned)
+}
+pub(super) fn time(value: Option<&serde_json::Value>) -> Option<String> {
+    text(value).or_else(|| {
+        value
+            .and_then(|v| v.as_i64())
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .map(|v| v.to_rfc3339())
+    })
+}
+pub(super) fn fetch(
+    http: &dyn BalanceHttp,
+    source: HttpSource,
+    secret: &str,
+    org: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<serde_json::Value, UsageError> {
+    let (status, body) = http.get(
+        &UsageRequest {
+            source,
+            secret,
+            org,
+            since: None,
+        },
+        proxy,
+    )?;
+    json(status, &body)
 }
 pub(super) fn decimal(v: Option<&serde_json::Value>) -> Result<Option<String>, UsageError> {
     let Some(v) = v.filter(|v| !v.is_null()) else {
@@ -102,7 +162,7 @@ pub(super) fn decimal(v: Option<&serde_json::Value>) -> Result<Option<String>, U
     }
     Ok(Some(s))
 }
-pub(super) fn fetch(
+pub(super) fn fetch_console(
     http: &dyn BalanceHttp,
     provider: Provider,
     route: u8,
@@ -113,6 +173,8 @@ pub(super) fn fetch(
         &UsageRequest {
             source: HttpSource::Provider(provider, route),
             secret,
+            org: None,
+            since: None,
         },
         proxy,
     )?;
@@ -134,7 +196,7 @@ pub(super) fn query(
     match provider {
         Provider::StepFun => stepfun::query(http, secret, proxy),
         Provider::MiMo => mimo::query(http, secret, proxy),
-        Provider::DeepSeek => Err(UsageError::Authentication),
+        _ => Err(UsageError::Authentication),
     }
     .map(Balance::Provider)
 }
@@ -209,7 +271,7 @@ pub(super) fn parse_session(
             let id = fields.get("userId").ok_or(UsageError::Authentication)?;
             format!("api-platform_serviceToken={token}; userId={id}")
         }
-        Provider::DeepSeek => return Err(UsageError::Authentication),
+        _ => return Err(UsageError::Authentication),
     };
     Ok(Zeroizing::new(value))
 }

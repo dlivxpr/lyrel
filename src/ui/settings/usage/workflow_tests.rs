@@ -707,3 +707,6 @@ mod private_workflow_tests;
 
 #[path = "provider_workflow_tests.rs"]
 mod provider_workflow_tests;
+
+#[path = "console_workflow_tests.rs"]
+mod console_workflow_tests;

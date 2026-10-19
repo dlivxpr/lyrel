@@ -1,4 +1,4 @@
-//! Desktop-local browser sources. Metadata discovery never reads session material.
+//! Scoped provider LocalStorage import; no cookies or authorization prompts.
 //! Profile discovery reads only browser metadata; session reads require an explicit profile.
 
 mod chromium;
@@ -14,6 +14,25 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
+#[derive(Clone, Copy)]
+pub(super) enum StorageSource {
+    DeepSeek,
+    Kimi,
+}
+impl StorageSource {
+    fn origin(self) -> &'static str {
+        match self {
+            Self::DeepSeek => "https://platform.deepseek.com",
+            Self::Kimi => "https://www.kimi.com",
+        }
+    }
+    fn key(self) -> &'static str {
+        match self {
+            Self::DeepSeek => "userToken",
+            Self::Kimi => "access_token",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,11 +106,14 @@ impl Profile {
 }
 
 // Deliberately no Debug, Serialize, Deserialize, or Clone implementation.
-pub(super) struct SessionMaterial(Zeroizing<String>);
+pub(super) struct SessionMaterial(Zeroizing<String>, Option<String>);
 
 impl SessionMaterial {
     pub(super) fn secret(&self) -> &str {
         self.0.as_str()
+    }
+    pub(super) fn identity(&self) -> Option<&str> {
+        self.1.as_deref()
     }
 }
 
@@ -112,7 +134,7 @@ impl std::fmt::Display for BrowserError {
         f.write_str(match self {
             Self::Locked => "Browser storage is locked; close the selected browser and try again",
             Self::Denied => "Permission to read the selected browser profile was denied",
-            Self::NoSession => "The selected profile has no DeepSeek platform session",
+            Self::NoSession => "The selected profile has no session for this provider",
             Self::Unsupported => "This browser storage format is not supported",
             Self::Protected => "Browser cookies are protected by App-Bound Encryption; protection will not be bypassed",
             Self::ProfileGone => "The selected browser profile is no longer available",
@@ -234,6 +256,14 @@ impl BrowserReader {
         &self,
         profile: &Profile,
     ) -> Result<(BrowserSelection, SessionMaterial), BrowserError> {
+        self.import_for(profile, StorageSource::DeepSeek)
+    }
+
+    pub(super) fn import_for(
+        &self,
+        profile: &Profile,
+        source: StorageSource,
+    ) -> Result<(BrowserSelection, SessionMaterial), BrowserError> {
         // Resolve against fresh metadata: a stale UI row or a foreign reader must
         // not authorize reading an arbitrary path.
         let current = self
@@ -241,13 +271,13 @@ impl BrowserReader {
             .into_iter()
             .find(|candidate| candidate.fingerprint == profile.fingerprint)
             .ok_or(BrowserError::ProfileGone)?;
-        let material = read_session(&current)?;
+        let material = read_session(&current, source)?;
         let selection = BrowserSelection {
             browser: current.browser,
             profile_id: current.id,
             profile_label: current.label,
             profile_fingerprint: current.fingerprint,
-            token_fingerprint: fingerprint(&["deepseek-token", material.secret()]),
+            token_fingerprint: material_fingerprint(source, &material),
         };
         Ok((selection, material))
     }
@@ -255,6 +285,14 @@ impl BrowserReader {
     pub(super) fn resolve(
         &self,
         selection: &BrowserSelection,
+    ) -> Result<SessionMaterial, BrowserError> {
+        self.resolve_for(selection, StorageSource::DeepSeek)
+    }
+
+    pub(super) fn resolve_for(
+        &self,
+        selection: &BrowserSelection,
+        source: StorageSource,
     ) -> Result<SessionMaterial, BrowserError> {
         let profile = self
             .profiles(selection.browser)?
@@ -264,8 +302,8 @@ impl BrowserReader {
                     && profile.fingerprint == selection.profile_fingerprint
             })
             .ok_or(BrowserError::ProfileGone)?;
-        let material = read_session(&profile)?;
-        if fingerprint(&["deepseek-token", material.secret()]) != selection.token_fingerprint {
+        let material = read_session(&profile, source)?;
+        if material_fingerprint(source, &material) != selection.token_fingerprint {
             return Err(BrowserError::SourceChanged);
         }
         Ok(material)
@@ -303,11 +341,21 @@ fn fingerprint(parts: &[&str]) -> String {
     encoded
 }
 
-fn read_session(profile: &Profile) -> Result<SessionMaterial, BrowserError> {
+fn material_fingerprint(source: StorageSource, material: &SessionMaterial) -> String {
+    match source {
+        StorageSource::DeepSeek => fingerprint(&["deepseek-token", material.secret()]),
+        StorageSource::Kimi => fingerprint(&[
+            source.origin(),
+            material.secret(),
+            material.identity().unwrap_or(""),
+        ]),
+    }
+}
+fn read_session(profile: &Profile, source: StorageSource) -> Result<SessionMaterial, BrowserError> {
     let token = if profile.browser == Browser::Firefox {
-        firefox::read(&profile.path)?
+        firefox::read(&profile.path, source.origin(), source.key())?
     } else {
-        chromium::read(&profile.path)?
+        chromium::read(&profile.path, source.origin(), source.key())?
     };
     // LocalStorage contains the raw userToken, not a Cookie header. Do not guess
     // another key or source, parse arbitrary JSON, or accept injected headers.
@@ -317,7 +365,24 @@ fn read_session(profile: &Profile) -> Result<SessionMaterial, BrowserError> {
     if token.len() > 64 * 1024 || token.chars().any(char::is_control) {
         return Err(BrowserError::Unreadable);
     }
-    Ok(SessionMaterial(Zeroizing::new(token)))
+    let identity = if matches!(source, StorageSource::Kimi) {
+        let value = if profile.browser == Browser::Firefox {
+            firefox::read(&profile.path, source.origin(), "msh_user_id")
+        } else {
+            chromium::read(&profile.path, source.origin(), "msh_user_id")
+        };
+        match value {
+            Ok(id) if !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control) => {
+                Some(id)
+            }
+            Ok(_) => return Err(BrowserError::Unreadable),
+            Err(BrowserError::NoSession) => None,
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+    Ok(SessionMaterial(Zeroizing::new(token), identity))
 }
 
 fn io_error(error: io::Error) -> BrowserError {

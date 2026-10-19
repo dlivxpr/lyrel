@@ -156,9 +156,9 @@ fn read(
     };
     let second = match provider {
         CookieProvider::StepFun => Zeroizing::new(if profile.browser == Browser::Firefox {
-            super::firefox::read_for(&profile.path, "https://platform.stepfun.com", "web_id")?
+            super::firefox::read(&profile.path, "https://platform.stepfun.com", "web_id")?
         } else {
-            super::chromium::read_for(&profile.path, "https://platform.stepfun.com", "web_id")?
+            super::chromium::read(&profile.path, "https://platform.stepfun.com", "web_id")?
         }),
         CookieProvider::MiMo => second.ok_or(BrowserError::NoSession)?,
     };
@@ -173,7 +173,7 @@ fn read(
     header.push_str(names[1]);
     header.push('=');
     header.push_str(&second);
-    Ok(SessionMaterial(header))
+    Ok(SessionMaterial(header, None))
 }
 
 type Values = [Option<Zeroizing<String>>; 2];

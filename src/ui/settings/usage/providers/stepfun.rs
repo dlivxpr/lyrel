@@ -3,6 +3,7 @@
 //! Dashboard 服务/消息描述符、Oasis 请求拦截器；web_id 来自 LocalStorage，绝不从 JWT 推导。
 //! https://platform.stepfun.com/_next/static/chunks/app/(dashboard)/account-overview/page-e82dc4ae140e2d0f.js
 //! QueryStepPlanRateLimit/GetStepPlanStatus 空请求、planFamily 分支及 creditBuckets。
+use super::fetch_console as fetch;
 use super::*;
 use serde_json::Value;
 
@@ -132,6 +133,7 @@ pub(super) fn query(
         plan_expires: None,
         pools: Vec::new(),
         enhancement: None,
+        overdrawn: None,
     };
     if coding {
         for (kind, remaining, remaining_proto, reset, reset_proto) in [

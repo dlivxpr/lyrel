@@ -5,6 +5,7 @@
 //! 模块 95952（GET /balance 与金额字段）。
 //! https://platform.xiaomimimo.com/static/279.8ef7328eee268de2.chunk.js
 //! 模块 70793（detail.currentPeriodEnd 为 UTC；usage.items，而不是 monthUsage）。
+use super::fetch_console as fetch;
 use super::*;
 
 fn data(value: &serde_json::Value) -> Result<&serde_json::Value, UsageError> {
@@ -61,6 +62,7 @@ pub(super) fn query(
         plan_expires: None,
         pools: Vec::new(),
         enhancement: None,
+        overdrawn: None,
     };
     for (kind, field) in [
         (PoolKind::Balance, "balance"),
