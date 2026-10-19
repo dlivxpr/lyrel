@@ -30,6 +30,9 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
   <Card title="统计" icon="chart-simple">
     明确选择本机或已连接远端，查看 omp／OpenCode 原生历史的 Token、记录费用与活跃主会话总览。
   </Card>
+  <Card title="用量" icon="coins">
+    DeepSeek 官方 API 余额、本机查询账户与页面可见期间的刷新。
+  </Card>
   <Card title="关于" icon="circle-info" href="/reference/updates">
     版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
   </Card>
@@ -121,7 +124,8 @@ Host、服务 pid／公开 URL、有效 home／存储选择器共同隔离来源
 | macOS / Linux | `~/.config/lyrel/config.json` |
 | Windows | `%APPDATA%\lyrel\config.json` |
 
-唯一的例外是已保存的 SSH 主机，它们保存在同一目录下的 `servers.json` 中，因此可以在机器之间同步 `config.json`，而不必同时携带服务器信息。[servers.json →](/reference/configuration#ssh)
+SSH 主机单独保存在同一目录下的 `servers.json`。[servers.json →](/reference/configuration#ssh)
+用量账户的非秘密元数据与快照保存在 `usage-accounts.json`；API key 仅保存在桌面本机系统凭据库的 `lyrel-usage` 服务中，不随配置同步。
 
 可通过 `--config-dir` 或 `LYREL_CONFIG_DIR` 将整个目录（包括配置、主题和状态）移至其他位置。配置目录的优先级为：`--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携模式的 `data` 目录 > 平台默认目录。
 
@@ -155,3 +159,16 @@ Host、服务 pid／公开 URL、有效 home／存储选择器共同隔离来源
 ```json
 { "gui_language": "system" }
 ```
+
+## DeepSeek 用量账户
+
+从**设置 → 用量**进入，或搜索 `DeepSeek`、余额、账户、刷新。点击**添加账户…**，输入便于区分的名称和 DeepSeek API key，再点击**验证并保存**。
+lyrel 从桌面本机请求 [DeepSeek 官方余额接口](https://api-docs.deepseek.com/api/get-user-balance)：`GET https://api.deepseek.com/user/balance`，认证为 `Authorization: Bearer <API key>`。仅验证成功才写入系统凭据库；不会读取智能体或远端机器的密钥，不导入 vortex 数据。
+
+余额保留接口返回的 CNY／USD 金额字符串，分别显示总余额、赠送余额、充值余额与更新时间，不换算币种、不伪造百分比。接口不提供用户姓名、邮箱、账单周期或重置时间，因此页面使用自定义名称及稳定的本地账户 ID 区分账户，不冒称已确认服务商用户身份。
+
+每个账户可重命名、停用／启用刷新、替换密钥、手动刷新及移除。相同名称不会合并账户。替换时先验证并写入新凭据槽，保存失败保留旧可用凭据。移除仅清理所选本地查询账户、快照及自己的凭据槽，不注销 DeepSeek 账户或撤销其 API key；清理失败可重试移除。
+
+默认仅手动刷新，可选择页面可见时每分钟或每 5 分钟刷新。应用启动不查询；离开用量页、进入搜索或关闭设置后，不再启动新的周期请求。已经发出的请求可以收尾，但不得重新启动轮询或恢复已移除／旧凭据的账户状态。请求使用 lyrel 的代理解析规则，连接超时 10 秒、总超时 30 秒，并拒绝重定向以避免认证材料发往其他来源。
+
+认证失败、限流、网络、服务响应结构、系统凭据库和本地保存错误分别显示。刷新失败保留旧快照并标注其时间与状态，不将未知余额填为零。没有授权的真实 DeepSeek 账户时，受控响应测试不能证明真实账户或系统凭据库集成已验收。

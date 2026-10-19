@@ -334,6 +334,67 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsNavAgents => "Integrations",
         L10nKey::SettingsNavKeybindings => "Keyboard shortcuts",
         L10nKey::SettingsNavAbout => "About",
+        L10nKey::SettingsNavUsage => "Usage",
+        L10nKey::UsageSearchKeywords => {
+            "DeepSeek balance API key accounts rename refresh credentials usage"
+        }
+        L10nKey::UsageScope => {
+            "Desktop-wide query accounts, independent of SSH machines. No agent keys are read."
+        }
+        L10nKey::UsageOfficial => {
+            "Official API: GET https://api.deepseek.com/user/balance · Bearer API key. The API does not return a user identity or reset period; the name and ID below identify the local query account."
+        }
+        L10nKey::UsageAdd => "Add account…",
+        L10nKey::UsageRefreshAll => "Refresh all",
+        L10nKey::UsageRefresh => "Refresh",
+        L10nKey::UsageCadence => "While this page is open:",
+        L10nKey::UsageManual => "Manual only",
+        L10nKey::UsageMinute => "Every minute",
+        L10nKey::UsageFiveMinutes => "Every 5 minutes",
+        L10nKey::UsageRename => "Rename…",
+        L10nKey::UsageReplace => "Replace key…",
+        L10nKey::UsageRemove => "Remove from lyrel…",
+        L10nKey::UsageRemoveWarning => {
+            "Only this local query account, its snapshots and its own credential slots are removed. Your DeepSeek account and API key are not revoked."
+        }
+        L10nKey::UsageName => "Account name",
+        L10nKey::UsageCancel => "Cancel",
+        L10nKey::UsageVerify => "Verify and save",
+        L10nKey::UsageConfirm => "Confirm",
+        L10nKey::UsageLoading => "Query in progress",
+        L10nKey::UsageEmpty => {
+            "No query accounts. Add a DeepSeek API key to verify its real balance and save it in the system credential store."
+        }
+        L10nKey::UsageRemoving => "Local removal incomplete — retry removal",
+        L10nKey::UsageDisabled => "Refresh paused",
+        L10nKey::UsageEnabled => "Refresh enabled",
+        L10nKey::UsageBalance => "Balance",
+        L10nKey::UsageGranted => "Granted",
+        L10nKey::UsageToppedUp => "Topped up",
+        L10nKey::UsageUpdated => "Updated:",
+        L10nKey::UsageAvailable => "Provider reports sufficient balance for API calls",
+        L10nKey::UsageUnavailable => "Provider reports insufficient balance for API calls",
+        L10nKey::UsageOldSnapshot => "Previous snapshot — not a current successful query",
+        L10nKey::UsageUnknown => "Balance unknown",
+        L10nKey::UsageDisable => "Pause refresh",
+        L10nKey::UsageEnable => "Enable refresh",
+        L10nKey::UsageOpen => "Open usage",
+        L10nKey::UsageAuthError => "Authentication failed. Replace the API key.",
+        L10nKey::UsageRateError => "DeepSeek rate limit reached. Refresh later.",
+        L10nKey::UsageNetworkError => {
+            "Network request failed or timed out. Check the connection and proxy."
+        }
+        L10nKey::UsageCredentialError => {
+            "System credential store failed. Existing usable credentials are retained; retry the operation."
+        }
+        L10nKey::UsageSaveError => {
+            "Could not read or save local account metadata. Check directory access; existing data is not overwritten on read failure."
+        }
+        L10nKey::UsageResponseError => {
+            "DeepSeek returned missing or unrecognized balance data. Balance remains unknown."
+        }
+        L10nKey::UsageServiceError => "DeepSeek returned a service error. Retry later.",
+        L10nKey::UsageStaleError => "This account changed or was removed. Reopen the operation.",
         L10nKey::SettingsHeader => "SETTINGS",
         L10nKey::SettingsWindowTitle => "Settings",
         L10nKey::Reset => "Reset",

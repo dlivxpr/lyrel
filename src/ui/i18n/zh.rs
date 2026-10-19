@@ -299,6 +299,57 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavAgents => "集成",
         L10nKey::SettingsNavKeybindings => "快捷键",
         L10nKey::SettingsNavAbout => "关于",
+        L10nKey::SettingsNavUsage => "用量",
+        L10nKey::UsageSearchKeywords => "DeepSeek 余额 API key 账户 重命名 刷新 凭据 用量",
+        L10nKey::UsageScope => "桌面全局查询账户，独立于 SSH 机器，不读取智能体密钥。",
+        L10nKey::UsageOfficial => {
+            "官方 API：GET https://api.deepseek.com/user/balance · Bearer API key。接口不返回用户身份或重置周期；下方名称和 ID 标识本地查询账户。"
+        }
+        L10nKey::UsageAdd => "添加账户…",
+        L10nKey::UsageRefreshAll => "全部刷新",
+        L10nKey::UsageRefresh => "刷新",
+        L10nKey::UsageCadence => "仅页面可见期间：",
+        L10nKey::UsageManual => "仅手动",
+        L10nKey::UsageMinute => "每分钟",
+        L10nKey::UsageFiveMinutes => "每 5 分钟",
+        L10nKey::UsageRename => "重命名…",
+        L10nKey::UsageReplace => "替换密钥…",
+        L10nKey::UsageRemove => "从 lyrel 移除…",
+        L10nKey::UsageRemoveWarning => {
+            "仅移除此本地查询账户、快照及其凭据槽，不注销 DeepSeek 账户或撤销 API key。"
+        }
+        L10nKey::UsageName => "账户名称",
+        L10nKey::UsageCancel => "取消",
+        L10nKey::UsageVerify => "验证并保存",
+        L10nKey::UsageConfirm => "确认",
+        L10nKey::UsageLoading => "正在查询",
+        L10nKey::UsageEmpty => {
+            "尚无查询账户。添加 DeepSeek API key，验证真实余额后存入系统凭据库。"
+        }
+        L10nKey::UsageRemoving => "本地移除未完成，请重试移除",
+        L10nKey::UsageDisabled => "刷新已停用",
+        L10nKey::UsageEnabled => "刷新已启用",
+        L10nKey::UsageBalance => "余额",
+        L10nKey::UsageGranted => "赠送余额",
+        L10nKey::UsageToppedUp => "充值余额",
+        L10nKey::UsageUpdated => "更新时间：",
+        L10nKey::UsageAvailable => "服务商报告余额足以调用 API",
+        L10nKey::UsageUnavailable => "服务商报告余额不足以调用 API",
+        L10nKey::UsageOldSnapshot => "旧快照，并非本次查询成功结果",
+        L10nKey::UsageUnknown => "余额未知",
+        L10nKey::UsageDisable => "停用刷新",
+        L10nKey::UsageEnable => "启用刷新",
+        L10nKey::UsageOpen => "打开用量",
+        L10nKey::UsageAuthError => "认证失效，请替换 API key。",
+        L10nKey::UsageRateError => "DeepSeek 请求已限流，请稍后刷新。",
+        L10nKey::UsageNetworkError => "网络失败或超时，请检查连接与代理。",
+        L10nKey::UsageCredentialError => "系统凭据库操作失败。保留已有可用凭据，请重试。",
+        L10nKey::UsageSaveError => {
+            "无法读取或保存本地账户信息，请检查目录权限；读取失败不会覆盖已有文件。"
+        }
+        L10nKey::UsageResponseError => "DeepSeek 返回的余额缺失或结构无法识别，不能确认余额。",
+        L10nKey::UsageServiceError => "DeepSeek 服务返回错误，请稍后重试。",
+        L10nKey::UsageStaleError => "此账户已变更或移除，请重新打开操作。",
         L10nKey::SettingsHeader => "设置",
         L10nKey::SettingsWindowTitle => "设置",
         L10nKey::Reset => "重置",
