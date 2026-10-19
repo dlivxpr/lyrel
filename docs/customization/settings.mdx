@@ -30,6 +30,9 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
   <Card title="技能" icon="book-open">
     在明确选择的机器与项目中只读浏览技能，搜索名称与描述，查看实际安装、来源及 SKILL.md。
   </Card>
+  <Card title="统计" icon="chart-simple">
+    明确选择本机或已连接远端，查看 omp 原生历史的 Token、记录费用与活跃主会话总览。
+  </Card>
   <Card title="关于" icon="circle-info" href="/reference/updates">
     版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
   </Card>
@@ -56,12 +59,13 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
 | omp 18.12.2 | `~/.omp/agent/skills`；命名 profile 使用 `~/.omp/profiles/<name>/agent`。遵循 `PI_CONFIG_DIR`、默认 profile 的 `PI_CODING_AGENT_DIR`、`OMP_PROFILE`／`PI_PROFILE` 及 lyrel 配置的启动选择器；同时发现 `.agent[s]/skills`、已安装包和 Skillshare 锁指向的包。原生根只发现一层 | `/skill:name`；在原生智能体启动时发现，来源开关与名称过滤仍由 omp 管理 |
 | pi 1.3.0 | `$PI_CODING_AGENT_DIR/skills`，默认 `~/.pi/agent/skills`；`.pi/skills`、`.agents/skills`、配置的技能路径及已安装包。递归发现，项目资源受原生信任控制；没有 omp 的 profile 概念 | `/skill:name [args]`；`/reload` 刷新资源 |
 | Kimi Code 2.2.0 | `$KIMI_CODE_HOME/skills`，默认 `~/.kimi-code/skills`；`.kimi-code/skills`、`.agents/skills`、`extra_skill_dirs`；`--skills-dir` 替换自动目录。支持平铺 `.md` | `/skill:name` 或 `/name`；新增技能在新会话可用 |
-| OpenCode 2.0.32 | XDG／`OPENCODE_CONFIG_DIR` 下的 `opencode/skills`，以及 `.opencode/skills`、兼容共享来源、`opencode.json(c)` 的额外本地路径。在线目录不会因只读浏览而自动下载，相关限制会报告 | `@skill-id` 或模型的 `skill` 工具；每个模型步骤刷新列表，不假定存在技能专用重载命令 |
+| OpenCode 2.0.32 | `$XDG_CONFIG_HOME/opencode/skills`，默认 `~/.config/opencode/skills`；显式配置根为 `$OPENCODE_CONFIG_DIR/skills`。同时读取 `.opencode/skills`、兼容共享来源、平台系统来源及 `opencode.json(c)` 的额外本地路径。在线目录不会因只读浏览而自动下载，相关限制会报告 | `@skill-id` 或模型的 `skill` 工具；每个模型步骤刷新列表，不假定存在技能专用重载命令 |
 | Hermes 0.22.2 | 有效 `$HERMES_HOME/skills`，沿用原生 profile 与平台目录解析；用户共享目录必须在 `skills.external_dirs` 显式配置。项目 `.hermes/skills`／`.agents/skills` 仍需原生信任 | `/name` 或 `/skill name`；`/reload-skills` 重新扫描 |
 
 来源记录只读兼容 skills CLI 1.7.2：用户级 v3 `.skill-lock.json`（含 `XDG_STATE_HOME/skills` 路径）及项目级 v1 `skills-lock.json`。记录只会绑定到对应共享目录的真实安装，不因名称相同而套到私有副本；损坏或未知版本不会重写。声明来源不代表 lyrel 已在线核验其内容。
 
 扫描在后台执行。刷新期间可保留旧快照，显示原有扫描时间；断连、权限不足和部分来源失败不会被显示为新的完整成功。切换机器、项目、离开页面及重新打开设置后，旧请求结果不能覆盖新范围。缓存仅属于当前设置会话，不复制原生配置或技能到 lyrel 持久化目录。
+一次快照最多保留 2,000 个安装与 32 MiB Markdown，单文件上限 1 MiB；目录与伴随文件遍历也有总上限，触及时显示不完整状态。OpenCode 的系统目录依据所选 Host 生成的 `LYREL_HOST_OS` 元数据区分平台，旧服务端未报告时明确提示升级，不采用桌面本机的平台作猜测。
 
 正式依据：[omp Skills](https://github.com/can1357/oh-my-pi/blob/9d5d4ac5b50ac2bb5866e4202efc0cf785dfc57a/docs/skills.md)、[pi Skills](https://github.com/earendil-works/pi/blob/1402973a9dbe8c627341e04c9744c54953e285ca/packages/coding-agent/docs/skills.md)、[Kimi Code Skills](https://github.com/MoonshotAI/kimi-code/blob/472192c34c1efad89a369870eff0da0b708ce9bb/docs/en/customization/skills.md)、[OpenCode Skills](https://github.com/anomalyco/opencode/blob/v2.0.32/services/www/src/docs/content/skills.mdx)、[Hermes Skills](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/website/docs/user-guide/features/skills.md)、[skills CLI 来源锁](https://github.com/vercel-labs/skills/blob/671e8c320810d36fed80fac5f1a2c1bf7e82d812/src/skill-lock.ts)。
 
@@ -79,6 +83,43 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
 
 录制已被其他操作使用的键盘快捷键时，会先询问是否接管：**替换**会将快捷键移交给当前操作，**取消**则让两个操作都保持原样。
 离开已编辑的表单时，会提示保存、放弃更改或继续编辑。
+
+## omp 原生历史统计
+
+从**设置 → 统计**进入，或搜索「统计」「Token」「omp」。先选择本机或已连接远端；
+选择不会随当前 SSH 工作区隐式改变，一次只展示一台机器。
+范围支持今天、本周、本月、本年、全部与自定义日期（`YYYY-MM-DD`，包含两端）。
+所有日期按桌面本机时区的日历边界解释，星期一为周起点；快照显示时间、时区与实际结果范围。
+本周／本月／本年比较截至当前日期的对应前期；全部不制造基期，无有效分母时显示「不可比较」。
+
+数据读取正式 omp `18.12.1` 的原生 JSONL，包括其他终端产生的可发现历史，
+并遵循所选 Host 的有效 home、`OMP_PROFILE`／`PI_PROFILE`、`PI_CONFIG_DIR`、
+`PI_CODING_AGENT_DIR` 及 `agent_launch.omp` 的明确作用域与绝对 `--session-dir`。命名 profile 不读取默认 profile。
+macOS／Linux 的已存在 XDG 数据／状态目录按上游规则解析；自定义文件通过原生
+`custom-session-files` 和 `terminal-sessions` 标记发现，不猜测任意项目路径。
+相对路径依赖原生 cwd 而无法核实时明确报错，不借用 GUI home。
+远端复用 Host 文件操作与非秘密环境元数据；旧 server 缺能力时要求升级，不回退本机。
+
+主会话按范围内活动计数，独立分叉仍计主会话；原生 artifact 子会话不计主会话，
+但可核实新增 Token 与费用计入总量。重复副本与可解析 `parentSession` 链的继承记录去重；
+同名 ID 在不同 Host／有效配置作用域中保持独立。继承关系未知、坏文件、权限失败、
+链接遗漏或扫描上限均显示受限状态，不冒称完整。分项缺失显示未知，与有效零不同。
+
+费用只采用记录中的有效 USD 费用，包括零；缺失费用显示未计价调用数，
+已知费用仅为小计，不是服务商账单、余额或套餐额度。本页不联网查询价表，不推算缺失费用。
+平均 Token 包含子代理用量，分母是活跃主会话；结果不完整或分母无效时不显示精确平均值。
+
+扫描、解析与聚合在后台执行；按机器及来源缓存结构化计量，未变文件无需重解析。
+缓存只在当前设置会话内保留，不写提示词、对话正文或凭据到磁盘。
+刷新失败时保留带时间的旧结果并明确标为过期；切换机器／范围或离开页面后，晚到结果不会覆盖新选择。
+当前扫描上限为 5,000 个文件、20,000 个目录、单文件 16 MiB、每轮变更读取 256 MiB。
+未实现的其他智能体与分析／来源／价格管理不提供成功占位。
+
+原生格式与目录依据：[会话契约](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/session.md)、
+[配置作用域](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/config-usage.md)、
+[目录实现](https://github.com/can1357/oh-my-pi/blob/v18.12.1/packages/utils/src/dirs.ts)。
+确定性文件／Host 测试不等于真实 SSH 或桌面视觉验收；Windows／macOS 实机、真实 SSH、
+窄窗口、主题、界面放大和键盘流程的实际验收证据须分别记录。
 
 <a id="the-settings-file"></a>
 ## 设置文件

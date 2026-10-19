@@ -17,6 +17,7 @@ log.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 yaml_serde.workspace = true
+chrono = { version = "0.4.45", features = ["serde"] }
 
 # SSH connection-manager data layer (`core::ssh_profile` / `core::keychain`) and
 # workspace identity (`core::session`). `uuid` mints stable ids (v4) and
@@ -218,6 +219,7 @@ serde_json.workspace = true
 sha2 = "0.11.1"
 
 [dev-dependencies]
+chrono-tz = "0.10"
 # Only the existing SSH transfer regression computes MD5 digests.
 md5 = "0.8"
 # Sandboxes for the `host::conformance` suite: a fresh empty directory per case,

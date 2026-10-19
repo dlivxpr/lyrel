@@ -2,15 +2,29 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
-        L10nKey::SkillsHelpOmp => "omp 18.12.2: /skill:name. skills.enabled, provider switches and name filters can prevent loading. Native roots are one level deep and discovered at startup. Restart the native agent to discover changed sources; lyrel does not execute it.",
-        L10nKey::SkillsHelpPi => "pi 1.3.0: /skill:name [args]; /reload refreshes resources. Project resources require native project trust. --no-skills disables automatic sources, but explicit --skill can still load a file.",
-        L10nKey::SkillsHelpKimi => "Kimi Code 2.2.0: /skill:name or /name; new skills are available in a new session. --skills-dir replaces automatic directories; extra_skill_dirs appends sources.",
-        L10nKey::SkillsHelpOpenCode => "OpenCode 2.0.32: @skill-id or the model skill tool. Permissions and autoinvoke policy affect availability. Skill lists refresh at model steps; no documented skill-specific reload command is assumed.",
-        L10nKey::SkillsHelpHermes => "Hermes 0.22.2: /name or /skill name; /reload-skills rescans. User shared directories need skills.external_dirs. Project discovery requires native trust; lyrel never grants it.",
+        L10nKey::SkillsHelpOmp => {
+            "omp 18.12.2: /skill:name. skills.enabled, provider switches and name filters can prevent loading. Native roots are one level deep and discovered at startup. Restart the native agent to discover changed sources; lyrel does not execute it."
+        }
+        L10nKey::SkillsHelpPi => {
+            "pi 1.3.0: /skill:name [args]; /reload refreshes resources. Project resources require native project trust. --no-skills disables automatic sources, but explicit --skill can still load a file."
+        }
+        L10nKey::SkillsHelpKimi => {
+            "Kimi Code 2.2.0: /skill:name or /name; new skills are available in a new session. --skills-dir replaces automatic directories; extra_skill_dirs appends sources."
+        }
+        L10nKey::SkillsHelpOpenCode => {
+            "OpenCode 2.0.32: @skill-id or the model skill tool. Permissions and autoinvoke policy affect availability. Skill lists refresh at model steps; no documented skill-specific reload command is assumed."
+        }
+        L10nKey::SkillsHelpHermes => {
+            "Hermes 0.22.2: /name or /skill name; /reload-skills rescans. User shared directories need skills.external_dirs. Project discovery requires native trust; lyrel never grants it."
+        }
         L10nKey::SettingsNavSkills => "Skills",
-        L10nKey::SkillsPageDescription => "Browse readonly skills on an explicitly selected machine and project: omp, Kimi Code, pi, OpenCode 2.x, Hermes. Search names and descriptions; inspect shared and private sources.",
+        L10nKey::SkillsPageDescription => {
+            "Browse readonly skills on an explicitly selected machine and project: omp, Kimi Code, pi, OpenCode 2.x, Hermes. Search names and descriptions; inspect shared and private sources."
+        }
         L10nKey::SkillsProject => "Project",
-        L10nKey::SkillsProjectHint => "Absolute path on the selected machine; blank means user scope only",
+        L10nKey::SkillsProjectHint => {
+            "Absolute path on the selected machine; blank means user scope only"
+        }
         L10nKey::SkillsApplyProject => "Apply project",
         L10nKey::SkillsSearch => "Search skill names and descriptions",
         L10nKey::SkillsSource => "Source",
@@ -20,13 +34,17 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsPrivate => "Agent private",
         L10nKey::SkillsRefresh => "Refresh",
         L10nKey::SkillsLoading => "Scanning the selected machine…",
-        L10nKey::SkillsEmpty => "No matching skills. Check the selected machine, project, native profile and source filter, then refresh. No configuration is changed.",
+        L10nKey::SkillsEmpty => {
+            "No matching skills. Check the selected machine, project, native profile and source filter, then refresh. No configuration is changed."
+        }
         L10nKey::SkillsScannedAt => "Snapshot: {time} (UTC Unix seconds)",
         L10nKey::SkillsIncomplete => "Incomplete or stale results",
         L10nKey::SkillsUnknown => "Unknown",
         L10nKey::SkillsDiscovered => "Discovered on disk",
-        L10nKey::SkillsDisabled => "Not enabled by launch options",
-        L10nKey::SkillsRuntimeNote => "Discovery does not prove a running agent loaded the skill. lyrel never changes native configuration or sends enable/reload commands to a terminal.",
+        L10nKey::SkillsDisabled => "Not enabled by native source selection",
+        L10nKey::SkillsRuntimeNote => {
+            "Discovery does not prove a running agent loaded the skill. lyrel never changes native configuration or sends enable/reload commands to a terminal."
+        }
         L10nKey::SkillsOpenFile => "Open SKILL.md",
         L10nKey::SkillsCopyPath => "Copy path",
         L10nKey::SkillsBrowseFiles => "Browse files…",
@@ -37,12 +55,79 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsNoSource => "No verifiable source recorded",
         L10nKey::SkillsNativeGuide => "Native documentation",
         L10nKey::SkillsBack => "Back",
-        L10nKey::SkillsNoMachine => "Selected machine is disconnected. Reconnect it and refresh. The target has not changed.",
+        L10nKey::SkillsNoMachine => {
+            "Selected machine is disconnected. Reconnect it and refresh. The target has not changed."
+        }
         L10nKey::SkillsReadError => "Could not read selected scope: {error}",
         L10nKey::SkillsScope => "Discovery locations and native state",
-        L10nKey::SkillsProfileNote => "Uses the selected Host environment and configured agent launch profile. Project paths never follow workspace changes automatically.",
+        L10nKey::SkillsProfileNote => {
+            "Uses the selected Host environment and configured agent launch profile. Project paths never follow workspace changes automatically."
+        }
         L10nKey::SkillsFileLimit => " (incomplete; links or scan limits)",
         L10nKey::SkillsCopied => "Path copied",
+        L10nKey::StatisticsTitle => "Statistics",
+        L10nKey::StatisticsKeywords => {
+            "statistics omp native history tokens cost sessions machine profile date range overview"
+        }
+        L10nKey::StatisticsToday => "Today",
+        L10nKey::StatisticsWeek => "This week",
+        L10nKey::StatisticsMonth => "This month",
+        L10nKey::StatisticsYear => "This year",
+        L10nKey::StatisticsAll => "All time",
+        L10nKey::StatisticsCustom => "Custom",
+        L10nKey::StatisticsScope => {
+            "Read omp native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
+        }
+        L10nKey::StatisticsRange => "Date range",
+        L10nKey::StatisticsCalendar => {
+            "Calendar boundaries use the desktop timezone; weeks start on Monday. Comparisons use the preceding matching calendar period."
+        }
+        L10nKey::StatisticsCustomDates => "Start / end date (YYYY-MM-DD, inclusive)",
+        L10nKey::StatisticsApply => "Apply dates",
+        L10nKey::StatisticsRefresh => "Refresh history",
+        L10nKey::StatisticsLoading => {
+            "Reading native history… Previous results remain dated below."
+        }
+        L10nKey::StatisticsInvalidDate => {
+            "Enter valid dates in YYYY-MM-DD format, with the start no later than the end."
+        }
+        L10nKey::StatisticsOffline => {
+            "Machine offline — reconnect and refresh. Cached results are not current."
+        }
+        L10nKey::StatisticsReadError => {
+            "Could not refresh native history. Previous results are stale. If the remote lacks agent environment metadata, upgrade lyrel-server. {error}"
+        }
+        L10nKey::StatisticsUpdated => {
+            "Snapshot: {time} · desktop timezone: {zone}\nResult range: {range}"
+        }
+        L10nKey::StatisticsComplete => "Complete within discovered sources and scan limits",
+        L10nKey::StatisticsPartial => {
+            "Incomplete — retained values may be stale or restricted; inspect source diagnostics below"
+        }
+        L10nKey::StatisticsTokens => "Total tokens",
+        L10nKey::StatisticsCost => "Recorded historical cost",
+        L10nKey::StatisticsSessions => "Active main sessions",
+        L10nKey::StatisticsInput => "Input tokens",
+        L10nKey::StatisticsOutput => "Output tokens",
+        L10nKey::StatisticsCacheRead => "Cache-read tokens",
+        L10nKey::StatisticsCacheWrite => "Cache-write tokens",
+        L10nKey::StatisticsAverage => "Tokens per main session (including child usage)",
+        L10nKey::StatisticsUnknown => "Unknown",
+        L10nKey::StatisticsUnpriced => "Unpriced",
+        L10nKey::StatisticsUnpricedCalls => {
+            "Calls without recorded cost: {count}. Known costs are a subtotal, not a bill or account quota. No prices are fetched or inferred."
+        }
+        L10nKey::StatisticsNotComparable => "Not comparable",
+        L10nKey::StatisticsComparison => {
+            "Previous period: {tokens} tokens · {cost} · {sessions} main sessions\nToken change: {change}"
+        }
+        L10nKey::StatisticsEmpty => {
+            "No native activity in this range. Check the selected machine and source paths, choose another range, or use omp and refresh."
+        }
+        L10nKey::StatisticsPrivacy => {
+            "Read-only · omp 18.12.1 JSONL · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Arbitrary undiscoverable custom stores require an explicit source association. Skipped symlinks and unknown lineage limit coverage."
+        }
+        L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 requires its native extension. --no-extensions/-ne disables discovery; --no-session disables history, resume and fork. Print/JSON/RPC modes are not the native TUI. Missing events never mean Done. Check startup diagnostics and project trust without bypassing consent."
         }

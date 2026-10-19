@@ -23,6 +23,7 @@ macro_rules! for_each_host_case {
             $($extra)*
             @cases
             read_dir_lists_and_sorts,
+            statistics_native_overview,
             read_dir_includes_hidden,
             read_dir_missing_is_not_found,
             read_dir_on_a_file_errors,
@@ -96,6 +97,44 @@ macro_rules! __host_case_table {
 }
 
 crate::for_each_host_case!(__host_case_table);
+
+pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
+    use crate::statistics::{DateWindow, StatisticsCache, discover_omp, scan};
+    let home = sandbox.path();
+    let config = h.join(home, "omp-config");
+    let agent = h.join(&h.join(&h.join(&config, "profiles"), "work"), "agent");
+    let sessions = h.join(&agent, "sessions");
+    h.create_dir(&sessions, true).unwrap();
+    let native = b"{\"type\":\"session\",\"version\":3,\"id\":\"stdio-native\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"cwd\":\"/work\"}\n{\"type\":\"model_usage\",\"id\":\"usage\",\"timestamp\":\"2026-03-08T09:00:00Z\",\"provider\":\"anthropic\",\"model\":\"test\",\"usage\":{\"input\":12,\"output\":3,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":15,\"cost\":{\"total\":0}}}\n";
+    h.write_file(&h.join(&sessions, "native.jsonl"), native)
+        .unwrap();
+    let command = format!(
+        "HOME='{}' USERPROFILE='{}' PI_CONFIG_DIR='{}' XDG_DATA_HOME='{}' XDG_STATE_HOME='{}' omp --profile work",
+        home.display(),
+        home.display(),
+        config.display(),
+        home.display(),
+        home.display()
+    );
+    let launch = std::collections::HashMap::from([("omp".into(), command)]);
+    let sources = discover_omp(h, &launch).unwrap();
+    let mut cache = StatisticsCache::default();
+    let snapshot = scan(h, &sources, &mut cache).unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(totals.tokens().total(), Some(15));
+    assert_eq!(totals.recorded_usd(), Some(0.));
+    assert_eq!(totals.main_sessions(), 1);
+    assert!(totals.is_complete());
+    // A failed refresh retains known values rather than turning history into zero.
+    h.write_file(&h.join(&sessions, "native.jsonl"), b"{broken")
+        .unwrap();
+    let stale = scan(h, &sources, &mut cache).unwrap();
+    assert!(!stale.is_complete());
+    assert_eq!(
+        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(15)
+    );
+}
 
 #[doc(hidden)]
 #[macro_export]
@@ -1383,27 +1422,53 @@ mod tests {
 /// The same actual-file workflow runs locally and through the real stdio server.
 pub fn skills_browse_is_readonly_and_host_bound(h: &dyn Host, sb: &dyn Sandbox) {
     use crate::skills::{ScanRequest, SourceKind, scan};
-    let home=h.join(sb.path(),"skills-home");let project=h.join(sb.path(),"skills-project");
-    let user=h.join(&h.join(&h.join(&home,".agents"),"skills"),"review");
-    let project_skill=h.join(&h.join(&h.join(&project,".agents"),"skills"),"review");
-    mkdir(h,&user);mkdir(h,&project_skill);
-    let document=h.join(&user,"SKILL.md");
-    write(h,&document,"---\nname: review\ndescription: Host user review\n---\n# Actual host instructions\n");
-    write(h,&h.join(&project_skill,"SKILL.md"),"---\nname: review\ndescription: Host project review\n---\n# Different installation\n");
-    let untouched=h.join(&home,"untouched.txt");write(h,&untouched,"unchanged");
-    let before=h.read_file(&document,4096).unwrap();let before_meta=h.stat(&document).unwrap();
-    let spelling=home.to_string_lossy();
+    let home = h.join(sb.path(), "skills-home");
+    let project = h.join(sb.path(), "skills-project");
+    mkdir(h, &h.join(&project, ".git"));
+    let user = h.join(&h.join(&h.join(&home, ".agents"), "skills"), "review");
+    let project_skill = h.join(&h.join(&h.join(&project, ".agents"), "skills"), "review");
+    mkdir(h, &user);
+    mkdir(h, &project_skill);
+    let document = h.join(&user, "SKILL.md");
+    write(
+        h,
+        &document,
+        "---\nname: review\ndescription: Host user review\n---\n# Actual host instructions\n",
+    );
+    write(
+        h,
+        &h.join(&project_skill, "SKILL.md"),
+        "---\nname: review\ndescription: Host project review\n---\n# Different installation\n",
+    );
+    let untouched = h.join(&home, "untouched.txt");
+    write(h, &untouched, "unchanged");
+    let before = h.read_file(&document, 4096).unwrap();
+    let before_meta = h.stat(&document).unwrap();
+    let spelling = home.to_string_lossy();
     let launches=["omp","pi","kimi","opencode","hermes"].into_iter().map(|agent|{
         let agent_dir=if agent=="omp"{h.join(&h.join(&home,".omp"),"agent")}else{h.join(&h.join(&home,".pi"),"agent")};
         (agent.to_owned(),format!("HOME='{spelling}' USERPROFILE='{spelling}' PROGRAMDATA='{spelling}/programdata' CLAUDE_CONFIG_DIR='{spelling}/.claude' XDG_DATA_HOME='{spelling}/.data' XDG_STATE_HOME='{spelling}/.state' PI_CONFIG_DIR=.omp OMP_PROFILE=default PI_PROFILE=default PI_CODING_AGENT_DIR='{}' KIMI_CODE_HOME='{spelling}/.kimi-code' HERMES_HOME='{spelling}/.hermes' XDG_CONFIG_HOME='{spelling}/.config' OPENCODE_CONFIG_DIR='{spelling}/.config/opencode' {agent}",agent_dir.display()))
     }).collect();
-    let result=scan(h,&ScanRequest::new(&home).with_project(&project).with_launch_commands(launches)).unwrap();
-    assert_eq!(result.host(),h.id());
-    assert_eq!(result.filtered("review",None).count(),2);
-    let user=result.filtered("Host user review",Some(SourceKind::UserShared)).next().unwrap();
-    assert_eq!(user.document(),h.canonicalize(&document).unwrap());
-    assert!(user.markdown().unwrap().contains("# Actual host instructions"));
-    assert_eq!(h.read_file(&document,4096).unwrap(),before);
-    assert_eq!(h.stat(&document).unwrap(),before_meta);
-    assert_eq!(h.read_file(&untouched,1024).unwrap(),b"unchanged");
+    let result = scan(
+        h,
+        &ScanRequest::new(&home)
+            .with_project(&project)
+            .with_launch_commands(launches),
+    )
+    .unwrap();
+    assert_eq!(result.host(), h.id());
+    assert_eq!(result.filtered("review", None).count(), 2);
+    let user = result
+        .filtered("Host user review", Some(SourceKind::UserShared))
+        .next()
+        .unwrap();
+    assert_eq!(user.document(), h.canonicalize(&document).unwrap());
+    assert!(
+        user.markdown()
+            .unwrap()
+            .contains("# Actual host instructions")
+    );
+    assert_eq!(h.read_file(&document, 4096).unwrap(), before);
+    assert_eq!(h.stat(&document).unwrap(), before_meta);
+    assert_eq!(h.read_file(&untouched, 1024).unwrap(), b"unchanged");
 }

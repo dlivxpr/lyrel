@@ -1405,9 +1405,12 @@ mod tests {
 
     #[test]
     fn skills_require_selected_peer_environment_before_reading_any_files() {
-        let (host, seen)=host_with_peer('/', |_|panic!("old skill peer must not receive filesystem or command requests"));
-        let error=crate::skills::scan(&*host,&crate::skills::ScanRequest::new("/peer/home")).unwrap_err();
-        assert_eq!(error.kind(),io::ErrorKind::Unsupported);
+        let (host, seen) = host_with_peer('/', |_| {
+            panic!("old skill peer must not receive filesystem or command requests")
+        });
+        let error = crate::skills::scan(&*host, &crate::skills::ScanRequest::new("/peer/home"))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         assert!(seen.try_recv().is_err());
     }
 

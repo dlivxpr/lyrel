@@ -7832,6 +7832,7 @@ impl LyrelApp {
             agent_show_all: false,
             agent_touched: std::collections::HashSet::new(),
             agent_busy: std::collections::HashSet::new(),
+            statistics: crate::ui::settings::statistics::StatisticsState::new(window, cx),
             _subs: subs,
         });
         let search_focus = self
@@ -7845,6 +7846,7 @@ impl LyrelApp {
         self.rebuild_theme_editor(window, cx);
         self.ensure_agent_hooks_loaded(cx);
         self.skills_section_changed(self.last_settings_location.0, cx);
+        self.load_statistics(cx);
         cx.notify();
     }
 
@@ -8757,12 +8759,18 @@ impl LyrelApp {
             if moved {
                 s.reveal_first_hit.set(true);
             }
+            if moved {
+                s.statistics.invalidate();
+            }
             if target == SettingsSection::Agents {
                 s.agent_hooks_states = crate::ui::settings::AgentHooksView::Loading;
             }
         }
         self.ensure_agent_hooks_loaded(cx);
         self.skills_section_changed(target, cx);
+        if target == SettingsSection::Statistics {
+            self.load_statistics(cx);
+        }
         cx.notify();
     }
 

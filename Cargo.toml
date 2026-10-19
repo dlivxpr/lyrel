@@ -40,6 +40,7 @@ gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
 
 anyhow.workspace = true
 log.workspace = true
+chrono = "0.4.45"
 # Smart double-click selection patterns (URL/email/path). Already in the tree
 # transitively, so pinning it here adds no new native code.
 regex = "1"

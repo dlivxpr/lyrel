@@ -2,13 +2,25 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
-        L10nKey::SkillsHelpOmp => "omp 18.12.2：使用 /skill:name。skills.enabled、来源开关和名称筛选可能阻止加载；原生来源仅在启动时发现一层目录。修改来源后可重新启动原生智能体，lyrel 不代为执行。",
-        L10nKey::SkillsHelpPi => "pi 1.3.0：使用 /skill:name [args]；/reload 刷新资源。项目资源受原生项目信任控制。--no-skills 禁止自动来源，但显式 --skill 仍可加载文件。",
-        L10nKey::SkillsHelpKimi => "Kimi Code 2.2.0：使用 /skill:name 或 /name；新增技能在新会话可用。--skills-dir 替换自动目录；extra_skill_dirs 追加来源。",
-        L10nKey::SkillsHelpOpenCode => "OpenCode 2.0.32：使用 @skill-id 或模型的 skill 工具。权限和 autoinvoke 策略影响可用性；技能列表在模型步骤刷新，不假定存在未被正式文档说明的技能专用重载命令。",
-        L10nKey::SkillsHelpHermes => "Hermes 0.22.2：使用 /name 或 /skill name；/reload-skills 重新扫描。用户共享目录须列入 skills.external_dirs；项目发现受原生信任控制，lyrel 不授予信任。",
+        L10nKey::SkillsHelpOmp => {
+            "omp 18.12.2：使用 /skill:name。skills.enabled、来源开关和名称筛选可能阻止加载；原生来源仅在启动时发现一层目录。修改来源后可重新启动原生智能体，lyrel 不代为执行。"
+        }
+        L10nKey::SkillsHelpPi => {
+            "pi 1.3.0：使用 /skill:name [args]；/reload 刷新资源。项目资源受原生项目信任控制。--no-skills 禁止自动来源，但显式 --skill 仍可加载文件。"
+        }
+        L10nKey::SkillsHelpKimi => {
+            "Kimi Code 2.2.0：使用 /skill:name 或 /name；新增技能在新会话可用。--skills-dir 替换自动目录；extra_skill_dirs 追加来源。"
+        }
+        L10nKey::SkillsHelpOpenCode => {
+            "OpenCode 2.0.32：使用 @skill-id 或模型的 skill 工具。权限和 autoinvoke 策略影响可用性；技能列表在模型步骤刷新，不假定存在未被正式文档说明的技能专用重载命令。"
+        }
+        L10nKey::SkillsHelpHermes => {
+            "Hermes 0.22.2：使用 /name 或 /skill name；/reload-skills 重新扫描。用户共享目录须列入 skills.external_dirs；项目发现受原生信任控制，lyrel 不授予信任。"
+        }
         L10nKey::SettingsNavSkills => "技能",
-        L10nKey::SkillsPageDescription => "在明确选择的机器和项目中只读浏览 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能，搜索名称与描述，查看共享及私有来源。",
+        L10nKey::SkillsPageDescription => {
+            "在明确选择的机器和项目中只读浏览 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能，搜索名称与描述，查看共享及私有来源。"
+        }
         L10nKey::SkillsProject => "项目",
         L10nKey::SkillsProjectHint => "所选机器上的绝对路径；留空只查看用户作用域",
         L10nKey::SkillsApplyProject => "应用项目",
@@ -20,13 +32,17 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsPrivate => "智能体私有",
         L10nKey::SkillsRefresh => "刷新",
         L10nKey::SkillsLoading => "正在扫描所选机器…",
-        L10nKey::SkillsEmpty => "没有匹配的技能。请检查所选机器、项目、原生 profile 和来源筛选后刷新。不会修改配置。",
+        L10nKey::SkillsEmpty => {
+            "没有匹配的技能。请检查所选机器、项目、原生 profile 和来源筛选后刷新。不会修改配置。"
+        }
         L10nKey::SkillsScannedAt => "快照：{time}（UTC Unix 秒）",
         L10nKey::SkillsIncomplete => "结果不完整或已过期",
         L10nKey::SkillsUnknown => "未知",
         L10nKey::SkillsDiscovered => "磁盘已发现",
-        L10nKey::SkillsDisabled => "启动选项未启用",
-        L10nKey::SkillsRuntimeNote => "磁盘发现不代表运行中的智能体已加载。lyrel 不修改原生配置，也不会向终端投递启用或重载命令。",
+        L10nKey::SkillsDisabled => "原生来源选择未启用",
+        L10nKey::SkillsRuntimeNote => {
+            "磁盘发现不代表运行中的智能体已加载。lyrel 不修改原生配置，也不会向终端投递启用或重载命令。"
+        }
         L10nKey::SkillsOpenFile => "打开 SKILL.md",
         L10nKey::SkillsCopyPath => "复制路径",
         L10nKey::SkillsBrowseFiles => "浏览文件…",
@@ -40,9 +56,66 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsNoMachine => "所选机器已断开。请重新连接后刷新，目标不会随工作区改变。",
         L10nKey::SkillsReadError => "无法读取所选作用域：{error}",
         L10nKey::SkillsScope => "发现位置与原生状态",
-        L10nKey::SkillsProfileNote => "使用所选 Host 的环境和智能体启动配置中的有效 profile。项目路径不会随工作区自动改变。",
+        L10nKey::SkillsProfileNote => {
+            "使用所选 Host 的环境和智能体启动配置中的有效 profile。项目路径不会随工作区自动改变。"
+        }
         L10nKey::SkillsFileLimit => "（不完整；链接或扫描上限）",
         L10nKey::SkillsCopied => "已复制路径",
+        L10nKey::StatisticsTitle => "统计",
+        L10nKey::StatisticsKeywords => {
+            "统计 omp 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+        }
+        L10nKey::StatisticsToday => "今天",
+        L10nKey::StatisticsWeek => "本周",
+        L10nKey::StatisticsMonth => "本月",
+        L10nKey::StatisticsYear => "本年",
+        L10nKey::StatisticsAll => "全部",
+        L10nKey::StatisticsCustom => "自定义",
+        L10nKey::StatisticsScope => {
+            "读取所选机器的 omp 原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
+        }
+        L10nKey::StatisticsRange => "日期范围",
+        L10nKey::StatisticsCalendar => {
+            "日历边界按桌面本机时区解释；每周从星期一开始。对比采用前一个对应日历期间。"
+        }
+        L10nKey::StatisticsCustomDates => "开始／结束日期（YYYY-MM-DD，包含两端）",
+        L10nKey::StatisticsApply => "应用日期",
+        L10nKey::StatisticsRefresh => "刷新历史",
+        L10nKey::StatisticsLoading => "正在读取原生历史…下方保留的旧结果带有快照时间。",
+        L10nKey::StatisticsInvalidDate => {
+            "请输入 YYYY-MM-DD 格式的有效日期，开始日期不能晚于结束日期。"
+        }
+        L10nKey::StatisticsOffline => "机器离线，请重新连接后刷新。缓存结果不是最新数据。",
+        L10nKey::StatisticsReadError => {
+            "无法刷新原生历史，已有结果已过期。远端缺少智能体环境元数据时请升级 lyrel-server。{error}"
+        }
+        L10nKey::StatisticsUpdated => "快照：{time} · 桌面时区：{zone}\n结果范围：{range}",
+        L10nKey::StatisticsComplete => "可发现来源与扫描上限范围内完整",
+        L10nKey::StatisticsPartial => "结果不完整，保留值可能过期或受限；请查看下方来源诊断",
+        L10nKey::StatisticsTokens => "总 Token",
+        L10nKey::StatisticsCost => "历史记录费用",
+        L10nKey::StatisticsSessions => "活跃主会话",
+        L10nKey::StatisticsInput => "输入 Token",
+        L10nKey::StatisticsOutput => "输出 Token",
+        L10nKey::StatisticsCacheRead => "缓存读取 Token",
+        L10nKey::StatisticsCacheWrite => "缓存写入 Token",
+        L10nKey::StatisticsAverage => "每主会话平均 Token（含子代理用量）",
+        L10nKey::StatisticsUnknown => "未知",
+        L10nKey::StatisticsUnpriced => "未计价",
+        L10nKey::StatisticsUnpricedCalls => {
+            "没有记录费用的调用：{count}。已知费用仅为小计，不是账单或账户额度；不联网取价或推算单价。"
+        }
+        L10nKey::StatisticsNotComparable => "不可比较",
+        L10nKey::StatisticsComparison => {
+            "上期：{tokens} Token · {cost} · {sessions} 个主会话\nToken 变化：{change}"
+        }
+        L10nKey::StatisticsEmpty => {
+            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用 omp 后刷新。"
+        }
+        L10nKey::StatisticsPrivacy => {
+            "只读 · omp 18.12.1 JSONL · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。任意不可发现的自定义存储需要显式来源关联。跳过链接与未知继承关系会限制覆盖范围。"
+        }
+        L10nKey::StatisticsOpen => "打开统计",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 需要加载原生扩展。--no-extensions/-ne 会禁用发现；--no-session 会禁用历史、恢复与分叉。Print/JSON/RPC 模式不是原生 TUI。缺少事件不代表本轮结束，请检查启动诊断与项目信任，不要绕过授权。"
         }
