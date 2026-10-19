@@ -828,6 +828,7 @@ impl LyrelApp {
                 SettingsSection::KeyboardMouse => self.render_settings_input(cx),
                 SettingsSection::Ssh => self.render_settings_ssh(cx),
                 SettingsSection::Agents => self.render_settings_agents(cx),
+                SettingsSection::Statistics => self.render_settings_statistics(cx),
                 SettingsSection::Keybindings => self.render_settings_keybindings(cx),
                 SettingsSection::About => self.render_settings_about(cx),
             };
@@ -1426,6 +1427,22 @@ impl LyrelApp {
                 }
                 SettingsSection::Agents => {
                     self.render_command_line_rows(cx);
+                }
+                SettingsSection::Statistics => {
+                    let control = self.settings_button(
+                        "statistics-search-open",
+                        t(L10nKey::StatisticsOpen),
+                        cx,
+                        |this, window, cx| {
+                            this.navigate_settings(SettingsSection::Statistics, None, window, cx)
+                        },
+                    );
+                    self.settings_row(
+                        t(L10nKey::StatisticsTitle),
+                        t(L10nKey::StatisticsScope),
+                        control.into_any_element(),
+                        cx,
+                    );
                 }
                 SettingsSection::About => {
                     self.render_settings_about(cx);
