@@ -13,6 +13,7 @@ use gpui_kit::component::{
 use lyrel_core::skills::{
     self, DiscoveryState, ScanRequest, ScanSnapshot, SkillInstallation, SourceKind,
 };
+use gpui_kit::TestSupportExt as _;
 use std::{
     io,
     path::{Path, PathBuf},
@@ -137,6 +138,17 @@ mod tests {
         vcx.update(|window, cx| {
             window.render_frame(cx);
             assert!(window.find(SharedString::from(row_id(&path))).visible());
+            assert!(window.try_find("skills-back").is_none());
+            assert!(
+                window.find("skills-detail-metadata").bounds().bottom()
+                    <= window.find("skills-detail-actions").bounds().top()
+            );
+            assert!(
+                (window.find("skills-query").bounds().size.width
+                    - window.find("skills-source").bounds().size.width)
+                    .abs()
+                    <= px(1.)
+            );
             window.click("skills-copy-path", cx);
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().as_deref(),
@@ -536,7 +548,12 @@ impl LyrelApp {
             },
         );
     }
-    fn render_skill_detail(&self, skill: &SkillInstallation, cx: &mut Context<Self>) -> AnyElement {
+    fn render_skill_detail(
+        &self,
+        skill: &SkillInstallation,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let host_id = skill.host();
         let path = skill.path().to_path_buf();
         let markdown_path = skill.document().to_path_buf();
@@ -550,108 +567,92 @@ impl LyrelApp {
             path.clone()
         };
         let copy_path = path.to_string_lossy().into_owned();
-        let mut content = vec![
-            Button::new("skills-back")
-                .small()
-                .ghost()
-                .disabled(
-                    self.active_settings()
-                        .is_some_and(|s| s.skills.maintenance.target_locked()),
-                )
-                .label(t(L10nKey::SkillsBack))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    if let Some(s) = this.active_settings_mut() {
-                        s.skills.selected = None;
-                        s.skills.browser = None;
-                        s.skills.browser_generation += 1;
-                        window.focus(&s.skills.query.read(cx).focus_handle(cx), cx);
-                    }
-                    cx.notify();
-                }))
-                .into_any_element(),
-            div()
-                .text_base()
-                .font_weight(FontWeight::MEDIUM)
-                .child(skill.name().to_string())
-                .into_any_element(),
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
+        let mut content = Vec::new();
+        if narrow {
+            content.push(
+                Button::new("skills-back")
+                    .small()
+                    .ghost()
+                    .disabled(
+                        self.active_settings()
+                            .is_some_and(|s| s.skills.maintenance.target_locked()),
+                    )
+                    .label(t(L10nKey::SkillsBack))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(s) = this.active_settings_mut() {
+                            s.skills.selected = None;
+                            s.skills.browser = None;
+                            s.skills.browser_generation += 1;
+                            window.focus(&s.skills.query.read(cx).focus_handle(cx), cx);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+        let scope = skill_scope(skill);
+        let discovery = skill.sources().iter().map(|source| source.state()).next();
+        let uniform_state = discovery.filter(|state| {
+            skill.sources().iter().all(|source| source.state() == *state)
+        });
+        content.push(
+            h_flex()
+                .gap_3()
+                .min_w_0()
                 .child(
-                    skill
-                        .sources()
-                        .iter()
-                        .map(|source| {
-                            format!(
-                                "{} · {}",
-                                source.agent().display_name(),
-                                t(source_key(source.kind()))
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" · "),
+                    div()
+                        .size_8()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .bg(cx.theme().muted)
+                        .child(skill_icon(cx)),
+                )
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id("skills-detail-name")
+                                .test_support()
+                                .text_base()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(skill.name().to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!(
+                                    "{} · {}",
+                                    t(source_key(scope)),
+                                    t(uniform_state.map(state_key).unwrap_or(L10nKey::SkillsMixedState))
+                                )),
+                        ),
                 )
                 .into_any_element(),
+        );
+        content.push(
             div()
+                .text_sm()
                 .child(
                     skill
                         .description()
-                        .unwrap_or(t(L10nKey::SkillsUnknown))
+                        .unwrap_or(t(L10nKey::SkillsNoDescription))
                         .to_string(),
                 )
                 .into_any_element(),
-            skill_metadata_row(
-                L10nKey::SkillsLocation,
-                path.to_string_lossy().into_owned(),
-                cx,
-            ),
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .child(
-                    Button::new("skills-open-file")
-                        .small()
-                        .ghost()
-                        .label(t(L10nKey::SkillsOpenFile))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.skills_open_file(host_id, markdown_path.clone(), window, cx)
-                        })),
-                )
-                .child(
-                    Button::new("skills-copy-path")
-                        .small()
-                        .ghost()
-                        .label(t(L10nKey::SkillsCopyPath))
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                copy_path.clone(),
-                            ))
-                        }),
-                )
-                .child(
-                    Button::new("skills-browse-files")
-                        .small()
-                        .ghost()
-                        .label(t(L10nKey::SkillsBrowseFiles))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if host_id.is_local() {
-                                cx.reveal_path(&browse_path);
-                            } else {
-                                this.skills_browse(host_id, browse_path.clone(), cx);
-                            }
-                        })),
-                )
-                .into_any_element(),
-        ];
-        content.push(self.render_skill_maintenance(skill, cx));
+        );
+        let companions = skill.companions();
+        let mut metadata = v_flex()
+            .id("skills-detail-metadata")
+            .test_support()
+            .gap_1()
+            .min_w_0();
         for (key, value) in [
-            (
-                L10nKey::SkillsOrigin,
-                skill
-                    .origin()
-                    .unwrap_or(t(L10nKey::SkillsNoSource))
-                    .to_string(),
-            ),
             (
                 L10nKey::SkillsInvocation,
                 skill
@@ -659,25 +660,14 @@ impl LyrelApp {
                     .unwrap_or(t(L10nKey::SkillsUnknown))
                     .to_string(),
             ),
+            (L10nKey::SkillsLocation, path.to_string_lossy().into_owned()),
             (
-                L10nKey::SkillsUpdated,
-                skill
-                    .updated()
-                    .map(|time| time.secs.to_string())
-                    .unwrap_or_else(|| t(L10nKey::SkillsUnknown).to_string()),
-            ),
-        ] {
-            content.push(skill_metadata_row(key, value, cx));
-        }
-        let companions = skill.companions();
-        content.push(
-            div()
-                .text_sm()
-                .child(t_fmt(
+                L10nKey::SkillsContents,
+                t_fmt(
                     L10nKey::SkillsCompanions,
                     &[
                         ("files", &companions.files().to_string()),
-                        ("bytes", &companions.bytes().to_string()),
+                        ("bytes", &skill_size(companions.bytes())),
                         (
                             "limited",
                             if companions.is_incomplete() {
@@ -687,15 +677,75 @@ impl LyrelApp {
                             },
                         ),
                     ],
-                ))
+                ),
+            ),
+            (
+                L10nKey::SkillsUpdated,
+                skill
+                    .updated()
+                    .map(|time| skill_timestamp(time.secs))
+                    .unwrap_or_else(|| t(L10nKey::SkillsUnknown).to_string()),
+            ),
+            (
+                L10nKey::SkillsOrigin,
+                skill
+                    .origin()
+                    .unwrap_or(t(L10nKey::SkillsNoSource))
+                    .to_string(),
+            ),
+        ] {
+            metadata = metadata.child(skill_metadata_row(key, value, cx));
+        }
+        content.push(metadata.into_any_element());
+        for problem in skill.problems() {
+            content.push(
+                div()
+                    .text_color(cx.theme().warning)
+                    .text_sm()
+                    .child(problem.clone())
+                    .into_any_element(),
+            );
+        }
+        content.push(
+            h_flex()
+                .id("skills-detail-actions")
+                .test_support()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    Button::new("skills-open-file")
+                        .small()
+                        .label(t(L10nKey::SkillsOpenFile))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.skills_open_file(host_id, markdown_path.clone(), window, cx)
+                        })),
+                )
+                .child(
+                    Button::new("skills-browse-files")
+                        .small()
+                        .label(t(L10nKey::SkillsBrowseFiles))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if host_id.is_local() {
+                                cx.reveal_path(&browse_path);
+                            } else {
+                                this.skills_browse(host_id, browse_path.clone(), cx);
+                            }
+                        })),
+                )
+                .child(
+                    Button::new("skills-copy-path")
+                        .small()
+                        .label(t(L10nKey::SkillsCopyPath))
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                copy_path.clone(),
+                            ))
+                        }),
+                )
+                .child(self.render_skill_maintenance(skill, cx))
                 .into_any_element(),
         );
-        if !skill.sources().iter().any(|source| {
-            matches!(
-                source.kind(),
-                SourceKind::UserShared | SourceKind::ProjectShared
-            )
-        }) {
+        if scope == SourceKind::AgentPrivate {
             content.push(
                 div()
                     .text_sm()
@@ -704,27 +754,19 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        if let Some(snapshot) = self
-            .active_settings()
-            .and_then(|s| s.skills.snapshot.as_ref())
-        {
-            let time = snapshot
-                .scanned_at()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .to_string();
-            content.push(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)]))
-                    .into_any_element(),
-            );
-        }
         if let Some(markdown) = skill.markdown() {
             let safe =
                 lyrel_core::core::github::markdown::sanitize(markdown, t(L10nKey::GitHubImage));
+            content.push(
+                div()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("SKILL.md")
+                    .into_any_element(),
+            );
             content.push(
                 TextView::markdown(
                     SharedString::from(format!("skill-markdown-{}", row_id(skill.path()))),
@@ -815,15 +857,6 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        for problem in skill.problems() {
-            content.push(
-                div()
-                    .text_color(cx.theme().warning)
-                    .text_sm()
-                    .child(problem.clone())
-                    .into_any_element(),
-            );
-        }
         if let Some((directory, entries)) = self
             .active_settings()
             .and_then(|s| s.skills.browser.as_ref())
@@ -854,6 +887,25 @@ impl LyrelApp {
                 }
             }
         }
+        if let Some(snapshot) = self
+            .active_settings()
+            .and_then(|s| s.skills.snapshot.as_ref())
+        {
+            let time = snapshot
+                .scanned_at()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|time| i64::try_from(time.as_secs()).ok())
+                .map(skill_timestamp)
+                .unwrap_or_else(|| t(L10nKey::SkillsUnknown).to_string());
+            content.push(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)]))
+                    .into_any_element(),
+            );
+        }
         v_flex()
             .gap_3()
             .min_w_0()
@@ -868,14 +920,55 @@ fn skill_metadata_row(key: L10nKey, value: String, cx: &App) -> AnyElement {
         .min_w_0()
         .child(
             div()
-                .w_24()
+                .w_16()
                 .flex_none()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(t(key)),
         )
-        .child(div().flex_1().min_w_0().text_sm().truncate().child(value))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .whitespace_normal()
+                .child(value),
+        )
         .into_any_element()
+}
+fn skill_scope(skill: &SkillInstallation) -> SourceKind {
+    [SourceKind::UserShared, SourceKind::ProjectShared]
+        .into_iter()
+        .find(|kind| skill.sources().iter().any(|source| source.kind() == *kind))
+        .unwrap_or(SourceKind::AgentPrivate)
+}
+
+fn skill_icon(cx: &App) -> impl IntoElement + use<> {
+    gpui_kit::svg()
+        .path("icons/settings/integrations.svg")
+        .size_4()
+        .flex_none()
+        .text_color(cx.theme().muted_foreground)
+}
+
+fn skill_timestamp(seconds: i64) -> String {
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M %:z")
+                .to_string()
+        })
+        .unwrap_or_else(|| t(L10nKey::SkillsUnknown).to_string())
+}
+
+fn skill_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024. * 1024.))
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.)
+    } else {
+        format!("{bytes} B")
+    }
 }
 fn machines_connected(cx: &App, id: HostId) -> bool {
     HostRegistry::lookup(cx, id).is_some_and(|host| host.is_connected())
