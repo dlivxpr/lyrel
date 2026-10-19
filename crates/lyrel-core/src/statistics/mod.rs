@@ -26,7 +26,12 @@ pub struct Source {
 }
 impl std::fmt::Debug for Source {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("Source").field("root", &self.root).field("scope", &self.scope).field("agent", &self.agent).finish()
+        formatter
+            .debug_struct("Source")
+            .field("root", &self.root)
+            .field("scope", &self.scope)
+            .field("agent", &self.agent)
+            .finish()
     }
 }
 impl Source {
@@ -231,10 +236,11 @@ impl Snapshot {
             }
             let active = (file.source.agent != "opencode" && window.contains(session.timestamp))
                 || session.activity.iter().any(|time| window.contains(*time))
-                || (file.source.agent != "opencode" && session
-                    .records
-                    .iter()
-                    .any(|r| r.timestamp >= session.timestamp && window.contains(r.timestamp)));
+                || (file.source.agent != "opencode"
+                    && session
+                        .records
+                        .iter()
+                        .any(|r| r.timestamp >= session.timestamp && window.contains(r.timestamp)));
             if active && !file.child {
                 sessions.insert((scope, session.id.as_str()));
             }
@@ -334,7 +340,14 @@ pub fn scan(
     }
     let mut snapshot = Snapshot {
         host: host.id().0,
-        sources: sources.iter().cloned().map(|mut source| { source.opencode_request = None; source }).collect(),
+        sources: sources
+            .iter()
+            .cloned()
+            .map(|mut source| {
+                source.opencode_request = None;
+                source
+            })
+            .collect(),
         updated: chrono::Utc::now().timestamp(),
         files: Vec::new(),
         issues: Vec::new(),

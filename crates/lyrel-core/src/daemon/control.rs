@@ -620,8 +620,14 @@ pub enum ReplyOk {
             >,
         >,
     ),
-    OpenCodeStatistics(Box<Result<crate::host::session_operations::opencode::OpenCodeStatistics,
-        crate::host::session_operations::SessionOperationError>>),
+    OpenCodeStatistics(
+        Box<
+            Result<
+                crate::host::session_operations::opencode::OpenCodeStatistics,
+                crate::host::session_operations::SessionOperationError,
+            >,
+        >,
+    ),
     HermesSessions(
         Box<
             Result<

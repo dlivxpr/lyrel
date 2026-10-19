@@ -16,7 +16,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "读取所选机器的原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
         }
         L10nKey::StatisticsSource => "智能体来源",
-        L10nKey::StatisticsSourceHelp => "OpenCode 使用所选原生客户端或配置的服务。不可用来源会显示诊断，不回退另一默认服务。",
+        L10nKey::StatisticsSourceHelp => {
+            "OpenCode 使用所选原生客户端或配置的服务。不可用来源会显示诊断，不回退另一默认服务。"
+        }
         L10nKey::StatisticsAllSources => "全部来源",
         L10nKey::StatisticsReasoning => "推理 Token",
         L10nKey::StatisticsRange => "日期范围",

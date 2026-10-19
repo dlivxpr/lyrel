@@ -16,7 +16,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Read native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
         }
         L10nKey::StatisticsSource => "Agent source",
-        L10nKey::StatisticsSourceHelp => "OpenCode uses the selected native client or configured service. Unavailable sources remain visible in diagnostics; no default-service fallback.",
+        L10nKey::StatisticsSourceHelp => {
+            "OpenCode uses the selected native client or configured service. Unavailable sources remain visible in diagnostics; no default-service fallback."
+        }
         L10nKey::StatisticsAllSources => "All sources",
         L10nKey::StatisticsReasoning => "Reasoning tokens",
         L10nKey::StatisticsRange => "Date range",

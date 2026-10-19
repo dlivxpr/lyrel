@@ -876,7 +876,9 @@ fn verify_connection(
 
 /// A default scope is deliberately discovered only on the executing Host.
 /// Bound clients never fall back to this path after disconnecting.
-fn history_context(request: &SessionOperation) -> Result<(SessionScope, Vec<String>, OpenCodeScope), SessionOperationError> {
+fn history_context(
+    request: &SessionOperation,
+) -> Result<(SessionScope, Vec<String>, OpenCodeScope), SessionOperationError> {
     let mut scope = request.scope.clone();
     if scope.opencode.is_none() {
         let mut context = OpenCodeScope::default();
@@ -934,7 +936,9 @@ fn history_context(request: &SessionOperation) -> Result<(SessionScope, Vec<Stri
     Ok((scope, launch, context))
 }
 
-pub(crate) fn sessions(request: &SessionOperation) -> Result<Vec<PastSession>, SessionOperationError> {
+pub(crate) fn sessions(
+    request: &SessionOperation,
+) -> Result<Vec<PastSession>, SessionOperationError> {
     let (scope, launch, context) = history_context(request)?;
     let mut out = Vec::new();
     let mut cursor: Option<String> = None;
@@ -1021,7 +1025,7 @@ pub(crate) fn sessions(request: &SessionOperation) -> Result<Vec<PastSession>, S
 }
 
 /// Metering projection only: no prompt, assistant text, tools or credentials.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OpenCodeStatistics {
     pub identity: String,
@@ -1035,35 +1039,68 @@ impl Write for MeterBytes {
         self.0 += bytes.len();
         Ok(bytes.len())
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
-pub(crate) fn statistics(request: &SessionOperation) -> Result<OpenCodeStatistics, SessionOperationError> {
+pub(crate) fn statistics(
+    request: &SessionOperation,
+) -> Result<OpenCodeStatistics, SessionOperationError> {
     let deadline = Instant::now() + Duration::from_secs(60);
     let (scope, launch, context) = history_context(request)?;
     let expected = context.server.as_ref().unwrap();
     let identity = serde_json::to_string(&json!({"agent":"opencode","server":expected,
         "environment":scope.environment,"connection":context.connection_argv}))
-        .map_err(|_| failure(SessionErrorKind::Identity, "cannot identify OpenCode statistics scope"))?;
-    let query = |operation: &str, session: &str, cursor: Option<&str>| -> Result<Value, SessionOperationError> {
+    .map_err(|_| {
+        failure(
+            SessionErrorKind::Identity,
+            "cannot identify OpenCode statistics scope",
+        )
+    })?;
+    let query = |operation: &str,
+                 session: &str,
+                 cursor: Option<&str>|
+     -> Result<Value, SessionOperationError> {
         if context.bridge.is_some() {
             return bridge_call(&context, operation, session, cursor).map(|v| v["data"].clone());
         }
         let (native, mut params) = match operation {
-            "stats" => ("experimental.session.stats", vec!["timezone=UTC".into(), "tools=none".into()]),
+            "stats" => (
+                "experimental.session.stats",
+                vec!["timezone=UTC".into(), "tools=none".into()],
+            ),
             "statistics-list" => ("session.list", vec!["limit=100".into()]),
-            "statistics-messages" => ("session.message.list", vec![format!("sessionID={session}"), "limit=200".into()]),
+            "statistics-messages" => (
+                "session.message.list",
+                vec![format!("sessionID={session}"), "limit=200".into()],
+            ),
             _ => unreachable!(),
         };
-        if let Some(cursor) = cursor { params.push(format!("cursor={cursor}")); }
-        else if operation != "stats" { params.push("order=asc".into()); }
+        if let Some(cursor) = cursor {
+            params.push(format!("cursor={cursor}"));
+        } else if operation != "stats" {
+            params.push("order=asc".into());
+        }
         api(&launch, &scope, &request.cwd, native, &params)
     };
-    let mut out = OpenCodeStatistics { identity, sessions: Vec::new(), issues: Vec::new() };
+    let mut out = OpenCodeStatistics {
+        identity,
+        sessions: Vec::new(),
+        issues: Vec::new(),
+    };
     // The official aggregate is an independent coverage check, not added to message usage.
     let native_stats = match query("stats", "", None) {
-        Ok(value) => Some(if value.get("data").is_some() { value["data"].clone() } else { value }),
-        Err(error) => { out.issues.push(format!("OpenCode experimental.session.stats: {error}")); None }
+        Ok(value) => Some(if value.get("data").is_some() {
+            value["data"].clone()
+        } else {
+            value
+        }),
+        Err(error) => {
+            out.issues
+                .push(format!("OpenCode experimental.session.stats: {error}"));
+            None
+        }
     };
     let mut cursor = None;
     let mut cursors = std::collections::HashSet::new();
@@ -1071,37 +1108,84 @@ pub(crate) fn statistics(request: &SessionOperation) -> Result<OpenCodeStatistic
     let mut messages_count = 0usize;
     let mut bytes = 0usize;
     'sessions: loop {
-        if Instant::now() >= deadline { out.issues.push("OpenCode statistics deadline reached".into()); break; }
+        if Instant::now() >= deadline {
+            out.issues
+                .push("OpenCode statistics deadline reached".into());
+            break;
+        }
         let page = match query("statistics-list", "", cursor.as_deref()) {
             Ok(page) => page,
-            Err(error) => { out.issues.push(error.to_string()); break; }
+            Err(error) => {
+                out.issues.push(error.to_string());
+                break;
+            }
         };
-        let Some(items) = page["data"].as_array() else { out.issues.push("OpenCode statistics session page is invalid".into()); break; };
+        let Some(items) = page["data"].as_array() else {
+            out.issues
+                .push("OpenCode statistics session page is invalid".into());
+            break;
+        };
         for item in items {
-            let id = match session_identity(item) { Ok(identity) => identity.id, Err(error) => { out.issues.push(error.to_string()); continue; } };
-            if !ids.insert(id.clone()) { continue; }
-            if out.sessions.len() >= 5000 { out.issues.push("OpenCode statistics session window reached".into()); break 'sessions; }
+            let id = match session_identity(item) {
+                Ok(identity) => identity.id,
+                Err(error) => {
+                    out.issues.push(error.to_string());
+                    continue;
+                }
+            };
+            if !ids.insert(id.clone()) {
+                continue;
+            }
+            if out.sessions.len() >= 5000 {
+                out.issues
+                    .push("OpenCode statistics session window reached".into());
+                break 'sessions;
+            }
             let mut messages = Vec::new();
             let mut message_cursor = None;
             let mut message_cursors = std::collections::HashSet::new();
             let mut message_ids = std::collections::HashMap::new();
             loop {
-                if Instant::now() >= deadline || messages_count >= 50000 || bytes >= 4 * 1024 * 1024 {
-                    out.issues.push("OpenCode statistics message/deadline/response window reached".into());
+                if Instant::now() >= deadline || messages_count >= 50000 || bytes >= 4 * 1024 * 1024
+                {
+                    out.issues.push(
+                        "OpenCode statistics message/deadline/response window reached".into(),
+                    );
                     break;
                 }
                 let page = match query("statistics-messages", &id, message_cursor.as_deref()) {
                     Ok(page) => page,
-                    Err(error) => { out.issues.push(format!("OpenCode {id}: {error}")); break; }
+                    Err(error) => {
+                        out.issues.push(format!("OpenCode {id}: {error}"));
+                        break;
+                    }
                 };
-                let Some(rows) = page["data"].as_array() else { out.issues.push(format!("OpenCode {id}: statistics message page is invalid")); break; };
+                let Some(rows) = page["data"].as_array() else {
+                    out.issues
+                        .push(format!("OpenCode {id}: statistics message page is invalid"));
+                    break;
+                };
                 for row in rows {
-                    if row["type"] != "user" && row["type"] != "assistant" && row["type"] != "compaction" { continue; }
+                    if row["type"] != "user"
+                        && row["type"] != "assistant"
+                        && row["type"] != "compaction"
+                    {
+                        continue;
+                    }
                     let row = json!({"id":row["id"],"type":row["type"],"time":{"created":row["time"]["created"]},
                         "model":row["model"],"tokens":row["tokens"],"cost":row["cost"]});
-                    let message_id = row["id"].as_str().ok_or_else(|| failure(SessionErrorKind::Identity, "OpenCode message identity missing"))?;
+                    let message_id = row["id"].as_str().ok_or_else(|| {
+                        failure(
+                            SessionErrorKind::Identity,
+                            "OpenCode message identity missing",
+                        )
+                    })?;
                     if let Some(index) = message_ids.get(message_id) {
-                        if messages[*index] != row { out.issues.push(format!("OpenCode {id}: conflicting duplicate message identity")); }
+                        if messages[*index] != row {
+                            out.issues.push(format!(
+                                "OpenCode {id}: conflicting duplicate message identity"
+                            ));
+                        }
                         continue;
                     }
                     message_ids.insert(message_id.to_owned(), messages.len());
@@ -1113,43 +1197,82 @@ pub(crate) fn statistics(request: &SessionOperation) -> Result<OpenCodeStatistic
                 }
                 message_cursor = match next_statistics_cursor(&page) {
                     Ok(cursor) => cursor,
-                    Err(error) => { out.issues.push(error.to_string()); break; }
+                    Err(error) => {
+                        out.issues.push(error.to_string());
+                        break;
+                    }
                 };
-                let Some(next) = &message_cursor else { break; };
-                if !message_cursors.insert(next.clone()) { out.issues.push(format!("OpenCode {id}: repeated message cursor")); break; }
+                let Some(next) = &message_cursor else {
+                    break;
+                };
+                if !message_cursors.insert(next.clone()) {
+                    out.issues
+                        .push(format!("OpenCode {id}: repeated message cursor"));
+                    break;
+                }
             }
             out.sessions.push(json!({"info":{"id":id,"projectID":item["projectID"],"parentID":item["parentID"],"fork":item["fork"],"time":{"created":item["time"]["created"]}},"messages":messages}));
             if Instant::now() >= deadline || messages_count >= 50000 || bytes >= 4 * 1024 * 1024 {
-                out.issues.push("OpenCode statistics message/deadline/response window reached".into());
+                out.issues
+                    .push("OpenCode statistics message/deadline/response window reached".into());
                 break 'sessions;
             }
         }
         cursor = match next_statistics_cursor(&page) {
             Ok(cursor) => cursor,
-            Err(error) => { out.issues.push(error.to_string()); break; }
+            Err(error) => {
+                out.issues.push(error.to_string());
+                break;
+            }
         };
-        let Some(next) = &cursor else { break; };
-        if !cursors.insert(next.clone()) { out.issues.push("OpenCode statistics repeated session cursor".into()); break; }
+        let Some(next) = &cursor else {
+            break;
+        };
+        if !cursors.insert(next.clone()) {
+            out.issues
+                .push("OpenCode statistics repeated session cursor".into());
+            break;
+        }
     }
-    if context.bridge.is_none() { verify_connection(&launch, &scope, &request.cwd, expected)?; }
-    else { let actual = server(&bridge_call(&context, "info", "", None)?["server"])?; if &actual != expected { return Err(failure(SessionErrorKind::Identity, "OpenCode statistics service changed")); } }
+    if context.bridge.is_none() {
+        verify_connection(&launch, &scope, &request.cwd, expected)?;
+    } else {
+        let actual = server(&bridge_call(&context, "info", "", None)?["server"])?;
+        if &actual != expected {
+            return Err(failure(
+                SessionErrorKind::Identity,
+                "OpenCode statistics service changed",
+            ));
+        }
+    }
     if let Some(stats) = native_stats {
         let mut steps = 0u64;
         let mut tokens = [0u64; 5];
         let mut cost = 0f64;
         for session in &out.sessions {
             for row in session["messages"].as_array().into_iter().flatten() {
-                if !session["info"]["fork"].is_null() && row["time"]["created"].as_i64() < session["info"]["time"]["created"].as_i64() { continue; }
-                if row["type"] == "assistant" { steps += 1; }
-                else if row["type"] != "compaction" { continue; }
+                if !session["info"]["fork"].is_null()
+                    && row["time"]["created"].as_i64() < session["info"]["time"]["created"].as_i64()
+                {
+                    continue;
+                }
+                if row["type"] == "assistant" {
+                    steps += 1;
+                } else if row["type"] != "compaction" {
+                    continue;
+                }
                 for (sum, value) in tokens.iter_mut().zip(native_token_values(&row["tokens"])) {
                     *sum = sum.checked_add(value.unwrap_or(0)).unwrap_or(u64::MAX);
                 }
                 cost += row["cost"].as_f64().unwrap_or(0.);
             }
         }
-        if stats["steps"].as_u64() != Some(steps) || native_token_values(&stats["tokens"]) != tokens.map(Some)
-            || !stats["cost"].as_f64().is_some_and(|native| (native-cost).abs() <= 1e-8 * (1. + native.abs())) {
+        if stats["steps"].as_u64() != Some(steps)
+            || native_token_values(&stats["tokens"]) != tokens.map(Some)
+            || !stats["cost"]
+                .as_f64()
+                .is_some_and(|native| (native - cost).abs() <= 1e-8 * (1. + native.abs()))
+        {
             out.issues.push("OpenCode native aggregate and message metering differ; history changed, compaction events are unavailable, or pagination is incomplete".into());
         }
     }
@@ -1157,15 +1280,31 @@ pub(crate) fn statistics(request: &SessionOperation) -> Result<OpenCodeStatistic
 }
 
 fn native_token_values(tokens: &Value) -> [Option<u64>; 5] {
-    [tokens["input"].as_u64(), tokens["output"].as_u64(), tokens["reasoning"].as_u64(), tokens["cache"]["read"].as_u64(), tokens["cache"]["write"].as_u64()]
+    [
+        tokens["input"].as_u64(),
+        tokens["output"].as_u64(),
+        tokens["reasoning"].as_u64(),
+        tokens["cache"]["read"].as_u64(),
+        tokens["cache"]["write"].as_u64(),
+    ]
 }
 
 fn next_statistics_cursor(page: &Value) -> Result<Option<String>, SessionOperationError> {
-    if !page["cursor"].is_object() { return Err(failure(SessionErrorKind::Command, "OpenCode statistics pagination metadata is missing")); }
+    if !page["cursor"].is_object() {
+        return Err(failure(
+            SessionErrorKind::Command,
+            "OpenCode statistics pagination metadata is missing",
+        ));
+    }
     match &page["cursor"]["next"] {
         Value::Null => Ok(None),
-        Value::String(value) if !value.is_empty() && value.len() <= 65536 => Ok(Some(value.clone())),
-        _ => Err(failure(SessionErrorKind::Command, "OpenCode statistics cursor is invalid")),
+        Value::String(value) if !value.is_empty() && value.len() <= 65536 => {
+            Ok(Some(value.clone()))
+        }
+        _ => Err(failure(
+            SessionErrorKind::Command,
+            "OpenCode statistics cursor is invalid",
+        )),
     }
 }
 

@@ -113,19 +113,52 @@ impl LyrelApp {
         let agent = state.agent;
         let mut opencode_sources = Vec::new();
         if agent != "omp" {
-            use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind, launch_context};
+            use lyrel_core::host::session_operations::{
+                SessionOperation, SessionOperationKind, launch_context,
+            };
             let native = crate::core::cli_agent::CLIAgent::OpenCode;
             for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
                 let pane = leaf.read(cx);
-                if pane.host_id() != host_id || pane.agent() != Some(native) { continue; }
-                let Some(session) = pane.agent_session() else { continue; };
-                let (Some(scope), Some(cwd), Some(launch_argv)) = (session.readout.session_scope.clone(), pane.host_cwd(), launch_context(native, &session)) else { continue; };
-                let selector = format!("opencode:client:{}", scope.opencode.as_ref().and_then(|context| context.bridge.as_ref()).map_or("disconnected", |bridge| bridge.client_id.as_str()));
-                if opencode_sources.iter().any(|source: &statistics::Source| source.scope() == selector) { continue; }
-                opencode_sources.push(statistics::Source::opencode(cwd.clone(), selector, SessionOperation {
-                    expected_host: host_id.0, agent: native, kind: SessionOperationKind::Resume,
-                    source_id: String::new(), cwd, launch_argv, scope,
-                }));
+                if pane.host_id() != host_id || pane.agent() != Some(native) {
+                    continue;
+                }
+                let Some(session) = pane.agent_session() else {
+                    continue;
+                };
+                let (Some(scope), Some(cwd), Some(launch_argv)) = (
+                    session.readout.session_scope.clone(),
+                    pane.host_cwd(),
+                    launch_context(native, &session),
+                ) else {
+                    continue;
+                };
+                let selector = format!(
+                    "opencode:client:{}",
+                    scope
+                        .opencode
+                        .as_ref()
+                        .and_then(|context| context.bridge.as_ref())
+                        .map_or("disconnected", |bridge| bridge.client_id.as_str())
+                );
+                if opencode_sources
+                    .iter()
+                    .any(|source: &statistics::Source| source.scope() == selector)
+                {
+                    continue;
+                }
+                opencode_sources.push(statistics::Source::opencode(
+                    cwd.clone(),
+                    selector,
+                    SessionOperation {
+                        expected_host: host_id.0,
+                        agent: native,
+                        kind: SessionOperationKind::Resume,
+                        source_id: String::new(),
+                        cwd,
+                        launch_argv,
+                        scope,
+                    },
+                ));
             }
         }
         let cache = state.cache.clone();
@@ -162,11 +195,15 @@ impl LyrelApp {
                             Ok(found) => sources.extend(found),
                             Err(error) => discovery_issues.push(format!("OpenCode: {error}")),
                         }
-                    } else { sources.extend(opencode_sources); }
+                    } else {
+                        sources.extend(opencode_sources);
+                    }
                 }
                 let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
                 let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
-                for reason in discovery_issues { snapshot.report_issue(Default::default(), reason); }
+                for reason in discovery_issues {
+                    snapshot.report_issue(Default::default(), reason);
+                }
                 let totals = snapshot.aggregate(&window);
                 let previous = window.previous().map(|w| snapshot.aggregate(w));
                 Ok(Presentation {
@@ -255,9 +292,29 @@ impl LyrelApp {
             .collect();
         let machine = self.settings_dropdown("statistics-machine", label, None, entries, cx);
         let selected_agent = state.agent;
-        let agent_entries = [("all", t(L10nKey::StatisticsAllSources)), ("omp", "omp"), ("opencode", "OpenCode")]
-            .into_iter().map(|(agent, label)| MenuEntry::item(label, selected_agent == agent, move |this, _, cx| this.select_statistics_agent(agent, cx))).collect();
-        let agent_picker = self.settings_dropdown("statistics-agent", match selected_agent { "omp" => "omp", "opencode" => "OpenCode", _ => t(L10nKey::StatisticsAllSources) }, None, agent_entries, cx);
+        let agent_entries = [
+            ("all", t(L10nKey::StatisticsAllSources)),
+            ("omp", "omp"),
+            ("opencode", "OpenCode"),
+        ]
+        .into_iter()
+        .map(|(agent, label)| {
+            MenuEntry::item(label, selected_agent == agent, move |this, _, cx| {
+                this.select_statistics_agent(agent, cx)
+            })
+        })
+        .collect();
+        let agent_picker = self.settings_dropdown(
+            "statistics-agent",
+            match selected_agent {
+                "omp" => "omp",
+                "opencode" => "OpenCode",
+                _ => t(L10nKey::StatisticsAllSources),
+            },
+            None,
+            agent_entries,
+            cx,
+        );
         let periods = [
             Period::Today,
             Period::Week,
@@ -288,7 +345,13 @@ impl LyrelApp {
                 cx,
             )
             .into_any_element(),
-            self.settings_row(t(L10nKey::StatisticsSource), t(L10nKey::StatisticsSourceHelp), agent_picker, cx).into_any_element(),
+            self.settings_row(
+                t(L10nKey::StatisticsSource),
+                t(L10nKey::StatisticsSourceHelp),
+                agent_picker,
+                cx,
+            )
+            .into_any_element(),
             self.settings_row(
                 t(L10nKey::StatisticsRange),
                 t(L10nKey::StatisticsCalendar),
@@ -403,7 +466,10 @@ impl LyrelApp {
                 ),
                 (L10nKey::StatisticsInput, number(totals.tokens().input())),
                 (L10nKey::StatisticsOutput, number(totals.tokens().output())),
-                (L10nKey::StatisticsReasoning, number(totals.tokens().reasoning())),
+                (
+                    L10nKey::StatisticsReasoning,
+                    number(totals.tokens().reasoning()),
+                ),
                 (
                     L10nKey::StatisticsCacheRead,
                     number(totals.tokens().cache_read()),
@@ -530,7 +596,10 @@ mod tests {
                     temp.path().display()
                 ),
             );
-            config.agent_launch.insert("opencode".into(), format!("'{}/missing/opencode'", temp.path().display()));
+            config.agent_launch.insert(
+                "opencode".into(),
+                format!("'{}/missing/opencode'", temp.path().display()),
+            );
             cx.set_global(config);
             crate::ui::keymap::init(cx);
         });
@@ -572,20 +641,39 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             vcx.run_until_parked();
         }
-        app.update_in(&mut vcx, |app, _, cx| app.select_statistics_agent("opencode", cx));
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.select_statistics_agent("opencode", cx)
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             vcx.run_until_parked();
-            if !vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) { break; }
-            assert!(std::time::Instant::now() < deadline, "OpenCode source failure did not settle");
+            if !vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "OpenCode source failure did not settle"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         app.update_in(&mut vcx, |app, _, cx| {
             let state = &app.active_settings().unwrap().statistics;
-            let failed = state.results.get(&(HostId::LOCAL, "opencode")).expect("diagnostic snapshot");
+            let failed = state
+                .results
+                .get(&(HostId::LOCAL, "opencode"))
+                .expect("diagnostic snapshot");
             assert!(!failed.snapshot.is_complete());
             assert_eq!(failed.totals.tokens().total(), None);
-            assert_eq!(state.results.get(&(HostId::LOCAL, "omp")).unwrap().totals.tokens().total(), Some(10));
+            assert_eq!(
+                state
+                    .results
+                    .get(&(HostId::LOCAL, "omp"))
+                    .unwrap()
+                    .totals
+                    .tokens()
+                    .total(),
+                Some(10)
+            );
             app.select_statistics_agent("omp", cx);
         });
         app.update_in(&mut vcx, |app, window, cx| {
