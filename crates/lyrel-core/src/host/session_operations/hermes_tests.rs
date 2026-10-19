@@ -310,3 +310,101 @@ fn native_hermes_statistics_marks_502_session_history_as_windowed() {
         snapshot.issues()
     );
 }
+
+#[test]
+#[ignore = "requires isolated SSH server argv, official native Hermes launcher and seeded work profile in LYREL_HERMES_SSH_*"]
+fn native_hermes_statistics_real_ssh_host_preserves_profile_and_disconnects() {
+    use crate::daemon::control::{ControlHello, LinkShutdown};
+    use crate::host::remote::RemoteHost;
+    use crate::statistics::{self, DateWindow, StatisticsCache};
+    use std::sync::{Arc, Mutex};
+    struct Process(Mutex<Option<std::process::Child>>);
+    impl LinkShutdown for Process {
+        fn shutdown_link(&self) -> io::Result<()> {
+            if let Some(mut child) = self.0.lock().unwrap().take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            Ok(())
+        }
+    }
+    let argv: Vec<String> =
+        serde_json::from_str(&std::env::var("LYREL_HERMES_SSH_ARGV").unwrap()).unwrap();
+    let home = std::env::var("LYREL_HERMES_SSH_HOME").unwrap();
+    let launcher = std::env::var("LYREL_HERMES_SSH_LAUNCHER").unwrap();
+    assert!(home.ends_with("/profiles/work"));
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let closer: Arc<dyn LinkShutdown> = Arc::new(Process(Mutex::new(Some(child))));
+    let host = RemoteHost::connect_with(
+        stdout,
+        stdin,
+        Some(closer.clone()),
+        "hermes-isolated-ssh",
+        &ControlHello::host_rpc("hermes-statistics-smoke", "isolated-ssh"),
+    )
+    .unwrap()
+    .into_shared();
+    assert!(!host.id().is_local());
+    assert!(
+        host.peer()
+            .has_feature(crate::daemon::control::feature::HERMES_STATISTICS)
+    );
+    let launch = std::collections::HashMap::from([(
+        "hermes".into(),
+        format!("HERMES_HOME='{home}' '{launcher}'"),
+    )]);
+    let sources = statistics::discover_hermes(&*host, &launch).unwrap();
+    assert_eq!(sources[0].root(), Path::new(&home));
+    let mut cache = StatisticsCache::default();
+    let snapshot = statistics::scan(&*host, &sources, &mut cache).unwrap();
+    assert_eq!(snapshot.host(), host.id().0);
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(totals.main_sessions(), 2);
+    assert_eq!(totals.tokens().total(), Some(25));
+    assert_eq!(totals.recorded_usd(), Some(0.0));
+    assert_eq!(totals.estimated_usd(), Some(1.0));
+    assert!(!snapshot.is_complete());
+    assert_eq!(snapshot.issues().len(), 1, "{:?}", snapshot.issues());
+    let mut scope = SessionScope {
+        profile: Some("default".into()),
+        ..Default::default()
+    };
+    scope.environment.insert("HERMES_HOME".into(), home.clone());
+    let mut request = SessionOperation {
+        expected_host: host.id().0,
+        agent: CLIAgent::Hermes,
+        kind: SessionOperationKind::Resume,
+        source_id: String::new(),
+        cwd: home.into(),
+        launch_argv: vec![launcher],
+        scope,
+    };
+    assert_eq!(
+        host.hermes_statistics(&request).unwrap_err().kind,
+        SessionErrorKind::Identity
+    );
+    request.scope.profile = Some("work".into());
+    closer.shutdown_link().unwrap();
+    assert_eq!(
+        host.hermes_statistics(&request).unwrap_err().kind,
+        SessionErrorKind::Connection
+    );
+    match statistics::scan(&*host, &sources, &mut cache) {
+        Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotConnected),
+        Ok(stale) => {
+            assert!(!stale.is_complete());
+            assert_eq!(
+                stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
+                Some(25)
+            );
+        }
+    }
+}
