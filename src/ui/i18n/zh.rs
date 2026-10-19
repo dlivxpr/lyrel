@@ -19,12 +19,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
-            "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 仓库、ref、子路径或 skills.sh 搜索发现候选，审查后安装到本机共享目录。"
+            "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 或 skills.sh 发现候选，审查共享安装、检查更新、保留本地改动并安全移除精确关联链接。"
         }
         L10nKey::SkillsProject => "项目",
         L10nKey::SkillsProjectHint => "所选机器上的绝对路径；留空只查看用户作用域",
         L10nKey::SkillsApplyProject => "应用项目",
-        L10nKey::SkillsSearch => "搜索技能名称与描述",
+        L10nKey::SkillsSearch => "搜索技能名称、描述与来源",
         L10nKey::SkillsSource => "来源",
         L10nKey::SkillsAllSources => "全部来源",
         L10nKey::SkillsUserShared => "用户共享",
@@ -107,6 +107,29 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsInstallBrowse => "浏览已安装技能",
         L10nKey::SkillsInstallError => "无法安装 {name} — {path}：{error}",
         L10nKey::SkillsInstallRefResolved => "已解析来源：{source}",
+        L10nKey::SkillsCheckUpdate => "检查更新",
+        L10nKey::SkillsUpdateAvailable => "有可用更新，请先审查此具体安装再替换",
+        L10nKey::SkillsUpdateCurrent => "没有更新，保留本地内容",
+        L10nKey::SkillsUpdateDeleted => "记录的技能已从上游消失。本地安装保持不变，不会自动移除。",
+        L10nKey::SkillsUpdateUnknown => "无法核实来源，不推断更新地址",
+        L10nKey::SkillsUpdateFailed => "更新检查失败，不能视为没有更新",
+        L10nKey::SkillsBaselineUnmodified => "本地内容与记录基线一致，仍默认保留。",
+        L10nKey::SkillsBaselineModified => "发现本地改动，默认保留。只有明确确认后才整项替换，不会自动合并。",
+        L10nKey::SkillsBaselineUnknown => "无法核实本地基线，默认保留现有内容。替换不会合并你的改动。",
+        L10nKey::SkillsUpdateReplace => "替换此安装并丢弃其当前内容",
+        L10nKey::SkillsUpdateConfirm => "替换安装",
+        L10nKey::SkillsUpdateApplied => "已更新安装：{path}",
+        L10nKey::SkillsRemoveReview => "移除安装…",
+        L10nKey::SkillsRemoveImpact => "移除此共享目录及匹配的来源记录？其他读取该共享安装的工具也会受影响。只允许清理下列精确关联链接，保留真实副本、其他目标和无法核实的链接。执行时会复核固定 Host、路径及内容。",
+        L10nKey::SkillsRemoveLinks => "精确关联的 symbolic link／junction",
+        L10nKey::SkillsRemoveNoLinks => "在所选原生目录中没有找到可证明关联的链接。",
+        L10nKey::SkillsRemoveConfirm => "移除共享安装",
+        L10nKey::SkillsRemoved => "已移除",
+        L10nKey::SkillsMaintenanceWorking => "正在检查固定安装或执行已确认的变更…",
+        L10nKey::SkillsMaintenanceCancel => "取消，保留文件、来源记录与链接",
+        L10nKey::SkillsMaintenanceRetained => "已保留：{reason}",
+        L10nKey::SkillsMaintenanceFailed => "失败：{error}",
+        L10nKey::SkillsMaintenanceUnknownOutcome => "结果未知：{error}。请先检查列出的路径，不要盲目重复移除。",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
             "统计 omp pi kimi Kimi Code OpenCode Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"

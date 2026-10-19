@@ -23,6 +23,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 mod install;
+mod maintenance;
 #[cfg(test)]
 mod test_host;
 
@@ -195,6 +196,7 @@ pub(crate) struct SkillsState {
     browser: Option<(PathBuf, Vec<Entry>)>,
     browser_generation: u64,
     install: install::InstallState,
+    maintenance: maintenance::MaintenanceState,
 }
 impl SkillsState {
     pub(crate) fn refresh_locale(&self, window: &mut Window, cx: &mut Context<LyrelApp>) {
@@ -274,6 +276,7 @@ impl LyrelApp {
             browser: None,
             browser_generation: 0,
             install: install::InstallState::new(subs, window, cx),
+            maintenance: maintenance::MaintenanceState::default(),
         }
     }
     pub(crate) fn skills_section_changed(
@@ -293,12 +296,13 @@ impl LyrelApp {
             s.skills.browser_generation += 1;
             s.skills.loading = false;
             s.skills.install.invalidate();
+            s.skills.maintenance.invalidate();
         }
     }
     fn select_skills_host(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .active_settings()
-            .is_some_and(|s| s.skills.install.target_locked())
+            .is_some_and(|s| s.skills.install.target_locked() || s.skills.maintenance.target_locked())
         {
             return;
         }
@@ -322,7 +326,7 @@ impl LyrelApp {
     fn apply_skills_project(&mut self, cx: &mut Context<Self>) {
         if self
             .active_settings()
-            .is_some_and(|s| s.skills.install.target_locked())
+            .is_some_and(|s| s.skills.install.target_locked() || s.skills.maintenance.target_locked())
         {
             return;
         }
@@ -491,7 +495,7 @@ impl LyrelApp {
                 })
             })
             .collect();
-        let host_picker = if state.install.target_locked() {
+        let host_picker = if state.install.target_locked() || state.maintenance.target_locked() {
             div().child(machine).into_any_element()
         } else {
             self.settings_dropdown("skills-machine", machine, None, entries, cx)
@@ -514,17 +518,20 @@ impl LyrelApp {
                 .child(
                     Input::new(&state.project_input)
                         .id("skills-project-input")
-                        .disabled(state.install.target_locked()),
+                        .disabled(state.install.target_locked() || state.maintenance.target_locked()),
                 )
                 .child(
                     Button::new("skills-apply-project")
                         .label(t(L10nKey::SkillsApplyProject))
-                        .disabled(state.install.target_locked())
+                        .disabled(state.install.target_locked() || state.maintenance.target_locked())
                         .on_click(cx.listener(|this, _, _, cx| this.apply_skills_project(cx))),
                 )
                 .into_any_element(),
         ];
         body.push(self.render_skills_install(cx));
+        for message in state.maintenance.messages() {
+            body.push(div().text_sm().child(message.clone()).into_any_element());
+        }
         if !state.install.open {
             let filter = state.filter;
             let kinds = [
@@ -541,6 +548,7 @@ impl LyrelApp {
                         kind == filter,
                         move |this, _, cx| {
                             if let Some(s) = this.active_settings_mut() {
+                                if s.skills.maintenance.target_locked() { return; }
                                 s.skills.filter = kind;
                                 s.skills.page = 0;
                                 s.skills.selected = None;
@@ -555,7 +563,7 @@ impl LyrelApp {
             body.push(
                 v_flex()
                     .gap_2()
-                    .child(Input::new(&state.query).id("skills-query"))
+                    .child(Input::new(&state.query).id("skills-query").disabled(state.maintenance.target_locked()))
                     .child(self.settings_dropdown(
                         "skills-source",
                         t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
@@ -701,6 +709,10 @@ impl LyrelApp {
             .children(body)
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
+                    if this.cancel_skills_maintenance(window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     if this.cancel_skills_install(window, cx) {
                         cx.stop_propagation();
                         return;
@@ -742,6 +754,7 @@ impl LyrelApp {
         let copy_path = path.to_string_lossy().into_owned();
         let mut content = vec![
             Button::new("skills-back")
+                .disabled(self.active_settings().is_some_and(|s| s.skills.maintenance.target_locked()))
                 .label(t(L10nKey::SkillsBack))
                 .on_click(cx.listener(|this, _, window, cx| {
                     if let Some(s) = this.active_settings_mut() {
@@ -801,6 +814,7 @@ impl LyrelApp {
                 )
                 .into_any_element(),
         ];
+        content.push(self.render_skill_maintenance(skill, cx));
         for (key, value) in [
             (
                 L10nKey::SkillsOrigin,
