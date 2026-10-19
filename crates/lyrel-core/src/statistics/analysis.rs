@@ -25,10 +25,12 @@ impl Metric {
                 }
             }
             Self::Cost => {
-                if totals.unpriced_calls() > 0 || totals.estimated_usd().is_some() {
+                if totals.unpriced_calls() > 0 {
                     None
                 } else {
-                    Some(totals.recorded_usd().unwrap_or(0.))
+                    totals
+                        .recorded_usd()
+                        .or_else(|| (totals.calls() == 0).then_some(0.0))
                 }
             }
             Self::Sessions => Some(totals.main_sessions() as f64),

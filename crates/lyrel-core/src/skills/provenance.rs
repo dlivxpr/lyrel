@@ -38,29 +38,39 @@ pub(super) fn attach(
 ) {
     let mut locks = Vec::new();
     let mut seen = HashSet::new();
+    let mut environments = Vec::new();
+    if let Ok(environment) = host.agent_environment() {
+        environments.push((request.home.clone(), environment));
+    }
     for agent in HookAgent::ALL {
         if let Ok(environment) = target.agent_environment(agent) {
             if let Ok(home) = target.agent_home(&environment) {
-                let lock = if let Some(state) = environment
-                    .get("XDG_STATE_HOME")
-                    .filter(|value| !value.is_empty())
-                {
-                    let state = match absolute_selector(host, &home, state) {
-                        Ok(path) => path,
-                        Err(error) => {
-                            snapshot
-                                .problems
-                                .push(format!("skills CLI source lock: {error}"));
-                            continue;
-                        }
-                    };
-                    under(host, &state, &["skills", ".skill-lock.json"])
-                } else {
-                    under(host, &home, &[".agents", ".skill-lock.json"])
-                };
-                locks.push((lock, under(host, &home, &[".agents", "skills"]), 3));
+                environments.push((home, environment));
             }
         }
+    }
+    for (home, environment) in environments {
+        let lock = if let Some(state) = environment
+            .get("XDG_STATE_HOME")
+            .filter(|value| !value.is_empty())
+        {
+            let state = PathBuf::from(state);
+            let state = if host.is_absolute(&state) {
+                state
+            } else if let Some(cwd) = request
+                .working_directory()
+                .filter(|cwd| host.is_absolute(cwd))
+            {
+                host.join(cwd, &state.to_string_lossy())
+            } else {
+                snapshot.problems.push("skills CLI source lock: relative XDG_STATE_HOME needs its explicit Host working directory".into());
+                continue;
+            };
+            under(host, &state, &["skills", ".skill-lock.json"])
+        } else {
+            under(host, &home, &[".agents", ".skill-lock.json"])
+        };
+        locks.push((lock, under(host, &home, &[".agents", "skills"]), 3));
     }
     if let Some(project) = &request.project {
         locks.push((
@@ -142,7 +152,7 @@ pub(super) fn attach(
         }
     }
 }
-fn sanitize_name(name: &str) -> String {
+pub(super) fn sanitize_name(name: &str) -> String {
     let mut result = String::new();
     let mut separator = false;
     for ch in name.to_lowercase().chars() {

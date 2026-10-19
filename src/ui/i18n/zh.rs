@@ -19,7 +19,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
-            "在明确选择的机器和项目中只读浏览 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能，搜索名称与描述，查看共享及私有来源。"
+            "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 仓库、ref、子路径或 skills.sh 搜索发现候选，审查后安装到本机共享目录。"
         }
         L10nKey::SkillsProject => "项目",
         L10nKey::SkillsProjectHint => "所选机器上的绝对路径；留空只查看用户作用域",
@@ -61,9 +61,42 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SkillsFileLimit => "（不完整；链接或扫描上限）",
         L10nKey::SkillsCopied => "已复制路径",
+        L10nKey::SkillsInstallTitle => "发现并安装公开技能",
+        L10nKey::SkillsGithubSource => "GitHub 仓库",
+        L10nKey::SkillsGithubHint => "owner/repo 或 https://github.com/owner/repo/tree/ref/path",
+        L10nKey::SkillsRef => "分支、标签或 commit（可选）",
+        L10nKey::SkillsRefHint => "默认使用仓库默认分支；填写后覆盖 URL 中的 ref",
+        L10nKey::SkillsSubpath => "仓库子路径（可选）",
+        L10nKey::SkillsSubpathHint => "只发现此相对目录下的技能",
+        L10nKey::SkillsDiscover => "发现技能",
+        L10nKey::SkillsRegistryQuery => "搜索 skills.sh",
+        L10nKey::SkillsRegistrySearch => "搜索目录",
+        L10nKey::SkillsRegistryNote => {
+            "使用 skills CLI 同款公开搜索接口，只显示 GitHub 来源。选择结果后仍需发现仓库、选择技能并审查安装，不会直接安装。"
+        }
+        L10nKey::SkillsInstallScope => "共享安装作用域",
+        L10nKey::SkillsInstallLocalOnly => "公开技能安装当前仅支持本机；仍可浏览远端技能。",
+        L10nKey::SkillsInstallReview => "审查安装…",
+        L10nKey::SkillsInstallConfirm => "安装所选技能",
+        L10nKey::SkillsInstallReplace => "替换此现有目录",
+        L10nKey::SkillsInstallKeep => "保留现有内容（默认）",
+        L10nKey::SkillsInstallCancel => "取消安装",
+        L10nKey::SkillsInstallWorking => "正在获取或写入所选技能…",
+        L10nKey::SkillsInstallEmpty => "没有发现候选。请尝试其他仓库、ref、子路径或搜索词。",
+        L10nKey::SkillsInstallSafety => {
+            "只写共享技能与 skills CLI 来源锁，不新建私有链接、不改原生配置、不向终端发送命令。同名目录默认保留，只有逐项确认后才替换。"
+        }
+        L10nKey::SkillsInstallDone => "已安装：{name} — {path}",
+        L10nKey::SkillsInstallRetained => "保持不变：{name} — {path}",
+        L10nKey::SkillsInstallDestination => "审查固定目标与来源锁",
+        L10nKey::SkillsInstallSelect => "选择要安装的技能",
+        L10nKey::SkillsInstallCandidates => "候选：{count}",
+        L10nKey::SkillsInstallBrowse => "浏览已安装技能",
+        L10nKey::SkillsInstallError => "无法安装 {name}：{error}",
+        L10nKey::SkillsInstallRefResolved => "已解析来源：{source}",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
-            "统计 omp pi kimi Kimi Code OpenCode 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+            "统计 omp pi kimi Kimi Code OpenCode Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
         }
         L10nKey::StatisticsToday => "今天",
         L10nKey::StatisticsWeek => "本周",
@@ -99,6 +132,26 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsPartial => "结果不完整，保留值可能过期或受限；请查看下方来源诊断",
         L10nKey::StatisticsTokens => "总 Token",
         L10nKey::StatisticsCost => "历史记录费用",
+        L10nKey::StatisticsEstimatedCost => "原生估算费用（独立于实际费用）",
+        L10nKey::StatisticsHermesLimits => {
+            "Hermes 使用正式 launcher 的有效 home/profile。公开历史不含子代理用量，也不支持分页。累计用量仅在日期范围覆盖整个会话时纳入，绝不摊日。实际与原生估算费用分别展示，不相加。"
+        }
+        L10nKey::StatisticsHermesCoverage => {
+            "Hermes 公开历史不含子代理用量、归档和零消息会话。总量仅覆盖可见的原生 CLI 历史。"
+        }
+        L10nKey::StatisticsHermesEmpty => {
+            "Hermes 返回空结果。公开接口无法区分空历史和 profile 数据库不可用。"
+        }
+        L10nKey::StatisticsHermesWindow => {
+            "Hermes 已达到全局或项目预览窗口。公开接口没有 offset/cursor，此结果不是全部历史。"
+        }
+        L10nKey::StatisticsHermesProfile => {
+            "Hermes 返回了不同的 profile，已忽略该行，未回退到其他 profile。"
+        }
+        L10nKey::StatisticsHermesLineage => "Hermes 返回的原生谱系重叠，已忽略重复的累计用量。",
+        L10nKey::StatisticsHermesTime => {
+            "Hermes 累计用量缺少可靠的活动区间，无法归入所选日期范围。"
+        }
         L10nKey::StatisticsSessions => "活跃主会话",
         L10nKey::StatisticsInput => "输入 Token",
         L10nKey::StatisticsOutput => "输出 Token",
@@ -108,17 +161,17 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsUnknown => "未知",
         L10nKey::StatisticsUnpriced => "未计价",
         L10nKey::StatisticsUnpricedCalls => {
-            "没有记录费用的调用：{count}。已知费用仅为小计，不是账单或账户额度；不联网取价或推算单价。"
+            "缺少实际费用的计量记录：{count}。已知实际费用仅为小计，不是账单或账户额度；原生估算费用独立展示，不联网取价或推算单价。"
         }
         L10nKey::StatisticsNotComparable => "不可比较",
         L10nKey::StatisticsComparison => {
             "上期：{tokens} Token · {cost} · {sessions} 个主会话\nToken 变化：{change}"
         }
         L10nKey::StatisticsEmpty => {
-            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用所选智能体后刷新。"
+            "此范围没有可计入的原生活动。请检查所选机器、来源和日期范围后刷新。跨越范围边界的累计记录仍不归入单日。"
         }
         L10nKey::StatisticsPrivacy => {
-            "只读 · omp 18.12.1／pi 1.3.0 JSONL／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 调用为增量，费用保持未知；pi 工具／摘要用量不推断模型。自定义存储必须可发现，跳过链接、未知继承与分页上限均显示诊断。"
+            "只读 · omp 18.12.1／pi 1.3.0 JSONL／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API／Hermes 0.22.2 公开网关 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 调用为增量，费用保持未知；pi 工具／摘要用量不推断模型。自定义存储必须可发现，覆盖、谱系与分页上限均显示诊断。"
         }
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::StatisticsAnalysisTitle => "活动与明细",
