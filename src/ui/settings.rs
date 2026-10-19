@@ -36,6 +36,7 @@ mod hosts;
 pub(crate) mod kit;
 mod pages;
 mod shell;
+pub(crate) mod skills;
 mod shortcuts;
 mod theme_picker;
 
@@ -199,18 +200,20 @@ pub(crate) enum SettingsSection {
     KeyboardMouse,
     Ssh,
     Agents,
+    Skills,
     Keybindings,
     About,
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 7] = [
+    pub(crate) const ALL: [SettingsSection; 8] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Terminal,
         SettingsSection::KeyboardMouse,
         SettingsSection::Ssh,
         SettingsSection::Agents,
+        SettingsSection::Skills,
         SettingsSection::About,
     ];
 
@@ -229,6 +232,7 @@ impl SettingsSection {
             Self::KeyboardMouse => L10nKey::SettingsNavInput,
             Self::Ssh => L10nKey::SettingsNavSsh,
             Self::Agents => L10nKey::SettingsNavAgents,
+            Self::Skills => L10nKey::SettingsNavSkills,
             Self::Keybindings => L10nKey::SettingsNavKeybindings,
             Self::About => L10nKey::SettingsNavAbout,
         }
@@ -242,6 +246,7 @@ impl SettingsSection {
             Self::KeyboardMouse | Self::Keybindings => "icons/settings/keyboard.svg",
             Self::Ssh => "icons/settings/ssh.svg",
             Self::Agents => "icons/settings/integrations.svg",
+            Self::Skills => "icons/settings/integrations.svg",
             Self::About => "icons/settings/about.svg",
         }
     }
@@ -254,6 +259,7 @@ impl SettingsSection {
             SettingsSection::KeyboardMouse => "settings:keyboard-mouse",
             SettingsSection::Ssh => "settings:ssh",
             SettingsSection::Agents => "settings:agents",
+            SettingsSection::Skills => "settings:skills",
             SettingsSection::Keybindings => "settings:keybindings",
             SettingsSection::About => "settings:about",
         }
@@ -272,6 +278,11 @@ fn settings_search_entries() -> &'static [SearchEntry] {
     use L10nKey::*;
     use SettingsSection::*;
     &[
+        SearchEntry {
+            section: Skills,
+            title: SettingsNavSkills,
+            keywords: SkillsPageDescription,
+        },
         SearchEntry {
             section: Appearance,
             title: SettingsUiFontSize,
@@ -776,6 +787,7 @@ impl SearchEntry {
     }
     fn description(&self) -> &'static str {
         match self.title {
+            L10nKey::SettingsNavSkills => t(L10nKey::SkillsPageDescription),
             L10nKey::SettingsUiFontSize => t(L10nKey::SettingsUiFontSizeDesc),
             L10nKey::SettingsMouseZoom => t(L10nKey::SettingsMouseZoomDesc),
             L10nKey::SettingsCustomPath => t(L10nKey::SettingsCustomPathDesc),
@@ -1103,6 +1115,7 @@ pub(crate) struct SettingsState {
     pub(crate) focus_handle: gpui_kit::FocusHandle,
     pub(crate) section: SettingsSection,
     pub(crate) search: Entity<InputState>,
+    pub(crate) skills: skills::SkillsState,
     pub(crate) shortcut_search: Entity<InputState>,
     pub(crate) modified_only: bool,
     pub(crate) save_error: Option<String>,

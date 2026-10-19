@@ -7714,6 +7714,7 @@ impl LyrelApp {
             self.build_shell_inputs(&mut subs, window, cx);
         let link_file_command_input = self.build_link_file_command_input(&mut subs, window, cx);
         let http_proxy_input = self.build_http_proxy_input(&mut subs, window, cx);
+        let skills = self.build_skills_state(&mut subs, window, cx);
         // One query box for whichever popover is open — a theme list or a
         // font list — since only one is ever open at a time.
         // Shared by every searchable dropdown on the page, so the hint is the
@@ -7786,6 +7787,7 @@ impl LyrelApp {
             focus_handle: focus_handle.clone(),
             section: self.last_settings_location.0,
             search: settings_search,
+            skills,
             shortcut_search,
             modified_only: false,
             search_active: false,
@@ -7842,6 +7844,7 @@ impl LyrelApp {
         }
         self.rebuild_theme_editor(window, cx);
         self.ensure_agent_hooks_loaded(cx);
+        self.skills_section_changed(self.last_settings_location.0, cx);
         cx.notify();
     }
 
@@ -7896,6 +7899,7 @@ impl LyrelApp {
             s.agent_query.update(cx, |state, cx| {
                 state.set_placeholder(t(L10nKey::SettingsSearchAgents), window, cx)
             });
+            s.skills.refresh_locale(window, cx);
             s.shell_args_input.update(cx, |state, cx| {
                 state.set_placeholder(t(L10nKey::AppPlaceholderNone), window, cx)
             });
@@ -8758,6 +8762,7 @@ impl LyrelApp {
             }
         }
         self.ensure_agent_hooks_loaded(cx);
+        self.skills_section_changed(target, cx);
         cx.notify();
     }
 

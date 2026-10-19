@@ -33,6 +33,11 @@ pub(crate) const AGENT_ENVIRONMENT_KEYS: &[&str] = &[
     "HERMES_DATA_DIR_SUFFIX",
     "HERMES_RUNTIME_DIR",
     "OPENCODE_DB",
+    "OPENCODE_CONFIG_DIR",
+    "OPENCODE_CONFIG",
+    "PI_PACKAGE_DIR",
+    "CLAUDE_CONFIG_DIR",
+    "PROGRAMDATA",
 ];
 
 pub(crate) fn local_agent_environment() -> std::collections::BTreeMap<String, String> {

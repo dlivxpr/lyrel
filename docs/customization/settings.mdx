@@ -6,7 +6,7 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
 <kbd>⌘ ,</kbd> 可打开设置。顶部的搜索框可匹配设置名称和关键词，通常比回想某项设置位于哪个分区更快。
 
 <a id="the-seven-sections"></a>
-## 七个分区
+## 设置分区
 
 <CardGroup cols={2}>
   <Card title="通用" icon="sliders">
@@ -27,10 +27,46 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
   <Card title="集成" icon="robot" href="/agents/status">
     每台机器上的 AI 智能体钩子，以及 PATH 中的 lyrel 命令。
   </Card>
+  <Card title="技能" icon="book-open">
+    在明确选择的机器与项目中只读浏览技能，搜索名称与描述，查看实际安装、来源及 SKILL.md。
+  </Card>
   <Card title="关于" icon="circle-info" href="/reference/updates">
     版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
   </Card>
 </CardGroup>
+
+## 技能：先选机器，再选项目
+
+从**设置 → 技能**进入，也可在设置搜索中输入 `skills`、`SKILL.md`、智能体名称或「共享」。机器默认是桌面本机；远端选项只列出已连接的 Host。切换工作区不会替你切换机器或项目。
+
+需要项目技能时，输入**目标机器上的绝对项目路径**，按 Enter 或选择**应用项目**。留空只查看用户级来源。不能解析的相对路径、旧远端缺少环境能力、断连和读取失败会明确报告，不会回退读取桌面目录。切换机器会清空项目选择，避免把本机路径当成远端路径。
+
+可按名称或描述搜索，并筛选用户共享、项目共享和智能体私有来源。列表分页显示；同一真实目录的链接别名可合并来源，同名但不同位置的副本仍是独立安装。打开详情后可阅读实际 `SKILL.md`、查看来源入口、更新时间、伴随文件数量和字节数，以及有记录的参数提示。缺少 frontmatter、无效 UTF-8、不可读、超过 1 MiB 或遍历上限会明确报告；没有来源和时间时保留未知，不补造信息。
+
+**打开 SKILL.md**通过 lyrel 编辑器打开所选 Host 的文件。**复制路径**复制实际安装路径。本机**浏览文件**在文件管理器定位；远端则在技能详情中列出目标 Host 的文件，文件通过同一远端编辑入口打开，绝不把远端路径交给本地文件管理器。详情和远端文件列表均可用 Escape 返回上一层，来源下拉框沿用设置的键盘导航与取消规则。
+
+### 发现不等于原生启用
+
+技能页只读取文件，不安装、不移除、不修改智能体配置、不授予项目信任，也不向运行中的 TUI 发送命令。状态「磁盘已发现」只说明存在文件；能证明来源开关关闭时显示未启用，运行时权限、信任、名称过滤和包过滤无法完整核实时显示未知。
+
+发现依据以下正式版本契约（核验于 2026-10-19）：
+
+| 智能体 | 主要用户根与项目来源 | 原生调用／刷新提示 |
+| --- | --- | --- |
+| omp 18.12.2 | `~/.omp/agent/skills`；命名 profile 使用 `~/.omp/profiles/<name>/agent`。遵循 `PI_CONFIG_DIR`、默认 profile 的 `PI_CODING_AGENT_DIR`、`OMP_PROFILE`／`PI_PROFILE` 及 lyrel 配置的启动选择器；同时发现 `.agent[s]/skills`、已安装包和 Skillshare 锁指向的包。原生根只发现一层 | `/skill:name`；在原生智能体启动时发现，来源开关与名称过滤仍由 omp 管理 |
+| pi 1.3.0 | `$PI_CODING_AGENT_DIR/skills`，默认 `~/.pi/agent/skills`；`.pi/skills`、`.agents/skills`、配置的技能路径及已安装包。递归发现，项目资源受原生信任控制；没有 omp 的 profile 概念 | `/skill:name [args]`；`/reload` 刷新资源 |
+| Kimi Code 2.2.0 | `$KIMI_CODE_HOME/skills`，默认 `~/.kimi-code/skills`；`.kimi-code/skills`、`.agents/skills`、`extra_skill_dirs`；`--skills-dir` 替换自动目录。支持平铺 `.md` | `/skill:name` 或 `/name`；新增技能在新会话可用 |
+| OpenCode 2.0.32 | XDG／`OPENCODE_CONFIG_DIR` 下的 `opencode/skills`，以及 `.opencode/skills`、兼容共享来源、`opencode.json(c)` 的额外本地路径。在线目录不会因只读浏览而自动下载，相关限制会报告 | `@skill-id` 或模型的 `skill` 工具；每个模型步骤刷新列表，不假定存在技能专用重载命令 |
+| Hermes 0.22.2 | 有效 `$HERMES_HOME/skills`，沿用原生 profile 与平台目录解析；用户共享目录必须在 `skills.external_dirs` 显式配置。项目 `.hermes/skills`／`.agents/skills` 仍需原生信任 | `/name` 或 `/skill name`；`/reload-skills` 重新扫描 |
+
+来源记录只读兼容 skills CLI 1.7.2：用户级 v3 `.skill-lock.json`（含 `XDG_STATE_HOME/skills` 路径）及项目级 v1 `skills-lock.json`。记录只会绑定到对应共享目录的真实安装，不因名称相同而套到私有副本；损坏或未知版本不会重写。声明来源不代表 lyrel 已在线核验其内容。
+
+扫描在后台执行。刷新期间可保留旧快照，显示原有扫描时间；断连、权限不足和部分来源失败不会被显示为新的完整成功。切换机器、项目、离开页面及重新打开设置后，旧请求结果不能覆盖新范围。缓存仅属于当前设置会话，不复制原生配置或技能到 lyrel 持久化目录。
+
+正式依据：[omp Skills](https://github.com/can1357/oh-my-pi/blob/9d5d4ac5b50ac2bb5866e4202efc0cf785dfc57a/docs/skills.md)、[pi Skills](https://github.com/earendil-works/pi/blob/1402973a9dbe8c627341e04c9744c54953e285ca/packages/coding-agent/docs/skills.md)、[Kimi Code Skills](https://github.com/MoonshotAI/kimi-code/blob/472192c34c1efad89a369870eff0da0b708ce9bb/docs/en/customization/skills.md)、[OpenCode Skills](https://github.com/anomalyco/opencode/blob/v2.0.32/services/www/src/docs/content/skills.mdx)、[Hermes Skills](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/website/docs/user-guide/features/skills.md)、[skills CLI 来源锁](https://github.com/vercel-labs/skills/blob/671e8c320810d36fed80fac5f1a2c1bf7e82d812/src/skill-lock.ts)。
+
+自动化验证使用隔离目录、真实 Host 文件读取和设置交互；真实桌面主题／缩放／窄窗口、真实 SSH 连接与远端编辑、macOS 实机仍需分别记录运行验收，不能以编译或 stdio 测试替代。
+
 
 <a id="search-and-edit"></a>
 ## 搜索与编辑
