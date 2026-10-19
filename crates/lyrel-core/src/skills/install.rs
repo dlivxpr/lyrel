@@ -315,7 +315,7 @@ fn inspect_directory(host: &dyn Host, directory: &Path) -> io::Result<(ExistingC
         digest.update(relative.len().to_le_bytes()); digest.update(relative.as_bytes());
         fingerprint_meta(&mut digest, &metadata); digest.update(bytes);
     }
-    Ok((ExistingContent::Directory { files: count, bytes: total }, Some(format!("{:x}", digest.finalize()))))
+    Ok((ExistingContent::Directory { files: count, bytes: total }, Some(crate::daemon::install::checksums::hex(&digest.finalize().into()))))
 }
 fn fingerprint_meta(digest: &mut Sha256, meta: &Meta) {
     digest.update([meta.is_dir as u8, meta.is_symlink as u8, meta.readonly as u8]);

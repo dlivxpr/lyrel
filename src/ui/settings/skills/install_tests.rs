@@ -58,9 +58,9 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-install-scope-trigger", cx);
-        window.render_frame(cx);
-        window.click("skills-install-scope-item-1", cx);
+        window.click("skills-install-scope", cx);
+        window.press("down", cx);
+        window.press("enter", cx);
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);

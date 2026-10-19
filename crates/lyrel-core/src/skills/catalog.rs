@@ -337,7 +337,7 @@ pub fn computed_hash(files: &[SkillFile]) -> Result<String, CatalogError> {
     ordered.sort_by(|a, b| collator.compare(&a.0, &b.0));
     let mut digest = Sha256::new();
     for (path, bytes) in ordered { digest.update(path.as_bytes()); digest.update(bytes); }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(crate::daemon::install::checksums::hex(&digest.finalize().into()))
 }
 
 #[non_exhaustive]

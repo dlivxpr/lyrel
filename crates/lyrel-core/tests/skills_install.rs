@@ -232,9 +232,11 @@ fn directory_link(target: &Path, path: &Path) {
 }
 #[cfg(windows)]
 fn directory_link(target: &Path, path: &Path) {
-    let status = std::process::Command::new("cmd").args(["/C", "mklink", "/J"])
-        .arg(path).arg(target).status().unwrap();
-    assert!(status.success(), "isolated junction creation must succeed");
+    let output = std::process::Command::new("cmd").args(["/D", "/C", "mklink", "/J"])
+        .arg(path.to_string_lossy().replace('/', "\\"))
+        .arg(target.to_string_lossy().replace('/', "\\"))
+        .output().unwrap();
+    assert!(output.status.success(), "isolated junction creation: {}", String::from_utf8_lossy(&output.stderr));
 }
 
 #[cfg(any(unix, windows))]

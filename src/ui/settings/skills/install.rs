@@ -1,7 +1,7 @@
 //! Public discovery and installation belong to the settings session. Network
 //! bytes stay on the desktop; the confirmed destination is a frozen Host plan.
 use super::*;
-use gpui_kit::component::{Disableable as _, checkbox::Checkbox};
+use gpui_kit::component::{Disableable as _, checkbox::Checkbox, select::{Select, SelectState, SelectItem, SelectEvent}};
 use lyrel_core::{
     core::github::{Transport, http::HttpTransport},
     skills::{catalog::{self, GitHubSource, SkillCatalog, SkillSearchResult}, install::{self, ExistingContent, InstallDecision, InstallPreview, InstallStatus, InstallTarget}},
@@ -12,6 +12,13 @@ use std::collections::BTreeSet;
 #[path = "install_tests.rs"]
 mod tests;
 
+#[derive(Clone)]
+struct ScopeChoice(bool);
+impl SelectItem for ScopeChoice {
+    type Value = bool;
+    fn title(&self) -> SharedString { t(if self.0 { L10nKey::SkillsProjectShared } else { L10nKey::SkillsUserShared }).into() }
+    fn value(&self) -> &bool { &self.0 }
+}
 pub(super) struct InstallState {
     pub(super) source: Entity<InputState>,
     reference: Entity<InputState>,
@@ -21,6 +28,8 @@ pub(super) struct InstallState {
     pub(super) busy: bool,
     pub(super) open: bool,
     project_scope: bool,
+    scope: Entity<SelectState<Vec<ScopeChoice>>>,
+    inputs: [String; 4],
     catalogue: Option<Arc<SkillCatalog>>,
     selected: BTreeSet<String>,
     hits: Vec<SkillSearchResult>,
@@ -40,26 +49,48 @@ impl InstallState {
             subs.push(cx.subscribe_in(&entity, window, |app, _, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     if let Some(s) = app.active_settings_mut() {
-                        s.skills.install.invalidate();
-                        s.skills.install.catalogue = None;
-                        s.skills.install.selected.clear();
-                        s.skills.install.hits.clear();
-                        s.skills.install.discovered = false;
-                        s.skills.install.searched = false;
+                        let state = &mut s.skills.install;
+                        let inputs = state.input_values(cx);
+                        if inputs != state.inputs {
+                            state.inputs = inputs;
+                            state.invalidate();
+                            state.catalogue = None;
+                            state.selected.clear();
+                            state.hits.clear();
+                            state.discovered = false;
+                            state.searched = false;
+                        }
                     }
                     cx.notify();
                 }
             }));
             entity
         };
+        let source = input(L10nKey::SkillsGithubHint);
+        let reference = input(L10nKey::SkillsRefHint);
+        let subpath = input(L10nKey::SkillsSubpathHint);
+        let search = input(L10nKey::SkillsRegistryQuery);
+        let scope = cx.new(|cx| SelectState::new(vec![ScopeChoice(false), ScopeChoice(true)], None, window, cx));
+        scope.update(cx, |state,cx| state.set_selected_value(&false,window,cx));
+        subs.push(cx.subscribe_in(&scope,window,|app,_,event,_,cx| {
+            if let SelectEvent::Confirm(Some(project)) = event {
+                if let Some(s)=app.active_settings_mut() {
+                    s.skills.install.project_scope=*project;
+                    s.skills.install.invalidate();
+                }
+                cx.notify();
+            }
+        }));
         Self {
-            source: input(L10nKey::SkillsGithubHint), reference: input(L10nKey::SkillsRefHint),
-            subpath: input(L10nKey::SkillsSubpathHint), search: input(L10nKey::SkillsRegistryQuery),
+            source, reference, subpath, search, scope, inputs: Default::default(),
             generation: 0, busy: false, open: false, project_scope: false, catalogue: None,
             selected: BTreeSet::new(), hits: Vec::new(), searched: false, discovered: false,
             preview: None, decisions: Vec::new(), messages: Vec::new(), error: None,
             github: None, registry: None,
         }
+    }
+    fn input_values(&self, cx: &App) -> [String; 4] {
+        [&self.source,&self.reference,&self.subpath,&self.search].map(|input|input.read(cx).value().to_string())
     }
     pub(super) fn invalidate(&mut self) {
         self.generation += 1;
@@ -94,6 +125,7 @@ impl LyrelApp {
         let state = &mut s.skills.install;
         if state.busy { return; }
         state.invalidate();
+        state.inputs = state.input_values(cx);
         let reference = state.reference.read(cx).value().trim().to_string();
         let subpath = state.subpath.read(cx).value().trim().to_string();
         let source = GitHubSource::parse(&state.source.read(cx).value()).and_then(|source| source.with_selection((!reference.is_empty()).then_some(reference.as_str()), (!subpath.is_empty()).then_some(subpath.as_str())));
@@ -123,10 +155,11 @@ impl LyrelApp {
         let state=&mut s.skills.install;
         if state.busy{return;}
         state.invalidate(); state.hits.clear();state.searched=false;state.busy=true;
+        state.inputs = state.input_values(cx);
         let (session,generation,query,injected)=(s.skills.session,state.generation,state.search.read(cx).value().to_string(),state.registry.clone());
         let Some(host)=HostRegistry::get(cx,HostId::LOCAL) else{return;};
         HostOps::run(host,cx,move |_| {
-            let transport:Arc<dyn Transport>=match injected {Some(t)=>t,None=>Arc::new(catalog::SkillsSearchHttp::new(proxy.as_deref()).map_err(|e|e.to_string())?)};
+            let transport:Arc<dyn Transport>=match injected {Some(t)=>t,None=>Arc::new(catalog::SkillsSearchHttp::new(proxy.as_deref()))};
             catalog::search(transport.as_ref(),&query).map_err(|e|e.to_string())
         },move |app,result,cx| {
             if let Some(state)=app.skills_install_current(session,generation){state.busy=false;state.searched=true;match result{Ok(hits)=>state.hits=hits,Err(error)=>state.error=Some(error)}cx.notify();}
@@ -219,13 +252,13 @@ impl LyrelApp {
                 }
                 body.push(row.into_any_element());
             }
-            body.push(kit::button("skills-install-confirm",t(L10nKey::SkillsInstallConfirm),kit::BtnKind::Primary).on_click(cx.listener(|app,_,_,cx|app.confirm_public_install(cx))).into_any_element());
+            body.push(Button::new("skills-install-confirm").label(t(L10nKey::SkillsInstallConfirm)).custom(crate::ui::theme::inverted_button(cx.theme().background,cx)).on_click(cx.listener(|app,_,_,cx|app.confirm_public_install(cx))).into_any_element());
             body.push(Button::new("skills-install-cancel").label(t(L10nKey::SkillsInstallCancel)).on_click(cx.listener(|app,_,window,cx|{if let Some(s)=app.active_settings_mut(){s.skills.install.cancel_review();window.focus(&s.skills.install.source.read(cx).focus_handle(cx),cx);}cx.notify();})).into_any_element());
         }else{
             for (label,input,id) in [(L10nKey::SkillsGithubSource,&state.source,"skills-install-source"),(L10nKey::SkillsRef,&state.reference,"skills-install-ref"),(L10nKey::SkillsSubpath,&state.subpath,"skills-install-subpath")]{body.push(v_flex().gap_1().child(t(label)).child(Input::new(input).id(id).disabled(state.busy)).into_any_element());}
             body.push(Button::new("skills-discover").label(t(L10nKey::SkillsDiscover)).disabled(state.busy||state.source.read(cx).value().trim().is_empty()).on_click(cx.listener(|app,_,_,cx|app.discover_public_skills(cx))).into_any_element());
-            let entries=[false,true].into_iter().filter(|project|!project||s.skills.project.is_some()).map(|project|MenuEntry::item(t(if project{L10nKey::SkillsProjectShared}else{L10nKey::SkillsUserShared}),project==state.project_scope,move |app,_,cx|{if let Some(s)=app.active_settings_mut(){s.skills.install.project_scope=project;s.skills.install.invalidate();}cx.notify();})).collect();
-            body.push(v_flex().gap_1().child(t(L10nKey::SkillsInstallScope)).child(self.settings_dropdown("skills-install-scope",t(if state.project_scope{L10nKey::SkillsProjectShared}else{L10nKey::SkillsUserShared}),None,if state.busy{Vec::new()}else{entries},cx)).into_any_element());
+            body.push(v_flex().gap_1().child(t(L10nKey::SkillsInstallScope)).child(Select::new(&state.scope).id("skills-install-scope").disabled(state.busy).accessibility_label(t(L10nKey::SkillsInstallScope))).into_any_element());
+            if state.project_scope && s.skills.project.is_none() { body.push(div().text_sm().text_color(cx.theme().warning).child(t(L10nKey::SkillsProjectHint)).into_any_element()); }
             if let Some(catalogue)=&state.catalogue{
                 body.push(div().text_sm().child(t_fmt(L10nKey::SkillsInstallRefResolved,&[("source",catalogue.tree_sha())])).into_any_element());
                 body.extend(catalogue.problems().iter().map(|problem|div().text_sm().text_color(cx.theme().warning).child(problem.clone()).into_any_element()));
