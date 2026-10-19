@@ -2483,7 +2483,12 @@ mod tests {
             (R::Stat { path: "/".into() }, s(5)),
             (R::Exists { path: "/".into() }, s(5)),
             (R::Canonicalize { path: "/".into() }, s(5)),
-            (R::ReadLink { path: "/alias".into() }, s(5)),
+            (
+                R::ReadLink {
+                    path: "/alias".into(),
+                },
+                s(5),
+            ),
             (R::RepoRoot { path: "/".into() }, s(5)),
             (R::WatchOpen { dirs: vec![] }, s(5)),
             (

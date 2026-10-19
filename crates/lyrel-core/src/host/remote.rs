@@ -1969,7 +1969,10 @@ mod tests {
         assert!(error.to_string().contains("update lyrel-server"));
         assert!(seen.recv_timeout(Duration::from_millis(200)).is_err());
         assert!(host.is_connected(), "the link survives the refusal");
-        assert_eq!(std::fs::read(&marker).unwrap(), b"must not inspect this machine");
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            b"must not inspect this machine"
+        );
     }
 
     #[test]
@@ -1980,7 +1983,10 @@ mod tests {
                 &[crate::daemon::control::feature::READ_LINK],
                 move |_| Some((ControlReply::Ok(ReplyOk::Path(target.into())), vec![])),
             );
-            assert_eq!(host.read_link(Path::new("private/alias")).unwrap(), Path::new(target));
+            assert_eq!(
+                host.read_link(Path::new("private/alias")).unwrap(),
+                Path::new(target)
+            );
             assert_eq!(
                 seen.recv().unwrap(),
                 ControlRequest::ReadLink {
@@ -1993,21 +1999,17 @@ mod tests {
 
     #[test]
     fn remote_read_link_reports_wrong_shape_and_connection_loss_without_fallback() {
-        let (host, _seen) = host_with_peer_announcing(
-            '/',
-            &[crate::daemon::control::feature::READ_LINK],
-            |_| Some((ControlReply::Ok(ReplyOk::Unit), vec![])),
-        );
+        let (host, _seen) =
+            host_with_peer_announcing('/', &[crate::daemon::control::feature::READ_LINK], |_| {
+                Some((ControlReply::Ok(ReplyOk::Unit), vec![]))
+            });
         assert_eq!(
             host.read_link(Path::new("/alias")).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
         host.client().close();
-        let (host, _seen) = host_with_peer_announcing(
-            '/',
-            &[crate::daemon::control::feature::READ_LINK],
-            |_| None,
-        );
+        let (host, _seen) =
+            host_with_peer_announcing('/', &[crate::daemon::control::feature::READ_LINK], |_| None);
         assert_eq!(
             host.read_link(Path::new("/alias")).unwrap_err().kind(),
             io::ErrorKind::ConnectionReset

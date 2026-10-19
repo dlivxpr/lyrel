@@ -88,8 +88,9 @@ impl LocalHost {
             let ft = e.file_type().ok();
             let is_symlink = ft.is_some_and(|t| t.is_symlink());
             #[cfg(windows)]
-            let is_symlink = is_symlink
-                || fs::symlink_metadata(&path).is_ok_and(|md| is_reparse_point(&md));
+            // Windows DirEntry caches raw attributes from enumeration. Querying
+            // every path again amplifies repeated ancestor checks in large parents.
+            let is_symlink = is_symlink || e.metadata().is_ok_and(|md| is_reparse_point(&md));
             let is_dir = if is_symlink {
                 fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
             } else {
@@ -780,9 +781,7 @@ mod tests {
     fn junction_read_link_and_unlink_preserve_targets_and_real_copies() {
         fn junction(target: &Path, link: &Path) {
             let mut cmd = std::process::Command::new("cmd");
-            cmd.args(["/D", "/C", "mklink", "/J"])
-                .arg(link)
-                .arg(target);
+            cmd.args(["/D", "/C", "mklink", "/J"]).arg(link).arg(target);
             crate::core::proc::hide_console(&mut cmd);
             let output = cmd
                 .output()
@@ -799,7 +798,11 @@ mod tests {
         let shared = temp.path().join("shared");
         let other = temp.path().join("other");
         let copy = temp.path().join("real-copy");
-        for (dir, body) in [(&shared, b"shared"), (&other, b"other!"), (&copy, b"copied")] {
+        for (dir, body) in [
+            (&shared, b"shared"),
+            (&other, b"other!"),
+            (&copy, b"copied"),
+        ] {
             fs::create_dir(dir).unwrap();
             fs::write(dir.join("SKILL.md"), body).unwrap();
         }

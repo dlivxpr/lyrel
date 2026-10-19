@@ -300,10 +300,9 @@ impl LyrelApp {
         }
     }
     fn select_skills_host(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .active_settings()
-            .is_some_and(|s| s.skills.install.target_locked() || s.skills.maintenance.target_locked())
-        {
+        if self.active_settings().is_some_and(|s| {
+            s.skills.install.target_locked() || s.skills.maintenance.target_locked()
+        }) {
             return;
         }
         if let Some(s) = self.active_settings_mut() {
@@ -312,6 +311,7 @@ impl LyrelApp {
             }
             s.skills.host = host;
             s.skills.install.invalidate();
+            s.skills.maintenance.invalidate();
             s.skills.project = None;
             s.skills.snapshot = None;
             s.skills.selected = None;
@@ -324,10 +324,9 @@ impl LyrelApp {
         self.refresh_skills(cx);
     }
     fn apply_skills_project(&mut self, cx: &mut Context<Self>) {
-        if self
-            .active_settings()
-            .is_some_and(|s| s.skills.install.target_locked() || s.skills.maintenance.target_locked())
-        {
+        if self.active_settings().is_some_and(|s| {
+            s.skills.install.target_locked() || s.skills.maintenance.target_locked()
+        }) {
             return;
         }
         let Some(project) = self
@@ -340,6 +339,7 @@ impl LyrelApp {
             let project = (!project.is_empty()).then(|| PathBuf::from(project));
             if s.skills.project != project {
                 s.skills.install.invalidate();
+                s.skills.maintenance.invalidate();
                 s.skills.snapshot = None;
                 s.skills.selected = None;
                 s.skills.browser = None;
@@ -518,12 +518,16 @@ impl LyrelApp {
                 .child(
                     Input::new(&state.project_input)
                         .id("skills-project-input")
-                        .disabled(state.install.target_locked() || state.maintenance.target_locked()),
+                        .disabled(
+                            state.install.target_locked() || state.maintenance.target_locked(),
+                        ),
                 )
                 .child(
                     Button::new("skills-apply-project")
                         .label(t(L10nKey::SkillsApplyProject))
-                        .disabled(state.install.target_locked() || state.maintenance.target_locked())
+                        .disabled(
+                            state.install.target_locked() || state.maintenance.target_locked(),
+                        )
                         .on_click(cx.listener(|this, _, _, cx| this.apply_skills_project(cx))),
                 )
                 .into_any_element(),
@@ -548,7 +552,9 @@ impl LyrelApp {
                         kind == filter,
                         move |this, _, cx| {
                             if let Some(s) = this.active_settings_mut() {
-                                if s.skills.maintenance.target_locked() { return; }
+                                if s.skills.maintenance.target_locked() {
+                                    return;
+                                }
                                 s.skills.filter = kind;
                                 s.skills.page = 0;
                                 s.skills.selected = None;
@@ -563,7 +569,11 @@ impl LyrelApp {
             body.push(
                 v_flex()
                     .gap_2()
-                    .child(Input::new(&state.query).id("skills-query").disabled(state.maintenance.target_locked()))
+                    .child(
+                        Input::new(&state.query)
+                            .id("skills-query")
+                            .disabled(state.maintenance.target_locked()),
+                    )
                     .child(self.settings_dropdown(
                         "skills-source",
                         t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
@@ -754,7 +764,10 @@ impl LyrelApp {
         let copy_path = path.to_string_lossy().into_owned();
         let mut content = vec![
             Button::new("skills-back")
-                .disabled(self.active_settings().is_some_and(|s| s.skills.maintenance.target_locked()))
+                .disabled(
+                    self.active_settings()
+                        .is_some_and(|s| s.skills.maintenance.target_locked()),
+                )
                 .label(t(L10nKey::SkillsBack))
                 .on_click(cx.listener(|this, _, window, cx| {
                     if let Some(s) = this.active_settings_mut() {

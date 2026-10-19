@@ -221,10 +221,23 @@ impl ScanSnapshot {
                         .unwrap_or("")
                         .to_lowercase()
                         .contains(&query)
-                    || skill.origin.as_deref().unwrap_or("").to_lowercase().contains(&query)
+                    || skill
+                        .origin
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query)
                     || skill.source_record.as_ref().is_some_and(|origin| {
-                        origin.source_url().unwrap_or("").to_lowercase().contains(&query)
-                            || origin.skill_path().unwrap_or("").to_lowercase().contains(&query)
+                        origin
+                            .source_url()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&query)
+                            || origin
+                                .skill_path()
+                                .unwrap_or("")
+                                .to_lowercase()
+                                .contains(&query)
                     }))
         })
     }

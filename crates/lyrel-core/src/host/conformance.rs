@@ -532,7 +532,10 @@ pub fn read_link_rejects_real_copies_and_missing_entries(h: &dyn Host, sb: &dyn 
     mkdir(h, &copy);
     let payload = h.join(&copy, "SKILL.md");
     write(h, &payload, "private content");
-    assert!(h.read_link(&copy).is_err(), "a real directory is not a link");
+    assert!(
+        h.read_link(&copy).is_err(),
+        "a real directory is not a link"
+    );
     assert!(h.read_link(&payload).is_err(), "a real file is not a link");
     let missing = h.join(sb.path(), "missing");
     assert_eq!(

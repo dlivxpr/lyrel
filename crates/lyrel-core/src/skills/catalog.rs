@@ -378,7 +378,9 @@ impl SkillCatalog {
         &self.tree_sha
     }
     pub(super) fn contains_skill_path(&self, path: &str) -> bool {
-        self.entries.iter().any(|entry| entry.path == path && entry.kind == "blob")
+        self.entries
+            .iter()
+            .any(|entry| entry.path == path && entry.kind == "blob")
     }
     /// Applies the same bounded download budget to the whole user selection.
     pub fn prepare_many(
@@ -747,7 +749,9 @@ fn slug(value: &str) -> String {
 pub fn computed_hash(files: &[SkillFile]) -> Result<String, CatalogError> {
     hash_files(files.iter())
 }
-pub(super) fn hash_files<'a>(files: impl Iterator<Item = &'a SkillFile>) -> Result<String, CatalogError> {
+pub(super) fn hash_files<'a>(
+    files: impl Iterator<Item = &'a SkillFile>,
+) -> Result<String, CatalogError> {
     static COLLATOR: std::sync::LazyLock<Result<icu_collator::CollatorBorrowed<'static>, String>> =
         std::sync::LazyLock::new(|| {
             icu_collator::Collator::try_new(Default::default(), Default::default())

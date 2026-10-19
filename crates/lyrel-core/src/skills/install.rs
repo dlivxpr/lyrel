@@ -261,7 +261,9 @@ pub(super) fn preview_update(
     if &preview.lock_bytes != expected_lock
         || host.canonicalize(preview.items[0].destination())? != host.canonicalize(destination)?
     {
-        return Err(changed("installation identity or source lock changed while checking update"));
+        return Err(changed(
+            "installation identity or source lock changed while checking update",
+        ));
     }
     preview.items[0].preserve_source = true;
     Ok(preview)
@@ -469,7 +471,11 @@ fn root_len(host: &dyn Host, text: &str) -> io::Result<usize> {
     let end = start + server.len() + 1 + share.len();
     Ok(end + usize::from(bytes.get(end).is_some_and(|byte| separator(*byte))))
 }
-pub(super) fn normalize_selector(host: &dyn Host, path: &Path, allow_dot: bool) -> io::Result<PathBuf> {
+pub(super) fn normalize_selector(
+    host: &dyn Host,
+    path: &Path,
+    allow_dot: bool,
+) -> io::Result<PathBuf> {
     let text = path_text(path)?;
     let root = root_len(host, text)?;
     let mut parts = Vec::new();
@@ -501,7 +507,10 @@ pub(super) fn normalize_selector(host: &dyn Host, path: &Path, allow_dot: bool) 
             host.join(&base, part)
         }))
 }
-pub(super) fn parent_and_name<'a>(host: &dyn Host, path: &'a Path) -> io::Result<Option<(PathBuf, &'a str)>> {
+pub(super) fn parent_and_name<'a>(
+    host: &dyn Host,
+    path: &'a Path,
+) -> io::Result<Option<(PathBuf, &'a str)>> {
     let text = path_text(path)?;
     let root = root_len(host, text)?;
     let text = text.trim_end_matches(|c| is_separator(host, c));
@@ -657,7 +666,10 @@ fn validate_skill(skill: &PreparedSkill) -> io::Result<()> {
     }
     Ok(())
 }
-pub(super) fn read_lock(host: &dyn Host, target: &InstallTarget) -> io::Result<(Option<Vec<u8>>, Value)> {
+pub(super) fn read_lock(
+    host: &dyn Host,
+    target: &InstallTarget,
+) -> io::Result<(Option<Vec<u8>>, Value)> {
     check_ancestors(host, &target.lock_path)?;
     let Some(meta) = safe_meta(host, &target.lock_path)? else {
         let value = if target.scope == InstallScope::User {
@@ -847,21 +859,31 @@ fn merge_lock(
         .as_object_mut()
         .unwrap();
     if !preserve_source {
-        entry.insert("source".into(), Value::String(skill.candidate.source.repository()));
+        entry.insert(
+            "source".into(),
+            Value::String(skill.candidate.source.repository()),
+        );
         entry.insert("sourceType".into(), Value::String("github".into()));
-        entry.insert("skillPath".into(), Value::String(skill.candidate.skill_path.clone()));
+        entry.insert(
+            "skillPath".into(),
+            Value::String(skill.candidate.skill_path.clone()),
+        );
         if let Some(reference) = &skill.candidate.source.reference {
             entry.insert("ref".into(), Value::String(reference.clone()));
         } else {
             entry.remove("ref");
         }
     }
-    let content_hash = super::catalog::hash_files(skill.files.iter().filter(|file| !excluded(&file.path)))
-        .map_err(io::Error::other)?;
+    let content_hash =
+        super::catalog::hash_files(skill.files.iter().filter(|file| !excluded(&file.path)))
+            .map_err(io::Error::other)?;
     entry.insert("contentHash".into(), Value::String(content_hash));
     if target.scope == InstallScope::User {
         if !preserve_source {
-            entry.insert("sourceUrl".into(), Value::String(skill.candidate.source.url()));
+            entry.insert(
+                "sourceUrl".into(),
+                Value::String(skill.candidate.source.url()),
+            );
         }
         entry.insert(
             "skillFolderHash".into(),
@@ -1095,7 +1117,12 @@ fn install_one(
         ))),
     }
 }
-pub(super) fn rename_live(host: &dyn Host, from: &Path, to: &Path, uncertain: &mut bool) -> io::Result<()> {
+pub(super) fn rename_live(
+    host: &dyn Host,
+    from: &Path,
+    to: &Path,
+    uncertain: &mut bool,
+) -> io::Result<()> {
     host.rename(from, to).inspect_err(|error| {
         *uncertain = !host.is_connected()
             || matches!(

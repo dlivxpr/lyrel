@@ -114,13 +114,19 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsUpdateUnknown => "无法核实来源，不推断更新地址",
         L10nKey::SkillsUpdateFailed => "更新检查失败，不能视为没有更新",
         L10nKey::SkillsBaselineUnmodified => "本地内容与记录基线一致，仍默认保留。",
-        L10nKey::SkillsBaselineModified => "发现本地改动，默认保留。只有明确确认后才整项替换，不会自动合并。",
-        L10nKey::SkillsBaselineUnknown => "无法核实本地基线，默认保留现有内容。替换不会合并你的改动。",
+        L10nKey::SkillsBaselineModified => {
+            "发现本地改动，默认保留。只有明确确认后才整项替换，不会自动合并。"
+        }
+        L10nKey::SkillsBaselineUnknown => {
+            "无法核实本地基线，默认保留现有内容。替换不会合并你的改动。"
+        }
         L10nKey::SkillsUpdateReplace => "替换此安装并丢弃其当前内容",
         L10nKey::SkillsUpdateConfirm => "替换安装",
         L10nKey::SkillsUpdateApplied => "已更新安装：{path}",
         L10nKey::SkillsRemoveReview => "移除安装…",
-        L10nKey::SkillsRemoveImpact => "移除此共享目录及匹配的来源记录？其他读取该共享安装的工具也会受影响。只允许清理下列精确关联链接，保留真实副本、其他目标和无法核实的链接。执行时会复核固定 Host、路径及内容。",
+        L10nKey::SkillsRemoveImpact => {
+            "移除此共享目录及匹配的来源记录？其他读取该共享安装的工具也会受影响。只允许清理下列精确关联链接，保留真实副本、其他目标和无法核实的链接。执行时会复核固定 Host、路径及内容。"
+        }
         L10nKey::SkillsRemoveLinks => "精确关联的 symbolic link／junction",
         L10nKey::SkillsRemoveNoLinks => "在所选原生目录中没有找到可证明关联的链接。",
         L10nKey::SkillsRemoveConfirm => "移除共享安装",
@@ -129,7 +135,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsMaintenanceCancel => "取消，保留文件、来源记录与链接",
         L10nKey::SkillsMaintenanceRetained => "已保留：{reason}",
         L10nKey::SkillsMaintenanceFailed => "失败：{error}",
-        L10nKey::SkillsMaintenanceUnknownOutcome => "结果未知：{error}。请先检查列出的路径，不要盲目重复移除。",
+        L10nKey::SkillsMaintenanceUnknownOutcome => {
+            "结果未知：{error}。请先检查列出的路径，不要盲目重复移除。"
+        }
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
             "统计 omp pi kimi Kimi Code OpenCode Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览 来源 关联 添加 检查 移除 单价 自定义 models.dev 公共 价表 币种 缓存"
