@@ -49,10 +49,8 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
         &pool.unit
     };
     let mut metric = v_flex()
+        .min_w_0()
         .gap_1()
-        .py_2()
-        .border_t_1()
-        .border_color(cx.theme().border)
         .child(
             h_flex()
                 .flex_wrap()
@@ -60,6 +58,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(pool_label(pool.kind))
@@ -69,6 +68,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
                 )
                 .child(
                     div()
+                        .text_xs()
                         .font_weight(gpui_kit::FontWeight::MEDIUM)
                         .child(format!(
                             "{} {} {}",
@@ -101,7 +101,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
     {
         metric = metric.child(
             div()
-                .h_1()
+                .h(gpui_kit::rems(0.375))
                 .w_full()
                 .rounded_sm()
                 .bg(cx.theme().muted)
@@ -127,20 +127,15 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
             detail = detail.child(format!("{} {value} {unit}", t(label)));
         }
     }
-    metric = metric.child(detail);
     for (label, value) in [
         (L10nKey::UsageReset, &pool.reset),
         (L10nKey::UsageExpires, &pool.expires),
     ] {
         if let Some(value) = value {
-            metric = metric.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("{} {value}", t(label))),
-            );
+            detail = detail.child(format!("{} {value}", t(label)));
         }
     }
+    metric = metric.child(detail);
     metric
 }
 impl UsagePage {
@@ -169,6 +164,8 @@ impl UsagePage {
         let data = self.data.read(cx);
         let refreshing = !self.pending.is_empty() || data.stored.accounts.iter().any(|a| a.busy);
         h_flex()
+            .id("usage-header")
+            .test_support()
             .w_full()
             .min_w_0()
             .flex_none()
@@ -189,8 +186,15 @@ impl UsagePage {
             )
             .child(
                 h_flex()
-                    .flex_none()
+                    .flex_wrap()
+                    .min_w_0()
                     .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(L10nKey::UsageCadence)),
+                    )
                     .child(
                         Select::new(&self.cadence)
                             .id("usage-cadence")
@@ -233,6 +237,17 @@ impl UsagePage {
             count += 1;
             cards = cards.child(self.render_account(account, cx));
         }
+        if count % 2 == 1 {
+            // An empty layout slot keeps a single account at the same width as
+            // its two-column peers. It has no text, role, focus or account ID.
+            cards = cards.child(
+                div()
+                    .flex_1()
+                    .flex_basis(gpui_kit::relative(0.48))
+                    .min_w(gpui_kit::rems(18.))
+                    .max_w_full(),
+            );
+        }
         let mut section = v_flex()
             .id(format!("usage-provider-{provider:?}"))
             .gap_2()
@@ -240,6 +255,27 @@ impl UsagePage {
             .child(
                 h_flex()
                     .gap_2()
+                    .flex_wrap()
+                    .child(
+                        div()
+                            .size_5()
+                            .flex_none()
+                            .rounded_sm()
+                            .bg(cx.theme().foreground)
+                            .text_color(cx.theme().background)
+                            .text_xs()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(match provider {
+                                Provider::Kimi => "K",
+                                Provider::CommandCode => "C",
+                                Provider::StepFun => "S",
+                                Provider::DeepSeek => "D",
+                                Provider::MiMo => "M",
+                            }),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -248,7 +284,10 @@ impl UsagePage {
                     )
                     .child(
                         div()
+                            .rounded_sm()
+                            .px_1()
                             .text_xs()
+                            .bg(cx.theme().muted)
                             .text_color(cx.theme().muted_foreground)
                             .child(interface_label(provider, provider == Provider::DeepSeek)),
                     )
@@ -382,40 +421,26 @@ impl UsagePage {
             });
         let mut row = v_flex()
             .id(format!("usage-account-{id}"))
+            .test_support()
+            .aria_label(account.name.clone())
             .flex_1()
-            .flex_basis(gpui_kit::rems(23.))
-            .min_w(gpui_kit::rems(16.))
+            .flex_basis(gpui_kit::relative(0.48))
+            .min_w(gpui_kit::rems(18.))
             .max_w_full()
-            .gap_2()
+            .gap(gpui_kit::rems(0.625))
             .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().group_box)
+            .rounded_xl()
+            .bg(crate::ui::settings::kit::Tk::of(cx).k04)
             .child(
                 h_flex()
                     .items_start()
                     .gap_1()
                     .child(
-                        v_flex()
+                        div()
                             .flex_1()
                             .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_weight(gpui_kit::FontWeight::MEDIUM)
-                                    .child(account.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(source_label(&account.auth)),
-                            )
-                            .child(div().text_xs().text_color(muted).child(interface_label(
-                                account.provider,
-                                matches!(account.auth, Authentication::ManualApiKey { .. }),
-                            ))),
+                            .font_weight(gpui_kit::FontWeight::MEDIUM)
+                            .child(account.name.clone()),
                     )
                     .child(
                         Button::new(format!("usage-refresh-{id}"))
@@ -434,20 +459,7 @@ impl UsagePage {
                     )
                     .child(menu),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(if account.removing { danger } else { muted })
-                    .child(t(if account.removing {
-                        L10nKey::UsageRemoving
-                    } else if self.pending.contains(&id) || account.busy {
-                        L10nKey::UsageLoading
-                    } else if !enabled {
-                        L10nKey::UsageDisabled
-                    } else {
-                        L10nKey::UsageEnabled
-                    })),
-            );
+            .child(self.render_account_metadata(account, cx));
         if let Some(snapshot) = &account.snapshot {
             match &snapshot.balance {
                 Balance::Official(balance) => {
@@ -466,7 +478,7 @@ impl UsagePage {
                                     )
                                     .child(
                                         div()
-                                            .text_lg()
+                                            .text_sm()
                                             .font_weight(gpui_kit::FontWeight::MEDIUM)
                                             .child(format!(
                                                 "{} {}",
@@ -484,11 +496,16 @@ impl UsagePage {
                                 line.currency
                             )));
                     }
-                    row = row.child(t(if balance.is_available {
-                        L10nKey::UsageAvailable
-                    } else {
-                        L10nKey::UsageUnavailable
-                    }));
+                    row = row.child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t(if balance.is_available {
+                                L10nKey::UsageAvailable
+                            } else {
+                                L10nKey::UsageUnavailable
+                            })),
+                    );
                 }
                 Balance::Platform(balance) => {
                     for (label, wallets) in [
@@ -505,7 +522,7 @@ impl UsagePage {
                                     )
                                     .child(
                                         div()
-                                            .text_lg()
+                                            .text_sm()
                                             .font_weight(gpui_kit::FontWeight::MEDIUM)
                                             .child(format!(
                                                 "{} {}",
@@ -517,29 +534,11 @@ impl UsagePage {
                     }
                 }
                 Balance::Provider(report) => {
-                    row = row.child(format!(
-                        "{}: {}",
-                        t(L10nKey::UsageIdentity),
-                        report
-                            .identity
-                            .as_deref()
-                            .unwrap_or(t(L10nKey::UsageUnknown))
-                    ));
                     if report.overdrawn == Some(true) {
                         row = row.child(div().text_color(danger).child(t(L10nKey::UsageOverdrawn)));
                     }
                     if report.expired == Some(true) {
                         row = row.child(t(L10nKey::UsageUnavailable));
-                    }
-                    if let Some(expires) = &report.plan_expires {
-                        row = row.child(format!(
-                            "{} · {} {expires}",
-                            t(L10nKey::UsagePlan),
-                            t(L10nKey::UsageExpires)
-                        ));
-                    }
-                    if let Some(plan) = &report.plan {
-                        row = row.child(format!("{}: {plan}", t(L10nKey::UsagePlan)));
                     }
                     for pool in &report.pools {
                         row = row.child(render_pool(pool, cx));
@@ -553,6 +552,22 @@ impl UsagePage {
                     }
                 }
             }
+        } else {
+            row = row.child(t(L10nKey::UsageUnknown));
+        }
+        if let Some(error) = account.error {
+            row = row.child(div().text_color(danger).child(error_text(error)));
+        }
+        let mut footer = v_flex()
+            .gap_1()
+            .id(format!("usage-updated-{id}"))
+            .test_support()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .pt_2()
+            .text_xs()
+            .text_color(muted);
+        if let Some(snapshot) = &account.snapshot {
             let time = chrono::DateTime::from_timestamp(snapshot.updated_at as i64, 0)
                 .map(|time| {
                     time.with_timezone(&chrono::Local)
@@ -560,41 +575,94 @@ impl UsagePage {
                         .to_string()
                 })
                 .unwrap_or_else(|| snapshot.updated_at.to_string());
-            row = row.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("{} {time}", t(L10nKey::UsageUpdated))),
-            );
+            footer = footer.child(format!("{} {time}", t(L10nKey::UsageUpdated)));
             if account.error.is_some() {
-                row = row.child(t(L10nKey::UsageOldSnapshot));
+                footer = footer.child(t(L10nKey::UsageOldSnapshot));
             }
         } else {
-            row = row.child(t(L10nKey::UsageUnknown));
+            footer = footer.child(t(L10nKey::UsageUnknown));
         }
-        if let Some(error) = account.error {
-            row = row.child(div().text_color(danger).child(error_text(error)));
-        }
+        row = row.child(footer);
 
+        row.into_any_element()
+    }
+    fn render_account_metadata(&self, account: &Account, cx: &Context<Self>) -> gpui_kit::Div {
+        let mut metadata = h_flex()
+            .min_w_0()
+            .flex_wrap()
+            .gap_2()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground);
+        if let Some(Snapshot {
+            balance: Balance::Provider(report),
+            ..
+        }) = &account.snapshot
+        {
+            if let Some(identity) = &report.identity {
+                metadata = metadata.child(format!("{}: {identity}", t(L10nKey::UsageIdentity)));
+            } else {
+                metadata = metadata.child(format!(
+                    "{}: {}",
+                    t(L10nKey::UsageIdentity),
+                    t(L10nKey::UsageUnknown)
+                ));
+            }
+            if let Some(plan) = &report.plan {
+                metadata = metadata.child(plan.clone());
+            }
+            if let Some(expires) = &report.plan_expires {
+                metadata = metadata.child(format!(
+                    "{} · {} {expires}",
+                    t(L10nKey::UsagePlan),
+                    t(L10nKey::UsageExpires)
+                ));
+            }
+        }
+        metadata = metadata.child(
+            div()
+                .min_w_0()
+                .rounded_sm()
+                .px_1()
+                .bg(cx.theme().muted)
+                .child(source_label(&account.auth)),
+        );
+        // DeepSeek supports both official key queries and private sessions.
+        // The account source must remain explicit even under its official badge.
+        if account.provider == Provider::DeepSeek
+            && !matches!(account.auth, Authentication::ManualApiKey { .. })
+        {
+            metadata = metadata.child(interface_label(account.provider, false));
+        }
         if account.provider == Provider::CommandCode {
             if let Some(selection) = &account.enhancement_browser {
-                row = row.child(div().text_xs().text_color(muted).child(format!(
+                metadata = metadata.child(format!(
                     "{} · {} · {} · {}",
                     t(L10nKey::UsageEnhancementBrowserSource),
                     selection.browser().label(),
                     selection.label(),
                     selection.cookie_name().unwrap_or("")
-                )));
+                ));
             } else if account.enhancement_slot.is_some() {
-                row = row.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(t(L10nKey::UsageEnhancementManualSource)),
-                );
+                metadata = metadata.child(t(L10nKey::UsageEnhancementManualSource));
             }
         }
-        row.into_any_element()
+        metadata.child(
+            div()
+                .text_color(if account.removing {
+                    cx.theme().danger
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .child(t(if account.removing {
+                    L10nKey::UsageRemoving
+                } else if self.pending.contains(&account.id) || account.busy {
+                    L10nKey::UsageLoading
+                } else if !account.enabled {
+                    L10nKey::UsageDisabled
+                } else {
+                    L10nKey::UsageEnabled
+                })),
+        )
     }
     fn render_form(&self, edit: Edit, cx: &Context<Self>) -> gpui_kit::AnyElement {
         let danger = cx.theme().danger;
@@ -852,25 +920,33 @@ impl UsagePage {
 impl Render for UsagePage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let data = self.data.read(cx);
-        let mut sections = v_flex().gap_5().p_1().child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                .child(t(L10nKey::UsageCodingPlans)),
-        );
-        for provider in [Provider::Kimi, Provider::CommandCode, Provider::StepFun] {
-            sections = sections.child(self.render_provider(provider, &data.stored.accounts, cx));
-        }
-        sections = sections.child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                .child(t(L10nKey::UsageApiAccounts)),
-        );
-        for provider in [Provider::DeepSeek, Provider::MiMo] {
-            sections = sections.child(self.render_provider(provider, &data.stored.accounts, cx));
+        let mut sections = v_flex().gap_6().p_1();
+        for (title, providers) in [
+            (
+                L10nKey::UsageCodingPlans,
+                &[Provider::Kimi, Provider::CommandCode, Provider::StepFun][..],
+            ),
+            (
+                L10nKey::UsageApiAccounts,
+                &[Provider::DeepSeek, Provider::MiMo][..],
+            ),
+        ] {
+            let mut group = v_flex()
+                .gap_3()
+                .min_w_0()
+                .child(
+                    div()
+                        .pb_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .text_sm()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .child(t(title)),
+                );
+            for &provider in providers {
+                group = group.child(self.render_provider(provider, &data.stored.accounts, cx));
+            }
+            sections = sections.child(group);
         }
         if let Some(error) = data.error.or(if self.edit.is_none() {
             self.error
