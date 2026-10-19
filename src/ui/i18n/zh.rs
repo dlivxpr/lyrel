@@ -4,7 +4,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
-            "统计 omp 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+            "统计 omp kimi Kimi Code 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
         }
         L10nKey::StatisticsToday => "今天",
         L10nKey::StatisticsWeek => "本周",
@@ -13,8 +13,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsAll => "全部",
         L10nKey::StatisticsCustom => "自定义",
         L10nKey::StatisticsScope => {
-            "读取所选机器的 omp 原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
+            "读取所选机器的原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
         }
+        L10nKey::StatisticsAgent => "智能体来源",
+        L10nKey::StatisticsAgentScope => "查看全部可用来源，或单个智能体的有效 home。不可读来源会保留诊断。",
+        L10nKey::StatisticsAllAgents => "全部智能体",
         L10nKey::StatisticsRange => "日期范围",
         L10nKey::StatisticsCalendar => {
             "日历边界按桌面本机时区解释；每周从星期一开始。对比采用前一个对应日历期间。"
@@ -51,10 +54,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "上期：{tokens} Token · {cost} · {sessions} 个主会话\nToken 变化：{change}"
         }
         L10nKey::StatisticsEmpty => {
-            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用 omp 后刷新。"
+            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用所选智能体后刷新。"
         }
         L10nKey::StatisticsPrivacy => {
-            "只读 · omp 18.12.1 JSONL · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。任意不可发现的自定义存储需要显式来源关联。跳过链接与未知继承关系会限制覆盖范围。"
+            "只读 · omp 18.12.1／Kimi Code 2.2.0 durable 1.5 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 的 turn 与非 turn 调用均为增量，费用保持未知。跳过链接与未知继承关系会限制覆盖范围。"
         }
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::IntegrationPiExtension => {
