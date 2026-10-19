@@ -332,6 +332,16 @@ pub trait Host: Send + Sync + 'static {
 
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf>;
 
+    /// The stored target of a symbolic link or junction, without resolving it.
+    /// Relative targets remain relative to the link's parent on this Host;
+    /// dangling links are readable. Callers must not fall back to another Host.
+    fn read_link(&self, _p: &Path) -> io::Result<PathBuf> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "host does not support reading link targets",
+        ))
+    }
+
     fn search(
         &self,
         roots: &[PathBuf],

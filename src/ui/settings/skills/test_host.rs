@@ -48,6 +48,9 @@ impl Host for IsolatedHost {
     fn read_file(&self, p: &Path, max: u64) -> io::Result<Vec<u8>> {
         self.inner.read_file(p, max)
     }
+    fn read_link(&self, p: &Path) -> io::Result<PathBuf> {
+        self.inner.read_link(p)
+    }
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
         if self.relative_state && p == Path::new(".") {
             self.inner.canonicalize(&self.home.join("cwd"))

@@ -518,6 +518,7 @@ impl LyrelApp {
         if !state.open {
             return Button::new("skills-install-open")
                 .label(format!("{}…", t(L10nKey::SkillsInstallTitle)))
+                .disabled(s.skills.maintenance.target_locked())
                 .on_click(cx.listener(|app, _, window, cx| {
                     if let Some(s) = app.active_settings_mut() {
                         s.skills.install.open = true;

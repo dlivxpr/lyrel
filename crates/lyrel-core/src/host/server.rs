@@ -382,6 +382,7 @@ fn handshake<R: Read>(
     let mut features = vec![
         feature::CONTROL.to_string(),
         feature::HOST_RPC.to_string(),
+        feature::READ_LINK.to_string(),
         feature::STDIO_BRIDGE.to_string(),
         // Every host this server fronts can search its own files; the
         // request only needs a name so an older client's peer is never sent
@@ -644,6 +645,13 @@ fn run_request(
                 ReplyOk::Path(canon.to_string_lossy().into_owned()),
                 Vec::new(),
             )
+        }
+        ControlRequest::ReadLink { path } => {
+            let target = h.read_link(&p(&path))?;
+            let target = target.to_str().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "link target is not valid UTF-8")
+            })?;
+            (ReplyOk::Path(target.to_owned()), Vec::new())
         }
         ControlRequest::ReadFile { path, max_bytes } => {
             let path = p(&path);
