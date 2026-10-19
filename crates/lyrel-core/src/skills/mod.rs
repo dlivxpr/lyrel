@@ -6,6 +6,8 @@ pub mod catalog;
 mod discovery;
 #[cfg(feature = "github")]
 pub mod install;
+#[cfg(feature = "github")]
+pub mod maintenance;
 mod packages;
 mod provenance;
 use crate::{
@@ -218,7 +220,25 @@ impl ScanSnapshot {
                         .as_deref()
                         .unwrap_or("")
                         .to_lowercase()
-                        .contains(&query))
+                        .contains(&query)
+                    || skill
+                        .origin
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query)
+                    || skill.source_record.as_ref().is_some_and(|origin| {
+                        origin
+                            .source_url()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&query)
+                            || origin
+                                .skill_path()
+                                .unwrap_or("")
+                                .to_lowercase()
+                                .contains(&query)
+                    }))
         })
     }
 }

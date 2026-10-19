@@ -179,6 +179,7 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
         std::fs::read_to_string(&document).unwrap(),
         "---\nname: needle\ndescription: Public repository reference\n---\n# Installed content\n"
     );
+    super::super::maintenance::tests::lifecycle(&app, &mut vcx, &project);
 }
 
 #[gpui_kit::test]

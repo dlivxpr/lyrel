@@ -19,14 +19,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
-            "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub repositories, refs and subpaths or search skills.sh; review public installation into local shared directories."
+            "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."
         }
         L10nKey::SkillsProject => "Project",
         L10nKey::SkillsProjectHint => {
             "Absolute path on the selected machine; blank means user scope only"
         }
         L10nKey::SkillsApplyProject => "Apply project",
-        L10nKey::SkillsSearch => "Search skill names and descriptions",
+        L10nKey::SkillsSearch => "Search skill names, descriptions and sources",
         L10nKey::SkillsSource => "Source",
         L10nKey::SkillsAllSources => "All sources",
         L10nKey::SkillsUserShared => "User shared",
@@ -117,6 +117,47 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsInstallBrowse => "Browse installed skills",
         L10nKey::SkillsInstallError => "Could not install {name} — {path}: {error}",
         L10nKey::SkillsInstallRefResolved => "Resolved source: {source}",
+        L10nKey::SkillsCheckUpdate => "Check for updates",
+        L10nKey::SkillsUpdateAvailable => {
+            "Update available — review this installation before replacing it"
+        }
+        L10nKey::SkillsUpdateCurrent => "Up to date — local content is kept",
+        L10nKey::SkillsUpdateDeleted => {
+            "The recorded skill is gone upstream. The local installation is kept; it will not be removed automatically."
+        }
+        L10nKey::SkillsUpdateUnknown => "Source cannot be verified — no update address is inferred",
+        L10nKey::SkillsUpdateFailed => "Update check failed — this is not an up-to-date result",
+        L10nKey::SkillsBaselineUnmodified => {
+            "Local content matches the recorded baseline. Keep is still the default."
+        }
+        L10nKey::SkillsBaselineModified => {
+            "Local changes found. Keep them unless you explicitly replace this entire installation; changes are not merged."
+        }
+        L10nKey::SkillsBaselineUnknown => {
+            "The local baseline cannot be verified. Keep existing content by default; replacement does not merge your changes."
+        }
+        L10nKey::SkillsUpdateReplace => "Replace this installation and discard its current content",
+        L10nKey::SkillsUpdateConfirm => "Replace installation",
+        L10nKey::SkillsUpdateApplied => "Updated installation: {path}",
+        L10nKey::SkillsRemoveReview => "Remove installation…",
+        L10nKey::SkillsRemoveImpact => {
+            "Remove this shared directory and its matching source record? Other tools reading this shared installation are affected too. Only the exact links listed below may be removed. Real copies, other targets and unverified links are kept. Execution rechecks the fixed Host, paths and content."
+        }
+        L10nKey::SkillsRemoveLinks => "Exact associated symbolic links / junctions",
+        L10nKey::SkillsRemoveNoLinks => {
+            "No proven associated links were found in the selected native roots."
+        }
+        L10nKey::SkillsRemoveConfirm => "Remove shared installation",
+        L10nKey::SkillsRemoved => "Removed",
+        L10nKey::SkillsMaintenanceWorking => {
+            "Checking the fixed installation or applying the confirmed change…"
+        }
+        L10nKey::SkillsMaintenanceCancel => "Cancel — keep files, source record and links",
+        L10nKey::SkillsMaintenanceRetained => "Kept: {reason}",
+        L10nKey::SkillsMaintenanceFailed => "Failed: {error}",
+        L10nKey::SkillsMaintenanceUnknownOutcome => {
+            "Outcome unknown: {error}. Inspect the listed paths before retrying; do not repeat the removal blindly."
+        }
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {
             "statistics omp pi kimi Kimi Code OpenCode Hermes native history tokens cost sessions machine profile date range overview source association add check remove price custom models.dev catalog currency cache"

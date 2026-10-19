@@ -87,6 +87,10 @@ impl LocalHost {
             let name = e.file_name().to_string_lossy().into_owned();
             let ft = e.file_type().ok();
             let is_symlink = ft.is_some_and(|t| t.is_symlink());
+            #[cfg(windows)]
+            // Windows DirEntry caches raw attributes from enumeration. Querying
+            // every path again amplifies repeated ancestor checks in large parents.
+            let is_symlink = is_symlink || e.metadata().is_ok_and(|md| is_reparse_point(&md));
             let is_dir = if is_symlink {
                 fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
             } else {
@@ -123,6 +127,14 @@ fn sort_entries(entries: &mut [(Entry, PathBuf)]) {
     });
 }
 
+#[cfg(windows)]
+fn is_reparse_point(md: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    // Junctions are directory reparse points, but not FileType::is_symlink().
+    // Treat all reparse points conservatively at the Host safety boundary.
+    md.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+}
+
 impl Host for LocalHost {
     fn id(&self) -> HostId {
         HostId::LOCAL
@@ -149,6 +161,8 @@ impl Host for LocalHost {
         guard_off_ui();
         let lmd = fs::symlink_metadata(p)?;
         let is_symlink = lmd.file_type().is_symlink();
+        #[cfg(windows)]
+        let is_symlink = is_symlink || is_reparse_point(&lmd);
         let md = if is_symlink { fs::metadata(p)? } else { lmd };
         Ok(Meta {
             is_dir: md.is_dir(),
@@ -203,6 +217,11 @@ impl Host for LocalHost {
         Ok(crate::core::path_spelling::local_spelling_buf(
             fs::canonicalize(p)?,
         ))
+    }
+
+    fn read_link(&self, p: &Path) -> io::Result<PathBuf> {
+        guard_off_ui();
+        fs::read_link(p)
     }
 
     fn search(
@@ -299,6 +318,16 @@ impl Host for LocalHost {
     fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> {
         guard_off_ui();
         let md = fs::symlink_metadata(p)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            // Directory symlinks may not report Metadata::is_dir(), whereas
+            // junctions do. Both carry DIRECTORY | REPARSE_POINT, so inspect
+            // the raw attributes and unlink without traversing the target.
+            if md.file_attributes() & 0x410 == 0x410 {
+                return fs::remove_dir(p);
+            }
+        }
         if md.is_dir() {
             if recursive {
                 fs::remove_dir_all(p)
@@ -746,6 +775,85 @@ mod tests {
     }
 
     crate::host_conformance_suite!(local, sandbox);
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_read_link_and_unlink_preserve_targets_and_real_copies() {
+        fn junction(target: &Path, link: &Path) {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/D", "/C", "mklink", "/J"]).arg(link).arg(target);
+            crate::core::proc::hide_console(&mut cmd);
+            let output = cmd
+                .output()
+                .expect("create isolated junction without symlink privilege");
+            assert!(
+                output.status.success(),
+                "mklink /J failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let host = LocalHost::new();
+        let shared = temp.path().join("shared");
+        let other = temp.path().join("other");
+        let copy = temp.path().join("real-copy");
+        for (dir, body) in [
+            (&shared, b"shared"),
+            (&other, b"other!"),
+            (&copy, b"copied"),
+        ] {
+            fs::create_dir(dir).unwrap();
+            fs::write(dir.join("SKILL.md"), body).unwrap();
+        }
+        let unrelated = temp.path().join("different-target");
+        junction(&other, &unrelated);
+        for recursive in [false, true] {
+            let link = temp
+                .path()
+                .join(if recursive { "recursive" } else { "unlink" });
+            junction(&shared, &link);
+            let raw = host.read_link(&link).unwrap();
+            assert_eq!(crate::core::path_spelling::local_spelling_buf(raw), shared);
+            let metadata = host.stat(&link).unwrap();
+            assert!(metadata.is_dir && metadata.is_symlink);
+            let entries = host.read_dir(temp.path(), None).unwrap();
+            let entry = entries
+                .iter()
+                .find(|entry| entry.name == link.file_name().unwrap().to_string_lossy())
+                .unwrap();
+            assert!(entry.is_dir && entry.is_symlink);
+            host.remove(&link, recursive).unwrap();
+            assert_eq!(
+                host.read_link(&link).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+            assert_eq!(fs::read(shared.join("SKILL.md")).unwrap(), b"shared");
+            assert_eq!(fs::read(copy.join("SKILL.md")).unwrap(), b"copied");
+            assert_eq!(fs::read(unrelated.join("SKILL.md")).unwrap(), b"other!");
+            assert_eq!(
+                crate::core::path_spelling::local_spelling_buf(host.read_link(&unrelated).unwrap()),
+                other
+            );
+            assert!(host.read_link(&copy).is_err(), "a real copy is not a link");
+        }
+        host.remove(&unrelated, false).unwrap();
+
+        let dangling = temp.path().join("dangling");
+        let gone = temp.path().join("gone");
+        fs::create_dir(&gone).unwrap();
+        junction(&gone, &dangling);
+        fs::remove_dir(&gone).unwrap();
+        assert_eq!(
+            crate::core::path_spelling::local_spelling_buf(host.read_link(&dangling).unwrap()),
+            gone
+        );
+        host.remove(&dangling, true).unwrap();
+        assert_eq!(
+            host.read_link(&dangling).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
 
     #[cfg(unix)]
     #[test]
