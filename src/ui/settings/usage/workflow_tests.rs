@@ -15,6 +15,7 @@ struct Reply {
 struct Http {
     replies: Mutex<VecDeque<Reply>>,
     calls: AtomicU64,
+    requests: Mutex<Vec<(String, String, String)>>,
 }
 impl Http {
     fn reply(&self, status: u16, body: &[u8]) {
@@ -35,7 +36,16 @@ impl Http {
     }
 }
 impl BalanceHttp for Http {
-    fn get(&self, _: &str, _: Option<&str>) -> Result<(u16, Vec<u8>), UsageError> {
+    fn get(
+        &self,
+        request: &UsageRequest<'_>,
+        _: Option<&str>,
+    ) -> Result<(u16, Vec<u8>), UsageError> {
+        self.requests.lock().unwrap().push((
+            request.endpoint().to_owned(),
+            request.header_name().to_owned(),
+            request.authorization_value(),
+        ));
         self.calls.fetch_add(1, Ordering::SeqCst);
         let reply = self
             .replies
@@ -56,16 +66,16 @@ fn install(
     vcx: &mut VisualTestContext,
     path: std::path::PathBuf,
     vault: Arc<dyn CredentialStore>,
-    http: Arc<Http>,
+    http: Arc<dyn BalanceHttp>,
     seed: bool,
 ) -> Option<Uuid> {
-    let mut accounts = Accounts::load(path, vault).unwrap();
+    let mut accounts = Accounts::load(path.clone(), vault).unwrap();
     let id = seed.then(|| {
         accounts
             .save_verified(
                 None,
                 "Personal",
-                "seed-key",
+                VerifiedSource::ApiKey("seed-key"),
                 accounts::decode(200, BALANCE).unwrap(),
                 100,
             )
@@ -75,6 +85,10 @@ fn install(
     let shared = Arc::new(Shared {
         accounts: Mutex::new(Ok(accounts)),
         http,
+        browser: Arc::new(browser::BrowserReader::with_root(
+            browser::Browser::Firefox,
+            path.parent().unwrap().join("isolated-browser"),
+        )),
         presentation: AtomicU64::new(1),
     });
     vcx.update(|_, cx| {
@@ -171,9 +185,9 @@ fn settings_account_lifecycle_validates_before_saving_and_removes_only_its_own_s
     settle(&mut vcx, |d| {
         d.stored.accounts.iter().any(|a| {
             a.name == "same"
-                && a.snapshot
-                    .as_ref()
-                    .is_some_and(|s| s.balance.balance_infos[0].total_balance == "110.00")
+                && a.snapshot.as_ref().is_some_and(|s| {
+                    s.balance.official().unwrap().balance_infos[0].total_balance == "110.00"
+                })
         })
     });
     let first = vcx.update(|_, cx| cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0].id);
@@ -344,9 +358,9 @@ fn replacing_and_removing_accounts_rejects_late_refreshes_through_settings(
     settle(&mut vcx, |d| {
         d.stored.accounts.iter().any(|a| {
             a.id == id
-                && a.snapshot
-                    .as_ref()
-                    .is_some_and(|s| s.balance.balance_infos[0].currency == "USD")
+                && a.snapshot.as_ref().is_some_and(|s| {
+                    s.balance.official().unwrap().balance_infos[0].currency == "USD"
+                })
         })
     });
     old.send(()).unwrap();
@@ -365,7 +379,15 @@ fn replacing_and_removing_accounts_rejects_late_refreshes_through_settings(
     vcx.update(|_, cx| {
         let account = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0];
         assert_eq!(
-            account.snapshot.as_ref().unwrap().balance.balance_infos[0].currency,
+            account
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .balance
+                .official()
+                .unwrap()
+                .balance_infos[0]
+                .currency,
             "USD"
         );
         assert_eq!(account.error, None);
@@ -487,7 +509,10 @@ fn settings_reports_vault_and_query_failures_without_losing_old_balance_or_key(
                 .as_ref()
                 .unwrap();
             assert_eq!(snapshot.updated_at, 100);
-            assert_eq!(snapshot.balance.balance_infos[0].total_balance, "110.00");
+            assert_eq!(
+                snapshot.balance.official().unwrap().balance_infos[0].total_balance,
+                "110.00"
+            );
         });
     }
 }
@@ -592,3 +617,90 @@ fn escape_cancels_the_usage_form_without_closing_settings_or_persisting_a_key(
     assert!(vault.is_empty());
     assert_eq!(http.calls.load(Ordering::SeqCst), 0);
 }
+
+const PLATFORM: &[u8] = br#"{"code":0,"data":{"biz_code":0,"biz_data":{"normal_wallets":[{"currency":"CNY","balance":"5.0000000000000000"}],"bonus_wallets":[{"currency":"CNY","balance":"0E-16"}]}}}"#;
+
+#[gpui_kit::test]
+fn private_manual_session_verifies_then_saves_and_failed_replacement_preserves_platform_source(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Arc::new(Http::default());
+    install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        vault.clone(),
+        http.clone(),
+        false,
+    );
+    open(&app, &mut vcx);
+    click(&mut vcx, "usage-add");
+    click(&mut vcx, "usage-source");
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    type_into(&mut vcx, "usage-name", "Private platform");
+    type_into(
+        &mut vcx,
+        "usage-key",
+        r#"{"userToken":"private-session-material"}"#,
+    );
+    http.reply(200, PLATFORM);
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |d| d.stored.accounts.len() == 1);
+    let id = vcx.update(|_, cx| {
+        let a = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0];
+        assert!(matches!(
+            a.auth,
+            Authentication::ManualSession {
+                kind: platform::SessionKind::WebToken,
+                ..
+            }
+        ));
+        let Balance::Platform(balance) = &a.snapshot.as_ref().unwrap().balance else {
+            panic!("private wallets must not become official balance")
+        };
+        assert_eq!(balance.normal_wallets[0].balance, "5.0000000000000000");
+        assert_eq!(balance.bonus_wallets[0].balance, "0E-16");
+        a.id
+    });
+    assert_eq!(vault.len(), 1);
+    assert_eq!(
+        Accounts::load(dir.path().join("usage.json"), vault.clone())
+            .unwrap()
+            .secret(id)
+            .unwrap(),
+        "private-session-material"
+    );
+    assert!(
+        !std::fs::read_to_string(dir.path().join("usage.json"))
+            .unwrap()
+            .contains("private-session-material")
+    );
+    click(&mut vcx, &format!("usage-replace-{id}"));
+    type_into(&mut vcx, "usage-key", "expired-session-material");
+    http.reply(200, br#"{"code":40003}"#);
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |d| {
+        d.stored.accounts[0].error == Some(UsageError::Authentication)
+    });
+    assert_eq!(
+        Accounts::load(dir.path().join("usage.json"), vault.clone())
+            .unwrap()
+            .secret(id)
+            .unwrap(),
+        "private-session-material"
+    );
+    assert_eq!(vault.len(), 1);
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests[0].0, platform::ENDPOINT);
+    assert_eq!(requests[0].1, "Authorization");
+    assert_eq!(
+        requests[0].2,
+        format!("{} {}", "Bearer", "private-session-material")
+    );
+}
+
+#[path = "private_workflow_tests.rs"]
+mod private_workflow_tests;

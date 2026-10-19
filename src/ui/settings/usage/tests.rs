@@ -13,7 +13,7 @@ fn verified_accounts_keep_identity_and_secrets_separate() {
         .save_verified(
             None,
             "same",
-            "first-secret",
+            VerifiedSource::ApiKey("first-secret"),
             decode(200, REPLY).unwrap(),
             100,
         )
@@ -22,7 +22,7 @@ fn verified_accounts_keep_identity_and_secrets_separate() {
         .save_verified(
             None,
             "same",
-            "second-secret",
+            VerifiedSource::ApiKey("second-secret"),
             decode(200, REPLY).unwrap(),
             101,
         )
@@ -40,6 +40,8 @@ fn verified_accounts_keep_identity_and_secrets_separate() {
             .as_ref()
             .unwrap()
             .balance
+            .official()
+            .unwrap()
             .balance_infos[0]
             .total_balance,
         "110.00"
@@ -78,7 +80,13 @@ fn replacement_failure_preserves_old_key_and_late_responses_cannot_cross_account
     let vault = Arc::new(FailingVault::default());
     let mut accounts = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
     let id = accounts
-        .save_verified(None, "a", "old", decode(200, REPLY).unwrap(), 100)
+        .save_verified(
+            None,
+            "a",
+            VerifiedSource::ApiKey("old"),
+            decode(200, REPLY).unwrap(),
+            100,
+        )
         .unwrap();
     let query = accounts.begin_refresh(id).unwrap();
     assert!(accounts.begin_refresh(id).is_none());
@@ -88,7 +96,7 @@ fn replacement_failure_preserves_old_key_and_late_responses_cannot_cross_account
         accounts.save_verified(
             Some(replacement),
             "a",
-            "new",
+            VerifiedSource::ApiKey("new"),
             decode(200, REPLY).unwrap(),
             101
         ),
@@ -112,7 +120,7 @@ fn replacement_failure_preserves_old_key_and_late_responses_cannot_cross_account
         .save_verified(
             Some(replacement),
             "a",
-            "new",
+            VerifiedSource::ApiKey("new"),
             decode(200, REPLY).unwrap(),
             103,
         )
@@ -144,7 +152,13 @@ fn failure_keeps_timestamp_and_unknown_is_never_zero() {
     )
     .unwrap();
     let id = accounts
-        .save_verified(None, "a", "key", decode(200, REPLY).unwrap(), 100)
+        .save_verified(
+            None,
+            "a",
+            VerifiedSource::ApiKey("key"),
+            decode(200, REPLY).unwrap(),
+            100,
+        )
         .unwrap();
     let query = accounts.begin_refresh(id).unwrap();
     accounts.finish_refresh(query, decode(429, b"{}"), 200);
@@ -173,7 +187,13 @@ fn failed_metadata_replacement_keeps_the_old_usable_credential() {
     let path = dir.path().join("usage.json");
     let mut accounts = Accounts::load(path.clone(), vault.clone()).unwrap();
     let id = accounts
-        .save_verified(None, "a", "old", decode(200, REPLY).unwrap(), 100)
+        .save_verified(
+            None,
+            "a",
+            VerifiedSource::ApiKey("old"),
+            decode(200, REPLY).unwrap(),
+            100,
+        )
         .unwrap();
     let replacement = accounts.begin_replace(id).unwrap();
     std::fs::remove_file(&path).unwrap();
@@ -182,7 +202,7 @@ fn failed_metadata_replacement_keeps_the_old_usable_credential() {
         accounts.save_verified(
             Some(replacement),
             "a",
-            "new",
+            VerifiedSource::ApiKey("new"),
             decode(200, REPLY).unwrap(),
             101
         ),
@@ -200,4 +220,55 @@ fn failed_metadata_replacement_keeps_the_old_usable_credential() {
             .updated_at,
         100
     );
+}
+
+#[test]
+fn platform_sessions_store_only_validated_material_and_failed_replacement_keeps_old_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = Arc::new(FailingVault::default());
+    let mut accounts = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
+    let platform = super::super::platform::decode(200, br#"{"code":0,"data":{"biz_code":0,"biz_data":{"normal_wallets":[{"currency":"CNY","balance":"5.0000000000000000"}],"bonus_wallets":[{"currency":"CNY","balance":"0E-16"}]}}}"#).unwrap();
+    let id = accounts
+        .save_verified(
+            None,
+            "Platform",
+            VerifiedSource::Session {
+                kind: super::super::platform::SessionKind::WebToken,
+                secret: "web-session-secret",
+            },
+            Balance::Platform(platform),
+            100,
+        )
+        .unwrap();
+    assert_eq!(accounts.secret(id).unwrap(), "web-session-secret");
+    assert_eq!(vault.inner.len(), 1);
+    let saved = std::fs::read_to_string(dir.path().join("usage.json")).unwrap();
+    assert!(!saved.contains("web-session-secret"));
+    assert!(matches!(
+        accounts.account(id).unwrap().auth,
+        Authentication::ManualSession { .. }
+    ));
+    let replacement = accounts.begin_replace(id).unwrap();
+    vault.fail.store(true, Ordering::SeqCst);
+    assert_eq!(
+        accounts.save_verified(
+            Some(replacement),
+            "Platform",
+            VerifiedSource::ApiKey("new-key"),
+            decode(200, REPLY).unwrap(),
+            200
+        ),
+        Err(UsageError::Credentials)
+    );
+    assert_eq!(accounts.secret(id).unwrap(), "web-session-secret");
+    assert!(matches!(
+        accounts
+            .account(id)
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .balance,
+        Balance::Platform(_)
+    ));
 }
