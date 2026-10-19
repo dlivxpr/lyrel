@@ -55,6 +55,28 @@ fn statistics_native_copies_forks_and_children_count_only_new_usage() {
     assert_eq!(totals.recorded_usd(), Some(1.5));
     assert_eq!(totals.unpriced_calls(), 1);
     assert_eq!(totals.main_sessions(), 2);
+    let analysis = snapshot
+        .analyze(&DateWindow::all("UTC"), chrono::Utc::now(), None, 2026)
+        .unwrap();
+    assert_eq!(analysis.totals().tokens().total(), Some(66));
+    assert_eq!(analysis.totals().main_sessions(), 2);
+    assert_eq!(
+        analysis
+            .models()
+            .iter()
+            .map(|m| m.totals().tokens().total().unwrap())
+            .sum::<u64>(),
+        66
+    );
+    assert_eq!(
+        analysis
+            .projects()
+            .iter()
+            .map(|p| p.totals().tokens().total().unwrap())
+            .sum::<u64>(),
+        66
+    );
+    assert_eq!(analysis.models()[0].totals().main_sessions(), 2);
     assert!(
         !serde_json::to_string(&snapshot)
             .unwrap()
@@ -201,4 +223,170 @@ fn statistics_discovers_explicit_native_session_directory_without_registry_marke
     assert_eq!(totals.tokens().total(), Some(52));
     assert_eq!(totals.recorded_usd(), Some(0.5));
     assert_eq!(totals.main_sessions(), 1);
+}
+
+#[test]
+fn statistics_analysis_reconciles_calendar_copies_models_and_unknown_projects() {
+    use chrono::{NaiveDate, TimeZone};
+    let tmp = tempfile::tempdir().unwrap();
+    let sample = concat!(
+        "{\"type\":\"session\",\"version\":3,\"id\":\"cross-day\",\"timestamp\":\"2026-03-08T04:30:00Z\"}\n",
+        "{\"type\":\"model_usage\",\"id\":\"a\",\"timestamp\":\"2026-03-08T04:30:00Z\",\"provider\":\"one\",\"model\":\"shared\",\"usage\":{\"totalTokens\":10,\"cost\":{\"total\":0}}}\n",
+        "{\"type\":\"model_usage\",\"id\":\"b\",\"timestamp\":\"2026-03-08T07:30:00Z\",\"provider\":\"two\",\"model\":\"shared\",\"usage\":{\"totalTokens\":20}}\n"
+    );
+    std::fs::write(tmp.path().join("a.jsonl"), sample).unwrap();
+    std::fs::write(tmp.path().join("copy.jsonl"), sample).unwrap();
+    let snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(tmp.path().into(), "test")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let now = chrono_tz::America::New_York
+        .with_ymd_and_hms(2026, 3, 8, 12, 0, 0)
+        .unwrap();
+    let range = DateWindow::all("America/New_York");
+    let analysis = snapshot.analyze(&range, now, None, 2026).unwrap();
+    let seventh = analysis
+        .days()
+        .iter()
+        .find(|d| d.date() == NaiveDate::from_ymd_opt(2026, 3, 7).unwrap())
+        .unwrap();
+    let eighth = analysis
+        .days()
+        .iter()
+        .find(|d| d.date() == NaiveDate::from_ymd_opt(2026, 3, 8).unwrap())
+        .unwrap();
+    assert_eq!(seventh.totals().tokens().total(), Some(10));
+    assert_eq!(eighth.totals().tokens().total(), Some(20));
+    assert_eq!(seventh.totals().main_sessions(), 1);
+    assert_eq!(eighth.totals().main_sessions(), 1);
+    assert_eq!(analysis.totals().main_sessions(), 1); // daily session counts are not additive
+    assert_eq!(analysis.totals().tokens().total(), Some(30));
+    assert_eq!(analysis.models().len(), 2); // provider is part of model identity
+    assert_eq!(analysis.projects().len(), 1);
+    assert!(analysis.projects()[0].label().is_none());
+    assert_eq!(analysis.projects()[0].totals().tokens().total(), Some(30));
+    assert_eq!(analysis.streaks().current(), Some(2));
+    assert_eq!(analysis.streaks().longest(), Some(2));
+    assert_eq!(eighth.value(analysis::Metric::Cost), None); // unknown is not zero cost
+    assert_eq!(
+        analysis.totals().tokens().total(),
+        snapshot.aggregate(&range).tokens().total()
+    );
+    let today = DateWindow::calendar(Period::Today, now, None).unwrap();
+    let filtered = snapshot.analyze(&today, now, Some("omp"), 2026).unwrap();
+    assert!(
+        !filtered
+            .days()
+            .iter()
+            .find(|d| d.date() == seventh.date())
+            .unwrap()
+            .is_in_range()
+    );
+    assert_eq!(filtered.totals().tokens().total(), Some(20));
+    assert_eq!(
+        snapshot
+            .analyze(&range, now, Some("not-registered"), 2026)
+            .unwrap()
+            .totals()
+            .calls(),
+        0
+    );
+    let missing = snapshot
+        .analyze(&range, now, Some("not-registered"), 2026)
+        .unwrap();
+    assert!(!missing.has_sources());
+    assert!(!missing.totals().is_complete());
+    assert_eq!(missing.streaks().longest(), None);
+}
+
+#[test]
+fn statistics_analysis_never_spreads_cumulative_or_estimated_cost_across_days() {
+    use chrono::TimeZone;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("native.jsonl"),
+        header("interval", None) + &usage("u", 10, None),
+    )
+    .unwrap();
+    let mut snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(temp.path().into(), "profile")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let record = &mut snapshot.files[0].session.records[0];
+    record.coverage_start = Some(record.timestamp - 86_400);
+    record.estimated_usd = Some(2.5);
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let all = DateWindow::all("UTC");
+    let analysis = snapshot.analyze(&all, now, None, 2026).unwrap();
+    assert_eq!(analysis.totals().tokens().total(), Some(12));
+    assert_eq!(analysis.totals().estimated_usd(), Some(2.5));
+    assert_eq!(analysis.totals().cumulative_records(), 1);
+    assert_eq!(analysis.models()[0].label(), None);
+    assert_eq!(analysis.models()[0].totals().tokens().total(), Some(12));
+    assert_eq!(analysis.totals().recorded_usd(), None);
+    assert_eq!(analysis.totals().unpriced_calls(), 0);
+    assert_eq!(analysis.streaks().longest(), None);
+    assert!(analysis.days().iter().filter(|d| d.date().to_string() == "2026-03-07" || d.date().to_string() == "2026-03-08").all(|d| d.value(analysis::Metric::Tokens).is_none()));
+    let today = DateWindow::calendar(Period::Today, now, None).unwrap();
+    let partial = snapshot.analyze(&today, now, None, 2026).unwrap();
+    assert!(!partial.totals().is_complete());
+    assert_eq!(partial.totals().calls(), 0);
+    assert_eq!(partial.models().len(), 1);
+    assert!(!partial.models()[0].totals().is_complete());
+    assert!(!snapshot.aggregate(&today).is_complete());
+    assert_eq!(snapshot.aggregate(&today).calls(), 0);
+    snapshot.files[0].session.records[0].time_unknown = true;
+    let unknown = snapshot.analyze(&all, now, None, 2026).unwrap();
+    assert_eq!(unknown.totals().tokens().total(), Some(12));
+    assert!(
+        unknown
+            .days()
+            .iter()
+            .all(|d| d.value(analysis::Metric::Tokens).is_none())
+    );
+    assert_eq!(snapshot.aggregate(&today).calls(), 0);
+    assert!(!snapshot.aggregate(&today).is_complete());
+}
+
+#[test]
+fn statistics_analysis_isolates_agents_and_preserves_conflicting_native_records() {
+    use chrono::TimeZone;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("native.jsonl"),
+        header("same", None) + &usage("u", 10, Some(0.)),
+    )
+    .unwrap();
+    let mut snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(temp.path().into(), "same-scope")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    // Serialized Snapshot is the production Host transport seam. Distinct registered
+    // agents may supply identical native IDs; neither may erase the other's usage.
+    let mut other = snapshot.files[0].clone();
+    other.source.agent = "another-native-agent".into();
+    snapshot.sources.push(other.source.clone());
+    snapshot.files.push(other);
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let all = DateWindow::all("UTC");
+    assert_eq!(snapshot.aggregate(&all).tokens().total(), Some(24));
+    assert_eq!(snapshot.aggregate(&all).main_sessions(), 2);
+    let analysis = snapshot.analyze(&all, now, Some("omp"), 2026).unwrap();
+    assert_eq!(analysis.totals().tokens().total(), Some(12));
+    assert_eq!(analysis.agents().len(), 1);
+    let mut collision = snapshot.files[0].clone();
+    collision.path = temp.path().join("collision.jsonl");
+    collision.session.records[0].tokens.total = Some(22);
+    snapshot.files.push(collision);
+    let analysis = snapshot.analyze(&all, now, Some("omp"), 2026).unwrap();
+    assert_eq!(analysis.totals().tokens().total(), Some(34));
+    assert!(!analysis.totals().is_complete());
+    assert_eq!(analysis.streaks().longest(), None);
+    assert_eq!(analysis.maximum(analysis::Metric::Tokens), 0.);
 }

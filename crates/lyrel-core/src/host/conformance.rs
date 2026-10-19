@@ -125,6 +125,24 @@ pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
     assert_eq!(totals.recorded_usd(), Some(0.));
     assert_eq!(totals.main_sessions(), 1);
     assert!(totals.is_complete());
+    let analysis = snapshot
+        .analyze(
+            &DateWindow::all("UTC"),
+            chrono::Utc::now(),
+            Some("omp"),
+            2026,
+        )
+        .unwrap();
+    let day = analysis
+        .days()
+        .iter()
+        .find(|d| d.date().to_string() == "2026-03-08")
+        .unwrap();
+    assert_eq!(day.totals().tokens().total(), Some(15));
+    assert_eq!(day.totals().main_sessions(), 1);
+    assert_eq!(analysis.models()[0].label(), Some("test"));
+    assert_eq!(analysis.projects()[0].label(), Some("/work"));
+    assert_eq!(analysis.agents()[0].totals().recorded_usd(), Some(0.));
     // A failed refresh retains known values rather than turning history into zero.
     h.write_file(&h.join(&sessions, "native.jsonl"), b"{broken")
         .unwrap();
@@ -134,6 +152,15 @@ pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
         stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
         Some(15)
     );
+    let analysis = stale
+        .analyze(&DateWindow::all("UTC"), chrono::Utc::now(), None, 2026)
+        .unwrap();
+    assert_eq!(analysis.totals().tokens().total(), Some(15));
+    assert_eq!(analysis.streaks().current(), None);
+    assert!(analysis.days().iter().all(|d| {
+        d.value(crate::statistics::analysis::Metric::Tokens)
+            .is_none()
+    }));
 }
 
 #[doc(hidden)]
