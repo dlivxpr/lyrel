@@ -212,6 +212,33 @@ pub fn statistics_kimi_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
         stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
         Some(45)
     );
+    // pi's formal usage entries are not omp model_usage entries. The same Host transport
+    // must discover and read its isolated flat store without falling back to the GUI home.
+    let pi_sessions = h.join(home, "pi-private");
+    h.create_dir(&pi_sessions, true).unwrap();
+    h.write_file(&h.join(&pi_sessions, "pi.jsonl"), b"{\"type\":\"session\",\"version\":3,\"id\":\"stdio-native\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"cwd\":\"/work\"}\n{\"type\":\"usage\",\"id\":\"usage\",\"timestamp\":\"2026-03-08T09:00:00Z\",\"kind\":\"future\",\"provider\":\"anthropic\",\"model\":\"test\",\"usage\":{\"input\":12,\"output\":3,\"cacheRead\":2,\"cacheWrite\":4,\"totalTokens\":999,\"cost\":{\"total\":0}}}\n").unwrap();
+    let launch = std::collections::HashMap::from([(
+        "pi".into(),
+        format!(
+            "HOME='{}' USERPROFILE='{}' PI_CODING_AGENT_DIR='{}' pi --session-dir '{}'",
+            home.display(),
+            home.display(),
+            h.join(home, "pi-agent").display(),
+            pi_sessions.display()
+        ),
+    )]);
+    let sources = crate::statistics::discover_pi(h, &launch).unwrap();
+    let pi = scan(h, &sources, &mut cache).unwrap();
+    assert_eq!(
+        pi.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(21)
+    );
+    assert_eq!(
+        pi.aggregate(&DateWindow::all("UTC")).recorded_usd(),
+        Some(0.)
+    );
+    assert_eq!(pi.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
+    assert!(pi.is_complete());
 }
 
 #[doc(hidden)]

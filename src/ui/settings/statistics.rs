@@ -200,6 +200,7 @@ impl LyrelApp {
                 let mut discovery_errors = Vec::new();
                 for (name, discover) in [
                     ("omp", statistics::discover_omp as Discover),
+                    ("pi", statistics::discover_pi as Discover),
                     ("kimi", statistics::discover_kimi as Discover),
                 ] {
                     if agent.is_some_and(|selected| selected != name) {
@@ -329,6 +330,7 @@ impl LyrelApp {
         let agents = [
             (None, t(L10nKey::StatisticsAllAgents)),
             (Some("omp"), "omp"),
+            (Some("pi"), "pi"),
             (Some("kimi"), "Kimi Code"),
             (Some("opencode"), "OpenCode"),
         ]
@@ -377,6 +379,13 @@ impl LyrelApp {
                 t(L10nKey::StatisticsTitle),
                 t(L10nKey::StatisticsScope),
                 machine,
+                cx,
+            )
+            .into_any_element(),
+            self.settings_row(
+                t(L10nKey::StatisticsAgent),
+                t(L10nKey::StatisticsAgentScope),
+                agent,
                 cx,
             )
             .into_any_element(),
@@ -634,6 +643,9 @@ mod tests {
             kimi_wire.push_str(&format!("{}\n", serde_json::json!({"type":"usage.record","agentId":"main","model":"kimi-code/kimi-for-coding","usageScope":scope,"time":chrono::Utc::now().timestamp_millis(),"usage":{"inputOther":3,"output":2,"inputCacheRead":0,"inputCacheCreation":0}})));
         }
         std::fs::write(kimi_session.join("agents/main/wire.jsonl"), kimi_wire).unwrap();
+        let pi = temp.path().join("pi-sessions");
+        std::fs::create_dir(&pi).unwrap();
+        std::fs::write(pi.join("pi.jsonl"), format!("{{\"type\":\"session\",\"version\":3,\"id\":\"gui-native\",\"timestamp\":\"{timestamp}\"}}\n{{\"type\":\"usage\",\"id\":\"call\",\"timestamp\":\"{timestamp}\",\"kind\":\"future\",\"usage\":{{\"input\":5,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{{\"total\":0.25}}}}}}\n")).unwrap();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             let mut config = Config::default();
@@ -651,6 +663,14 @@ mod tests {
             config.agent_launch.insert(
                 "opencode".into(),
                 format!("'{}/missing/opencode'", temp.path().display()),
+            );
+            config.agent_launch.insert(
+                "pi".into(),
+                format!(
+                    "PI_CODING_AGENT_DIR='{}' pi --session-dir '{}'",
+                    temp.path().join("pi-agent").display(),
+                    pi.display()
+                ),
             );
             cx.set_global(config);
             crate::ui::keymap::init(cx);
@@ -723,7 +743,7 @@ mod tests {
                     .totals
                     .tokens()
                     .total(),
-                Some(20)
+                Some(27)
             );
             app.select_statistics_agent(None, cx);
         });
@@ -740,7 +760,7 @@ mod tests {
                     .unwrap()
                     .days()
                     .iter()
-                    .any(|d| d.totals().tokens().total() == Some(10))
+                    .any(|d| d.totals().tokens().total() == Some(27))
             );
             cx.notify();
         });
@@ -830,9 +850,9 @@ mod tests {
                 .get(&(HostId::LOCAL, None))
                 .expect("real native snapshot")
                 .totals;
-            assert_eq!(totals.tokens().total(), Some(20));
-            assert_eq!(totals.recorded_usd(), Some(0.));
-            assert_eq!(totals.main_sessions(), 2);
+            assert_eq!(totals.tokens().total(), Some(27));
+            assert_eq!(totals.recorded_usd(), Some(0.25));
+            assert_eq!(totals.main_sessions(), 3);
             assert_eq!(totals.unpriced_calls(), 2);
             app.select_statistics_agent(Some("kimi"), cx);
         });
@@ -846,7 +866,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             vcx.run_until_parked();
         }
-        app.update_in(&mut vcx, |app, window, cx| {
+        app.update_in(&mut vcx, |app, _window, cx| {
             let presentation = app
                 .active_settings()
                 .unwrap()
@@ -865,11 +885,40 @@ mod tests {
                     .iter()
                     .all(|source| source.agent() == "kimi")
             );
+            app.select_statistics_agent(Some("pi"), cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            vcx.run_until_parked();
+        }
+        app.update_in(&mut vcx, |app, _, cx| {
+            let totals = &app.active_settings().unwrap().statistics.results
+                .get(&(HostId::LOCAL, Some("pi"))).unwrap().totals;
+            assert_eq!(totals.tokens().total(), Some(7));
+            assert_eq!(totals.recorded_usd(), Some(0.25));
+            cx.global_mut::<Config>().agent_launch.insert(
+                "pi".into(), "PI_CODING_AGENT_DIR=relative pi".into());
+            app.select_statistics_agent(None, cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            vcx.run_until_parked();
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            let presentation = app.active_settings().unwrap().statistics.results
+                .get(&(HostId::LOCAL, None)).unwrap();
+            assert_eq!(presentation.totals.tokens().total(), Some(20));
+            assert!(!presentation.snapshot.is_complete());
+            assert!(presentation.snapshot.issues().iter().any(|issue| issue.path().to_string_lossy() == "pi"));
             // A disconnected machine must not borrow the local native snapshot.
             app.select_statistics_host(HostId(123456), cx);
             let state = &app.active_settings().unwrap().statistics;
             assert!(state.error.is_some());
-            assert!(!state.results.contains_key(&(HostId(123456), Some("kimi"))));
+            assert!(!state.results.contains_key(&(HostId(123456), None)));
             app.select_statistics_host(HostId::LOCAL, cx);
             app.navigate_settings(SettingsSection::General, None, window, cx);
             assert!(!app.active_settings().unwrap().statistics.loading);
