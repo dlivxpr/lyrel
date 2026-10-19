@@ -10,6 +10,7 @@ mod omp;
 mod opencode;
 pub use opencode::discover_opencode;
 mod pi;
+pub mod pricing;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
@@ -249,8 +250,17 @@ pub struct Snapshot {
     updated: i64,
     files: Vec<FileFacts>,
     issues: Vec<ScanIssue>,
+    #[serde(default)]
+    pricing: pricing::Pricing,
 }
 impl Snapshot {
+    pub fn with_pricing(mut self, pricing: pricing::Pricing) -> Self {
+        self.apply_pricing(pricing);
+        self
+    }
+    pub fn apply_pricing(&mut self, pricing: pricing::Pricing) {
+        self.pricing = pricing;
+    }
     pub fn host(&self) -> u64 {
         self.host
     }
@@ -284,9 +294,9 @@ impl Snapshot {
                     main_sessions += 1;
                 }
             },
-            |_, record| {
+            |_, record, cost| {
                 if record.covered_by(window) {
-                    out.add_record(record);
+                    out.add_record(record, cost);
                 } else if record.overlaps(window) {
                     out.complete = false;
                 }
@@ -304,8 +314,9 @@ impl Snapshot {
         &'a self,
         agent: Option<&str>,
         mut session: impl FnMut(&'a FileFacts),
-        mut usage: impl FnMut(&'a FileFacts, &'a UsageRecord),
+        mut usage: impl FnMut(&'a FileFacts, &'a UsageRecord, &pricing::RecordCost<'a>),
     ) -> u64 {
+        let prices = pricing::PriceIndex::new(&self.pricing);
         let mut identities = HashMap::new();
         for file in &self.files {
             let source = (file.source.agent.as_str(), file.source.scope.as_str());
@@ -368,7 +379,8 @@ impl Snapshot {
                         variants.push(record);
                     }
                 }
-                usage(file, record);
+                let cost = prices.resolve(record);
+                usage(file, record, &cost);
             }
         }
         ambiguous
@@ -403,6 +415,8 @@ pub struct Totals {
     tokens: Tokens,
     recorded_usd: Option<f64>,
     estimated_usd: Option<f64>,
+    estimated_costs: std::collections::BTreeMap<String, pricing::CurrencyEstimate>,
+    recorded_calls: u64,
     unpriced_calls: u64,
     main_sessions: u64,
     calls: u64,
@@ -411,7 +425,7 @@ pub struct Totals {
     complete: bool,
 }
 impl Totals {
-    fn add_record(&mut self, record: &UsageRecord) {
+    fn add_record(&mut self, record: &UsageRecord, cost: &pricing::RecordCost<'_>) {
         self.tokens.add(&record.tokens, self.calls == 0);
         self.calls += 1;
         self.cumulative_records +=
@@ -421,9 +435,28 @@ impl Totals {
         }
         if let Some(cost) = record.recorded_usd {
             self.recorded_usd = Some(self.recorded_usd.unwrap_or(0.) + cost);
-        } else {
+            self.recorded_calls += 1;
+        } else if cost.unpriced {
             self.unpriced_calls += 1;
         }
+        pricing::add_estimates(&mut self.estimated_costs, cost);
+    }
+    pub fn estimated_costs(&self) -> &std::collections::BTreeMap<String, pricing::CurrencyEstimate> {
+        &self.estimated_costs
+    }
+    /// Returns a complete comparable amount in one explicit currency only.
+    /// Native estimated_usd remains a separate informational estimate.
+    pub fn cost_in(&self, currency: &str) -> Option<f64> {
+        if !self.complete || self.unpriced_calls > 0 || (currency != "USD" && self.recorded_calls > 0) {
+            return None;
+        }
+        let estimated_calls = self.calls - self.recorded_calls;
+        let estimate = self.estimated_costs.get(currency);
+        if estimated_calls > 0 && !estimate.is_some_and(|value| value.is_complete() && value.calls == estimated_calls) {
+            return None;
+        }
+        Some(if currency == "USD" { self.recorded_usd.unwrap_or(0.0) } else { 0.0 }
+            + estimate.and_then(pricing::CurrencyEstimate::total).unwrap_or(0.0))
     }
     pub fn estimated_usd(&self) -> Option<f64> {
         self.estimated_usd
@@ -475,6 +508,8 @@ impl Default for Totals {
             tokens: Tokens::default(),
             recorded_usd: None,
             estimated_usd: None,
+            estimated_costs: std::collections::BTreeMap::new(),
+            recorded_calls: 0,
             unpriced_calls: 0,
             main_sessions: 0,
             calls: 0,
@@ -517,6 +552,7 @@ pub fn scan(
         updated: chrono::Utc::now().timestamp(),
         files: Vec::new(),
         issues: Vec::new(),
+        pricing: pricing::Pricing::default(),
     };
     let mut seen = HashSet::new();
     let mut dirs = 0;
@@ -555,7 +591,20 @@ pub fn scan(
             });
             continue;
         }
-        let exact_file = host.stat(&source.root).is_ok_and(|m| !m.is_dir);
+        let metadata = host.stat(&source.root);
+        if metadata.as_ref().is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+            && cache.files.iter().any(|((id, agent, scope, _), (_, facts))| {
+                *id == host.id().0 && *agent == source.agent && *scope == source.scope
+                    && facts.source.root == source.root
+            })
+        {
+            snapshot.issues.push(ScanIssue {
+                path: source.root.clone(),
+                reason: "previously readable statistics source is missing; retaining stale facts".into(),
+            });
+            continue;
+        }
+        let exact_file = metadata.is_ok_and(|m| !m.is_dir);
         let initial = if exact_file {
             let value = source.root.to_string_lossy();
             let split = value.rfind(['/', '\\']).ok_or_else(|| {
@@ -591,8 +640,9 @@ pub fn scan(
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound
                         && path == source.root
-                        && !cache.files.keys().any(|(id, agent, scope, _)| {
+                        && !cache.files.iter().any(|((id, agent, scope, _), (_, facts))| {
                             *id == host.id().0 && *agent == source.agent && *scope == source.scope
+                                && facts.source.root == source.root
                         }) =>
                 {
                     continue;
@@ -716,12 +766,12 @@ pub fn scan(
     if !snapshot.issues.is_empty() {
         for ((host_id, agent, scope, path), (_, facts)) in &cache.files {
             if *host_id == host.id().0
-                && !host
-                    .stat(path)
-                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
                 && sources
                     .iter()
-                    .any(|s| s.agent == *agent && s.scope == *scope)
+                    .any(|s| s.agent == *agent && s.scope == *scope && s.root == facts.source.root)
+                && snapshot.issues.iter().any(|issue| {
+                    path.starts_with(&issue.path) || issue.path == facts.source.root
+                })
                 && !snapshot.files.iter().any(|f| {
                     f.path == *path && f.source.agent == *agent && f.source.scope == *scope
                 })

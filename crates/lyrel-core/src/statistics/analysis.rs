@@ -25,12 +25,10 @@ impl Metric {
                 }
             }
             Self::Cost => {
-                if totals.unpriced_calls() > 0 {
+                if totals.estimated_costs().keys().any(|currency| currency != "USD") {
                     None
                 } else {
-                    totals
-                        .recorded_usd()
-                        .or_else(|| (totals.calls() == 0).then_some(0.0))
+                    totals.cost_in("USD")
                 }
             }
             Self::Sessions => Some(totals.main_sessions() as f64),
@@ -233,7 +231,7 @@ impl Snapshot {
         let ambiguous = self.visit_usage(
             agent,
             |file| sessions.push(file),
-            |file, record| {
+            |file, record, cost| {
                 let keys = [
                     group_key(file, Some(&file.source.agent), None),
                     group_key(
@@ -245,13 +243,13 @@ impl Snapshot {
                     group_key(file, file.session.project.as_deref(), None),
                 ];
                 if record.covered_by(window) {
-                    totals.add_record(record);
+                    totals.add_record(record, cost);
                     for (groups, key) in [&mut agents, &mut models, &mut projects]
                         .into_iter()
                         .zip(keys)
                     {
                         let group = groups.entry(key).or_default();
-                        group.totals.add_record(record);
+                        group.totals.add_record(record, cost);
                         if !file.child {
                             group.sessions.insert(main_identity(file));
                         }
@@ -281,7 +279,7 @@ impl Snapshot {
                         continue;
                     }
                     if record.covered_by(boundary) && record.covered_by(window) {
-                        day.totals.add_record(record);
+                        day.totals.add_record(record, cost);
                     } else {
                         day.totals.complete = false;
                     }
