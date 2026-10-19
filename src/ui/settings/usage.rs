@@ -436,14 +436,19 @@ struct BrowserChoice(browser::Browser);
 fn browser_choices(provider: Provider, enhancement: bool) -> Vec<BrowserChoice> {
     #[cfg(not(target_os = "macos"))]
     let _ = (provider, enhancement);
-    browser::Browser::all().iter().copied().filter(|browser| {
-        #[cfg(target_os = "macos")]
-        if *browser == browser::Browser::Safari {
-            return enhancement || provider == Provider::MiMo;
-        }
-        let _ = browser;
-        true
-    }).map(BrowserChoice).collect()
+    browser::Browser::all()
+        .iter()
+        .copied()
+        .filter(|browser| {
+            #[cfg(target_os = "macos")]
+            if *browser == browser::Browser::Safari {
+                return enhancement || provider == Provider::MiMo;
+            }
+            let _ = browser;
+            true
+        })
+        .map(BrowserChoice)
+        .collect()
 }
 impl SelectItem for BrowserChoice {
     type Value = browser::Browser;
@@ -575,12 +580,7 @@ impl UsagePage {
             s.set_selected_value(&Provider::DeepSeek, window, cx)
         });
         let browsers = cx.new(|cx| {
-            SelectState::new(
-                browser_choices(Provider::DeepSeek, false),
-                None,
-                window,
-                cx,
-            )
+            SelectState::new(browser_choices(Provider::DeepSeek, false), None, window, cx)
         });
         let profiles = cx.new(|cx| SelectState::new(Vec::<ProfileChoice>::new(), None, window, cx));
         let secs = data.read(cx).stored.interval_secs;
@@ -614,7 +614,9 @@ impl UsagePage {
                             cx,
                         );
                     });
-                    page.browsers.update(cx, |s, cx| s.set_items(browser_choices(*provider, false), window, cx));
+                    page.browsers.update(cx, |s, cx| {
+                        s.set_items(browser_choices(*provider, false), window, cx)
+                    });
                     page.form_version.fetch_add(1, Ordering::SeqCst);
                     page.key.update(cx, |s, cx| s.set_value("", window, cx));
                     page.error = None;
@@ -789,11 +791,15 @@ impl UsagePage {
         self.provider
             .update(cx, |s, cx| s.set_selected_value(&provider, window, cx));
         self.source.update(cx, |s, cx| {
-            s.set_items(if matches!(edit, Edit::Enhance(_)) {
-                vec![Source::Session, Source::Browser]
-            } else {
-                provider.sources()
-            }, window, cx)
+            s.set_items(
+                if matches!(edit, Edit::Enhance(_)) {
+                    vec![Source::Session, Source::Browser]
+                } else {
+                    provider.sources()
+                },
+                window,
+                cx,
+            )
         });
         let source = match edit {
             Edit::Replace(id) => self
@@ -820,7 +826,11 @@ impl UsagePage {
         self.discovering = false;
         self.profile_items.clear();
         self.browsers.update(cx, |s, cx| {
-            s.set_items(browser_choices(provider, matches!(edit, Edit::Enhance(_))), window, cx);
+            s.set_items(
+                browser_choices(provider, matches!(edit, Edit::Enhance(_))),
+                window,
+                cx,
+            );
             s.set_selected_index(None, window, cx);
         });
         self.profiles
@@ -829,7 +839,8 @@ impl UsagePage {
             .update(cx, |input, cx| input.set_value(name, window, cx));
         self.key
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.cookie_name.update(cx, |input, cx| input.set_value("", window, cx));
+        self.cookie_name
+            .update(cx, |input, cx| input.set_value("", window, cx));
         if matches!(edit, Edit::Enhance(_)) {
             self.source.read(cx).focus_handle(cx).focus(window, cx);
         } else {
@@ -887,7 +898,10 @@ impl UsagePage {
         let from_browser = self.source.read(cx).selected_value() == Some(&Source::Browser);
         let cookie_name = self.cookie_name.read(cx).value().trim().to_owned();
         let profile = self.profiles.read(cx).selected_value().and_then(|id| {
-            self.profile_items.iter().find(|choice| &choice.id == id).map(|choice| choice.profile.clone())
+            self.profile_items
+                .iter()
+                .find(|choice| &choice.id == id)
+                .map(|choice| choice.profile.clone())
         });
         let data = self.data.clone();
         let shared = data.read(cx).shared.clone();
@@ -911,10 +925,18 @@ impl UsagePage {
                             return Err(UsageError::Stale);
                         }
                         let profile = profile.ok_or(UsageError::BrowserMissing)?;
-                        let (selection, material) = shared.browser.import_cookies(
-                            &profile, browser::CookieProvider::CommandCode(&cookie_name), true
-                        ).map_err(browser_error)?;
-                        (Some(selection), providers::command_code::session(material.secret())?)
+                        let (selection, material) = shared
+                            .browser
+                            .import_cookies(
+                                &profile,
+                                browser::CookieProvider::CommandCode(&cookie_name),
+                                true,
+                            )
+                            .map_err(browser_error)?;
+                        (
+                            Some(selection),
+                            providers::command_code::session(material.secret())?,
+                        )
                     } else {
                         (None, providers::command_code::session(&input)?)
                     };
@@ -1178,11 +1200,21 @@ impl UsagePage {
                                 .map(|s| Some(zeroize::Zeroizing::new(s)))
                         };
                         let enhancement = accounts.enhancement_secret(id);
-                        let enhancement_browser = accounts.account(id).unwrap().enhancement_browser.clone();
-                        (ticket, auth, provider, secret, enhancement, enhancement_browser)
+                        let enhancement_browser =
+                            accounts.account(id).unwrap().enhancement_browser.clone();
+                        (
+                            ticket,
+                            auth,
+                            provider,
+                            secret,
+                            enhancement,
+                            enhancement_browser,
+                        )
                     })
                 };
-                let Some((ticket, auth, provider, secret, enhancement, enhancement_browser)) = start else {
+                let Some((ticket, auth, provider, secret, enhancement, enhancement_browser)) =
+                    start
+                else {
                     return;
                 };
                 let mut result = secret.and_then(|secret| match auth {
@@ -1252,12 +1284,22 @@ impl UsagePage {
                     if report.provider == Provider::CommandCode {
                         let enhancement = if let Some(selection) = enhancement_browser {
                             if gate.load(Ordering::SeqCst) {
-                                selection.cookie_name().ok_or(UsageError::BrowserChanged).and_then(|name| {
-                                    shared.browser.resolve_cookies(&selection, browser::CookieProvider::CommandCode(name))
-                                        .map_err(browser_error)
-                                        .and_then(|material| providers::command_code::session(material.secret()))
-                                        .map(Some)
-                                })
+                                selection
+                                    .cookie_name()
+                                    .ok_or(UsageError::BrowserChanged)
+                                    .and_then(|name| {
+                                        shared
+                                            .browser
+                                            .resolve_cookies(
+                                                &selection,
+                                                browser::CookieProvider::CommandCode(name),
+                                            )
+                                            .map_err(browser_error)
+                                            .and_then(|material| {
+                                                providers::command_code::session(material.secret())
+                                            })
+                                            .map(Some)
+                                    })
                             } else {
                                 Err(UsageError::Stale)
                             }
@@ -1578,9 +1620,20 @@ impl Render for UsagePage {
                                 _ => L10nKey::UsageCookieBrowserHelp,
                             })));
                         if matches!(edit, Edit::Enhance(_)) {
-                            form = form.child(t(L10nKey::UsageCommandCookieName))
-                                .child(Input::new(&self.cookie_name).id("usage-cookie-name").small().w_full().disabled(self.submitting))
-                                .child(div().text_color(muted).child(t(L10nKey::UsageCommandCookieNameHelp)));
+                            form = form
+                                .child(t(L10nKey::UsageCommandCookieName))
+                                .child(
+                                    Input::new(&self.cookie_name)
+                                        .id("usage-cookie-name")
+                                        .small()
+                                        .w_full()
+                                        .disabled(self.submitting),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(muted)
+                                        .child(t(L10nKey::UsageCommandCookieNameHelp)),
+                                );
                         }
                         if self.discovering {
                             form = form.child(t(L10nKey::UsageLoading));
@@ -1617,17 +1670,21 @@ impl Render for UsagePage {
                         .disabled(
                             self.submitting
                                 || self.name.read(cx).value().trim().is_empty()
-                                || (matches!(edit, Edit::Add | Edit::Replace(_) | Edit::Enhance(_))
-                                    && if self.source.read(cx).selected_value()
-                                        == Some(&Source::Browser)
-                                    {
-                                        self.discovering
-                                            || self.profiles.read(cx).selected_value().is_none()
-                                            || (matches!(edit, Edit::Enhance(_))
-                                                && !browser::valid_command_cookie_name(self.cookie_name.read(cx).value().trim()))
-                                    } else {
-                                        self.key.read(cx).value().trim().is_empty()
-                                    }),
+                                || (matches!(
+                                    edit,
+                                    Edit::Add | Edit::Replace(_) | Edit::Enhance(_)
+                                ) && if self.source.read(cx).selected_value()
+                                    == Some(&Source::Browser)
+                                {
+                                    self.discovering
+                                        || self.profiles.read(cx).selected_value().is_none()
+                                        || (matches!(edit, Edit::Enhance(_))
+                                            && !browser::valid_command_cookie_name(
+                                                self.cookie_name.read(cx).value().trim(),
+                                            ))
+                                } else {
+                                    self.key.read(cx).value().trim().is_empty()
+                                }),
                         )
                         .on_click(cx.listener(|p, _, w, cx| p.submit(w, cx))),
                     ),
@@ -1893,10 +1950,19 @@ impl Render for UsagePage {
             );
             if account.provider == Provider::CommandCode {
                 if let Some(selection) = &account.enhancement_browser {
-                    row = row.child(div().text_color(muted).child(format!("{} · {} · {} · {}",
-                        t(L10nKey::UsageEnhancementBrowserSource), selection.browser().label(), selection.label(), selection.cookie_name().unwrap_or(""))));
+                    row = row.child(div().text_color(muted).child(format!(
+                        "{} · {} · {} · {}",
+                        t(L10nKey::UsageEnhancementBrowserSource),
+                        selection.browser().label(),
+                        selection.label(),
+                        selection.cookie_name().unwrap_or("")
+                    )));
                 } else if account.enhancement_slot.is_some() {
-                    row = row.child(div().text_color(muted).child(t(L10nKey::UsageEnhancementManualSource)));
+                    row = row.child(
+                        div()
+                            .text_color(muted)
+                            .child(t(L10nKey::UsageEnhancementManualSource)),
+                    );
                 }
                 row = row.child(
                     button(

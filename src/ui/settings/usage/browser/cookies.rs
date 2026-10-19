@@ -12,10 +12,10 @@ use zeroize::Zeroizing;
 
 #[cfg(target_os = "macos")]
 mod mac;
-#[cfg(target_os = "windows")]
-mod win;
 #[cfg(target_os = "macos")]
 mod safari;
+#[cfg(target_os = "windows")]
+mod win;
 
 #[cfg(target_os = "macos")]
 pub(super) type PasswordReader = fn(Browser, bool) -> Result<Zeroizing<Vec<u8>>, BrowserError>;
@@ -52,7 +52,11 @@ impl<'a> CookieProvider<'a> {
                 ".platform.xiaomimimo.com",
                 ".xiaomimimo.com",
             ],
-            Self::CommandCode(_) => ["api.commandcode.ai", ".api.commandcode.ai", ".commandcode.ai"],
+            Self::CommandCode(_) => [
+                "api.commandcode.ai",
+                ".api.commandcode.ai",
+                ".commandcode.ai",
+            ],
         }
     }
 
@@ -103,8 +107,11 @@ impl<'a> CookieProvider<'a> {
 }
 
 pub(in super::super) fn valid_command_cookie_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 256
-        && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+    !name.is_empty()
+        && name.len() <= 256
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 impl BrowserReader {
@@ -133,7 +140,10 @@ impl BrowserReader {
             profile_label: current.label,
             profile_fingerprint: current.fingerprint,
             token_fingerprint: provider.token_fingerprint(&material),
-            cookie_name: match provider { CookieProvider::CommandCode(name) => Some(name.to_owned()), _ => None },
+            cookie_name: match provider {
+                CookieProvider::CommandCode(name) => Some(name.to_owned()),
+                _ => None,
+            },
         };
         Ok((selection, material))
     }
@@ -470,7 +480,11 @@ fn chromium(
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-pub(super) fn read_file(root: &Path, path: &Path, max: u64) -> Result<Zeroizing<Vec<u8>>, BrowserError> {
+pub(super) fn read_file(
+    root: &Path,
+    path: &Path,
+    max: u64,
+) -> Result<Zeroizing<Vec<u8>>, BrowserError> {
     use std::io::Read as _;
     if !fs::canonicalize(path).map_err(io_error)?.starts_with(root) {
         return Err(BrowserError::Denied);
@@ -481,7 +495,9 @@ pub(super) fn read_file(root: &Path, path: &Path, max: u64) -> Result<Zeroizing<
         return Err(BrowserError::Unreadable);
     }
     let mut bytes = Zeroizing::new(Vec::with_capacity(metadata.len() as usize));
-    file.take(max + 1).read_to_end(&mut bytes).map_err(io_error)?;
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
     if bytes.len() as u64 > max {
         return Err(BrowserError::Unreadable);
     }
@@ -489,9 +505,11 @@ pub(super) fn read_file(root: &Path, path: &Path, max: u64) -> Result<Zeroizing<
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-fn decode_plaintext(bytes: &[u8], host: &str, version: i64)
-    -> Result<Zeroizing<String>, BrowserError>
-{
+fn decode_plaintext(
+    bytes: &[u8],
+    host: &str,
+    version: i64,
+) -> Result<Zeroizing<String>, BrowserError> {
     use sha2::{Digest, Sha256};
     let bytes = if version >= 24 {
         let digest = Sha256::digest(host.as_bytes());
@@ -1022,9 +1040,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (reader, profile, db) = chromium_fixture(root.path());
         db.execute("INSERT INTO cookies (host_key,name,encrypted_value,has_expires,is_persistent,expires_utc) VALUES ('.xiaomimimo.com','api-platform_serviceToken',?1,1,1,1)", [b"v10expired-never-decrypt".as_slice()]).unwrap();
-        assert!(matches!(reader.import_cookies(&profile, CookieProvider::MiMo, false), Err(BrowserError::NoSession)));
+        assert!(matches!(
+            reader.import_cookies(&profile, CookieProvider::MiMo, false),
+            Err(BrowserError::NoSession)
+        ));
         db.execute_batch("BEGIN EXCLUSIVE;").unwrap();
-        assert!(matches!(reader.import_cookies(&profile, CookieProvider::MiMo, false), Err(BrowserError::Locked)));
+        assert!(matches!(
+            reader.import_cookies(&profile, CookieProvider::MiMo, false),
+            Err(BrowserError::Locked)
+        ));
     }
 
     #[cfg(target_os = "windows")]
@@ -1039,13 +1063,22 @@ mod tests {
         };
         let mut output = CRYPT_INTEGER_BLOB::default();
         // 仅加密本测试生成的字节；不读取浏览器或系统凭据，不允许 UI。
-        assert_ne!(unsafe {
-            CryptProtectData(&input, std::ptr::null(), std::ptr::null(),
-                std::ptr::null(), std::ptr::null(), CRYPTPROTECT_UI_FORBIDDEN, &mut output)
-        }, 0);
-        let bytes = unsafe {
-            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec()
-        };
+        assert_ne!(
+            unsafe {
+                CryptProtectData(
+                    &input,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut output,
+                )
+            },
+            0
+        );
+        let bytes =
+            unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
         unsafe { LocalFree(output.pbData.cast()) };
         bytes
     }
@@ -1057,12 +1090,19 @@ mod tests {
         wrapped.extend_from_slice(&protect_fixture(key));
         let state = serde_json::json!({"os_crypt": {"encrypted_key":
             base64::engine::general_purpose::STANDARD.encode(&wrapped)}});
-        fs::write(root.join("Local State"), serde_json::to_vec(&state).unwrap()).unwrap();
+        fs::write(
+            root.join("Local State"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
     }
 
     #[cfg(target_os = "windows")]
     fn gcm_fixture(prefix: &[u8], key: &[u8; 32], nonce_byte: u8, bytes: &[u8]) -> Vec<u8> {
-        use aes_gcm::{Aes256Gcm, Nonce, aead::{Aead, KeyInit}};
+        use aes_gcm::{
+            Aes256Gcm, Nonce,
+            aead::{Aead, KeyInit},
+        };
         let cipher = Aes256Gcm::new_from_slice(key).unwrap();
         let nonce = Nonce::from([nonce_byte; 12]);
         let mut blob = prefix.to_vec();
@@ -1082,11 +1122,27 @@ mod tests {
     fn windows_import_and_background_resolve_legacy_dpapi_rows() {
         let root = tempfile::tempdir().unwrap();
         let (reader, profile, db) = chromium_fixture(root.path());
-        db.execute("UPDATE meta SET value='23' WHERE key='version'", []).unwrap();
-        encrypted_mimo(&db, &protect_fixture(b"isolated-dpapi-token"), &protect_fixture(b"user-17"));
-        let (selection, material) = reader.import_cookies(&profile, CookieProvider::MiMo, true).unwrap();
-        assert_eq!(material.secret(), "api-platform_serviceToken=isolated-dpapi-token; userId=user-17");
-        assert_eq!(reader.resolve_cookies(&selection, CookieProvider::MiMo).unwrap().secret(), material.secret());
+        db.execute("UPDATE meta SET value='23' WHERE key='version'", [])
+            .unwrap();
+        encrypted_mimo(
+            &db,
+            &protect_fixture(b"isolated-dpapi-token"),
+            &protect_fixture(b"user-17"),
+        );
+        let (selection, material) = reader
+            .import_cookies(&profile, CookieProvider::MiMo, true)
+            .unwrap();
+        assert_eq!(
+            material.secret(),
+            "api-platform_serviceToken=isolated-dpapi-token; userId=user-17"
+        );
+        assert_eq!(
+            reader
+                .resolve_cookies(&selection, CookieProvider::MiMo)
+                .unwrap()
+                .secret(),
+            material.secret()
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -1096,7 +1152,11 @@ mod tests {
         for (version, prefix) in [(23, b"v10"), (24, b"v11")] {
             let root = tempfile::tempdir().unwrap();
             let (reader, profile, db) = chromium_fixture(root.path());
-            db.execute("UPDATE meta SET value=?1 WHERE key='version'", [version.to_string()]).unwrap();
+            db.execute(
+                "UPDATE meta SET value=?1 WHERE key='version'",
+                [version.to_string()],
+            )
+            .unwrap();
             let key = [0x37; 32];
             windows_key(root.path(), &key);
             let mut token = Vec::new();
@@ -1107,11 +1167,30 @@ mod tests {
             }
             token.extend_from_slice(b"isolated-gcm-token");
             user.extend_from_slice(b"user-17");
-            encrypted_mimo(&db, &gcm_fixture(prefix, &key, 1, &token), &gcm_fixture(prefix, &key, 2, &user));
-            let (selection, material) = reader.import_cookies(&profile, CookieProvider::MiMo, true).unwrap();
-            assert_eq!(material.secret(), "api-platform_serviceToken=isolated-gcm-token; userId=user-17");
-            assert_eq!(reader.resolve_cookies(&selection, CookieProvider::MiMo).unwrap().secret(), material.secret());
-            assert!(!serde_json::to_string(&selection).unwrap().contains("isolated-gcm-token"));
+            encrypted_mimo(
+                &db,
+                &gcm_fixture(prefix, &key, 1, &token),
+                &gcm_fixture(prefix, &key, 2, &user),
+            );
+            let (selection, material) = reader
+                .import_cookies(&profile, CookieProvider::MiMo, true)
+                .unwrap();
+            assert_eq!(
+                material.secret(),
+                "api-platform_serviceToken=isolated-gcm-token; userId=user-17"
+            );
+            assert_eq!(
+                reader
+                    .resolve_cookies(&selection, CookieProvider::MiMo)
+                    .unwrap()
+                    .secret(),
+                material.secret()
+            );
+            assert!(
+                !serde_json::to_string(&selection)
+                    .unwrap()
+                    .contains("isolated-gcm-token")
+            );
         }
     }
 
@@ -1126,21 +1205,39 @@ mod tests {
         valid.extend_from_slice(b"isolated-token");
         let mut tampered = gcm_fixture(b"v10", &key, 3, &valid);
         *tampered.last_mut().unwrap() ^= 1;
-        for blob in [gcm_fixture(b"v10", &key, 4, &wrong_host),
-            gcm_fixture(b"v10", &key, 5, b"missing-domain-hash"), tampered,
-            protect_fixture(b"missing-domain-hash"), b"v11short".to_vec()] {
+        for blob in [
+            gcm_fixture(b"v10", &key, 4, &wrong_host),
+            gcm_fixture(b"v10", &key, 5, b"missing-domain-hash"),
+            tampered,
+            protect_fixture(b"missing-domain-hash"),
+            b"v11short".to_vec(),
+        ] {
             let root = tempfile::tempdir().unwrap();
             let (reader, profile, db) = chromium_fixture(root.path());
             windows_key(root.path(), &key);
             encrypted_mimo(&db, &blob, &protect_fixture(&valid));
-            assert!(matches!(reader.import_cookies(&profile, CookieProvider::MiMo, true), Err(BrowserError::Unreadable)));
+            assert!(matches!(
+                reader.import_cookies(&profile, CookieProvider::MiMo, true),
+                Err(BrowserError::Unreadable)
+            ));
         }
         let root = tempfile::tempdir().unwrap();
         let (reader, profile, db) = chromium_fixture(root.path());
         windows_key(root.path(), &key);
-        encrypted_mimo(&db, &gcm_fixture(b"v10", &key, 6, &valid), &gcm_fixture(b"v10", &key, 7, &valid));
-        fs::write(root.path().join("Local State"), r#"{"os_crypt":{"encrypted_key":"not-base64"}}"#).unwrap();
-        assert!(matches!(reader.import_cookies(&profile, CookieProvider::MiMo, true), Err(BrowserError::Unreadable)));
+        encrypted_mimo(
+            &db,
+            &gcm_fixture(b"v10", &key, 6, &valid),
+            &gcm_fixture(b"v10", &key, 7, &valid),
+        );
+        fs::write(
+            root.path().join("Local State"),
+            r#"{"os_crypt":{"encrypted_key":"not-base64"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            reader.import_cookies(&profile, CookieProvider::MiMo, true),
+            Err(BrowserError::Unreadable)
+        ));
     }
 
     #[cfg(target_os = "macos")]
@@ -1153,7 +1250,10 @@ mod tests {
             assert!(interactive);
             Err(BrowserError::Denied)
         };
-        assert!(matches!(reader.import_cookies(&profile, CookieProvider::MiMo, true), Err(BrowserError::Denied)));
+        assert!(matches!(
+            reader.import_cookies(&profile, CookieProvider::MiMo, true),
+            Err(BrowserError::Denied)
+        ));
         let selection = BrowserSelection {
             browser: profile.browser,
             profile_id: profile.id.clone(),
@@ -1166,32 +1266,113 @@ mod tests {
             assert!(!interactive, "background must use Keychain UISkip");
             Err(BrowserError::Denied)
         };
-        assert!(matches!(reader.resolve_cookies(&selection, CookieProvider::MiMo), Err(BrowserError::Denied)));
+        assert!(matches!(
+            reader.resolve_cookies(&selection, CookieProvider::MiMo),
+            Err(BrowserError::Denied)
+        ));
     }
     #[test]
     fn command_cookie_reader_uses_only_explicit_name_host_and_profile_with_live_wal() {
         let root = tempfile::tempdir().unwrap();
         let (reader, profile, db) = firefox(root.path());
-        cookie(&db, "api.commandcode.ai", "chosen-session", "before", "/", i64::MAX, "");
-        cookie(&db, ".commandcode.ai", "__Secure-better-auth.session_token", "not-selected-default", "/", i64::MAX, "");
-        cookie(&db, "commandcode.ai", "chosen-session", "not-api-host-only", "/", i64::MAX, "");
-        cookie(&db, ".commandcode.ai.evil.invalid", "chosen-session", "wrong-domain", "/", i64::MAX, "");
-        cookie(&db, ".commandcode.ai", "chosen-session", "expired", "/", 1, "");
+        cookie(
+            &db,
+            "api.commandcode.ai",
+            "chosen-session",
+            "before",
+            "/",
+            i64::MAX,
+            "",
+        );
+        cookie(
+            &db,
+            ".commandcode.ai",
+            "__Secure-better-auth.session_token",
+            "not-selected-default",
+            "/",
+            i64::MAX,
+            "",
+        );
+        cookie(
+            &db,
+            "commandcode.ai",
+            "chosen-session",
+            "not-api-host-only",
+            "/",
+            i64::MAX,
+            "",
+        );
+        cookie(
+            &db,
+            ".commandcode.ai.evil.invalid",
+            "chosen-session",
+            "wrong-domain",
+            "/",
+            i64::MAX,
+            "",
+        );
+        cookie(
+            &db,
+            ".commandcode.ai",
+            "chosen-session",
+            "expired",
+            "/",
+            1,
+            "",
+        );
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE moz_cookies SET value='committed-wal-session' WHERE host='api.commandcode.ai'").unwrap();
         let provider = CookieProvider::CommandCode("chosen-session");
         let (selection, material) = reader.import_cookies(&profile, provider, true).unwrap();
         assert_eq!(material.secret(), "chosen-session=committed-wal-session");
         assert_eq!(selection.cookie_name(), Some("chosen-session"));
         let metadata = serde_json::to_string(&selection).unwrap();
-        assert!(!metadata.contains("committed-wal-session") && !metadata.contains(root.path().to_str().unwrap()));
-        assert!(matches!(reader.import_cookies(&profile, CookieProvider::CommandCode("missing-name"), true), Err(BrowserError::NoSession)));
-        assert!(matches!(reader.resolve_cookies(&selection, CookieProvider::CommandCode("other-name")), Err(BrowserError::SourceChanged)));
-        for name in ["", "Cookie: chosen-session", "chosen-session; other", "chosen\r\nheader"] {
-            assert!(matches!(reader.import_cookies(&profile, CookieProvider::CommandCode(name), true), Err(BrowserError::Unreadable)));
+        assert!(
+            !metadata.contains("committed-wal-session")
+                && !metadata.contains(root.path().to_str().unwrap())
+        );
+        assert!(matches!(
+            reader.import_cookies(&profile, CookieProvider::CommandCode("missing-name"), true),
+            Err(BrowserError::NoSession)
+        ));
+        assert!(matches!(
+            reader.resolve_cookies(&selection, CookieProvider::CommandCode("other-name")),
+            Err(BrowserError::SourceChanged)
+        ));
+        for name in [
+            "",
+            "Cookie: chosen-session",
+            "chosen-session; other",
+            "chosen\r\nheader",
+        ] {
+            assert!(matches!(
+                reader.import_cookies(&profile, CookieProvider::CommandCode(name), true),
+                Err(BrowserError::Unreadable)
+            ));
         }
-        db.execute("UPDATE moz_cookies SET value='rotated' WHERE host='api.commandcode.ai'", []).unwrap();
-        assert_eq!(reader.resolve_cookies(&selection, provider).unwrap().secret(), "chosen-session=rotated");
-        cookie(&db, ".api.commandcode.ai", "chosen-session", "ambiguous-account", "/", i64::MAX, "");
-        assert!(matches!(reader.import_cookies(&profile, provider, true), Err(BrowserError::Unreadable)));
+        db.execute(
+            "UPDATE moz_cookies SET value='rotated' WHERE host='api.commandcode.ai'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            reader
+                .resolve_cookies(&selection, provider)
+                .unwrap()
+                .secret(),
+            "chosen-session=rotated"
+        );
+        cookie(
+            &db,
+            ".api.commandcode.ai",
+            "chosen-session",
+            "ambiguous-account",
+            "/",
+            i64::MAX,
+            "",
+        );
+        assert!(matches!(
+            reader.import_cookies(&profile, provider, true),
+            Err(BrowserError::Unreadable)
+        ));
     }
 }

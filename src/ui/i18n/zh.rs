@@ -506,12 +506,18 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageCommandSessionHelp => {
             "从你已授权的 Command Code 登录请求中，明确复制一个会话 Cookie 的 name=value（不是 API key，也不是整段 Cookie）。仅在 api.commandcode.ai 验证会话用户与 API key 用户相同、并成功查询增强后保存；不假设 Cookie 名称或 subscription.userId。"
         }
-        L10nKey::UsageCommandBrowserHelp => "选择浏览器和 profile 后再验证。仅读取 Command Code 会话 Cookie，先由 /auth/get-session 匹配主要 API-key 身份，再查询账务增强；浏览器材料从不保存。Windows 拒绝 ABE，支持传统 DPAPI。macOS Chromium 仅本次主动操作可申请 Keychain；Safari 按 binarycookies 尽力读取，需全盘访问。后台从不弹授权，Safari 需主动重新导入。会话轮换后仍须重新核对身份。",
+        L10nKey::UsageCommandBrowserHelp => {
+            "选择浏览器和 profile 后再验证。仅读取 Command Code 会话 Cookie，先由 /auth/get-session 匹配主要 API-key 身份，再查询账务增强；浏览器材料从不保存。Windows 拒绝 ABE，支持传统 DPAPI。macOS Chromium 仅本次主动操作可申请 Keychain；Safari 按 binarycookies 尽力读取，需全盘访问。后台从不弹授权，Safari 需主动重新导入。会话轮换后仍须重新核对身份。"
+        }
         L10nKey::UsageCommandCookieName => "精确会话 Cookie 名称",
-        L10nKey::UsageCommandCookieNameHelp => "仅填写本人已授权 Command Code 登录请求中的精确会话 Cookie 名称，不填值。公开 BetterAuth 默认规则不能证明该服务端实际配置；Lyrel 不猜名称，仅读取你指定的、域适用于 api.commandcode.ai 的 Cookie，再核对 API-key 用户。名称仅作为非秘密来源选择器。",
+        L10nKey::UsageCommandCookieNameHelp => {
+            "仅填写本人已授权 Command Code 登录请求中的精确会话 Cookie 名称，不填值。公开 BetterAuth 默认规则不能证明该服务端实际配置；Lyrel 不猜名称，仅读取你指定的、域适用于 api.commandcode.ai 的 Cookie，再核对 API-key 用户。名称仅作为非秘密来源选择器。"
+        }
         L10nKey::UsageEnhancementBrowserSource => "增强来源 · 浏览器会话",
         L10nKey::UsageEnhancementManualSource => "增强来源 · 系统凭据库中的手工会话",
-        L10nKey::UsageBrowserFullDiskAccess => "Safari Cookie 需要在 macOS 隐私与安全性中为 Lyrel 授予全盘访问。Lyrel 不修改系统权限，也不在后台读取 Safari。如你自行决定授权，请再次主动导入所选 Safari 来源。",
+        L10nKey::UsageBrowserFullDiskAccess => {
+            "Safari Cookie 需要在 macOS 隐私与安全性中为 Lyrel 授予全盘访问。Lyrel 不修改系统权限，也不在后台读取 Safari。如你自行决定授权，请再次主动导入所选 Safari 来源。"
+        }
         L10nKey::UsageApiSource => "API 密钥",
         L10nKey::UsageSessionSource => "私有平台 · 手工会话",
         L10nKey::UsageBrowserSource => "私有平台 · 浏览器",

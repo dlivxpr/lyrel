@@ -510,9 +510,12 @@ impl Accounts {
         report: ProviderReport,
         now: u64,
     ) -> Result<(), UsageError> {
-        let current = self.account(query.id).filter(|a| {
-            a.revision == query.revision && !a.removing && a.provider == Provider::CommandCode
-        }).ok_or(UsageError::Stale)?;
+        let current = self
+            .account(query.id)
+            .filter(|a| {
+                a.revision == query.revision && !a.removing && a.provider == Provider::CommandCode
+            })
+            .ok_or(UsageError::Stale)?;
         if report.provider != Provider::CommandCode || report.identity.is_none()
             || current.snapshot.as_ref().is_none_or(|snapshot| {
                 !matches!(&snapshot.balance, Balance::Provider(previous) if previous.identity == report.identity)
@@ -525,13 +528,19 @@ impl Accounts {
         let old = account.enhancement_slot.take();
         account.retired_slots.extend(old);
         account.enhancement_browser = Some(selection);
-        account.snapshot = Some(Snapshot { balance: Balance::Provider(report), updated_at: now });
+        account.snapshot = Some(Snapshot {
+            balance: Balance::Provider(report),
+            updated_at: now,
+        });
         account.busy = false;
         self.persist(&next)?;
         self.stored = next;
         if let Some(old) = old {
             if self.vault.delete(SERVICE, &old.to_string()).is_ok() {
-                self.account_mut(query.id).unwrap().retired_slots.retain(|slot| *slot != old);
+                self.account_mut(query.id)
+                    .unwrap()
+                    .retired_slots
+                    .retain(|slot| *slot != old);
             } else {
                 self.account_mut(query.id).unwrap().error = Some(UsageError::Credentials);
             }

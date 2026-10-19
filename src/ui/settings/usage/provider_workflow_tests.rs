@@ -662,7 +662,10 @@ fn select_command_browser(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, i
     vcx.simulate_keystrokes("down enter");
     vcx.run_until_parked();
     click(vcx, "usage-browser");
-    let index = browser::Browser::all().iter().position(|b| *b == browser::Browser::Firefox).unwrap();
+    let index = browser::Browser::all()
+        .iter()
+        .position(|b| *b == browser::Browser::Firefox)
+        .unwrap();
     vcx.simulate_keystrokes(&format!("{}enter", "down ".repeat(index + 1)));
     vcx.run_until_parked();
     let page = app.update_in(vcx, |a, _, _| a.active_settings().unwrap().usage.clone());
@@ -684,43 +687,85 @@ fn select_command_browser(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, i
 }
 
 fn reply_command_enhancement(http: &Http) {
-    http.reply(200, br#"{"user":{"id":"command-user"},"session":{"id":"fixture"}}"#);
+    http.reply(
+        200,
+        br#"{"user":{"id":"command-user"},"session":{"id":"fixture"}}"#,
+    );
     http.reply(200, br#"{"success":true,"data":{"planId":"individual-max","status":"active","currentPeriodEnd":"2026-12-01T00:00:00Z"}}"#);
 }
 
 #[gpui_kit::test]
-fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_rotated_identity(cx: &mut TestAppContext) {
+fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_rotated_identity(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let db = command_browser_fixture(&dir.path().join("isolated-browser"));
     let (app, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
-    install(&mut vcx, dir.path().join("usage.json"), vault.clone(), http.clone(), false);
+    install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        vault.clone(),
+        http.clone(),
+        false,
+    );
     open(&app, &mut vcx);
     let id = add_command(&mut vcx, &http);
     select_command_browser(&app, &mut vcx, id);
     reply_command(&http);
     reply_command_enhancement(&http);
     click(&mut vcx, "usage-submit");
-    settle(&mut vcx, |d| d.stored.accounts[0].enhancement_browser.is_some());
+    settle(&mut vcx, |d| {
+        d.stored.accounts[0].enhancement_browser.is_some()
+    });
     let saved = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
     assert_eq!(saved.secret(id).unwrap(), "command-main-key");
     assert!(saved.enhancement_secret(id).unwrap().is_none());
     assert_eq!(vault.len(), 1);
     let metadata = std::fs::read_to_string(dir.path().join("usage.json")).unwrap();
-    for private in ["browser-command-session", "never-send", "evil-session", dir.path().to_str().unwrap()] {
+    for private in [
+        "browser-command-session",
+        "never-send",
+        "evil-session",
+        dir.path().to_str().unwrap(),
+    ] {
         assert!(!metadata.contains(private));
     }
-    let cookies = http.requests.lock().unwrap().iter().filter(|r| r.1 == "Cookie").cloned().collect::<Vec<_>>();
-    assert_eq!(cookies, vec![
-        (providers::command_code::IDENTITY_ENDPOINT.into(), "Cookie".into(), "custom-command-session=browser-command-session".into()),
-        (providers::command_code::SESSION_ENDPOINT.into(), "Cookie".into(), "custom-command-session=browser-command-session".into())
-    ]);
-    db.execute("UPDATE moz_cookies SET value='rotated-same-user' WHERE value='browser-command-session'", []).unwrap();
+    let cookies = http
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.1 == "Cookie")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cookies,
+        vec![
+            (
+                providers::command_code::IDENTITY_ENDPOINT.into(),
+                "Cookie".into(),
+                "custom-command-session=browser-command-session".into()
+            ),
+            (
+                providers::command_code::SESSION_ENDPOINT.into(),
+                "Cookie".into(),
+                "custom-command-session=browser-command-session".into()
+            )
+        ]
+    );
+    db.execute(
+        "UPDATE moz_cookies SET value='rotated-same-user' WHERE value='browser-command-session'",
+        [],
+    )
+    .unwrap();
     reply_command(&http);
     reply_command_enhancement(&http);
     click(&mut vcx, &format!("usage-refresh-{id}"));
-    let page = app.update_in(&mut vcx, |a, _, _| a.active_settings().unwrap().usage.clone());
+    let page = app.update_in(&mut vcx, |a, _, _| {
+        a.active_settings().unwrap().usage.clone()
+    });
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
     while page.read_with(&vcx, |p, _| p.pending.contains(&id)) {
         vcx.run_until_parked();
@@ -728,19 +773,35 @@ fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_
         std::thread::sleep(Duration::from_millis(10));
     }
     vcx.update(|_, cx| {
-        let Balance::Provider(report) = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0].snapshot.as_ref().unwrap().balance else { panic!("Command report") };
+        let Balance::Provider(report) = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .balance
+        else {
+            panic!("Command report")
+        };
         assert_eq!(report.plan.as_deref(), Some("individual-max"));
         assert_eq!(report.enhancement, None);
     });
-    db.execute("UPDATE moz_cookies SET value='different-account' WHERE value='rotated-same-user'", []).unwrap();
+    db.execute(
+        "UPDATE moz_cookies SET value='different-account' WHERE value='rotated-same-user'",
+        [],
+    )
+    .unwrap();
     reply_command(&http);
     http.reply(200, br#"{"user":{"id":"different-user"}}"#);
     click(&mut vcx, &format!("usage-refresh-{id}"));
-    settle(&mut vcx, |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::IdentityMismatch)));
+    settle(
+        &mut vcx,
+        |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::IdentityMismatch)),
+    );
     vcx.update(|_, cx| {
         let account = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0];
         assert!(account.error.is_none());
-        let Balance::Provider(report) = &account.snapshot.as_ref().unwrap().balance else { panic!("Command report") };
+        let Balance::Provider(report) = &account.snapshot.as_ref().unwrap().balance else {
+            panic!("Command report")
+        };
         assert_eq!(report.identity.as_deref(), Some("command-user"));
         assert_eq!(report.pools[0].remaining.as_deref(), Some("85"));
         assert_eq!(report.plan.as_deref(), Some("individual-pro"));
@@ -749,12 +810,25 @@ fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_
     db.execute_batch("BEGIN EXCLUSIVE").unwrap();
     reply_command(&http);
     click(&mut vcx, &format!("usage-refresh-{id}"));
-    settle(&mut vcx, |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::BrowserLocked)));
-    db.execute_batch("ROLLBACK; UPDATE moz_cookies SET expiry=1").unwrap();
+    settle(
+        &mut vcx,
+        |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::BrowserLocked)),
+    );
+    db.execute_batch("ROLLBACK; UPDATE moz_cookies SET expiry=1")
+        .unwrap();
     reply_command(&http);
     click(&mut vcx, &format!("usage-refresh-{id}"));
-    settle(&mut vcx, |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::BrowserMissing)));
-    assert_eq!(Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap().secret(id).unwrap(), "command-main-key");
+    settle(
+        &mut vcx,
+        |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::BrowserMissing)),
+    );
+    assert_eq!(
+        Accounts::load(dir.path().join("usage.json"), vault.clone())
+            .unwrap()
+            .secret(id)
+            .unwrap(),
+        "command-main-key"
+    );
     click(&mut vcx, &format!("usage-remove-{id}"));
     click(&mut vcx, "usage-submit");
     settle(&mut vcx, |d| d.stored.accounts.is_empty());
@@ -762,20 +836,31 @@ fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_
 }
 
 #[gpui_kit::test]
-fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_source(cx: &mut TestAppContext) {
+fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_source(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let _db = command_browser_fixture(&dir.path().join("isolated-browser"));
     let (app, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
-    install(&mut vcx, dir.path().join("usage.json"), vault.clone(), http.clone(), false);
+    install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        vault.clone(),
+        http.clone(),
+        false,
+    );
     open(&app, &mut vcx);
     let id = add_command(&mut vcx, &http);
     for close_page in [false, true] {
         select_command_browser(&app, &mut vcx, id);
         reply_command(&http);
         http.reply(200, br#"{"user":{"id":"command-user"}}"#);
-        let release = http.held(200, br#"{"success":true,"data":{"planId":"late-plan","status":"active"}}"#);
+        let release = http.held(
+            200,
+            br#"{"success":true,"data":{"planId":"late-plan","status":"active"}}"#,
+        );
         let before = http.calls.load(Ordering::SeqCst);
         click(&mut vcx, "usage-submit");
         let deadline = std::time::Instant::now() + Duration::from_secs(8);

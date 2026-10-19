@@ -557,12 +557,18 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageCommandSessionHelp => {
             "Explicitly copy one session cookie as name=value from an authorized Command Code login request, not an API key or the entire Cookie header. It is saved only after api.commandcode.ai verifies the same user as the key and returns enhancement data. Cookie names and subscription.userId are not assumed."
         }
-        L10nKey::UsageCommandBrowserHelp => "Select a browser and profile, then verify. Only the Command Code session cookie is read, and /auth/get-session must match the primary API-key identity before billing enhancement. Browser material is never saved. Windows ABE is refused; traditional DPAPI is supported. macOS Chromium may request Keychain access only now. Safari uses best-effort binarycookies and requires Full Disk Access; background refresh never prompts and Safari requires explicit re-import. Session rotation is accepted only after identity verification.",
+        L10nKey::UsageCommandBrowserHelp => {
+            "Select a browser and profile, then verify. Only the Command Code session cookie is read, and /auth/get-session must match the primary API-key identity before billing enhancement. Browser material is never saved. Windows ABE is refused; traditional DPAPI is supported. macOS Chromium may request Keychain access only now. Safari uses best-effort binarycookies and requires Full Disk Access; background refresh never prompts and Safari requires explicit re-import. Session rotation is accepted only after identity verification."
+        }
         L10nKey::UsageCommandCookieName => "Exact session cookie name",
-        L10nKey::UsageCommandCookieNameHelp => "Enter only the exact session cookie name from your authorized Command Code login request, not its value. Public BetterAuth defaults do not prove this server's cookie configuration. Lyrel does not guess a name: only your named cookie, in domains valid for api.commandcode.ai, is read and then verified against the API-key user. The name is a non-secret source selector.",
+        L10nKey::UsageCommandCookieNameHelp => {
+            "Enter only the exact session cookie name from your authorized Command Code login request, not its value. Public BetterAuth defaults do not prove this server's cookie configuration. Lyrel does not guess a name: only your named cookie, in domains valid for api.commandcode.ai, is read and then verified against the API-key user. The name is a non-secret source selector."
+        }
         L10nKey::UsageEnhancementBrowserSource => "Enhancement · browser session",
         L10nKey::UsageEnhancementManualSource => "Enhancement · manual session in credential store",
-        L10nKey::UsageBrowserFullDiskAccess => "Safari cookies require Full Disk Access for Lyrel in macOS Privacy & Security. Lyrel does not change system permissions or read Safari during background refresh. If you choose to grant access yourself, explicitly import the selected Safari source again.",
+        L10nKey::UsageBrowserFullDiskAccess => {
+            "Safari cookies require Full Disk Access for Lyrel in macOS Privacy & Security. Lyrel does not change system permissions or read Safari during background refresh. If you choose to grant access yourself, explicitly import the selected Safari source again."
+        }
         L10nKey::UsageApiSource => "API key",
         L10nKey::UsageSessionSource => "Private platform · manual session",
         L10nKey::UsageBrowserSource => "Private platform · browser",
