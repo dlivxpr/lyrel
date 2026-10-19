@@ -167,6 +167,7 @@ fn harness_grant_settings_workflow_uses_real_http_header_and_persists_only_valid
                 Err(e) => panic!("controlled HTTP accept: {e}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
