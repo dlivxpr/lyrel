@@ -895,3 +895,104 @@ fn account_overflow_keyboard_opens_a_named_form_and_restores_the_trigger(cx: &mu
     });
     assert_eq!(http.calls.load(Ordering::SeqCst), 0);
 }
+
+#[gpui_kit::test]
+fn usage_account_grid_keeps_identity_actions_and_update_footer_reachable_at_interface_zoom(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage.json");
+    let (app, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Arc::new(Http::default());
+    install(&mut vcx, path.clone(), vault.clone(), http.clone(), true);
+    open(&app, &mut vcx);
+    for name in ["Work account", "Shared account"] {
+        click(&mut vcx, "usage-add-DeepSeek");
+        type_into(&mut vcx, "usage-name", name);
+        type_into(&mut vcx, "usage-key", "controlled-api-key");
+        http.reply(200, BALANCE);
+        click(&mut vcx, "usage-submit");
+        settle(&mut vcx, |data| {
+            data.stored.accounts.iter().any(|a| a.name == name)
+        });
+    }
+    let ids = vcx.update(|_, cx| {
+        cx.global::<UsageGlobal>()
+            .0
+            .read(cx)
+            .stored
+            .accounts
+            .iter()
+            .map(|account| account.id)
+            .collect::<Vec<_>>()
+    });
+    for (locale, font_size, mode) in [
+        ("en", 14., gpui_kit::component::ThemeMode::Light),
+        ("zh-CN", 18., gpui_kit::component::ThemeMode::Dark),
+    ] {
+        crate::ui::i18n::set_locale(locale);
+        app.update_in(&mut vcx, |_, window, cx| {
+            gpui_kit::component::Theme::change(mode, Some(window), cx);
+            gpui_kit::component::Theme::update(cx, |theme| {
+                theme.font_size = gpui_kit::px(font_size)
+            });
+            cx.notify();
+        });
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)));
+        vcx.run_until_parked();
+        reveal(&mut vcx, &format!("usage-more-{}", ids[2]), "usage-content");
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let cards = [ids[0], ids[1], ids[2]]
+                .map(|id| window.find(format!("usage-account-{id}")).bounds());
+            assert!((cards[0].top() - cards[1].top()).abs() <= gpui_kit::px(1.));
+            assert!(cards[1].left() > cards[0].right());
+            assert!(cards[2].top() > cards[0].bottom());
+            assert!((cards[0].size.width - cards[1].size.width).abs() <= gpui_kit::px(1.));
+            assert!((cards[0].size.width - cards[2].size.width).abs() <= gpui_kit::px(1.));
+            let header = window.find("usage-header").bounds();
+            let refresh_all = window.find("usage-refresh-all");
+            assert!(refresh_all.visible());
+            assert!(refresh_all.bounds().top() >= header.top());
+            assert!(refresh_all.bounds().bottom() <= header.bottom());
+        });
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(720.), gpui_kit::px(700.)));
+        vcx.run_until_parked();
+        reveal(&mut vcx, &format!("usage-more-{}", ids[2]), "usage-content");
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let viewport = window.find("usage-content").bounds();
+            let cards = [ids[0], ids[1], ids[2]]
+                .map(|id| window.find(format!("usage-account-{id}")).bounds());
+            assert!(cards[1].top() > cards[0].bottom());
+            assert!(cards[2].top() > cards[1].bottom());
+            for (id, card) in ids.iter().zip(cards) {
+                assert!(card.left() >= viewport.left());
+                assert!(card.right() <= viewport.right());
+                let more = window.find(format!("usage-more-{id}")).bounds();
+                let refresh = window.find(format!("usage-refresh-{id}")).bounds();
+                assert!((more.top() - refresh.top()).abs() <= gpui_kit::px(1.));
+                assert!(more.right() <= card.right());
+                let footer = window.find(format!("usage-updated-{id}")).bounds();
+                assert!(footer.top() > refresh.bottom());
+                assert!(footer.bottom() <= card.bottom());
+            }
+        });
+    }
+    click(&mut vcx, &format!("usage-rename-{}", ids[2]));
+    type_into(&mut vcx, "usage-name", "Renamed at narrow zoom");
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |data| {
+        data.stored.accounts[2].name == "Renamed at narrow zoom"
+    });
+    assert_eq!(
+        Accounts::load(path, vault)
+            .unwrap()
+            .account(ids[2])
+            .unwrap()
+            .name,
+        "Renamed at narrow zoom"
+    );
+    crate::ui::i18n::set_locale("en");
+}
