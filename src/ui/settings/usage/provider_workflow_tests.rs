@@ -402,6 +402,7 @@ fn kimi_manual_settings_uses_real_post_body_and_bearer_without_cookie(cx: &mut T
                 Err(error) => panic!("{error}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -568,6 +569,7 @@ fn kimi_settings_redirect_never_forwards_credentials_or_creates_account(cx: &mut
                 Err(e) => panic!("{e}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
