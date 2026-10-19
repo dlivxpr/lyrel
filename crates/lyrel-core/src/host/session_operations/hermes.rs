@@ -107,7 +107,7 @@ pub(crate) fn statistics(
         ));
     }
     let (_, gateway, scope) = context(request)?;
-    let (result, shutdown_error) = rpc(
+    let (mut result, shutdown_error) = rpc(
         &gateway,
         &scope,
         &request.cwd,
@@ -122,6 +122,19 @@ pub(crate) fn statistics(
             SessionErrorKind::Command,
             "Hermes statistics returned invalid project metadata",
         ));
+    }
+    for project in result["projects"].as_array_mut().unwrap() {
+        if let Some(rows) = project
+            .get_mut("previewSessions")
+            .and_then(|rows| rows.as_array_mut())
+        {
+            for row in rows {
+                if let Some(fields) = row.as_object_mut() {
+                    fields.remove("preview");
+                    fields.remove("title");
+                }
+            }
+        }
     }
     Ok(result)
 }

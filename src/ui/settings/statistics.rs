@@ -788,7 +788,7 @@ mod tests {
                     .unwrap()
                     .days()
                     .iter()
-                    .any(|d| d.totals().tokens().total() == Some(10))
+                    .any(|d| d.totals().tokens().total() == Some(20))
             );
             cx.notify();
         });

@@ -214,6 +214,7 @@ Home/End 到年首／年尾，Enter 展开详情，Escape 隐藏详情，再按�
 复用已配置的 Hermes 启动命令与 Host 环境，不读取另一机器的默认 profile，不猜测系统 Python。
 仅通过 Hermes 0.22.2 正式 launcher 的 `--print-runtime-command --module tui_gateway.entry`
 查询 `projects.tree`；远端需要独立的 `hermes-statistics-v1` 能力，旧 server 明确要求升级。
+统计响应在数据所属 Host 剔除 `title`／`preview`，不为统计传输会话标题或提示词片段；仅缓存结构化计量元数据。
 
 仅纳入 `source=cli` 的原生持久会话。正式项目路径用于项目归属，无项目进入 Home 桶；
 可见 branch/reset 是独立主会话，compression 谱系已由上游合计，重叠谱系不会重复计费。

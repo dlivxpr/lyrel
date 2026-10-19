@@ -234,6 +234,36 @@ fn native_hermes_statistics_reads_public_stored_usage() {
         "unexpected gateway/runtime failure: {:?}",
         snapshot.issues()
     );
+    let mut scope = SessionScope::default();
+    scope
+        .environment
+        .insert("HERMES_HOME".into(), home.to_string_lossy().into_owned());
+    let payload = host
+        .hermes_statistics(&SessionOperation {
+            expected_host: 0,
+            agent: CLIAgent::Hermes,
+            kind: SessionOperationKind::Resume,
+            source_id: String::new(),
+            cwd: home.clone(),
+            launch_argv: vec![launcher],
+            scope,
+        })
+        .unwrap();
+    for row in payload["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["previewSessions"].as_array().unwrap())
+    {
+        assert!(
+            row.get("preview").is_none(),
+            "statistics transport must not carry prompt previews"
+        );
+        assert!(
+            row.get("title").is_none(),
+            "statistics transport does not need conversation titles"
+        );
+    }
     let omp = tempfile::tempdir().unwrap();
     let timestamp = chrono::Utc::now().to_rfc3339();
     std::fs::write(omp.path().join("native.jsonl"), format!(
@@ -252,4 +282,31 @@ fn native_hermes_statistics_reads_public_stored_usage() {
         "same IDs and scope strings from different agents remain independent"
     );
     assert_eq!(totals.tokens().total(), Some(27));
+}
+
+#[test]
+#[ignore = "requires official LYREL_TEST_HERMES and isolated LYREL_TEST_HERMES_HOME containing 502 native CLI sessions"]
+fn native_hermes_statistics_marks_502_session_history_as_windowed() {
+    use crate::statistics::{self, DateWindow, StatisticsCache};
+    let host = crate::host::local::LocalHost::new();
+    let home = PathBuf::from(std::env::var("LYREL_TEST_HERMES_HOME").unwrap());
+    let launcher = std::env::var("LYREL_TEST_HERMES").unwrap();
+    let launch = std::collections::HashMap::from([(
+        "hermes".into(),
+        format!("HERMES_HOME='{}' '{}'", home.display(), launcher),
+    )]);
+    let sources = statistics::discover_hermes(&*host, &launch).unwrap();
+    let snapshot = statistics::scan(&*host, &sources, &mut StatisticsCache::default()).unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(totals.main_sessions(), 501);
+    assert_eq!(totals.tokens().total(), Some(0));
+    assert!(!snapshot.is_complete());
+    assert!(
+        snapshot
+            .issues()
+            .iter()
+            .any(|i| i.reason().starts_with("Hermes global 501-session")),
+        "{:?}",
+        snapshot.issues()
+    );
 }
