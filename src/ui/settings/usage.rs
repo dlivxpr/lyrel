@@ -23,6 +23,7 @@ use std::{
 mod accounts;
 mod browser;
 mod platform;
+mod presentation;
 mod providers;
 use accounts::*;
 use providers::Provider;
@@ -495,6 +496,9 @@ pub(crate) struct UsagePage {
     visible_gate: Arc<AtomicBool>,
     form_version: Arc<AtomicU64>,
     poll: Option<Task<()>>,
+    scroll: gpui_kit::ScrollHandle,
+    form_scroll: gpui_kit::ScrollHandle,
+    form_focus: gpui_kit::FocusHandle,
     _subs: Vec<Subscription>,
 }
 impl UsagePage {
@@ -592,10 +596,10 @@ impl UsagePage {
             page.restart_poll(cx);
             cx.notify();
         })];
-        subs.push(cx.subscribe_in(&cadence, window, |page, _, event, _, cx| {
+        subs.push(cx.subscribe_in(&cadence, window, |page, _, event, window, cx| {
             if let SelectEvent::Confirm(Some(secs)) = event {
                 let secs = *secs;
-                page.work(cx, move |a| a.set_interval(secs));
+                page.work(window, cx, move |a| a.set_interval(secs));
             }
         }));
         subs.push(
@@ -673,6 +677,9 @@ impl UsagePage {
             visible_gate: Arc::new(AtomicBool::new(false)),
             form_version: Arc::new(AtomicU64::new(0)),
             poll: None,
+            scroll: gpui_kit::ScrollHandle::new(),
+            form_scroll: gpui_kit::ScrollHandle::new(),
+            form_focus: cx.focus_handle(),
             _subs: subs,
         }
     }
@@ -843,6 +850,8 @@ impl UsagePage {
             .update(cx, |input, cx| input.set_value("", window, cx));
         if matches!(edit, Edit::Enhance(_)) {
             self.source.read(cx).focus_handle(cx).focus(window, cx);
+        } else if matches!(edit, Edit::Remove(_)) {
+            self.form_focus.focus(window, cx);
         } else {
             self.name.read(cx).focus_handle(cx).focus(window, cx);
         }
@@ -863,6 +872,7 @@ impl UsagePage {
     }
     fn work(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
         f: impl FnOnce(&mut Accounts) -> Result<(), UsageError> + Send + 'static,
     ) {
@@ -870,18 +880,18 @@ impl UsagePage {
         let shared = data.read(cx).shared.clone();
         let was_submitting = self.submitting;
         let version = self.form_version.load(Ordering::SeqCst);
-        cx.spawn(async move |page, cx| {
+        cx.spawn_in(window, async move |page, cx| {
             let result = worker(move || {
                 let mut guard = shared.accounts.lock().unwrap();
                 guard.as_mut().map_err(|e| *e).and_then(f)
             })
             .await;
             publish(&data, cx).await;
-            let _ = page.update(cx, |page, cx| {
+            let _ = page.update_in(cx, |page, window, cx| {
                 if version == page.form_version.load(Ordering::SeqCst) {
                     page.error = result.err();
                     if was_submitting && result.is_ok() {
-                        page.edit = None;
+                        page.cancel(window, cx);
                     }
                 }
                 if was_submitting {
@@ -908,7 +918,7 @@ impl UsagePage {
         let proxy = cx.global::<Config>().http_proxy.clone();
         let version = self.form_version.load(Ordering::SeqCst);
         let gate = self.form_version.clone();
-        cx.spawn(async move |page, cx| {
+        cx.spawn_in(window, async move |page, cx| {
             let result = worker(move || {
                 let (ticket, key) = {
                     let mut guard = shared.accounts.lock().unwrap();
@@ -971,12 +981,12 @@ impl UsagePage {
             })
             .await;
             publish(&data, cx).await;
-            let _ = page.update(cx, |page, cx| {
+            let _ = page.update_in(cx, |page, window, cx| {
                 page.submitting = false;
                 if version == page.form_version.load(Ordering::SeqCst) {
                     page.error = result.err();
                     if result.is_ok() {
-                        page.edit = None;
+                        page.cancel(window, cx);
                     }
                 }
                 cx.notify();
@@ -1006,8 +1016,8 @@ impl UsagePage {
         self.submitting = true;
         self.error = None;
         match edit {
-            Edit::Rename(id) => self.work(cx, move |a| a.rename(id, &name)),
-            Edit::Remove(id) => self.work(cx, move |a| a.remove(id)),
+            Edit::Rename(id) => self.work(window, cx, move |a| a.rename(id, &name)),
+            Edit::Remove(id) => self.work(window, cx, move |a| a.remove(id)),
             Edit::Enhance(id) => self.submit_enhancement(id, window, cx),
             Edit::Add | Edit::Replace(_) => {
                 let secret = zeroize::Zeroizing::new(self.key.read(cx).value().trim().to_string());
@@ -1036,7 +1046,7 @@ impl UsagePage {
                 let proxy = cx.global::<Config>().http_proxy.clone();
                 let version = self.form_version.load(Ordering::SeqCst);
                 let gate = self.form_version.clone();
-                cx.spawn(async move |page, cx| {
+                cx.spawn_in(window, async move |page, cx| {
                     let result = worker(move || {
                         let replacement = {
                             let mut guard = shared.accounts.lock().unwrap();
@@ -1152,12 +1162,12 @@ impl UsagePage {
                     })
                     .await;
                     publish(&data, cx).await;
-                    let _ = page.update(cx, |page, cx| {
+                    let _ = page.update_in(cx, |page, window, cx| {
                         page.submitting = false;
                         if version == page.form_version.load(Ordering::SeqCst) {
                             page.error = result.err();
                             if result.is_ok() {
-                                page.edit = None;
+                                page.cancel(window, cx);
                             }
                         }
                         cx.notify();
@@ -1461,540 +1471,6 @@ fn button(
         .label(label)
         .small()
         .when(kind == BtnKind::Primary, |b| b.primary())
-}
-impl Render for UsagePage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let stored = self.data.read(cx).stored.clone();
-        let danger = cx.theme().danger;
-        let muted = cx.theme().muted_foreground;
-        let mut content = v_flex()
-            .id("usage-page")
-            .w_full()
-            .min_w_0()
-            .gap_4()
-            .text_sm()
-            .on_key_down(
-                cx.listener(|page, event: &gpui_kit::KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "escape" && page.edit.is_some() {
-                        page.cancel(window, cx);
-                        cx.stop_propagation();
-                    }
-                }),
-            )
-            .child(div().text_color(muted).child(t(L10nKey::UsageScope)))
-            .child(div().text_color(muted).child(t(L10nKey::UsageOfficial)))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(
-                        button("usage-add", t(L10nKey::UsageAdd), BtnKind::Secondary)
-                            .disabled(
-                                self.submitting
-                                    || self.data.read(cx).loading
-                                    || self.data.read(cx).error.is_some(),
-                            )
-                            .on_click(cx.listener(|p, _, w, cx| p.open_edit(Edit::Add, w, cx))),
-                    )
-                    .child(
-                        button(
-                            "usage-refresh-all",
-                            t(L10nKey::UsageRefreshAll),
-                            BtnKind::Secondary,
-                        )
-                        .on_click(cx.listener(|p, _, _, cx| p.refresh_all(cx))),
-                    ),
-            );
-        content = content.child(
-            v_flex().gap_2().child(t(L10nKey::UsageCadence)).child(
-                Select::new(&self.cadence)
-                    .id("usage-cadence")
-                    .disabled(self.submitting)
-                    .small()
-                    .w_full()
-                    .accessibility_label(t(L10nKey::UsageCadence)),
-            ),
-        );
-        if self.data.read(cx).loading {
-            content = content.child(t(L10nKey::UsageLoading));
-        }
-        if let Some(error) = self.error.or(self.data.read(cx).error) {
-            content = content.child(div().text_color(danger).child(error_text(error)));
-        }
-        if let Some(edit) = self.edit {
-            let mut form = v_flex().id("usage-form").gap_2();
-            let title = match edit {
-                Edit::Add => L10nKey::UsageAdd,
-                Edit::Rename(_) => L10nKey::UsageRename,
-                Edit::Replace(_) => L10nKey::UsageReplace,
-                Edit::Remove(_) => L10nKey::UsageRemove,
-                Edit::Enhance(_) => L10nKey::UsageEnhance,
-            };
-            form = form.child(t(title));
-            if matches!(edit, Edit::Remove(_)) {
-                form = form
-                    .child(t(L10nKey::UsageRemoveWarning))
-                    .child(self.name.read(cx).value());
-            } else if matches!(edit, Edit::Enhance(_)) {
-                form = form.child(self.name.read(cx).value());
-            } else {
-                form = form
-                    .child(t(L10nKey::UsageName))
-                    .child(Input::new(&self.name).id("usage-name").small().w_full());
-            }
-            let provider = self
-                .provider
-                .read(cx)
-                .selected_value()
-                .copied()
-                .unwrap_or_default();
-            if matches!(edit, Edit::Add | Edit::Replace(_)) {
-                form = form.child(t(L10nKey::UsageProvider)).child(
-                    Select::new(&self.provider)
-                        .id("usage-provider")
-                        .small()
-                        .w_full()
-                        .disabled(self.submitting || matches!(edit, Edit::Replace(_)))
-                        .accessibility_label(t(L10nKey::UsageProvider)),
-                );
-                if provider != Provider::DeepSeek {
-                    form = form.child(div().text_color(muted).child(t(match provider {
-                        Provider::Kimi => L10nKey::UsageKimiDisclosure,
-                        Provider::CommandCode => L10nKey::UsageCommandDisclosure,
-                        _ => provider.help(),
-                    })));
-                }
-            }
-            if matches!(edit, Edit::Add | Edit::Replace(_) | Edit::Enhance(_)) {
-                let source = self
-                    .source
-                    .read(cx)
-                    .selected_value()
-                    .copied()
-                    .unwrap_or(Source::ApiKey);
-                form = form.child(t(L10nKey::UsageSource)).child(
-                    Select::new(&self.source)
-                        .id("usage-source")
-                        .small()
-                        .w_full()
-                        .disabled(self.submitting)
-                        .accessibility_label(t(L10nKey::UsageSource)),
-                );
-                if source == Source::ApiKey {
-                    form = form
-                        .child(t(L10nKey::UsageApiKey))
-                        .child(Input::new(&self.key).id("usage-key").small().w_full());
-                } else {
-                    if matches!(edit, Edit::Enhance(_)) {
-                        form = form.child(t(L10nKey::UsageCommandDisclosure));
-                    }
-                    form = form.child(div().text_color(muted).child(t(
-                        if provider == Provider::DeepSeek {
-                            L10nKey::UsagePrivateDisclosure
-                        } else {
-                            provider.help()
-                        },
-                    )));
-                    if source == Source::Session {
-                        form = form
-                            .child(t(if provider == Provider::DeepSeek {
-                                L10nKey::UsageSessionInput
-                            } else if provider == Provider::Kimi {
-                                L10nKey::UsageSessionSource
-                            } else {
-                                L10nKey::UsageCookieInput
-                            }))
-                            .child(Input::new(&self.key).id("usage-key").small().w_full())
-                            .child(div().text_color(muted).child(t(provider.help())));
-                    } else {
-                        form = form
-                            .child(t(L10nKey::UsageBrowser))
-                            .child(
-                                Select::new(&self.browsers)
-                                    .id("usage-browser")
-                                    .small()
-                                    .w_full()
-                                    .disabled(self.submitting || self.discovering)
-                                    .placeholder(t(L10nKey::UsageChooseBrowser))
-                                    .accessibility_label(t(L10nKey::UsageBrowser)),
-                            )
-                            .child(t(L10nKey::UsageProfile))
-                            .child(
-                                Select::new(&self.profiles)
-                                    .id("usage-profile")
-                                    .small()
-                                    .w_full()
-                                    .disabled(self.submitting || self.discovering)
-                                    .placeholder(t(L10nKey::UsageChooseProfile))
-                                    .accessibility_label(t(L10nKey::UsageProfile)),
-                            )
-                            .child(div().text_color(muted).child(t(match provider {
-                                Provider::Kimi => L10nKey::UsageKimiHelp,
-                                Provider::CommandCode => L10nKey::UsageCommandBrowserHelp,
-                                Provider::DeepSeek => L10nKey::UsageBrowserHelp,
-                                _ => L10nKey::UsageCookieBrowserHelp,
-                            })));
-                        if matches!(edit, Edit::Enhance(_)) {
-                            form = form
-                                .child(t(L10nKey::UsageCommandCookieName))
-                                .child(
-                                    Input::new(&self.cookie_name)
-                                        .id("usage-cookie-name")
-                                        .small()
-                                        .w_full()
-                                        .disabled(self.submitting),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(muted)
-                                        .child(t(L10nKey::UsageCommandCookieNameHelp)),
-                                );
-                        }
-                        if self.discovering {
-                            form = form.child(t(L10nKey::UsageLoading));
-                        }
-                    }
-                }
-            }
-            form = form.child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        button("usage-cancel", t(L10nKey::UsageCancel), BtnKind::Secondary)
-                            .on_click(cx.listener(|p, _, w, cx| p.cancel(w, cx))),
-                    )
-                    .child(
-                        button(
-                            "usage-submit",
-                            t(if self.submitting {
-                                L10nKey::UsageLoading
-                            } else if matches!(edit, Edit::Add | Edit::Replace(_)) {
-                                L10nKey::UsageVerify
-                            } else {
-                                L10nKey::UsageConfirm
-                            }),
-                            BtnKind::Primary,
-                        )
-                        .custom(
-                            ButtonCustomVariant::new(cx)
-                                .color(cx.theme().foreground)
-                                .foreground(cx.theme().background)
-                                .hover(cx.theme().foreground.opacity(0.88))
-                                .active(cx.theme().foreground.opacity(0.8)),
-                        )
-                        .disabled(
-                            self.submitting
-                                || self.name.read(cx).value().trim().is_empty()
-                                || (matches!(
-                                    edit,
-                                    Edit::Add | Edit::Replace(_) | Edit::Enhance(_)
-                                ) && if self.source.read(cx).selected_value()
-                                    == Some(&Source::Browser)
-                                {
-                                    self.discovering
-                                        || self.profiles.read(cx).selected_value().is_none()
-                                        || (matches!(edit, Edit::Enhance(_))
-                                            && !browser::valid_command_cookie_name(
-                                                self.cookie_name.read(cx).value().trim(),
-                                            ))
-                                } else {
-                                    self.key.read(cx).value().trim().is_empty()
-                                }),
-                        )
-                        .on_click(cx.listener(|p, _, w, cx| p.submit(w, cx))),
-                    ),
-            );
-            content = content.child(form);
-        }
-        if stored.accounts.is_empty() && !self.data.read(cx).loading {
-            content = content.child(div().text_color(muted).child(t(L10nKey::UsageEmpty)));
-        }
-        for account in stored.accounts {
-            let id = account.id;
-            let mut row = v_flex()
-                .id(format!("usage-account-{id}"))
-                .gap_2()
-                .py_3()
-                .border_t_1()
-                .border_color(cx.theme().border)
-                .child(account.name)
-                .child(
-                    div()
-                        .text_color(muted)
-                        .child(format!("{} · {id}", account.provider.label())),
-                );
-            row = row.child(div().text_color(muted).child(match &account.auth {
-                Authentication::ManualApiKey { .. } => t(L10nKey::UsageApiSource).to_owned(),
-                Authentication::ManualSession { kind, .. } => format!(
-                    "{} · {}",
-                    t(L10nKey::UsageSessionSource),
-                    match kind {
-                        platform::SessionKind::WebToken => "userToken · Bearer",
-                        platform::SessionKind::HarnessGrant => "Harness grant · x-dsh-auth-token",
-                    }
-                ),
-                Authentication::ProviderSession { .. } => t(L10nKey::UsageSessionSource).to_owned(),
-                Authentication::BrowserLocalStorage { selection } => format!(
-                    "{} · {} · {}",
-                    t(L10nKey::UsageBrowserSource),
-                    selection.browser().label(),
-                    selection.label()
-                ),
-                Authentication::BrowserCookies { selection, .. } => format!(
-                    "{} · {} · {}",
-                    t(L10nKey::UsageCookieSource),
-                    selection.browser().label(),
-                    selection.label()
-                ),
-            }));
-            row = row.child(t(if account.removing {
-                L10nKey::UsageRemoving
-            } else if self.pending.contains(&id) || account.busy {
-                L10nKey::UsageLoading
-            } else if !account.enabled {
-                L10nKey::UsageDisabled
-            } else {
-                L10nKey::UsageEnabled
-            }));
-            if let Some(snapshot) = account.snapshot {
-                match &snapshot.balance {
-                    Balance::Official(balance) => {
-                        for line in &balance.balance_infos {
-                            row = row
-                                .child(format!(
-                                    "{} {} {}",
-                                    t(L10nKey::UsageBalance),
-                                    line.total_balance,
-                                    line.currency
-                                ))
-                                .child(format!(
-                                    "{} {} {} · {} {} {}",
-                                    t(L10nKey::UsageGranted),
-                                    line.granted_balance,
-                                    line.currency,
-                                    t(L10nKey::UsageToppedUp),
-                                    line.topped_up_balance,
-                                    line.currency
-                                ));
-                        }
-                        row = row.child(t(if balance.is_available {
-                            L10nKey::UsageAvailable
-                        } else {
-                            L10nKey::UsageUnavailable
-                        }));
-                    }
-                    Balance::Platform(balance) => {
-                        for (label, wallets) in [
-                            (L10nKey::UsageNormalWallet, &balance.normal_wallets),
-                            (L10nKey::UsageBonusWallet, &balance.bonus_wallets),
-                        ] {
-                            for wallet in wallets {
-                                row = row.child(format!(
-                                    "{} {} {}",
-                                    t(label),
-                                    wallet.balance,
-                                    wallet.currency
-                                ));
-                            }
-                        }
-                    }
-                    Balance::Provider(report) => {
-                        row = row.child(format!(
-                            "{}: {}",
-                            t(L10nKey::UsageIdentity),
-                            report
-                                .identity
-                                .as_deref()
-                                .unwrap_or(t(L10nKey::UsageUnknown))
-                        ));
-                        if report.overdrawn == Some(true) {
-                            row = row
-                                .child(div().text_color(danger).child(t(L10nKey::UsageOverdrawn)));
-                        }
-                        if report.expired == Some(true) {
-                            row = row.child(t(L10nKey::UsageUnavailable));
-                        }
-                        if let Some(expires) = &report.plan_expires {
-                            row = row.child(format!(
-                                "{} · {} {expires}",
-                                t(L10nKey::UsagePlan),
-                                t(L10nKey::UsageExpires)
-                            ));
-                        }
-                        if let Some(plan) = &report.plan {
-                            row = row.child(format!("{}: {plan}", t(L10nKey::UsagePlan)));
-                        }
-                        for pool in &report.pools {
-                            if let Some(name) = &pool.name {
-                                row = row.child(name.clone());
-                            }
-                            row = row.child(format!(
-                                "{} · {} {} {}",
-                                pool_label(pool.kind),
-                                t(L10nKey::UsageRemaining),
-                                pool.remaining
-                                    .as_deref()
-                                    .unwrap_or(t(L10nKey::UsageUnknown)),
-                                if pool.unit == "requests" {
-                                    t(L10nKey::UsageRequests)
-                                } else {
-                                    &pool.unit
-                                }
-                            ));
-                            if let Some(used) = &pool.used {
-                                row = row.child(format!(
-                                    "{}: {used} {}",
-                                    t(L10nKey::UsageUsed),
-                                    if pool.unit == "requests" {
-                                        t(L10nKey::UsageRequests)
-                                    } else {
-                                        &pool.unit
-                                    }
-                                ));
-                            }
-                            if let Some(limit) = &pool.limit {
-                                row = row.child(format!(
-                                    "{}: {limit} {}",
-                                    t(L10nKey::UsageLimit),
-                                    if pool.unit == "requests" {
-                                        t(L10nKey::UsageRequests)
-                                    } else {
-                                        &pool.unit
-                                    }
-                                ));
-                            }
-                            if let Some(reset) = &pool.reset {
-                                row = row.child(format!("{}: {reset}", t(L10nKey::UsageReset)));
-                            }
-                            if let Some(expires) = &pool.expires {
-                                row = row.child(format!("{}: {expires}", t(L10nKey::UsageExpires)));
-                            }
-                        }
-                        if let Some(error) = report.enhancement {
-                            row = row.child(div().text_color(danger).child(format!(
-                                "{} · {}",
-                                t(L10nKey::UsageEnhancementFailed),
-                                error_text(error)
-                            )));
-                        }
-                    }
-                }
-                let time = chrono::DateTime::from_timestamp(snapshot.updated_at as i64, 0)
-                    .map(|time| {
-                        time.with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d %H:%M:%S %:z")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| snapshot.updated_at.to_string());
-                row = row.child(
-                    div()
-                        .text_color(muted)
-                        .child(format!("{} {time}", t(L10nKey::UsageUpdated))),
-                );
-                if account.error.is_some() {
-                    row = row.child(t(L10nKey::UsageOldSnapshot));
-                }
-            } else {
-                row = row.child(t(L10nKey::UsageUnknown));
-            }
-            if let Some(error) = account.error {
-                row = row.child(div().text_color(danger).child(error_text(error)));
-            }
-            let enabled = account.enabled;
-            row = row.child(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(
-                        button(
-                            format!("usage-refresh-{id}"),
-                            t(L10nKey::UsageRefresh),
-                            BtnKind::Secondary,
-                        )
-                        .disabled(!enabled || account.removing || self.pending.contains(&id))
-                        .on_click(cx.listener(move |p, _, _, cx| p.refresh(id, cx))),
-                    )
-                    .child(
-                        button(
-                            format!("usage-toggle-{id}"),
-                            t(if enabled {
-                                L10nKey::UsageDisable
-                            } else {
-                                L10nKey::UsageEnable
-                            }),
-                            BtnKind::Secondary,
-                        )
-                        .disabled(account.removing || self.submitting)
-                        .on_click(cx.listener(move |p, _, _, cx| {
-                            p.work(cx, move |a| a.set_enabled(id, !enabled))
-                        })),
-                    )
-                    .child(
-                        button(
-                            format!("usage-rename-{id}"),
-                            t(L10nKey::UsageRename),
-                            BtnKind::Secondary,
-                        )
-                        .disabled(account.removing || self.submitting)
-                        .on_click(
-                            cx.listener(move |p, _, w, cx| p.open_edit(Edit::Rename(id), w, cx)),
-                        ),
-                    )
-                    .child(
-                        button(
-                            format!("usage-replace-{id}"),
-                            t(L10nKey::UsageReplace),
-                            BtnKind::Secondary,
-                        )
-                        .disabled(account.removing || self.submitting)
-                        .on_click(
-                            cx.listener(move |p, _, w, cx| p.open_edit(Edit::Replace(id), w, cx)),
-                        ),
-                    )
-                    .child(
-                        button(
-                            format!("usage-remove-{id}"),
-                            t(L10nKey::UsageRemove),
-                            BtnKind::Secondary,
-                        )
-                        .disabled(self.submitting)
-                        .on_click(
-                            cx.listener(move |p, _, w, cx| p.open_edit(Edit::Remove(id), w, cx)),
-                        ),
-                    ),
-            );
-            if account.provider == Provider::CommandCode {
-                if let Some(selection) = &account.enhancement_browser {
-                    row = row.child(div().text_color(muted).child(format!(
-                        "{} · {} · {} · {}",
-                        t(L10nKey::UsageEnhancementBrowserSource),
-                        selection.browser().label(),
-                        selection.label(),
-                        selection.cookie_name().unwrap_or("")
-                    )));
-                } else if account.enhancement_slot.is_some() {
-                    row = row.child(
-                        div()
-                            .text_color(muted)
-                            .child(t(L10nKey::UsageEnhancementManualSource)),
-                    );
-                }
-                row = row.child(
-                    button(
-                        format!("usage-enhance-{id}"),
-                        t(L10nKey::UsageEnhance),
-                        BtnKind::Secondary,
-                    )
-                    .disabled(account.removing || self.submitting || account.busy)
-                    .on_click(
-                        cx.listener(move |p, _, w, cx| p.open_edit(Edit::Enhance(id), w, cx)),
-                    ),
-                );
-            }
-            content = content.child(row);
-        }
-        content
-    }
 }
 impl LyrelApp {
     pub(super) fn cancel_usage_form(
