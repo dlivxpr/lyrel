@@ -26,6 +26,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Absolute path on the selected machine; blank means user scope only"
         }
         L10nKey::SkillsApplyProject => "Apply project",
+        L10nKey::SkillsOwnerProjectRequired => {
+            "Switch the selected project to {project} before maintaining this installation"
+        }
         L10nKey::SkillsSearch => "Search skill names, descriptions and sources",
         L10nKey::SkillsSource => "Source",
         L10nKey::SkillsAllSources => "All sources",

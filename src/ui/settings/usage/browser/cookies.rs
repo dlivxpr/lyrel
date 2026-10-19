@@ -1,8 +1,8 @@
 //! 仅从显式选择的 profile 读取白名单 Cookie；StepFun web_id 来自精确 LocalStorage origin。
 
 use super::{
-    Browser, BrowserError, BrowserReader, BrowserSelection, Profile, SessionMaterial, fingerprint,
-    io_error,
+    Browser, BrowserError, BrowserReader, BrowserSelection, ImportPermission, Profile,
+    SessionMaterial, fingerprint, io_error,
 };
 use rusqlite::{Connection, ErrorCode, OpenFlags, params};
 use std::fs;
@@ -18,9 +18,11 @@ mod safari;
 mod win;
 
 #[cfg(target_os = "macos")]
-pub(super) type PasswordReader = fn(Browser, bool) -> Result<Zeroizing<Vec<u8>>, BrowserError>;
+pub(super) type PasswordReader =
+    fn(Browser, &ImportPermission) -> Result<Zeroizing<Vec<u8>>, BrowserError>;
 #[cfg(target_os = "macos")]
-pub(super) type FileReader = fn(&Path, &Path, u64) -> Result<Zeroizing<Vec<u8>>, BrowserError>;
+pub(super) type FileReader =
+    fn(&Path, &Path, u64, &ImportPermission) -> Result<Zeroizing<Vec<u8>>, BrowserError>;
 #[cfg(target_os = "macos")]
 pub(super) use mac::password as mac_password;
 
@@ -119,7 +121,7 @@ impl BrowserReader {
         &self,
         profile: &Profile,
         provider: CookieProvider,
-        interactive: bool,
+        permission: &ImportPermission,
     ) -> Result<(BrowserSelection, SessionMaterial), BrowserError> {
         if let CookieProvider::CommandCode(name) = provider {
             if !valid_command_cookie_name(name) {
@@ -133,7 +135,7 @@ impl BrowserReader {
                 candidate.id == profile.id && candidate.fingerprint == profile.fingerprint
             })
             .ok_or(BrowserError::ProfileGone)?;
-        let material = read(self, &current, provider, interactive)?;
+        let material = read(self, &current, provider, permission)?;
         let selection = BrowserSelection {
             browser: current.browser,
             profile_id: current.id,
@@ -170,7 +172,7 @@ impl BrowserReader {
             })
             .ok_or(BrowserError::ProfileGone)?;
         // 后台解析绝不授权 Keychain 弹窗。
-        let material = read(self, &profile, provider, false)?;
+        let material = read(self, &profile, provider, &ImportPermission::background())?;
         if provider.token_fingerprint(&material) != selection.token_fingerprint {
             return Err(BrowserError::SourceChanged);
         }
@@ -182,7 +184,7 @@ fn read(
     reader: &BrowserReader,
     profile: &Profile,
     provider: CookieProvider,
-    interactive: bool,
+    permission: &ImportPermission,
 ) -> Result<SessionMaterial, BrowserError> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -196,9 +198,9 @@ fn read(
             if matches!(provider, CookieProvider::StepFun) {
                 return Err(BrowserError::Unsupported);
             }
-            safari::read(reader, profile, provider, now, interactive)?
+            safari::read(reader, profile, provider, now, permission)?
         }
-        _ => chromium(reader, profile, provider, now, interactive)?,
+        _ => chromium(reader, profile, provider, now, permission)?,
     };
     let [first, second] = values;
     let first = first.ok_or(BrowserError::NoSession)?;
@@ -375,7 +377,7 @@ fn chromium(
     profile: &Profile,
     provider: CookieProvider,
     now: i64,
-    interactive: bool,
+    permission: &ImportPermission,
 ) -> Result<Values, BrowserError> {
     #[cfg(target_os = "windows")]
     let mut crypt = win::Crypt::new(profile)?;
@@ -418,7 +420,7 @@ fn chromium(
     #[cfg(target_os = "macos")]
     let mut password = None;
     #[cfg(not(target_os = "macos"))]
-    let _ = (reader, interactive);
+    let _ = reader;
     let mut count = 0;
     while let Some(row) = rows.next().map_err(sql_error)? {
         count += 1;
@@ -448,13 +450,18 @@ fn chromium(
             if encrypted.starts_with(b"v20") || encrypted.starts_with(b"APPB") {
                 return Err(BrowserError::Protected);
             }
+            #[cfg(test)]
+            if let Some(boundary) = &reader.permission_boundary {
+                boundary(permission)?;
+            }
+            permission.interaction()?;
             #[cfg(target_os = "macos")]
             {
                 if !encrypted.starts_with(b"v10") {
                     return Err(BrowserError::Unsupported);
                 }
                 if password.is_none() {
-                    password = Some((reader.cookie_password)(profile.browser, interactive)?);
+                    password = Some((reader.cookie_password)(profile.browser, permission)?);
                 }
                 let host: String = row.get(0).map_err(sql_error)?;
                 mac::decrypt(
@@ -484,11 +491,14 @@ pub(super) fn read_file(
     root: &Path,
     path: &Path,
     max: u64,
+    permission: &ImportPermission,
 ) -> Result<Zeroizing<Vec<u8>>, BrowserError> {
     use std::io::Read as _;
+    permission.interaction()?;
     if !fs::canonicalize(path).map_err(io_error)?.starts_with(root) {
         return Err(BrowserError::Denied);
     }
+    permission.interaction()?;
     let file = fs::File::open(path).map_err(io_error)?;
     let metadata = file.metadata().map_err(io_error)?;
     if !metadata.is_file() || metadata.len() > max {
@@ -618,7 +628,11 @@ mod tests {
             "",
         );
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::StepFun, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::NoSession)
         ));
         firefox_web_id(&profile.path, "wrong-origin");
@@ -629,7 +643,11 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::StepFun, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::NoSession)
         ));
     }
@@ -658,7 +676,11 @@ mod tests {
             )
             .unwrap();
         let (selection, material) = reader
-            .import_cookies(&profile, CookieProvider::StepFun, true)
+            .import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form(),
+            )
             .unwrap();
         assert_eq!(
             material.secret(),
@@ -692,7 +714,11 @@ mod tests {
         );
         assert_eq!(
             reader
-                .import_cookies(&profile, CookieProvider::StepFun, true)
+                .import_cookies(
+                    &profile,
+                    CookieProvider::StepFun,
+                    &ImportPermission::test_form()
+                )
                 .unwrap()
                 .1
                 .secret(),
@@ -712,7 +738,11 @@ mod tests {
             )
             .unwrap();
             assert!(matches!(
-                reader.import_cookies(&profile, CookieProvider::StepFun, true),
+                reader.import_cookies(
+                    &profile,
+                    CookieProvider::StepFun,
+                    &ImportPermission::test_form()
+                ),
                 Err(BrowserError::Unreadable)
             ));
         }
@@ -751,7 +781,11 @@ mod tests {
             "",
         );
         let (selection, material) = reader
-            .import_cookies(&profile, CookieProvider::StepFun, true)
+            .import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form(),
+            )
             .unwrap();
         assert_eq!(
             material.secret(),
@@ -799,7 +833,11 @@ mod tests {
             "",
         );
         let (selection, material) = reader
-            .import_cookies(&profile, CookieProvider::MiMo, true)
+            .import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form(),
+            )
             .unwrap();
         assert_eq!(
             material.secret(),
@@ -841,7 +879,11 @@ mod tests {
             let (reader, profile, db) = firefox(root.path());
             cookie(&db, host, "Oasis-Token", "excluded", path, expiry, attrs);
             assert!(matches!(
-                reader.import_cookies(&profile, CookieProvider::StepFun, true),
+                reader.import_cookies(
+                    &profile,
+                    CookieProvider::StepFun,
+                    &ImportPermission::test_form()
+                ),
                 Err(BrowserError::NoSession)
             ));
         }
@@ -862,7 +904,11 @@ mod tests {
             "",
         );
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::StepFun, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Unreadable)
         ));
         db.execute("DELETE FROM moz_cookies", []).unwrap();
@@ -876,7 +922,11 @@ mod tests {
             "",
         );
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::StepFun, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Unreadable)
         ));
     }
@@ -895,13 +945,21 @@ mod tests {
             "",
         );
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::NoSession)
         ));
         cookie(&db, ".xiaomimimo.com", "userId", "42", "/", i64::MAX, "");
         assert_eq!(
             reader
-                .import_cookies(&profile, CookieProvider::MiMo, true)
+                .import_cookies(
+                    &profile,
+                    CookieProvider::MiMo,
+                    &ImportPermission::test_form()
+                )
                 .unwrap()
                 .1
                 .secret(),
@@ -924,7 +982,11 @@ mod tests {
         );
         db.execute_batch("BEGIN EXCLUSIVE;").unwrap();
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::StepFun, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Locked)
         ));
     }
@@ -944,7 +1006,11 @@ mod tests {
         );
         firefox_web_id(&profile.path, "selected-device");
         let (selection, _) = reader
-            .import_cookies(&profile, CookieProvider::StepFun, true)
+            .import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form(),
+            )
             .unwrap();
         drop(db);
         let other = root.path().join("Profiles/other.default");
@@ -999,7 +1065,11 @@ mod tests {
         local.flush().unwrap();
         drop(local);
         let (_, material) = reader
-            .import_cookies(&profile, CookieProvider::StepFun, true)
+            .import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form(),
+            )
             .unwrap();
         assert_eq!(
             material.secret(),
@@ -1013,7 +1083,11 @@ mod tests {
         let (reader, profile, db) = chromium_fixture(root.path());
         db.execute("INSERT INTO cookies (host_key,name,encrypted_value) VALUES ('.stepfun.com','Oasis-Token',?1)",[b"v20isolated-protected-fixture".as_slice()]).unwrap();
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::StepFun, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Protected)
         ));
     }
@@ -1029,7 +1103,11 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::StepFun, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::StepFun,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Protected)
         ));
     }
@@ -1041,12 +1119,20 @@ mod tests {
         let (reader, profile, db) = chromium_fixture(root.path());
         db.execute("INSERT INTO cookies (host_key,name,encrypted_value,has_expires,is_persistent,expires_utc) VALUES ('.xiaomimimo.com','api-platform_serviceToken',?1,1,1,1)", [b"v10expired-never-decrypt".as_slice()]).unwrap();
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, false),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::background()
+            ),
             Err(BrowserError::NoSession)
         ));
         db.execute_batch("BEGIN EXCLUSIVE;").unwrap();
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, false),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::background()
+            ),
             Err(BrowserError::Locked)
         ));
     }
@@ -1130,7 +1216,11 @@ mod tests {
             &protect_fixture(b"user-17"),
         );
         let (selection, material) = reader
-            .import_cookies(&profile, CookieProvider::MiMo, true)
+            .import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form(),
+            )
             .unwrap();
         assert_eq!(
             material.secret(),
@@ -1173,7 +1263,11 @@ mod tests {
                 &gcm_fixture(prefix, &key, 2, &user),
             );
             let (selection, material) = reader
-                .import_cookies(&profile, CookieProvider::MiMo, true)
+                .import_cookies(
+                    &profile,
+                    CookieProvider::MiMo,
+                    &ImportPermission::test_form(),
+                )
                 .unwrap();
             assert_eq!(
                 material.secret(),
@@ -1217,7 +1311,11 @@ mod tests {
             windows_key(root.path(), &key);
             encrypted_mimo(&db, &blob, &protect_fixture(&valid));
             assert!(matches!(
-                reader.import_cookies(&profile, CookieProvider::MiMo, true),
+                reader.import_cookies(
+                    &profile,
+                    CookieProvider::MiMo,
+                    &ImportPermission::test_form()
+                ),
                 Err(BrowserError::Unreadable)
             ));
         }
@@ -1235,7 +1333,11 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Unreadable)
         ));
     }
@@ -1246,12 +1348,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (mut reader, profile, db) = chromium_fixture(root.path());
         db.execute("INSERT INTO cookies (host_key,name,encrypted_value) VALUES ('.xiaomimimo.com','api-platform_serviceToken',?1)", [b"v10fixture-no-system-keychain".as_slice()]).unwrap();
-        reader.cookie_password = |_, interactive| {
-            assert!(interactive);
+        reader.cookie_password = |_, permission| {
+            assert!(permission.interaction()?);
             Err(BrowserError::Denied)
         };
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Denied)
         ));
         let selection = BrowserSelection {
@@ -1262,8 +1368,11 @@ mod tests {
             token_fingerprint: "mimo-cookie:isolated-source-binding".to_owned(),
             cookie_name: None,
         };
-        reader.cookie_password = |_, interactive| {
-            assert!(!interactive, "background must use Keychain UISkip");
+        reader.cookie_password = |_, permission| {
+            assert!(
+                !permission.interaction()?,
+                "background must use Keychain UISkip"
+            );
             Err(BrowserError::Denied)
         };
         assert!(matches!(
@@ -1322,7 +1431,9 @@ mod tests {
         );
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE moz_cookies SET value='committed-wal-session' WHERE host='api.commandcode.ai'").unwrap();
         let provider = CookieProvider::CommandCode("chosen-session");
-        let (selection, material) = reader.import_cookies(&profile, provider, true).unwrap();
+        let (selection, material) = reader
+            .import_cookies(&profile, provider, &ImportPermission::test_form())
+            .unwrap();
         assert_eq!(material.secret(), "chosen-session=committed-wal-session");
         assert_eq!(selection.cookie_name(), Some("chosen-session"));
         let metadata = serde_json::to_string(&selection).unwrap();
@@ -1331,7 +1442,11 @@ mod tests {
                 && !metadata.contains(root.path().to_str().unwrap())
         );
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::CommandCode("missing-name"), true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::CommandCode("missing-name"),
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::NoSession)
         ));
         assert!(matches!(
@@ -1345,7 +1460,11 @@ mod tests {
             "chosen\r\nheader",
         ] {
             assert!(matches!(
-                reader.import_cookies(&profile, CookieProvider::CommandCode(name), true),
+                reader.import_cookies(
+                    &profile,
+                    CookieProvider::CommandCode(name),
+                    &ImportPermission::test_form()
+                ),
                 Err(BrowserError::Unreadable)
             ));
         }
@@ -1371,7 +1490,7 @@ mod tests {
             "",
         );
         assert!(matches!(
-            reader.import_cookies(&profile, provider, true),
+            reader.import_cookies(&profile, provider, &ImportPermission::test_form()),
             Err(BrowserError::Unreadable)
         ));
     }

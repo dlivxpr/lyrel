@@ -710,3 +710,39 @@ mod provider_workflow_tests;
 
 #[path = "console_workflow_tests.rs"]
 mod console_workflow_tests;
+
+#[gpui_kit::test]
+fn replacing_credentials_commits_the_edited_name_with_the_verified_source(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Arc::new(Http::default());
+    let path = dir.path().join("usage.json");
+    let id = install(&mut vcx, path.clone(), vault.clone(), http.clone(), true).unwrap();
+    open(&app, &mut vcx);
+    click(&mut vcx, &format!("usage-replace-{id}"));
+    type_into(&mut vcx, "usage-name", "Replacement name");
+    type_into(&mut vcx, "usage-key", "rejected-key");
+    http.reply(401, b"{}");
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |d| {
+        d.stored.accounts[0].error == Some(UsageError::Authentication)
+    });
+    assert_eq!(
+        Accounts::load(path.clone(), vault.clone())
+            .unwrap()
+            .account(id)
+            .unwrap()
+            .name,
+        "Personal"
+    );
+    type_into(&mut vcx, "usage-key", "verified-new-key");
+    http.reply(200, BALANCE);
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |d| {
+        d.stored.accounts[0].name == "Replacement name"
+    });
+    let saved = Accounts::load(path, vault).unwrap();
+    assert_eq!(saved.account(id).unwrap().name, "Replacement name");
+    assert_eq!(saved.secret(id).unwrap(), "verified-new-key");
+}

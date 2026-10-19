@@ -98,15 +98,32 @@ fn target_and_request(
         .iter()
         .any(|s| s.kind() == SourceKind::ProjectShared)
     {
-        InstallTarget::project(
-            host,
-            project.ok_or_else(|| {
+        let owner = skill
+            .sources()
+            .iter()
+            .filter_map(|source| source.project())
+            .next()
+            .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "this project installation needs its explicit project",
+                    "project installation has no proven owner",
                 )
-            })?,
-        )?
+            })?;
+        if project
+            .as_deref()
+            .map(|selected| host.canonicalize(selected))
+            .transpose()?
+            != Some(host.canonicalize(owner)?)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                t_fmt(
+                    L10nKey::SkillsOwnerProjectRequired,
+                    &[("project", &owner.to_string_lossy())],
+                ),
+            ));
+        }
+        InstallTarget::project(host, owner.to_path_buf())?
     } else {
         InstallTarget::user(host, home.into(), state, cwd)?
     };

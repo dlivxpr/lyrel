@@ -60,6 +60,19 @@ fn type_into(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str, value
     });
 }
 
+fn tab_to(cx: &mut VisualTestContext, id: &'static str) {
+    for _ in 0..160 {
+        if cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.find(id).focused() == Some(true)
+        }) {
+            return;
+        }
+        cx.update(|window, cx| window.press("tab", cx));
+    }
+    panic!("{id} must be reachable through real Tab navigation");
+}
+
 #[gpui_kit::test]
 fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
@@ -112,7 +125,57 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         app.navigate_settings(SettingsSection::Statistics, None, window, cx);
     });
     settle(&app, &mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        window.focus(&app.active_settings().unwrap().focus_handle, cx)
+    });
+    tab_to(&mut vcx, "statistics-machine");
+    vcx.simulate_keystrokes("enter escape");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.find("statistics-machine").focused() == Some(true)
+    }));
+    tab_to(&mut vcx, "statistics-agent");
+    vcx.simulate_keystrokes("enter down down enter");
+    settle(&app, &mut vcx);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| app
+            .active_settings()
+            .unwrap()
+            .statistics
+            .agent),
+        Some("omp")
+    );
+    tab_to(&mut vcx, "statistics-period");
+    vcx.simulate_keystrokes("enter down down down down down down enter");
+    settle(&app, &mut vcx);
+    assert!(app.read_with(
+        &vcx,
+        |app, _| app.active_settings().unwrap().statistics.period == Period::Custom
+    ));
+    tab_to(&mut vcx, "statistics-apply");
+    vcx.simulate_keystrokes("enter");
+    settle(&app, &mut vcx);
+    tab_to(&mut vcx, "statistics-refresh");
+    vcx.simulate_keystrokes("enter");
+    settle(&app, &mut vcx);
+    reveal(&app, &mut vcx, "statistics-period");
+    app.update_in(&mut vcx, |app, window, cx| {
+        window.focus(&app.active_settings().unwrap().focus_handle, cx)
+    });
+    tab_to(&mut vcx, "statistics-period");
+    vcx.simulate_keystrokes("enter down down down down down enter");
+    settle(&app, &mut vcx);
     click(&app, &mut vcx, "statistics-add-source");
+    reveal(&app, &mut vcx, "statistics-source-kind");
+    vcx.simulate_keystrokes("shift-tab");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.find("statistics-source-kind").focused() == Some(true)
+    }));
+    vcx.simulate_keystrokes("enter down enter");
+    vcx.run_until_parked();
     type_into(
         &app,
         &mut vcx,
@@ -322,4 +385,56 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         );
     });
     app.update_in(&mut vcx, |app, window, cx| app.close_settings(window, cx));
+}
+
+#[gpui_kit::test]
+fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let agent = temp.path().join("pi");
+    let history = temp.path().join("history");
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::create_dir(&history).unwrap();
+    std::fs::write(
+        agent.join("settings.json"),
+        serde_json::to_vec(&serde_json::json!({"sessionDir":history})).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(history.join("visible.jsonl"), "{\"type\":\"session\",\"version\":3,\"id\":\"visible-cache\",\"timestamp\":\"2026-10-19T00:00:00Z\"}\n{\"type\":\"message\",\"id\":\"usage\",\"timestamp\":\"2026-10-19T00:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":40,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n").unwrap();
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        cx.global_mut::<Config>().agent_launch.insert(
+            "pi".into(),
+            format!("PI_CODING_AGENT_DIR='{}' pi", agent.display()),
+        );
+        app.open_settings_section(SettingsSection::General, window, cx);
+        let state = &mut app.active_settings_mut().unwrap().statistics;
+        state.management.path = Some(temp.path().join("settings.json"));
+        state.agent = Some("pi");
+        state.period = Period::All;
+        app.navigate_settings(SettingsSection::Statistics, None, window, cx);
+    });
+    settle(&app, &mut vcx);
+    let observed = app.read_with(&vcx, |app, _| {
+        let visible =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(visible.totals.tokens().total(), Some(42));
+        visible.snapshot.updated()
+    });
+    std::fs::write(agent.join("settings.json"), "unreadable native settings").unwrap();
+    click(&app, &mut vcx, "statistics-refresh");
+    settle(&app, &mut vcx);
+    app.read_with(&vcx, |app, _| {
+        let visible =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(visible.totals.tokens().total(), Some(42));
+        assert_eq!(visible.totals.main_sessions(), 1);
+        assert!(!visible.totals.is_complete());
+        assert_eq!(visible.snapshot.updated(), observed);
+        assert_eq!(
+            visible.analysis.as_ref().unwrap().totals().tokens().total(),
+            Some(42)
+        );
+    });
 }

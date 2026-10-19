@@ -238,6 +238,8 @@ fn stepfun_manual_settings_workflow_sends_real_connect_requests_and_preserves_id
                     Err(error) => panic!("controlled server accept: {error}"),
                 }
             };
+            // Match the MiMo loopback fixture: Windows inherits nonblocking mode.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
@@ -448,6 +450,7 @@ fn private_session_redirect_does_not_forward_cookie_or_oasis_headers() {
                 Err(error) => panic!("controlled redirect server: {error}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();

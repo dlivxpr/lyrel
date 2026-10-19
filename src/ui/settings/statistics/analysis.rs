@@ -129,7 +129,7 @@ fn detail(totals: &Totals) -> String {
     }
 }
 impl LyrelApp {
-    fn analysis_button(
+    pub(in crate::ui::settings) fn analysis_button(
         &self,
         id: &'static str,
         label: impl Into<SharedString>,
@@ -141,7 +141,7 @@ impl LyrelApp {
             .small()
             .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
     }
-    fn analysis_menu(
+    pub(in crate::ui::settings) fn analysis_menu(
         &self,
         id: &'static str,
         label: impl Into<SharedString>,

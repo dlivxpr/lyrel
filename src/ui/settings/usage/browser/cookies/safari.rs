@@ -1,6 +1,6 @@
 //! Safari binarycookies 的 best-effort 读取；后台不访问可能受 TCC 保护的文件。
 
-use super::{BrowserError, CookieProvider, Profile, Values, path_matches, store};
+use super::{BrowserError, CookieProvider, ImportPermission, Profile, Values, path_matches, store};
 use zeroize::Zeroizing;
 
 pub(super) fn read(
@@ -8,20 +8,22 @@ pub(super) fn read(
     profile: &Profile,
     provider: CookieProvider,
     now: i64,
-    interactive: bool,
+    permission: &ImportPermission,
 ) -> Result<Values, BrowserError> {
     // 文件访问没有 UISkip 等同的公开 TCC 保证；即使曾授权，后台也不探测文件。
-    if !interactive {
+    if !permission.interaction()? {
         return Err(BrowserError::FullDiskAccess);
     }
     let path = profile.path.join("Cookies/Cookies.binarycookies");
-    let bytes = (reader.safari_file)(&profile.path, &path, 16 * 1024 * 1024).map_err(|error| {
-        if error == BrowserError::Denied {
-            BrowserError::FullDiskAccess
-        } else {
-            error
-        }
-    })?;
+    let bytes = (reader.safari_file)(&profile.path, &path, 16 * 1024 * 1024, permission).map_err(
+        |error| {
+            if error == BrowserError::Denied {
+                BrowserError::FullDiskAccess
+            } else {
+                error
+            }
+        },
+    )?;
     parse(&bytes, provider, now)
 }
 
@@ -203,7 +205,11 @@ mod tests {
             Err(BrowserError::Unsupported)
         ));
         let (selection, material) = reader
-            .import_cookies(&profile, CookieProvider::MiMo, true)
+            .import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form(),
+            )
             .unwrap();
         assert_eq!(
             material.secret(),
@@ -214,13 +220,17 @@ mod tests {
                 .unwrap()
                 .contains("safari-token")
         );
-        reader.safari_file = |_, _, _| panic!("background must not open protected Safari files");
+        reader.safari_file = |_, _, _, _| panic!("background must not open protected Safari files");
         assert!(matches!(
             reader.resolve_cookies(&selection, CookieProvider::MiMo),
             Err(BrowserError::FullDiskAccess)
         ));
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, false),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::background()
+            ),
             Err(BrowserError::FullDiskAccess)
         ));
     }
@@ -236,7 +246,11 @@ mod tests {
             let reader = fixture(root.path(), host, path, expiry);
             let profile = reader.profiles(Browser::Safari).unwrap().remove(0);
             assert!(matches!(
-                reader.import_cookies(&profile, CookieProvider::MiMo, true),
+                reader.import_cookies(
+                    &profile,
+                    CookieProvider::MiMo,
+                    &ImportPermission::test_form()
+                ),
                 Err(BrowserError::NoSession)
             ));
         }
@@ -250,7 +264,11 @@ mod tests {
             let profile = reader.profiles(Browser::Safari).unwrap().remove(0);
             fs::write(root.path().join("Cookies/Cookies.binarycookies"), bytes).unwrap();
             assert!(matches!(
-                reader.import_cookies(&profile, CookieProvider::MiMo, true),
+                reader.import_cookies(
+                    &profile,
+                    CookieProvider::MiMo,
+                    &ImportPermission::test_form()
+                ),
                 Err(BrowserError::Unreadable | BrowserError::Unsupported)
             ));
         }
@@ -261,14 +279,22 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut reader = fixture(root.path(), ".xiaomimimo.com", "/", 4_000_000_000.0);
         let profile = reader.profiles(Browser::Safari).unwrap().remove(0);
-        reader.safari_file = |_, _, _| Err(BrowserError::Denied);
+        reader.safari_file = |_, _, _, _| Err(BrowserError::Denied);
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::FullDiskAccess)
         ));
-        reader.safari_file = |_, _, _| Err(BrowserError::Locked);
+        reader.safari_file = |_, _, _, _| Err(BrowserError::Locked);
         assert!(matches!(
-            reader.import_cookies(&profile, CookieProvider::MiMo, true),
+            reader.import_cookies(
+                &profile,
+                CookieProvider::MiMo,
+                &ImportPermission::test_form()
+            ),
             Err(BrowserError::Locked)
         ));
     }

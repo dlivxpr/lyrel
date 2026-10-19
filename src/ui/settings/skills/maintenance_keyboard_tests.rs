@@ -125,3 +125,59 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
     }
     crate::ui::i18n::set_locale("en");
 }
+
+#[gpui_kit::test]
+fn skills_host_and_source_pickers_preserve_keyboard_selection_and_escape(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(project.join(".agents/skills/project-only")).unwrap();
+    std::fs::write(
+        project.join(".agents/skills/project-only/SKILL.md"),
+        "---\nname: project-only\n---\n# Project",
+    )
+    .unwrap();
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        super::super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
+        app.open_settings_section(SettingsSection::Skills, window, cx);
+        let s = app.active_settings_mut().unwrap();
+        s.skills.project_input.clone().update(cx, |input, cx| {
+            input.set_value(project.to_string_lossy().into_owned(), window, cx)
+        });
+        app.apply_skills_project(cx);
+    });
+    settle(&app, &mut vcx);
+    vcx.simulate_resize(gpui_kit::size(px(1200.), px(1400.)));
+    app.update_in(&mut vcx, |app, window, cx| {
+        window.focus(&app.active_settings().unwrap().skills.focus, cx)
+    });
+    for (id, keys) in [
+        ("skills-machine", "enter escape"),
+        ("skills-source", "enter down down down enter"),
+    ] {
+        let mut reached = false;
+        for _ in 0..100 {
+            if vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window.find(id).focused() == Some(true)
+            }) {
+                reached = true;
+                break;
+            }
+            vcx.update(|window, cx| window.press("tab", cx));
+        }
+        assert!(reached, "{id} must be Tab-reachable");
+        vcx.simulate_keystrokes(keys);
+        vcx.run_until_parked();
+    }
+    assert_eq!(
+        app.read_with(&vcx, |app, _| app.active_settings().unwrap().skills.filter),
+        Some(SourceKind::ProjectShared)
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join(".agents/skills/project-only/SKILL.md")).unwrap(),
+        "---\nname: project-only\n---\n# Project"
+    );
+}

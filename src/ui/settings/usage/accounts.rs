@@ -361,6 +361,7 @@ impl Accounts {
             _ => Provider::DeepSeek,
         };
         if let Some(account) = next.accounts.iter_mut().find(|a| a.id == id) {
+            account.name = name.to_owned();
             account.retired_slots.extend(account.auth.slot());
             account.auth = auth;
             account.provider = provider;
@@ -438,6 +439,10 @@ impl Accounts {
             .transpose()
     }
     pub fn fail_enhancement(&mut self, query: Query, error: UsageError) {
+        if error == UsageError::Stale {
+            self.fail_replace(query, error);
+            return;
+        }
         if let Some(account) = self
             .account_mut(query.id)
             .filter(|a| a.revision == query.revision && !a.removing)

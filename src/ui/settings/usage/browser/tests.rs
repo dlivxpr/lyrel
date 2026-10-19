@@ -106,6 +106,33 @@ fn chromium_import_reads_real_leveldb_and_persists_only_binding() {
 }
 
 #[test]
+fn chromium_import_rejects_oversized_recovery_inputs_before_reading_tokens() {
+    for (files, size) in [(1, 17 * 1024 * 1024), (5, 15 * 1024 * 1024), (513, 0)] {
+        let root = tempfile::tempdir().unwrap();
+        let profile = chromium_profile(root.path(), "Default", "small-valid-token");
+        let reader = BrowserReader::with_root(Browser::Chrome, root.path());
+        let selected = reader.profiles(Browser::Chrome).unwrap().remove(0);
+        assert_eq!(
+            reader.import(&selected).unwrap().1.secret(),
+            "small-valid-token"
+        );
+        for index in 0..files {
+            // Unreferenced recovery files must also count: the memory Env copies
+            // these even though CURRENT does not reference their contents.
+            let file = fs::File::create(
+                profile.join(format!("Local Storage/leveldb/MANIFEST-unused-{index}")),
+            )
+            .unwrap();
+            file.set_len(size).unwrap();
+        }
+        assert!(matches!(
+            reader.import(&selected),
+            Err(BrowserError::Unreadable)
+        ));
+    }
+}
+
+#[test]
 fn locked_leveldb_is_not_bypassed() {
     let root = tempfile::tempdir().unwrap();
     let profile = chromium_profile(root.path(), "Default", "fixture-locked-secret");

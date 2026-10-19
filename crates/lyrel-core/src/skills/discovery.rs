@@ -616,6 +616,14 @@ pub(super) fn agent_roots(
             }
         }
     }
+    for root in &mut roots {
+        if root.kind == SourceKind::ProjectShared {
+            root.project = project_dirs
+                .iter()
+                .find(|project| under(host, project, &[".agents", "skills"]) == root.path)
+                .cloned();
+        }
+    }
     if disabled && agent != HookAgent::Pi {
         for root in &mut roots {
             root.state = DiscoveryState::Disabled;
@@ -647,6 +655,7 @@ fn push(
         recursive,
         flat_markdown,
         state,
+        project: None,
     });
 }
 fn bool_field(value: &Value, key: &str) -> Option<bool> {

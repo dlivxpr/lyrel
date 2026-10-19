@@ -160,3 +160,101 @@ pub(crate) fn lifecycle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, proj
 
 #[path = "maintenance_keyboard_tests.rs"]
 mod keyboard;
+
+#[gpui_kit::test]
+fn ancestor_skill_requires_explicit_owner_project_switch_before_removal(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("repo");
+    let child = project.join("crates/app");
+    let installation = project.join(".agents/skills/ancestor");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::create_dir_all(&installation).unwrap();
+    std::fs::create_dir(project.join(".git")).unwrap();
+    std::fs::write(
+        installation.join("SKILL.md"),
+        "---\nname: ancestor\n---\n# Keep until owner selected\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("skills-lock.json"), br#"{"version":1,"skills":{"ancestor":{"source":"example/skills","sourceType":"github","skillPath":"ancestor/SKILL.md"}}}"#).unwrap();
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
+        app.open_settings_section(SettingsSection::Skills, window, cx);
+        app.active_settings()
+            .unwrap()
+            .skills
+            .project_input
+            .clone()
+            .update(cx, |input, cx| {
+                input.set_value(child.to_string_lossy().into_owned(), window, cx)
+            });
+        app.apply_skills_project(cx);
+    });
+    settle(&app, &mut vcx);
+    vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
+    let selected = app.read_with(&vcx, |app, _| {
+        app.active_settings()
+            .unwrap()
+            .skills
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .filtered("ancestor", Some(SourceKind::ProjectShared))
+            .next()
+            .unwrap()
+            .path()
+            .to_owned()
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click(SharedString::from(row_id(&selected)), cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-remove-review", cx);
+    });
+    settle(&app, &mut vcx);
+    assert!(app.read_with(&vcx, |app, _| {
+        app.active_settings()
+            .unwrap()
+            .skills
+            .maintenance
+            .error
+            .as_ref()
+            .is_some_and(|error| error.contains(project.to_string_lossy().as_ref()))
+    }));
+    assert!(installation.join("SKILL.md").exists());
+    vcx.simulate_keystrokes("escape");
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.active_settings()
+            .unwrap()
+            .skills
+            .project_input
+            .clone()
+            .update(cx, |input, cx| {
+                input.set_value(project.to_string_lossy().into_owned(), window, cx)
+            });
+        app.apply_skills_project(cx);
+    });
+    settle(&app, &mut vcx);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click(SharedString::from(row_id(&selected)), cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-remove-review", cx);
+    });
+    settle(&app, &mut vcx);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-remove-confirm", cx);
+    });
+    settle(&app, &mut vcx);
+    assert!(!installation.exists());
+    let lock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.join("skills-lock.json")).unwrap()).unwrap();
+    assert!(lock["skills"].get("ancestor").is_none());
+}
