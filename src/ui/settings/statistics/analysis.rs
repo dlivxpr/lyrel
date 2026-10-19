@@ -15,6 +15,7 @@ pub(super) struct AnalysisState {
     pub(super) year: i32,
     pub(super) date: NaiveDate,
     pub(super) detail: bool,
+    pub(super) summary_detail: bool,
     pub(super) focus: FocusHandle,
     pub(super) anchor: Option<gpui_kit::ScrollAnchor>,
     calendar_scroll: gpui_kit::ScrollHandle,
@@ -37,6 +38,7 @@ impl AnalysisState {
             year: date.year(),
             date,
             detail: false,
+            summary_detail: false,
             focus: cx.focus_handle().tab_stop(true),
             anchor: None,
             calendar_scroll: gpui_kit::ScrollHandle::new(),
@@ -56,6 +58,24 @@ impl AnalysisState {
             .scroll_to_item(((offset + self.date.ordinal0()) / 7 + 1) as usize);
     }
 }
+fn agent_label(agent: &str) -> &str {
+    match agent {
+        "kimi" => "Kimi Code",
+        "opencode" => "OpenCode",
+        "hermes" => "Hermes",
+        other => other,
+    }
+}
+fn agent_opacity(agent: &str) -> f32 {
+    match agent {
+        "omp" => 1.,
+        "pi" => 0.8,
+        "opencode" => 0.65,
+        "hermes" => 0.5,
+        _ => 0.35,
+    }
+}
+
 fn metric_key(metric: Metric) -> L10nKey {
     match metric {
         Metric::Tokens => L10nKey::StatisticsTokens,
@@ -69,7 +89,7 @@ fn group_key(group: GroupKind) -> L10nKey {
         GroupKind::Projects => L10nKey::StatisticsProjects,
     }
 }
-fn detail(totals: &Totals) -> String {
+pub(super) fn detail(totals: &Totals) -> String {
     let empty = totals.calls() == 0 && totals.is_complete();
     let tokens = |value: Option<u64>| number(value.or_else(|| empty.then_some(0)));
     let native = t_fmt(
@@ -389,7 +409,7 @@ impl LyrelApp {
             .p_3()
             .border_1()
             .border_color(cx.theme().border)
-            .rounded_lg()
+            .rounded_xl()
             .child(
                 h_flex()
                     .min_w_0()
@@ -406,18 +426,14 @@ impl LyrelApp {
                     .child(metric),
             )
             .child(
-                h_flex().min_w_0().flex_wrap().gap_2().child(agent).child(
-                    div().text_xs().text_color(tk.k5).child(t_fmt(
-                        L10nKey::StatisticsAnalysisSnapshot,
-                        &[(
-                            "agent",
-                            p.analysis
-                                .as_ref()
-                                .and_then(|a| a.agent_filter())
-                                .unwrap_or(t(L10nKey::StatisticsAllAgents)),
-                        )],
-                    )),
-                ),
+                h_flex().min_w_0().flex_wrap().gap_2().child(agent)
+                    .when(p.analysis.as_ref().and_then(|a| a.agent_filter()) != state.agent.as_deref(), |row| {
+                        row.child(div().text_xs().text_color(tk.k5).child(t_fmt(
+                            L10nKey::StatisticsAnalysisSnapshot,
+                            &[("agent", p.analysis.as_ref().and_then(|a| a.agent_filter())
+                                .unwrap_or(t(L10nKey::StatisticsAllAgents)))],
+                        )))
+                    }),
             );
         if let Some(error) = &p.analysis_error {
             activity = activity.child(
@@ -615,7 +631,11 @@ impl LyrelApp {
                                 &number(analysis.streaks().longest().map(u64::from)),
                             ),
                         ],
-                    ))),
+                    )))
+                    .child(div().flex_1())
+                    .child(h_flex().gap_0p5().children([0., 0.25, 0.5, 0.75, 1.].map(|level| {
+                        div().size_2().rounded_sm().bg(if level == 0. { tk.k06 } else { accent.opacity(level) })
+                    }))),
             )
             .child(
                 div().text_xs().text_color(tk.k5).child(t_fmt(
@@ -679,25 +699,28 @@ impl LyrelApp {
             GroupKind::Models => analysis.models(),
             GroupKind::Projects => analysis.projects(),
         };
+        let maximum = groups.iter().filter_map(|group| Metric::Tokens.value(group.totals())).fold(0., f64::max);
         let pages = groups.len().div_ceil(10).max(1);
         let page = state.page.min(pages - 1);
         let common = v_flex()
             .flex_grow(1.)
             .flex_shrink(1.)
-            .flex_basis(rems(16.))
+            .flex_basis(rems(21.))
             .min_w_0()
             .gap_2()
             .p_3()
             .border_1()
             .border_color(cx.theme().border)
-            .rounded_lg()
-            .child(groups_menu)
+            .rounded_xl()
+            .child(h_flex().justify_between().gap_2()
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(t(L10nKey::StatisticsCommon)))
+                .child(groups_menu))
             .children(
                 groups
                     .iter()
                     .skip(page * 10)
                     .take(10)
-                    .map(|group| self.render_statistics_breakdown(group, false, cx)),
+                    .map(|group| self.render_statistics_breakdown(group, false, analysis, maximum, cx)),
             )
             .when(groups.is_empty(), |el| {
                 el.child(
@@ -707,77 +730,66 @@ impl LyrelApp {
                         .child(t(L10nKey::StatisticsEmpty)),
                 )
             })
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        self.analysis_button(
-                            "statistics-group-previous",
-                            "‹",
-                            cx,
-                            move |this, _, cx| {
-                                this.change_analysis(|s| s.page = page.saturating_sub(1), false, cx)
-                            },
-                        )
-                        .accessibility_label(t(L10nKey::StatisticsPreviousPage))
-                        .disabled(page == 0),
-                    )
+            .when(pages > 1, |common| {
+                common.child(h_flex().gap_2()
+                    .child(self.analysis_button("statistics-group-previous", "‹", cx, move |this, _, cx| {
+                        this.change_analysis(|s| s.page = page.saturating_sub(1), false, cx)
+                    }).accessibility_label(t(L10nKey::StatisticsPreviousPage)).disabled(page == 0))
                     .child(div().text_xs().child(format!("{} / {pages}", page + 1)))
-                    .child(
-                        self.analysis_button(
-                            "statistics-group-next",
-                            "›",
-                            cx,
-                            move |this, _, cx| {
-                                this.change_analysis(|s| s.page = page + 1, false, cx)
-                            },
-                        )
-                        .accessibility_label(t(L10nKey::StatisticsNextPage))
-                        .disabled(page + 1 >= pages),
-                    ),
-            );
+                    .child(self.analysis_button("statistics-group-next", "›", cx, move |this, _, cx| {
+                        this.change_analysis(|s| s.page = page + 1, false, cx)
+                    }).accessibility_label(t(L10nKey::StatisticsNextPage)).disabled(page + 1 >= pages)))
+            });
         let agent_pages = analysis.agents().len().div_ceil(10).max(1);
         let agent_page = state.agent_page.min(agent_pages - 1);
         let agents = v_flex()
             .flex_grow(1.)
             .flex_shrink(1.)
-            .flex_basis(rems(22.))
+            .flex_basis(rems(21.))
             .min_w_0()
             .gap_2()
             .p_3()
             .border_1()
             .border_color(cx.theme().border)
-            .rounded_lg()
+            .rounded_xl()
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .child(t(L10nKey::StatisticsAgents)),
             )
+            .child(h_flex().h_1p5().w_full().rounded_sm().overflow_hidden()
+                .bg(tk.k08).children(analysis.agents().iter().filter_map(|group| {
+                    let total = Metric::Tokens.value(analysis.totals()).filter(|v| *v > 0.)?;
+                    let value = Metric::Tokens.value(group.totals())?;
+                    Some(div().h_full().w(gpui_kit::relative((value / total) as f32))
+                        .bg(cx.theme().primary.opacity(agent_opacity(group.agent()))))
+                })))
             .child(
                 h_flex()
                     .gap_2()
                     .text_xs()
                     .text_color(tk.k5)
-                    .child(div().flex_1().child(t(L10nKey::StatisticsAgent)))
+                    .child(div().flex_1().min_w_0().child(t(L10nKey::StatisticsAgent)))
                     .child(
                         div()
-                            .w_20()
+                            .w_12()
                             .text_right()
                             .child(t(L10nKey::StatisticsTokens)),
                     )
                     .child(
                         div()
-                            .w_20()
+                            .w_16()
                             .text_right()
                             .child(t(L10nKey::StatisticsCostCard)),
                     )
                     .child(
                         div()
-                            .w_12()
+                            .w_10()
                             .text_right()
                             .child(t(L10nKey::StatisticsSessionColumn)),
-                    ),
+                    )
+                    .child(div().w_8().text_right().child(t(L10nKey::StatisticsShare))),
             )
             .children(
                 analysis
@@ -785,7 +797,7 @@ impl LyrelApp {
                     .iter()
                     .skip(agent_page * 10)
                     .take(10)
-                    .map(|group| self.render_statistics_breakdown(group, true, cx)),
+                    .map(|group| self.render_statistics_breakdown(group, true, analysis, 0., cx)),
             )
             .when(analysis.agents().is_empty(), |el| {
                 el.child(
@@ -850,12 +862,6 @@ impl LyrelApp {
                     .child(agents)
                     .child(common),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(tk.k5)
-                    .child(t(L10nKey::StatisticsBreakdownScope)),
-            )
             .into_any_element()
     }
 
@@ -863,106 +869,62 @@ impl LyrelApp {
         &self,
         group: &Breakdown,
         table: bool,
+        analysis: &lyrel_core::statistics::analysis::Analysis,
+        maximum: f64,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tk = Tk::of(cx);
-        let label = group.label().unwrap_or(t(L10nKey::StatisticsUnattributed));
-        let context = format!(
-            "{} · {} · {}",
-            group.agent(),
-            group.scope(),
-            group.provider().unwrap_or("")
-        );
+        let raw_label = group.label().unwrap_or(t(L10nKey::StatisticsUnattributed));
+        let label = if table { agent_label(group.agent()) } else { raw_label };
+        let context = format!("{} · {} · {}", group.agent(), group.scope(), group.provider().unwrap_or(""));
         let totals = group.totals();
         let state = &self.active_settings().unwrap().statistics.analysis;
-        let key = format!(
-            "{table}:{}:{}:{}:{label}",
-            group.agent(),
-            group.scope(),
-            group.provider().unwrap_or("")
-        );
+        let key = format!("{table}:{}:{}:{}:{raw_label}", group.agent(), group.scope(), group.provider().unwrap_or(""));
         let expanded = state.expanded.as_deref() == Some(&key);
-        let metric_value = match state.metric {
-            Metric::Tokens => number(totals.tokens().total()),
-            Metric::Cost => money(totals.recorded_usd()),
-            Metric::Sessions => session_count(totals),
-        };
-        let identity = v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_1()
-            .child(div().truncate().child(label.to_owned()))
-            .child(
-                div()
-                    .truncate()
-                    .text_xs()
-                    .text_color(tk.k5)
-                    .child(context.clone()),
-            );
-        let values = h_flex()
-            .gap_2()
-            .child(
-                div()
-                    .w_20()
-                    .text_right()
-                    .child(number(totals.tokens().total())),
-            )
-            .child(
-                div()
-                    .w_20()
-                    .text_right()
-                    .child(money(totals.recorded_usd())),
-            )
-            .child(div().w_12().text_right().child(session_count(totals)));
+        let token_value = Metric::Tokens.value(totals);
+        let share = token_value.zip(Metric::Tokens.value(analysis.totals()))
+            .filter(|(_, total)| *total > 0.)
+            .map(|(value, total)| format!("{:.0}%", value / total * 100.))
+            .unwrap_or_else(|| "—".into());
+        let cost = totals.recorded_usd().map(|v| format!("${v:.2}"))
+            .unwrap_or_else(|| "—".into());
+        let identity = h_flex().flex_1().min_w_0().gap_1p5()
+            .when(table, |row| row.child(div().size_1p5().rounded_sm()
+                .bg(cx.theme().primary.opacity(agent_opacity(group.agent())))))
+            .child(div().truncate().child(label.to_owned()));
         let row = if table {
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .gap_2()
+            h_flex().w_full().min_w_0().gap_2().text_xs()
                 .child(identity)
-                .child(values)
+                .child(div().w_12().text_right().child(dashboard::compact(totals.tokens().total())))
+                .child(div().w_16().text_right().text_color(tk.k5).child(cost.clone()))
+                .child(div().w_10().text_right().text_color(tk.k5).child(session_count(totals)))
+                .child(div().w_8().text_right().text_color(tk.k5).child(share))
                 .into_any_element()
         } else {
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .gap_2()
-                .child(identity)
-                .child(div().text_sm().child(metric_value))
+            v_flex().w_full().min_w_0().gap_1()
+                .child(h_flex().min_w_0().gap_2().text_xs()
+                    .child(identity)
+                    .child(div().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsRankContext,
+                        &[("cost", &cost), ("sessions", &session_count(totals))])))
+                    .child(div().child(dashboard::compact(totals.tokens().total()))))
+                .child(h_flex().w_full().h_0p5().rounded_sm().overflow_hidden().bg(tk.k08)
+                    .when_some(token_value.filter(|_| maximum > 0.), |bar, value| {
+                        bar.child(div().h_full().w(gpui_kit::relative((value / maximum) as f32)).bg(tk.k5))
+                    }))
                 .into_any_element()
         };
         let description = detail(totals);
-        let content = v_flex()
-            .w_full()
-            .min_w_0()
-            .gap_2()
-            .whitespace_normal()
-            .text_left()
+        let content = v_flex().w_full().min_w_0().gap_2().whitespace_normal().text_left()
             .child(row)
-            .when(expanded, |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(tk.k5)
-                        .child(format!("{context}\n{description}")),
-                )
-            });
+            .when(expanded, |el| el.child(div().id(SharedString::from(format!("statistics-breakdown-detail:{key}")))
+                .text_xs().text_color(tk.k5).child(format!("{context}\n{description}\n{}", t(L10nKey::StatisticsBreakdownScope)))));
         Button::new(SharedString::from(format!("statistics-breakdown:{key}")))
-            .ghost()
-            .h_auto()
-            .w_full()
-            .min_w_0()
-            .py_2()
-            .px_0()
+            .ghost().h_auto().w_full().min_w_0().py_1p5().px_0()
+            .border_b_1().border_color(cx.theme().border)
             .accessibility_label(format!("{label} · {context}\n{description}"))
-            .tooltip(context)
-            .child(content)
+            .tooltip(context).child(content)
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.change_analysis(
-                    |s| s.expanded = if expanded { None } else { Some(key.clone()) },
-                    false,
-                    cx,
-                );
+                this.change_analysis(|s| s.expanded = if expanded { None } else { Some(key.clone()) }, false, cx);
             }))
             .into_any_element()
     }
