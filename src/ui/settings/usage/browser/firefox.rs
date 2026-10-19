@@ -88,10 +88,12 @@ pub(super) fn profiles(
     Ok(())
 }
 
-pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
-    // Exact HTTPS origin only. Container/partition origin attributes are not the
-    // selected default origin and must not silently supply a different account.
-    let path = profile.join("storage/default/https+++platform.deepseek.com/ls/data.sqlite");
+pub(super) fn read(profile: &Path, origin: &str, name: &str) -> Result<String, BrowserError> {
+    // Exact HTTPS origin only, never a container or another profile.
+    let host = origin
+        .strip_prefix("https://")
+        .ok_or(BrowserError::Unsupported)?;
+    let path = profile.join(format!("storage/default/https+++{host}/ls/data.sqlite"));
     match fs::metadata(&path) {
         Ok(metadata) if metadata.is_file() => {}
         Ok(_) => return Err(BrowserError::Unreadable),
@@ -110,15 +112,13 @@ pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
     db.execute_batch("PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;")
         .map_err(sql_error)?;
     let mut statement = db
-        .prepare(
-            "SELECT value, conversion_type, compression_type FROM data WHERE key = 'userToken'",
-        )
+        .prepare("SELECT value, conversion_type, compression_type FROM data WHERE key = ?1")
         .map_err(|error| match error.sqlite_error_code() {
             Some(ErrorCode::Unknown) => BrowserError::Unsupported,
             _ => sql_error(error),
         })?;
     let value = statement
-        .query_row([], |row| {
+        .query_row([name], |row| {
             Ok((
                 row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, i64>(1)?,

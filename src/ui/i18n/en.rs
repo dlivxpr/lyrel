@@ -403,11 +403,57 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageOfficial => {
             "Official API: GET https://api.deepseek.com/user/balance · Bearer API key. The API does not return a user identity or reset period; the name and ID below identify the local query account."
         }
-        L10nKey::UsageSource => "DeepSeek authentication source",
-        L10nKey::UsageApiSource => "Official API key",
+        L10nKey::UsageSource => "Authentication source",
+        L10nKey::UsageProvider => "Provider",
+        L10nKey::UsageKimiDisclosure => {
+            "Private usage interfaces: API keys only target api.kimi.com/coding/v1/usages and /me; web sessions only target www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats. These interfaces may change. Web sessions never fall back to the API-key endpoint."
+        }
+        L10nKey::UsageKimiHelp => {
+            "Copy access_token (raw or access_token JSON) from https://www.kimi.com LocalStorage in the selected profile. Only access_token and optional msh_user_id are read, never refresh_token or cookies. Browser material stays in request memory; manual tokens are saved only after validation."
+        }
+        L10nKey::UsageCommandDisclosure => {
+            "Private interfaces: API keys only target api.commandcode.ai /alpha/whoami, /alpha/billing/credits, /alpha/billing/subscriptions and /alpha/usage/summary. Manual sessions only target /auth/get-session for identity and /internal/billing/subscriptions. Enhancement failure does not invalidate the primary source."
+        }
+        L10nKey::UsageEnhance => "Enhance with manual session…",
+        L10nKey::UsageEnhancementFailed => {
+            "Session enhancement did not apply; primary API-key usage remains available"
+        }
+        L10nKey::UsageIdentity => "Provider identity",
+        L10nKey::UsagePlan => "Plan",
+        L10nKey::UsageRemaining => "Remaining",
+        L10nKey::UsageReset => "Reset / period end",
+        L10nKey::UsageFiveHour => "5-hour window",
+        L10nKey::UsageWeekly => "Weekly window",
+        L10nKey::UsageMonthlyTotal => "Monthly total quota",
+        L10nKey::UsageMonthlyCode => "Monthly code quota",
+        L10nKey::UsageMonthly => "Monthly credits",
+        L10nKey::UsagePurchased => "Purchased credits",
+        L10nKey::UsageFree => "Free credits",
+        L10nKey::UsageBooster => "Booster wallet",
+        L10nKey::UsageCoding => "Coding quota (provider-defined period)",
+        L10nKey::UsageRequests => "requests",
+        L10nKey::UsageUsed => "Used",
+        L10nKey::UsageLimit => "Limit",
+        L10nKey::UsageIdentityMismatch => {
+            "The session and API key belong to different users. Enhancement was not saved; primary authentication is unchanged."
+        }
+        L10nKey::UsageCodeFiveHour => "Code 5-hour window",
+        L10nKey::UsageCodeWeekly => "Code weekly window",
+        L10nKey::UsageBoosterMonthly => "Booster monthly spending limit",
+        L10nKey::UsageExpires => "Expires",
+        L10nKey::UsageRawBalance => "Raw balance (provider units, unconverted)",
+        L10nKey::UsageOverdrawn => "Provider reports this account is overdrawn",
+        L10nKey::UsageBillingUsage => "Billing-period usage cost",
+        L10nKey::UsageRequestCount => "Period requests",
+        L10nKey::UsageSandboxMinutes => "Sandbox minutes",
+        L10nKey::UsageOrganizationLimit => "Organization limit",
+        L10nKey::UsageCommandSessionHelp => {
+            "Explicitly copy one session cookie as name=value from an authorized Command Code login request, not an API key or the entire Cookie header. It is saved only after api.commandcode.ai verifies the same user as the key and returns enhancement data. Cookie names and subscription.userId are not assumed."
+        }
+        L10nKey::UsageApiSource => "API key",
         L10nKey::UsageSessionSource => "Private platform · manual session",
         L10nKey::UsageBrowserSource => "Private platform · browser LocalStorage",
-        L10nKey::UsageApiKey => "DeepSeek API key",
+        L10nKey::UsageApiKey => "API key",
         L10nKey::UsageSessionInput => "Platform userToken or Harness grant",
         L10nKey::UsageSessionHelp => {
             "Copy userToken from platform.deepseek.com LocalStorage (raw value or userToken JSON), or paste Harness grant JSON with version, token and issuer. Cookies and official API keys are rejected. Only the required token enters the system credential store after validation."
@@ -431,7 +477,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Access to the selected source was denied. Background refresh never requests permission. Check access or enter the session manually."
         }
         L10nKey::UsageBrowserMissing => {
-            "The selected profile or platform userToken is missing. Sign in with that profile and import again."
+            "The selected profile or provider session is missing. Sign in with that profile and import again."
         }
         L10nKey::UsageBrowserUnsupported => {
             "This platform or browser storage format is unsupported. Enter the session manually."
@@ -473,7 +519,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageAvailable => "Provider reports sufficient balance for API calls",
         L10nKey::UsageUnavailable => "Provider reports insufficient balance for API calls",
         L10nKey::UsageOldSnapshot => "Previous snapshot — not a current successful query",
-        L10nKey::UsageUnknown => "Balance unknown",
+        L10nKey::UsageUnknown => "Unknown",
         L10nKey::UsageDisable => "Pause refresh",
         L10nKey::UsageEnable => "Enable refresh",
         L10nKey::UsageOpen => "Open usage",

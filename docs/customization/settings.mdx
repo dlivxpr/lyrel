@@ -172,7 +172,7 @@ SSH 主机单独保存在同一目录下的 `servers.json`。[servers.json →](
 
 ## DeepSeek 用量账户
 
-从**设置 → 用量**进入，或搜索 `DeepSeek`、余额、会话、浏览器、`LocalStorage`。点击**添加账户…**，输入便于区分的名称，在 **DeepSeek 认证来源**选择官方 API key、手工平台会话或浏览器 LocalStorage，再点击**验证并保存**。
+从**设置 → 用量**进入，或搜索 `DeepSeek`、`Kimi`、`Command Code`、余额、会话、浏览器、`LocalStorage`。点击**添加账户…**，输入便于区分的名称，选择**服务商**与**认证来源**，再点击**验证并保存**。DeepSeek 支持官方 API key、手工平台会话或浏览器 LocalStorage。
 lyrel 从桌面本机请求 [DeepSeek 官方余额接口](https://api-docs.deepseek.com/api/get-user-balance)：`GET https://api.deepseek.com/user/balance`，认证为 `Authorization: Bearer <API key>`。仅验证成功才写入系统凭据库；不会读取智能体或远端机器的密钥，不导入 vortex 数据。
 
 余额保留接口返回的 CNY／USD 金额字符串，分别显示总余额、赠送余额、充值余额与更新时间，不换算币种、不伪造百分比。接口不提供用户姓名、邮箱、账单周期或重置时间，因此页面使用自定义名称及稳定的本地账户 ID 区分账户，不冒称已确认服务商用户身份。
@@ -200,3 +200,33 @@ Windows／macOS 的 Chromium 系支持现行 LevelDB LocalStorage；恢复在内
 浏览器 token 只在请求期间驻留内存，材料类型不能序列化或调试输出，离开请求后释放；不写系统凭据库、配置、快照、日志或临时文件。持久化仅含浏览器、profile ID／显示名称，以及路径和原 token 的 SHA-256 绑定指纹，不含原始路径或 token。每次刷新重新读取同一 profile，后台从不请求系统权限；来源或 token 改变时保守要求主动重新导入，无法确认同一服务商身份时绝不静默接受另一账户。
 
 真实浏览器导入需要用户对目标浏览器、profile 与平台账户的明确授权。本次开发只使用临时 LevelDB／SQLite 样本和回环 HTTP，未获读取真实浏览器及查询真实 DeepSeek 平台账户的授权；Windows／macOS 实际浏览器、系统凭据库与真实平台查询仍须分别验收。
+
+## Kimi Code 与 Command Code
+
+两家账户沿用上述桌面本机账户、凭据库、代理、失败替换保护与页面可见期间刷新生命周期。认证来源不会因当前 SSH 工作区、读取失败或接口失败而改变。API-key 用量接口均为第一方客户端使用的私有接口，可能随服务商版本变化；本地受控响应测试不等于已通过真实账户验收。
+
+### Kimi Code
+
+选择 **Kimi Code** 后可使用 API key、手工网页会话或明确选择的浏览器 LocalStorage。API key 固定请求 `GET https://api.kimi.com/coding/v1/usages` 与 `/me`；不是 Kimi Open Platform 的推理余额接口。按第一方 [`@moonshot-ai/kimi-code@2.2.0`](https://unpkg.com/@moonshot-ai/kimi-code@2.2.0/dist/main.mjs) 的字段，分别保留 `limit_5h`、`limit_7d`、`limit_month_total`、`limit_month_code`，展示已用／剩余百分比与各自重置时间；缺失项保留未知，不推导为零或完全可用。
+
+网页会话只发送到 `https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats`，该方法与字段已在[第一方 request descriptor](https://statics.moonshot.cn/kimi-web-seo/assets/request-zVfD9fT_.js) 与网页调用点核实；不沿用第三方旧 `GetUsages` 假设，也不将会话改投 API-key 端点。手工输入接受裸 `access_token`、`access_token=…`、Bearer 值或仅含 `access_token`／可选 `msh_user_id` 的 JSON，不接收整段含刷新 token 的存储导出。认证验证成功后仅保存所需 access token。
+
+浏览器先选品牌与 profile，再主动验证；仅读取精确 origin `https://www.kimi.com` 的 `access_token` 与可选 `msh_user_id`。第一方网页 token 模块证据为 [CN token module](https://statics.moonshot.cn/kimi-web-seo/assets/token-MisPoNr1.js)。不读取 `refresh_token`、不刷新浏览器登录态、不读 `kimi-auth` Cookie、不切换到另一个 profile。缺少可核实身份时明确未知，不以本地显示名称冒充已确认身份。浏览器材料不入凭据库或元数据；来源 token 或身份改变后需主动重新导入。
+
+API-key `boosterWallet` 与四类配额分开显示。第一方 CLI 只将 `balance.amount`／`amountLeft` 除以 `1e6` 得到“分”（不足一分的正值按一分展示），再按币种显示金额；`monthlyChargeLimit.priceInCents` 与 `monthlyUsed.priceInCents` 本身已经是分，绝不再次除以 `1e6`。加油包余额／总额与启用的月度支出限制、月度已用分别展示；缺失余额保留未知，不照搬上游 CLI 的零值兜底。
+
+网页返回的 Kimi／Code 5 小时与 7 天窗口独立显示，订阅余额、赠送余额、加油包钱包保留各自口径、名称与到期时间；不把余额到期时间冒充窗口重置时间，也不把不同池或币种相加。`overdrawn` 原样作为超额状态呈现，不以成功请求掩盖服务商超额。
+
+网页 `Balance.amount`／`amount_left` 的 int64 原值及 `unit` 枚举另外显示，不经浮点转换、不猜测定点位数；`UNIT_COUNT`、`UNIT_CREDIT`、`UNIT_CURRENCY` 与未知单位不能混并。第一方网页本身主要消费已用比例，未给出这些原始字段与历史费用间的换算契约，因此原样展示而不把它们冒称为可直接相加的 Credit 或货币余额。
+
+### Command Code
+
+API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com/command-code@1.84.0/dist/cli.mjs) 请求 `https://api.commandcode.ai/alpha/whoami?limits=1`，并对返回的可选组织请求 `/alpha/billing/credits?orgId=…` 与 `/alpha/billing/subscriptions?orgId=…`，再用订阅的 `currentPeriodStart` 请求 `/alpha/usage/summary?orgId=…&since=…`。服务商用户身份、套餐、月度周期、组织限制与各窗口重置分别展示；月度 Credit、购买 Credit、免费 Credit、5 小时／周滚动窗口、当期费用／请求数及 Sandbox 分钟不相加、不折算为历史费用。滚动窗口与购买 Credit 的规则见[第一方用量限制说明](https://commandcode.ai/docs/resources/usage-limits)。
+
+已添加 Command Code API-key 账户后，点击**手工会话增强…**，从你已授权的该站登录请求中明确复制一个会话 Cookie 的 `name=value`。不猜 Cookie 名称，不接受整段 Cookie、cURL 或 API key 代替会话。先向 `GET https://api.commandcode.ai/auth/get-session` 验证会话身份，只有 `user.id` 与主要 API-key `whoami.user.id` 相同时才查询 `GET https://api.commandcode.ai/internal/billing/subscriptions` 并合并套餐／周期。不会凭空假设订阅响应有 `userId`。两个请求均仅发送该 Cookie，不发送 API key。
+
+身份端点与基址来自[第一方 auth client](https://commandcode.ai/assets/auth-client-DR7oY-YF.js) 的 `baseURL=https://api.commandcode.ai/auth` 及 [root 会话身份读取](https://commandcode.ai/assets/root-CycwDi3N.js)；账务 endpoint、GET、Cookie 凭据与 `{success,data}` 包装来自[第一方常量](https://commandcode.ai/assets/constants-oAoFBSr8.js)及[第一方订阅 hook](https://commandcode.ai/assets/use-legacy-pro-status-B1iLcEZv.js)。私有接口不等于公开第三方支持保证。
+
+手工增强仅在身份与账务查询均成功后保存到独立系统凭据槽；失败、失配或保存失败不覆盖主要 API key 或旧增强凭据。刷新增强失败单独显示，仍展示成功查询的主要额度；移除只删除该账户自己的主要／增强槽。浏览器 Cookie 自动导入另属 #17，本票不读取真实 Cookie 或绕过系统保护。
+
+真实服务商账户、Windows／macOS 系统凭据库与真实浏览器读取均未获本票授权，因此仍为未验收项；没有发送服务商认证请求，没有读取用户真实浏览器或申请系统权限。

@@ -356,17 +356,61 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavAbout => "关于",
         L10nKey::SettingsNavUsage => "用量",
         L10nKey::UsageSearchKeywords => {
-            "DeepSeek 余额 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 浏览器 profile LocalStorage userToken"
+            "Kimi Command Code DeepSeek 余额 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 浏览器 profile LocalStorage userToken access_token"
         }
         L10nKey::UsageScope => "桌面全局查询账户，独立于 SSH 机器，不读取智能体密钥。",
         L10nKey::UsageOfficial => {
             "官方 API：GET https://api.deepseek.com/user/balance · Bearer API key。接口不返回用户身份或重置周期；下方名称和 ID 标识本地查询账户。"
         }
-        L10nKey::UsageSource => "DeepSeek 认证来源",
-        L10nKey::UsageApiSource => "官方 API key",
+        L10nKey::UsageSource => "认证来源",
+        L10nKey::UsageProvider => "服务商",
+        L10nKey::UsageKimiDisclosure => {
+            "私有用量接口：API key 仅请求 api.kimi.com/coding/v1/usages 与 /me；网页会话仅请求 www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats。接口可能变更，不将网页登录态回退到 API-key 端点。"
+        }
+        L10nKey::UsageKimiHelp => {
+            "从所选 profile 的 https://www.kimi.com LocalStorage 复制 access_token 裸值或 access_token JSON。仅读取 access_token 与可选 msh_user_id，不读取 refresh_token 或 Cookie。浏览器材料仅在请求期驻留内存；手工 token 验证后保存。"
+        }
+        L10nKey::UsageCommandDisclosure => {
+            "私有接口：API key 仅发送至 api.commandcode.ai 的 /alpha/whoami、/alpha/billing/credits、/alpha/billing/subscriptions 与 /alpha/usage/summary。手工会话仅请求 /auth/get-session 核对身份及 /internal/billing/subscriptions；增强失败不影响主要来源。"
+        }
+        L10nKey::UsageEnhance => "手工会话增强…",
+        L10nKey::UsageEnhancementFailed => "会话增强未生效；API-key 主要用量仍可用",
+        L10nKey::UsageIdentity => "服务商身份",
+        L10nKey::UsagePlan => "套餐",
+        L10nKey::UsageRemaining => "剩余",
+        L10nKey::UsageReset => "重置／周期结束",
+        L10nKey::UsageFiveHour => "5 小时窗口",
+        L10nKey::UsageWeekly => "周窗口",
+        L10nKey::UsageMonthlyTotal => "月度总配额",
+        L10nKey::UsageMonthlyCode => "月度代码配额",
+        L10nKey::UsageMonthly => "月度 Credit",
+        L10nKey::UsagePurchased => "购买 Credit",
+        L10nKey::UsageFree => "免费 Credit",
+        L10nKey::UsageBooster => "加油包钱包",
+        L10nKey::UsageCoding => "Coding 配额（周期以上游返回为准）",
+        L10nKey::UsageRequests => "次",
+        L10nKey::UsageUsed => "已用",
+        L10nKey::UsageLimit => "额度",
+        L10nKey::UsageIdentityMismatch => {
+            "会话与 API key 属于不同用户，增强未保存；主要认证保持不变。"
+        }
+        L10nKey::UsageCodeFiveHour => "代码 5 小时窗口",
+        L10nKey::UsageCodeWeekly => "代码周窗口",
+        L10nKey::UsageBoosterMonthly => "加油包月度支出限制",
+        L10nKey::UsageExpires => "到期",
+        L10nKey::UsageRawBalance => "原始余额（按返回单位，未折算）",
+        L10nKey::UsageOverdrawn => "服务商报告账户已超额",
+        L10nKey::UsageBillingUsage => "账单周期用量费用",
+        L10nKey::UsageRequestCount => "周期请求数",
+        L10nKey::UsageSandboxMinutes => "Sandbox 分钟数",
+        L10nKey::UsageOrganizationLimit => "组织限制",
+        L10nKey::UsageCommandSessionHelp => {
+            "从你已授权的 Command Code 登录请求中，明确复制一个会话 Cookie 的 name=value（不是 API key，也不是整段 Cookie）。仅在 api.commandcode.ai 验证会话用户与 API key 用户相同、并成功查询增强后保存；不假设 Cookie 名称或 subscription.userId。"
+        }
+        L10nKey::UsageApiSource => "API key",
         L10nKey::UsageSessionSource => "私有平台 · 手工会话",
         L10nKey::UsageBrowserSource => "私有平台 · 浏览器 LocalStorage",
-        L10nKey::UsageApiKey => "DeepSeek API 密钥",
+        L10nKey::UsageApiKey => "API key",
         L10nKey::UsageSessionInput => "平台 userToken 或 Harness grant",
         L10nKey::UsageSessionHelp => {
             "从 platform.deepseek.com 的 LocalStorage 复制 userToken（裸值或 userToken JSON）；也可粘贴带 version、token、issuer 的 Harness grant JSON。拒绝 Cookie 和官方 API key。验证后仅将必要 token 存入系统凭据库。"
@@ -390,7 +434,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "系统拒绝读取所选来源。后台不会申请权限；请检查访问权限或手工输入会话。"
         }
         L10nKey::UsageBrowserMissing => {
-            "所选 profile 或平台 userToken 不存在。请在该 profile 登录后重新导入。"
+            "所选 profile 或该服务商会话不存在。请在该 profile 登录后重新导入。"
         }
         L10nKey::UsageBrowserUnsupported => "当前平台或浏览器存储格式不支持导入，请手工输入会话。",
         L10nKey::UsageBrowserChanged => {
@@ -430,7 +474,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageAvailable => "服务商报告余额足以调用 API",
         L10nKey::UsageUnavailable => "服务商报告余额不足以调用 API",
         L10nKey::UsageOldSnapshot => "旧快照，并非本次查询成功结果",
-        L10nKey::UsageUnknown => "余额未知",
+        L10nKey::UsageUnknown => "未知",
         L10nKey::UsageDisable => "停用刷新",
         L10nKey::UsageEnable => "启用刷新",
         L10nKey::UsageOpen => "打开用量",
