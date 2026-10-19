@@ -103,14 +103,42 @@ fn install(
     });
     id
 }
+fn reveal(vcx: &mut VisualTestContext, id: &str, region: &str) {
+    for step in 0..20 {
+        let visible = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.find(id.to_string()).visible()
+        });
+        if visible { return; }
+        vcx.update(|window, cx| {
+            window.scroll(region.to_string(), gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                gpui_kit::px(0.), gpui_kit::px(if step == 0 { 10000. } else { -240. }),
+            )), cx);
+        });
+        vcx.run_until_parked();
+    }
+    panic!("usage control {id} is unreachable through {region}");
+}
 fn click(vcx: &mut VisualTestContext, id: &str) {
-    vcx.update(|window, cx| {
-        window.render_frame(cx);
-        window.click(id.to_string(), cx);
-    });
+    // Most existing scenarios start with a DeepSeek account. Use its actual
+    // provider entry; provider-specific scenarios still exercise the form picker.
+    let id = if id == "usage-add" { "usage-add-DeepSeek" } else { id };
+    for prefix in ["usage-rename-", "usage-replace-", "usage-remove-", "usage-enhance-", "usage-toggle-"] {
+        if let Some(account) = id.strip_prefix(prefix) {
+            let more = format!("usage-more-{account}");
+            reveal(vcx, &more, "usage-content");
+            vcx.update(|window, cx| window.click(more, cx));
+            vcx.run_until_parked();
+            break;
+        }
+    }
+    let region = if ["usage-source", "usage-provider", "usage-browser", "usage-profile", "usage-cookie-name"].contains(&id) { "usage-form-body" } else { "usage-content" };
+    reveal(vcx, id, region);
+    vcx.update(|window, cx| window.click(id.to_string(), cx));
     vcx.run_until_parked();
 }
 fn type_into(vcx: &mut VisualTestContext, id: &str, value: &str) {
+    reveal(vcx, id, "usage-form-body");
     vcx.update(|window, cx| {
         window.click(id.to_string(), cx);
         window.press("secondary-a", cx);
@@ -585,13 +613,13 @@ fn escape_cancels_the_usage_form_without_closing_settings_or_persisting_a_key(
     vcx.update(|w, cx| {
         w.render_frame(cx);
         for _ in 0..16 {
-            if w.find("usage-add").focused() == Some(true) {
+            if w.find("usage-add-Kimi").focused() == Some(true) {
                 break;
             }
             w.press("tab", cx);
         }
         assert_eq!(
-            w.find("usage-add").focused(),
+            w.find("usage-add-Kimi").focused(),
             Some(true),
             "Add is reachable through the native Tab order"
         );
@@ -601,6 +629,15 @@ fn escape_cancels_the_usage_form_without_closing_settings_or_persisting_a_key(
     app.update_in(&mut vcx, |a, _, cx| {
         assert!(a.active_settings().unwrap().usage.read(cx).edit.is_some())
     });
+    // The modal owns Tab even at a narrow viewport; native controls remain named.
+    for _ in 0..12 {
+        vcx.simulate_keystrokes("tab");
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |a, window, cx| {
+            let page = a.active_settings().unwrap().usage.read(cx);
+            assert!(page.form_focus.contains_focused(window, cx));
+        });
+    }
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
     app.update_in(&mut vcx, |a, _, cx| {
@@ -611,8 +648,8 @@ fn escape_cancels_the_usage_form_without_closing_settings_or_persisting_a_key(
     });
     vcx.update(|w, cx| {
         w.render_frame(cx);
-        assert!(w.find("usage-add").visible());
-        assert_eq!(w.find("usage-add").focused(), Some(true));
+        assert!(w.find("usage-add-Kimi").visible());
+        assert_eq!(w.find("usage-add-Kimi").focused(), Some(true));
     });
     assert!(vault.is_empty());
     assert_eq!(http.calls.load(Ordering::SeqCst), 0);
@@ -745,4 +782,40 @@ fn replacing_credentials_commits_the_edited_name_with_the_verified_source(cx: &m
     let saved = Accounts::load(path, vault).unwrap();
     assert_eq!(saved.account(id).unwrap().name, "Replacement name");
     assert_eq!(saved.secret(id).unwrap(), "verified-new-key");
+}
+
+#[gpui_kit::test]
+fn account_overflow_keyboard_opens_a_named_form_and_restores_the_trigger(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, mut vcx) = harness(cx);
+    let http = Arc::new(Http::default());
+    let id = install(&mut vcx, dir.path().join("usage.json"),
+        Arc::new(InMemoryCredentialStore::new()), http.clone(), true).unwrap();
+    open(&app, &mut vcx);
+    let more = format!("usage-more-{id}");
+    reveal(&mut vcx, &more, "usage-content");
+    vcx.update(|window, cx| {
+        for _ in 0..32 {
+            window.render_frame(cx);
+            if window.find(more.clone()).focused() == Some(true) { break; }
+            window.press("tab", cx);
+        }
+        assert_eq!(window.find(more.clone()).focused(), Some(true));
+        window.press("enter", cx);
+    });
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("usage-name").label(), Some(t(L10nKey::UsageName)));
+        assert_eq!(window.find("usage-name").focused(), Some(true));
+    });
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find(more).focused(), Some(true));
+    });
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0);
 }
