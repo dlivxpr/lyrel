@@ -836,6 +836,11 @@ impl LyrelApp {
             };
             (t(section.title()).to_string(), None, content)
         };
+        let data_page = !searching
+            && matches!(
+                section,
+                SettingsSection::Skills | SettingsSection::Statistics | SettingsSection::Usage
+            );
 
         // Up in the title-bar band, where the window's own chrome sits, and
         // not in the page column. Pulled up into that band from the column
@@ -875,27 +880,44 @@ impl LyrelApp {
 
         let notices = self.render_settings_notices(cx);
 
-        let body = v_flex()
-            .id("settings-content")
-            .size_full()
-            .overflow_y_scroll()
-            .when_some(self.active_settings(), |pane, s| {
-                pane.track_scroll(&s.content_scroll)
-            })
-            .child(
-                // A block, not a flex box: as a flex item it would negotiate a
-                // height with the pane and leave most of the page outside the
-                // scroll range.
-                div().w_full().px(px(56.)).pb(px(48.)).child(
-                    v_flex()
-                        .w_full()
-                        .max_w(px(READING_COLUMN * scale))
-                        .gap(px(40.))
-                        .child(header)
-                        .children(notices)
-                        .child(content),
-                ),
-            );
+        let body = if data_page {
+            v_flex()
+                .id("settings-content")
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .w_full()
+                .px_5()
+                .pb_4()
+                .gap_4()
+                .child(header.flex_shrink_0())
+                .children(notices)
+                .child(div().flex_1().min_h_0().min_w_0().relative().child(content))
+                .into_any_element()
+        } else {
+            v_flex()
+                .id("settings-content")
+                .size_full()
+                .overflow_y_scroll()
+                .when_some(self.active_settings(), |pane, s| {
+                    pane.track_scroll(&s.content_scroll)
+                })
+                .child(
+                    // A block, not a flex box: as a flex item it would negotiate a
+                    // height with the pane and leave most of the page outside the
+                    // scroll range.
+                    div().w_full().px(px(56.)).pb(px(48.)).child(
+                        v_flex()
+                            .w_full()
+                            .max_w(px(READING_COLUMN * scale))
+                            .gap(px(40.))
+                            .child(header)
+                            .children(notices)
+                            .child(content),
+                    ),
+                )
+                .into_any_element()
+        };
         let main = v_flex()
             .flex_1()
             .min_w_0()
@@ -912,12 +934,16 @@ impl LyrelApp {
                     .children(back),
             )
             .when_some(self.active_settings(), |pane, s| {
-                pane.child(crate::ui::scrollbar::with_inset_vertical_scrollbar(
-                    "settings-content-scrollbar",
-                    body,
-                    &s.content_scroll,
-                    px(SCROLLBAR_WINDOW_INSET),
-                ))
+                if data_page {
+                    pane.child(body)
+                } else {
+                    pane.child(crate::ui::scrollbar::with_inset_vertical_scrollbar(
+                        "settings-content-scrollbar",
+                        body,
+                        &s.content_scroll,
+                        px(SCROLLBAR_WINDOW_INSET),
+                    ))
+                }
             });
 
         let root = div()
