@@ -1,5 +1,11 @@
 //! 所选机器的原生历史总览；所有文件与聚合离开 GPUI 线程。
 mod analysis;
+mod management;
+#[cfg(test)]
+mod management_tests;
+mod storage;
+#[cfg(test)]
+mod workflow_tests;
 use super::kit::{Tk, fs};
 use super::shell::MenuEntry;
 use super::*;
@@ -25,7 +31,9 @@ pub(crate) struct StatisticsState {
     cache: Arc<Mutex<StatisticsCache>>,
     results: HashMap<(HostId, Option<&'static str>), Presentation>,
     analysis: analysis::AnalysisState,
+    management: management::Management,
 }
+#[derive(Clone)]
 struct Presentation {
     snapshot: Snapshot,
     window: DateWindow,
@@ -33,6 +41,7 @@ struct Presentation {
     previous: Option<Totals>,
     analysis: Option<statistics::analysis::Analysis>,
     analysis_error: Option<String>,
+    bindings: Vec<statistics::sources::SourceBinding>,
 }
 impl StatisticsState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
@@ -49,6 +58,7 @@ impl StatisticsState {
             cache: Arc::new(Mutex::new(StatisticsCache::default())),
             results: HashMap::new(),
             analysis: analysis::AnalysisState::new(cx),
+            management: management::Management::new(window, cx),
         }
     }
     pub(crate) fn invalidate(&mut self) {
@@ -105,6 +115,9 @@ fn issue_text(reason: &str) -> String {
 }
 impl LyrelApp {
     pub(crate) fn load_statistics(&mut self, cx: &mut Context<Self>) {
+        if !self.ensure_statistics_settings(cx) {
+            return;
+        }
         let launch = cx.global::<Config>().agent_launch.clone();
         let Some(settings) = self.active_settings() else {
             return;
@@ -113,6 +126,9 @@ impl LyrelApp {
             return;
         }
         let state = &settings.statistics;
+        if state.management.busy {
+            return;
+        }
         let custom = if state.period == Period::Custom {
             let start = chrono::NaiveDate::parse_from_str(
                 state.start.read(cx).value().as_str(),
@@ -147,6 +163,7 @@ impl LyrelApp {
         };
         let host_id = state.host;
         let agent = state.agent;
+        let stored = state.management.stored.clone();
         let mut opencode_sources = Vec::new();
         if agent.is_none_or(|agent| agent == "opencode") {
             use lyrel_core::host::session_operations::{
@@ -250,11 +267,25 @@ impl LyrelApp {
                         sources.extend(opencode_sources);
                     }
                 }
+                let resolved = stored.sources.resolve_for_host(host, sources, &launch);
+                let sources: Vec<_> = resolved
+                    .sources
+                    .into_iter()
+                    .filter(|source| agent.is_none_or(|a| a == source.agent()))
+                    .collect();
+                let bindings = resolved.bindings;
+                for failure in resolved.issues {
+                    discovery_errors.push((
+                        "source",
+                        format!("{}: {}", failure.binding.selector, failure.reason),
+                    ));
+                }
                 let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
                 let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
                 for (name, error) in discovery_errors {
                     snapshot = snapshot.with_issue(name.into(), error);
                 }
+                let snapshot = snapshot.with_pricing(stored.pricing);
                 let totals = snapshot.aggregate(&window);
                 let previous = window.previous().map(|w| snapshot.aggregate(w));
                 let analysis = snapshot.analyze(
@@ -274,6 +305,7 @@ impl LyrelApp {
                     previous,
                     analysis,
                     analysis_error,
+                    bindings,
                 })
             },
             move |this, result, cx| {
@@ -309,6 +341,7 @@ impl LyrelApp {
     fn select_statistics_host(&mut self, host: HostId, cx: &mut Context<Self>) {
         if let Some(s) = self.active_settings_mut() {
             s.statistics.host = host;
+            s.statistics.management.reset_scope();
             s.statistics.invalidate();
         }
         self.load_statistics(cx);
@@ -427,6 +460,7 @@ impl LyrelApp {
             )
             .into_any_element(),
         ];
+        rows.push(self.render_statistics_management(cx));
         if state.agent.is_none_or(|agent| agent == "hermes") {
             rows.push(
                 div()
@@ -583,6 +617,37 @@ impl LyrelApp {
                     ))
                     .into_any_element(),
             );
+            for (currency, estimate) in totals.estimated_costs() {
+                rows.push(
+                    div()
+                        .text_sm()
+                        .text_color(tk.k5)
+                        .child(t_fmt(
+                            L10nKey::StatisticsPriceEstimate,
+                            &[
+                                ("currency", currency),
+                                (
+                                    "custom",
+                                    &estimate
+                                        .custom
+                                        .map(|v| format!("{v:.6}"))
+                                        .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
+                                ),
+                                (
+                                    "catalog",
+                                    &estimate
+                                        .catalog
+                                        .map(|v| format!("{v:.6}"))
+                                        .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
+                                ),
+                                ("priced", &estimate.priced_tokens.to_string()),
+                                ("unpriced", &estimate.unpriced_tokens.to_string()),
+                                ("partial", &estimate.partial_calls.to_string()),
+                            ],
+                        ))
+                        .into_any_element(),
+                );
+            }
             if let Some(previous) = &p.previous {
                 let change = totals
                     .token_change(previous)
