@@ -404,12 +404,29 @@ fn unreadable_skill_preserves_other_results_and_reports_actual_permission_denial
 #[test]
 fn explicit_native_provider_policy_is_not_misreported_as_a_default_opt_out() {
     use lyrel_core::{core::agent_hooks::HookAgent, skills::DiscoveryState};
-    let temp=tempfile::tempdir().unwrap();let home=temp.path().join("home");let project=temp.path().join("project");
-    skill(&home.join(".claude/skills/foreign"),"foreign","Explicit omp provider");
-    let config=home.join(".omp/agent/config.yml");fs::create_dir_all(config.parent().unwrap()).unwrap();
-    let original="enabledProviders:\n  - claude\nskills:\n  enableClaudeUser: false\n";fs::write(&config,original).unwrap();
-    let host=LocalHost::new();let result=scan(&*host,&fixture(&home,&project)).unwrap();
-    let skill=result.filtered("Explicit omp provider",None).next().unwrap();
-    assert!(skill.sources().iter().any(|s|s.agent()==HookAgent::OhMyPi&&s.state()==DiscoveryState::Unknown));
-    assert_eq!(fs::read_to_string(config).unwrap(),original);
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    skill(
+        &home.join(".claude/skills/foreign"),
+        "foreign",
+        "Explicit omp provider",
+    );
+    let config = home.join(".omp/agent/config.yml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let original = "enabledProviders:\n  - claude\nskills:\n  enableClaudeUser: false\n";
+    fs::write(&config, original).unwrap();
+    let host = LocalHost::new();
+    let result = scan(&*host, &fixture(&home, &project)).unwrap();
+    let skill = result
+        .filtered("Explicit omp provider", None)
+        .next()
+        .unwrap();
+    assert!(
+        skill
+            .sources()
+            .iter()
+            .any(|s| s.agent() == HookAgent::OhMyPi && s.state() == DiscoveryState::Unknown)
+    );
+    assert_eq!(fs::read_to_string(config).unwrap(), original);
 }
