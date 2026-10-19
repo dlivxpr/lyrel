@@ -147,7 +147,7 @@ pub mod feature {
     pub const CONTROL: &str = "control";
     pub const HOST_RPC: &str = "host-rpc";
     /// Raw symbolic-link/junction targets; older peers must be upgraded first.
-    pub const READ_LINK: &str = "read-link";
+    pub const READ_LINK: &str = "host-read-link-v1";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
     /// The peer can say what is running inside one of its panes, and what that
