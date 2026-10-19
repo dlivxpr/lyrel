@@ -1,8 +1,17 @@
 //! 原生历史的结构化统计 seam；扫描只缓存计量元数据，不保留对话正文。
+pub mod analysis;
+mod kimi;
+#[cfg(test)]
+mod kimi_tests;
+pub use kimi::discover_kimi;
 mod omp;
+mod opencode;
+pub use opencode::discover_opencode;
+mod pi;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
+pub use pi::discover_pi;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -14,11 +23,27 @@ const MAX_DIRS: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SCAN_BYTES: u64 = 256 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
     root: PathBuf,
     scope: String,
     agent: String,
+    #[serde(skip)]
+    opencode_request: Option<Box<crate::host::session_operations::SessionOperation>>,
+    #[serde(default)]
+    max_depth: Option<u8>,
+    #[serde(default)]
+    discovery_issue: Option<String>,
+}
+impl std::fmt::Debug for Source {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Source")
+            .field("root", &self.root)
+            .field("scope", &self.scope)
+            .field("agent", &self.agent)
+            .finish()
+    }
 }
 impl Source {
     pub fn omp(root: PathBuf, scope: impl Into<String>) -> Self {
@@ -26,6 +51,29 @@ impl Source {
             root,
             scope: scope.into(),
             agent: "omp".into(),
+            opencode_request: None,
+            max_depth: None,
+            discovery_issue: None,
+        }
+    }
+    pub fn kimi(root: PathBuf, scope: impl Into<String>) -> Self {
+        Self {
+            root,
+            scope: scope.into(),
+            agent: "kimi".into(),
+            opencode_request: None,
+            max_depth: None,
+            discovery_issue: None,
+        }
+    }
+    pub fn pi(root: PathBuf, scope: impl Into<String>) -> Self {
+        Self {
+            root,
+            scope: scope.into(),
+            agent: "pi".into(),
+            opencode_request: None,
+            max_depth: Some(0),
+            discovery_issue: None,
         }
     }
     pub fn root(&self) -> &std::path::Path {
@@ -44,10 +92,15 @@ pub struct Tokens {
     input: Option<u64>,
     output: Option<u64>,
     cache_read: Option<u64>,
+    #[serde(default)]
+    reasoning: Option<u64>,
     cache_write: Option<u64>,
     total: Option<u64>,
 }
 impl Tokens {
+    pub fn reasoning(&self) -> Option<u64> {
+        self.reasoning
+    }
     pub fn input(&self) -> Option<u64> {
         self.input
     }
@@ -74,6 +127,7 @@ impl Tokens {
         self.input = sum(self.input, other.input, first);
         self.output = sum(self.output, other.output, first);
         self.cache_read = sum(self.cache_read, other.cache_read, first);
+        self.reasoning = sum(self.reasoning, other.reasoning, first);
         self.cache_write = sum(self.cache_write, other.cache_write, first);
         self.total = sum(self.total, other.total, first);
     }
@@ -81,11 +135,19 @@ impl Tokens {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageRecord {
     id: String,
+    #[serde(default)]
+    fingerprint: Option<String>,
     timestamp: i64,
     provider: String,
     model: String,
     tokens: Tokens,
     recorded_usd: Option<f64>,
+    #[serde(default)]
+    coverage_start: Option<i64>,
+    #[serde(default)]
+    estimated_usd: Option<f64>,
+    #[serde(default)]
+    time_unknown: bool,
 }
 impl UsageRecord {
     pub fn timestamp(&self) -> i64 {
@@ -103,6 +165,28 @@ impl UsageRecord {
     pub fn recorded_usd(&self) -> Option<f64> {
         self.recorded_usd
     }
+    pub fn coverage_start(&self) -> Option<i64> {
+        self.coverage_start
+    }
+    pub fn estimated_usd(&self) -> Option<f64> {
+        self.estimated_usd
+    }
+    fn overlaps(&self, window: &DateWindow) -> bool {
+        if self.time_unknown {
+            return true;
+        }
+        window.start().is_none_or(|s| self.timestamp >= s)
+            && window
+                .end()
+                .is_none_or(|e| self.coverage_start.unwrap_or(self.timestamp) < e)
+    }
+    fn covered_by(&self, window: &DateWindow) -> bool {
+        if self.time_unknown {
+            return window.start().is_none() && window.end().is_none();
+        }
+        window.contains(self.timestamp)
+            && window.contains(self.coverage_start.unwrap_or(self.timestamp))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeSession {
@@ -111,6 +195,8 @@ pub struct NativeSession {
     timestamp: i64,
     project: Option<String>,
     records: Vec<UsageRecord>,
+    #[serde(default)]
+    activity: Vec<i64>,
 }
 impl NativeSession {
     pub fn id(&self) -> &str {
@@ -130,6 +216,8 @@ struct FileFacts {
     child: bool,
     observed: i64,
     session: NativeSession,
+    #[serde(default)]
+    metadata_stamp: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanIssue {
@@ -153,6 +241,9 @@ pub struct Snapshot {
     issues: Vec<ScanIssue>,
 }
 impl Snapshot {
+    pub fn report_issue(&mut self, path: PathBuf, reason: String) {
+        self.issues.push(ScanIssue { path, reason });
+    }
     pub fn host(&self) -> u64 {
         self.host
     }
@@ -168,91 +259,164 @@ impl Snapshot {
     pub fn is_complete(&self) -> bool {
         self.issues.is_empty()
     }
+    /// Attach a failed source discovery without discarding readable agents.
+    pub fn with_issue(mut self, path: PathBuf, reason: impl Into<String>) -> Self {
+        self.issues.push(ScanIssue {
+            path,
+            reason: reason.into(),
+        });
+        self
+    }
     pub fn aggregate(&self, window: &DateWindow) -> Totals {
         let mut out = Totals::default();
-        let mut sessions = HashSet::new();
-        let mut records = HashMap::new();
-        // 只有可解析的原生 parentSession 链才允许跨会话消除继承记录。
+        let mut main_sessions = 0;
+        let ambiguous = self.visit_usage(
+            None,
+            |file| {
+                if file.active_in(window) {
+                    main_sessions += 1;
+                }
+            },
+            |_, record| {
+                if record.covered_by(window) {
+                    out.add_record(record);
+                } else if record.overlaps(window) {
+                    out.complete = false;
+                }
+            },
+        );
+        out.complete &= self.is_complete() && ambiguous == 0;
+        out.ambiguous_records = ambiguous;
+        out.main_sessions = main_sessions;
+        out
+    }
+
+    // One canonical stream for overview and all analysis. Copies and inherited records
+    // are eliminated before consumers filter by date/model/project. Host is snapshot-wide.
+    fn visit_usage<'a>(
+        &'a self,
+        agent: Option<&str>,
+        mut session: impl FnMut(&'a FileFacts),
+        mut usage: impl FnMut(&'a FileFacts, &'a UsageRecord),
+    ) -> u64 {
         let mut identities = HashMap::new();
         for file in &self.files {
-            identities.insert(
-                (file.source.scope.as_str(), file.session.id.as_str()),
-                file.session.id.as_str(),
-            );
+            let source = (file.source.agent.as_str(), file.source.scope.as_str());
+            identities.insert((source, file.session.id.as_str()), file.session.id.as_str());
             if let Some(path) = file.path.to_str() {
-                identities.insert((file.source.scope.as_str(), path), file.session.id.as_str());
+                identities.insert((source, path), file.session.id.as_str());
             }
         }
         let mut parents = HashMap::new();
         for file in &self.files {
+            let source = (file.source.agent.as_str(), file.source.scope.as_str());
             if let Some(parent) = file
                 .session
                 .parent
                 .as_deref()
-                .and_then(|p| identities.get(&(file.source.scope.as_str(), p)))
+                .and_then(|p| identities.get(&(source, p)))
             {
-                parents.insert(
-                    (file.source.scope.as_str(), file.session.id.as_str()),
-                    *parent,
-                );
+                parents.insert((source, file.session.id.as_str()), *parent);
             }
         }
-        for file in &self.files {
-            let scope = file.source.scope.as_str();
-            let session = &file.session;
-            let mut lineage = session.id.as_str();
+        let mut sessions = HashSet::new();
+        let mut records: HashMap<_, (&UsageRecord, Vec<&UsageRecord>)> = HashMap::new();
+        let mut ambiguous = 0;
+        // Prefer original roots for inherited record attribution, independently of directory order.
+        let mut files: Vec<_> = self.files.iter().collect();
+        files.sort_by(|a, b| {
+            (a.session.parent.is_some(), a.child, &a.path).cmp(&(
+                b.session.parent.is_some(),
+                b.child,
+                &b.path,
+            ))
+        });
+        for file in files {
+            if agent.is_some_and(|a| a != file.source.agent) {
+                continue;
+            }
+            let source = (file.source.agent.as_str(), file.source.scope.as_str());
+            if !file.child && sessions.insert((source, file.session.id.as_str())) {
+                session(file);
+            }
+            let mut lineage = file.session.id.as_str();
             let mut visited = HashSet::new();
-            while visited.insert(lineage) {
-                match parents.get(&(scope, lineage)) {
-                    Some(parent) => lineage = parent,
-                    None => break,
+            while let Some(parent) = parents.get(&(source, lineage)) {
+                if !visited.insert(lineage) {
+                    break;
                 }
+                lineage = parent;
             }
-            let active = window.contains(session.timestamp)
-                || session
-                    .records
-                    .iter()
-                    .any(|r| r.timestamp >= session.timestamp && window.contains(r.timestamp));
-            if active && !file.child {
-                sessions.insert((scope, session.id.as_str()));
-            }
-            for record in &session.records {
-                if !window.contains(record.timestamp) {
-                    continue;
-                }
-                // IDs are short and only meaningful within the verified lineage and scope.
-                let key = (scope, lineage, record.id.as_str());
-                if let Some(old) = records.insert(key, record) {
-                    if old != record {
-                        out.ambiguous_records += 1;
+            for record in &file.session.records {
+                match records.entry((source, lineage, record.id.as_str())) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert((record, Vec::new()));
                     }
-                    continue;
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        let (first, variants) = entry.get_mut();
+                        if *first == record || variants.contains(&record) {
+                            continue;
+                        }
+                        ambiguous += 1;
+                        variants.push(record);
+                    }
                 }
-                out.tokens.add(&record.tokens, out.calls == 0);
-                out.calls += 1;
-                if let Some(cost) = record.recorded_usd {
-                    out.recorded_usd = Some(out.recorded_usd.unwrap_or(0.) + cost);
-                } else {
-                    out.unpriced_calls += 1;
-                }
+                usage(file, record);
             }
         }
-        out.main_sessions = sessions.len() as u64;
-        out.complete = self.is_complete() && out.ambiguous_records == 0;
-        out
+        ambiguous
     }
 }
-#[derive(Clone, Debug, Default)]
+impl FileFacts {
+    fn activity_timestamps(&self) -> impl Iterator<Item = i64> + '_ {
+        std::iter::once(self.session.timestamp)
+            .filter(|timestamp| self.source.agent != "opencode" && *timestamp != i64::MIN)
+            .chain(self.session.activity.iter().copied())
+            .chain(
+                self.session
+                    .records
+                    .iter()
+                    .filter(|r| {
+                        self.source.agent != "opencode"
+                            && !r.time_unknown
+                            && r.timestamp >= self.session.timestamp
+                    })
+                    .map(|r| r.timestamp),
+            )
+    }
+    fn active_in(&self, window: &DateWindow) -> bool {
+        self.activity_timestamps().any(|t| window.contains(t))
+    }
+}
+#[derive(Clone, Debug)]
 pub struct Totals {
     tokens: Tokens,
     recorded_usd: Option<f64>,
+    estimated_usd: Option<f64>,
     unpriced_calls: u64,
     main_sessions: u64,
     calls: u64,
+    cumulative_records: u64,
     ambiguous_records: u64,
     complete: bool,
 }
 impl Totals {
+    fn add_record(&mut self, record: &UsageRecord) {
+        self.tokens.add(&record.tokens, self.calls == 0);
+        self.calls += 1;
+        self.cumulative_records +=
+            u64::from(record.coverage_start.is_some() || record.time_unknown);
+        if let Some(cost) = record.recorded_usd {
+            self.recorded_usd = Some(self.recorded_usd.unwrap_or(0.) + cost);
+        } else if let Some(cost) = record.estimated_usd {
+            self.estimated_usd = Some(self.estimated_usd.unwrap_or(0.) + cost);
+        } else {
+            self.unpriced_calls += 1;
+        }
+    }
+    pub fn estimated_usd(&self) -> Option<f64> {
+        self.estimated_usd
+    }
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
@@ -267,6 +431,9 @@ impl Totals {
     }
     pub fn calls(&self) -> u64 {
         self.calls
+    }
+    pub fn cumulative_records(&self) -> u64 {
+        self.cumulative_records
     }
     pub fn is_complete(&self) -> bool {
         self.complete
@@ -291,9 +458,25 @@ impl Totals {
             .map(|(n, p)| (n as f64 / p as f64 - 1.) * 100.)
     }
 }
+impl Default for Totals {
+    fn default() -> Self {
+        Self {
+            tokens: Tokens::default(),
+            recorded_usd: None,
+            estimated_usd: None,
+            unpriced_calls: 0,
+            main_sessions: 0,
+            calls: 0,
+            cumulative_records: 0,
+            ambiguous_records: 0,
+            complete: true,
+        }
+    }
+}
 #[derive(Default)]
 pub struct StatisticsCache {
-    files: HashMap<(u64, String, PathBuf), (Meta, FileFacts)>,
+    files: HashMap<(u64, String, String, PathBuf), (Meta, FileFacts)>,
+    opencode: HashMap<(u64, String), (Source, Vec<FileFacts>, i64)>,
 }
 
 /// Blocking Host operation. GUI callers dispatch using HostOps. No network pricing.
@@ -311,7 +494,14 @@ pub fn scan(
     }
     let mut snapshot = Snapshot {
         host: host.id().0,
-        sources: sources.to_vec(),
+        sources: sources
+            .iter()
+            .cloned()
+            .map(|mut source| {
+                source.opencode_request = None;
+                source
+            })
+            .collect(),
         updated: chrono::Utc::now().timestamp(),
         files: Vec::new(),
         issues: Vec::new(),
@@ -321,6 +511,34 @@ pub fn scan(
     let mut files = 0;
     let mut bytes = 0;
     for source in sources {
+        if let Some(reason) = &source.discovery_issue {
+            snapshot.report_issue(source.root.clone(), reason.clone());
+            continue;
+        }
+        if source.agent == "opencode" {
+            opencode::scan_source(host, source, &mut snapshot, cache);
+            continue;
+        }
+        if source.agent == "kimi" {
+            kimi::scan_source(
+                host,
+                source,
+                cache,
+                &mut snapshot,
+                &mut seen,
+                &mut dirs,
+                &mut files,
+                &mut bytes,
+            );
+            continue;
+        }
+        if source.agent != "omp" && source.agent != "pi" {
+            snapshot.issues.push(ScanIssue {
+                path: source.root.clone(),
+                reason: format!("unsupported native statistics agent: {}", source.agent),
+            });
+            continue;
+        }
         let exact_file = host.stat(&source.root).is_ok_and(|m| !m.is_dir);
         let initial = if exact_file {
             let value = source.root.to_string_lossy();
@@ -335,14 +553,15 @@ pub fn scan(
             source.root.clone()
         };
         let child_root = if exact_file { &initial } else { &source.root };
-        let root_is_child = host
-            .stat(&PathBuf::from(format!(
-                "{}.jsonl",
-                child_root.to_string_lossy()
-            )))
-            .is_ok_and(|m| !m.is_dir);
-        let mut pending = vec![(initial, root_is_child)];
-        while let Some((path, child)) = pending.pop() {
+        let root_is_child = source.agent == "omp"
+            && host
+                .stat(&PathBuf::from(format!(
+                    "{}.jsonl",
+                    child_root.to_string_lossy()
+                )))
+                .is_ok_and(|m| !m.is_dir);
+        let mut pending = vec![(initial, root_is_child, 0u8)];
+        while let Some((path, child, depth)) = pending.pop() {
             dirs += 1;
             if dirs > MAX_DIRS {
                 snapshot.issues.push(ScanIssue {
@@ -356,10 +575,9 @@ pub fn scan(
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound
                         && path == source.root
-                        && !cache
-                            .files
-                            .keys()
-                            .any(|(id, scope, _)| *id == host.id().0 && *scope == source.scope) =>
+                        && !cache.files.keys().any(|(id, agent, scope, _)| {
+                            *id == host.id().0 && *agent == source.agent && *scope == source.scope
+                        }) =>
                 {
                     continue;
                 }
@@ -384,9 +602,13 @@ pub fn scan(
                     continue;
                 }
                 if entry.is_dir {
+                    if source.max_depth.is_some_and(|limit| depth >= limit) {
+                        continue;
+                    }
                     let sibling = PathBuf::from(format!("{}.jsonl", path.to_string_lossy()));
-                    let nested = child || host.stat(&sibling).is_ok_and(|m| !m.is_dir);
-                    pending.push((path, nested));
+                    let nested = source.agent == "omp"
+                        && (child || host.stat(&sibling).is_ok_and(|m| !m.is_dir));
+                    pending.push((path, nested, depth.saturating_add(1)));
                     continue;
                 }
                 if !entry.name.ends_with(".jsonl") {
@@ -402,7 +624,7 @@ pub fn scan(
                         continue;
                     }
                 };
-                if !seen.insert((source.scope.clone(), path.clone())) {
+                if !seen.insert((source.agent.clone(), source.scope.clone(), path.clone())) {
                     continue;
                 }
                 files += 1;
@@ -414,7 +636,12 @@ pub fn scan(
                     pending.clear();
                     break;
                 }
-                let key = (host.id().0, source.scope.clone(), path.clone());
+                let key = (
+                    host.id().0,
+                    source.agent.clone(),
+                    source.scope.clone(),
+                    path.clone(),
+                );
                 let result = (|| {
                     let meta = host.stat(&path)?;
                     if let Some((old, facts)) = cache.files.get(&key) {
@@ -430,7 +657,16 @@ pub fn scan(
                     }
                     bytes += meta.len;
                     let data = host.read_file(&path, MAX_FILE_BYTES)?;
-                    let session = omp::parse(&data)?;
+                    let session = match source.agent.as_str() {
+                        "omp" => omp::parse(&data)?,
+                        "pi" => pi::parse(&data)?,
+                        _ => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                "unsupported native statistics agent",
+                            ));
+                        }
+                    };
                     Ok((
                         meta,
                         FileFacts {
@@ -439,6 +675,7 @@ pub fn scan(
                             child,
                             observed: snapshot.updated,
                             session,
+                            metadata_stamp: None,
                         },
                     ))
                 })();
@@ -461,23 +698,29 @@ pub fn scan(
         }
     }
     if !snapshot.issues.is_empty() {
-        for ((host_id, scope, path), (_, facts)) in &cache.files {
+        for ((host_id, agent, scope, path), (_, facts)) in &cache.files {
             if *host_id == host.id().0
-                && sources.iter().any(|s| s.scope == *scope)
-                && !snapshot
-                    .files
+                && !host
+                    .stat(path)
+                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                && sources
                     .iter()
-                    .any(|f| f.path == *path && f.source.scope == *scope)
+                    .any(|s| s.agent == *agent && s.scope == *scope)
+                && !snapshot.files.iter().any(|f| {
+                    f.path == *path && f.source.agent == *agent && f.source.scope == *scope
+                })
             {
                 snapshot.files.push(facts.clone());
             }
         }
     }
+    pi::resolve_inheritance(&mut snapshot);
     // Restrict lineage claims rather than silently treating an unresolved parent as reliable.
     for file in &snapshot.files {
         if let Some(parent) = &file.session.parent {
             if !snapshot.files.iter().any(|f| {
-                f.source.scope == file.source.scope
+                f.source.agent == file.source.agent
+                    && f.source.scope == file.source.scope
                     && (f.session.id == *parent || f.path.to_string_lossy() == parent.as_str())
             }) {
                 snapshot.issues.push(ScanIssue {
@@ -495,10 +738,12 @@ pub fn scan(
         }
     }
     if snapshot.issues.is_empty() {
-        cache.files.retain(|(id, scope, path), _| {
+        cache.files.retain(|(id, agent, scope, path), _| {
             *id != host.id().0
-                || !sources.iter().any(|s| s.scope == *scope)
-                || seen.contains(&(scope.clone(), path.clone()))
+                || !sources
+                    .iter()
+                    .any(|s| s.agent == *agent && s.scope == *scope)
+                || seen.contains(&(agent.clone(), scope.clone(), path.clone()))
         });
     }
     Ok(snapshot)

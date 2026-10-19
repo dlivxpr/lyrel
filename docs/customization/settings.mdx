@@ -31,7 +31,7 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
     在明确选择的机器与项目中只读浏览技能，搜索名称与描述，查看实际安装、来源及 SKILL.md。
   </Card>
   <Card title="统计" icon="chart-simple">
-    明确选择本机或已连接远端，查看 omp 原生历史的 Token、记录费用与活跃主会话总览。
+    明确选择本机或已连接远端，查看 omp／pi／Kimi Code／OpenCode 原生历史的 Token、记录费用与活跃主会话总览。
   </Card>
   <Card title="用量" icon="coins">
     DeepSeek 官方 API 余额、私有平台手工会话和所选浏览器 LocalStorage，以及仅页面可见期间的刷新。
@@ -87,10 +87,10 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
 录制已被其他操作使用的键盘快捷键时，会先询问是否接管：**替换**会将快捷键移交给当前操作，**取消**则让两个操作都保持原样。
 离开已编辑的表单时，会提示保存、放弃更改或继续编辑。
 
-## omp 原生历史统计
+## 原生历史统计
 
-从**设置 → 统计**进入，或搜索「统计」「Token」「omp」。先选择本机或已连接远端；
-选择不会随当前 SSH 工作区隐式改变，一次只展示一台机器。
+从**设置 → 统计**进入，或搜索「统计」「Token」「omp」「pi」「Kimi」「OpenCode」。先选择本机或已连接远端；
+选择不会随当前 SSH 工作区隐式改变，一次只展示一台机器。「智能体来源」可选择全部智能体或单个有效来源；一个来源发现失败不会清空其他已读取来源，失败原因显示在来源诊断中。
 范围支持今天、本周、本月、本年、全部与自定义日期（`YYYY-MM-DD`，包含两端）。
 所有日期按桌面本机时区的日历边界解释，星期一为周起点；快照显示时间、时区与实际结果范围。
 本周／本月／本年比较截至当前日期的对应前期；全部不制造基期，无有效分母时显示「不可比较」。
@@ -102,6 +102,69 @@ macOS／Linux 的已存在 XDG 数据／状态目录按上游规则解析；自�
 `custom-session-files` 和 `terminal-sessions` 标记发现，不猜测任意项目路径。
 相对路径依赖原生 cwd 而无法核实时明确报错，不借用 GUI home。
 远端复用 Host 文件操作与非秘密环境元数据；旧 server 缺能力时要求升级，不回退本机。
+
+Kimi Code 使用正式 `2.2.0` 的 protocol `1.5` durable `usage.record`，
+只读取所选 Host 的有效 `KIMI_CODE_HOME`（优先采用 `agent_launch.kimi` 中的明确选择），
+缺省为该 Host 的 `~/.kimi-code`，不读取旧产品 `~/.kimi`。
+显式空值／相对 home 缺少原生 cwd 时拒绝，不回退 daemon 或桌面默认目录。
+会话元数据接受 `state.json` 与 `session-meta/state.json` 的第一方读取顺序，
+逐个读取 `agents/*/wire.jsonl`，不会把 session index 当作用量文件。
+
+第一方 `UsageAgentModel.record()` 直接持久化本次请求的 `input.usage`，
+`usageScope` 仅区分 turn 请求与 operation 请求；`status().total` 累加两种 scope。
+因此 `turn`、`session` 和缺省 scope 都按单次增量计入，不能将 `session` 行误认累计值而跳过。
+Token 分别取 `inputOther`、`output`、`inputCacheRead`、`inputCacheCreation`，缺项保留未知；
+原生 wire 没有费用，显示未计价，不根据模型名或 Token 推算。
+
+Kimi 主会话、子代理与 child 会话分别识别：非 main agent 和 `custom.parent_session_id`
+标记的 child 不计主会话，但其可核实新增用量计入总量。
+fork／child 逐个 agent journal 以最后一条可靠 `forked` 标记切除继承前缀；
+标记之后新建的子代理仅在 journal 的原生创建时间严格晚于 fork 创建时间时确认为新增。
+缺少可靠边界显示受限，不全额累加或静默当作零。空 fork 不根据继承的 `updatedAt` 计作活跃会话。
+wire 没有独立请求 ID，不能按 turn、模型、时间或相同 Token 合并真实的多次调用；
+重复发现的同一原生 session／agent journal 按持久位置去重，并保持 Host／agent／有效 home 隔离。
+
+### OpenCode 2.x
+
+来源下拉可选全部、omp、pi、Kimi Code 或 OpenCode。OpenCode 适配依据正式 `2.0.32` 的公开
+`experimental.session.stats`、`session.list` 和 `session.message.list`，不扫描旧 SQLite。
+打开的原生 TUI 使用已认证、有界的只读客户端桥；没有绑定客户端时使用配置的
+`agent_launch.opencode` 和所选 Host 的 home／环境调用正式 `opencode api`。
+绑定来源断连、认证不足或服务身份变化只显示诊断，绝不借用另一默认服务。
+远端要求独立能力 `opencode-statistics-v1`；旧 server 必须升级，不能回退本机。
+
+分页遵循不透明 `cursor.next`，消息页上限 200，会话页 100；重复游标、分页字段缺失、
+5,000 个会话、50,000 条计量消息、约 4 MiB 计量投影或查询期限均标记不完整。
+服务端聚合作为独立覆盖检查，不与逐消息数据相加。日期筛选和日界使用桌面日历时区。
+Token 总量为 input + output + reasoning + cache.read + cache.write；推理单列，
+不重复加到 output。子代理用量计入总量，但 `parentID` 子会话不计主会话；
+原生分叉是独立主会话，复制的旧消息按 `fork` 与原生创建时间守卫排除。
+活动计数只采用 user／assistant 消息；不将无消息的创建事件伪装成活跃会话。
+Host、服务 pid／公开 URL、有效 home／存储选择器共同隔离来源；缓存不含客户端认证材料。
+压缩请求的公开 `compaction` 消息若携带 Token／费用，也纳入真实用量；但该响应只提供
+消息创建时间，不能核实原生 `usageRecorded` 事件的完成时间，因此明确标记日期归属受限。
+服务端聚合还交叉核对 Token 各分项、费用与 assistant steps；不一致不会显示完整成功。
+
+正式契约：[会话与统计](https://github.com/anomalyco/opencode/blob/v2.0.32/packages/protocol/src/groups/session.ts)、
+[消息分页](https://github.com/anomalyco/opencode/blob/v2.0.32/packages/protocol/src/groups/message.ts)、
+[统计与分叉守卫](https://github.com/anomalyco/opencode/blob/v2.0.32/packages/core/src/session/stats.ts)。
+
+### pi 原生历史
+
+pi 独立按正式 `@earendil-works/pi-coding-agent@1.3.0` 解析，不使用 omp 的 profile、XDG 或 `model_usage` 字段。
+有效来源依次采用 `agent_launch.pi` 的 `--session-dir`、`PI_CODING_AGENT_SESSION_DIR`、有效配置根下 `settings.json:sessionDir`，否则读取 `PI_CODING_AGENT_DIR|~/.pi/agent` 下的 `sessions`。
+已知 Host 历史返回的会话作用域可补充原生 pane 捕获的存储、home 与配置根；捕获 cwd 可用于项目 `.pi/settings.json` 及相对路径。没有原生 cwd 的相对设置明确报错，绝不回退默认目录。历史发现 API 的最近 500 条窗口仅限制额外已知来源发现，不限制已发现目录内的完整计量扫描；不可发现的任意项目目录不自动猜测。
+
+pi 按官方 `usage-totals` 口径计入全文件全部分支：assistant（包括失败／中断）、toolResult 可选用量、顶层任意 `kind` 的 `usage`、compaction／branch_summary 可选用量。
+总 Token 使用 `input + output + cacheRead + cacheWrite`；`reasoning` 已包含在 output、`cacheWrite1h` 已包含在 cacheWrite，不重复相加，也不采用可能不同的 `totalTokens`。模型优先使用真实 `responseModel`；工具／摘要缺少 provider／model 时保留未知，不沿用前一个模型。
+原生 pi 无通用子代理身份字段，工具嵌套调用计入用量但不增加主会话；不凭文件夹名称或 `parentSession` 猜子代理身份。磁盘 v1／v2／v3 可读，v1 缺条目 ID 仅独立根文件按行身份计量，继承不可核实则受限。
+pi 的 `parentSession` 是精确父文件路径；只在相同 Host、home、有效配置根及存储作用域内核实继承条目 ID。缺父文件、跨作用域或循环时排除该文件不可核实的用量并显示排除条数，不冒充全额或免费。新用量不会因整个文件是分叉而丢弃；相同短 ID 但计量／时间／内容摘要不同的条目保留并报冲突。原始正文不进入结构化缓存。
+
+pi 格式与算法依据：[Session format](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/session-format.md)、[usage-totals.js](https://unpkg.com/@earendil-works/pi-coding-agent@1.3.0/dist/core/usage-totals.js)。记录费用是 pi 按自身模型价表计算的历史值（含合法零），不代表服务商账单。
+
+### 统计口径与缓存
+
+总览与分析共用唯一用量 visitor 和活动时间流。pi 在扫描阶段已切除可核实继承，不会在分析时再次扣除；Kimi 仅保留最后可靠 fork 边界后的 prompt／steer 及用量时间，不采用 metadata 的创建或更新时间。OpenCode 活动仅来自 user／assistant 消息，日期未知的 compaction 用量只进入全部范围总量。
 
 主会话按范围内活动计数，独立分叉仍计主会话；原生 artifact 子会话不计主会话，
 但可核实新增 Token 与费用计入总量。重复副本与可解析 `parentSession` 链的继承记录去重；
@@ -116,13 +179,49 @@ macOS／Linux 的已存在 XDG 数据／状态目录按上游规则解析；自�
 缓存只在当前设置会话内保留，不写提示词、对话正文或凭据到磁盘。
 刷新失败时保留带时间的旧结果并明确标为过期；切换机器／范围或离开页面后，晚到结果不会覆盖新选择。
 当前扫描上限为 5,000 个文件、20,000 个目录、单文件 16 MiB、每轮变更读取 256 MiB。
-未实现的其他智能体与分析／来源／价格管理不提供成功占位。
+未实现的其他智能体与价格管理不提供成功占位。
+Kimi 元数据单文件上限 256 KiB、durable 单行上限 256 KiB；其他文件／目录／字节上限同上。
+旧版／未知 protocol、坏行、截断和不可核实继承均显示诊断，不影响其他可读 agent。
 
 原生格式与目录依据：[会话契约](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/session.md)、
 [配置作用域](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/config-usage.md)、
 [目录实现](https://github.com/can1357/oh-my-pi/blob/v18.12.1/packages/utils/src/dirs.ts)。
+Kimi 口径依据：[正式 2.2.0 分发包](https://unpkg.com/@moonshot-ai/kimi-code@2.2.0/dist/main.mjs)
+中的 `usageAgentModel.ts`、`sessionUsageService.ts`、`appendForkedMarker()`、`sessionMetaSchema`；
+独立样本来自 [ccusage 原生 wire 样本补丁](https://github.com/ccusage/ccusage/commit/69fbca0f1d3fd691c89ad892dc54a8f7583fd1f3)，
+但不采用该第三方跳过 session-scope 的错误口径。
 确定性文件／Host 测试不等于真实 SSH 或桌面视觉验收；Windows／macOS 实机、真实 SSH、
 窄窗口、主题、界面放大和键盘流程的实际验收证据须分别记录。
+
+### 活动热力图与分解明细
+
+「活动与明细」直接使用同一快照与去重口径；只展示已发现真实来源中的智能体。
+「分析智能体」仅筛选分析区域，上方总览保持其原有机器／来源范围。年度热力图可切换
+Token、历史记录费用、活跃主会话；指标只改变图格深浅，日期详情始终保留全部指标。
+年度切换只改变日历，智能体／常用模型／常用项目明细仍覆盖完整所选日期范围。
+
+每月从星期一开始，日期边界和日期说明均使用桌面本机时区，不使用远端机器时区。
+选择日期或将焦点移入日历后，可用方向键按日／周移动，Page Up/Down 按月移动，
+Home/End 到年首／年尾，Enter 展开详情，Escape 隐藏详情，再按可关闭设置。
+当前日期及完整数值有常驻说明，不依赖悬停；月份自动换行，控件跟随界面字号缩放。
+
+图例深浅按本年、所选范围和智能体筛选中的已知最大值解释；`?` 为未知／不完整，
+`–` 为范围外，范围外不代表零活动。费用图格仅使用完整记录费用，不将估算、未计价
+或扫描失败当作零费用；记录的零费用仍为有效值。记录费用、估算费用和未计价调用分别显示。
+累计跨日记录只在完整覆盖其时间区间的范围内计入总量，不摊到每天；相交但无法归属的
+日格标为不完整，不能据此计算连续使用。当前／最长连续天数只在可见年份与所选范围内计算；
+今天没有活动时，当前连续天数可从昨天开始。不完整来源不构造连续天数。
+没有可靠活动时间的累计记录只在「全部」范围保留可得总量；有边界的范围与日格显示未知，
+不把占位时间解释为真实日期。所选智能体在当前机器没有已发现来源时也明确提示来源缺失，
+不会回退其他来源或显示为零活动。
+累计记录与逐次调用分开标明，不把一条会话累计记录当作真实调用次数。累计会话只有路由模型
+元数据、不能可靠分摊到逐次模型时，保留为「无法归属」模型用量，而不是伪造模型排名。
+
+分解保留智能体、来源作用域和模型提供商身份；缺少项目或模型时显示「无法归属」，
+不静默丢弃。已知 Token 总量降序排列，未知值不参与排名；每页可查看十条完整明细并翻页。
+同一主会话可能跨日期、模型或项目参与，因此这些会话数不可相加；子代理用量计入用量，
+但不增加主会话数。原生副本和可核实继承记录先由总览共用的唯一算法消重，再执行日期／模型／项目分解。
+刷新期间保留带快照时间的旧结果，扫描诊断及不完整状态仍可见。
 
 <a id="the-settings-file"></a>
 ## 设置文件
