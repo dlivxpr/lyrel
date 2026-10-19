@@ -1123,7 +1123,11 @@ impl UsagePage {
                     accounts.begin_refresh(id).map(|ticket| {
                         let auth = accounts.account(id).unwrap().auth.clone();
                         let provider = accounts.account(id).unwrap().provider;
-                        let secret = if matches!(auth, Authentication::BrowserLocalStorage { .. }) {
+                        let secret = if matches!(
+                            auth,
+                            Authentication::BrowserLocalStorage { .. }
+                                | Authentication::BrowserCookies { .. }
+                        ) {
                             Ok(None)
                         } else {
                             accounts

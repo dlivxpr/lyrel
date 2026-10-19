@@ -443,7 +443,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsNavAbout => "About",
         L10nKey::SettingsNavUsage => "Usage",
         L10nKey::UsageSearchKeywords => {
-            "DeepSeek StepFun Xiaomi MiMo balance plan Credits quota reset API key accounts rename refresh credentials usage private platform session cookie browser profile LocalStorage userToken"
+            "Kimi Code Command Code DeepSeek StepFun Xiaomi MiMo balance plan Credits quota reset API key accounts rename refresh credentials usage private platform session cookie browser profile LocalStorage userToken access_token"
         }
         L10nKey::UsageScope => {
             "Desktop-wide query accounts, independent of SSH machines. No agent keys are read."

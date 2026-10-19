@@ -402,7 +402,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavAbout => "关于",
         L10nKey::SettingsNavUsage => "用量",
         L10nKey::UsageSearchKeywords => {
-            "Kimi Command Code DeepSeek 余额 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 浏览器 profile LocalStorage userToken access_token"
+            "Kimi Code Command Code DeepSeek StepFun Xiaomi MiMo 余额 套餐 Credit 配额 重置 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 Cookie 浏览器 profile LocalStorage userToken access_token"
         }
         L10nKey::UsageScope => "桌面全局查询账户，独立于 SSH 机器，不读取智能体密钥。",
         L10nKey::UsageOfficial => {
