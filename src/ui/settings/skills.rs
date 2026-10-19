@@ -5,6 +5,7 @@ use crate::ui::{
     host_ops::{Entry, HostOps},
     host_registry::HostRegistry,
 };
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _,
     button::{Button, ButtonVariants as _},
@@ -13,7 +14,6 @@ use gpui_kit::component::{
 use lyrel_core::skills::{
     self, DiscoveryState, ScanRequest, ScanSnapshot, SkillInstallation, SourceKind,
 };
-use gpui_kit::TestSupportExt as _;
 use std::{
     io,
     path::{Path, PathBuf},
@@ -593,7 +593,10 @@ impl LyrelApp {
         let scope = skill_scope(skill);
         let discovery = skill.sources().iter().map(|source| source.state()).next();
         let uniform_state = discovery.filter(|state| {
-            skill.sources().iter().all(|source| source.state() == *state)
+            skill
+                .sources()
+                .iter()
+                .all(|source| source.state() == *state)
         });
         content.push(
             h_flex()
@@ -629,7 +632,9 @@ impl LyrelApp {
                                 .child(format!(
                                     "{} · {}",
                                     t(source_key(scope)),
-                                    t(uniform_state.map(state_key).unwrap_or(L10nKey::SkillsMixedState))
+                                    t(uniform_state
+                                        .map(state_key)
+                                        .unwrap_or(L10nKey::SkillsMixedState))
                                 )),
                         ),
                 )
@@ -774,17 +779,23 @@ impl LyrelApp {
                 )
                 .selectable(true)
                 .markdown_extensions(
-                    gpui_kit::component::text::MarkdownExtensions::default()
-                        .frontmatter()
-                        .plugin(gpui_kit::component::text::FrontmatterPlugin::new()),
+                    gpui_kit::component::text::MarkdownExtensions::default().frontmatter(),
                 )
                 .markdown_block_parser(|node, parse| {
+                    // Frontmatter 已用于上方元数据；正文预览不再重复一份 YAML。
+                    if matches!(node, gpui_kit::component::text::markdown_ast::Node::Yaml(_)) {
+                        return Some(
+                            gpui_kit::component::text::MarkdownNode::new("skill-frontmatter", ())
+                                .text(""),
+                        );
+                    }
                     (!safe_node(node)).then(|| {
                         let source = parse.node_source(node).unwrap_or_default().to_string();
                         gpui_kit::component::text::MarkdownNode::new("skill-unsafe", source.clone())
                             .text(source)
                     })
                 })
+                .markdown_block_renderer("skill-frontmatter", |_, _, _| div().h_0())
                 .markdown_block_renderer("skill-unsafe", |node, _, _| {
                     div().child(node.data::<String>().cloned().unwrap_or_default())
                 })

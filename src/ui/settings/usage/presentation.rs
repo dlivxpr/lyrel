@@ -48,38 +48,35 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
     } else {
         &pool.unit
     };
-    let mut metric = v_flex()
-        .min_w_0()
-        .gap_1()
-        .child(
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(pool_label(pool.kind))
-                        .when_some(pool.name.as_ref(), |label, name| {
-                            label.child(format!(" · {name}"))
-                        }),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(gpui_kit::FontWeight::MEDIUM)
-                        .child(format!(
-                            "{} {} {}",
-                            t(L10nKey::UsageRemaining),
-                            pool.remaining
-                                .as_deref()
-                                .unwrap_or(t(L10nKey::UsageUnknown)),
-                            unit
-                        )),
-                ),
-        );
+    let mut metric = v_flex().min_w_0().gap_1().child(
+        h_flex()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(pool_label(pool.kind))
+                    .when_some(pool.name.as_ref(), |label, name| {
+                        label.child(format!(" · {name}"))
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                    .child(format!(
+                        "{} {} {}",
+                        t(L10nKey::UsageRemaining),
+                        pool.remaining
+                            .as_deref()
+                            .unwrap_or(t(L10nKey::UsageUnknown)),
+                        unit
+                    )),
+            ),
+    );
     // Only an upstream percentage or a real remaining/limit pair can draw a bar.
     // Original decimal strings remain the displayed source of truth (including Credits).
     let remaining = pool
@@ -160,7 +157,7 @@ impl UsagePage {
             state.set_items(browser_choices(provider, false), window, cx)
         });
     }
-    fn render_header(&self, cx: &Context<Self>) -> gpui_kit::Div {
+    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let data = self.data.read(cx);
         let refreshing = !self.pending.is_empty() || data.stored.accounts.iter().any(|a| a.busy);
         h_flex()
@@ -175,7 +172,7 @@ impl UsagePage {
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(gpui_kit::rems(12.))
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(t(if data.loading || refreshing {
@@ -196,12 +193,14 @@ impl UsagePage {
                             .child(t(L10nKey::UsageCadence)),
                     )
                     .child(
-                        Select::new(&self.cadence)
-                            .id("usage-cadence")
-                            .small()
-                            .w(gpui_kit::rems(10.))
-                            .disabled(self.submitting)
-                            .accessibility_label(t(L10nKey::UsageCadence)),
+                        // Select 的外层为 size_full；由容器给定两个轴，避免挤出工具栏。
+                        div().w(gpui_kit::rems(10.)).h_7().flex_none().child(
+                            Select::new(&self.cadence)
+                                .id("usage-cadence")
+                                .small()
+                                .disabled(self.submitting)
+                                .accessibility_label(t(L10nKey::UsageCadence)),
+                        ),
                     )
                     .child(
                         button(
@@ -496,16 +495,13 @@ impl UsagePage {
                                 line.currency
                             )));
                     }
-                    row = row.child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(t(if balance.is_available {
-                                L10nKey::UsageAvailable
-                            } else {
-                                L10nKey::UsageUnavailable
-                            })),
-                    );
+                    row = row.child(div().text_xs().text_color(muted).child(t(
+                        if balance.is_available {
+                            L10nKey::UsageAvailable
+                        } else {
+                            L10nKey::UsageUnavailable
+                        },
+                    )));
                 }
                 Balance::Platform(balance) => {
                     for (label, wallets) in [
@@ -931,18 +927,15 @@ impl Render for UsagePage {
                 &[Provider::DeepSeek, Provider::MiMo][..],
             ),
         ] {
-            let mut group = v_flex()
-                .gap_3()
-                .min_w_0()
-                .child(
-                    div()
-                        .pb_2()
-                        .border_b_1()
-                        .border_color(cx.theme().border)
-                        .text_sm()
-                        .font_weight(gpui_kit::FontWeight::MEDIUM)
-                        .child(t(title)),
-                );
+            let mut group = v_flex().gap_3().min_w_0().child(
+                div()
+                    .pb_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .text_sm()
+                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                    .child(t(title)),
+            );
             for &provider in providers {
                 group = group.child(self.render_provider(provider, &data.stored.accounts, cx));
             }

@@ -344,9 +344,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsCostCard => "Recorded cost",
         L10nKey::StatisticsSessionColumn => "Sessions",
         L10nKey::StatisticsTokenDelta => "Previous period: {change}",
-        L10nKey::StatisticsRecordedSubtotal => {
-            "Recorded subtotal · {count} unpriced records"
-        }
+        L10nKey::StatisticsRecordedSubtotal => "Recorded subtotal · {count} unpriced records",
         L10nKey::StatisticsSessionAverage => "{value} tokens / main session",
         L10nKey::StatisticsRecordCount => "{calls} usage records · {cumulative} cumulative",
         L10nKey::StatisticsActivity => "Activity",

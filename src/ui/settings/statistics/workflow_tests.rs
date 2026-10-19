@@ -295,13 +295,34 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
     reveal(&app, &mut vcx, "statistics-summary-values");
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert!(window.find("statistics-summary-values").label().unwrap().contains("3,000,000"));
-        assert_eq!(window.find("statistics-token-composition").label(),
-            Some(format!("{}: 3,000,000", t(L10nKey::StatisticsTokens)).as_str()));
-        assert!(app.read(cx).active_settings().unwrap().statistics.analysis.summary_detail);
+        assert!(
+            window
+                .find("statistics-summary-values")
+                .label()
+                .unwrap()
+                .contains("3,000,000")
+        );
+        assert_eq!(
+            window.find("statistics-token-composition").label(),
+            Some(format!("{}: 3,000,000", t(L10nKey::StatisticsTokens)).as_str())
+        );
+        assert!(
+            app.read(cx)
+                .active_settings()
+                .unwrap()
+                .statistics
+                .analysis
+                .summary_detail
+        );
     });
     click(&app, &mut vcx, "statistics-summary-details");
-    assert!(!app.read_with(&vcx, |app, _| app.active_settings().unwrap().statistics.analysis.summary_detail));
+    assert!(!app.read_with(&vcx, |app, _| {
+        app.active_settings()
+            .unwrap()
+            .statistics
+            .analysis
+            .summary_detail
+    }));
     for (locale, width, mode) in [
         ("en", 1120., gpui_kit::component::ThemeMode::Light),
         ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
@@ -515,11 +536,47 @@ fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
     reveal(&app, &mut vcx, "statistics-cost-trend");
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert_ne!(window.find("statistics-cost-trend").label(), Some(t(L10nKey::StatisticsTrendUnavailable)),
-            "complete native zero costs are real known data, not an unavailable trend");
-        assert_eq!(window.find("statistics-token-composition").label(),
-            Some(format!("{}: 42", t(L10nKey::StatisticsTokens)).as_str()));
+        assert_ne!(
+            window.find("statistics-cost-trend").label(),
+            Some(t(L10nKey::StatisticsTrendUnavailable)),
+            "complete native zero costs are real known data, not an unavailable trend"
+        );
+        assert_eq!(
+            window.find("statistics-token-composition").label(),
+            Some(format!("{}: 42", t(L10nKey::StatisticsTokens)).as_str())
+        );
     });
+    let rank_id = app.read_with(&vcx, |app, _| {
+        let group = &app.active_settings().unwrap().statistics.results
+            [&(HostId::LOCAL, Some("pi"))]
+            .analysis
+            .as_ref()
+            .unwrap()
+            .models()[0];
+        format!(
+            "statistics-breakdown:false:{}:{}:{}:{}",
+            group.agent(),
+            group.scope(),
+            group.provider().unwrap_or(""),
+            group.label().unwrap()
+        )
+    });
+    for (tile, expected_value) in [
+        ("statistics-tile-cost", "$0.00"),
+        ("statistics-tile-sessions", "1"),
+        ("statistics-tile-tokens", "42"),
+    ] {
+        click(&app, &mut vcx, tile);
+        reveal(&app, &mut vcx, &rank_id);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row = window.find(rank_id.clone());
+            assert!(
+                row.label().unwrap().lines().next().unwrap().ends_with(expected_value),
+                "the ranking's primary value must follow the selected metric, including native zero cost"
+            );
+        });
+    }
     std::fs::write(agent.join("settings.json"), "unreadable native settings").unwrap();
     click(&app, &mut vcx, "statistics-refresh");
     settle(&app, &mut vcx);
@@ -538,9 +595,18 @@ fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
     reveal(&app, &mut vcx, "statistics-cost-trend");
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("statistics-cost-trend").label(), Some(t(L10nKey::StatisticsTrendUnavailable)),
-            "retained partial values must not produce a complete-looking daily curve");
-        assert_eq!(window.find("statistics-session-trend").label(), Some(t(L10nKey::StatisticsTrendUnavailable)));
-        assert_eq!(window.find("statistics-token-composition").label(), Some(t(L10nKey::StatisticsCompositionUnavailable)));
+        assert_eq!(
+            window.find("statistics-cost-trend").label(),
+            Some(t(L10nKey::StatisticsTrendUnavailable)),
+            "retained partial values must not produce a complete-looking daily curve"
+        );
+        assert_eq!(
+            window.find("statistics-session-trend").label(),
+            Some(t(L10nKey::StatisticsTrendUnavailable))
+        );
+        assert_eq!(
+            window.find("statistics-token-composition").label(),
+            Some(t(L10nKey::StatisticsCompositionUnavailable))
+        );
     });
 }

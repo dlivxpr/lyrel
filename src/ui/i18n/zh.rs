@@ -696,7 +696,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageSubscriptionCredit => "订阅 Credits",
         L10nKey::UsageCreditBucket => "Credit 额度池",
         L10nKey::UsageAdd => "添加账户…",
-        L10nKey::UsageCodingPlans => "Coding Plans",
+        L10nKey::UsageCodingPlans => "Coding 套餐",
         L10nKey::UsageApiAccounts => "API 账户",
         L10nKey::UsagePageVisible => "桌面账户 · 仅此页面可见时刷新",
         L10nKey::UsageProviderEmpty => "暂无账户 · 添加后查看服务商用量",
