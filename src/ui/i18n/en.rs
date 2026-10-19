@@ -65,7 +65,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SkillsFileLimit => " (incomplete; links or scan limits)",
         L10nKey::SkillsCopied => "Path copied",
-        L10nKey::SkillsInstallTitle => "Discover and install public skills",
+        L10nKey::SkillsInstallTitle => "Discover and install skills",
         L10nKey::SkillsGithubSource => "GitHub repository",
         L10nKey::SkillsGithubHint => "owner/repo or https://github.com/owner/repo/tree/ref/path",
         L10nKey::SkillsRef => "Branch, tag or commit (optional)",
@@ -79,8 +79,23 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Uses the public search route used by skills CLI. Only GitHub sources are shown. Results still require repository discovery, selection and installation review."
         }
         L10nKey::SkillsInstallScope => "Shared installation scope",
-        L10nKey::SkillsInstallLocalOnly => {
-            "Public installation is currently available on the local machine. Remote browsing remains available."
+        L10nKey::SkillsGithubAuthorization => {
+            "GitHub discovery and downloads run on this desktop using its existing GH_TOKEN / GITHUB_TOKEN or gh authorization. Credentials never go to the selected Host. Review fixes that machine, home/project and source snapshot; cancel to change the destination."
+        }
+        L10nKey::SkillsGithubUnauthorized => {
+            "GitHub rejected this desktop’s authorization (401). Refresh the existing environment or gh authorization and retry discovery."
+        }
+        L10nKey::SkillsGithubForbidden => {
+            "GitHub denied access (403). Check this desktop’s repository permissions and organization SSO authorization."
+        }
+        L10nKey::SkillsGithubInvisible => {
+            "Repository or ref is missing or not visible to this desktop’s authorization (404). Check the source and existing gh account permissions."
+        }
+        L10nKey::SkillsGithubRateLimited => {
+            "GitHub rate limit reached. Wait for the limit to reset, then retry."
+        }
+        L10nKey::SkillsGithubNetwork => {
+            "Could not reach GitHub. Check this desktop’s network and proxy, then retry."
         }
         L10nKey::SkillsInstallReview => "Review installation…",
         L10nKey::SkillsInstallConfirm => "Install selected skills",
@@ -100,7 +115,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsInstallSelect => "Select skills to install",
         L10nKey::SkillsInstallCandidates => "Candidates: {count}",
         L10nKey::SkillsInstallBrowse => "Browse installed skills",
-        L10nKey::SkillsInstallError => "Could not install {name}: {error}",
+        L10nKey::SkillsInstallError => "Could not install {name} — {path}: {error}",
         L10nKey::SkillsInstallRefResolved => "Resolved source: {source}",
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {

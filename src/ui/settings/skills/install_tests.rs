@@ -377,3 +377,160 @@ fn late_repository_response_cannot_replace_new_source_or_explicit_project(cx: &m
     });
     assert!(!project.join(".agents").exists());
 }
+
+#[gpui_kit::test]
+fn remote_install_review_freezes_host_home_and_source_without_touching_local_twin(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let local = temp.path().join("local/home");
+    let remote = temp.path().join("remote/home");
+    std::fs::create_dir_all(&remote).unwrap();
+    let remote_id = HostId(404);
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
+    app.update_in(&mut vcx, |app, window, cx| {
+        super::super::tests::isolate_native_roots(&local, cx);
+        std::fs::create_dir(remote.join("cwd")).unwrap();
+        super::super::test_host::install_on(&remote, remote_id, true, cx);
+        app.open_settings_section(SettingsSection::Skills, window, cx);
+        app.select_skills_host(remote_id, window, cx);
+        app.active_settings_mut().unwrap().skills.install.github = Some(Arc::new(PublicRepository));
+    });
+    settle_install(&app, &mut vcx);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-install-open", cx);
+        window.click("skills-install-source", cx);
+        window.input("example/skills", cx);
+        window.click("skills-discover", cx);
+    });
+    settle_install(&app, &mut vcx);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-candidate-skills/needle/SKILL.md", cx);
+        window.click("skills-install-review", cx);
+    });
+    settle_install(&app, &mut vcx);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    });
+    assert!(!remote.join(".agents").exists());
+    assert!(!local.join(".agents").exists());
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-install-review", cx);
+    });
+    settle_install(&app, &mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.select_skills_host(HostId::LOCAL, window, cx);
+        let state = &app.active_settings().unwrap().skills;
+        assert_eq!(state.host, remote_id);
+        assert_eq!(
+            state.install.preview.as_ref().unwrap().target().anchor(),
+            remote.as_path()
+        );
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-install-confirm", cx);
+    });
+    settle_install(&app, &mut vcx);
+    assert_eq!(
+        std::fs::read_to_string(remote.join(".agents/skills/needle/SKILL.md")).unwrap(),
+        "---\nname: needle\ndescription: Public repository reference\n---\n# Installed content\n"
+    );
+    let lock: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(remote.join("cwd/.state/skills/.skill-lock.json")).unwrap(),
+    )
+    .unwrap();
+    app.update_in(&mut vcx, |app, _, _| {
+        let snapshot = app
+            .active_settings()
+            .unwrap()
+            .skills
+            .snapshot
+            .as_ref()
+            .unwrap();
+        let installed = snapshot
+            .installations()
+            .iter()
+            .find(|skill| skill.path() == remote.join(".agents/skills/needle"))
+            .unwrap();
+        assert_eq!(
+            installed.source_record().unwrap().source(),
+            "example/skills"
+        );
+    });
+    assert_eq!(lock["skills"]["needle"]["source"], "example/skills");
+    assert_eq!(
+        lock["skills"]["needle"]["skillFolderHash"],
+        "3333333333333333333333333333333333333333"
+    );
+    assert!(!local.join(".agents").exists());
+    assert!(!local.join(".state").exists());
+}
+
+struct RepositoryFailure(ApiError);
+impl Transport for RepositoryFailure {
+    fn get(&self, _: &str) -> Result<Reply, ApiError> {
+        Err(self.0.clone())
+    }
+    fn authenticated(&self) -> bool {
+        true
+    }
+}
+#[gpui_kit::test]
+fn github_failures_explain_authorization_visibility_limits_and_network_without_writes(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
+    app.update_in(&mut vcx, |app, window, cx| {
+        super::super::tests::isolate_native_roots(&home, cx);
+        app.open_settings_section(SettingsSection::Skills, window, cx);
+    });
+    settle_install(&app, &mut vcx);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("skills-install-open", cx);
+        window.click("skills-install-source", cx);
+        window.input("example/private-skills", cx);
+    });
+    for (error, key) in [
+        (ApiError::Unauthorized, L10nKey::SkillsGithubUnauthorized),
+        (
+            ApiError::Forbidden("SSO required".into()),
+            L10nKey::SkillsGithubForbidden,
+        ),
+        (ApiError::NotFound, L10nKey::SkillsGithubInvisible),
+        (
+            ApiError::RateLimited { reset: Some(42) },
+            L10nKey::SkillsGithubRateLimited,
+        ),
+        (
+            ApiError::Network("offline".into()),
+            L10nKey::SkillsGithubNetwork,
+        ),
+    ] {
+        app.update_in(&mut vcx, |app, _, _| {
+            app.active_settings_mut().unwrap().skills.install.github =
+                Some(Arc::new(RepositoryFailure(error)));
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.click("skills-discover", cx);
+        });
+        settle_install(&app, &mut vcx);
+        app.update_in(&mut vcx, |app, _, _| {
+            let state = &app.active_settings().unwrap().skills.install;
+            assert_eq!(state.error.as_deref(), Some(t(key)));
+            assert!(state.preview.is_none());
+            assert!(state.catalogue.is_none());
+        });
+        assert!(!home.join(".agents").exists());
+    }
+}

@@ -7,19 +7,31 @@ use lyrel_core::host::{
 struct IsolatedHost {
     inner: SharedHost,
     home: PathBuf,
+    id: HostId,
+    relative_state: bool,
 }
 pub(super) fn install(home: &Path, cx: &mut Context<LyrelApp>) {
+    install_on(home, HostId::LOCAL, false, cx);
+}
+pub(super) fn install_on(
+    home: &Path,
+    id: HostId,
+    relative_state: bool,
+    cx: &mut Context<LyrelApp>,
+) {
     HostRegistry::insert(
         cx,
         Arc::new(IsolatedHost {
             inner: lyrel_core::host::local::LocalHost::new(),
             home: home.into(),
+            id,
+            relative_state,
         }),
     );
 }
 impl Host for IsolatedHost {
     fn id(&self) -> HostId {
-        HostId::LOCAL
+        self.id
     }
     fn separator(&self) -> char {
         self.inner.separator()
@@ -37,7 +49,11 @@ impl Host for IsolatedHost {
         self.inner.read_file(p, max)
     }
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
-        self.inner.canonicalize(p)
+        if self.relative_state && p == Path::new(".") {
+            self.inner.canonicalize(&self.home.join("cwd"))
+        } else {
+            self.inner.canonicalize(p)
+        }
     }
     fn search(
         &self,
@@ -95,7 +111,14 @@ impl Host for IsolatedHost {
             ),
             ("XDG_CONFIG_HOME", format!("{h}/.config")),
             ("XDG_DATA_HOME", format!("{h}/.data")),
-            ("XDG_STATE_HOME", format!("{h}/.state")),
+            (
+                "XDG_STATE_HOME",
+                if self.relative_state {
+                    ".state".into()
+                } else {
+                    format!("{h}/.state")
+                },
+            ),
         ]
         .into_iter()
         .map(|(k, v)| (k.into(), v))

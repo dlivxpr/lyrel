@@ -1,13 +1,12 @@
-//! Public discovery and installation belong to the settings session. Network
+//! Discovery and installation belong to the settings session. Network
 //! bytes stay on the desktop; the confirmed destination is a frozen Host plan.
 use super::*;
 use gpui_kit::component::{
-    Disableable as _,
     checkbox::Checkbox,
     select::{Select, SelectEvent, SelectItem, SelectState},
 };
 use lyrel_core::{
-    core::github::{Transport, http::HttpTransport},
+    core::github::{ApiError, Transport},
     skills::{
         catalog::{self, GitHubSource, SkillCatalog, SkillSearchResult},
         install::{
@@ -44,11 +43,14 @@ pub(super) struct InstallState {
     search: Entity<InputState>,
     generation: u64,
     pub(super) busy: bool,
+    committing: bool,
+    review_host: Option<lyrel_core::host::SharedHost>,
     pub(super) open: bool,
     project_scope: bool,
     scope: Entity<SelectState<Vec<ScopeChoice>>>,
     inputs: [String; 4],
     catalogue: Option<Arc<SkillCatalog>>,
+    download: Option<Arc<dyn Transport>>,
     selected: BTreeSet<String>,
     hits: Vec<SkillSearchResult>,
     searched: bool,
@@ -119,9 +121,12 @@ impl InstallState {
             inputs: Default::default(),
             generation: 0,
             busy: false,
+            committing: false,
+            review_host: None,
             open: false,
             project_scope: false,
             catalogue: None,
+            download: None,
             selected: BTreeSet::new(),
             hits: Vec::new(),
             searched: false,
@@ -139,18 +144,26 @@ impl InstallState {
             .map(|input| input.read(cx).value().to_string())
     }
     pub(super) fn invalidate(&mut self) {
+        if self.committing {
+            return;
+        }
         self.generation += 1;
         self.busy = false;
+        self.review_host = None;
         self.preview = None;
         self.decisions.clear();
         self.error = None;
         self.messages.clear();
+    }
+    pub(super) fn target_locked(&self) -> bool {
+        self.committing || self.preview.is_some()
     }
     pub(super) fn cancel_review(&mut self) -> bool {
         if self.preview.take().is_none() {
             return false;
         }
         self.decisions.clear();
+        self.review_host = None;
         true
     }
     pub(super) fn refresh_locale(&self, window: &mut Window, cx: &mut Context<LyrelApp>) {
@@ -171,7 +184,22 @@ fn github_transport(
     if let Some(transport) = injected {
         return Ok(transport);
     }
-    Ok(Arc::new(HttpTransport::new(None, proxy)))
+    Ok(catalog::desktop_github_transport(proxy))
+}
+fn catalog_error(error: catalog::CatalogError) -> String {
+    let key = match &error {
+        catalog::CatalogError::Http(ApiError::Unauthorized) => {
+            Some(L10nKey::SkillsGithubUnauthorized)
+        }
+        catalog::CatalogError::Http(ApiError::Forbidden(_)) => Some(L10nKey::SkillsGithubForbidden),
+        catalog::CatalogError::Http(ApiError::NotFound) => Some(L10nKey::SkillsGithubInvisible),
+        catalog::CatalogError::Http(ApiError::RateLimited { .. }) => {
+            Some(L10nKey::SkillsGithubRateLimited)
+        }
+        catalog::CatalogError::Http(ApiError::Network(_)) => Some(L10nKey::SkillsGithubNetwork),
+        _ => None,
+    };
+    key.map_or_else(|| error.to_string(), |key| t(key).to_string())
 }
 impl LyrelApp {
     pub(crate) fn cancel_skills_install(
@@ -203,20 +231,12 @@ impl LyrelApp {
         generation: u64,
     ) -> Option<&mut InstallState> {
         self.active_settings_mut()
-            .filter(|s| {
-                s.section == SettingsSection::Skills
-                    && s.skills.host == HostId::LOCAL
-                    && s.skills.session == session
-                    && s.skills.install.generation == generation
-            })
+            .filter(|s| s.skills.session == session && s.skills.install.generation == generation)
             .map(|s| &mut s.skills.install)
     }
     fn discover_public_skills(&mut self, cx: &mut Context<Self>) {
         let proxy = cx.global::<Config>().http_proxy.clone();
-        let Some(s) = self
-            .active_settings_mut()
-            .filter(|s| s.skills.host == HostId::LOCAL)
-        else {
+        let Some(s) = self.active_settings_mut() else {
             return;
         };
         let state = &mut s.skills.install;
@@ -242,6 +262,7 @@ impl LyrelApp {
             }
         };
         state.catalogue = None;
+        state.download = None;
         state.selected.clear();
         state.discovered = false;
         state.busy = true;
@@ -256,15 +277,18 @@ impl LyrelApp {
             move |_| {
                 let transport = github_transport(injected, proxy.as_deref())?;
                 catalog::discover(transport.as_ref(), &source)
-                    .map(Arc::new)
-                    .map_err(|e| e.to_string())
+                    .map(|catalogue| (Arc::new(catalogue), transport))
+                    .map_err(catalog_error)
             },
             move |app, result, cx| {
                 if let Some(state) = app.skills_install_current(session, generation) {
                     state.busy = false;
                     state.discovered = true;
                     match result {
-                        Ok(catalogue) => state.catalogue = Some(catalogue),
+                        Ok((catalogue, transport)) => {
+                            state.catalogue = Some(catalogue);
+                            state.download = Some(transport);
+                        }
                         Err(error) => state.error = Some(error),
                     }
                     cx.notify();
@@ -275,10 +299,7 @@ impl LyrelApp {
     }
     fn search_public_skills(&mut self, cx: &mut Context<Self>) {
         let proxy = cx.global::<Config>().http_proxy.clone();
-        let Some(s) = self
-            .active_settings_mut()
-            .filter(|s| s.skills.host == HostId::LOCAL)
-        else {
+        let Some(s) = self.active_settings_mut() else {
             return;
         };
         let state = &mut s.skills.install;
@@ -307,7 +328,7 @@ impl LyrelApp {
                     Some(t) => t,
                     None => Arc::new(catalog::SkillsSearchHttp::new(proxy.as_deref())),
                 };
-                catalog::search(transport.as_ref(), &query).map_err(|e| e.to_string())
+                catalog::search(transport.as_ref(), &query).map_err(|error| error.to_string())
             },
             move |app, result, cx| {
                 if let Some(state) = app.skills_install_current(session, generation) {
@@ -325,10 +346,7 @@ impl LyrelApp {
     }
     fn review_public_install(&mut self, cx: &mut Context<Self>) {
         let proxy = cx.global::<Config>().http_proxy.clone();
-        let Some(s) = self
-            .active_settings_mut()
-            .filter(|s| s.skills.host == HostId::LOCAL)
-        else {
+        let Some(s) = self.active_settings_mut() else {
             return;
         };
         let state = &mut s.skills.install;
@@ -347,13 +365,21 @@ impl LyrelApp {
             None
         };
         let selected = state.selected.clone();
+        let host_id = s.skills.host;
         state.invalidate();
         state.busy = true;
-        let (session, generation, injected) =
-            (s.skills.session, state.generation, state.github.clone());
-        let Some(host) = HostRegistry::get(cx, HostId::LOCAL) else {
+        let (session, generation, injected) = (
+            s.skills.session,
+            state.generation,
+            state.download.clone().or_else(|| state.github.clone()),
+        );
+        let Some(host) = HostRegistry::get(cx, host_id).filter(|host| host.is_connected()) else {
+            state.busy = false;
+            state.error = Some(t(L10nKey::SkillsNoMachine).to_string());
+            cx.notify();
             return;
         };
+        let bound_host = host.clone();
         HostOps::run(
             host,
             cx,
@@ -369,9 +395,9 @@ impl LyrelApp {
                     .collect::<Vec<_>>();
                 let skills = catalogue
                     .prepare_many(transport.as_ref(), &indices)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(catalog_error)?;
                 let target = if let Some(project) = project {
-                    InstallTarget::project(project)
+                    InstallTarget::project(host, project)
                 } else {
                     let environment = host.agent_environment().map_err(|e| e.to_string())?;
                     let keys = if host.separator() == '\\' {
@@ -389,11 +415,13 @@ impl LyrelApp {
                         .get("XDG_STATE_HOME")
                         .filter(|s| !s.is_empty())
                         .map(PathBuf::from);
-                    InstallTarget::user(
-                        PathBuf::from(home),
-                        state,
-                        std::env::current_dir().map_err(|e| e.to_string())?,
-                    )
+                    let cwd = if state.as_ref().is_some_and(|state| !host.is_absolute(state)) {
+                        host.canonicalize(Path::new("."))
+                            .map_err(|error| error.to_string())?
+                    } else {
+                        PathBuf::new()
+                    };
+                    InstallTarget::user(host, PathBuf::from(home), state, cwd)
                 }
                 .map_err(|e| e.to_string())?;
                 install::preview_install(host, target, skills).map_err(|e| e.to_string())
@@ -412,6 +440,7 @@ impl LyrelApp {
                                 })
                                 .collect();
                             state.preview = Some(preview);
+                            state.review_host = Some(bound_host);
                         }
                         Err(error) => state.error = Some(error),
                     }
@@ -422,10 +451,7 @@ impl LyrelApp {
         cx.notify();
     }
     fn confirm_public_install(&mut self, cx: &mut Context<Self>) {
-        let Some(s) = self
-            .active_settings_mut()
-            .filter(|s| s.skills.host == HostId::LOCAL)
-        else {
+        let Some(s) = self.active_settings_mut() else {
             return;
         };
         let state = &mut s.skills.install;
@@ -435,6 +461,12 @@ impl LyrelApp {
         let Some(preview) = state.preview.take() else {
             return;
         };
+        let Some(host) = state.review_host.take() else {
+            state.error = Some(t(L10nKey::SkillsNoMachine).to_string());
+            cx.notify();
+            return;
+        };
+        state.committing = true;
         state.busy = true;
         state.messages.clear();
         state.error = None;
@@ -443,9 +475,6 @@ impl LyrelApp {
             state.generation,
             std::mem::take(&mut state.decisions),
         );
-        let Some(host) = HostRegistry::get(cx, HostId::LOCAL) else {
-            return;
-        };
         HostOps::run(
             host,
             cx,
@@ -455,6 +484,7 @@ impl LyrelApp {
             move |app, report, cx| {
                 if let Some(state) = app.skills_install_current(session, generation) {
                     state.busy = false;
+                    state.committing = false;
                     for item in report.items {
                         let path = item.destination.to_string_lossy();
                         state.messages.push(match item.status {
@@ -468,7 +498,7 @@ impl LyrelApp {
                             ),
                             InstallStatus::Failed(error) => t_fmt(
                                 L10nKey::SkillsInstallError,
-                                &[("name", &item.name), ("error", &error)],
+                                &[("name", &item.name), ("path", &path), ("error", &error)],
                             ),
                         });
                     }
@@ -485,12 +515,6 @@ impl LyrelApp {
             return div().into_any_element();
         };
         let state = &s.skills.install;
-        if s.skills.host != HostId::LOCAL {
-            return div()
-                .text_sm()
-                .child(t(L10nKey::SkillsInstallLocalOnly))
-                .into_any_element();
-        }
         if !state.open {
             return Button::new("skills-install-open")
                 .label(format!("{}…", t(L10nKey::SkillsInstallTitle)))
@@ -511,6 +535,11 @@ impl LyrelApp {
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(t(L10nKey::SkillsInstallSafety))
+                .into_any_element(),
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(t(L10nKey::SkillsGithubAuthorization))
                 .into_any_element(),
         ];
         body.push(

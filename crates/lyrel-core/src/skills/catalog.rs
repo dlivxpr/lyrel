@@ -1,12 +1,27 @@
-//! Anonymous public GitHub skill catalogs and the skills.sh CLI search endpoint.
+//! GitHub skill catalogs and the anonymous skills.sh CLI search endpoint.
 //! Network I/O is injected through the existing GitHub Transport boundary.
 
-use crate::core::github::{ApiError, Transport};
+use crate::core::github::{ApiError, Transport, http::HttpTransport, token};
 use std::{
     collections::{BTreeMap, HashSet},
     fmt,
     path::PathBuf,
+    sync::Arc,
 };
+
+/// Creates the GitHub transport on the desktop worker, never on a Host/server.
+///
+/// Blocking: resolve local `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh` only from
+/// the worker that will discover/download the source. Reuse the returned
+/// transport for both operations. An available token is used from the first
+/// request; without one, public repositories remain accessible anonymously.
+/// Rejected or insufficient credentials retain their typed API error instead
+/// of silently retrying anonymously or switching accounts. No credential is
+/// copied into a source, catalog, prepared file, or target Host.
+pub fn desktop_github_transport(proxy: Option<&str>) -> Arc<dyn Transport> {
+    let token = token::resolve_token_from_system().map(|(token, _)| token);
+    Arc::new(HttpTransport::new(token, proxy))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogError {
@@ -70,7 +85,7 @@ impl GitHubSource {
                 || url.query().is_some()
             {
                 return Err(CatalogError::Source(
-                    "Only anonymous github.com HTTPS sources are supported".into(),
+                    "Only credential-free github.com HTTPS sources are supported".into(),
                 ));
             }
             // Inspect the original path: URL normalization must not erase traversal.
@@ -84,7 +99,7 @@ impl GitHubSource {
             let path = body.strip_prefix("github:").unwrap_or(body);
             if path.contains(':') || path.starts_with(['.', '/', '\\']) || path.contains("//") {
                 return Err(CatalogError::Source(
-                    "Only public GitHub repositories are supported".into(),
+                    "Only GitHub repositories are supported".into(),
                 ));
             }
             (path.to_string(), false)
@@ -368,7 +383,6 @@ impl SkillCatalog {
         http: &dyn Transport,
         indices: &[usize],
     ) -> Result<Vec<PreparedSkill>, CatalogError> {
-        anonymous(http)?;
         let mut selected = Vec::new();
         let mut seen = HashSet::new();
         for index in indices {
@@ -401,7 +415,6 @@ impl SkillCatalog {
         http: &dyn Transport,
         index: usize,
     ) -> Result<PreparedSkill, CatalogError> {
-        anonymous(http)?;
         let candidate = self
             .candidates
             .get(index)
@@ -462,7 +475,7 @@ struct BlobReply {
 fn anonymous(http: &dyn Transport) -> Result<(), CatalogError> {
     if http.authenticated() {
         return Err(CatalogError::Unsafe(
-            "Skill discovery only accepts anonymous public HTTP".into(),
+            "skills.sh search only accepts anonymous HTTP".into(),
         ));
     }
     Ok(())
@@ -555,7 +568,6 @@ fn fetch_blob(
 /// Discover without writing anything. Every entry is validated before any blob
 /// fetch; truncated responses and links never become partial trusted catalogs.
 pub fn discover(http: &dyn Transport, source: &GitHubSource) -> Result<SkillCatalog, CatalogError> {
-    anonymous(http)?;
     // Public struct fields are convenient for consumers, but never a bypass.
     if !valid_repo_part(&source.owner) || !valid_repo_part(&source.repo) {
         return Err(CatalogError::Source("Invalid repository source".into()));
