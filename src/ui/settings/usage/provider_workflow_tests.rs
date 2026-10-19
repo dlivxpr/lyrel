@@ -622,3 +622,300 @@ fn kimi_settings_redirect_never_forwards_credentials_or_creates_account(cx: &mut
     assert!(vault.is_empty());
     assert!(!dir.path().join("usage.json").exists());
 }
+
+fn command_browser_fixture(root: &std::path::Path) -> rusqlite::Connection {
+    std::fs::create_dir_all(root.join("Profiles/a-empty")).unwrap();
+    std::fs::create_dir_all(root.join("Profiles/b-work")).unwrap();
+    std::fs::write(root.join("profiles.ini"), "[Profile0]\nName=Empty\nIsRelative=1\nPath=Profiles/a-empty\n[Profile1]\nName=Command work\nIsRelative=1\nPath=Profiles/b-work\n").unwrap();
+    let db = rusqlite::Connection::open(root.join("Profiles/b-work/cookies.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE moz_cookies(host TEXT,name TEXT,value TEXT,path TEXT,expiry INTEGER,originAttributes TEXT);
+        INSERT INTO moz_cookies VALUES ('api.commandcode.ai','custom-command-session','browser-command-session','/',4102444800,'');
+        INSERT INTO moz_cookies VALUES ('.commandcode.ai','__Secure-better-auth.session_token','never-send','/',4102444800,'');
+        INSERT INTO moz_cookies VALUES ('.commandcode.ai.evil.invalid','custom-command-session','evil-session','/',4102444800,'');
+        INSERT INTO moz_cookies VALUES ('commandcode.ai','custom-command-session','apex-host-only-never-send','/',4102444800,'');
+        INSERT INTO moz_cookies VALUES ('.commandcode.ai','custom-command-session','expired-session','/',1,'');").unwrap();
+    db
+}
+
+fn add_command(vcx: &mut VisualTestContext, http: &Http) -> Uuid {
+    click(vcx, "usage-add");
+    click(vcx, "usage-provider");
+    vcx.simulate_keystrokes("down down enter");
+    vcx.run_until_parked();
+    type_into(vcx, "usage-name", "Command primary");
+    type_into(vcx, "usage-key", "command-main-key");
+    reply_command(http);
+    click(vcx, "usage-submit");
+    settle(vcx, |d| d.stored.accounts.len() == 1);
+    vcx.update(|_, cx| cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0].id)
+}
+
+fn select_command_browser(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, id: Uuid) {
+    click(vcx, &format!("usage-enhance-{id}"));
+    app.update_in(vcx, |a, _, cx| {
+        let page = a.active_settings().unwrap().usage.read(cx);
+        assert!(
+            matches!(page.edit, Some(Edit::Enhance(account)) if account == id),
+            "enhancement form must open through its button; submitting={}",
+            page.submitting
+        );
+    });
+    click(vcx, "usage-source");
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    app.update_in(vcx, |a, _, cx| {
+        assert!(matches!(a.active_settings().unwrap().usage.read(cx).edit, Some(Edit::Enhance(account)) if account == id));
+    });
+    click(vcx, "usage-source");
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    click(vcx, "usage-browser");
+    let index = browser::Browser::all()
+        .iter()
+        .position(|b| *b == browser::Browser::Firefox)
+        .unwrap();
+    vcx.simulate_keystrokes(&format!("{}enter", "down ".repeat(index + 1)));
+    vcx.run_until_parked();
+    let page = app.update_in(vcx, |a, _, _| a.active_settings().unwrap().usage.clone());
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while page.read_with(vcx, |p, _| p.discovering || p.profile_items.len() != 2) {
+        vcx.run_until_parked();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    click(vcx, "usage-profile");
+    vcx.simulate_keystrokes("down down enter");
+    vcx.run_until_parked();
+    click(vcx, "usage-submit");
+    app.update_in(vcx, |a, _, cx| {
+        let page = a.active_settings().unwrap().usage.read(cx);
+        assert!(!page.submitting && page.error.is_none());
+        assert!(page.cookie_name.read(cx).value().is_empty());
+        assert!(matches!(page.edit, Some(Edit::Enhance(account)) if account == id));
+    });
+    type_into(vcx, "usage-cookie-name", "custom-command-session");
+}
+
+fn reply_command_enhancement(http: &Http) {
+    http.reply(
+        200,
+        br#"{"user":{"id":"command-user"},"session":{"id":"fixture"}}"#,
+    );
+    http.reply(200, br#"{"success":true,"data":{"planId":"individual-max","status":"active","currentPeriodEnd":"2026-12-01T00:00:00Z"}}"#);
+}
+
+#[gpui_kit::test]
+fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_rotated_identity(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = command_browser_fixture(&dir.path().join("isolated-browser"));
+    let (app, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Arc::new(Http::default());
+    install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        vault.clone(),
+        http.clone(),
+        false,
+    );
+    open(&app, &mut vcx);
+    let id = add_command(&mut vcx, &http);
+    select_command_browser(&app, &mut vcx, id);
+    reply_command(&http);
+    reply_command_enhancement(&http);
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |d| {
+        d.stored.accounts[0].enhancement_browser.is_some()
+    });
+    let saved = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
+    assert_eq!(saved.secret(id).unwrap(), "command-main-key");
+    assert!(saved.enhancement_secret(id).unwrap().is_none());
+    assert_eq!(vault.len(), 1);
+    let metadata = std::fs::read_to_string(dir.path().join("usage.json")).unwrap();
+    for private in [
+        "browser-command-session",
+        "never-send",
+        "evil-session",
+        dir.path().to_str().unwrap(),
+    ] {
+        assert!(!metadata.contains(private));
+    }
+    let cookies = http
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.1 == "Cookie")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cookies,
+        vec![
+            (
+                providers::command_code::IDENTITY_ENDPOINT.into(),
+                "Cookie".into(),
+                "custom-command-session=browser-command-session".into()
+            ),
+            (
+                providers::command_code::SESSION_ENDPOINT.into(),
+                "Cookie".into(),
+                "custom-command-session=browser-command-session".into()
+            )
+        ]
+    );
+    db.execute(
+        "UPDATE moz_cookies SET value='rotated-same-user' WHERE value='browser-command-session'",
+        [],
+    )
+    .unwrap();
+    reply_command(&http);
+    reply_command_enhancement(&http);
+    click(&mut vcx, &format!("usage-refresh-{id}"));
+    let page = app.update_in(&mut vcx, |a, _, _| {
+        a.active_settings().unwrap().usage.clone()
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while page.read_with(&vcx, |p, _| p.pending.contains(&id)) {
+        vcx.run_until_parked();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    vcx.update(|_, cx| {
+        let Balance::Provider(report) = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .balance
+        else {
+            panic!("Command report")
+        };
+        assert_eq!(report.plan.as_deref(), Some("individual-max"));
+        assert_eq!(report.enhancement, None);
+    });
+    db.execute(
+        "UPDATE moz_cookies SET value='different-account' WHERE value='rotated-same-user'",
+        [],
+    )
+    .unwrap();
+    reply_command(&http);
+    http.reply(200, br#"{"user":{"id":"different-user"}}"#);
+    click(&mut vcx, &format!("usage-refresh-{id}"));
+    settle(
+        &mut vcx,
+        |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::IdentityMismatch)),
+    );
+    vcx.update(|_, cx| {
+        let account = &cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0];
+        assert!(account.error.is_none());
+        let Balance::Provider(report) = &account.snapshot.as_ref().unwrap().balance else {
+            panic!("Command report")
+        };
+        assert_eq!(report.identity.as_deref(), Some("command-user"));
+        assert_eq!(report.pools[0].remaining.as_deref(), Some("85"));
+        assert_eq!(report.plan.as_deref(), Some("individual-pro"));
+    });
+    assert_eq!(vault.len(), 1);
+    db.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    reply_command(&http);
+    click(&mut vcx, &format!("usage-refresh-{id}"));
+    settle(
+        &mut vcx,
+        |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::BrowserLocked)),
+    );
+    db.execute_batch("ROLLBACK; UPDATE moz_cookies SET expiry=1")
+        .unwrap();
+    reply_command(&http);
+    click(&mut vcx, &format!("usage-refresh-{id}"));
+    settle(
+        &mut vcx,
+        |d| matches!(&d.stored.accounts[0].snapshot.as_ref().unwrap().balance, Balance::Provider(r) if r.enhancement==Some(UsageError::BrowserMissing)),
+    );
+    assert_eq!(
+        Accounts::load(dir.path().join("usage.json"), vault.clone())
+            .unwrap()
+            .secret(id)
+            .unwrap(),
+        "command-main-key"
+    );
+    click(&mut vcx, &format!("usage-remove-{id}"));
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |d| d.stored.accounts.is_empty());
+    assert!(vault.is_empty());
+}
+
+#[gpui_kit::test]
+fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_source(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let _db = command_browser_fixture(&dir.path().join("isolated-browser"));
+    let (app, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Arc::new(Http::default());
+    install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        vault.clone(),
+        http.clone(),
+        false,
+    );
+    open(&app, &mut vcx);
+    let id = add_command(&mut vcx, &http);
+    let page = app.update_in(&mut vcx, |a, _, _| {
+        a.active_settings().unwrap().usage.clone()
+    });
+    for close_page in [false, true] {
+        select_command_browser(&app, &mut vcx, id);
+        reply_command(&http);
+        http.reply(200, br#"{"user":{"id":"command-user"}}"#);
+        let release = http.held(
+            200,
+            br#"{"success":true,"data":{"planId":"late-plan","status":"active"}}"#,
+        );
+        let before = http.calls.load(Ordering::SeqCst);
+        click(&mut vcx, "usage-submit");
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while http.calls.load(Ordering::SeqCst) < before + 6 {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if close_page {
+            app.update_in(&mut vcx, |a, w, cx| a.close_settings(w, cx));
+        } else {
+            vcx.update(|window, cx| window.press("escape", cx));
+            vcx.run_until_parked();
+            app.update_in(&mut vcx, |a, _, cx| {
+                assert!(
+                    a.has_settings(),
+                    "Escape cancels the enhancement, not the settings window"
+                );
+                assert!(a.active_settings().unwrap().usage.read(cx).edit.is_none());
+            });
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                assert!(window.try_find("usage-source").is_none());
+            });
+        }
+        release.send(()).unwrap();
+        settle(&mut vcx, |d| !d.stored.accounts[0].busy);
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while page.read_with(&vcx, |page, _| page.submitting) {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let saved = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
+        assert!(saved.account(id).unwrap().enhancement_browser.is_none());
+        assert!(saved.enhancement_secret(id).unwrap().is_none());
+        assert_eq!(saved.secret(id).unwrap(), "command-main-key");
+        assert_eq!(vault.len(), 1);
+        if close_page {
+            vcx.executor().advance_clock(Duration::from_secs(600));
+            vcx.run_until_parked();
+            assert_eq!(http.calls.load(Ordering::SeqCst), before + 6);
+        }
+    }
+}
