@@ -383,7 +383,6 @@ impl LyrelApp {
             .child(
                 Button::new("skills-check-update")
                     .small()
-                    .ghost()
                     .label(format!("{}…", t(L10nKey::SkillsCheckUpdate)))
                     .disabled(state.target_locked() || s.skills.install.open)
                     .on_click(cx.listener(|app, _, window, cx| {
@@ -402,7 +401,6 @@ impl LyrelApp {
             .child(
                 Button::new("skills-remove-review")
                     .small()
-                    .ghost()
                     .label(t(L10nKey::SkillsRemoveReview))
                     .disabled(state.target_locked() || s.skills.install.open)
                     .on_click(cx.listener(|app, _, window, cx| {
