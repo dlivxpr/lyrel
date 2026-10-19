@@ -107,7 +107,8 @@ export default Plugin.define({
       return { pid: info.pid, urls }
     }
     const metadata = (info) => ({ id: info.id, parentID: info.parentID, fork: info.fork,
-      projectID: info.projectID, title: info.title, location: info.location, time: info.time, model: info.model })
+      projectID: info.projectID, title: info.title, location: info.location, time: info.time, model: info.model,
+      cost: info.cost, tokens: info.tokens })
     const listener = createServer((socket) => {
       if (closed) { socket.destroy(); return }
       // Pending peers cannot consume authenticated operation slots. Evict the
@@ -180,6 +181,21 @@ export default Plugin.define({
           }
           let data
           if (request.operation === "info") data = null
+          else if (request.operation === "stats") {
+            data = await context.client.session.stats({ timezone: "UTC", tools: "none" }, options)
+          } else if (request.operation === "statistics-list") {
+            if (request.cursor != null && (typeof request.cursor !== "string" || request.cursor.length > 65536)) throw new Error("invalid cursor")
+            const page = await context.client.session.list(request.cursor
+              ? { limit: 100, cursor: request.cursor } : { limit: 100, order: "asc" }, options)
+            data = { ...page, data: page.data.map(metadata) }
+          } else if (request.operation === "statistics-messages") {
+            if (typeof request.source_id !== "string" || !/^ses_[A-Za-z0-9_]+$/.test(request.source_id)) throw new Error("invalid session")
+            if (request.cursor != null && (typeof request.cursor !== "string" || request.cursor.length > 65536)) throw new Error("invalid cursor")
+            const page = await context.client.message.list({ sessionID: request.source_id, limit: 200,
+              ...(request.cursor ? { cursor: request.cursor } : { order: "asc" }) }, options)
+            data = { ...page, data: page.data.map((message) => ({ id: message.id, type: message.type,
+              time: { created: message.time.created }, model: message.model, tokens: message.tokens, cost: message.cost })) }
+          }
           else if (request.operation === "list") {
             const page = await context.client.session.list(request.cursor
               ? { limit: 100, cursor: request.cursor }
