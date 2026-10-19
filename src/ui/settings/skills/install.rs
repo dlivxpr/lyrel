@@ -2,7 +2,6 @@
 //! bytes stay on the desktop; the confirmed destination is a frozen Host plan.
 use super::*;
 use gpui_kit::component::{
-    Disableable as _,
     checkbox::Checkbox,
     select::{Select, SelectEvent, SelectItem, SelectState},
 };
