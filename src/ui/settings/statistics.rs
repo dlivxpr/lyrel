@@ -33,6 +33,7 @@ pub(crate) struct StatisticsState {
     analysis: analysis::AnalysisState,
     management: management::Management,
 }
+#[derive(Clone)]
 struct Presentation {
     snapshot: Snapshot,
     window: DateWindow,
@@ -123,6 +124,7 @@ impl LyrelApp {
             return;
         }
         let state = &settings.statistics;
+        if state.management.busy { return; }
         let custom = if state.period == Period::Custom {
             let start = chrono::NaiveDate::parse_from_str(
                 state.start.read(cx).value().as_str(),

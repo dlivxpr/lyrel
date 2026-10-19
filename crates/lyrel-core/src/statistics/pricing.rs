@@ -8,6 +8,7 @@ pub const CATALOG_URL: &str = "https://models.dev/api.json";
 /// 每百万 Token 的单价；缺失类别不是零，也不能借用其他类别。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct UnitPrice {
     pub provider: String,
     pub model: String,
@@ -43,6 +44,7 @@ impl UnitPrice {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct Pricing {
     pub public_enabled: bool,
     pub custom: Vec<UnitPrice>,
@@ -108,6 +110,7 @@ impl Pricing {
 
 /// 每币种分别呈现估算与覆盖；custom/catalog 均不是账单。
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct CurrencyEstimate {
     pub custom: Option<f64>,
     pub catalog: Option<f64>,

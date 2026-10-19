@@ -4,14 +4,13 @@ use lyrel_core::statistics::pricing::{Pricing, UnitPrice};
 use serde_json::json;
 
 fn price(currency: &str, input: Option<f64>, output: Option<f64>) -> UnitPrice {
-    UnitPrice {
-        provider: "provider".into(),
-        model: "model".into(),
-        currency: currency.into(),
-        input,
-        output,
-        ..UnitPrice::default()
-    }
+    let mut price = UnitPrice::default();
+    price.provider = "provider".into();
+    price.model = "model".into();
+    price.currency = currency.into();
+    price.input = input;
+    price.output = output;
+    price
 }
 
 fn snapshot(records: &[serde_json::Value]) -> Snapshot {

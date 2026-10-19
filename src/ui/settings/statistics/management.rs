@@ -20,6 +20,7 @@ pub(super) struct Management {
     pub(super) http: Arc<dyn storage::CatalogHttp>,
     editing_price: Option<(String, String, String)>,
     editor_host: HostId,
+    editor_window: Option<gpui_kit::AnyWindowHandle>,
 }
 impl Management {
     pub fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
@@ -27,7 +28,7 @@ impl Management {
             path: crate::core::config::config_path("statistics-settings.json"), editor: None,
             source_agent: "omp", selector: cx.new(|cx| InputState::new(window, cx)),
             price: (0..8).map(|_| cx.new(|cx| InputState::new(window, cx))).collect(),
-            return_focus: None, revision: Uuid::new_v4(), http: Arc::new(storage::PublicCatalogHttp), editing_price: None, editor_host: HostId::LOCAL }
+            return_focus: None, revision: Uuid::new_v4(), http: Arc::new(storage::PublicCatalogHttp), editing_price: None, editor_host: HostId::LOCAL, editor_window: None }
     }
 }
 impl LyrelApp {
@@ -62,6 +63,7 @@ impl LyrelApp {
         if state.busy || !state.loaded { return; }
         state.editor = Some(editor);
         state.return_focus = window.focused(cx);
+        state.editor_window = Some(window.window_handle());
         state.error = None;
         if editor == Editor::Price {
             state.editing_price = None;
@@ -78,15 +80,19 @@ impl LyrelApp {
         cx.notify(); true
     }
     fn change_statistics_settings(&mut self, mutation: impl FnOnce(&mut storage::StoredStatistics, &dyn lyrel_core::host::Host) -> Result<(), String> + Send + 'static, cx: &mut Context<Self>) {
-        self.change_statistics_settings_on(HostId::LOCAL, mutation, cx);
+        self.change_statistics_settings_on(HostId::LOCAL, None, mutation, cx);
     }
-    fn change_statistics_settings_on(&mut self, host_id: HostId, mutation: impl FnOnce(&mut storage::StoredStatistics, &dyn lyrel_core::host::Host) -> Result<(), String> + Send + 'static, cx: &mut Context<Self>) {
+    fn change_statistics_settings_on(&mut self, host_id: HostId, source_host: Option<HostId>, mutation: impl FnOnce(&mut storage::StoredStatistics, &dyn lyrel_core::host::Host) -> Result<(), String> + Send + 'static, cx: &mut Context<Self>) {
         let Some(settings) = self.active_settings_mut() else { return; };
         let state = &mut settings.statistics.management;
         if state.busy || !state.loaded { return; }
         let mut stored = state.stored.clone();
         let path = state.path.clone();
         let revision = Uuid::new_v4(); state.revision = revision; state.busy = true; state.error = None;
+        let mut results = settings.statistics.results.clone();
+        let analysis_agent = settings.statistics.analysis.agent.clone();
+        let year = settings.statistics.analysis.year;
+        settings.statistics.invalidate();
         let Some(host) = HostRegistry::lookup(cx, host_id) else {
             if let Some(s) = self.active_settings_mut() { s.statistics.management.busy = false; s.statistics.management.error = Some(t(L10nKey::StatisticsOffline).into()); }
             cx.notify(); return;
@@ -94,14 +100,34 @@ impl LyrelApp {
         HostOps::run(host, cx, move |host| -> Result<_, String> {
             mutation(&mut stored, host)?;
             stored.save(&path.ok_or("Statistics configuration directory unavailable")?).map_err(|e| e.to_string())?;
-            Ok(stored)
+            if let Some(host) = source_host {
+                results.retain(|(id,_),_| *id != host);
+            } else {
+                for presentation in results.values_mut() {
+                    presentation.snapshot.apply_pricing(stored.pricing.clone());
+                    presentation.totals = presentation.snapshot.aggregate(&presentation.window);
+                    presentation.previous = presentation.window.previous().map(|window| presentation.snapshot.aggregate(window));
+                    match presentation.snapshot.analyze(&presentation.window,chrono::Local::now(),analysis_agent.as_deref(),year) {
+                        Ok(analysis) => { presentation.analysis = Some(analysis); presentation.analysis_error = None; },
+                        Err(error) => { presentation.analysis = None; presentation.analysis_error = Some(error); }
+                    }
+                }
+            }
+            Ok((stored,results))
         }, move |this, result, cx| {
             let Some(settings) = this.active_settings_mut() else { return; };
             let state = &mut settings.statistics.management;
             if state.revision != revision { return; }
             state.busy = false;
             match result {
-                Ok(stored) => { state.stored = stored; state.editor = None; settings.statistics.invalidate(); settings.statistics.results.clear(); },
+                Ok((stored,results)) => {
+                    state.stored = stored;
+                    state.editor = None;
+                    let restore = state.editor_window.take().zip(state.return_focus.take());
+                    settings.statistics.invalidate();
+                    settings.statistics.results = results;
+                    if let Some((handle, focus)) = restore { let _ = handle.update(cx, |_,window,cx| window.focus(&focus,cx)); }
+                },
                 Err(error) => state.error = Some(error),
             }
             this.load_statistics(cx); cx.notify();
@@ -114,7 +140,7 @@ impl LyrelApp {
         let agent = state.source_agent;
         let launch = cx.global::<Config>().agent_launch.clone();
         let host = state.editor_host;
-        self.change_statistics_settings_on(host, move |stored, host| stored.sources.add(host, agent, &selector, &launch).map(|_| ()).map_err(|e| e.to_string()), cx);
+        self.change_statistics_settings_on(host, Some(host), move |stored, host| stored.sources.add(host, agent, &selector, &launch).map(|_| ()).map_err(|e| e.to_string()), cx);
     }
     fn save_statistics_price(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.active_settings().map(|s| &s.statistics.management) else { return; };
@@ -175,7 +201,7 @@ impl LyrelApp {
                     .child(div().text_sm().child(format!("{} · {}\n{}\n{}", binding.agent, binding.host, binding.scope, binding.selector)))
                     .child(h_flex().flex_wrap().gap_2()
                         .child(self.settings_button(SharedString::from(format!("statistics-check-source:{id}")), t(L10nKey::StatisticsCheckSource), cx, move |this, _, cx| this.check_statistics_source(check.clone(), cx)).disabled(disabled))
-                        .child(self.settings_button(SharedString::from(format!("statistics-remove-source:{id}")), t(L10nKey::StatisticsRemoveSource), cx, move |this, _, cx| { let binding = remove.clone(); this.change_statistics_settings(move |stored, _| { stored.sources.remove(&binding); Ok(()) }, cx); }).disabled(disabled)))
+                        .child(self.settings_button(SharedString::from(format!("statistics-remove-source:{id}")), t(L10nKey::StatisticsRemoveSource), cx, move |this, _, cx| { let binding = remove.clone(); this.change_statistics_settings_on(HostId::LOCAL, Some(HostId(binding.host)), move |stored, _| { stored.sources.remove(&binding); Ok(()) }, cx); }).disabled(disabled)))
                     .into_any_element());
             }
         }
