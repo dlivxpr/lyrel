@@ -652,6 +652,14 @@ fn add_command(vcx: &mut VisualTestContext, http: &Http) -> Uuid {
 
 fn select_command_browser(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, id: Uuid) {
     click(vcx, &format!("usage-enhance-{id}"));
+    app.update_in(vcx, |a, _, cx| {
+        let page = a.active_settings().unwrap().usage.read(cx);
+        assert!(
+            matches!(page.edit, Some(Edit::Enhance(account)) if account == id),
+            "enhancement form must open through its button; submitting={}",
+            page.submitting
+        );
+    });
     click(vcx, "usage-source");
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
@@ -678,10 +686,12 @@ fn select_command_browser(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, i
     click(vcx, "usage-profile");
     vcx.simulate_keystrokes("down down enter");
     vcx.run_until_parked();
-    vcx.update(|window, cx| {
-        window.render_frame(cx);
-        assert_eq!(window.find("usage-submit").disabled(), Some(true));
-        assert_eq!(window.find("usage-cookie-name").value(), Some(""));
+    click(vcx, "usage-submit");
+    app.update_in(vcx, |a, _, cx| {
+        let page = a.active_settings().unwrap().usage.read(cx);
+        assert!(!page.submitting && page.error.is_none());
+        assert!(page.cookie_name.read(cx).value().is_empty());
+        assert!(matches!(page.edit, Some(Edit::Enhance(account)) if account == id));
     });
     type_into(vcx, "usage-cookie-name", "custom-command-session");
 }
@@ -853,6 +863,9 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
     );
     open(&app, &mut vcx);
     let id = add_command(&mut vcx, &http);
+    let page = app.update_in(&mut vcx, |a, _, _| {
+        a.active_settings().unwrap().usage.clone()
+    });
     for close_page in [false, true] {
         select_command_browser(&app, &mut vcx, id);
         reply_command(&http);
@@ -874,6 +887,13 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
         } else {
             vcx.update(|window, cx| window.press("escape", cx));
             vcx.run_until_parked();
+            app.update_in(&mut vcx, |a, _, cx| {
+                assert!(
+                    a.has_settings(),
+                    "Escape cancels the enhancement, not the settings window"
+                );
+                assert!(a.active_settings().unwrap().usage.read(cx).edit.is_none());
+            });
             vcx.update(|window, cx| {
                 window.render_frame(cx);
                 assert!(window.try_find("usage-source").is_none());
@@ -881,6 +901,12 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
         }
         release.send(()).unwrap();
         settle(&mut vcx, |d| !d.stored.accounts[0].busy);
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while page.read_with(&vcx, |page, _| page.submitting) {
+            vcx.run_until_parked();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
         let saved = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
         assert!(saved.account(id).unwrap().enhancement_browser.is_none());
         assert!(saved.enhancement_secret(id).unwrap().is_none());

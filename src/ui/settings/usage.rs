@@ -991,6 +991,14 @@ impl UsagePage {
         let Some(edit) = self.edit else {
             return;
         };
+        if matches!(edit, Edit::Enhance(_))
+            && self.source.read(cx).selected_value() == Some(&Source::Browser)
+            && (!browser::valid_command_cookie_name(self.cookie_name.read(cx).value().trim())
+                || self.discovering
+                || self.profiles.read(cx).selected_value().is_none())
+        {
+            return;
+        }
         let name = self.name.read(cx).value().trim().to_string();
         if name.is_empty() {
             return;
@@ -1982,6 +1990,25 @@ impl Render for UsagePage {
     }
 }
 impl LyrelApp {
+    pub(super) fn cancel_usage_form(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(usage) = self
+            .active_settings()
+            .map(|settings| settings.usage.clone())
+        else {
+            return false;
+        };
+        usage.update(cx, |page, cx| {
+            if page.edit.is_none() {
+                return false;
+            }
+            page.cancel(window, cx);
+            true
+        })
+    }
     pub(super) fn render_settings_usage(&self, _cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         self.active_settings()
             .unwrap()
