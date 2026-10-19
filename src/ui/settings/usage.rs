@@ -339,11 +339,7 @@ enum Material {
     Session(platform::SessionMaterial),
     Browser(browser::BrowserSelection, platform::SessionMaterial),
     ProviderSession(Provider, zeroize::Zeroizing<String>),
-    ProviderBrowser(
-        Provider,
-        browser::BrowserSelection,
-        browser::SessionMaterial,
-    ),
+    ProviderBrowser(browser::BrowserSelection, browser::SessionMaterial),
     Cookies(
         Provider,
         browser::BrowserSelection,
@@ -357,7 +353,7 @@ impl Material {
             Self::Session(v) => v.secret(),
             Self::Browser(_, v) => v.secret(),
             Self::ProviderSession(_, v) => v,
-            Self::ProviderBrowser(_, _, v) => v.secret(),
+            Self::ProviderBrowser(_, v) => v.secret(),
             Self::Cookies(_, _, v) => v,
         }
     }
@@ -389,7 +385,7 @@ impl Material {
                 provider: *provider,
                 secret,
             },
-            Self::ProviderBrowser(_, selection, _) => VerifiedSource::Browser(selection.clone()),
+            Self::ProviderBrowser(selection, _) => VerifiedSource::Browser(selection.clone()),
             Self::Cookies(provider, selection, _) => VerifiedSource::BrowserCookies {
                 provider: *provider,
                 selection: selection.clone(),
@@ -1002,7 +998,7 @@ impl UsagePage {
                                             .import_for(&profile, browser::StorageSource::Kimi)
                                             .map_err(browser_error)?;
                                         providers::kimi::session(material.secret())?;
-                                        Material::ProviderBrowser(provider, selection, material)
+                                        Material::ProviderBrowser(selection, material)
                                     } else {
                                         let (selection, material) = shared
                                             .browser
@@ -1039,7 +1035,7 @@ impl UsagePage {
                                 material.secret(),
                                 proxy.as_deref(),
                             )?;
-                            if let Material::ProviderBrowser(_, _, browser) = &material {
+                            if let Material::ProviderBrowser(_, browser) = &material {
                                 bind_browser_identity(&mut balance, browser.identity())?;
                             }
                             Ok((material, balance))
@@ -1603,7 +1599,6 @@ impl Render for UsagePage {
                     selection.browser().label(),
                     selection.label()
                 ),
-                Authentication::ProviderSession { .. } => t(L10nKey::UsageSessionSource).to_owned(),
                 Authentication::BrowserCookies { selection, .. } => format!(
                     "{} · {} · {}",
                     t(L10nKey::UsageCookieSource),

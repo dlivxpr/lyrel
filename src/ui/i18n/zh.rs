@@ -453,10 +453,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageCommandSessionHelp => {
             "从你已授权的 Command Code 登录请求中，明确复制一个会话 Cookie 的 name=value（不是 API key，也不是整段 Cookie）。仅在 api.commandcode.ai 验证会话用户与 API key 用户相同、并成功查询增强后保存；不假设 Cookie 名称或 subscription.userId。"
         }
-        L10nKey::UsageApiSource => "API key",
+        L10nKey::UsageApiSource => "API 密钥",
         L10nKey::UsageSessionSource => "私有平台 · 手工会话",
         L10nKey::UsageBrowserSource => "私有平台 · 浏览器 LocalStorage",
-        L10nKey::UsageApiKey => "API key",
+        L10nKey::UsageApiKey => "API 密钥",
         L10nKey::UsageSessionInput => "平台 userToken 或 Harness grant",
         L10nKey::UsageSessionHelp => {
             "从 platform.deepseek.com 的 LocalStorage 复制 userToken（裸值或 userToken JSON）；也可粘贴带 version、token、issuer 的 Harness grant JSON。拒绝 Cookie 和官方 API key。验证后仅将必要 token 存入系统凭据库。"
