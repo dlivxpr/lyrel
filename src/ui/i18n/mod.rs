@@ -302,7 +302,6 @@ l10n_keys! {
     StatisticsCatalogDisabled,
     StatisticsManageSources,
     StatisticsManagePrices,
-    StatisticsEditSource,
     StatisticsSaveSource,
     StatisticsPriceRow,
     StatisticsSourceLocation,
