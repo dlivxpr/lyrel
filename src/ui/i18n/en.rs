@@ -443,7 +443,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsNavAbout => "About",
         L10nKey::SettingsNavUsage => "Usage",
         L10nKey::UsageSearchKeywords => {
-            "DeepSeek balance API key accounts rename refresh credentials usage private platform session browser profile LocalStorage userToken"
+            "DeepSeek StepFun Xiaomi MiMo balance plan Credits quota reset API key accounts rename refresh credentials usage private platform session cookie browser profile LocalStorage userToken"
         }
         L10nKey::UsageScope => {
             "Desktop-wide query accounts, independent of SSH machines. No agent keys are read."
@@ -451,10 +451,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageOfficial => {
             "Official API: GET https://api.deepseek.com/user/balance · Bearer API key. The API does not return a user identity or reset period; the name and ID below identify the local query account."
         }
-        L10nKey::UsageSource => "DeepSeek authentication source",
+        L10nKey::UsageSource => "Authentication source",
         L10nKey::UsageApiSource => "Official API key",
         L10nKey::UsageSessionSource => "Private platform · manual session",
-        L10nKey::UsageBrowserSource => "Private platform · browser LocalStorage",
+        L10nKey::UsageBrowserSource => "Private platform · browser",
         L10nKey::UsageApiKey => "DeepSeek API key",
         L10nKey::UsageSessionInput => "Platform userToken or Harness grant",
         L10nKey::UsageSessionHelp => {
@@ -479,7 +479,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Access to the selected source was denied. Background refresh never requests permission. Check access or enter the session manually."
         }
         L10nKey::UsageBrowserMissing => {
-            "The selected profile or platform userToken is missing. Sign in with that profile and import again."
+            "The selected profile or required provider session fields are missing. Sign in with that profile and import again."
         }
         L10nKey::UsageBrowserUnsupported => {
             "This platform or browser storage format is unsupported. Enter the session manually."
@@ -490,6 +490,38 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageBrowserUnreadable => {
             "Could not read the selected browser storage. No other profile was used. Check file access and browser version."
         }
+        L10nKey::UsageProvider => "Provider",
+        L10nKey::UsageStepFunHelp => {
+            "Private StepFun console interface: platform.stepfun.com Dashboard QueryStepPlanRateLimit, UserInfo and GetStepPlanStatus only. Copy the decoded Oasis-Token from your own Network request headers and web_id from that site's LocalStorage; paste Oasis-Token=…; Oasis-Webid=…. Oasis-Webid is a request header, never derived from a JWT. No API-key query is supported. Request windows and Credit plans remain separate."
+        }
+        L10nKey::UsageMiMoHelp => {
+            "Private MiMo console interface: platform.xiaomimimo.com/api/v1/balance, userProfile, tokenPlan/detail and tokenPlan/usage only. Paste api-platform_serviceToken (or serviceToken) with userId from your own session. No API-key query is supported. Balances and plan Credits remain separate; missing fields stay unknown."
+        }
+        L10nKey::UsageCookieInput => "Required session fields",
+        L10nKey::UsageCookieBrowserHelp => {
+            "Reads only the required cookies in the selected profile; StepFun also needs the exact platform origin's LocalStorage web_id. Firefox is supported; macOS Chromium requests Keychain access only during explicit import. Refresh never prompts. Windows App-Bound Encryption cannot be bypassed; use a manual session instead. Browser material is never saved. A changed session requires explicit re-import."
+        }
+        L10nKey::UsageCookieSource => "Private platform · browser cookies",
+        L10nKey::UsageBrowserProtected => {
+            "App-Bound Encryption protects these browser cookies. Lyrel cannot import them and will not weaken or bypass protection. Enter the session manually or select a supported Firefox profile."
+        }
+        L10nKey::UsageIdentity => "Identity",
+        L10nKey::UsagePlan => "Plan",
+        L10nKey::UsageUnknownValue => "Unknown",
+        L10nKey::UsageFiveHour => "5-hour window",
+        L10nKey::UsageWeekly => "Weekly window",
+        L10nKey::UsageMonthly => "Monthly plan",
+        L10nKey::UsageCash => "Cash balance",
+        L10nKey::UsageGift => "Gift balance",
+        L10nKey::UsageFrozen => "Frozen balance",
+        L10nKey::UsageOverdraft => "Overdraft facility",
+        L10nKey::UsageSubscriptionCredit => "Subscription Credits",
+        L10nKey::UsageCreditBucket => "Credit bucket",
+        L10nKey::UsageRemaining => "Remaining",
+        L10nKey::UsageUsed => "Used",
+        L10nKey::UsageLimit => "Limit",
+        L10nKey::UsageReset => "Resets",
+        L10nKey::UsageExpires => "Expires",
         L10nKey::UsageAdd => "Add account…",
         L10nKey::UsageRefreshAll => "Refresh all",
         L10nKey::UsageRefresh => "Refresh",
