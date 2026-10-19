@@ -2306,6 +2306,7 @@ mod tests {
         let mut cache = StatisticsCache::default();
         let first = statistics::scan(&*host, &[source.clone()], &mut cache).unwrap();
         let totals = first.aggregate(&DateWindow::all("UTC"));
+        assert_eq!(totals.main_sessions(), 1);
         assert_eq!(totals.tokens().input(), Some(9));
         assert_eq!(totals.tokens().output(), None);
         assert_eq!(totals.recorded_usd(), Some(1.25));

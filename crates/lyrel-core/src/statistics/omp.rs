@@ -169,6 +169,7 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<NativeSession> {
                     timestamp: timestamp(&value).ok_or_else(error)?,
                     project: value.get("cwd").and_then(Value::as_str).map(str::to_owned),
                     records: Vec::new(),
+                    activity: Vec::new(),
                 });
             }
             Some("message" | "model_usage") => {

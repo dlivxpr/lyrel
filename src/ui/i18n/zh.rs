@@ -138,6 +138,47 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "只读原生历史 · omp 18.12.1 JSONL／Hermes 0.22.2 公开网关 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。覆盖限制与未知谱系在下方明确显示。"
         }
         L10nKey::StatisticsOpen => "打开统计",
+        L10nKey::StatisticsAnalysisTitle => "活动与明细",
+        L10nKey::StatisticsAllAgents => "全部已发现智能体",
+        L10nKey::StatisticsAgents => "智能体明细",
+        L10nKey::StatisticsModels => "常用模型",
+        L10nKey::StatisticsProjects => "常用项目",
+        L10nKey::StatisticsAnalysisValues => {
+            "{tokens} Token · 记录费用 {cost} · 估算费用 {estimated}\n{sessions} 个主会话 · {calls} 条用量记录（其中 {cumulative} 条累计）· {unpriced} 条未计价\n输入 {input} · 输出 {output} · 缓存读取 {read} · 缓存写入 {write}\n{status}"
+        }
+        L10nKey::StatisticsAnalysisAgent => "分析智能体",
+        L10nKey::StatisticsAnalysisScope => {
+            "仅筛选此分析，沿用上方机器、已发现来源与日期范围。刷新期间保留旧结果。"
+        }
+        L10nKey::StatisticsAnalysisMetric => "热力图指标",
+        L10nKey::StatisticsMetricScope => {
+            "仅改变日历深浅，详情始终显示全部指标。费用深浅仅使用完整记录费用，不使用估算或未计价调用。"
+        }
+        L10nKey::StatisticsAnalysisError => "无法构建桌面日历：{error}",
+        L10nKey::StatisticsPreviousYear => "上一年",
+        L10nKey::StatisticsNextYear => "下一年",
+        L10nKey::StatisticsStreaks => {
+            "当前连续 {current} 天 · 最长连续 {longest} 天。仅限可见年份与所选范围；今天无活动时从昨天起算。来源未知或跨日累计用量时无法可靠计算。"
+        }
+        L10nKey::StatisticsOutsideRange => "所选范围外：不计算此日活动，不表示零活动。",
+        L10nKey::StatisticsCalendarKeys => {
+            "选择日期查看详情。方向键：日／周；Page Up/Down：月；Home/End：年首／年尾；Enter：详情；Escape：隐藏详情，再按关闭设置。"
+        }
+        L10nKey::StatisticsHeatmapLegend => {
+            "{metric}：浅 → 深 = 0 → {max}（本年及所选范围内已知最大值）。? 表示未知／不完整；– 表示范围外。选择日期查看准确数值。跨日会话数不可相加，累计用量不会摊到每天。"
+        }
+        L10nKey::StatisticsWeekdays => "一　 二　 三　 四　 五　 六　 日",
+        L10nKey::StatisticsBreakdowns => "分解明细",
+        L10nKey::StatisticsBreakdownScope => {
+            "覆盖完整所选范围，不限于日历年份。已知 Token 总量降序排列，未知不参与排名。智能体、来源作用域与提供商分别保留。模型／项目会话数表示参与、不可相加；子代理用量不增加主会话数。"
+        }
+        L10nKey::StatisticsUnattributed => "无法归属",
+        L10nKey::StatisticsPreviousPage => "上一页",
+        L10nKey::StatisticsNextPage => "下一页",
+        L10nKey::StatisticsAnalysisSnapshot => "当前快照的分析智能体：{agent}",
+        L10nKey::StatisticsNoAnalysisSources => {
+            "所选机器中没有与此分析智能体匹配的已发现来源。请选择其他智能体或刷新；来源缺失不表示零活动。"
+        }
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 需要加载原生扩展。--no-extensions/-ne 会禁用发现；--no-session 会禁用历史、恢复与分叉。Print/JSON/RPC 模式不是原生 TUI。缺少事件不代表本轮结束，请检查启动诊断与项目信任，不要绕过授权。"
         }

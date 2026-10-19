@@ -276,6 +276,7 @@ fn parse(
                     timestamp: end.or(start).unwrap_or(i64::MIN),
                     project: project_path,
                     records,
+                    activity: Vec::new(),
                 },
             });
         }
