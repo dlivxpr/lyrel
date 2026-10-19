@@ -131,7 +131,7 @@ pub(super) fn scan_source(
     }
 }
 
-fn parse(
+pub(super) fn parse(
     source: &Source,
     value: &Value,
     observed: i64,
