@@ -2,8 +2,8 @@
 //! Profile discovery reads only browser metadata; session reads require an explicit profile.
 
 mod chromium;
-mod firefox;
 mod cookies;
+mod firefox;
 pub(super) use cookies::CookieProvider;
 #[cfg(test)]
 mod tests;

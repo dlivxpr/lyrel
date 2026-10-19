@@ -24,8 +24,8 @@ mod accounts;
 mod browser;
 mod platform;
 mod providers;
-use providers::Provider;
 use accounts::*;
+use providers::Provider;
 use uuid::Uuid;
 
 const ENDPOINT: &str = "https://api.deepseek.com/user/balance";
@@ -45,9 +45,15 @@ impl UsageRequest<'_> {
             HttpSource::Official => ENDPOINT,
             HttpSource::Platform(_) => platform::ENDPOINT,
             HttpSource::Provider(provider, route) => match (provider, route) {
-                (Provider::StepFun, 0) => "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit",
-                (Provider::StepFun, 1) => "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus",
-                (Provider::StepFun, _) => "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/UserInfo",
+                (Provider::StepFun, 0) => {
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit"
+                }
+                (Provider::StepFun, 1) => {
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus"
+                }
+                (Provider::StepFun, _) => {
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/UserInfo"
+                }
                 (Provider::MiMo, 0) => "https://platform.xiaomimimo.com/api/v1/balance",
                 (Provider::MiMo, 1) => "https://platform.xiaomimimo.com/api/v1/tokenPlan/detail",
                 (Provider::MiMo, 2) => "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage",
@@ -68,12 +74,18 @@ impl UsageRequest<'_> {
         match self.source {
             HttpSource::Official => format!("Bearer {}", self.secret),
             HttpSource::Platform(kind) => kind.authorization_value(self.secret),
-            HttpSource::Provider(Provider::StepFun, _) => self.session_field("Oasis-Token").to_owned(),
+            HttpSource::Provider(Provider::StepFun, _) => {
+                self.session_field("Oasis-Token").to_owned()
+            }
             HttpSource::Provider(..) => self.secret.to_owned(),
         }
     }
     fn session_field(&self, name: &str) -> &str {
-        self.secret.split("; ").filter_map(|part|part.split_once('=')).find_map(|(key,value)|(key==name).then_some(value)).unwrap_or("")
+        self.secret
+            .split("; ")
+            .filter_map(|part| part.split_once('='))
+            .find_map(|(key, value)| (key == name).then_some(value))
+            .unwrap_or("")
     }
 }
 /// The varying external HTTP boundary; source selection, parsing and transitions remain real.
@@ -110,26 +122,43 @@ impl DeepSeekHttp {
             builder = builder.proxy(Some(proxy));
         }
         let agent: ureq::Agent = builder.build().into();
-        let mut response = if matches!(request.source, HttpSource::Provider(Provider::StepFun, _)) {
-            agent.post(endpoint)
-                .header("Content-Type", "application/json")
-                .header("Connect-Protocol-Version", "1")
-                .header("oasis-appid", "10300").header("oasis-platform", "web")
-                .header("Origin", "https://platform.stepfun.com").header("Referer", "https://platform.stepfun.com/")
-                .header("Accept", "application/json")
-                .header(request.header_name(), request.authorization_value())
-                .header("Oasis-Webid", request.session_field("Oasis-Webid"))
-                .header("Cookie", format!("Oasis-Token={}", url::form_urlencoded::byte_serialize(request.session_field("Oasis-Token").as_bytes()).collect::<String>()))
-                .send("{}")
-        } else {
-            let mut get = agent.get(endpoint)
-                .header("Accept", "application/json")
-                .header(request.header_name(), request.authorization_value());
-            if matches!(request.source, HttpSource::Provider(Provider::MiMo, _)) {
-                get = get.header("Origin", "https://platform.xiaomimimo.com").header("Referer", "https://platform.xiaomimimo.com/console/balance");
+        let mut response =
+            if matches!(request.source, HttpSource::Provider(Provider::StepFun, _)) {
+                agent
+                    .post(endpoint)
+                    .header("Content-Type", "application/json")
+                    .header("Connect-Protocol-Version", "1")
+                    .header("oasis-appid", "10300")
+                    .header("oasis-platform", "web")
+                    .header("Origin", "https://platform.stepfun.com")
+                    .header("Referer", "https://platform.stepfun.com/")
+                    .header("Accept", "application/json")
+                    .header(request.header_name(), request.authorization_value())
+                    .header("Oasis-Webid", request.session_field("Oasis-Webid"))
+                    .header(
+                        "Cookie",
+                        format!(
+                            "Oasis-Token={}",
+                            url::form_urlencoded::byte_serialize(
+                                request.session_field("Oasis-Token").as_bytes()
+                            )
+                            .collect::<String>()
+                        ),
+                    )
+                    .send("{}")
+            } else {
+                let mut get = agent
+                    .get(endpoint)
+                    .header("Accept", "application/json")
+                    .header(request.header_name(), request.authorization_value());
+                if matches!(request.source, HttpSource::Provider(Provider::MiMo, _)) {
+                    get = get
+                        .header("Origin", "https://platform.xiaomimimo.com")
+                        .header("Referer", "https://platform.xiaomimimo.com/console/balance");
+                }
+                get.call()
             }
-            get.call()
-        }.map_err(|_| UsageError::Network)?;
+            .map_err(|_| UsageError::Network)?;
         let status = response.status().as_u16();
         let body = response
             .body_mut()
@@ -216,7 +245,11 @@ enum Material {
     Session(platform::SessionMaterial),
     Browser(browser::BrowserSelection, platform::SessionMaterial),
     ProviderSession(Provider, zeroize::Zeroizing<String>),
-    Cookies(Provider, browser::BrowserSelection, zeroize::Zeroizing<String>),
+    Cookies(
+        Provider,
+        browser::BrowserSelection,
+        zeroize::Zeroizing<String>,
+    ),
 }
 impl Material {
     fn secret(&self) -> &str {
@@ -232,7 +265,9 @@ impl Material {
             Self::ApiKey(_) => HttpSource::Official,
             Self::Session(v) => HttpSource::Platform(v.kind()),
             Self::Browser(..) => HttpSource::Platform(platform::SessionKind::WebToken),
-            Self::ProviderSession(provider, _) | Self::Cookies(provider, _, _) => HttpSource::Provider(*provider, 0),
+            Self::ProviderSession(provider, _) | Self::Cookies(provider, _, _) => {
+                HttpSource::Provider(*provider, 0)
+            }
         }
     }
     fn verified(&self) -> VerifiedSource<'_> {
@@ -243,8 +278,14 @@ impl Material {
                 secret: v.secret(),
             },
             Self::Browser(selection, _) => VerifiedSource::Browser(selection.clone()),
-            Self::ProviderSession(provider, secret) => VerifiedSource::ProviderSession { provider: *provider, secret },
-            Self::Cookies(provider, selection, _) => VerifiedSource::BrowserCookies { provider: *provider, selection: selection.clone() },
+            Self::ProviderSession(provider, secret) => VerifiedSource::ProviderSession {
+                provider: *provider,
+                secret,
+            },
+            Self::Cookies(provider, selection, _) => VerifiedSource::BrowserCookies {
+                provider: *provider,
+                selection: selection.clone(),
+            },
         }
     }
 }
@@ -270,8 +311,12 @@ impl SelectItem for Source {
 }
 impl SelectItem for Provider {
     type Value = Self;
-    fn title(&self) -> gpui_kit::SharedString { self.label().into() }
-    fn value(&self) -> &Self { self }
+    fn title(&self) -> gpui_kit::SharedString {
+        self.label().into()
+    }
+    fn value(&self) -> &Self {
+        self
+    }
 }
 #[derive(Clone)]
 struct BrowserChoice(browser::Browser);
@@ -366,8 +411,17 @@ impl UsagePage {
         };
         let name = cx.new(|cx| InputState::new(window, cx));
         let key = cx.new(|cx| InputState::new(window, cx).masked(true));
-        let provider = cx.new(|cx| SelectState::new(vec![Provider::DeepSeek, Provider::StepFun, Provider::MiMo], None, window, cx));
-        provider.update(cx, |s, cx| s.set_selected_value(&Provider::DeepSeek, window, cx));
+        let provider = cx.new(|cx| {
+            SelectState::new(
+                vec![Provider::DeepSeek, Provider::StepFun, Provider::MiMo],
+                None,
+                window,
+                cx,
+            )
+        });
+        provider.update(cx, |s, cx| {
+            s.set_selected_value(&Provider::DeepSeek, window, cx)
+        });
         let cadence = cx.new(|cx| {
             SelectState::new(
                 vec![Cadence(0), Cadence(60), Cadence(300)],
@@ -415,18 +469,36 @@ impl UsagePage {
                 page.work(cx, move |a| a.set_interval(secs));
             }
         }));
-        subs.push(cx.subscribe_in(&provider, window, |page, _, event, window, cx| {
-            if let SelectEvent::Confirm(Some(provider)) = event {
-                page.form_version.fetch_add(1, Ordering::SeqCst);
-                page.key.update(cx, |s, cx| s.set_value("", window, cx));
-                page.error = None;
-                page.source.update(cx, |s, cx| {
-                    s.set_items(if *provider == Provider::DeepSeek { vec![Source::ApiKey, Source::Session, Source::Browser] } else { vec![Source::Session, Source::Browser] }, window, cx);
-                    s.set_selected_value(&if *provider == Provider::DeepSeek { Source::ApiKey } else { Source::Session }, window, cx);
-                });
-                cx.notify();
-            }
-        }));
+        subs.push(
+            cx.subscribe_in(&provider, window, |page, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(provider)) = event {
+                    page.form_version.fetch_add(1, Ordering::SeqCst);
+                    page.key.update(cx, |s, cx| s.set_value("", window, cx));
+                    page.error = None;
+                    page.source.update(cx, |s, cx| {
+                        s.set_items(
+                            if *provider == Provider::DeepSeek {
+                                vec![Source::ApiKey, Source::Session, Source::Browser]
+                            } else {
+                                vec![Source::Session, Source::Browser]
+                            },
+                            window,
+                            cx,
+                        );
+                        s.set_selected_value(
+                            &if *provider == Provider::DeepSeek {
+                                Source::ApiKey
+                            } else {
+                                Source::Session
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                    cx.notify();
+                }
+            }),
+        );
         subs.push(cx.subscribe_in(
             &source,
             window,
@@ -579,11 +651,30 @@ impl UsagePage {
                 .unwrap_or_default(),
         };
         let provider = match edit {
-            Edit::Replace(id) => self.data.read(cx).stored.accounts.iter().find(|a| a.id == id).map(|a| a.provider).unwrap_or_default(),
+            Edit::Replace(id) => self
+                .data
+                .read(cx)
+                .stored
+                .accounts
+                .iter()
+                .find(|a| a.id == id)
+                .map(|a| a.provider)
+                .unwrap_or_default(),
             _ => Provider::DeepSeek,
         };
-        self.provider.update(cx, |s, cx| s.set_selected_value(&provider, window, cx));
-        self.source.update(cx, |s, cx| s.set_items(if provider == Provider::DeepSeek { vec![Source::ApiKey, Source::Session, Source::Browser] } else { vec![Source::Session, Source::Browser] }, window, cx));
+        self.provider
+            .update(cx, |s, cx| s.set_selected_value(&provider, window, cx));
+        self.source.update(cx, |s, cx| {
+            s.set_items(
+                if provider == Provider::DeepSeek {
+                    vec![Source::ApiKey, Source::Session, Source::Browser]
+                } else {
+                    vec![Source::Session, Source::Browser]
+                },
+                window,
+                cx,
+            )
+        });
         let source = match edit {
             Edit::Replace(id) => self
                 .data
@@ -594,8 +685,10 @@ impl UsagePage {
                 .find(|a| a.id == id)
                 .map(|a| match a.auth {
                     Authentication::ManualApiKey { .. } => Source::ApiKey,
-                    Authentication::ManualSession { .. } | Authentication::ProviderSession { .. } => Source::Session,
-                    Authentication::BrowserLocalStorage { .. } | Authentication::BrowserCookies { .. } => Source::Browser,
+                    Authentication::ManualSession { .. }
+                    | Authentication::ProviderSession { .. } => Source::Session,
+                    Authentication::BrowserLocalStorage { .. }
+                    | Authentication::BrowserCookies { .. } => Source::Browser,
                 })
                 .unwrap_or(Source::ApiKey),
             _ => Source::ApiKey,
@@ -676,7 +769,12 @@ impl UsagePage {
             Edit::Remove(id) => self.work(cx, move |a| a.remove(id)),
             Edit::Add | Edit::Replace(_) => {
                 let secret = zeroize::Zeroizing::new(self.key.read(cx).value().trim().to_string());
-                let provider = self.provider.read(cx).selected_value().copied().unwrap_or_default();
+                let provider = self
+                    .provider
+                    .read(cx)
+                    .selected_value()
+                    .copied()
+                    .unwrap_or_default();
                 let source = self
                     .source
                     .read(cx)
@@ -714,17 +812,33 @@ impl UsagePage {
                         let verified = (|| {
                             let material = match (provider, source) {
                                 (Provider::DeepSeek, Source::ApiKey) => Material::ApiKey(secret),
-                                (Provider::DeepSeek, Source::Session) => Material::Session(platform::parse_manual(&secret)?),
+                                (Provider::DeepSeek, Source::Session) => {
+                                    Material::Session(platform::parse_manual(&secret)?)
+                                }
                                 (Provider::DeepSeek, Source::Browser) => {
                                     let profile = profile.ok_or(UsageError::BrowserMissing)?;
-                                    let (selection, material) = shared.browser.import(&profile).map_err(browser_error)?;
-                                    Material::Browser(selection, platform::parse_browser(material.secret())?)
+                                    let (selection, material) =
+                                        shared.browser.import(&profile).map_err(browser_error)?;
+                                    Material::Browser(
+                                        selection,
+                                        platform::parse_browser(material.secret())?,
+                                    )
                                 }
-                                (_, Source::Session) => Material::ProviderSession(provider, providers::parse_manual(provider, &secret)?),
+                                (_, Source::Session) => Material::ProviderSession(
+                                    provider,
+                                    providers::parse_manual(provider, &secret)?,
+                                ),
                                 (_, Source::Browser) => {
                                     let profile = profile.ok_or(UsageError::BrowserMissing)?;
-                                    let (selection, material) = shared.browser.import_cookies(&profile, cookie_provider(provider)?, true).map_err(browser_error)?;
-                                    Material::Cookies(provider, selection, providers::parse_manual(provider, material.secret())?)
+                                    let (selection, material) = shared
+                                        .browser
+                                        .import_cookies(&profile, cookie_provider(provider)?, true)
+                                        .map_err(browser_error)?;
+                                    Material::Cookies(
+                                        provider,
+                                        selection,
+                                        providers::parse_session(provider, material.secret())?,
+                                    )
                                 }
                                 (_, Source::ApiKey) => return Err(UsageError::Authentication),
                             };
@@ -814,7 +928,11 @@ impl UsagePage {
                     };
                     accounts.begin_refresh(id).map(|ticket| {
                         let auth = accounts.account(id).unwrap().auth.clone();
-                        let secret = if matches!(auth, Authentication::BrowserLocalStorage { .. } | Authentication::BrowserCookies { .. }) {
+                        let secret = if matches!(
+                            auth,
+                            Authentication::BrowserLocalStorage { .. }
+                                | Authentication::BrowserCookies { .. }
+                        ) {
                             Ok(None)
                         } else {
                             accounts
@@ -853,12 +971,28 @@ impl UsagePage {
                     Authentication::ProviderSession { provider, .. } => {
                         let secret = secret.as_deref().map(|s| s.as_str()).unwrap_or("");
                         let secret = providers::parse_manual(provider, secret)?;
-                        query(&*shared.http, HttpSource::Provider(provider, 0), &secret, proxy.as_deref())
+                        query(
+                            &*shared.http,
+                            HttpSource::Provider(provider, 0),
+                            &secret,
+                            proxy.as_deref(),
+                        )
                     }
-                    Authentication::BrowserCookies { selection, provider } => {
-                        let material = shared.browser.resolve_cookies(&selection, cookie_provider(provider)?).map_err(browser_error)?;
-                        let secret = providers::parse_manual(provider, material.secret())?;
-                        query(&*shared.http, HttpSource::Provider(provider, 0), &secret, proxy.as_deref())
+                    Authentication::BrowserCookies {
+                        selection,
+                        provider,
+                    } => {
+                        let material = shared
+                            .browser
+                            .resolve_cookies(&selection, cookie_provider(provider)?)
+                            .map_err(browser_error)?;
+                        let secret = providers::parse_session(provider, material.secret())?;
+                        query(
+                            &*shared.http,
+                            HttpSource::Provider(provider, 0),
+                            &secret,
+                            proxy.as_deref(),
+                        )
                     }
                 });
                 if let Ok(accounts) = shared.accounts.lock().unwrap().as_mut() {
@@ -1023,9 +1157,17 @@ impl Render for UsagePage {
                     .child(Input::new(&self.name).id("usage-name").small().w_full());
             }
             if matches!(edit, Edit::Add | Edit::Replace(_)) {
-                let provider = self.provider.read(cx).selected_value().copied().unwrap_or_default();
+                let provider = self
+                    .provider
+                    .read(cx)
+                    .selected_value()
+                    .copied()
+                    .unwrap_or_default();
                 form = form.child(t(L10nKey::UsageProvider)).child(
-                    Select::new(&self.provider).id("usage-provider").small().w_full()
+                    Select::new(&self.provider)
+                        .id("usage-provider")
+                        .small()
+                        .w_full()
                         .disabled(self.submitting || matches!(edit, Edit::Replace(_)))
                         .accessibility_label(t(L10nKey::UsageProvider)),
                 );
@@ -1048,16 +1190,26 @@ impl Render for UsagePage {
                         .child(t(L10nKey::UsageApiKey))
                         .child(Input::new(&self.key).id("usage-key").small().w_full());
                 } else {
-                    form = form.child(
-                        div()
-                            .text_color(muted)
-                            .child(t(if provider == Provider::DeepSeek { L10nKey::UsagePrivateDisclosure } else { provider.help() })),
-                    );
+                    form = form.child(div().text_color(muted).child(t(
+                        if provider == Provider::DeepSeek {
+                            L10nKey::UsagePrivateDisclosure
+                        } else {
+                            provider.help()
+                        },
+                    )));
                     if source == Source::Session {
                         form = form
-                            .child(t(if provider == Provider::DeepSeek { L10nKey::UsageSessionInput } else { L10nKey::UsageCookieInput }))
+                            .child(t(if provider == Provider::DeepSeek {
+                                L10nKey::UsageSessionInput
+                            } else {
+                                L10nKey::UsageCookieInput
+                            }))
                             .child(Input::new(&self.key).id("usage-key").small().w_full())
-                            .when(provider == Provider::DeepSeek, |form| form.child(div().text_color(muted).child(t(L10nKey::UsageSessionHelp))));
+                            .when(provider == Provider::DeepSeek, |form| {
+                                form.child(
+                                    div().text_color(muted).child(t(L10nKey::UsageSessionHelp)),
+                                )
+                            });
                     } else {
                         form = form
                             .child(t(L10nKey::UsageBrowser))
@@ -1080,7 +1232,13 @@ impl Render for UsagePage {
                                     .placeholder(t(L10nKey::UsageChooseProfile))
                                     .accessibility_label(t(L10nKey::UsageProfile)),
                             )
-                            .child(div().text_color(muted).child(t(if provider == Provider::DeepSeek { L10nKey::UsageBrowserHelp } else { L10nKey::UsageCookieBrowserHelp })));
+                            .child(div().text_color(muted).child(t(
+                                if provider == Provider::DeepSeek {
+                                    L10nKey::UsageBrowserHelp
+                                } else {
+                                    L10nKey::UsageCookieBrowserHelp
+                                },
+                            )));
                         if self.discovering {
                             form = form.child(t(L10nKey::UsageLoading));
                         }
@@ -1143,7 +1301,11 @@ impl Render for UsagePage {
                 .border_t_1()
                 .border_color(cx.theme().border)
                 .child(account.name)
-                .child(div().text_color(muted).child(format!("{} · {id}", account.provider.label())));
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(format!("{} · {id}", account.provider.label())),
+                );
             row = row.child(div().text_color(muted).child(match &account.auth {
                 Authentication::ManualApiKey { .. } => t(L10nKey::UsageApiSource).to_owned(),
                 Authentication::ManualSession { kind, .. } => format!(
@@ -1161,7 +1323,12 @@ impl Render for UsagePage {
                     selection.label()
                 ),
                 Authentication::ProviderSession { .. } => t(L10nKey::UsageSessionSource).to_owned(),
-                Authentication::BrowserCookies { selection, .. } => format!("{} · {} · {}", t(L10nKey::UsageCookieSource), selection.browser().label(), selection.label()),
+                Authentication::BrowserCookies { selection, .. } => format!(
+                    "{} · {} · {}",
+                    t(L10nKey::UsageCookieSource),
+                    selection.browser().label(),
+                    selection.label()
+                ),
             }));
             row = row.child(t(if account.removing {
                 L10nKey::UsageRemoving
@@ -1215,11 +1382,36 @@ impl Render for UsagePage {
                         }
                     }
                     Balance::Provider(report) => {
-                        row = row.child(format!("{} {}", t(L10nKey::UsageIdentity), report.identity.as_deref().unwrap_or(t(L10nKey::UsageUnknownValue))))
-                            .child(format!("{} {}", t(L10nKey::UsagePlan), report.plan.as_deref().unwrap_or(t(L10nKey::UsageUnknownValue))));
-                        if report.expired == Some(true) { row = row.child(t(L10nKey::UsageUnavailable)); }
-                        if let Some(expires) = &report.plan_expires { row = row.child(format!("{} · {} {expires}", t(L10nKey::UsagePlan), t(L10nKey::UsageExpires))); }
-                        if report.pools.is_empty() { row = row.child(t(L10nKey::UsageUnknown)); }
+                        row = row
+                            .child(format!(
+                                "{} {}",
+                                t(L10nKey::UsageIdentity),
+                                report
+                                    .identity
+                                    .as_deref()
+                                    .unwrap_or(t(L10nKey::UsageUnknownValue))
+                            ))
+                            .child(format!(
+                                "{} {}",
+                                t(L10nKey::UsagePlan),
+                                report
+                                    .plan
+                                    .as_deref()
+                                    .unwrap_or(t(L10nKey::UsageUnknownValue))
+                            ));
+                        if report.expired == Some(true) {
+                            row = row.child(t(L10nKey::UsageUnavailable));
+                        }
+                        if let Some(expires) = &report.plan_expires {
+                            row = row.child(format!(
+                                "{} · {} {expires}",
+                                t(L10nKey::UsagePlan),
+                                t(L10nKey::UsageExpires)
+                            ));
+                        }
+                        if report.pools.is_empty() {
+                            row = row.child(t(L10nKey::UsageUnknown));
+                        }
                         for pool in &report.pools {
                             let label = match pool.kind {
                                 providers::PoolKind::FiveHour => L10nKey::UsageFiveHour,
@@ -1229,21 +1421,59 @@ impl Render for UsagePage {
                                 providers::PoolKind::Gift => L10nKey::UsageGift,
                                 providers::PoolKind::Frozen => L10nKey::UsageFrozen,
                                 providers::PoolKind::Overdraft => L10nKey::UsageOverdraft,
-                                providers::PoolKind::SubscriptionCredit => L10nKey::UsageSubscriptionCredit,
+                                providers::PoolKind::SubscriptionCredit => {
+                                    L10nKey::UsageSubscriptionCredit
+                                }
                                 providers::PoolKind::CreditBucket => L10nKey::UsageCreditBucket,
                                 providers::PoolKind::Monthly => L10nKey::UsageMonthly,
                             };
-                            let unit = if pool.unit.is_empty() { t(L10nKey::UsageUnknownValue) } else { &pool.unit };
-                            row = row.child(format!("{} · {} {} {}", t(label), t(L10nKey::UsageRemaining), pool.remaining.as_deref().unwrap_or(t(L10nKey::UsageUnknownValue)), unit));
-                            if let Some(name) = &pool.name { row = row.child(div().text_color(muted).child(name.clone())); }
-                            if let Some(used) = &pool.used { row = row.child(format!("{} {used} {unit}", t(L10nKey::UsageUsed))); }
-                            if let Some(limit) = &pool.limit { row = row.child(format!("{} {limit} {unit}", t(L10nKey::UsageLimit))); }
-                            if matches!(pool.kind, providers::PoolKind::FiveHour | providers::PoolKind::Weekly | providers::PoolKind::Monthly | providers::PoolKind::SubscriptionCredit | providers::PoolKind::CreditBucket) {
-                                row = row.child(format!("{} {}", t(L10nKey::UsageReset), pool.reset.as_deref().unwrap_or(t(L10nKey::UsageUnknownValue))));
+                            let unit = if pool.unit.is_empty() {
+                                t(L10nKey::UsageUnknownValue)
+                            } else {
+                                &pool.unit
+                            };
+                            row = row.child(format!(
+                                "{} · {} {} {}",
+                                t(label),
+                                t(L10nKey::UsageRemaining),
+                                pool.remaining
+                                    .as_deref()
+                                    .unwrap_or(t(L10nKey::UsageUnknownValue)),
+                                unit
+                            ));
+                            if let Some(name) = &pool.name {
+                                row = row.child(div().text_color(muted).child(name.clone()));
                             }
-                            if let Some(expires) = &pool.expires { row = row.child(format!("{} {expires}", t(L10nKey::UsageExpires))); }
+                            if let Some(used) = &pool.used {
+                                row = row.child(format!("{} {used} {unit}", t(L10nKey::UsageUsed)));
+                            }
+                            if let Some(limit) = &pool.limit {
+                                row =
+                                    row.child(format!("{} {limit} {unit}", t(L10nKey::UsageLimit)));
+                            }
+                            if matches!(
+                                pool.kind,
+                                providers::PoolKind::FiveHour
+                                    | providers::PoolKind::Weekly
+                                    | providers::PoolKind::Monthly
+                                    | providers::PoolKind::SubscriptionCredit
+                                    | providers::PoolKind::CreditBucket
+                            ) {
+                                row = row.child(format!(
+                                    "{} {}",
+                                    t(L10nKey::UsageReset),
+                                    pool.reset
+                                        .as_deref()
+                                        .unwrap_or(t(L10nKey::UsageUnknownValue))
+                                ));
+                            }
+                            if let Some(expires) = &pool.expires {
+                                row = row.child(format!("{} {expires}", t(L10nKey::UsageExpires)));
+                            }
                         }
-                        if let Some(error) = report.enhancement { row = row.child(div().text_color(danger).child(error_text(error))); }
+                        if let Some(error) = report.enhancement {
+                            row = row.child(div().text_color(danger).child(error_text(error)));
+                        }
                     }
                 }
                 let time = chrono::DateTime::from_timestamp(snapshot.updated_at as i64, 0)

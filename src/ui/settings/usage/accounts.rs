@@ -59,8 +59,14 @@ pub(super) enum VerifiedSource<'a> {
         secret: &'a str,
     },
     Browser(super::browser::BrowserSelection),
-    ProviderSession { provider: super::providers::Provider, secret: &'a str },
-    BrowserCookies { selection: super::browser::BrowserSelection, provider: super::providers::Provider },
+    ProviderSession {
+        provider: super::providers::Provider,
+        secret: &'a str,
+    },
+    BrowserCookies {
+        selection: super::browser::BrowserSelection,
+        provider: super::providers::Provider,
+    },
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Snapshot {
@@ -80,13 +86,21 @@ pub(super) enum Authentication {
     BrowserLocalStorage {
         selection: super::browser::BrowserSelection,
     },
-    ProviderSession { slot: Uuid, provider: super::providers::Provider },
-    BrowserCookies { selection: super::browser::BrowserSelection, provider: super::providers::Provider },
+    ProviderSession {
+        slot: Uuid,
+        provider: super::providers::Provider,
+    },
+    BrowserCookies {
+        selection: super::browser::BrowserSelection,
+        provider: super::providers::Provider,
+    },
 }
 impl Authentication {
     fn slot(&self) -> Option<Uuid> {
         match self {
-            Self::ManualApiKey { slot } | Self::ManualSession { slot, .. } | Self::ProviderSession { slot, .. } => Some(*slot),
+            Self::ManualApiKey { slot }
+            | Self::ManualSession { slot, .. }
+            | Self::ProviderSession { slot, .. } => Some(*slot),
             Self::BrowserLocalStorage { .. } | Self::BrowserCookies { .. } => None,
         }
     }
@@ -217,6 +231,26 @@ impl Accounts {
         else {
             return;
         };
+        let result = result.and_then(|balance| {
+            if let (
+                Some(Snapshot {
+                    balance: Balance::Provider(previous),
+                    ..
+                }),
+                Balance::Provider(next),
+            ) = (&account.snapshot, &balance)
+            {
+                if previous.provider != next.provider
+                    || previous
+                        .identity
+                        .as_ref()
+                        .is_some_and(|identity| next.identity.as_ref() != Some(identity))
+                {
+                    return Err(UsageError::BrowserChanged);
+                }
+            }
+            Ok(balance)
+        });
         account.busy = false;
         match result {
             Ok(balance) => {
@@ -275,10 +309,22 @@ impl Accounts {
                 kind: kind.unwrap(),
             },
             VerifiedSource::Browser(selection) => Authentication::BrowserLocalStorage { selection },
-            VerifiedSource::ProviderSession { provider, .. } => Authentication::ProviderSession { slot: slot.unwrap(), provider },
-            VerifiedSource::BrowserCookies { selection, provider } => Authentication::BrowserCookies { selection, provider },
+            VerifiedSource::ProviderSession { provider, .. } => Authentication::ProviderSession {
+                slot: slot.unwrap(),
+                provider,
+            },
+            VerifiedSource::BrowserCookies {
+                selection,
+                provider,
+            } => Authentication::BrowserCookies {
+                selection,
+                provider,
+            },
         };
-        let provider = match &balance { Balance::Provider(report) => report.provider, _ => super::providers::Provider::DeepSeek };
+        let provider = match &balance {
+            Balance::Provider(report) => report.provider,
+            _ => super::providers::Provider::DeepSeek,
+        };
         let mut next = self.stored.clone();
         if let Some(account) = next.accounts.iter_mut().find(|a| a.id == id) {
             account.retired_slots.extend(account.auth.slot());

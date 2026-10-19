@@ -75,7 +75,10 @@ pub(super) fn read_for(profile: &Path, origin: &str, key: &str) -> Result<String
             },
         );
     }
-    if !fs::canonicalize(&path).map_err(io_error)?.starts_with(profile) {
+    if !fs::canonicalize(&path)
+        .map_err(io_error)?
+        .starts_with(profile)
+    {
         return Err(BrowserError::Denied);
     }
     let lock = File::open(path.join("LOCK")).map_err(io_error)?;

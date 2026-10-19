@@ -491,12 +491,20 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Could not read the selected browser storage. No other profile was used. Check file access and browser version."
         }
         L10nKey::UsageProvider => "Provider",
-        L10nKey::UsageStepFunHelp => "Private StepFun console interface: platform.stepfun.com Dashboard QueryStepPlanRateLimit, UserInfo and GetStepPlanStatus only. Copy the decoded Oasis-Token from your own Network request headers and web_id from that site's LocalStorage; paste Oasis-Token=…; Oasis-Webid=…. Oasis-Webid is a request header, never derived from a JWT. No API-key query is supported. Request windows and Credit plans remain separate.",
-        L10nKey::UsageMiMoHelp => "Private MiMo console interface: platform.xiaomimimo.com/api/v1/balance, userProfile, tokenPlan/detail and tokenPlan/usage only. Paste api-platform_serviceToken (or serviceToken) with userId from your own session. No API-key query is supported. Balances and plan Credits remain separate; missing fields stay unknown.",
+        L10nKey::UsageStepFunHelp => {
+            "Private StepFun console interface: platform.stepfun.com Dashboard QueryStepPlanRateLimit, UserInfo and GetStepPlanStatus only. Copy the decoded Oasis-Token from your own Network request headers and web_id from that site's LocalStorage; paste Oasis-Token=…; Oasis-Webid=…. Oasis-Webid is a request header, never derived from a JWT. No API-key query is supported. Request windows and Credit plans remain separate."
+        }
+        L10nKey::UsageMiMoHelp => {
+            "Private MiMo console interface: platform.xiaomimimo.com/api/v1/balance, userProfile, tokenPlan/detail and tokenPlan/usage only. Paste api-platform_serviceToken (or serviceToken) with userId from your own session. No API-key query is supported. Balances and plan Credits remain separate; missing fields stay unknown."
+        }
         L10nKey::UsageCookieInput => "Required session fields",
-        L10nKey::UsageCookieBrowserHelp => "Reads only the required cookies in the selected profile; StepFun also needs the exact platform origin's LocalStorage web_id. Firefox is supported; macOS Chromium requests Keychain access only during explicit import. Refresh never prompts. Windows App-Bound Encryption cannot be bypassed; use a manual session instead. Browser material is never saved. A changed session requires explicit re-import.",
+        L10nKey::UsageCookieBrowserHelp => {
+            "Reads only the required cookies in the selected profile; StepFun also needs the exact platform origin's LocalStorage web_id. Firefox is supported; macOS Chromium requests Keychain access only during explicit import. Refresh never prompts. Windows App-Bound Encryption cannot be bypassed; use a manual session instead. Browser material is never saved. A changed session requires explicit re-import."
+        }
         L10nKey::UsageCookieSource => "Private platform · browser cookies",
-        L10nKey::UsageBrowserProtected => "App-Bound Encryption protects these browser cookies. Lyrel cannot import them and will not weaken or bypass protection. Enter the session manually or select a supported Firefox profile.",
+        L10nKey::UsageBrowserProtected => {
+            "App-Bound Encryption protects these browser cookies. Lyrel cannot import them and will not weaken or bypass protection. Enter the session manually or select a supported Firefox profile."
+        }
         L10nKey::UsageIdentity => "Identity",
         L10nKey::UsagePlan => "Plan",
         L10nKey::UsageUnknownValue => "Unknown",

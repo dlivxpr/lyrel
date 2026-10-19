@@ -100,13 +100,19 @@ pub(super) fn read_for(profile: &Path, origin: &str, key: &str) -> Result<String
     };
     // Exact HTTPS origin only. Container/partition origin attributes are not the
     // selected default origin and must not silently supply a different account.
-    let path = profile.join("storage/default").join(directory).join("ls/data.sqlite");
+    let path = profile
+        .join("storage/default")
+        .join(directory)
+        .join("ls/data.sqlite");
     match fs::metadata(&path) {
         Ok(metadata) if metadata.is_file() => {}
         Ok(_) => return Err(BrowserError::Unreadable),
         Err(error) => return Err(io_error(error)),
     }
-    if !fs::canonicalize(&path).map_err(io_error)?.starts_with(profile) {
+    if !fs::canonicalize(&path)
+        .map_err(io_error)?
+        .starts_with(profile)
+    {
         return Err(BrowserError::Denied);
     }
     // Do not use immutable=1: it silently ignores committed WAL records. SQLite
@@ -122,9 +128,7 @@ pub(super) fn read_for(profile: &Path, origin: &str, key: &str) -> Result<String
     db.execute_batch("PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;")
         .map_err(sql_error)?;
     let mut statement = db
-        .prepare(
-            "SELECT value, conversion_type, compression_type FROM data WHERE key = ?1",
-        )
+        .prepare("SELECT value, conversion_type, compression_type FROM data WHERE key = ?1")
         .map_err(|error| match error.sqlite_error_code() {
             Some(ErrorCode::Unknown) => BrowserError::Unsupported,
             _ => sql_error(error),
