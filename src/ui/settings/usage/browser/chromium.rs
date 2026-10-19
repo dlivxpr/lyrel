@@ -43,7 +43,7 @@ pub(super) fn profiles(
     Ok(())
 }
 
-pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
+pub(super) fn read(profile: &Path, origin: &str, name: &str) -> Result<String, BrowserError> {
     let path = profile.join("Local Storage/leveldb");
     if !path.try_exists().map_err(io_error)? {
         // Chromium's new SQLite LocalStorage backend is a separate format, not
@@ -59,6 +59,12 @@ pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
                 BrowserError::NoSession
             },
         );
+    }
+    if !fs::canonicalize(&path)
+        .map_err(io_error)?
+        .starts_with(profile)
+    {
+        return Err(BrowserError::Denied);
     }
     let lock = File::open(path.join("LOCK")).map_err(io_error)?;
     fs2::FileExt::try_lock_shared(&lock).map_err(|error| {
@@ -125,13 +131,15 @@ pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
         std::io::copy(&mut source, &mut destination).map_err(io_error)?;
     }
     let mut db = DB::open(memory_root, options).map_err(|_| BrowserError::Unreadable)?;
-    // Both DOMString encodings are specified by Chromium. Never enumerate keys
-    // or scan for a token-shaped value: exact origin + exact userToken only.
+    // Read only the explicitly allowlisted DOMString; never enumerate stored keys.
     let snapshot = db.get_snapshot();
-    for key in [
-        b"_https://platform.deepseek.com\0\x01userToken".as_slice(),
-        b"_https://platform.deepseek.com\0\x00u\0s\0e\0r\0T\0o\0k\0e\0n\0".as_slice(),
-    ] {
+    let mut latin = format!("_{origin}\0\x01").into_bytes();
+    latin.extend_from_slice(name.as_bytes());
+    let mut wide = format!("_{origin}\0\x00").into_bytes();
+    for word in name.encode_utf16() {
+        wide.extend_from_slice(&word.to_le_bytes());
+    }
+    for key in [&latin[..], &wide[..]] {
         if let Some(value) = db
             .get_at(&snapshot, key)
             .map_err(|_| BrowserError::Unreadable)?
