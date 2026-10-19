@@ -6,7 +6,7 @@ use crate::ui::{
     host_registry::HostRegistry,
 };
 use gpui_kit::component::{
-    ActiveTheme as _,
+    ActiveTheme as _, Disableable as _,
     button::{Button, ButtonVariants as _},
     text::TextView,
 };
@@ -296,6 +296,12 @@ impl LyrelApp {
         }
     }
     fn select_skills_host(&mut self, host: HostId, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .active_settings()
+            .is_some_and(|s| s.skills.install.target_locked())
+        {
+            return;
+        }
         if let Some(s) = self.active_settings_mut() {
             if s.skills.host == host {
                 return;
@@ -314,6 +320,12 @@ impl LyrelApp {
         self.refresh_skills(cx);
     }
     fn apply_skills_project(&mut self, cx: &mut Context<Self>) {
+        if self
+            .active_settings()
+            .is_some_and(|s| s.skills.install.target_locked())
+        {
+            return;
+        }
         let Some(project) = self
             .active_settings()
             .map(|s| s.skills.project_input.read(cx).value().trim().to_string())
@@ -475,7 +487,11 @@ impl LyrelApp {
                 })
             })
             .collect();
-        let host_picker = self.settings_dropdown("skills-machine", machine, None, entries, cx);
+        let host_picker = if state.install.target_locked() {
+            div().child(machine).into_any_element()
+        } else {
+            self.settings_dropdown("skills-machine", machine, None, entries, cx)
+        };
         let mut body = vec![
             div()
                 .text_sm()
@@ -491,10 +507,15 @@ impl LyrelApp {
             v_flex()
                 .gap_2()
                 .child(t(L10nKey::SkillsProject))
-                .child(Input::new(&state.project_input).id("skills-project-input"))
+                .child(
+                    Input::new(&state.project_input)
+                        .id("skills-project-input")
+                        .disabled(state.install.target_locked()),
+                )
                 .child(
                     Button::new("skills-apply-project")
                         .label(t(L10nKey::SkillsApplyProject))
+                        .disabled(state.install.target_locked())
                         .on_click(cx.listener(|this, _, _, cx| this.apply_skills_project(cx))),
                 )
                 .into_any_element(),

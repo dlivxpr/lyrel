@@ -178,7 +178,8 @@ fn user_lock_uses_cli_v3_xdg_location_and_preserves_install_time() {
     let lock_path = cwd.join("relative-state/skills/.skill-lock.json");
     fs::write(&lock_path, r#"{"version":3,"dismissed":{"findSkillsPrompt":true},"unknown":8,"skills":{"review":{"installedAt":"2026-01-01T00:00:00.000Z","future":42}}}"#).unwrap();
     let host = LocalHost::new();
-    let target = InstallTarget::user(&*host, home.clone(), Some("relative-state".into()), cwd).unwrap();
+    let target =
+        InstallTarget::user(&*host, home.clone(), Some("relative-state".into()), cwd).unwrap();
     assert_eq!(target.lock_path(), lock_path);
     let preview = preview_install(&*host, target, vec![prepared("review")]).unwrap();
     let report = apply_install(&*host, preview, &[InstallDecision::Install], NOW);
@@ -690,8 +691,13 @@ fn relative_xdg_source_record_is_found_only_with_the_same_explicit_working_direc
     fs::create_dir(&home).unwrap();
     fs::create_dir(&cwd).unwrap();
     let host = LocalHost::new();
-    let target =
-        InstallTarget::user(&*host, home.clone(), Some("relative-state".into()), cwd.clone()).unwrap();
+    let target = InstallTarget::user(
+        &*host,
+        home.clone(),
+        Some("relative-state".into()),
+        cwd.clone(),
+    )
+    .unwrap();
     let preview = preview_install(&*host, target, vec![prepared("review")]).unwrap();
     assert_eq!(
         apply_install(&*host, preview, &[InstallDecision::Install], NOW).items[0].status,
@@ -911,90 +917,221 @@ impl PathHost {
         }
     }
     fn local(&self, path: &Path) -> std::path::PathBuf {
-        assert!(self.is_absolute(path), "relative Host access: {}", path.display());
+        assert!(
+            self.is_absolute(path),
+            "relative Host access: {}",
+            path.display()
+        );
         let text = path.to_str().unwrap();
-        let text = if self.separator == '\\' { text.replace('\\', "/") } else { text.into() };
-        let text = if text.as_bytes().get(1) == Some(&b':') { &text[2..] } else { &text };
-        text.split('/').filter(|part| !part.is_empty()).fold(self.sandbox.path().to_path_buf(), |base, part| {
-            assert!(!matches!(part, "." | ".."));
-            base.join(part)
-        })
+        let text = if self.separator == '\\' {
+            text.replace('\\', "/")
+        } else {
+            text.into()
+        };
+        let text = if text.as_bytes().get(1) == Some(&b':') {
+            &text[2..]
+        } else {
+            &text
+        };
+        text.split('/').filter(|part| !part.is_empty()).fold(
+            self.sandbox.path().to_path_buf(),
+            |base, part| {
+                assert!(!matches!(part, "." | ".."));
+                base.join(part)
+            },
+        )
     }
     fn directory(&self, path: &str) {
         fs::create_dir_all(self.local(Path::new(path))).unwrap();
     }
     fn connected(&self) -> std::io::Result<()> {
-        if self.is_connected() { Ok(()) } else { Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "isolated Host disconnected")) }
+        if self.is_connected() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "isolated Host disconnected",
+            ))
+        }
     }
 }
 impl Host for PathHost {
-    fn id(&self) -> lyrel_core::host::HostId { self.id }
-    fn separator(&self) -> char { self.separator }
+    fn id(&self) -> lyrel_core::host::HostId {
+        self.id
+    }
+    fn separator(&self) -> char {
+        self.separator
+    }
     fn is_absolute(&self, path: &Path) -> bool {
         let text = path.to_str().unwrap();
-        if self.separator == '/' { text.starts_with('/') } else {
-            text.starts_with("\\\\") || (text.as_bytes().get(1) == Some(&b':') && matches!(text.as_bytes().get(2), Some(b'/' | b'\\')))
+        if self.separator == '/' {
+            text.starts_with('/')
+        } else {
+            text.starts_with("\\\\")
+                || (text.as_bytes().get(1) == Some(&b':')
+                    && matches!(text.as_bytes().get(2), Some(b'/' | b'\\')))
         }
     }
-    fn is_connected(&self) -> bool { !self.disconnected.load(std::sync::atomic::Ordering::SeqCst) }
-    fn read_dir(&self, path: &Path, _: Option<&Path>) -> std::io::Result<Vec<lyrel_core::host::Entry>> {
+    fn is_connected(&self) -> bool {
+        !self.disconnected.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn read_dir(
+        &self,
+        path: &Path,
+        _: Option<&Path>,
+    ) -> std::io::Result<Vec<lyrel_core::host::Entry>> {
         self.connected()?;
         self.inner.read_dir(&self.local(path), None)
     }
-    fn stat(&self, path: &Path) -> std::io::Result<lyrel_core::host::Meta> { self.connected()?; self.inner.stat(&self.local(path)) }
-    fn read_file(&self, path: &Path, max: u64) -> std::io::Result<Vec<u8>> { self.connected()?; self.inner.read_file(&self.local(path), max) }
-    fn canonicalize(&self, path: &Path) -> std::io::Result<std::path::PathBuf> { self.stat(path)?; Ok(path.into()) }
-    fn search(&self, _: &[std::path::PathBuf], _: &str, _: usize, _: usize, _: bool) -> std::io::Result<Vec<lyrel_core::host::SearchHit>> { unreachable!() }
-    fn search_content(&self, _: &[std::path::PathBuf], _: &lyrel_core::host::ContentQuery, _: &lyrel_core::host::ContentLimits) -> std::io::Result<lyrel_core::host::ContentResults> { unreachable!() }
-    fn write_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<lyrel_core::host::Meta> { self.connected()?; self.inner.write_file(&self.local(path), bytes) }
-    fn create_file_new(&self, path: &Path) -> std::io::Result<()> { self.connected()?; self.inner.create_file_new(&self.local(path)) }
-    fn create_dir(&self, path: &Path, recursive: bool) -> std::io::Result<()> { self.connected()?; self.inner.create_dir(&self.local(path), recursive) }
+    fn stat(&self, path: &Path) -> std::io::Result<lyrel_core::host::Meta> {
+        self.connected()?;
+        self.inner.stat(&self.local(path))
+    }
+    fn read_file(&self, path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+        self.connected()?;
+        self.inner.read_file(&self.local(path), max)
+    }
+    fn canonicalize(&self, path: &Path) -> std::io::Result<std::path::PathBuf> {
+        self.stat(path)?;
+        Ok(path.into())
+    }
+    fn search(
+        &self,
+        _: &[std::path::PathBuf],
+        _: &str,
+        _: usize,
+        _: usize,
+        _: bool,
+    ) -> std::io::Result<Vec<lyrel_core::host::SearchHit>> {
+        unreachable!()
+    }
+    fn search_content(
+        &self,
+        _: &[std::path::PathBuf],
+        _: &lyrel_core::host::ContentQuery,
+        _: &lyrel_core::host::ContentLimits,
+    ) -> std::io::Result<lyrel_core::host::ContentResults> {
+        unreachable!()
+    }
+    fn write_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<lyrel_core::host::Meta> {
+        self.connected()?;
+        self.inner.write_file(&self.local(path), bytes)
+    }
+    fn create_file_new(&self, path: &Path) -> std::io::Result<()> {
+        self.connected()?;
+        self.inner.create_file_new(&self.local(path))
+    }
+    fn create_dir(&self, path: &Path, recursive: bool) -> std::io::Result<()> {
+        self.connected()?;
+        self.inner.create_dir(&self.local(path), recursive)
+    }
     fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         self.connected()?;
-        let lock_commit = from.to_str().unwrap().ends_with(".stage") && to.to_str().unwrap().ends_with("skills-lock.json");
-        if lock_commit && self.fail_lock_after.is_some_and(|limit| self.lock_commits.load(std::sync::atomic::Ordering::SeqCst) >= limit) {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "isolated lock commit denied"));
+        let lock_commit = from.to_str().unwrap().ends_with(".stage")
+            && to.to_str().unwrap().ends_with("skills-lock.json");
+        if lock_commit
+            && self.fail_lock_after.is_some_and(|limit| {
+                self.lock_commits.load(std::sync::atomic::Ordering::SeqCst) >= limit
+            })
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "isolated lock commit denied",
+            ));
         }
         self.inner.rename(&self.local(from), &self.local(to))?;
-        if lock_commit { self.lock_commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }
+        if lock_commit {
+            self.lock_commits
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         if (self.lose_publish_reply && to.to_str().unwrap().ends_with("review"))
             || (self.lose_lock_reply && to.to_str().unwrap().ends_with("skills-lock.json"))
         {
-            self.disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-            return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "isolated rename reply lost"));
+            self.disconnected
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "isolated rename reply lost",
+            ));
         }
         if self.disconnect_after_publish && to.to_str().unwrap().ends_with("review") {
-            self.disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.disconnected
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         Ok(())
     }
-    fn remove(&self, path: &Path, recursive: bool) -> std::io::Result<()> { self.connected()?; self.inner.remove(&self.local(path), recursive) }
-    fn repo_root(&self, _: &Path) -> std::io::Result<Option<std::path::PathBuf>> { unreachable!() }
-    fn git(&self, _: &Path, _: &[&str]) -> std::io::Result<lyrel_core::host::Output> { unreachable!() }
-    fn shells(&self) -> std::io::Result<lyrel_core::core::shells::ShellInventory> { unreachable!() }
-    fn watch(&self, _: &[std::path::PathBuf]) -> std::io::Result<lyrel_core::host::WatchSub> { unreachable!() }
+    fn remove(&self, path: &Path, recursive: bool) -> std::io::Result<()> {
+        self.connected()?;
+        self.inner.remove(&self.local(path), recursive)
+    }
+    fn repo_root(&self, _: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+        unreachable!()
+    }
+    fn git(&self, _: &Path, _: &[&str]) -> std::io::Result<lyrel_core::host::Output> {
+        unreachable!()
+    }
+    fn shells(&self) -> std::io::Result<lyrel_core::core::shells::ShellInventory> {
+        unreachable!()
+    }
+    fn watch(&self, _: &[std::path::PathBuf]) -> std::io::Result<lyrel_core::host::WatchSub> {
+        unreachable!()
+    }
 }
 
 #[test]
 fn host_path_install_resolves_roots_state_ancestors_and_nested_staging_on_the_target() {
     for (separator, home, cwd, state, expected_lock, destination) in [
-        ('/', "/home/shared", "/workspace/repo", "../state", "/workspace/state/skills/.skill-lock.json", "/home/shared/.agents/skills/review"),
-        ('\\', r"C:\Users\shared", r"C:\workspace\repo", r"..\state", r"C:\workspace\state\skills\.skill-lock.json", r"C:\Users\shared\.agents\skills\review"),
-        ('\\', r"\\server\share\home", r"\\server\share\workspace\repo", r"..\state", r"\\server\share\workspace\state\skills\.skill-lock.json", r"\\server\share\home\.agents\skills\review"),
+        (
+            '/',
+            "/home/shared",
+            "/workspace/repo",
+            "../state",
+            "/workspace/state/skills/.skill-lock.json",
+            "/home/shared/.agents/skills/review",
+        ),
+        (
+            '\\',
+            r"C:\Users\shared",
+            r"C:\workspace\repo",
+            r"..\state",
+            r"C:\workspace\state\skills\.skill-lock.json",
+            r"C:\Users\shared\.agents\skills\review",
+        ),
+        (
+            '\\',
+            r"\\server\share\home",
+            r"\\server\share\workspace\repo",
+            r"..\state",
+            r"\\server\share\workspace\state\skills\.skill-lock.json",
+            r"\\server\share\home\.agents\skills\review",
+        ),
     ] {
         let host = PathHost::new(separator, 41);
         host.directory(home);
         host.directory(cwd);
-        let target = InstallTarget::user(&host, home.into(), Some(state.into()), cwd.into()).unwrap();
+        let target =
+            InstallTarget::user(&host, home.into(), Some(state.into()), cwd.into()).unwrap();
         assert_eq!(target.lock_path().to_str().unwrap(), expected_lock);
         let mut skill = prepared("review");
-        skill.files.push(SkillFile::new("references/nested/guide.txt".into(), b"target Host".to_vec()));
+        skill.files.push(SkillFile::new(
+            "references/nested/guide.txt".into(),
+            b"target Host".to_vec(),
+        ));
         let preview = preview_install(&host, target, vec![skill]).unwrap();
-        assert_eq!(preview.items()[0].destination().to_str().unwrap(), destination);
+        assert_eq!(
+            preview.items()[0].destination().to_str().unwrap(),
+            destination
+        );
         let report = apply_install(&host, preview, &[InstallDecision::Install], NOW);
         assert_eq!(report.items[0].status, InstallStatus::Installed);
-        assert_eq!(fs::read(host.local(&host.join(Path::new(destination), "references/nested/guide.txt"))).unwrap(), b"target Host");
-        let lock: serde_json::Value = serde_json::from_slice(&fs::read(host.local(Path::new(expected_lock))).unwrap()).unwrap();
+        assert_eq!(
+            fs::read(host.local(&host.join(Path::new(destination), "references/nested/guide.txt")))
+                .unwrap(),
+            b"target Host"
+        );
+        let lock: serde_json::Value =
+            serde_json::from_slice(&fs::read(host.local(Path::new(expected_lock))).unwrap())
+                .unwrap();
         assert_eq!(lock["skills"]["review"]["source"], "example/skills");
     }
 }
@@ -1003,7 +1140,9 @@ fn host_path_install_resolves_roots_state_ancestors_and_nested_staging_on_the_ta
 fn same_named_host_paths_cannot_retarget_a_constructor_or_confirmation_and_cancel_writes_nothing() {
     let first = PathHost::new('/', 51);
     let second = PathHost::new('/', 52);
-    for host in [&first, &second] { host.directory("/project"); }
+    for host in [&first, &second] {
+        host.directory("/project");
+    }
     let target = InstallTarget::project(&first, "/project".into()).unwrap();
     assert!(preview_install(&second, target.clone(), vec![prepared("review")]).is_err());
     let preview = preview_install(&first, target.clone(), vec![prepared("review")]).unwrap();
@@ -1012,37 +1151,96 @@ fn same_named_host_paths_cannot_retarget_a_constructor_or_confirmation_and_cance
     let preview = preview_install(&first, target.clone(), vec![prepared("review")]).unwrap();
     let wrong = apply_install(&second, preview, &[InstallDecision::Install], NOW);
     assert!(matches!(wrong.items[0].status, InstallStatus::Failed(_)));
-    for host in [&first, &second] { assert_eq!(fs::read_dir(host.local(Path::new("/project"))).unwrap().count(), 0); }
+    for host in [&first, &second] {
+        assert_eq!(
+            fs::read_dir(host.local(Path::new("/project")))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
     let preview = preview_install(&first, target, vec![prepared("review")]).unwrap();
-    assert_eq!(apply_install(&first, preview, &[InstallDecision::Install], NOW).items[0].status, InstallStatus::Installed);
-    assert_eq!(fs::read_dir(second.local(Path::new("/project"))).unwrap().count(), 0);
+    assert_eq!(
+        apply_install(&first, preview, &[InstallDecision::Install], NOW).items[0].status,
+        InstallStatus::Installed
+    );
+    assert_eq!(
+        fs::read_dir(second.local(Path::new("/project")))
+            .unwrap()
+            .count(),
+        0
+    );
 }
 
 #[test]
 fn remote_relative_state_requires_explicit_host_cwd_and_never_uses_desktop_cwd() {
     let host = PathHost::new('/', 61);
-    assert!(InstallTarget::user(&host, "/home/shared".into(), Some("state".into()), "".into()).is_err());
-    assert!(InstallTarget::user(&host, "/home/shared".into(), Some("state".into()), "relative".into()).is_err());
+    assert!(
+        InstallTarget::user(
+            &host,
+            "/home/shared".into(),
+            Some("state".into()),
+            "".into()
+        )
+        .is_err()
+    );
+    assert!(
+        InstallTarget::user(
+            &host,
+            "/home/shared".into(),
+            Some("state".into()),
+            "relative".into()
+        )
+        .is_err()
+    );
     assert!(InstallTarget::project(&host, "/home/../private".into()).is_err());
     let windows = PathHost::new('\\', 62);
     assert!(InstallTarget::project(&windows, r"C:\home\..\private".into()).is_err());
     assert!(InstallTarget::project(&windows, r"C:relative".into()).is_err());
-    assert!(InstallTarget::user(&windows, r"C:\home".into(), Some(r"..\..\state".into()), r"C:\workspace".into()).is_err());
+    assert!(
+        InstallTarget::user(
+            &windows,
+            r"C:\home".into(),
+            Some(r"..\..\state".into()),
+            r"C:\workspace".into()
+        )
+        .is_err()
+    );
 }
 
 #[test]
-fn disconnect_after_live_publish_reports_exact_unrecorded_target_and_recovery_without_retrying_next_item() {
+fn disconnect_after_live_publish_reports_exact_unrecorded_target_and_recovery_without_retrying_next_item()
+ {
     let mut host = PathHost::new('\\', 71);
     host.disconnect_after_publish = true;
     host.directory(r"C:\project");
     let target = InstallTarget::project(&host, r"C:\project".into()).unwrap();
-    let preview = preview_install(&host, target, vec![prepared("review"), prepared("second")]).unwrap();
-    let report = apply_install(&host, preview, &[InstallDecision::Install, InstallDecision::Install], NOW);
-    assert!(matches!(&report.items[0].status, InstallStatus::Failed(message) if message.contains(r"C:\project\.agents\skills\review") && message.contains("rollback incomplete") && message.contains("Reconnect") && message.contains("review") ));
+    let preview =
+        preview_install(&host, target, vec![prepared("review"), prepared("second")]).unwrap();
+    let report = apply_install(
+        &host,
+        preview,
+        &[InstallDecision::Install, InstallDecision::Install],
+        NOW,
+    );
+    assert!(
+        matches!(&report.items[0].status, InstallStatus::Failed(message) if message.contains(r"C:\project\.agents\skills\review") && message.contains("rollback incomplete") && message.contains("Reconnect") && message.contains("review") )
+    );
     assert!(matches!(&report.items[1].status, InstallStatus::Failed(_)));
-    assert!(host.local(Path::new(r"C:\project\.agents\skills\review\SKILL.md")).exists());
-    assert!(!host.local(Path::new(r"C:\project\skills-lock.json")).exists());
-    assert!(!host.local(Path::new(r"C:\project\.agents\skills\second")).exists());
+    assert!(
+        host.local(Path::new(r"C:\project\.agents\skills\review\SKILL.md"))
+            .exists()
+    );
+    assert!(
+        !host
+            .local(Path::new(r"C:\project\skills-lock.json"))
+            .exists()
+    );
+    assert!(
+        !host
+            .local(Path::new(r"C:\project\.agents\skills\second"))
+            .exists()
+    );
 }
 
 #[test]
@@ -1055,9 +1253,17 @@ fn lost_live_rename_reply_preserves_uncertain_content_and_reports_recovery_paths
         let target = InstallTarget::project(&host, "/project".into()).unwrap();
         let preview = preview_install(&host, target, vec![prepared("review")]).unwrap();
         let report = apply_install(&host, preview, &[InstallDecision::Install], NOW);
-        assert!(matches!(&report.items[0].status, InstallStatus::Failed(message) if message.contains("outcome unknown") && message.contains("/project/.agents/skills/review") && message.contains("/project/skills-lock.json") && message.contains("Reconnect")));
-        assert!(host.local(Path::new("/project/.agents/skills/review/SKILL.md")).exists());
-        assert_eq!(host.local(Path::new("/project/skills-lock.json")).exists(), lose_lock_reply);
+        assert!(
+            matches!(&report.items[0].status, InstallStatus::Failed(message) if message.contains("outcome unknown") && message.contains("/project/.agents/skills/review") && message.contains("/project/skills-lock.json") && message.contains("Reconnect"))
+        );
+        assert!(
+            host.local(Path::new("/project/.agents/skills/review/SKILL.md"))
+                .exists()
+        );
+        assert_eq!(
+            host.local(Path::new("/project/skills-lock.json")).exists(),
+            lose_lock_reply
+        );
     }
 }
 
@@ -1078,9 +1284,16 @@ fn foreign_host_ancestors_and_dangling_entries_cannot_redirect_shared_writes() {
         let report = apply_install(&host, preview, &[InstallDecision::Install], NOW);
         assert!(matches!(report.items[0].status, InstallStatus::Failed(_)));
         assert!(preview_install(&host, target, vec![prepared("review")]).is_err());
-        assert_eq!(fs::read_to_string(outside.path().join("keep.txt")).unwrap(), "unrelated");
+        assert_eq!(
+            fs::read_to_string(outside.path().join("keep.txt")).unwrap(),
+            "unrelated"
+        );
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 1);
-        assert!(!host.local(&host.join(Path::new(project_path), "skills-lock.json")).exists());
+        assert!(
+            !host
+                .local(&host.join(Path::new(project_path), "skills-lock.json"))
+                .exists()
+        );
     }
 }
 
@@ -1093,8 +1306,14 @@ fn fully_qualified_host_roots_allow_safe_project_installs_without_client_root_pa
         let preview = preview_install(&host, target, vec![prepared("review")]).unwrap();
         let report = apply_install(&host, preview, &[InstallDecision::Install], NOW);
         assert_eq!(report.items[0].status, InstallStatus::Installed);
-        assert!(host.local(&host.join(Path::new(root), ".agents/skills/review/SKILL.md")).exists());
-        assert!(host.local(&host.join(Path::new(root), "skills-lock.json")).exists());
+        assert!(
+            host.local(&host.join(Path::new(root), ".agents/skills/review/SKILL.md"))
+                .exists()
+        );
+        assert!(
+            host.local(&host.join(Path::new(root), "skills-lock.json"))
+                .exists()
+        );
     }
 }
 
@@ -1104,14 +1323,35 @@ fn second_remote_lock_failure_preserves_first_committed_item_and_rolls_back_only
     host.fail_lock_after = Some(1);
     host.directory(r"C:\project");
     let target = InstallTarget::project(&host, r"C:\project".into()).unwrap();
-    let preview = preview_install(&host, target, vec![prepared("first"), prepared("second")]).unwrap();
-    let report = apply_install(&host, preview, &[InstallDecision::Install, InstallDecision::Install], NOW);
+    let preview =
+        preview_install(&host, target, vec![prepared("first"), prepared("second")]).unwrap();
+    let report = apply_install(
+        &host,
+        preview,
+        &[InstallDecision::Install, InstallDecision::Install],
+        NOW,
+    );
     assert_eq!(report.items[0].status, InstallStatus::Installed);
-    assert_eq!(report.items[1].destination.to_str().unwrap(), r"C:\project\.agents\skills\second");
-    assert!(matches!(&report.items[1].status, InstallStatus::Failed(message) if message.contains("isolated lock commit denied")));
-    assert!(host.local(Path::new(r"C:\project\.agents\skills\first\SKILL.md")).exists());
-    assert!(!host.local(Path::new(r"C:\project\.agents\skills\second")).exists());
-    let lock: serde_json::Value = serde_json::from_slice(&fs::read(host.local(Path::new(r"C:\project\skills-lock.json"))).unwrap()).unwrap();
+    assert_eq!(
+        report.items[1].destination.to_str().unwrap(),
+        r"C:\project\.agents\skills\second"
+    );
+    assert!(
+        matches!(&report.items[1].status, InstallStatus::Failed(message) if message.contains("isolated lock commit denied"))
+    );
+    assert!(
+        host.local(Path::new(r"C:\project\.agents\skills\first\SKILL.md"))
+            .exists()
+    );
+    assert!(
+        !host
+            .local(Path::new(r"C:\project\.agents\skills\second"))
+            .exists()
+    );
+    let lock: serde_json::Value = serde_json::from_slice(
+        &fs::read(host.local(Path::new(r"C:\project\skills-lock.json"))).unwrap(),
+    )
+    .unwrap();
     assert_eq!(lock["skills"]["first"]["source"], "example/skills");
     assert!(lock["skills"].get("second").is_none());
 }

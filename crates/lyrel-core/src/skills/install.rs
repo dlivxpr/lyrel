@@ -46,8 +46,12 @@ impl InstallTarget {
             } else {
                 let cwd = normalize_selector(host, &cwd, false)?;
                 let state = path_text(&state)?;
-                if host.separator() == '\\' && (state.contains(':') || state.starts_with(['/', '\\'])) {
-                    return Err(invalid("state selector must be fully qualified or relative to the selected Host cwd"));
+                if host.separator() == '\\'
+                    && (state.contains(':') || state.starts_with(['/', '\\']))
+                {
+                    return Err(invalid(
+                        "state selector must be fully qualified or relative to the selected Host cwd",
+                    ));
                 }
                 host.join(&cwd, state)
             };
@@ -368,9 +372,13 @@ fn changed(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, message)
 }
 fn path_text(path: &Path) -> io::Result<&str> {
-    let text = path.to_str().ok_or_else(|| invalid("Host path must be UTF-8"))?;
+    let text = path
+        .to_str()
+        .ok_or_else(|| invalid("Host path must be UTF-8"))?;
     if text.is_empty() || text.chars().any(char::is_control) {
-        return Err(invalid("Host path must be nonempty and contain no control characters"));
+        return Err(invalid(
+            "Host path must be nonempty and contain no control characters",
+        ));
     }
     Ok(text)
 }
@@ -381,10 +389,15 @@ fn is_separator(host: &dyn Host, character: char) -> bool {
 /// Drive-relative and Windows current-drive roots are deliberately not selectors.
 fn root_len(host: &dyn Host, text: &str) -> io::Result<usize> {
     if !host.is_absolute(Path::new(text)) {
-        return Err(invalid("installation selectors must be absolute on the selected Host"));
+        return Err(invalid(
+            "installation selectors must be absolute on the selected Host",
+        ));
     }
     if host.separator() != '\\' {
-        return text.starts_with('/').then_some(1).ok_or_else(|| invalid("invalid Host root"));
+        return text
+            .starts_with('/')
+            .then_some(1)
+            .ok_or_else(|| invalid("invalid Host root"));
     }
     let bytes = text.as_bytes();
     let separator = |byte: u8| matches!(byte, b'/' | b'\\');
@@ -397,18 +410,37 @@ fn root_len(host: &dyn Host, text: &str) -> io::Result<usize> {
         return Ok(3);
     }
     if bytes.len() < 2 || !separator(bytes[0]) || !separator(bytes[1]) {
-        return Err(invalid("Windows selectors require a drive or UNC share root"));
+        return Err(invalid(
+            "Windows selectors require a drive or UNC share root",
+        ));
     }
     let start = if text.starts_with(r"\\?\") {
-        if drive(4) { return Ok(7); }
-        if text.get(4..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC\\")) { 8 }
-        else { return Err(invalid("unsupported Windows device path")); }
-    } else { 2 };
+        if drive(4) {
+            return Ok(7);
+        }
+        if text
+            .get(4..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC\\"))
+        {
+            8
+        } else {
+            return Err(invalid("unsupported Windows device path"));
+        }
+    } else {
+        2
+    };
     let mut parts = text[start..].splitn(3, |c| is_separator(host, c));
     let server = parts.next().unwrap_or("");
     let share = parts.next().unwrap_or("");
-    if server.is_empty() || share.is_empty() || [server, share].iter().any(|part| matches!(*part, "." | "..") || part.contains(':')) {
-        return Err(invalid("Windows selectors require an explicit UNC server and share"));
+    if server.is_empty()
+        || share.is_empty()
+        || [server, share]
+            .iter()
+            .any(|part| matches!(*part, "." | "..") || part.contains(':'))
+    {
+        return Err(invalid(
+            "Windows selectors require an explicit UNC server and share",
+        ));
     }
     let end = start + server.len() + 1 + share.len();
     Ok(end + usize::from(bytes.get(end).is_some_and(|byte| separator(*byte))))
@@ -417,11 +449,20 @@ fn normalize_selector(host: &dyn Host, path: &Path, allow_dot: bool) -> io::Resu
     let text = path_text(path)?;
     let root = root_len(host, text)?;
     let mut parts = Vec::new();
-    for part in text[root..].split(|c| is_separator(host, c)).filter(|part| !part.is_empty()) {
+    for part in text[root..]
+        .split(|c| is_separator(host, c))
+        .filter(|part| !part.is_empty())
+    {
         match part {
             "." if allow_dot => (),
-            ".." if allow_dot && !parts.is_empty() => { parts.pop(); }
-            "." | ".." => return Err(invalid("selector contains dot segments or escapes its filesystem root")),
+            ".." if allow_dot && !parts.is_empty() => {
+                parts.pop();
+            }
+            "." | ".." => {
+                return Err(invalid(
+                    "selector contains dot segments or escapes its filesystem root",
+                ));
+            }
             part => {
                 if host.separator() == '\\' && (part.contains(':') || part.ends_with(['.', ' '])) {
                     return Err(invalid("unsafe Windows selector segment"));
@@ -430,22 +471,38 @@ fn normalize_selector(host: &dyn Host, path: &Path, allow_dot: bool) -> io::Resu
             }
         }
     }
-    Ok(parts.into_iter().fold(PathBuf::from(&text[..root]), |base, part| host.join(&base, part)))
+    Ok(parts
+        .into_iter()
+        .fold(PathBuf::from(&text[..root]), |base, part| {
+            host.join(&base, part)
+        }))
 }
 fn parent_and_name<'a>(host: &dyn Host, path: &'a Path) -> io::Result<Option<(PathBuf, &'a str)>> {
     let text = path_text(path)?;
     let root = root_len(host, text)?;
     let text = text.trim_end_matches(|c| is_separator(host, c));
-    if text.len() <= root { return Ok(None); }
-    let index = text.rfind(|c| is_separator(host, c)).ok_or_else(|| invalid("Host path has no parent"))?;
-    Ok(Some((PathBuf::from(&text[..index.max(root)]), &text[index + 1..])))
+    if text.len() <= root {
+        return Ok(None);
+    }
+    let index = text
+        .rfind(|c| is_separator(host, c))
+        .ok_or_else(|| invalid("Host path has no parent"))?;
+    Ok(Some((
+        PathBuf::from(&text[..index.max(root)]),
+        &text[index + 1..],
+    )))
 }
 fn ancestors(host: &dyn Host, path: &Path) -> io::Result<Vec<PathBuf>> {
     let text = path_text(path)?;
     let root = root_len(host, text)?;
     let mut chain = vec![PathBuf::from(&text[..root])];
-    for part in text[root..].split(|c| is_separator(host, c)).filter(|part| !part.is_empty()) {
-        if matches!(part, "." | "..") { return Err(invalid("unexpected Host dot segment")); }
+    for part in text[root..]
+        .split(|c| is_separator(host, c))
+        .filter(|part| !part.is_empty())
+    {
+        if matches!(part, "." | "..") {
+            return Err(invalid("unexpected Host dot segment"));
+        }
         chain.push(host.join(chain.last().unwrap(), part));
     }
     Ok(chain)
@@ -456,10 +513,11 @@ fn safe_meta(host: &dyn Host, path: &Path) -> io::Result<Option<Meta>> {
     if let Some((parent, name)) = parent_and_name(host, path)? {
         match host.read_dir(&parent, None) {
             Ok(entries) => {
-                if entries
-                    .iter()
-                    .any(|e| (e.name == name || (host.separator() == '\\' && e.name.eq_ignore_ascii_case(name))) && e.is_symlink)
-                {
+                if entries.iter().any(|e| {
+                    (e.name == name
+                        || (host.separator() == '\\' && e.name.eq_ignore_ascii_case(name)))
+                        && e.is_symlink
+                }) {
                     return Err(invalid(format!("refusing linked path: {}", path.display())));
                 }
             }
@@ -811,7 +869,9 @@ fn merge_lock(
 }
 fn excluded(path: &Path) -> bool {
     let value = path.to_str().unwrap_or("");
-    value.split('/').any(|name| matches!(name, ".git" | "__pycache__" | "__pypackages__"))
+    value
+        .split('/')
+        .any(|name| matches!(name, ".git" | "__pycache__" | "__pypackages__"))
         || value.rsplit('/').next() == Some("metadata.json")
 }
 fn install_one(
@@ -832,8 +892,8 @@ fn install_one(
     let token = uuid::Uuid::new_v4().to_string();
     let stage = host.join(&target.shared_root, &format!(".lyrel-stage-{token}"));
     let backup = host.join(&target.shared_root, &format!(".lyrel-backup-{token}"));
-    let (lock_parent, _) = parent_and_name(host, &target.lock_path)?
-        .ok_or_else(|| invalid("lock has no parent"))?;
+    let (lock_parent, _) =
+        parent_and_name(host, &target.lock_path)?.ok_or_else(|| invalid("lock has no parent"))?;
     let lock_stage = host.join(&lock_parent, &format!(".lyrel-lock-{token}.stage"));
     let lock_backup = host.join(&lock_parent, &format!(".lyrel-lock-{token}.backup"));
     let write_guard = host.join(&lock_parent, ".lyrel-skills-write.lock");
@@ -903,10 +963,20 @@ fn install_one(
             return Err(changed("source lock changed before commit; review again"));
         }
         if expected_lock.is_some() {
-            rename_live(host, &target.lock_path, &lock_backup, &mut publication_uncertain)?;
+            rename_live(
+                host,
+                &target.lock_path,
+                &lock_backup,
+                &mut publication_uncertain,
+            )?;
             old_lock_moved = true;
         }
-        rename_live(host, &lock_stage, &target.lock_path, &mut publication_uncertain)?;
+        rename_live(
+            host,
+            &lock_stage,
+            &target.lock_path,
+            &mut publication_uncertain,
+        )?;
         lock_stage_created = false;
         committed = true;
         Ok(())
@@ -917,8 +987,13 @@ fn install_one(
         let error = operation.unwrap_err();
         return Err(io::Error::other(format!(
             "{error}; publication outcome unknown at content {} and source lock {}; Reconnect to the selected Host and inspect those targets before retrying. Retained recovery candidates: content stage {}, content backup {}, lock stage {}, lock backup {}, write guard {}. Restore backups only after reviewing the actual targets; do not blindly repeat installation",
-            item.destination.display(), target.lock_path.display(), stage.display(),
-            backup.display(), lock_stage.display(), lock_backup.display(), write_guard.display()
+            item.destination.display(),
+            target.lock_path.display(),
+            stage.display(),
+            backup.display(),
+            lock_stage.display(),
+            lock_backup.display(),
+            write_guard.display()
         )));
     }
     let mut rollback_errors = Vec::new();
@@ -997,10 +1072,16 @@ fn install_one(
 }
 fn rename_live(host: &dyn Host, from: &Path, to: &Path, uncertain: &mut bool) -> io::Result<()> {
     host.rename(from, to).inspect_err(|error| {
-        *uncertain = !host.is_connected() || matches!(error.kind(),
-            io::ErrorKind::NotConnected | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
-            | io::ErrorKind::TimedOut | io::ErrorKind::UnexpectedEof);
+        *uncertain = !host.is_connected()
+            || matches!(
+                error.kind(),
+                io::ErrorKind::NotConnected
+                    | io::ErrorKind::ConnectionAborted
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::UnexpectedEof
+            );
     })
 }
 fn cleanup(host: &dyn Host, path: &Path, recursive: bool, warnings: &mut Vec<String>) {

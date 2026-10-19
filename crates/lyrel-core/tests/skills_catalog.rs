@@ -152,7 +152,11 @@ fn local_environment_or_gh_authorization_discovers_and_prepares_private_pinned_f
 
     for source in ["GH_TOKEN", "GITHUB_TOKEN", "gh"] {
         let vars = |name: &str| match name {
-            "PATH" => Some(std::path::Path::new("synthetic-bin").to_string_lossy().into_owned()),
+            "PATH" => Some(
+                std::path::Path::new("synthetic-bin")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             name if name == source => Some("synthetic-catalog-secret".into()),
             _ => None,
         };
@@ -188,19 +192,29 @@ fn local_environment_or_gh_authorization_discovers_and_prepares_private_pinned_f
         );
         http.blob(PDF_BLOB, PDF.as_bytes());
         http.blob(companion, b"template");
-        let http = AuthorizedHttp { http, token: Some(token) };
+        let http = AuthorizedHttp {
+            http,
+            token: Some(token),
+        };
         let source = GitHubSource::parse("acme/tools/skills/pdf#release%2Fstable").unwrap();
         let catalog = discover(&http, &source).unwrap();
         let prepared = catalog.prepare_many(&http, &[0]).unwrap().remove(0);
         assert_eq!(catalog.tree_sha(), ROOT);
         assert_eq!(prepared.candidate.tree_hash, PDF_TREE);
         assert_eq!(prepared.candidate.source, source);
-        assert_eq!(prepared.candidate.source.url(), "https://github.com/acme/tools.git");
+        assert_eq!(
+            prepared.candidate.source.url(),
+            "https://github.com/acme/tools.git"
+        );
         assert_eq!(prepared.files[0].path, std::path::Path::new("SKILL.md"));
         assert_eq!(prepared.files[0].contents, PDF.as_bytes());
         assert_eq!(prepared.files[1].path, std::path::Path::new("template.txt"));
         assert_eq!(prepared.files[1].contents, b"template");
-        for output in [format!("{catalog:?}"), format!("{prepared:?}"), format!("{source:?}")] {
+        for output in [
+            format!("{catalog:?}"),
+            format!("{prepared:?}"),
+            format!("{source:?}"),
+        ] {
             assert!(!output.contains("synthetic-catalog-secret"));
         }
         assert!(http.http.calls.lock().unwrap().iter().all(|path| {
@@ -218,7 +232,9 @@ fn private_tree_document_and_companion_failures_keep_the_original_api_classifica
         ApiError::Unauthorized,
         ApiError::Forbidden("Resource protected by organization SAML enforcement".into()),
         ApiError::NotFound,
-        ApiError::RateLimited { reset: Some(1_800_000_000) },
+        ApiError::RateLimited {
+            reset: Some(1_800_000_000),
+        },
         ApiError::Network("connection timed out".into()),
     ];
     for failure in failures {
@@ -257,7 +273,10 @@ fn github_authorization_is_not_accepted_by_skills_sh_search() {
         token: lyrel_core::core::github::Token::new("synthetic-catalog-secret"),
     };
     let error = search(&http, "pdf").unwrap_err();
-    assert!(matches!(error, lyrel_core::skills::catalog::CatalogError::Unsafe(_)));
+    assert!(matches!(
+        error,
+        lyrel_core::skills::catalog::CatalogError::Unsafe(_)
+    ));
     assert!(http.http.calls.lock().unwrap().is_empty());
 }
 
@@ -515,7 +534,7 @@ fn public_github_install_is_immediately_browsable_with_cli_compatible_project_pr
         .contents
         .clone();
     let host = LocalHost::new();
-    let target = InstallTarget::project(project.clone()).unwrap();
+    let target = InstallTarget::project(&*host, project.clone()).unwrap();
     let preview = preview_install(&*host, target, vec![prepared]).unwrap();
     let report = apply_install(
         &*host,

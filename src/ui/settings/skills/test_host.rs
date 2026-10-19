@@ -7,19 +7,24 @@ use lyrel_core::host::{
 struct IsolatedHost {
     inner: SharedHost,
     home: PathBuf,
+    id: HostId,
 }
 pub(super) fn install(home: &Path, cx: &mut Context<LyrelApp>) {
+    install_on(home, HostId::LOCAL, cx);
+}
+pub(super) fn install_on(home: &Path, id: HostId, cx: &mut Context<LyrelApp>) {
     HostRegistry::insert(
         cx,
         Arc::new(IsolatedHost {
             inner: lyrel_core::host::local::LocalHost::new(),
             home: home.into(),
+            id,
         }),
     );
 }
 impl Host for IsolatedHost {
     fn id(&self) -> HostId {
-        HostId::LOCAL
+        self.id
     }
     fn separator(&self) -> char {
         self.inner.separator()

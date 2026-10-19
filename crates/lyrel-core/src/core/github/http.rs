@@ -199,7 +199,9 @@ mod tests {
                     Err(error) => panic!("loopback accept failed: {error}"),
                 }
             };
-            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             let mut bytes = Vec::new();
             while !bytes.ends_with(b"\r\n\r\n") {
                 let mut byte = [0];
@@ -219,15 +221,27 @@ mod tests {
                 write!(first, "HTTP/1.1 302 Found\r\nLocation: http://{redirect_host}:{}/destination\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", address.port()).unwrap();
                 drop(first);
                 let (mut second, redirected) = receive(&listener);
-                second.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+                second
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .unwrap();
                 (initial, redirected)
             });
             let http = HttpTransport::new(Token::new("synthetic-http-secret"), None);
             // Exercise the production Agent's redirect policy against a local
             // HTTP endpoint; only proxy discovery is disabled for isolation.
-            let response = http.agent.get(format!("http://{address}/initial"))
-                .header("Authorization", format!("Bearer {}", http.token.as_ref().unwrap().expose()))
-                .config().proxy(None).build().call();
+            let response = http
+                .agent
+                .get(format!("http://{address}/initial"))
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", http.token.as_ref().unwrap().expose()),
+                )
+                .config()
+                .proxy(None)
+                .build()
+                .call();
             let (initial, redirected) = server.join().unwrap();
             assert_eq!(response.unwrap().status().as_u16(), 200);
             assert!(initial.to_ascii_lowercase().contains("authorization:"));
