@@ -45,6 +45,10 @@ fn settle_install(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
+fn click_form(window: &mut Window, cx: &mut App, id: &'static str) {
+    super::super::tests::reveal(window, cx, id, "skills-modal-scroll");
+    window.click(id, cx);
+}
 #[gpui_kit::test]
 fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
@@ -73,20 +77,23 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-install-scope", cx);
+        for id in ["skills-install-source", "skills-install-ref", "skills-install-subpath", "skills-registry-query"] {
+            assert!(window.find(id).label().is_some_and(|name| !name.is_empty()));
+        }
+        click_form(window, cx, "skills-install-scope");
         window.press("down", cx);
         window.press("enter", cx);
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-install-source", cx);
+        click_form(window, cx, "skills-install-source");
         window.input("example/skills", cx);
-        window.click("skills-discover", cx);
+        click_form(window, cx, "skills-discover");
     });
     settle_install(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-candidate-skills/needle/SKILL.md", cx);
+        click_form(window, cx, "skills-candidate-skills/needle/SKILL.md");
         window.click("skills-install-review", cx);
     });
     settle_install(&app, &mut vcx);
@@ -156,7 +163,7 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     settle_install(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-replace-needle", cx);
+        click_form(window, cx, "skills-replace-needle");
         window.press("escape", cx);
     });
     assert_eq!(std::fs::read_to_string(&document).unwrap(), local_edit);
@@ -171,7 +178,7 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     settle_install(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-replace-needle", cx);
+        click_form(window, cx, "skills-replace-needle");
         window.click("skills-install-confirm", cx);
     });
     settle_install(&app, &mut vcx);
@@ -198,14 +205,14 @@ fn search_results_require_discovery_and_never_install_on_selection(cx: &mut Test
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("skills-install-open", cx);
-        window.click("skills-registry-query", cx);
+        click_form(window, cx, "skills-registry-query");
         window.input("needle", cx);
-        window.click("skills-registry-search", cx);
+        click_form(window, cx, "skills-registry-search");
     });
     settle_install(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-registry-example/skills/needle", cx);
+        click_form(window, cx, "skills-registry-example/skills/needle");
     });
     app.update_in(&mut vcx, |app, _, cx| {
         let state = &app.active_settings().unwrap().skills.install;
@@ -220,7 +227,7 @@ fn search_results_require_discovery_and_never_install_on_selection(cx: &mut Test
     assert!(!temp.path().join("home/.agents").exists());
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-discover", cx);
+        click_form(window, cx, "skills-discover");
     });
     settle_install(&app, &mut vcx);
     app.update_in(&mut vcx, |app, _, _| {
@@ -258,9 +265,9 @@ fn registry_failure_stays_visible_and_does_not_create_candidates(cx: &mut TestAp
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("skills-install-open", cx);
-        window.click("skills-registry-query", cx);
+        click_form(window, cx, "skills-registry-query");
         window.input("pdf", cx);
-        window.click("skills-registry-search", cx);
+        click_form(window, cx, "skills-registry-search");
     });
     settle_install(&app, &mut vcx);
     app.update_in(&mut vcx, |app, _, _| {
@@ -292,7 +299,12 @@ fn installer_escape_returns_to_browsing_without_writes_in_a_narrow_window(cx: &m
         }
         assert_eq!(window.find("skills-install-open").focused(), Some(true));
         window.press("enter", cx);
+        for _ in 0..24 {
+            window.press("tab", cx);
+            assert!(app.read(cx).active_settings().unwrap().skills.modal_focus.contains_focused(window, cx));
+        }
         window.press("escape", cx);
+        assert_eq!(window.find("skills-install-open").focused(), Some(true));
     });
     app.update_in(&mut vcx, |app, _, _| {
         assert!(!app.active_settings().unwrap().skills.install.open);
@@ -345,9 +357,9 @@ fn late_repository_response_cannot_replace_new_source_or_explicit_project(cx: &m
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("skills-install-open", cx);
-        window.click("skills-install-source", cx);
+        click_form(window, cx, "skills-install-source");
         window.input("old/skills", cx);
-        window.click("skills-discover", cx);
+        click_form(window, cx, "skills-discover");
     });
     vcx.run_until_parked();
     entered_rx
@@ -355,13 +367,15 @@ fn late_repository_response_cannot_replace_new_source_or_explicit_project(cx: &m
         .unwrap();
     vcx.update(|window, cx| {
         window.render_frame(cx);
+        window.press("escape", cx);
         window.click("skills-project-input", cx);
         window.input(project.to_string_lossy().as_ref(), cx);
         window.click("skills-apply-project", cx);
-        window.click("skills-install-source", cx);
+        window.click("skills-install-open", cx);
+        click_form(window, cx, "skills-install-source");
         window.press("secondary-a", cx);
         window.input("example/skills", cx);
-        window.click("skills-discover", cx);
+        click_form(window, cx, "skills-discover");
     });
     release_tx.send(()).unwrap();
     settle_install(&app, &mut vcx);
@@ -402,14 +416,14 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("skills-install-open", cx);
-        window.click("skills-install-source", cx);
+        click_form(window, cx, "skills-install-source");
         window.input("example/skills", cx);
-        window.click("skills-discover", cx);
+        click_form(window, cx, "skills-discover");
     });
     settle_install(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        window.click("skills-candidate-skills/needle/SKILL.md", cx);
+        click_form(window, cx, "skills-candidate-skills/needle/SKILL.md");
         window.click("skills-install-review", cx);
     });
     settle_install(&app, &mut vcx);
@@ -498,7 +512,7 @@ fn github_failures_explain_authorization_visibility_limits_and_network_without_w
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("skills-install-open", cx);
-        window.click("skills-install-source", cx);
+        click_form(window, cx, "skills-install-source");
         window.input("example/private-skills", cx);
     });
     for (error, key) in [
@@ -523,7 +537,7 @@ fn github_failures_explain_authorization_visibility_limits_and_network_without_w
         });
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            window.click("skills-discover", cx);
+            click_form(window, cx, "skills-discover");
         });
         settle_install(&app, &mut vcx);
         app.update_in(&mut vcx, |app, _, _| {

@@ -24,6 +24,7 @@ use std::{
 };
 mod install;
 mod maintenance;
+mod view;
 #[cfg(test)]
 mod test_host;
 
@@ -48,6 +49,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
+    pub(super) fn reveal(window: &mut Window, cx: &mut App, target: impl Into<SharedString>, region: &'static str) {
+        let target = target.into();
+        for _ in 0..50 {
+            window.render_frame(cx);
+            let bounds = window.find(region).bounds();
+            let item = window.find(target.clone());
+            let center = item.bounds().center();
+            if item.visible() && bounds.contains(&center) {
+                return;
+            }
+            let delta = if center.y < bounds.top() { 160. } else { -160. };
+            window.scroll(region, gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(delta))), cx);
+        }
+        panic!("{target} is not reachable through {region}");
+    }
     #[gpui_kit::test]
     fn skills_workflow_searches_actual_project_files_and_keeps_scope_on_navigation(
         cx: &mut TestAppContext,
@@ -59,6 +75,7 @@ mod tests {
         let original = "---\nname: needle\ndescription: A uniquely searchable reference\n---\n# Actual project skill\n";
         std::fs::write(install.join("SKILL.md"), original).unwrap();
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        vcx.simulate_resize(gpui_kit::size(px(1200.), px(800.)));
         app.update_in(&mut vcx, |app, window, cx| {
             isolate_native_roots(&temp.path().join("native-home"), cx);
             app.open_settings_section(SettingsSection::Skills, window, cx)
@@ -66,16 +83,18 @@ mod tests {
         settle(&app, &mut vcx);
         vcx.update(|window, cx| {
             window.render_frame(cx);
+            for id in ["skills-project-input", "skills-query"] {
+                assert!(window.find(id).label().is_some_and(|name| !name.is_empty()));
+            }
             window.click("skills-project-input", cx);
             window.input(temp.path().to_string_lossy().as_ref(), cx);
             window.click("skills-apply-project", cx);
         });
         settle(&app, &mut vcx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            let query = app.active_settings().unwrap().skills.query.clone();
-            query.update(cx, |input, cx| {
-                input.set_value("uniquely searchable", window, cx)
-            });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.click("skills-query", cx);
+            window.input("uniquely searchable", cx);
         });
         let path = app.update_in(&mut vcx, |app, _, cx| {
             let state = &app.active_settings().unwrap().skills;
@@ -105,6 +124,26 @@ mod tests {
                 app.active_settings().unwrap().skills.project.as_deref(),
                 Some(temp.path())
             );
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(SharedString::from(row_id(&path))).visible());
+            window.click("skills-copy-path", cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some(path.to_string_lossy().as_ref()));
+        });
+        vcx.simulate_resize(gpui_kit::size(px(680.), px(560.)));
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("skills-back").visible());
+            window.click("skills-back", cx);
+            assert!(window.find(SharedString::from(row_id(&path))).visible());
+            window.click(SharedString::from(row_id(&path)), cx);
+            window.press("escape", cx);
+        });
+        app.update_in(&mut vcx, |app, _, _| {
+            let state = &app.active_settings().unwrap().skills;
+            assert!(state.selected.is_none());
+            assert_eq!(state.project.as_deref(), Some(temp.path()));
         });
         assert_eq!(
             std::fs::read_to_string(install.join("SKILL.md")).unwrap(),
@@ -188,6 +227,11 @@ pub(crate) struct SkillsState {
     query: Entity<InputState>,
     filter: Option<SourceKind>,
     focus: gpui_kit::FocusHandle,
+    modal_focus: gpui_kit::FocusHandle,
+    return_focus: Option<gpui_kit::FocusHandle>,
+    list_scroll: gpui_kit::ScrollHandle,
+    detail_scroll: gpui_kit::ScrollHandle,
+    modal_scroll: gpui_kit::ScrollHandle,
     snapshot: Option<Arc<ScanSnapshot>>,
     loading: bool,
     error: Option<String>,
@@ -252,9 +296,7 @@ impl LyrelApp {
             if matches!(event, InputEvent::Change) {
                 if let Some(s) = this.active_settings_mut() {
                     s.skills.page = 0;
-                    s.skills.selected = None;
-                    s.skills.browser = None;
-                    s.skills.browser_generation += 1;
+                    s.skills.list_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
                 }
                 cx.notify();
             }
@@ -268,6 +310,11 @@ impl LyrelApp {
             query,
             filter: None,
             focus: cx.focus_handle().tab_stop(true),
+            modal_focus: cx.focus_handle(),
+            return_focus: None,
+            list_scroll: gpui_kit::ScrollHandle::new(),
+            detail_scroll: gpui_kit::ScrollHandle::new(),
+            modal_scroll: gpui_kit::ScrollHandle::new(),
             snapshot: None,
             loading: false,
             error: None,
@@ -475,278 +522,6 @@ impl LyrelApp {
             },
         );
     }
-    pub(crate) fn render_settings_skills(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(s) = self.active_settings() else {
-            return div().into_any_element();
-        };
-        let state = &s.skills;
-        let host_id = state.host;
-        let machines = self.agent_hooks_machines(cx);
-        let machine = machines
-            .iter()
-            .find(|m| m.host == host_id)
-            .map(|m| m.label.clone())
-            .unwrap_or_else(|| t(L10nKey::SkillsNoMachine).into());
-        let entries = machines
-            .into_iter()
-            .map(|m| {
-                MenuEntry::item(m.label, m.host == host_id, move |this, w, cx| {
-                    this.select_skills_host(m.host, w, cx)
-                })
-            })
-            .collect();
-        let host_picker = if state.install.target_locked() || state.maintenance.target_locked() {
-            div().child(machine).into_any_element()
-        } else {
-            self.analysis_menu("skills-machine", machine, entries, cx)
-        };
-        let mut body = vec![
-            div()
-                .text_sm()
-                .child(t(L10nKey::SkillsPageDescription))
-                .into_any_element(),
-            self.settings_row(
-                t(L10nKey::SettingsMachine),
-                t(L10nKey::SkillsProfileNote),
-                host_picker,
-                cx,
-            )
-            .into_any_element(),
-            v_flex()
-                .gap_2()
-                .child(t(L10nKey::SkillsProject))
-                .child(
-                    Input::new(&state.project_input)
-                        .id("skills-project-input")
-                        .disabled(
-                            state.install.target_locked() || state.maintenance.target_locked(),
-                        ),
-                )
-                .child(
-                    Button::new("skills-apply-project")
-                        .label(t(L10nKey::SkillsApplyProject))
-                        .disabled(
-                            state.install.target_locked() || state.maintenance.target_locked(),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.apply_skills_project(cx))),
-                )
-                .into_any_element(),
-        ];
-        body.push(self.render_skills_install(cx));
-        for message in state.maintenance.messages() {
-            body.push(div().text_sm().child(message.clone()).into_any_element());
-        }
-        if !state.install.open {
-            let filter = state.filter;
-            let kinds = [
-                None,
-                Some(SourceKind::UserShared),
-                Some(SourceKind::ProjectShared),
-                Some(SourceKind::AgentPrivate),
-            ];
-            let filters = kinds
-                .into_iter()
-                .map(|kind| {
-                    MenuEntry::item(
-                        t(kind.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
-                        kind == filter,
-                        move |this, _, cx| {
-                            if let Some(s) = this.active_settings_mut() {
-                                if s.skills.maintenance.target_locked() {
-                                    return;
-                                }
-                                s.skills.filter = kind;
-                                s.skills.page = 0;
-                                s.skills.selected = None;
-                                s.skills.browser = None;
-                                s.skills.browser_generation += 1;
-                            }
-                            cx.notify();
-                        },
-                    )
-                })
-                .collect();
-            body.push(
-                v_flex()
-                    .gap_2()
-                    .child(
-                        Input::new(&state.query)
-                            .id("skills-query")
-                            .disabled(state.maintenance.target_locked()),
-                    )
-                    .child(self.analysis_menu(
-                        "skills-source",
-                        t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
-                        filters,
-                        cx,
-                    ))
-                    .child(
-                        Button::new("skills-refresh")
-                            .label(t(L10nKey::SkillsRefresh))
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_skills(cx))),
-                    )
-                    .into_any_element(),
-            );
-            if state.loading {
-                body.push(div().child(t(L10nKey::SkillsLoading)).into_any_element());
-            }
-            if !machines_connected(cx, host_id) || state.error.is_some() {
-                body.push(
-                    div()
-                        .text_color(cx.theme().warning)
-                        .child(t(L10nKey::SkillsIncomplete))
-                        .into_any_element(),
-                );
-            }
-            if let Some(error) = &state.error {
-                body.push(div().text_sm().child(error.clone()).into_any_element());
-            }
-            if let Some(snapshot) = &state.snapshot {
-                let time = snapshot
-                    .scanned_at()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .to_string();
-                body.push(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)]))
-                        .into_any_element(),
-                );
-                if !snapshot.problems().is_empty() {
-                    body.push(
-                        div()
-                            .text_color(cx.theme().warning)
-                            .child(t(L10nKey::SkillsIncomplete))
-                            .into_any_element(),
-                    );
-                }
-                for problem in snapshot.problems() {
-                    body.push(div().text_sm().child(problem.clone()).into_any_element());
-                }
-                if let Some(skill) = state
-                    .selected
-                    .as_ref()
-                    .and_then(|path| snapshot.installations().iter().find(|s| s.path() == path))
-                {
-                    body.push(self.render_skill_detail(skill, cx));
-                } else {
-                    let query = state.query.read(cx).value();
-                    let matches = snapshot.filtered(&query, filter).collect::<Vec<_>>();
-                    let page = state.page.min(matches.len().saturating_sub(1) / 50);
-                    if matches.is_empty() {
-                        body.push(div().child(t(L10nKey::SkillsEmpty)).into_any_element());
-                    }
-                    for skill in matches.iter().skip(page * 50).take(50) {
-                        let path = skill.path().to_path_buf();
-                        body.push(
-                            v_flex()
-                                .gap_1()
-                                .min_w_0()
-                                .child(
-                                    Button::new(SharedString::from(row_id(&path)))
-                                        .ghost()
-                                        .label(skill.name().to_string())
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            if let Some(s) = this.active_settings_mut() {
-                                                s.skills.selected = Some(path.clone());
-                                                s.skills.browser = None;
-                                                s.skills.browser_generation += 1;
-                                                window.focus(&s.skills.focus, cx);
-                                            }
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    skill
-                                        .description()
-                                        .unwrap_or(t(L10nKey::SkillsUnknown))
-                                        .to_string(),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(skill.path().to_string_lossy().into_owned()),
-                                )
-                                .into_any_element(),
-                        );
-                    }
-                    if matches.len() > 50 {
-                        let last_page = matches.len().saturating_sub(1) / 50;
-                        body.push(
-                            h_flex()
-                                .gap_2()
-                                .child(Button::new("skills-prev").label("←").on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        if let Some(s) = this.active_settings_mut() {
-                                            s.skills.page = s.skills.page.saturating_sub(1);
-                                        }
-                                        cx.notify();
-                                    },
-                                )))
-                                .child(format!("{} / {}", page + 1, last_page + 1))
-                                .child(Button::new("skills-next").label("→").on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        if let Some(s) = this.active_settings_mut() {
-                                            s.skills.page = (page + 1).min(last_page);
-                                        }
-                                        cx.notify();
-                                    },
-                                )))
-                                .into_any_element(),
-                        );
-                    }
-                }
-            } else if !state.loading && state.error.is_none() {
-                body.push(div().child(t(L10nKey::SkillsEmpty)).into_any_element());
-            }
-            body.push(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(L10nKey::SkillsRuntimeNote))
-                    .into_any_element(),
-            );
-        }
-        v_flex()
-            .gap_4()
-            .min_w_0()
-            .track_focus(&state.focus)
-            .children(body)
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    if this.cancel_skills_maintenance(window, cx) {
-                        cx.stop_propagation();
-                        return;
-                    }
-                    if this.cancel_skills_install(window, cx) {
-                        cx.stop_propagation();
-                        return;
-                    }
-                    if let Some(s) = this.active_settings_mut().filter(|s| s.menu.is_none()) {
-                        if s.skills.browser.take().is_some() || s.skills.selected.take().is_some() {
-                            if s.skills.selected.is_none() {
-                                window.focus(&s.skills.query.read(cx).focus_handle(cx), cx);
-                            }
-                            s.skills.browser_generation += 1;
-                            cx.stop_propagation();
-                            cx.notify();
-                        } else if !s.skills.query.read(cx).value().is_empty() {
-                            s.skills
-                                .query
-                                .clone()
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    }
-                }
-            }))
-            .into_any_element()
-    }
     fn render_skill_detail(&self, skill: &SkillInstallation, cx: &mut Context<Self>) -> AnyElement {
         let host_id = skill.host();
         let path = skill.path().to_path_buf();
@@ -763,6 +538,8 @@ impl LyrelApp {
         let copy_path = path.to_string_lossy().into_owned();
         let mut content = vec![
             Button::new("skills-back")
+                .small()
+                .ghost()
                 .disabled(
                     self.active_settings()
                         .is_some_and(|s| s.skills.maintenance.target_locked()),
@@ -779,9 +556,14 @@ impl LyrelApp {
                 }))
                 .into_any_element(),
             div()
-                .text_lg()
-                .font_weight(FontWeight::SEMIBOLD)
+                .text_base()
+                .font_weight(FontWeight::MEDIUM)
                 .child(skill.name().to_string())
+                .into_any_element(),
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(skill.sources().iter().map(|source| t(source_key(source.kind()))).collect::<Vec<_>>().join(" · "))
                 .into_any_element(),
             div()
                 .child(
@@ -791,14 +573,13 @@ impl LyrelApp {
                         .to_string(),
                 )
                 .into_any_element(),
-            div()
-                .child(path.to_string_lossy().into_owned())
-                .into_any_element(),
+            skill_metadata_row(L10nKey::SkillsLocation, path.to_string_lossy().into_owned(), cx),
             h_flex()
                 .flex_wrap()
                 .gap_2()
                 .child(
                     Button::new("skills-open-file")
+                        .small().ghost()
                         .label(t(L10nKey::SkillsOpenFile))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.skills_open_file(host_id, markdown_path.clone(), window, cx)
@@ -806,6 +587,7 @@ impl LyrelApp {
                 )
                 .child(
                     Button::new("skills-copy-path")
+                        .small().ghost()
                         .label(t(L10nKey::SkillsCopyPath))
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
@@ -815,6 +597,7 @@ impl LyrelApp {
                 )
                 .child(
                     Button::new("skills-browse-files")
+                        .small().ghost()
                         .label(t(L10nKey::SkillsBrowseFiles))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if host_id.is_local() {
@@ -850,12 +633,7 @@ impl LyrelApp {
                     .unwrap_or_else(|| t(L10nKey::SkillsUnknown).to_string()),
             ),
         ] {
-            content.push(
-                div()
-                    .text_sm()
-                    .child(format!("{}: {value}", t(key)))
-                    .into_any_element(),
-            );
+            content.push(skill_metadata_row(key, value, cx));
         }
         let companions = skill.companions();
         content.push(
@@ -878,7 +656,36 @@ impl LyrelApp {
                 ))
                 .into_any_element(),
         );
-        content.push(div().child(t(L10nKey::SkillsScope)).into_any_element());
+        if !skill.sources().iter().any(|source| matches!(source.kind(), SourceKind::UserShared | SourceKind::ProjectShared)) {
+            content.push(div().text_sm().text_color(cx.theme().muted_foreground).child(t(L10nKey::SkillsReadonly)).into_any_element());
+        }
+        if let Some(snapshot) = self.active_settings().and_then(|s| s.skills.snapshot.as_ref()) {
+            let time = snapshot.scanned_at().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs().to_string();
+            content.push(div().text_xs().text_color(cx.theme().muted_foreground).child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)])).into_any_element());
+        }
+        if let Some(markdown) = skill.markdown() {
+            let safe =
+                lyrel_core::core::github::markdown::sanitize(markdown, t(L10nKey::GitHubImage));
+            content.push(
+                TextView::markdown(
+                    SharedString::from(format!("skill-markdown-{}", row_id(skill.path()))),
+                    safe,
+                )
+                .selectable(true)
+                .markdown_block_parser(|node, parse| {
+                    (!safe_node(node)).then(|| {
+                        let source = parse.node_source(node).unwrap_or_default().to_string();
+                        gpui_kit::component::text::MarkdownNode::new("skill-unsafe", source.clone())
+                            .text(source)
+                    })
+                })
+                .markdown_block_renderer("skill-unsafe", |node, _, _| {
+                    div().child(node.data::<String>().cloned().unwrap_or_default())
+                })
+                .into_any_element(),
+            );
+        }
+        content.push(div().pt_3().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground).child(t(L10nKey::SkillsScope)).into_any_element());
         for source in skill.sources() {
             content.push(
                 div()
@@ -974,34 +781,18 @@ impl LyrelApp {
                 }
             }
         }
-        if let Some(markdown) = skill.markdown() {
-            let safe =
-                lyrel_core::core::github::markdown::sanitize(markdown, t(L10nKey::GitHubImage));
-            content.push(
-                TextView::markdown(
-                    SharedString::from(format!("skill-markdown-{}", row_id(skill.path()))),
-                    safe,
-                )
-                .selectable(true)
-                .markdown_block_parser(|node, parse| {
-                    (!safe_node(node)).then(|| {
-                        let source = parse.node_source(node).unwrap_or_default().to_string();
-                        gpui_kit::component::text::MarkdownNode::new("skill-unsafe", source.clone())
-                            .text(source)
-                    })
-                })
-                .markdown_block_renderer("skill-unsafe", |node, _, _| {
-                    div().child(node.data::<String>().cloned().unwrap_or_default())
-                })
-                .into_any_element(),
-            );
-        }
         v_flex()
             .gap_3()
             .min_w_0()
             .children(content)
             .into_any_element()
     }
+}
+fn skill_metadata_row(key: L10nKey, value: String, cx: &App) -> AnyElement {
+    h_flex().items_start().gap_3().min_w_0()
+        .child(div().w_24().flex_none().text_xs().text_color(cx.theme().muted_foreground).child(t(key)))
+        .child(div().flex_1().min_w_0().text_sm().truncate().child(value))
+        .into_any_element()
 }
 fn machines_connected(cx: &App, id: HostId) -> bool {
     HostRegistry::lookup(cx, id).is_some_and(|host| host.is_connected())

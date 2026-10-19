@@ -32,8 +32,8 @@ pub(super) struct MaintenanceState {
     pub(super) github: Option<Arc<dyn Transport>>,
 }
 impl MaintenanceState {
-    pub(super) fn messages(&self) -> &[String] {
-        &self.messages
+    pub(super) fn is_open(&self) -> bool {
+        self.path.is_some()
     }
     pub(super) fn target_locked(&self) -> bool {
         self.busy || self.update.is_some() || self.remove.is_some()
@@ -175,7 +175,8 @@ impl LyrelApp {
             return false;
         }
         state.invalidate();
-        window.focus(&s.skills.focus, cx);
+        let focus = s.skills.return_focus.take().unwrap_or_else(|| s.skills.focus.clone());
+        window.focus(&focus, cx);
         cx.notify();
         true
     }
@@ -372,31 +373,42 @@ impl LyrelApp {
         }) {
             return div().into_any_element();
         }
-        let mut body = vec![
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .child(
-                    Button::new("skills-check-update")
-                        .label(t(L10nKey::SkillsCheckUpdate))
-                        .disabled(state.busy || state.remove.is_some())
-                        .on_click(
-                            cx.listener(|app, _, _, cx| app.review_skill_maintenance(false, cx)),
-                        ),
-                )
-                .child(
-                    Button::new("skills-remove-review")
-                        .label(t(L10nKey::SkillsRemoveReview))
-                        .disabled(state.busy || state.update.is_some())
-                        .on_click(
-                            cx.listener(|app, _, _, cx| app.review_skill_maintenance(true, cx)),
-                        ),
-                )
-                .into_any_element(),
-        ];
-        if state.path.as_deref() != Some(skill.path()) {
-            return v_flex().gap_2().children(body).into_any_element();
+        h_flex().flex_wrap().gap_2()
+            .child(Button::new("skills-check-update").small().ghost()
+                .label(format!("{}…", t(L10nKey::SkillsCheckUpdate)))
+                .disabled(state.target_locked() || s.skills.install.open)
+                .on_click(cx.listener(|app, _, window, cx| {
+                    if let Some(s) = app.active_settings_mut() {
+                        s.skills.return_focus = window.focused(cx);
+                        s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                    }
+                    app.review_skill_maintenance(false, cx);
+                    if let Some(s) = app.active_settings() { window.focus(&s.skills.modal_focus, cx); }
+                })))
+            .child(Button::new("skills-remove-review").small().ghost()
+                .label(t(L10nKey::SkillsRemoveReview))
+                .disabled(state.target_locked() || s.skills.install.open)
+                .on_click(cx.listener(|app, _, window, cx| {
+                    if let Some(s) = app.active_settings_mut() {
+                        s.skills.return_focus = window.focused(cx);
+                        s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                    }
+                    app.review_skill_maintenance(true, cx);
+                    if let Some(s) = app.active_settings() { window.focus(&s.skills.modal_focus, cx); }
+                }))).into_any_element()
+    }
+    pub(super) fn render_skills_maintenance_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(s) = self.active_settings() else { return div().into_any_element(); };
+        let state = &s.skills.maintenance;
+        let mut body = vec![self.skills_modal_target(cx)];
+        if let Some(path) = &state.path {
+            body.push(skill_metadata_row(L10nKey::SkillsLocation, path.display().to_string(), cx));
         }
+        let mut footer = h_flex().gap_2().child(
+            Button::new("skills-maintenance-cancel").small().ghost()
+                .label(t(L10nKey::SkillsMaintenanceCancel)).disabled(state.committing)
+                .on_click(cx.listener(|app, _, window, cx| { app.cancel_skills_maintenance(window, cx); })),
+        );
         if state.busy {
             body.push(
                 div()
@@ -458,12 +470,18 @@ impl LyrelApp {
                     }))
                     .into_any_element(),
             );
-            body.push(
-                Button::new("skills-update-confirm")
+            footer = footer.child(
+                Button::new("skills-update-confirm").small()
                     .label(t(L10nKey::SkillsUpdateConfirm))
                     .disabled(state.busy || !state.replace)
-                    .on_click(cx.listener(|app, _, _, cx| app.confirm_skill_maintenance(false, cx)))
-                    .into_any_element(),
+                    .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
+                    .on_click(cx.listener(|app, _, window, cx| {
+                        if let Some(s) = app.active_settings() {
+                            s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                            window.focus(&s.skills.modal_focus, cx);
+                        }
+                        app.confirm_skill_maintenance(false, cx);
+                    })),
             );
         }
         if let Some(preview) = &state.remove {
@@ -522,22 +540,16 @@ impl LyrelApp {
                         .into_any_element(),
                 );
             }
-            body.push(
-                Button::new("skills-remove-confirm")
-                    .label(t(L10nKey::SkillsRemoveConfirm))
-                    .disabled(state.busy)
-                    .on_click(cx.listener(|app, _, _, cx| app.confirm_skill_maintenance(true, cx)))
-                    .into_any_element(),
-            );
-        }
-        if state.update.is_some() || state.remove.is_some() || state.busy && !state.committing {
-            body.push(
-                Button::new("skills-maintenance-cancel")
-                    .label(t(L10nKey::SkillsMaintenanceCancel))
+            footer = footer.child(
+                Button::new("skills-remove-confirm").small().danger()
+                    .label(t(L10nKey::SkillsRemoveConfirm)).disabled(state.busy)
                     .on_click(cx.listener(|app, _, window, cx| {
-                        app.cancel_skills_maintenance(window, cx);
-                    }))
-                    .into_any_element(),
+                        if let Some(s) = app.active_settings() {
+                            s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                            window.focus(&s.skills.modal_focus, cx);
+                        }
+                        app.confirm_skill_maintenance(true, cx);
+                    })),
             );
         }
         if let Some(error) = &state.error {
@@ -549,7 +561,8 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        v_flex().gap_2().min_w_0().children(body).into_any_element()
+        body.extend(state.messages.iter().map(|message| div().text_sm().child(message.clone()).into_any_element()));
+        self.render_skills_modal("skills-maintenance-dialog", t(L10nKey::SkillsMaintenanceTitle).into(), v_flex().gap_3().min_w_0().children(body).into_any_element(), footer.into_any_element(), cx)
     }
 }
 enum MaintenanceReview {

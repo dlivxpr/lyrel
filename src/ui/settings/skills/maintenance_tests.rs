@@ -79,14 +79,7 @@ pub(crate) fn lifecycle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, proj
     });
     cx.update(|window, cx| {
         window.render_frame(cx);
-        let top = window
-            .find(SharedString::from(row_id(&selected)))
-            .bounds()
-            .top();
-        let scroll = &app.read(cx).active_settings().unwrap().content_scroll;
-        let offset = scroll.offset();
-        scroll.set_offset(gpui_kit::point(offset.x, offset.y - top + px(240.)));
-        window.render_frame(cx);
+        super::super::tests::reveal(window, cx, SharedString::from(row_id(&selected)), "skills-list-scroll");
         window.click(SharedString::from(row_id(&selected)), cx);
     });
     cx.update(|window, cx| {
@@ -102,6 +95,7 @@ pub(crate) fn lifecycle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, proj
     assert_eq!(std::fs::read_to_string(&document).unwrap(), local);
     assert_eq!(std::fs::read(&lock).unwrap(), original_lock);
     cx.update(|window, cx| {
+        super::super::tests::reveal(window, cx, "skills-update-replace", "skills-modal-scroll");
         window.render_frame(cx);
         window.click("skills-update-replace", cx);
         window.press("escape", cx);
@@ -114,6 +108,7 @@ pub(crate) fn lifecycle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, proj
     });
     settle(app, cx);
     cx.update(|window, cx| {
+        super::super::tests::reveal(window, cx, "skills-update-replace", "skills-modal-scroll");
         window.render_frame(cx);
         window.click("skills-update-replace", cx);
         window.click("skills-update-confirm", cx);
@@ -128,6 +123,7 @@ pub(crate) fn lifecycle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, proj
     assert_eq!(updated_lock["skills"]["needle"]["source"], "example/skills");
     cx.update(|window, cx| {
         window.render_frame(cx);
+        window.press("escape", cx);
         window.click("skills-remove-review", cx);
     });
     settle(app, cx);
