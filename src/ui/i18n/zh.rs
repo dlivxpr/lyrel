@@ -182,7 +182,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsUpdated => "快照：{time} · 桌面时区：{zone}\n结果范围：{range}",
         L10nKey::StatisticsComplete => "可发现来源与扫描上限范围内完整",
         L10nKey::StatisticsPartial => "结果不完整，保留值可能过期或受限；请查看下方来源诊断",
-        L10nKey::StatisticsTokens => "总 Token",
+        L10nKey::StatisticsTokens => "Token",
         L10nKey::StatisticsCost => "历史记录费用",
         L10nKey::StatisticsEstimatedCost => "原生估算费用（独立于实际费用）",
         L10nKey::StatisticsHermesLimits => {
@@ -204,11 +204,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsHermesTime => {
             "Hermes 累计用量缺少可靠的活动区间，无法归入所选日期范围。"
         }
-        L10nKey::StatisticsSessions => "活跃主会话",
-        L10nKey::StatisticsInput => "输入 Token",
-        L10nKey::StatisticsOutput => "输出 Token",
-        L10nKey::StatisticsCacheRead => "缓存读取 Token",
-        L10nKey::StatisticsCacheWrite => "缓存写入 Token",
+        L10nKey::StatisticsSessions => "主会话",
+        L10nKey::StatisticsInput => "输入",
+        L10nKey::StatisticsOutput => "输出",
+        L10nKey::StatisticsCacheRead => "缓存读",
+        L10nKey::StatisticsCacheWrite => "缓存写",
         L10nKey::StatisticsAverage => "每主会话平均 Token（含子代理用量）",
         L10nKey::StatisticsUnknown => "未知",
         L10nKey::StatisticsUnpriced => "未计价",
@@ -264,8 +264,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsAnalysisTitle => "活动与明细",
         L10nKey::StatisticsAllAgents => "全部已发现智能体",
         L10nKey::StatisticsAgents => "智能体明细",
-        L10nKey::StatisticsModels => "常用模型",
-        L10nKey::StatisticsProjects => "常用项目",
+        L10nKey::StatisticsModels => "模型",
+        L10nKey::StatisticsProjects => "项目",
         L10nKey::StatisticsAnalysisValues => {
             "{tokens} Token · 记录费用 {cost} · 原生估算 {estimated}\n{sessions} 个主会话 · {calls} 条用量记录（其中 {cumulative} 条累计）· {unpriced} 条未计价\n输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {read} · 缓存写入 {write}\n{status}"
         }
@@ -307,13 +307,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsCostCard => "记录费用",
         L10nKey::StatisticsSessionColumn => "会话",
         L10nKey::StatisticsTokenDelta => "与上期相比：{change}",
-        L10nKey::StatisticsRecordedSubtotal => "已知小计 · {count} 条记录缺少实际费用",
-        L10nKey::StatisticsNativeEstimate => "原生估算（独立）：{value}",
-        L10nKey::StatisticsCurrencyEstimate => {
-            "{currency} 估算 · 自定义 {custom} · 目录 {catalog} · {partial} 条部分计价"
-        }
-        L10nKey::StatisticsPreviousValue => "上期：{value}",
-        L10nKey::StatisticsSessionAverage => "每主会话 {value} Token（含子代理用量）",
+        L10nKey::StatisticsRecordedSubtotal => "记录费用小计 · {count} 条未计价",
+        L10nKey::StatisticsSessionAverage => "平均每主会话 {value} Token",
         L10nKey::StatisticsRecordCount => "{calls} 条计量记录 · {cumulative} 条累计",
         L10nKey::StatisticsActivity => "活动",
         L10nKey::StatisticsActivityStreaks => "当前连续 {current} 天 · 最长 {longest} 天",
@@ -330,6 +325,13 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsSourceLocation => "历史路径或原生服务 URL",
         L10nKey::StatisticsAddPrice => "添加单价…",
         L10nKey::StatisticsSourceTarget => "目标机器：{machine}",
+        L10nKey::StatisticsCommon => "常用",
+        L10nKey::StatisticsShare => "占比",
+        L10nKey::StatisticsCompositionUnavailable => "组成不可比较",
+        L10nKey::StatisticsDailyTrend => "逐日 · {start} – {end}；未知日留空",
+        L10nKey::StatisticsTrendUnavailable => "逐日趋势不可用",
+        L10nKey::StatisticsSummaryDetails => "数值与覆盖详情",
+        L10nKey::StatisticsRankContext => "{cost} · {sessions} 会话",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 需要加载原生扩展。--no-extensions/-ne 会禁用发现；--no-session 会禁用历史、恢复与分叉。Print/JSON/RPC 模式不是原生 TUI。缺少事件不代表本轮结束，请检查启动诊断与项目信任，不要绕过授权。"
         }

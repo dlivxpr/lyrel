@@ -212,7 +212,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsPartial => {
             "Incomplete — retained values may be stale or restricted; inspect source diagnostics below"
         }
-        L10nKey::StatisticsTokens => "Total tokens",
+        L10nKey::StatisticsTokens => "Tokens",
         L10nKey::StatisticsCost => "Recorded historical cost",
         L10nKey::StatisticsEstimatedCost => "Native estimated cost (separate from actual)",
         L10nKey::StatisticsHermesLimits => {
@@ -236,11 +236,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsHermesTime => {
             "Hermes stored usage has no reliable activity interval. Cumulative usage cannot be assigned to this date range."
         }
-        L10nKey::StatisticsSessions => "Active main sessions",
-        L10nKey::StatisticsInput => "Input tokens",
-        L10nKey::StatisticsOutput => "Output tokens",
-        L10nKey::StatisticsCacheRead => "Cache-read tokens",
-        L10nKey::StatisticsCacheWrite => "Cache-write tokens",
+        L10nKey::StatisticsSessions => "Main sessions",
+        L10nKey::StatisticsInput => "Input",
+        L10nKey::StatisticsOutput => "Output",
+        L10nKey::StatisticsCacheRead => "Cache read",
+        L10nKey::StatisticsCacheWrite => "Cache write",
         L10nKey::StatisticsAverage => "Tokens per main session (including child usage)",
         L10nKey::StatisticsUnknown => "Unknown",
         L10nKey::StatisticsUnpriced => "Unpriced",
@@ -296,8 +296,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsAnalysisTitle => "Activity and breakdowns",
         L10nKey::StatisticsAllAgents => "All discovered agents",
         L10nKey::StatisticsAgents => "Agents",
-        L10nKey::StatisticsModels => "Frequently used models",
-        L10nKey::StatisticsProjects => "Frequently used projects",
+        L10nKey::StatisticsModels => "Models",
+        L10nKey::StatisticsProjects => "Projects",
         L10nKey::StatisticsAnalysisValues => {
             "{tokens} tokens · recorded {cost} · native estimate {estimated}\n{sessions} main sessions · {calls} usage records ({cumulative} cumulative) · {unpriced} unpriced records\nInput {input} · output {output} · reasoning {reasoning} · cache read {read} · cache write {write}\n{status}"
         }
@@ -342,14 +342,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsSessionColumn => "Sessions",
         L10nKey::StatisticsTokenDelta => "Previous period: {change}",
         L10nKey::StatisticsRecordedSubtotal => {
-            "Known subtotal · {count} records without actual cost"
+            "Recorded subtotal · {count} unpriced records"
         }
-        L10nKey::StatisticsNativeEstimate => "Native estimate, separate: {value}",
-        L10nKey::StatisticsCurrencyEstimate => {
-            "{currency} estimates · custom {custom} · catalog {catalog} · {partial} partial"
-        }
-        L10nKey::StatisticsPreviousValue => "Previous period: {value}",
-        L10nKey::StatisticsSessionAverage => "{value} tokens / main session, including child usage",
+        L10nKey::StatisticsSessionAverage => "{value} tokens / main session",
         L10nKey::StatisticsRecordCount => "{calls} usage records · {cumulative} cumulative",
         L10nKey::StatisticsActivity => "Activity",
         L10nKey::StatisticsActivityStreaks => "Current streak {current} days · longest {longest}",
@@ -366,6 +361,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsSourceLocation => "History path or native service URL",
         L10nKey::StatisticsAddPrice => "Add price…",
         L10nKey::StatisticsSourceTarget => "Target machine: {machine}",
+        L10nKey::StatisticsCommon => "Frequent",
+        L10nKey::StatisticsShare => "Share",
+        L10nKey::StatisticsCompositionUnavailable => "Composition unavailable",
+        L10nKey::StatisticsDailyTrend => "Daily · {start} – {end}; unknown days leave gaps",
+        L10nKey::StatisticsTrendUnavailable => "Daily trend unavailable",
+        L10nKey::StatisticsSummaryDetails => "Values and coverage",
+        L10nKey::StatisticsRankContext => "{cost} · {sessions} sessions",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 requires its native extension. --no-extensions/-ne disables discovery; --no-session disables history, resume and fork. Print/JSON/RPC modes are not the native TUI. Missing events never mean Done. Check startup diagnostics and project trust without bypassing consent."
         }
