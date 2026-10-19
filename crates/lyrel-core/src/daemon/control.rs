@@ -628,7 +628,9 @@ pub enum ReplyOk {
             >,
         >,
     ),
-    HermesStatistics(Box<Result<serde_json::Value, crate::host::session_operations::SessionOperationError>>),
+    HermesStatistics(
+        Box<Result<serde_json::Value, crate::host::session_operations::SessionOperationError>>,
+    ),
     Attached {
         took_over_from: Option<String>,
     },

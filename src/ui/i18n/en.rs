@@ -46,13 +46,27 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsEstimatedCost => "Native estimated cost (separate from actual)",
         L10nKey::StatisticsAllSources => "All sources",
         L10nKey::StatisticsSource => "Agent source",
-        L10nKey::StatisticsHermesLimits => "Hermes uses the selected launcher's home/profile. Public history excludes child usage and has no pagination. Cumulative usage is included only when the range covers the entire session; it is never spread across days. Actual and native estimated costs are separate, not additive.",
-        L10nKey::StatisticsHermesCoverage => "Hermes public history excludes child usage, archived and zero-message sessions. Totals cover visible native CLI history only.",
-        L10nKey::StatisticsHermesEmpty => "Hermes returned an empty result. The public interface cannot distinguish empty history from an unavailable profile database.",
-        L10nKey::StatisticsHermesWindow => "Hermes reached a global or project preview window. The public interface has no offset/cursor; this is not complete history.",
-        L10nKey::StatisticsHermesProfile => "Hermes returned a different profile. The row was omitted; no fallback profile was used.",
-        L10nKey::StatisticsHermesLineage => "Hermes returned overlapping native lineage. Duplicate cumulative usage was omitted.",
-        L10nKey::StatisticsHermesTime => "Hermes stored usage has no reliable activity interval. Cumulative usage cannot be assigned to this date range.",
+        L10nKey::StatisticsHermesLimits => {
+            "Hermes uses the selected launcher's home/profile. Public history excludes child usage and has no pagination. Cumulative usage is included only when the range covers the entire session; it is never spread across days. Actual and native estimated costs are separate, not additive."
+        }
+        L10nKey::StatisticsHermesCoverage => {
+            "Hermes public history excludes child usage, archived and zero-message sessions. Totals cover visible native CLI history only."
+        }
+        L10nKey::StatisticsHermesEmpty => {
+            "Hermes returned an empty result. The public interface cannot distinguish empty history from an unavailable profile database."
+        }
+        L10nKey::StatisticsHermesWindow => {
+            "Hermes reached a global or project preview window. The public interface has no offset/cursor; this is not complete history."
+        }
+        L10nKey::StatisticsHermesProfile => {
+            "Hermes returned a different profile. The row was omitted; no fallback profile was used."
+        }
+        L10nKey::StatisticsHermesLineage => {
+            "Hermes returned overlapping native lineage. Duplicate cumulative usage was omitted."
+        }
+        L10nKey::StatisticsHermesTime => {
+            "Hermes stored usage has no reliable activity interval. Cumulative usage cannot be assigned to this date range."
+        }
         L10nKey::StatisticsSessions => "Active main sessions",
         L10nKey::StatisticsInput => "Input tokens",
         L10nKey::StatisticsOutput => "Output tokens",

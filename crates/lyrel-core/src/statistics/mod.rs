@@ -22,7 +22,7 @@ pub struct Source {
     scope: String,
     agent: String,
     #[serde(skip)]
-    hermes_request: Option<Box<crate::host::session_operations::SessionOperation>>,
+    hermes_request: Option<std::sync::Arc<crate::host::session_operations::SessionOperation>>,
 }
 impl Source {
     pub fn omp(root: PathBuf, scope: impl Into<String>) -> Self {
@@ -95,10 +95,19 @@ pub struct UsageRecord {
     coverage_start: Option<i64>,
     #[serde(default)]
     estimated_usd: Option<f64>,
+    #[serde(default)]
+    time_unknown: bool,
 }
 impl UsageRecord {
-    pub fn coverage_start(&self) -> Option<i64> { self.coverage_start }
-    pub fn estimated_usd(&self) -> Option<f64> { self.estimated_usd }
+    pub fn time_unknown(&self) -> bool {
+        self.time_unknown
+    }
+    pub fn coverage_start(&self) -> Option<i64> {
+        self.coverage_start
+    }
+    pub fn estimated_usd(&self) -> Option<f64> {
+        self.estimated_usd
+    }
     pub fn timestamp(&self) -> i64 {
         self.timestamp
     }
@@ -164,7 +173,9 @@ pub struct Snapshot {
     issues: Vec<ScanIssue>,
 }
 impl Snapshot {
-    pub fn record_issue(&mut self, path: PathBuf, reason: String) { self.issues.push(ScanIssue { path, reason }); }
+    pub fn record_issue(&mut self, path: PathBuf, reason: String) {
+        self.issues.push(ScanIssue { path, reason });
+    }
     pub fn host(&self) -> u64 {
         self.host
     }
@@ -229,11 +240,17 @@ impl Snapshot {
                 sessions.insert((scope, session.id.as_str()));
             }
             for record in &session.records {
+                if record.time_unknown && (window.start().is_some() || window.end().is_some()) {
+                    out.ambiguous_records += 1;
+                    continue;
+                }
                 if let Some(start) = record.coverage_start {
                     let overlaps = window.start().is_none_or(|s| record.timestamp >= s)
                         && window.end().is_none_or(|e| start < e);
                     if !window.contains(start) || !window.contains(record.timestamp) {
-                        if overlaps { out.ambiguous_records += 1; }
+                        if overlaps {
+                            out.ambiguous_records += 1;
+                        }
                         continue;
                     }
                 } else if !window.contains(record.timestamp) {
@@ -276,7 +293,9 @@ pub struct Totals {
     complete: bool,
 }
 impl Totals {
-    pub fn estimated_usd(&self) -> Option<f64> { self.estimated_usd }
+    pub fn estimated_usd(&self) -> Option<f64> {
+        self.estimated_usd
+    }
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }

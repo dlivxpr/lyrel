@@ -38,13 +38,25 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsEstimatedCost => "原生估算费用（独立于实际费用）",
         L10nKey::StatisticsAllSources => "全部来源",
         L10nKey::StatisticsSource => "智能体来源",
-        L10nKey::StatisticsHermesLimits => "Hermes 使用正式 launcher 的有效 home/profile。公开历史不含子代理用量，也不支持分页。累计用量仅在日期范围覆盖整个会话时纳入，绝不摊日。实际与原生估算费用分别展示，不相加。",
-        L10nKey::StatisticsHermesCoverage => "Hermes 公开历史不含子代理用量、归档和零消息会话。总量仅覆盖可见的原生 CLI 历史。",
-        L10nKey::StatisticsHermesEmpty => "Hermes 返回空结果。公开接口无法区分空历史和 profile 数据库不可用。",
-        L10nKey::StatisticsHermesWindow => "Hermes 已达到全局或项目预览窗口。公开接口没有 offset/cursor，此结果不是全部历史。",
-        L10nKey::StatisticsHermesProfile => "Hermes 返回了不同的 profile，已忽略该行，未回退到其他 profile。",
+        L10nKey::StatisticsHermesLimits => {
+            "Hermes 使用正式 launcher 的有效 home/profile。公开历史不含子代理用量，也不支持分页。累计用量仅在日期范围覆盖整个会话时纳入，绝不摊日。实际与原生估算费用分别展示，不相加。"
+        }
+        L10nKey::StatisticsHermesCoverage => {
+            "Hermes 公开历史不含子代理用量、归档和零消息会话。总量仅覆盖可见的原生 CLI 历史。"
+        }
+        L10nKey::StatisticsHermesEmpty => {
+            "Hermes 返回空结果。公开接口无法区分空历史和 profile 数据库不可用。"
+        }
+        L10nKey::StatisticsHermesWindow => {
+            "Hermes 已达到全局或项目预览窗口。公开接口没有 offset/cursor，此结果不是全部历史。"
+        }
+        L10nKey::StatisticsHermesProfile => {
+            "Hermes 返回了不同的 profile，已忽略该行，未回退到其他 profile。"
+        }
         L10nKey::StatisticsHermesLineage => "Hermes 返回的原生谱系重叠，已忽略重复的累计用量。",
-        L10nKey::StatisticsHermesTime => "Hermes 累计用量缺少可靠的活动区间，无法归入所选日期范围。",
+        L10nKey::StatisticsHermesTime => {
+            "Hermes 累计用量缺少可靠的活动区间，无法归入所选日期范围。"
+        }
         L10nKey::StatisticsSessions => "活跃主会话",
         L10nKey::StatisticsInput => "输入 Token",
         L10nKey::StatisticsOutput => "输出 Token",
