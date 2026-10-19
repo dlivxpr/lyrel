@@ -402,16 +402,16 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavAbout => "关于",
         L10nKey::SettingsNavUsage => "用量",
         L10nKey::UsageSearchKeywords => {
-            "DeepSeek 余额 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 浏览器 profile LocalStorage userToken"
+            "DeepSeek StepFun 阶跃 Xiaomi MiMo 小米 余额 套餐 Credits 额度 重置 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 Cookie 浏览器 profile LocalStorage userToken"
         }
         L10nKey::UsageScope => "桌面全局查询账户，独立于 SSH 机器，不读取智能体密钥。",
         L10nKey::UsageOfficial => {
             "官方 API：GET https://api.deepseek.com/user/balance · Bearer API key。接口不返回用户身份或重置周期；下方名称和 ID 标识本地查询账户。"
         }
-        L10nKey::UsageSource => "DeepSeek 认证来源",
+        L10nKey::UsageSource => "认证来源",
         L10nKey::UsageApiSource => "官方 API key",
         L10nKey::UsageSessionSource => "私有平台 · 手工会话",
-        L10nKey::UsageBrowserSource => "私有平台 · 浏览器 LocalStorage",
+        L10nKey::UsageBrowserSource => "私有平台 · 浏览器",
         L10nKey::UsageApiKey => "DeepSeek API 密钥",
         L10nKey::UsageSessionInput => "平台 userToken 或 Harness grant",
         L10nKey::UsageSessionHelp => {
@@ -436,7 +436,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "系统拒绝读取所选来源。后台不会申请权限；请检查访问权限或手工输入会话。"
         }
         L10nKey::UsageBrowserMissing => {
-            "所选 profile 或平台 userToken 不存在。请在该 profile 登录后重新导入。"
+            "所选 profile 或服务商必需的会话字段不存在。请在该 profile 登录后重新导入。"
         }
         L10nKey::UsageBrowserUnsupported => "当前平台或浏览器存储格式不支持导入，请手工输入会话。",
         L10nKey::UsageBrowserChanged => {
@@ -445,6 +445,38 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageBrowserUnreadable => {
             "无法读取所选浏览器存储。未使用其他 profile；请检查文件权限与浏览器版本。"
         }
+        L10nKey::UsageProvider => "服务商",
+        L10nKey::UsageStepFunHelp => {
+            "StepFun 私有控制台：仅请求 platform.stepfun.com 的 Dashboard QueryStepPlanRateLimit、UserInfo、GetStepPlanStatus。从本人的 Network 请求头复制已解码 Oasis-Token，从同站 LocalStorage 复制 web_id，粘贴为 Oasis-Token=…; Oasis-Webid=…。Oasis-Webid 是请求头，不从 JWT 推导。不提供 API key 查询；请求窗口与 Credit 套餐保留不同口径。"
+        }
+        L10nKey::UsageMiMoHelp => {
+            "MiMo 私有控制台：仅请求 platform.xiaomimimo.com/api/v1/balance、userProfile、tokenPlan/detail 与 tokenPlan/usage。粘贴本人会话的 api-platform_serviceToken（或 serviceToken）及 userId，不提供 API key 查询。账户余额与套餐 Credits 分开，缺失字段保留未知。"
+        }
+        L10nKey::UsageCookieInput => "必需的会话字段",
+        L10nKey::UsageCookieBrowserHelp => {
+            "仅读取所选 profile 的必需 Cookie；StepFun 另需精确平台 origin 的 LocalStorage web_id。支持 Firefox；macOS Chromium 仅主动导入时申请 Keychain 授权，刷新不弹授权。Windows App-Bound Encryption 无法绕过，请改用手工会话。浏览器材料从不保存，会话改变需主动重新导入。"
+        }
+        L10nKey::UsageCookieSource => "私有平台 · 浏览器 Cookie",
+        L10nKey::UsageBrowserProtected => {
+            "浏览器 Cookie 受到 App-Bound Encryption 保护，无法导入。Lyrel 不会关闭或绕过保护；请手工输入会话或选择支持的 Firefox profile。"
+        }
+        L10nKey::UsageIdentity => "身份",
+        L10nKey::UsagePlan => "套餐",
+        L10nKey::UsageUnknownValue => "未知",
+        L10nKey::UsageFiveHour => "5 小时窗口",
+        L10nKey::UsageWeekly => "每周窗口",
+        L10nKey::UsageMonthly => "月度套餐",
+        L10nKey::UsageCash => "现金余额",
+        L10nKey::UsageGift => "赠送余额",
+        L10nKey::UsageFrozen => "冻结余额",
+        L10nKey::UsageOverdraft => "透支额度",
+        L10nKey::UsageSubscriptionCredit => "订阅 Credits",
+        L10nKey::UsageCreditBucket => "Credit 额度池",
+        L10nKey::UsageRemaining => "剩余",
+        L10nKey::UsageUsed => "已用",
+        L10nKey::UsageLimit => "上限",
+        L10nKey::UsageReset => "重置时间",
+        L10nKey::UsageExpires => "到期时间",
         L10nKey::UsageAdd => "添加账户…",
         L10nKey::UsageRefreshAll => "全部刷新",
         L10nKey::UsageRefresh => "刷新",

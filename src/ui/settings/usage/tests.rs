@@ -272,3 +272,69 @@ fn platform_sessions_store_only_validated_material_and_failed_replacement_keeps_
         Balance::Platform(_)
     ));
 }
+
+#[test]
+fn provider_identity_change_and_failed_vault_replacement_keep_original_account_snapshot() {
+    use super::super::providers::{Provider, ProviderReport};
+    let dir = tempfile::tempdir().unwrap();
+    let vault = Arc::new(FailingVault::default());
+    let mut accounts = Accounts::load(dir.path().join("usage.json"), vault.clone()).unwrap();
+    let report = |identity: &str| {
+        Balance::Provider(ProviderReport {
+            provider: Provider::StepFun,
+            identity: Some(identity.to_owned()),
+            plan: Some("Plan Pro".to_owned()),
+            expired: None,
+            plan_expires: None,
+            pools: Vec::new(),
+            enhancement: None,
+        })
+    };
+    let id = accounts
+        .save_verified(
+            None,
+            "StepFun",
+            VerifiedSource::ProviderSession {
+                provider: Provider::StepFun,
+                secret: "Oasis-Token=old; Oasis-Webid=web",
+            },
+            report("42"),
+            100,
+        )
+        .unwrap();
+    let refresh = accounts.begin_refresh(id).unwrap();
+    accounts.finish_refresh(refresh, Ok(report("other-user")), 200);
+    let account = accounts.account(id).unwrap();
+    assert_eq!(account.error, Some(UsageError::BrowserChanged));
+    assert_eq!(account.snapshot.as_ref().unwrap().updated_at, 100);
+    let replacement = accounts.begin_replace(id).unwrap();
+    vault.fail.store(true, Ordering::SeqCst);
+    assert_eq!(
+        accounts.save_verified(
+            Some(replacement),
+            "StepFun",
+            VerifiedSource::ProviderSession {
+                provider: Provider::StepFun,
+                secret: "Oasis-Token=new; Oasis-Webid=web"
+            },
+            report("42"),
+            300
+        ),
+        Err(UsageError::Credentials)
+    );
+    assert_eq!(
+        accounts.secret(id).unwrap(),
+        "Oasis-Token=old; Oasis-Webid=web"
+    );
+    assert_eq!(
+        accounts
+            .account(id)
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .updated_at,
+        100
+    );
+    assert_eq!(vault.inner.len(), 1);
+}
