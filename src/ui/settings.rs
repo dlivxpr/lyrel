@@ -39,6 +39,7 @@ mod shell;
 mod shortcuts;
 pub(crate) mod statistics;
 mod theme_picker;
+pub(crate) mod usage;
 
 /// The settings nav, and the page's padding either side of its column.
 const NAV_W: f32 = 220.;
@@ -202,11 +203,12 @@ pub(crate) enum SettingsSection {
     Agents,
     Statistics,
     Keybindings,
+    Usage,
     About,
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 8] = [
+    pub(crate) const ALL: [SettingsSection; 9] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Terminal,
@@ -214,6 +216,7 @@ impl SettingsSection {
         SettingsSection::Ssh,
         SettingsSection::Agents,
         SettingsSection::Statistics,
+        SettingsSection::Usage,
         SettingsSection::About,
     ];
 
@@ -233,6 +236,7 @@ impl SettingsSection {
             Self::Ssh => L10nKey::SettingsNavSsh,
             Self::Agents => L10nKey::SettingsNavAgents,
             Self::Statistics => L10nKey::StatisticsTitle,
+            Self::Usage => L10nKey::SettingsNavUsage,
             Self::Keybindings => L10nKey::SettingsNavKeybindings,
             Self::About => L10nKey::SettingsNavAbout,
         }
@@ -247,6 +251,7 @@ impl SettingsSection {
             Self::Ssh => "icons/settings/ssh.svg",
             Self::Agents => "icons/settings/integrations.svg",
             Self::Statistics => "icons/settings/integrations.svg",
+            Self::Usage => "icons/settings/integrations.svg",
             Self::About => "icons/settings/about.svg",
         }
     }
@@ -260,6 +265,7 @@ impl SettingsSection {
             SettingsSection::Ssh => "settings:ssh",
             SettingsSection::Agents => "settings:agents",
             SettingsSection::Statistics => "settings:statistics",
+            SettingsSection::Usage => "settings:usage",
             SettingsSection::Keybindings => "settings:keybindings",
             SettingsSection::About => "settings:about",
         }
@@ -282,6 +288,11 @@ fn settings_search_entries() -> &'static [SearchEntry] {
             section: Statistics,
             title: StatisticsTitle,
             keywords: StatisticsKeywords,
+        },
+        SearchEntry {
+            section: Usage,
+            title: SettingsNavUsage,
+            keywords: UsageSearchKeywords,
         },
         SearchEntry {
             section: Appearance,
@@ -1113,6 +1124,7 @@ pub(crate) struct ThemeEditor {
 pub(crate) struct SettingsState {
     pub(crate) focus_handle: gpui_kit::FocusHandle,
     pub(crate) section: SettingsSection,
+    pub(crate) usage: Entity<usage::UsagePage>,
     pub(crate) search: Entity<InputState>,
     pub(crate) shortcut_search: Entity<InputState>,
     pub(crate) modified_only: bool,
