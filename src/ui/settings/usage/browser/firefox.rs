@@ -88,22 +88,12 @@ pub(super) fn profiles(
     Ok(())
 }
 
-pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
-    read_for(profile, "https://platform.deepseek.com", "userToken")
-}
-
-pub(super) fn read_for(profile: &Path, origin: &str, key: &str) -> Result<String, BrowserError> {
-    let directory = match (origin, key) {
-        ("https://platform.deepseek.com", "userToken") => "https+++platform.deepseek.com",
-        ("https://platform.stepfun.com", "web_id") => "https+++platform.stepfun.com",
-        _ => return Err(BrowserError::Unsupported),
-    };
-    // Exact HTTPS origin only. Container/partition origin attributes are not the
-    // selected default origin and must not silently supply a different account.
-    let path = profile
-        .join("storage/default")
-        .join(directory)
-        .join("ls/data.sqlite");
+pub(super) fn read(profile: &Path, origin: &str, name: &str) -> Result<String, BrowserError> {
+    // Exact HTTPS origin only, never a container or another profile.
+    let host = origin
+        .strip_prefix("https://")
+        .ok_or(BrowserError::Unsupported)?;
+    let path = profile.join(format!("storage/default/https+++{host}/ls/data.sqlite"));
     match fs::metadata(&path) {
         Ok(metadata) if metadata.is_file() => {}
         Ok(_) => return Err(BrowserError::Unreadable),
@@ -134,7 +124,7 @@ pub(super) fn read_for(profile: &Path, origin: &str, key: &str) -> Result<String
             _ => sql_error(error),
         })?;
     let value = statement
-        .query_row([key], |row| {
+        .query_row([name], |row| {
             Ok((
                 row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, i64>(1)?,
