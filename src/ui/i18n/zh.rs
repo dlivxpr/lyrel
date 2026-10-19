@@ -72,7 +72,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsRegistryQuery => "搜索 skills.sh",
         L10nKey::SkillsRegistrySearch => "搜索目录",
         L10nKey::SkillsRegistryNote => {
-            "使用 skills CLI 同款公开搜索接口。选择结果后仍需发现仓库、选择技能并审查安装，不会直接安装。"
+            "使用 skills CLI 同款公开搜索接口，只显示 GitHub 来源。选择结果后仍需发现仓库、选择技能并审查安装，不会直接安装。"
         }
         L10nKey::SkillsInstallScope => "共享安装作用域",
         L10nKey::SkillsInstallLocalOnly => "公开技能安装当前仅支持本机；仍可浏览远端技能。",

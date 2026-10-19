@@ -479,3 +479,44 @@ fn selecting_multiple_skills_checks_one_download_budget_before_companion_request
             .contains("1,000")
     );
 }
+
+#[test]
+#[ignore = "真实公开 skills.sh HTTP；仅在明确联网验收时执行，不写任何安装目录"]
+fn public_skills_sh_search_exposes_a_reviewable_github_source() {
+    let http = lyrel_core::skills::catalog::SkillsSearchHttp::new(None);
+    let results = search(&http, "find-skills").unwrap();
+    let result = results
+        .iter()
+        .find(|result| {
+            result.source.repository() == "vercel-labs/skills" && result.skill_id == "find-skills"
+        })
+        .expect("published find-skills source should be reviewable");
+    assert_eq!(result.source.skill_filter.as_deref(), Some("find-skills"));
+    eprintln!(
+        "public search verified: {} @ {}",
+        result.source.repository(),
+        result.skill_id
+    );
+}
+
+#[test]
+fn supported_github_search_results_survive_mixed_non_github_catalogue_entries() {
+    let mut http = Http::default();
+    http.json("/api/search?q=find%2Dskills&limit=20", json!({"skills":[
+        {"id":"vercel-labs/skills/find-skills","source":"vercel-labs/skills","skillId":"find-skills","name":"find-skills","installs":3917059},
+        {"id":"skills.volces.com/find-skills","source":"skills.volces.com","skillId":"find-skills","name":"find-skills","installs":1561},
+        {"id":"modelscope.cn/find-skills","source":"modelscope.cn","skillId":"find-skills","name":"find-skills","installs":1375}
+    ]}));
+    let results = search(&http, "find-skills").unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.source.repository())
+            .collect::<Vec<_>>(),
+        ["vercel-labs/skills"]
+    );
+    assert_eq!(
+        results[0].source.skill_filter.as_deref(),
+        Some("find-skills")
+    );
+}

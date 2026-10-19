@@ -810,11 +810,13 @@ pub fn search(http: &dyn Transport, query: &str) -> Result<Vec<SkillSearchResult
     }
     let mut rows = Vec::with_capacity(decoded.skills.len());
     for item in decoded.skills {
-        let mut source = GitHubSource::parse(&item.source)?;
+        // The public catalogue also contains well-known HTTP registries, which
+        // are outside this installer. They must not hide valid GitHub matches.
+        let Ok(mut source) = GitHubSource::parse(&item.source) else {
+            continue;
+        };
         if source.subpath.is_some() || source.reference.is_some() || source.skill_filter.is_some() {
-            return Err(CatalogError::Invalid(
-                "Search source is not a GitHub repository".into(),
-            ));
+            continue;
         }
         let skill_id = item
             .skill_id

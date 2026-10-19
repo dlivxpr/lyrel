@@ -76,7 +76,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsRegistryQuery => "Search skills.sh",
         L10nKey::SkillsRegistrySearch => "Search catalogue",
         L10nKey::SkillsRegistryNote => {
-            "Uses the public search route used by skills CLI. Results still require repository discovery, selection and installation review."
+            "Uses the public search route used by skills CLI. Only GitHub sources are shown. Results still require repository discovery, selection and installation review."
         }
         L10nKey::SkillsInstallScope => "Shared installation scope",
         L10nKey::SkillsInstallLocalOnly => {
