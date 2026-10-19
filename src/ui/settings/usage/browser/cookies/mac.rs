@@ -1,6 +1,6 @@
 //! macOS 官方 Keychain 授权与 Chromium v10 Cookie 解密；不创建或修改钥匙串条目。
 
-use super::super::{Browser, BrowserError};
+use super::super::{Browser, BrowserError, ImportPermission};
 use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 use zeroize::Zeroizing;
@@ -109,7 +109,7 @@ impl Drop for Owned {
 
 pub(in super::super) fn password(
     browser: Browser,
-    interactive: bool,
+    permission: &ImportPermission,
 ) -> Result<Zeroizing<Vec<u8>>, BrowserError> {
     let (service, account) = match browser {
         Browser::Chrome => ("Chrome Safe Storage", "Chrome"),
@@ -120,6 +120,7 @@ pub(in super::super) fn password(
     };
     let service = Owned::string(service)?;
     let account = Owned::string(account)?;
+    let interactive = permission.interaction()?;
     // SecItemCopyMatching 是唯一的系统交互。后台显式 UISkip，不使用命令行
     // security、不解锁钥匙串、不改 ACL、不在失败时改用可弹窗的 API。
     let (keys, values) = unsafe {
@@ -157,6 +158,8 @@ pub(in super::super) fn password(
         )
     })?;
     let mut result = ptr::null();
+    // Profile/SQLite work and even query preparation may outlive the form.
+    permission.interaction()?;
     let status = unsafe { SecItemCopyMatching(query.0, &mut result) };
     if status != 0 {
         if !result.is_null() {

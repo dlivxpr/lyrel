@@ -72,7 +72,14 @@ pub(super) fn attach(
         };
         locks.push((lock, under(host, &home, &[".agents", "skills"]), 3));
     }
-    if let Some(project) = &request.project {
+    // Discovery may expose several ancestor projects. Read the lock belonging
+    // to each actual shared root, never a same-named lock in the selected child.
+    for project in snapshot
+        .installations
+        .iter()
+        .flat_map(|skill| skill.sources.iter())
+        .filter_map(|source| source.project.as_ref())
+    {
         locks.push((
             host.join(project, "skills-lock.json"),
             under(host, project, &[".agents", "skills"]),

@@ -161,6 +161,40 @@ impl std::fmt::Display for BrowserError {
 
 impl std::error::Error for BrowserError {}
 
+pub(super) struct ImportPermission {
+    form: Option<(std::sync::Arc<std::sync::atomic::AtomicU64>, u64)>,
+}
+impl ImportPermission {
+    pub(super) fn for_form(
+        form: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        version: u64,
+    ) -> Self {
+        Self {
+            form: Some((form, version)),
+        }
+    }
+    pub(super) fn background() -> Self {
+        Self { form: None }
+    }
+    pub(super) fn interaction(&self) -> Result<bool, BrowserError> {
+        match &self.form {
+            Some((form, version)) if form.load(std::sync::atomic::Ordering::SeqCst) != *version => {
+                Err(BrowserError::Denied)
+            }
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
+    }
+    #[cfg(test)]
+    fn test_form() -> Self {
+        Self::for_form(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)), 0)
+    }
+}
+
+#[cfg(test)]
+type PermissionBoundary =
+    std::sync::Arc<dyn Fn(&ImportPermission) -> Result<(), BrowserError> + Send + Sync>;
+
 pub(super) struct BrowserReader {
     roots: Vec<(Browser, PathBuf)>,
     isolated: bool,
@@ -168,6 +202,8 @@ pub(super) struct BrowserReader {
     cookie_password: cookies::PasswordReader,
     #[cfg(target_os = "macos")]
     safari_file: cookies::FileReader,
+    #[cfg(test)]
+    pub(super) permission_boundary: Option<PermissionBoundary>,
 }
 
 impl BrowserReader {
@@ -239,6 +275,8 @@ impl BrowserReader {
             cookie_password: cookies::mac_password,
             #[cfg(target_os = "macos")]
             safari_file: cookies::read_file,
+            #[cfg(test)]
+            permission_boundary: None,
         }
     }
 
@@ -252,6 +290,8 @@ impl BrowserReader {
             cookie_password: cookies::mac_password,
             #[cfg(target_os = "macos")]
             safari_file: cookies::read_file,
+            #[cfg(test)]
+            permission_boundary: None,
         }
     }
 

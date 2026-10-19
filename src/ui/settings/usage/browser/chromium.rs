@@ -1,7 +1,14 @@
 use super::{Browser, BrowserError, Profile, io_error, make_profile, utf16};
 use rusty_leveldb::{DB, in_memory};
 use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::Path;
+
+// Bound the whole recovery input, not just the selected token. These fixed
+// desktop budgets include unreferenced tables/logs copied into the memory Env.
+const MAX_FILES: usize = 512;
+const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(super) fn profiles(
     browser: Browser,
@@ -105,6 +112,8 @@ pub(super) fn read(profile: &Path, origin: &str, name: &str) -> Result<String, B
     options.create_if_missing = false;
     options.paranoid_checks = true;
     let memory_root = Path::new("lyrel-browser-local-storage-memory");
+    let mut files = Vec::new();
+    let mut expected_total = 0u64;
     for entry in fs::read_dir(&path).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
         if !entry.file_type().map_err(io_error)?.is_file() {
@@ -123,12 +132,46 @@ pub(super) fn read(profile: &Path, origin: &str, name: &str) -> Result<String, B
         {
             continue;
         }
-        let mut source = File::open(entry.path()).map_err(io_error)?;
+        let metadata = entry.metadata().map_err(io_error)?;
+        let len = metadata.len();
+        expected_total = expected_total
+            .checked_add(len)
+            .ok_or(BrowserError::Unreadable)?;
+        if files.len() == MAX_FILES || len > MAX_FILE_BYTES || expected_total > MAX_TOTAL_BYTES {
+            return Err(BrowserError::Unreadable);
+        }
+        files.push((entry.path(), name, len));
+    }
+    let mut total = 0u64;
+    let mut buffer = [0u8; 16 * 1024];
+    for (path, name, expected_len) in files {
+        let mut source = File::open(path).map_err(io_error)?;
+        let metadata = source.metadata().map_err(io_error)?;
+        if !metadata.is_file() || metadata.len() != expected_len {
+            return Err(BrowserError::Unreadable);
+        }
         let mut destination = options
             .env
             .open_writable_file(&memory_root.join(name))
             .map_err(|_| BrowserError::Unreadable)?;
-        std::io::copy(&mut source, &mut destination).map_err(io_error)?;
+        let mut copied = 0u64;
+        loop {
+            let count = source.read(&mut buffer).map_err(io_error)?;
+            if count == 0 {
+                break;
+            }
+            copied += count as u64;
+            total += count as u64;
+            // Recheck actual reads before writing to the memory Env. A file
+            // growing after stat cannot exceed either budget or its proof.
+            if copied > expected_len || copied > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES {
+                return Err(BrowserError::Unreadable);
+            }
+            destination.write_all(&buffer[..count]).map_err(io_error)?;
+        }
+        if copied != expected_len || source.metadata().map_err(io_error)?.len() != expected_len {
+            return Err(BrowserError::Unreadable);
+        }
     }
     let mut db = DB::open(memory_root, options).map_err(|_| BrowserError::Unreadable)?;
     // Read only the explicitly allowlisted DOMString; never enumerate stored keys.
