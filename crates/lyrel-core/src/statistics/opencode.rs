@@ -11,6 +11,8 @@ impl Source {
             agent: "opencode".into(),
             opencode_request: Some(Box::new(request)),
             hermes_request: None,
+            max_depth: None,
+            discovery_issue: None,
         }
     }
 }
@@ -219,6 +221,7 @@ fn parse(
                 .map_or_else(|| model_id.to_owned(), |v| format!("{model_id}#{v}"));
             records.push(UsageRecord {
                 id: message_id.into(),
+                fingerprint: None,
                 timestamp: timestamp / 1000,
                 provider: model["providerID"].as_str().unwrap_or("unknown").into(),
                 model: model_id,

@@ -13,6 +13,8 @@ impl Source {
             agent: "hermes".into(),
             hermes_request: Some(std::sync::Arc::new(request)),
             opencode_request: None,
+            max_depth: None,
+            discovery_issue: None,
         }
     }
 }
@@ -243,6 +245,7 @@ fn parse(
             let cost = |key: &str| row[key].as_f64().filter(|v| v.is_finite() && *v >= 0.);
             let records = vec![UsageRecord {
                 id: format!("stored:{id}"),
+                fingerprint: None,
                 timestamp: end.or(start).unwrap_or(i64::MIN),
                 coverage_start: interval.map(|(start, _)| start),
                 time_unknown: interval.is_none(),

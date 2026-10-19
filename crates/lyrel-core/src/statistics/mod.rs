@@ -9,9 +9,11 @@ pub use kimi::discover_kimi;
 mod omp;
 mod opencode;
 pub use opencode::discover_opencode;
+mod pi;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
+pub use pi::discover_pi;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -32,6 +34,10 @@ pub struct Source {
     opencode_request: Option<Box<crate::host::session_operations::SessionOperation>>,
     #[serde(skip)]
     hermes_request: Option<std::sync::Arc<crate::host::session_operations::SessionOperation>>,
+    #[serde(default)]
+    max_depth: Option<u8>,
+    #[serde(default)]
+    discovery_issue: Option<String>,
 }
 impl std::fmt::Debug for Source {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -51,6 +57,8 @@ impl Source {
             agent: "omp".into(),
             opencode_request: None,
             hermes_request: None,
+            max_depth: None,
+            discovery_issue: None,
         }
     }
     pub fn kimi(root: PathBuf, scope: impl Into<String>) -> Self {
@@ -60,6 +68,19 @@ impl Source {
             agent: "kimi".into(),
             opencode_request: None,
             hermes_request: None,
+            max_depth: None,
+            discovery_issue: None,
+        }
+    }
+    pub fn pi(root: PathBuf, scope: impl Into<String>) -> Self {
+        Self {
+            root,
+            scope: scope.into(),
+            agent: "pi".into(),
+            opencode_request: None,
+            hermes_request: None,
+            max_depth: Some(0),
+            discovery_issue: None,
         }
     }
     pub fn root(&self) -> &std::path::Path {
@@ -121,6 +142,8 @@ impl Tokens {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageRecord {
     id: String,
+    #[serde(default)]
+    fingerprint: Option<String>,
     timestamp: i64,
     provider: String,
     model: String,
@@ -500,6 +523,10 @@ pub fn scan(
     let mut files = 0;
     let mut bytes = 0;
     for source in sources {
+        if let Some(reason) = &source.discovery_issue {
+            snapshot = snapshot.with_issue(source.root.clone(), reason.clone());
+            continue;
+        }
         if source.agent == "hermes" {
             hermes::scan_source(host, source, cache, &mut snapshot);
             continue;
@@ -521,7 +548,7 @@ pub fn scan(
             );
             continue;
         }
-        if source.agent != "omp" {
+        if source.agent != "omp" && source.agent != "pi" {
             snapshot.issues.push(ScanIssue {
                 path: source.root.clone(),
                 reason: format!("unsupported native statistics agent: {}", source.agent),
@@ -542,14 +569,15 @@ pub fn scan(
             source.root.clone()
         };
         let child_root = if exact_file { &initial } else { &source.root };
-        let root_is_child = host
-            .stat(&PathBuf::from(format!(
-                "{}.jsonl",
-                child_root.to_string_lossy()
-            )))
-            .is_ok_and(|m| !m.is_dir);
-        let mut pending = vec![(initial, root_is_child)];
-        while let Some((path, child)) = pending.pop() {
+        let root_is_child = source.agent == "omp"
+            && host
+                .stat(&PathBuf::from(format!(
+                    "{}.jsonl",
+                    child_root.to_string_lossy()
+                )))
+                .is_ok_and(|m| !m.is_dir);
+        let mut pending = vec![(initial, root_is_child, 0u8)];
+        while let Some((path, child, depth)) = pending.pop() {
             dirs += 1;
             if dirs > MAX_DIRS {
                 snapshot.issues.push(ScanIssue {
@@ -590,9 +618,13 @@ pub fn scan(
                     continue;
                 }
                 if entry.is_dir {
+                    if source.max_depth.is_some_and(|limit| depth >= limit) {
+                        continue;
+                    }
                     let sibling = PathBuf::from(format!("{}.jsonl", path.to_string_lossy()));
-                    let nested = child || host.stat(&sibling).is_ok_and(|m| !m.is_dir);
-                    pending.push((path, nested));
+                    let nested = source.agent == "omp"
+                        && (child || host.stat(&sibling).is_ok_and(|m| !m.is_dir));
+                    pending.push((path, nested, depth.saturating_add(1)));
                     continue;
                 }
                 if !entry.name.ends_with(".jsonl") {
@@ -641,7 +673,16 @@ pub fn scan(
                     }
                     bytes += meta.len;
                     let data = host.read_file(&path, MAX_FILE_BYTES)?;
-                    let session = omp::parse(&data)?;
+                    let session = match source.agent.as_str() {
+                        "omp" => omp::parse(&data)?,
+                        "pi" => pi::parse(&data)?,
+                        _ => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                "unsupported native statistics agent",
+                            ));
+                        }
+                    };
                     Ok((
                         meta,
                         FileFacts {
@@ -689,6 +730,7 @@ pub fn scan(
             }
         }
     }
+    pi::resolve_inheritance(&mut snapshot);
     // Restrict lineage claims rather than silently treating an unresolved parent as reliable.
     for file in &snapshot.files {
         if let Some(parent) = &file.session.parent {

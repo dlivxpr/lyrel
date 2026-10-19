@@ -67,7 +67,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsCopied => "Path copied",
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {
-            "statistics omp kimi Kimi Code OpenCode Hermes native history tokens cost sessions machine profile date range overview"
+            "statistics omp pi kimi Kimi Code OpenCode Hermes native history tokens cost sessions machine profile date range overview"
         }
         L10nKey::StatisticsToday => "Today",
         L10nKey::StatisticsWeek => "This week",
@@ -152,7 +152,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "No attributable usage in this range. Check the selected machine, source and date range, then refresh. Cumulative records crossing the range remain unassigned."
         }
         L10nKey::StatisticsPrivacy => {
-            "Read-only · omp 18.12.1 / Kimi Code 2.2.0 durable 1.5 / OpenCode 2.x public API / Hermes 0.22.2 public gateway · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Kimi turn and non-turn calls are incremental; cost remains unknown. Coverage, lineage and pagination limits are reported below."
+            "Read-only · omp 18.12.1 / pi 1.3.0 JSONL / Kimi Code 2.2.0 durable 1.5 / OpenCode 2.x public API / Hermes 0.22.2 public gateway · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Kimi calls are incremental; cost remains unknown. pi tool/summary usage has no inferred model. Custom stores must be discoverable; coverage, lineage and pagination limits are reported below."
         }
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::StatisticsAnalysisTitle => "Activity and breakdowns",

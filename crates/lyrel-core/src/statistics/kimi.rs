@@ -325,6 +325,7 @@ fn parse(bytes: &[u8], state: &Value, agent: &str) -> io::Result<(NativeSession,
                     .and_then(|n| n.checked_add(cache_write?));
                 records.push(UsageRecord {
                     id: format!("{agent}:{line_offset}"),
+                    fingerprint: None,
                     timestamp: time,
                     provider: String::new(),
                     model: record["model"].as_str().unwrap_or("").into(),

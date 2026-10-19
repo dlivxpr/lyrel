@@ -63,7 +63,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsCopied => "已复制路径",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
-            "统计 omp kimi Kimi Code OpenCode Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+            "统计 omp pi kimi Kimi Code OpenCode Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
         }
         L10nKey::StatisticsToday => "今天",
         L10nKey::StatisticsWeek => "本周",
@@ -138,7 +138,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "此范围没有可计入的原生活动。请检查所选机器、来源和日期范围后刷新。跨越范围边界的累计记录仍不归入单日。"
         }
         L10nKey::StatisticsPrivacy => {
-            "只读 · omp 18.12.1／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API／Hermes 0.22.2 公开网关 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 的 turn 与非 turn 调用均为增量，费用保持未知。覆盖、谱系和分页限制在下方显示。"
+            "只读 · omp 18.12.1／pi 1.3.0 JSONL／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API／Hermes 0.22.2 公开网关 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 调用为增量，费用保持未知；pi 工具／摘要用量不推断模型。自定义存储必须可发现，覆盖、谱系与分页上限均显示诊断。"
         }
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::StatisticsAnalysisTitle => "活动与明细",
