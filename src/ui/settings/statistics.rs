@@ -396,13 +396,6 @@ impl LyrelApp {
                 cx,
             )
             .into_any_element(),
-            self.settings_row(
-                t(L10nKey::StatisticsAgent),
-                t(L10nKey::StatisticsAgentScope),
-                agent,
-                cx,
-            )
-            .into_any_element(),
         ];
         if period == Period::Custom {
             rows.push(
@@ -841,7 +834,7 @@ mod tests {
             });
         }
         crate::ui::i18n::set_locale("en");
-        app.update_in(&mut vcx, |app, window, cx| {
+        app.update_in(&mut vcx, |app, _window, cx| {
             let state = app.active_settings().unwrap();
             assert!(state.section == SettingsSection::Statistics);
             let totals = &state
@@ -894,12 +887,19 @@ mod tests {
             vcx.run_until_parked();
         }
         app.update_in(&mut vcx, |app, _, cx| {
-            let totals = &app.active_settings().unwrap().statistics.results
-                .get(&(HostId::LOCAL, Some("pi"))).unwrap().totals;
+            let totals = &app
+                .active_settings()
+                .unwrap()
+                .statistics
+                .results
+                .get(&(HostId::LOCAL, Some("pi")))
+                .unwrap()
+                .totals;
             assert_eq!(totals.tokens().total(), Some(7));
             assert_eq!(totals.recorded_usd(), Some(0.25));
-            cx.global_mut::<Config>().agent_launch.insert(
-                "pi".into(), "PI_CODING_AGENT_DIR=relative pi".into());
+            cx.global_mut::<Config>()
+                .agent_launch
+                .insert("pi".into(), "PI_CODING_AGENT_DIR=relative pi".into());
             app.select_statistics_agent(None, cx);
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -909,11 +909,22 @@ mod tests {
             vcx.run_until_parked();
         }
         app.update_in(&mut vcx, |app, window, cx| {
-            let presentation = app.active_settings().unwrap().statistics.results
-                .get(&(HostId::LOCAL, None)).unwrap();
+            let presentation = app
+                .active_settings()
+                .unwrap()
+                .statistics
+                .results
+                .get(&(HostId::LOCAL, None))
+                .unwrap();
             assert_eq!(presentation.totals.tokens().total(), Some(20));
             assert!(!presentation.snapshot.is_complete());
-            assert!(presentation.snapshot.issues().iter().any(|issue| issue.path().to_string_lossy() == "pi"));
+            assert!(
+                presentation
+                    .snapshot
+                    .issues()
+                    .iter()
+                    .any(|issue| issue.path().to_string_lossy() == "pi")
+            );
             // A disconnected machine must not borrow the local native snapshot.
             app.select_statistics_host(HostId(123456), cx);
             let state = &app.active_settings().unwrap().statistics;

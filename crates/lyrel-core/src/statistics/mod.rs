@@ -37,7 +37,8 @@ pub struct Source {
 }
 impl std::fmt::Debug for Source {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("Source")
+        formatter
+            .debug_struct("Source")
             .field("root", &self.root)
             .field("scope", &self.scope)
             .field("agent", &self.agent)
@@ -254,9 +255,6 @@ impl Snapshot {
     }
     pub fn issues(&self) -> &[ScanIssue] {
         &self.issues
-    }
-    pub fn report_issue(&mut self, path: PathBuf, reason: String) {
-        self.issues.push(ScanIssue { path, reason });
     }
     pub fn is_complete(&self) -> bool {
         self.issues.is_empty()

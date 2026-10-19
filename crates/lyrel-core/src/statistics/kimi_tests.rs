@@ -82,22 +82,47 @@ fn statistics_kimi_analysis_keeps_only_post_fork_prompt_and_steer_activity() {
     use chrono::{NaiveDate, TimeZone};
     let temp = tempfile::tempdir().unwrap();
     let fork = session(temp.path(), "session_fork", Some("original"), false);
-    wire(&fork, "main", concat!(
-        "{\"type\":\"turn.prompt\",\"time\":1767225600000}\n",
-        "{\"type\":\"forked\",\"agentId\":\"main\",\"time\":1767312000000}\n",
-        "{\"type\":\"turn.prompt\",\"time\":1767312000000}\n",
-        "{\"type\":\"turn.steer\",\"time\":1767398400000}\n"
-    ));
-    let snapshot = scan(&*LocalHost::new(), &[Source::kimi(temp.path().into(), "fork")],
-        &mut StatisticsCache::default()).unwrap();
-    let analysis = snapshot.analyze(&DateWindow::all("UTC"),
-        chrono::Utc.with_ymd_and_hms(2026, 1, 4, 0, 0, 0).unwrap(), None, 2026).unwrap();
+    wire(
+        &fork,
+        "main",
+        concat!(
+            "{\"type\":\"turn.prompt\",\"time\":1767225600000}\n",
+            "{\"type\":\"forked\",\"agentId\":\"main\",\"time\":1767312000000}\n",
+            "{\"type\":\"turn.prompt\",\"time\":1767312000000}\n",
+            "{\"type\":\"turn.steer\",\"time\":1767398400000}\n"
+        ),
+    );
+    let snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::kimi(temp.path().into(), "fork")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let analysis = snapshot
+        .analyze(
+            &DateWindow::all("UTC"),
+            chrono::Utc.with_ymd_and_hms(2026, 1, 4, 0, 0, 0).unwrap(),
+            None,
+            2026,
+        )
+        .unwrap();
     for (day, sessions) in [(1, 0), (2, 1), (3, 1)] {
         let date = NaiveDate::from_ymd_opt(2026, 1, day).unwrap();
-        assert_eq!(analysis.days().iter().find(|day| day.date() == date).unwrap()
-            .totals().main_sessions(), sessions);
+        assert_eq!(
+            analysis
+                .days()
+                .iter()
+                .find(|day| day.date() == date)
+                .unwrap()
+                .totals()
+                .main_sessions(),
+            sessions
+        );
     }
-    assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
+    assert_eq!(
+        snapshot.aggregate(&DateWindow::all("UTC")).main_sessions(),
+        1
+    );
     assert_eq!(analysis.totals().main_sessions(), 1);
 }
 
