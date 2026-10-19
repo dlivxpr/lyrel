@@ -1,4 +1,5 @@
 //! 原生历史的结构化统计 seam；扫描只缓存计量元数据，不保留对话正文。
+pub mod analysis;
 mod omp;
 mod time_range;
 use crate::host::{Host, Meta};
@@ -86,6 +87,10 @@ pub struct UsageRecord {
     model: String,
     tokens: Tokens,
     recorded_usd: Option<f64>,
+    #[serde(default)]
+    coverage_start: Option<i64>,
+    #[serde(default)]
+    estimated_usd: Option<f64>,
 }
 impl UsageRecord {
     pub fn timestamp(&self) -> i64 {
@@ -103,6 +108,20 @@ impl UsageRecord {
     pub fn recorded_usd(&self) -> Option<f64> {
         self.recorded_usd
     }
+    pub fn coverage_start(&self) -> Option<i64> {
+        self.coverage_start
+    }
+    pub fn estimated_usd(&self) -> Option<f64> {
+        self.estimated_usd
+    }
+    fn overlaps(&self, window: &DateWindow) -> bool {
+        window.start().is_none_or(|s| self.timestamp >= s)
+            && window.end().is_none_or(|e| self.coverage_start.unwrap_or(self.timestamp) < e)
+    }
+    fn covered_by(&self, window: &DateWindow) -> bool {
+        window.contains(self.timestamp)
+            && window.contains(self.coverage_start.unwrap_or(self.timestamp))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeSession {
@@ -111,6 +130,8 @@ pub struct NativeSession {
     timestamp: i64,
     project: Option<String>,
     records: Vec<UsageRecord>,
+    #[serde(default)]
+    activity: Vec<i64>,
 }
 impl NativeSession {
     pub fn id(&self) -> &str {
@@ -170,82 +191,101 @@ impl Snapshot {
     }
     pub fn aggregate(&self, window: &DateWindow) -> Totals {
         let mut out = Totals::default();
-        let mut sessions = HashSet::new();
-        let mut records = HashMap::new();
-        // 只有可解析的原生 parentSession 链才允许跨会话消除继承记录。
+        let mut main_sessions = 0;
+        let ambiguous = self.visit_usage(None, |file| {
+            if file.active_in(window) {
+                main_sessions += 1;
+            }
+        }, |_, record| {
+            if record.covered_by(window) {
+                out.add_record(record);
+            } else if record.overlaps(window) {
+                out.complete = false;
+            }
+        });
+        out.complete &= self.is_complete() && ambiguous == 0;
+        out.ambiguous_records = ambiguous;
+        out.main_sessions = main_sessions;
+        out
+    }
+
+    // One canonical stream for overview and all analysis. Copies and inherited records
+    // are eliminated before consumers filter by date/model/project. Host is snapshot-wide.
+    fn visit_usage<'a>(
+        &'a self,
+        agent: Option<&str>,
+        mut session: impl FnMut(&'a FileFacts),
+        mut usage: impl FnMut(&'a FileFacts, &'a UsageRecord),
+    ) -> u64 {
         let mut identities = HashMap::new();
         for file in &self.files {
-            identities.insert(
-                (file.source.scope.as_str(), file.session.id.as_str()),
-                file.session.id.as_str(),
-            );
+            let source = (file.source.agent.as_str(), file.source.scope.as_str());
+            identities.insert((source, file.session.id.as_str()), file.session.id.as_str());
             if let Some(path) = file.path.to_str() {
-                identities.insert((file.source.scope.as_str(), path), file.session.id.as_str());
+                identities.insert((source, path), file.session.id.as_str());
             }
         }
         let mut parents = HashMap::new();
         for file in &self.files {
-            if let Some(parent) = file
-                .session
-                .parent
-                .as_deref()
-                .and_then(|p| identities.get(&(file.source.scope.as_str(), p)))
-            {
-                parents.insert(
-                    (file.source.scope.as_str(), file.session.id.as_str()),
-                    *parent,
-                );
+            let source = (file.source.agent.as_str(), file.source.scope.as_str());
+            if let Some(parent) = file.session.parent.as_deref().and_then(|p| identities.get(&(source, p))) {
+                parents.insert((source, file.session.id.as_str()), *parent);
             }
         }
-        for file in &self.files {
-            let scope = file.source.scope.as_str();
-            let session = &file.session;
-            let mut lineage = session.id.as_str();
+        let mut sessions = HashSet::new();
+        let mut records: HashMap<_, (&UsageRecord, Vec<&UsageRecord>)> = HashMap::new();
+        let mut ambiguous = 0;
+        // Prefer original roots for inherited record attribution, independently of directory order.
+        let mut files: Vec<_> = self.files.iter().collect();
+        files.sort_by(|a, b| (a.session.parent.is_some(), a.child, &a.path).cmp(&(b.session.parent.is_some(), b.child, &b.path)));
+        for file in files {
+            if agent.is_some_and(|a| a != file.source.agent) {
+                continue;
+            }
+            let source = (file.source.agent.as_str(), file.source.scope.as_str());
+            if !file.child && sessions.insert((source, file.session.id.as_str())) {
+                session(file);
+            }
+            let mut lineage = file.session.id.as_str();
             let mut visited = HashSet::new();
-            while visited.insert(lineage) {
-                match parents.get(&(scope, lineage)) {
-                    Some(parent) => lineage = parent,
-                    None => break,
-                }
+            while let Some(parent) = parents.get(&(source, lineage)) {
+                if !visited.insert(lineage) { break; }
+                lineage = parent;
             }
-            let active = window.contains(session.timestamp)
-                || session
-                    .records
-                    .iter()
-                    .any(|r| r.timestamp >= session.timestamp && window.contains(r.timestamp));
-            if active && !file.child {
-                sessions.insert((scope, session.id.as_str()));
-            }
-            for record in &session.records {
-                if !window.contains(record.timestamp) {
-                    continue;
-                }
-                // IDs are short and only meaningful within the verified lineage and scope.
-                let key = (scope, lineage, record.id.as_str());
-                if let Some(old) = records.insert(key, record) {
-                    if old != record {
-                        out.ambiguous_records += 1;
+            for record in &file.session.records {
+                match records.entry((source, lineage, record.id.as_str())) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert((record, Vec::new()));
                     }
-                    continue;
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        let (first, variants) = entry.get_mut();
+                        if *first == record || variants.contains(&record) { continue; }
+                        ambiguous += 1;
+                        variants.push(record);
+                    }
                 }
-                out.tokens.add(&record.tokens, out.calls == 0);
-                out.calls += 1;
-                if let Some(cost) = record.recorded_usd {
-                    out.recorded_usd = Some(out.recorded_usd.unwrap_or(0.) + cost);
-                } else {
-                    out.unpriced_calls += 1;
-                }
+                usage(file, record);
             }
         }
-        out.main_sessions = sessions.len() as u64;
-        out.complete = self.is_complete() && out.ambiguous_records == 0;
-        out
+        ambiguous
     }
 }
-#[derive(Clone, Debug, Default)]
+impl FileFacts {
+    fn activity_timestamps(&self) -> impl Iterator<Item = i64> + '_ {
+        std::iter::once(self.session.timestamp)
+            .filter(|_| self.source.agent != "opencode")
+            .chain(self.session.activity.iter().copied())
+            .chain(self.session.records.iter().filter(|r| r.timestamp >= self.session.timestamp).map(|r| r.timestamp))
+    }
+    fn active_in(&self, window: &DateWindow) -> bool {
+        self.activity_timestamps().any(|t| window.contains(t))
+    }
+}
+#[derive(Clone, Debug)]
 pub struct Totals {
     tokens: Tokens,
     recorded_usd: Option<f64>,
+    estimated_usd: Option<f64>,
     unpriced_calls: u64,
     main_sessions: u64,
     calls: u64,
@@ -253,6 +293,20 @@ pub struct Totals {
     complete: bool,
 }
 impl Totals {
+    fn add_record(&mut self, record: &UsageRecord) {
+        self.tokens.add(&record.tokens, self.calls == 0);
+        self.calls += 1;
+        if let Some(cost) = record.recorded_usd {
+            self.recorded_usd = Some(self.recorded_usd.unwrap_or(0.) + cost);
+        } else if let Some(cost) = record.estimated_usd {
+            self.estimated_usd = Some(self.estimated_usd.unwrap_or(0.) + cost);
+        } else {
+            self.unpriced_calls += 1;
+        }
+    }
+    pub fn estimated_usd(&self) -> Option<f64> {
+        self.estimated_usd
+    }
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
@@ -289,6 +343,12 @@ impl Totals {
             .zip(previous.tokens.total)
             .filter(|(_, p)| *p > 0)
             .map(|(n, p)| (n as f64 / p as f64 - 1.) * 100.)
+    }
+}
+impl Default for Totals {
+    fn default() -> Self {
+        Self { tokens: Tokens::default(), recorded_usd: None, estimated_usd: None,
+            unpriced_calls: 0, main_sessions: 0, calls: 0, ambiguous_records: 0, complete: true }
     }
 }
 #[derive(Default)]

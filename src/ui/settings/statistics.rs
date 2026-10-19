@@ -1,4 +1,5 @@
 //! 所选机器的原生历史总览；所有文件与聚合离开 GPUI 线程。
+mod analysis;
 use super::kit::{Tk, fs};
 use super::shell::MenuEntry;
 use super::*;
@@ -18,12 +19,15 @@ pub(crate) struct StatisticsState {
     error: Option<String>,
     cache: Arc<Mutex<StatisticsCache>>,
     results: HashMap<HostId, Presentation>,
+    analysis: analysis::AnalysisState,
 }
 struct Presentation {
     snapshot: Snapshot,
     window: DateWindow,
     totals: Totals,
     previous: Option<Totals>,
+    analysis: Option<statistics::analysis::Analysis>,
+    analysis_error: Option<String>,
 }
 impl StatisticsState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
@@ -38,6 +42,7 @@ impl StatisticsState {
             error: None,
             cache: Arc::new(Mutex::new(StatisticsCache::default())),
             results: HashMap::new(),
+            analysis: analysis::AnalysisState::new(cx),
         }
     }
     pub(crate) fn invalidate(&mut self) {
@@ -109,6 +114,9 @@ impl LyrelApp {
         };
         let host_id = state.host;
         let cache = state.cache.clone();
+        let analysis_agent = state.analysis.agent.clone();
+        let analysis_year = state.analysis.year;
+        let analysis_now = chrono::Local::now();
         let Some(host) = HostRegistry::lookup(cx, host_id) else {
             if let Some(s) = self.active_settings_mut() {
                 s.statistics.invalidate();
@@ -132,11 +140,18 @@ impl LyrelApp {
                 let snapshot = statistics::scan(host, &sources, &mut cache)?;
                 let totals = snapshot.aggregate(&window);
                 let previous = window.previous().map(|w| snapshot.aggregate(w));
+                let analysis = snapshot.analyze(&window, analysis_now, analysis_agent.as_deref(), analysis_year);
+                let (analysis, analysis_error) = match analysis {
+                    Ok(value) => (Some(value), None),
+                    Err(error) => (None, Some(error)),
+                };
                 Ok(Presentation {
                     snapshot,
                     window,
                     totals,
                     previous,
+                    analysis,
+                    analysis_error,
                 })
             },
             move |this, result, cx| {
@@ -417,13 +432,15 @@ impl LyrelApp {
                         .into_any_element(),
                 );
             }
+            rows.push(self.render_statistics_analysis(p, cx));
             for source in p.snapshot.sources() {
                 rows.push(
                     div()
                         .text_size(fs(12.))
                         .text_color(tk.k5)
                         .child(format!(
-                            "omp · {}\n{}",
+                            "{} · {}\n{}",
+                            source.agent(),
                             source.scope(),
                             source.root().display()
                         ))
@@ -454,6 +471,7 @@ impl LyrelApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
     use crate::core::session::Session;
     use gpui_kit::{TestAppContext, VisualTestContext};
 
@@ -518,6 +536,27 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             vcx.run_until_parked();
         }
+        app.update_in(&mut vcx, |app, window, cx| {
+            let state = &app.active_settings().unwrap().statistics;
+            window.focus(&state.analysis.focus);
+            assert!(state.results.get(&HostId::LOCAL).unwrap().analysis.as_ref().unwrap().days().iter().any(|d| d.totals().tokens().total() == Some(10)));
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("home right down enter");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let state = &app.read(cx).active_settings().unwrap().statistics.analysis;
+            assert_eq!(state.date.ordinal(), 9);
+            assert!(state.detail);
+        });
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let settings = app.read(cx).active_settings().unwrap();
+            assert!(!settings.statistics.analysis.detail);
+            assert!(settings.section == SettingsSection::Statistics);
+        });
         app.update_in(&mut vcx, |app, window, cx| {
             let state = app.active_settings().unwrap();
             assert!(state.section == SettingsSection::Statistics);
