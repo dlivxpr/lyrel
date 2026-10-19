@@ -1,0 +1,244 @@
+; lyrel Windows installer (Inno Setup 6 — preinstalled on GitHub's
+; windows-latest runners). Compiled by bundle-windows.ps1, which stages the
+; payload and passes every path in via /D defines:
+;
+;   /DAppVersion=<semver>   display version parsed from Cargo.toml
+;   /DVersionInfoVersion=<numeric version> PE-compatible file version
+;   /DStageDir=<abs path>   staged payload (app, CLI, updater, marker, resources)
+;   /DOutputDir=<abs path>  where the setup exe is written
+;   /DOutputName=<basename> setup exe filename, without ".exe"
+;   /DArchitectures=<id>    Inno architecture: x64compatible
+;
+; Defaults to a per-user install ({localappdata}\Programs\lyrel — no UAC
+; prompt), with an "install for all users" escape hatch in the dialog. The
+; build is unsigned, so SmartScreen warns on first launch either way — same as
+; the portable zip.
+
+#ifndef AppVersion
+  #error Missing /DAppVersion — this script is meant to be compiled via bundle-windows.ps1
+#endif
+#ifndef VersionInfoVersion
+  #error Missing /DVersionInfoVersion — this script is meant to be compiled via bundle-windows.ps1
+#endif
+#ifndef Architectures
+  #error Missing /DArchitectures — this script is meant to be compiled via bundle-windows.ps1
+#endif
+
+[Setup]
+; lyrel 使用独立 AppId；后续升级保持此值，不接管其他产品的安装。
+AppId={{E57DD2B4-E65D-4F13-9E2E-8D929125780A}
+AppName=lyrel
+AppVersion={#AppVersion}
+VersionInfoVersion={#VersionInfoVersion}
+AppPublisher=lyrel contributors
+AppPublisherURL=https://github.com/dlivxpr/lyrel
+AppSupportURL=https://github.com/dlivxpr/lyrel/issues
+AppUpdatesURL=https://github.com/dlivxpr/lyrel/releases
+DefaultDirName={autopf}\lyrel
+DisableProgramGroupPage=yes
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+ArchitecturesAllowed={#Architectures}
+ArchitecturesInstallIn64BitMode={#Architectures}
+MinVersion=10.0
+LicenseFile={#StageDir}\LICENSE.txt
+SetupIconFile=..\..\assets\favicon.ico
+UninstallDisplayIcon={app}\lyrel-app.exe
+OutputDir={#OutputDir}
+OutputBaseFilename={#OutputName}
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+; The persistent daemon (lyrel-app.exe --daemon) is a detached background process
+; that outlives the GUI and holds the running image of lyrel-app.exe, so Windows
+; locks the file and an upgrade can't replace it. We stop it explicitly in
+; PrepareToInstall below; keep the Restart Manager as a backstop but don't let
+; it relaunch anything (the GUI respawns the daemon itself on next start).
+CloseApplications=yes
+RestartApplications=no
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; Writing shell verbs is an install-time decision, the way VS Code and Git for
+; Windows treat theirs — not a runtime preference, so lyrel has no setting for
+; it. Off by default: the registry is user-visible system state. The keys land
+; under HKCU even for an all-users install, so this only ever affects whoever
+; ran the installer. Inno restores the previous choice when upgrading.
+Name: "explorermenu"; Description: "Add ""Open in lyrel"" to the folder context menu"; GroupDescription: "Shell integration:"; Flags: unchecked
+
+[Files]
+Source: "{#StageDir}\lyrel-app.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The CLI. `core::cli_install` adds {app} to the user's PATH at first launch,
+; so this is not registered as an [Env] change here — the portable zip has no
+; installer to do it, and one code path serving both is one behaviour to debug.
+; The uninstaller takes that entry back out; see RemoveAppDirFromUserPath below.
+Source: "{#StageDir}\lyrel.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\lyrel-updater.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+; This installer-only marker is the authority for enabling automatic Windows
+; updates. The portable archive is created before the marker enters the stage.
+Source: "{#StageDir}\.lyrel-inno-install"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#StageDir}\completions\*"; DestDir: "{app}\completions"; Flags: ignoreversion recursesubdirs
+; Microsoft's redistributable ConPTY. It has to land in {app} rather than a
+; subdirectory: `portable-pty` finds it through the DLL search path, which
+; starts at the directory of the executable that loads it (the daemon is
+; {app}\lyrel-app.exe). The two files are a matched pair — never update one
+; alone. See assets\windows\conpty\README.md.
+Source: "{#StageDir}\conpty.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\OpenConsole.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\LICENSE-ConPTY.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\ConPTY-manifest.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
+; WSL 使用随包提供的同架构 Linux musl server，缺失时必须阻止打包。
+Source: "{#StageDir}\server\*"; DestDir: "{app}\server"; Flags: ignoreversion recursesubdirs
+
+; AppUserModelID is what lets toast notifications carry the lyrel name and icon
+; instead of the notify-rust PowerShell fallback: Windows only honors an
+; unpackaged app's toast identity when a shortcut stamps it. Must match
+; `core::aumid::AUMID` (src/core/aumid.rs), which at startup stamps the
+; per-user shortcut below if some older installer left it unstamped, and
+; writes one from scratch for the portable zip. It deliberately leaves an
+; all-users install alone — it cannot write {commonprograms} unelevated, and a
+; per-user twin would both duplicate the Start Menu entry and outlive this
+; uninstaller — so an elevated install depends on the stamp right here.
+[Icons]
+Name: "{autoprograms}\lyrel"; Filename: "{app}\lyrel-app.exe"; AppUserModelID: "io.github.dlivxpr.lyrel"
+Name: "{autodesktop}\lyrel"; Filename: "{app}\lyrel-app.exe"; Tasks: desktopicon; AppUserModelID: "io.github.dlivxpr.lyrel"
+
+[Run]
+; The registry shape lives in core::explorer_context_menu, not here: the app
+; reads those same keys to decide whether an existing registration still points
+; at this install, and two hand-kept copies of the layout would drift. Runs
+; before the launch entry below so a first start already sees the final state.
+; skipifsilent because a silent run *is* the elevated in-place update (#504):
+; launching the app there would run it elevated, and under over-the-shoulder
+; elevation the menu would land in the administrator's hive, not the user's.
+; Skipping loses nothing: an upgrade keeps the install path, so the HKCU keys
+; a ticked first install wrote still point at the right executable.
+Filename: "{app}\lyrel-app.exe"; Parameters: "--register-explorer-menu"; Tasks: explorermenu; Flags: runhidden waituntilterminated skipifsilent
+Filename: "{app}\lyrel-app.exe"; Description: "{cm:LaunchProgram,lyrel}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Stop the daemon before the uninstaller deletes lyrel-app.exe — the running daemon
+; is the locked image of that file, so removing it fails otherwise. Naming {app}
+; widens the stop the same way PrepareToInstall's does: ConPTY hosts orphaned by
+; a daemon that never got to shut down keep the installed images open, and their
+; DeleteFile fails an uninstall exactly as it fails an upgrade. (The stop excludes
+; the calling process itself, so the binary running this step is safe.) This runs
+; at the start of uninstallation, before any files are removed. The installed
+; binary is this version, which understands the flags; runhidden suppresses any
+; flash and the call returns without opening a window. RunOnceId keys the entry
+; so a repeated uninstall doesn't run it twice.
+Filename: "{app}\lyrel-app.exe"; Parameters: "--stop-daemon --update-install-dir ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "StopDaemon"
+; Unconditional, and deliberately not gated on the task: an install that had the
+; menu registered and was later upgraded without the box ticked still holds the
+; keys, and verbs pointing at a deleted exe are worse than a no-op. Removing keys
+; that were never written succeeds silently.
+Filename: "{app}\lyrel-app.exe"; Parameters: "--unregister-explorer-menu"; Flags: runhidden waituntilterminated; RunOnceId: "UnregisterExplorerMenu"
+
+[Code]
+(* Gracefully stop the persistent daemon before we overwrite lyrel-app.exe. We can't
+  run the *installed* binary here — on an upgrade from an older build it may not
+  understand --stop-daemon and would launch the GUI instead — so we extract the
+  *new* lyrel-app.exe to {tmp} and run that. It connects to the running daemon, hangs
+  up every shell, waits for it to exit (releasing the file lock), then returns
+  without opening a window. Naming {app} widens the stop into "make this directory
+  replaceable": ConPTY hosts (OpenConsole.exe) orphaned by a daemon that never got
+  to shut down keep the installed images open — invisible to the daemon stop, fatal
+  to the DeleteFile below — so anything still running from {app} is terminated and
+  the call waits until the images there actually open for writing. Best effort: any
+  failure falls through to the Restart Manager backstop, and a fresh install simply
+  has nothing to stop. *)
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  ExtractTemporaryFile('lyrel-app.exe');
+  Exec(ExpandConstant('{tmp}\lyrel-app.exe'),
+       '--stop-daemon --update-install-dir "' + ExpandConstant('{app}') + '"', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := '';
+end;
+
+(* Take {app} back out of the user's PATH.
+
+  `core::cli_install` puts it there at first launch rather than the installer
+  doing it, because the portable zip has no installer — but that leaves nobody
+  to undo it, and an uninstall that permanently grows the user's PATH by one
+  dead entry is not an uninstall. So the removal lives here, on the one install
+  shape that has an uninstaller at all. (Unix has no equivalent hook: deleting
+  the .app or the tarball leaves the symlink behind for the user to remove.)
+
+  HKCU even for an all-users install: cli_install only ever writes the user
+  hive, so that is the only place an entry can be. On a machine where several
+  users ran lyrel, this clears the one uninstalling — the others keep a dead
+  entry, which is the price of not needing elevation to install in the first
+  place.
+
+  Entries are compared case-insensitively and ignoring a trailing backslash,
+  and every other entry is written back verbatim: this is somebody's PATH, and
+  we are here to remove one thing from it, not to tidy it. No
+  WM_SETTINGCHANGE broadcast — the entry now names a deleted directory, so
+  nothing is waiting on the news, and it is gone from new shells at next
+  sign-in regardless. *)
+procedure RemoveAppDirFromUserPath();
+var
+  Existing, Rebuilt, Raw, Entry, Target: String;
+  P: Integer;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Existing) then
+    exit;
+
+  Target := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+  Rebuilt := '';
+  (* The trailing ';' makes the last entry look like every other one. *)
+  Existing := Existing + ';';
+  repeat
+    P := Pos(';', Existing);
+    Raw := Copy(Existing, 1, P - 1);
+    Existing := Copy(Existing, P + 1, Length(Existing));
+    Entry := Trim(Raw);
+    if (Entry <> '') and
+       (CompareText(RemoveBackslashUnlessRoot(Entry), Target) <> 0) then
+    begin
+      if Rebuilt <> '' then
+        Rebuilt := Rebuilt + ';';
+      Rebuilt := Rebuilt + Raw;
+    end;
+  until Existing = '';
+
+  if Rebuilt = '' then
+    RegDeleteValue(HKEY_CURRENT_USER, 'Environment', 'Path')
+  (* Inno cannot read a value's type back, so infer it: a PATH holding a '%' is
+     one that has to stay expandable, and rewriting it as REG_SZ would freeze
+     every other entry's variable at today's value. *)
+  else if Pos('%', Rebuilt) > 0 then
+    RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Rebuilt)
+  else
+    RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Rebuilt);
+end;
+
+(* Remove the optional Explorer verbs if this user enabled them in Settings.
+
+  The application owns only the final `lyrel` subkeys. Deleting those trees
+  removes their command children without touching another application's verb
+  or a shared `shell` parent. Missing keys are the normal default and make both
+  calls harmless no-ops. This cleanup is uninstall-only: upgrades keep the
+  user's explicit registration, and the next app launch reports "Needs update"
+  if an install path ever changes. *)
+procedure RemoveExplorerContextMenu();
+begin
+  RegDeleteKeyIncludingSubkeys(
+    HKEY_CURRENT_USER, 'Software\Classes\Directory\shell\lyrel');
+  RegDeleteKeyIncludingSubkeys(
+    HKEY_CURRENT_USER, 'Software\Classes\Directory\Background\shell\lyrel');
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    RemoveAppDirFromUserPath();
+    RemoveExplorerContextMenu();
+  end;
+end;

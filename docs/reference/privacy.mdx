@@ -1,0 +1,66 @@
+---
+title: "隐私与权限"
+description: "macOS 会向你请求哪些权限、为何请求，以及 lyrel 自身持有哪些权限。"
+---
+
+<a id="why-macos-asks-lyrel-for-permission"></a>
+## 为什么 macOS 会向 lyrel 请求权限
+
+窗格通过 lyrel 自带的可执行文件派生，因此当你运行的程序向 macOS 请求访问受保护的资源时，macOS 会将该请求归属于 **lyrel.app**，而不是该程序。
+
+如果 lyrel 未声明任何用途说明字符串，该请求就会**直接被拒绝，且完全不显示提示**，程序看起来就像无缘无故地出了故障。
+
+因此，lyrel 声明了相应的用途说明字符串，你便会看到正常的一次性权限提示：
+
+<CardGroup cols={2}>
+  <Card title="设备" icon="camera">
+    摄像头 · 麦克风 · 蓝牙 · 定位 · 运动
+  </Card>
+  <Card title="个人数据" icon="address-book">
+    通讯录 · 日历 · 提醒事项 · 照片图库
+  </Card>
+  <Card title="系统" icon="gear">
+    本地网络 · Apple Events · 语音识别 · 系统管理
+  </Card>
+</CardGroup>
+
+<Warning>
+  **声明用途说明字符串并不等于持有相应权限。**
+  lyrel.app 自身并未获授这些权限。你看到的每个提示都对应于你在窗格中运行的程序，你可以在**系统设置 →
+  隐私与安全性**中撤销权限。
+</Warning>
+
+<a id="full-disk-access"></a>
+### 完全磁盘访问权限
+
+Apple 没有为此定义用途说明字符串键。访问 `~/Library/Mail`、
+`~/Library/Messages`、`~/Library/Safari` 或 `~/Library/Containers`，需要在**系统设置 → 隐私与安全性 → 完全磁盘访问权限**中手动授权。
+
+<a id="what-leaves-your-machine"></a>
+## 哪些数据会离开你的计算机
+
+| | |
+|---|---|
+| **更新检查** | 启动时及之后每六小时分页请求本项目 GitHub releases API。默认会后台下载匹配的新 stable 包及校验和，安装仍需明确同意。`check_for_updates: false` 关闭自动检查，`auto_download_updates: false` 关闭后台下载。lyrel 当前尚无实际发布资产；缺少安装包时不会回退到上游下载。 |
+| **远程服务器安装** | 为你连接的计算机下载 `lyrel-server` 二进制文件；对于 WSL，则复制安装包中已自带的文件。lyrel 当前尚无实际发布资产；缺少安装包时不会回退到上游下载。 |
+| **GitHub 标签页** | 仅在你使用时：向 `api.github.com` 请求当前聚焦窗格所在仓库的议题、拉取请求、评论和已更改文件。即使仓库位于远程工作区，请求也会从本机发出；当你通过 `gh` 登录时，请求会携带 GitHub CLI 的令牌。 |
+| **其他一切** | 不发送任何数据。没有遥测、没有分析，也无需账户。 |
+
+以上所有操作均遵循 `http_proxy` 设置。[更新 →](/reference/updates#proxies)
+
+GitHub 标签页本身不存储任何凭据。每次连接时，它都会从 `GH_TOKEN`、
+`GITHUB_TOKEN` 或 `gh auth token` 获取令牌，仅将结果保存在内存中，绝不写入磁盘或日志。议题和拉取请求正文中的图片仅在由 GitHub 托管时才会被获取（例如粘贴到议题中的截图，域名为 `*.githubusercontent.com`）；其他图片均显示为链接，因此打开议题不会让第三方图片托管方知道你阅读了该议题。
+[GitHub 标签页 →](/window/side-panel#github)
+
+<a id="what-is-stored-and-where"></a>
+## 存储哪些内容，以及存储在哪里
+
+配置目录的优先级为：`--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携版的 `data` 目录 > 平台默认目录。Unix 默认使用 `~/.config/lyrel/`，Windows 默认使用 `%APPDATA%\lyrel\`。下表中的 `<config>` 指实际使用的配置目录。
+
+| | |
+|---|---|
+| 设置、主题、窗口状态 | 配置目录，默认是 `~/.config/lyrel/`（Windows 上为 `%APPDATA%\lyrel\`） |
+| 已保存的 SSH 主机 | `<config>/servers.json`，Unix 上权限模式为 `0600`。保存地址、用户名和密钥路径，不含机密信息。 |
+| SSH 密码和密钥口令 | **操作系统钥匙串**——绝不存入 `config.json` 或 `servers.json`，也绝不以明文形式写入磁盘 |
+| 窗格回滚缓冲区的末尾内容 | `<config>/scrollback/*.bin`，Unix 上权限模式为 `0600`，Windows 上受配置目录的 ACL 保护。每个窗格最多 256 KiB，仅保留到不再可能被请求时：关闭窗格会立即删除其文件，恢复操作会消耗该文件，定期清理会回收其余文件。 |
+| Shell 历史记录 | 仍保存在你的 shell 自己的文件中，与以前完全相同；除非你启用了逐窗格历史记录，此时记录会合并回该文件。 |

@@ -1,0 +1,89 @@
+---
+title: "智能体技能"
+description: "教会编程智能体正确使用 lyrel——也包括何时不该使用。"
+---
+
+CLI 只是其中一部分。智能体还必须知道，*何时*使用窗格比直接运行命令更合适，以及更重要的——哪些窗格绝不能碰。这正是这项技能的用途。
+
+<a id="installing-it"></a>
+## 安装技能
+
+```bash
+npx skills add dlivxpr/lyrel
+```
+
+源文件位于仓库的
+[`skills/lyrel/`](https://github.com/dlivxpr/lyrel/tree/main/skills/lyrel)
+目录中：包含一个 `SKILL.md` 和两份参考文档——完整的命令表，以及智能体在将工作交给另一个智能体之前需要阅读的委派操作指南。
+
+<Note>
+  这是 lyrel 唯一的技能——**设置 → 集成** 中没有任何选项会替你安装技能。使用 CLI 运行*其他*智能体的流程——创建工作智能体窗格、使用 `lyrel wait`、收集结果——在另一篇文档中介绍。
+  [编排 →](/agents/orchestration)
+</Note>
+
+<a id="updating-it"></a>
+## 更新技能
+
+`add` 不会刷新已经安装的技能——更新有单独的命令，技能名称为 `lyrel`：
+
+```bash
+npx skills update lyrel    # 更新此技能
+npx skills update          # 更新所有已安装的技能
+```
+
+CLI 会记录每项技能的来源，因此 `update` 只会重新下载有变化的内容。执行 `npx skills remove lyrel` 可将其移除。
+
+<a id="what-it-teaches"></a>
+## 技能教授的内容
+
+<a id="when-to-use-a-pane-instead-of-a-plain-command"></a>
+### 何时应使用窗格而不是普通命令
+
+对于启动后完成任务并退出的操作，智能体已有的 Bash 风格工具就很合适。以下情况适合使用窗格：
+
+- **不应阻塞。** 例如开发服务器、文件监视程序、`tail -f`、耗时较长的测试。
+- **需要交互或保留状态。** 例如 REPL、`ssh`、数据库 shell——任何需要发送输入、读取输出、再发送输入的操作。窗格可以在多轮交互之间保持会话；一次性调用则做不到。
+- **需要真正的 TTY。** 某些程序检测到管道后会改变行为——例如颜色输出、进度条、TUI、`top`、原始模式。
+- **用户应当能够观看。** 窗格中的任何活动都会实时显示在用户的窗口中。这往往正是使用窗格的目的。
+- **用户询问的内容并非由你启动。** 例如“那个窗格里正在运行什么？”、“为什么端口 3000 被占用了？”、“我的智能体正在做什么？”
+
+<a id="the-safety-rules"></a>
+### 安全规则
+
+<Warning>
+  这台机器上的窗格承载着用户的实际工作，其中一些窗格里还有正在执行任务的其他编程智能体。凡是并非由该智能体创建的窗格，都只能读取。
+</Warning>
+
+- **绝不要向并非由你打开的窗格执行 `send`。** 按键输入会直接落入那里正在进行的操作中。先检查 `lyrel agents`。
+- **绝不要关闭并非由你创建的窗格、标签页或工作区。**
+- **绝不要执行 `server stop` 或 `server restart`。** 服务器一旦停止，机器上的所有窗格都会随之终止，包括你自己的窗格。
+- 当 `doctor` 报告无法连接到服务器时，**绝不要自行执行 `lyrel server start`**——启动一个用户并未要求启动的服务器，会改变其 GUI 所连接的对象。应当告知用户。
+- **清理你自己创建的资源。** 临时窗格使用完毕后，执行 `lyrel pane close %83`。
+
+<a id="the-reliable-idioms"></a>
+### 可靠的惯用方法
+
+这项技能不会让智能体抓取屏幕内容，而是引导它们使用真正能够回答问题的基础操作：
+
+```bash
+# 是否已完成？——当只剩深度为 0 的 shell 时，就完成了
+lyrel procs %83 --json
+
+# 获取结果，而不是屏幕画面
+lyrel send "$PANE" 'cargo test > /tmp/t.log 2>&1; echo $? > /tmp/t.rc' --enter
+
+# 恰好在另一个智能体需要处理时唤醒
+lyrel wait %3 --until waiting,done --changed --timeout 600
+```
+
+<a id="how-to-delegate"></a>
+### 如何委派任务
+
+`references/delegation.md` 是智能体在启动工作智能体之前需要阅读的部分：为工作智能体提供独立的 git worktree 和工作区，在交互模式下移交任务，并在提示词中明确交付约定，确认命令确实已经启动，通过 `lyrel wait` 持续照看，从 git 而不是屏幕中收集结果，最后清理资源——如果将任务分发给多个工作智能体，则在逐个收集结果时使用较短的超时时间，以免一个卡住的工作智能体拖住整轮任务。
+
+<a id="for-humans-writing-their-own-tooling"></a>
+## 致自行编写工具的开发者
+
+即使你不是智能体，这些资料也值得一读——它们以最精简的方式介绍了如何将 lyrel 用作任务运行器。请先阅读
+[CLI 概览](/cli/overview)，再阅读
+[命令参考](/cli/reference)。

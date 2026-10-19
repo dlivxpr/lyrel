@@ -1,0 +1,956 @@
+use std::borrow::Cow;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::net::TcpStream;
+
+use crate::daemon::protocol::{NativeSshSpec, SshAlgorithms, SshProxy};
+
+use super::known_hosts;
+use super::session::SshConnection;
+
+pub enum Transport {
+    Tcp(TcpStream),
+    Process(ProcessStream),
+    Channel(russh::ChannelStream<russh::client::Msg>),
+}
+
+impl AsyncRead for Transport {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Transport::Tcp(s) => Pin::new(s).poll_read(cx, buf),
+            Transport::Process(s) => Pin::new(s).poll_read(cx, buf),
+            Transport::Channel(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Transport {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Transport::Tcp(s) => Pin::new(s).poll_write(cx, buf),
+            Transport::Process(s) => Pin::new(s).poll_write(cx, buf),
+            Transport::Channel(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Transport::Tcp(s) => Pin::new(s).poll_flush(cx),
+            Transport::Process(s) => Pin::new(s).poll_flush(cx),
+            Transport::Channel(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Transport::Tcp(s) => Pin::new(s).poll_shutdown(cx),
+            Transport::Process(s) => Pin::new(s).poll_shutdown(cx),
+            Transport::Channel(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+pub struct ProcessStream {
+    _child: tokio::process::Child,
+    stdin: Option<tokio::process::ChildStdin>,
+    stdout: tokio::process::ChildStdout,
+}
+
+impl ProcessStream {
+    pub fn from_parts(
+        child: tokio::process::Child,
+        stdin: tokio::process::ChildStdin,
+        stdout: tokio::process::ChildStdout,
+    ) -> ProcessStream {
+        ProcessStream {
+            _child: child,
+            stdin: Some(stdin),
+            stdout,
+        }
+    }
+
+    fn stdin_mut(&mut self) -> std::io::Result<&mut tokio::process::ChildStdin> {
+        self.stdin.as_mut().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the process stream's write half is already closed",
+            )
+        })
+    }
+}
+
+impl AsyncRead for ProcessStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stdout).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for ProcessStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut().stdin_mut() {
+            Ok(stdin) => Pin::new(stdin).poll_write(cx, buf),
+            Err(e) => Poll::Ready(Err(e)),
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut().stdin_mut() {
+            Ok(stdin) => Pin::new(stdin).poll_flush(cx),
+            Err(_) => Poll::Ready(Ok(())),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let Some(stdin) = this.stdin.as_mut() else {
+            return Poll::Ready(Ok(()));
+        };
+        match Pin::new(stdin).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
+                this.stdin = None;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(e)) => {
+                this.stdin = None;
+                Poll::Ready(Err(e))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+pub async fn build_transport(
+    spec: &NativeSshSpec,
+    jump: Option<Arc<SshConnection>>,
+) -> anyhow::Result<Transport> {
+    if let SshProxy::Command(template) = &spec.proxy {
+        return spawn_proxy_command(template, &spec.host, spec.port, &spec.user);
+    }
+    if let Some(jump) = jump {
+        let channel = jump
+            .open_direct_tcpip(&spec.host, spec.port)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "jump host direct-tcpip to {}:{} failed: {e}",
+                    spec.host,
+                    spec.port
+                )
+            })?;
+        return Ok(Transport::Channel(channel.into_stream()));
+    }
+    match &spec.proxy {
+        SshProxy::Socks { host, port } => {
+            let stream = socks5_connect(host, *port, &spec.host, spec.port).await?;
+            Ok(Transport::Tcp(stream))
+        }
+        SshProxy::Http { host, port } => {
+            let stream = http_connect(host, *port, &spec.host, spec.port).await?;
+            Ok(Transport::Tcp(stream))
+        }
+        _ => {
+            let stream = TcpStream::connect((spec.host.as_str(), spec.port))
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("connect to {}:{} failed: {e}", spec.host, spec.port)
+                })?;
+            Ok(Transport::Tcp(stream))
+        }
+    }
+}
+
+fn spawn_proxy_command(
+    template: &str,
+    host: &str,
+    port: u16,
+    user: &str,
+) -> anyhow::Result<Transport> {
+    let argv = proxy_command_argv(template, host, port, user);
+    let mut it = argv.into_iter();
+    let program = it
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("empty ProxyCommand"))?;
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(it)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .kill_on_drop(true);
+    crate::core::proc::hide_console_tokio(&mut cmd);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("spawn ProxyCommand failed: {e}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("ProxyCommand stdin unavailable"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("ProxyCommand stdout unavailable"))?;
+    Ok(Transport::Process(ProcessStream::from_parts(
+        child, stdin, stdout,
+    )))
+}
+
+pub fn proxy_command_argv(template: &str, host: &str, port: u16, user: &str) -> Vec<String> {
+    shell_split(template)
+        .into_iter()
+        .map(|tok| substitute_tokens(&tok, host, port, user))
+        .collect()
+}
+
+fn substitute_tokens(tok: &str, host: &str, port: u16, user: &str) -> String {
+    let mut out = String::with_capacity(tok.len());
+    let mut chars = tok.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            match chars.next() {
+                Some('h') => out.push_str(host),
+                Some('p') => out.push_str(&port.to_string()),
+                Some('r') => out.push_str(user),
+                Some('%') => out.push('%'),
+                Some(other) => {
+                    out.push('%');
+                    out.push(other);
+                }
+                None => out.push('%'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn shell_split(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut has_token = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                has_token = true;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                has_token = true;
+            }
+            '\\' if !in_single => {
+                if let Some(&next) = chars.peek() {
+                    chars.next();
+                    cur.push(next);
+                    has_token = true;
+                }
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if has_token {
+                    out.push(std::mem::take(&mut cur));
+                    has_token = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has_token = true;
+            }
+        }
+    }
+    if has_token {
+        out.push(cur);
+    }
+    out
+}
+
+async fn socks5_connect(
+    proxy_host: &str,
+    proxy_port: u16,
+    target: &str,
+    target_port: u16,
+) -> anyhow::Result<TcpStream> {
+    let mut s = TcpStream::connect((proxy_host, proxy_port))
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("connect to SOCKS proxy {proxy_host}:{proxy_port} failed: {e}")
+        })?;
+    socks5_handshake(&mut s, target, target_port).await?;
+    Ok(s)
+}
+
+/// The SOCKS5 exchange itself, over a stream that is already connected.
+///
+/// Generic over the stream rather than taking a `TcpStream`, which is what
+/// lets a test drive it from an in-memory duplex instead of standing up a
+/// proxy. This is hand-rolled wire format with length prefixes in it; it
+/// deserves to be exercised.
+async fn socks5_handshake<S>(s: &mut S, target: &str, target_port: u16) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    s.write_all(&[0x05, 0x01, 0x00]).await?;
+    let mut reply = [0u8; 2];
+    s.read_exact(&mut reply).await?;
+    if reply[0] != 0x05 || reply[1] != 0x00 {
+        anyhow::bail!("SOCKS5 proxy refused no-auth (got {reply:?})");
+    }
+    let host_bytes = target.as_bytes();
+    if host_bytes.len() > 255 {
+        anyhow::bail!("SOCKS5 target host too long");
+    }
+    let mut req = vec![0x05, 0x01, 0x00, 0x03, host_bytes.len() as u8];
+    req.extend_from_slice(host_bytes);
+    req.extend_from_slice(&target_port.to_be_bytes());
+    s.write_all(&req).await?;
+    let mut head = [0u8; 4];
+    s.read_exact(&mut head).await?;
+    if head[1] != 0x00 {
+        anyhow::bail!("SOCKS5 CONNECT failed (reply code {})", head[1]);
+    }
+    let addr_len = match head[3] {
+        0x01 => 4,
+        0x04 => 16,
+        0x03 => {
+            let mut l = [0u8; 1];
+            s.read_exact(&mut l).await?;
+            l[0] as usize
+        }
+        other => anyhow::bail!("SOCKS5 unexpected bound ATYP {other}"),
+    };
+    let mut discard = vec![0u8; addr_len + 2];
+    s.read_exact(&mut discard).await?;
+    Ok(())
+}
+
+async fn http_connect(
+    proxy_host: &str,
+    proxy_port: u16,
+    target: &str,
+    target_port: u16,
+) -> anyhow::Result<TcpStream> {
+    let mut s = TcpStream::connect((proxy_host, proxy_port))
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("connect to HTTP proxy {proxy_host}:{proxy_port} failed: {e}")
+        })?;
+    http_connect_handshake(&mut s, target, target_port).await?;
+    Ok(s)
+}
+
+/// See [`socks5_handshake`] — same split, same reason.
+async fn http_connect_handshake<S>(s: &mut S, target: &str, target_port: u16) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let req = format!(
+        "CONNECT {target}:{target_port} HTTP/1.1\r\nHost: {target}:{target_port}\r\nProxy-Connection: keep-alive\r\n\r\n"
+    );
+    s.write_all(req.as_bytes()).await?;
+    let mut buf = Vec::with_capacity(256);
+    let mut byte = [0u8; 1];
+    loop {
+        s.read_exact(&mut byte).await?;
+        buf.push(byte[0]);
+        if buf.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if buf.len() > 8192 {
+            anyhow::bail!("HTTP CONNECT response headers too large");
+        }
+    }
+    let head = String::from_utf8_lossy(&buf);
+    let status_ok = head
+        .lines()
+        .next()
+        .map(|line| line.contains(" 200"))
+        .unwrap_or(false);
+    if !status_ok {
+        let first = head.lines().next().unwrap_or("").trim();
+        anyhow::bail!("HTTP CONNECT failed: {first}");
+    }
+    Ok(())
+}
+
+pub fn build_config(spec: &NativeSshSpec) -> Arc<russh::client::Config> {
+    // Every hop comes through here — the target and each jump host build their
+    // own config from their own spec — so each asks known_hosts about itself.
+    let known = known_hosts::known_algorithms(&spec.host, spec.port);
+    let mut cfg = russh::client::Config {
+        preferred: build_preferred(&spec.algorithms, &known),
+        ..Default::default()
+    };
+    let (interval, max) = keepalive(spec);
+    cfg.keepalive_interval = interval;
+    cfg.keepalive_max = max;
+    Arc::new(cfg)
+}
+
+/// Keepalive on every connection, not just the ones whose profile asks.
+///
+/// Without one a connection whose peer stops answering is never noticed:
+/// nothing is sent on an idle link, so neither a stalled path nor a host that
+/// rebooted under it produces an error, and the socket stays established for
+/// hours while the link it carries reads "connected". A probe every
+/// [`DEFAULT_KEEPALIVE_INTERVAL`] that goes unanswered
+/// [`DEFAULT_KEEPALIVE_MAX`] times in a row ends the session, which drops the
+/// connection from the cache and lets the next open dial a fresh one.
+///
+/// A profile's own interval wins; `0` there means the user turned it off.
+fn keepalive(spec: &NativeSshSpec) -> (Option<Duration>, usize) {
+    let interval = match spec.keepalive_interval_s {
+        Some(0) => None,
+        Some(secs) => Some(Duration::from_secs(u64::from(secs))),
+        None => Some(DEFAULT_KEEPALIVE_INTERVAL),
+    };
+    let max = spec
+        .keepalive_count_max
+        .map_or(DEFAULT_KEEPALIVE_MAX, |max| max as usize);
+    (interval, max)
+}
+
+const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const DEFAULT_KEEPALIVE_MAX: usize = 3;
+
+fn build_preferred(
+    a: &SshAlgorithms,
+    known_host_keys: &[russh::keys::Algorithm],
+) -> russh::Preferred {
+    let mut p = russh::Preferred::DEFAULT;
+    if !a.kex.is_empty() {
+        let v: Vec<russh::kex::Name> = a
+            .kex
+            .iter()
+            .filter_map(|s| russh::kex::Name::try_from(s.as_str()).ok())
+            .collect();
+        if !v.is_empty() {
+            p.kex = Cow::Owned(v);
+        }
+    }
+    if !a.cipher.is_empty() {
+        let v: Vec<russh::cipher::Name> = a
+            .cipher
+            .iter()
+            .filter_map(|s| russh::cipher::Name::try_from(s.as_str()).ok())
+            .collect();
+        if !v.is_empty() {
+            p.cipher = Cow::Owned(v);
+        }
+    }
+    if !a.mac.is_empty() {
+        let v: Vec<russh::mac::Name> = a
+            .mac
+            .iter()
+            .filter_map(|s| russh::mac::Name::try_from(s.as_str()).ok())
+            .collect();
+        if !v.is_empty() {
+            p.mac = Cow::Owned(v);
+        }
+    }
+    if !a.host_key.is_empty() {
+        let v: Vec<russh::keys::Algorithm> = a
+            .host_key
+            .iter()
+            .filter_map(|s| s.parse::<russh::keys::Algorithm>().ok())
+            .collect();
+        if !v.is_empty() {
+            p.key = Cow::Owned(v);
+        }
+    } else if !known_host_keys.is_empty() {
+        // What OpenSSH's `order_hostkeyalgs()` does: offer the algorithms this
+        // host already has entries for ahead of the rest, so a server that has
+        // both an ssh-rsa key on file and an ed25519 key on offer answers with
+        // the one the user has already accepted. Without it the default order
+        // picks ed25519, and a host known only by ssh-rsa raises a
+        // key-you-have-never-seen prompt on every single connection.
+        //
+        // Reordering only, never filtering — a host whose keys have genuinely
+        // rotated must still be able to negotiate — and skipped entirely when
+        // the user pinned `HostKeyAlgorithms`, which OpenSSH also treats as the
+        // last word.
+        let mut ordered: Vec<russh::keys::Algorithm> = p.key.iter().cloned().collect();
+        ordered.sort_by_key(|alg| !known_host_keys.iter().any(|k| same_key_type(k, alg)));
+        p.key = Cow::Owned(ordered);
+    }
+    if !a.compression.is_empty() {
+        let v: Vec<russh::compression::Name> = a
+            .compression
+            .iter()
+            .filter_map(|s| russh::compression::Name::try_from(s.as_str()).ok())
+            .collect();
+        if !v.is_empty() {
+            p.compression = Cow::Owned(v);
+        }
+    }
+    p
+}
+
+/// Whether two host-key algorithms stand for the same *key*.
+///
+/// An `ssh-rsa` line in known_hosts parses to `Rsa { hash: None }`, but what
+/// gets negotiated is one of `rsa-sha2-512`, `rsa-sha2-256` or `ssh-rsa` — three
+/// signature algorithms over one key. Comparing with `==` would float only the
+/// SHA-1 spelling to the front of the list, which is a downgrade dressed up as a
+/// preference; OpenSSH's `order_hostkeyalgs()` matches on the key type too.
+fn same_key_type(a: &russh::keys::Algorithm, b: &russh::keys::Algorithm) -> bool {
+    use russh::keys::Algorithm;
+    match (a, b) {
+        (Algorithm::Rsa { .. }, Algorithm::Rsa { .. }) => true,
+        _ => a == b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A profile that says nothing about keepalive still gets one: without
+    /// it a peer that stops answering is never noticed.
+    #[test]
+    fn every_connection_is_kept_alive_unless_the_profile_turns_it_off() {
+        let mut spec = super::super::test_support::base_spec();
+        assert_eq!(
+            keepalive(&spec),
+            (Some(DEFAULT_KEEPALIVE_INTERVAL), DEFAULT_KEEPALIVE_MAX)
+        );
+
+        spec.keepalive_interval_s = Some(60);
+        spec.keepalive_count_max = Some(5);
+        assert_eq!(keepalive(&spec), (Some(Duration::from_secs(60)), 5));
+
+        spec.keepalive_interval_s = Some(0);
+        assert_eq!(keepalive(&spec).0, None);
+    }
+
+    #[test]
+    fn proxy_command_substitutes_h_p_r_tokens() {
+        let argv = proxy_command_argv("corkscrew proxy 8080 %h %p", "example.com", 2222, "deploy");
+        assert_eq!(
+            argv,
+            vec!["corkscrew", "proxy", "8080", "example.com", "2222"]
+        );
+    }
+
+    #[test]
+    fn proxy_command_handles_quotes_and_percent_and_user() {
+        let argv = proxy_command_argv(
+            "sh -c 'nc -X connect -x %h:%p %r@host 100%%'",
+            "h.example",
+            22,
+            "root",
+        );
+        assert_eq!(
+            argv,
+            vec!["sh", "-c", "nc -X connect -x h.example:22 root@host 100%",]
+        );
+    }
+
+    #[test]
+    fn shell_split_respects_double_quotes_and_escapes() {
+        assert_eq!(shell_split(r#"a "b c" d\ e"#), vec!["a", "b c", "d e"]);
+        assert_eq!(shell_split("   "), Vec::<String>::new());
+    }
+
+    #[test]
+    fn build_preferred_keeps_defaults_for_empty_lists() {
+        let a = SshAlgorithms::default();
+        let p = build_preferred(&a, &[]);
+        assert_eq!(p.kex, russh::Preferred::DEFAULT.kex);
+        assert_eq!(p.cipher, russh::Preferred::DEFAULT.cipher);
+        assert_eq!(p.key, russh::Preferred::DEFAULT.key);
+    }
+
+    #[test]
+    fn build_preferred_drops_unknown_and_applies_known_entries() {
+        let a = SshAlgorithms {
+            cipher: vec!["totally-not-a-cipher".into(), "aes256-ctr".into()],
+            ..Default::default()
+        };
+        let p = build_preferred(&a, &[]);
+        let aes = russh::cipher::Name::try_from("aes256-ctr").unwrap();
+        assert_eq!(p.cipher.as_ref(), &[aes]);
+    }
+
+    /// The default order leads with ed25519, so a host known only by an
+    /// ssh-rsa key was greeted with a key it had never seen on every connect.
+    #[test]
+    fn build_preferred_floats_known_hosts_algorithms_to_the_front() {
+        let rsa = russh::keys::Algorithm::Rsa { hash: None };
+        let p = build_preferred(&SshAlgorithms::default(), &[rsa]);
+        // All three RSA spellings sign for the one key on file, so all three
+        // lead — anything less would pin the host to SHA-1 signatures.
+        assert!(
+            p.key
+                .iter()
+                .take(3)
+                .all(|a| matches!(a, russh::keys::Algorithm::Rsa { .. })),
+            "expected the RSA spellings first, got {:?}",
+            p.key
+        );
+    }
+
+    #[test]
+    fn build_preferred_reordering_never_drops_an_algorithm() {
+        let rsa = russh::keys::Algorithm::Rsa { hash: None };
+        let p = build_preferred(&SshAlgorithms::default(), &[rsa]);
+        let mut got: Vec<String> = p.key.iter().map(|a| a.to_string()).collect();
+        let mut want: Vec<String> = russh::Preferred::DEFAULT
+            .key
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    /// OpenSSH stops reordering once `HostKeyAlgorithms` is explicit, because
+    /// the user has already said what order they want.
+    #[test]
+    fn build_preferred_leaves_a_pinned_host_key_list_alone() {
+        let a = SshAlgorithms {
+            host_key: vec!["ssh-ed25519".into(), "rsa-sha2-512".into()],
+            ..Default::default()
+        };
+        let p = build_preferred(&a, &[russh::keys::Algorithm::Rsa { hash: None }]);
+        assert_eq!(
+            p.key.as_ref(),
+            &[
+                russh::keys::Algorithm::Ed25519,
+                russh::keys::Algorithm::Rsa {
+                    hash: Some(russh::keys::HashAlg::Sha512)
+                },
+            ]
+        );
+    }
+
+    /// What the zlib session test's server sends back for an `exec`: text that
+    /// inflates far past 2x its compressed size, then bytes that barely
+    /// compress at all — the two shapes russh's zlib once cut short.
+    fn zlib_payload() -> Vec<u8> {
+        let mut out = b"total 0\n".repeat(8 * 1024);
+        let mut x: u32 = 0x9e37_79b9;
+        out.extend((0..200 * 1024).map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        }));
+        out
+    }
+
+    struct ZlibSshd;
+
+    impl russh::server::Handler for ZlibSshd {
+        type Error = russh::Error;
+
+        async fn auth_none(&mut self, _user: &str) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn exec_request(
+            &mut self,
+            channel: russh::ChannelId,
+            _command: &[u8],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            session.channel_success(channel)?;
+            for chunk in zlib_payload().chunks(16 * 1024) {
+                session.data(channel, chunk.to_vec())?;
+            }
+            session.eof(channel)?;
+            session.close(channel)?;
+            Ok(())
+        }
+    }
+
+    struct TrustingClient;
+
+    impl russh::client::Handler for TrustingClient {
+        type Error = russh::Error;
+
+        async fn check_server_key(
+            &mut self,
+            _key: &russh::keys::PublicKeyOrCertificate,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    /// #997: a host imported with `Compression yes` negotiates zlib, and the
+    /// russh we pinned truncated every packet that inflated past 2x — the
+    /// stream desynced right after auth and the pane never printed a byte.
+    #[tokio::test]
+    async fn a_zlib_session_delivers_every_byte() {
+        use russh::keys::PrivateKey;
+        use russh::keys::ssh_key::private::Ed25519Keypair;
+
+        let zlib = SshAlgorithms {
+            compression: vec!["zlib@openssh.com".into()],
+            ..Default::default()
+        };
+        let preferred = build_preferred(&zlib, &[]);
+        assert_eq!(
+            preferred.compression.as_ref(),
+            &[russh::compression::ZLIB_LEGACY]
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("bound address");
+        let mut server_config = russh::server::Config::default();
+        server_config.inactivity_timeout = None;
+        server_config.preferred = preferred.clone();
+        server_config
+            .keys
+            .push(PrivateKey::from(Ed25519Keypair::from_seed(&[7; 32])));
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept the test client");
+            let running = russh::server::run_stream(Arc::new(server_config), socket, ZlibSshd)
+                .await
+                .expect("server handshake");
+            let _ = running.await;
+        });
+
+        let received = tokio::time::timeout(Duration::from_secs(10), async {
+            let client_config = russh::client::Config {
+                preferred,
+                ..Default::default()
+            };
+            let mut handle = russh::client::connect(Arc::new(client_config), addr, TrustingClient)
+                .await
+                .expect("client handshake");
+            let auth = handle
+                .authenticate_none("tester")
+                .await
+                .expect("auth round trip");
+            assert!(auth.success());
+            let mut channel = handle
+                .channel_open_session()
+                .await
+                .expect("session open is confirmed");
+            channel.exec(true, "ls").await.expect("exec request");
+            let mut received = Vec::new();
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { data } => received.extend_from_slice(&data),
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            received
+        })
+        .await
+        .expect("a zlib session must not stall after auth");
+        server.abort();
+
+        let expected = zlib_payload();
+        assert_eq!(received.len(), expected.len());
+        assert!(received == expected, "the payload arrived corrupted");
+    }
+}
+
+#[cfg(test)]
+mod proxy_handshake_tests {
+    use super::*;
+    use tokio::io::duplex;
+
+    /// Drive a handshake against a scripted peer.
+    ///
+    /// `script` is what the fake proxy says, in order; the bytes the handshake
+    /// sent come back for inspection. An in-memory duplex stands in for the
+    /// socket, which is the whole reason the handshakes take a generic stream.
+    async fn run_socks5(script: &[u8], target: &str, port: u16) -> (anyhow::Result<()>, Vec<u8>) {
+        let (mut client, mut proxy) = duplex(4096);
+        let script = script.to_vec();
+        let peer = tokio::spawn(async move {
+            // Answer first so a handshake that reads before writing cannot
+            // deadlock against a duplex nobody is draining.
+            let _ = proxy.write_all(&script).await;
+            let mut seen = Vec::new();
+            let mut chunk = [0u8; 512];
+            while let Ok(n) = proxy.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                seen.extend_from_slice(&chunk[..n]);
+            }
+            seen
+        });
+        let out = socks5_handshake(&mut client, target, port).await;
+        drop(client);
+        let sent = peer.await.unwrap_or_default();
+        (out, sent)
+    }
+
+    #[tokio::test]
+    async fn socks5_greets_with_no_auth_and_addresses_the_target_by_name() {
+        // no-auth accepted, then CONNECT granted with an IPv4 bound address.
+        let script = [
+            &[0x05u8, 0x00][..],
+            &[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x1f, 0x90][..],
+        ]
+        .concat();
+        let (out, sent) = run_socks5(&script, "example.com", 22).await;
+        assert!(out.is_ok(), "{:?}", out.err());
+        assert_eq!(
+            &sent[..3],
+            &[0x05, 0x01, 0x00],
+            "greeting is SOCKS5 no-auth"
+        );
+        let req = &sent[3..];
+        assert_eq!(
+            &req[..5],
+            &[0x05, 0x01, 0x00, 0x03, 11],
+            "CONNECT by domain name, 11 bytes of it"
+        );
+        assert_eq!(&req[5..16], b"example.com");
+        assert_eq!(&req[16..18], &22u16.to_be_bytes(), "port is big-endian");
+    }
+
+    #[tokio::test]
+    async fn socks5_reads_the_variable_length_bound_address_before_returning() {
+        // ATYP 0x03: a length byte then that many bytes, then the port. Getting
+        // this wrong leaves unread bytes that the SSH banner exchange would
+        // then read as protocol.
+        let mut script = vec![0x05, 0x00, 0x05, 0x00, 0x00, 0x03, 3];
+        script.extend_from_slice(b"abc");
+        script.extend_from_slice(&[0x00, 0x16]);
+        let (out, _) = run_socks5(&script, "example.com", 22).await;
+        assert!(out.is_ok(), "{:?}", out.err());
+    }
+
+    #[tokio::test]
+    async fn socks5_refuses_a_proxy_that_wants_authentication() {
+        let (out, _) = run_socks5(&[0x05, 0x02], "example.com", 22).await;
+        let msg = out
+            .expect_err("a proxy demanding auth must fail")
+            .to_string();
+        assert!(msg.contains("no-auth"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn socks5_surfaces_the_connect_reply_code() {
+        let (out, _) = run_socks5(&[0x05, 0x00, 0x05, 0x05, 0x00, 0x01], "example.com", 22).await;
+        let msg = out.expect_err("reply code 5 is a refusal").to_string();
+        assert!(msg.contains("reply code 5"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn socks5_rejects_a_host_too_long_for_its_length_byte() {
+        let long = "a".repeat(256);
+        let (out, _) = run_socks5(&[0x05, 0x00], &long, 22).await;
+        let msg = out
+            .expect_err("256 bytes will not fit in one byte")
+            .to_string();
+        assert!(msg.contains("too long"), "{msg}");
+    }
+
+    async fn run_http(script: &str, target: &str, port: u16) -> (anyhow::Result<()>, String) {
+        let (mut client, mut proxy) = duplex(16384);
+        let script = script.to_string();
+        let peer = tokio::spawn(async move {
+            let _ = proxy.write_all(script.as_bytes()).await;
+            let mut seen = Vec::new();
+            let mut chunk = [0u8; 512];
+            while let Ok(n) = proxy.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                seen.extend_from_slice(&chunk[..n]);
+            }
+            seen
+        });
+        let out = http_connect_handshake(&mut client, target, port).await;
+        drop(client);
+        let sent = peer.await.unwrap_or_default();
+        (out, String::from_utf8_lossy(&sent).into_owned())
+    }
+
+    #[tokio::test]
+    async fn http_connect_asks_for_the_target_and_accepts_200() {
+        let (out, sent) = run_http(
+            "HTTP/1.1 200 Connection established\r\nVia: 1.1 proxy\r\n\r\n",
+            "example.com",
+            22,
+        )
+        .await;
+        assert!(out.is_ok(), "{:?}", out.err());
+        assert!(
+            sent.starts_with("CONNECT example.com:22 HTTP/1.1\r\n"),
+            "{sent:?}"
+        );
+        assert!(sent.contains("Host: example.com:22\r\n"), "{sent:?}");
+        assert!(sent.ends_with("\r\n\r\n"), "request must be terminated");
+    }
+
+    #[tokio::test]
+    async fn http_connect_stops_at_the_header_terminator_and_not_before() {
+        // A header block containing a bare \r\n must not be mistaken for the
+        // end; only \r\n\r\n ends it. If this read short, the leftover header
+        // bytes would land in the SSH banner exchange.
+        let (out, _) = run_http(
+            "HTTP/1.1 200 OK\r\nX-A: 1\r\nX-B: 2\r\n\r\n",
+            "example.com",
+            22,
+        )
+        .await;
+        assert!(out.is_ok(), "{:?}", out.err());
+    }
+
+    #[tokio::test]
+    async fn http_connect_reports_the_status_line_on_refusal() {
+        let (out, _) = run_http(
+            "HTTP/1.1 407 Proxy Authentication Required\r\n\r\n",
+            "h",
+            22,
+        )
+        .await;
+        let msg = out.expect_err("407 is a refusal").to_string();
+        assert!(msg.contains("407"), "{msg}");
+    }
+
+    /// `" 200"` with the space is what the status check looks for, so a 2000-ish
+    /// code or a 200 appearing in a header must not be mistaken for success.
+    #[tokio::test]
+    async fn http_connect_does_not_take_a_header_mentioning_200_for_success() {
+        let (out, _) = run_http(
+            "HTTP/1.1 502 Bad Gateway\r\nX-Upstream: 200\r\n\r\n",
+            "h",
+            22,
+        )
+        .await;
+        assert!(out.is_err(), "only the status line decides");
+    }
+}

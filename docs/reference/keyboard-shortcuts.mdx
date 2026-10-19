@@ -1,0 +1,143 @@
+---
+title: "键盘快捷键"
+description: "所有默认快捷键，以及用于重新绑定的操作名称。"
+---
+
+**设置 → 键盘与鼠标 → 键盘快捷键**（<kbd>⌘ ,</kbd>）是本页的实时版本——
+它显示的是*你当前安装的应用*所使用的绑定。以下列出的是出厂默认值。
+
+<a id="tabs-and-workspaces"></a>
+## 标签页与工作区
+
+| 操作 | macOS | Windows |
+|---|---|---|
+| 新建标签页 | <kbd>⌘ T</kbd> | <kbd>Ctrl ⇧ T</kbd> |
+| 关闭窗格 / 标签页 | <kbd>⌘ W</kbd> | <kbd>Ctrl ⇧ W</kbd> |
+| 重新打开已关闭的标签页 | <kbd>⌘ ⇧ T</kbd> | <kbd>Alt ⇧ T</kbd> |
+| 下一个标签页 · 上一个标签页 | <kbd>⌘ ⇧ ]</kbd> · <kbd>⌘ ⇧ [</kbd> | <kbd>Ctrl PgDn</kbd> · <kbd>Ctrl PgUp</kbd> |
+| 最近使用的标签页切换器（按住浏览，松开选定） | <kbd>⌃ ⇥</kbd> · <kbd>⌃ ⇧ ⇥</kbd> | 同左 |
+| 跳转到标签页 1–9 | <kbd>⌘ 1</kbd>…<kbd>⌘ 9</kbd> | <kbd>Alt 1</kbd>…<kbd>Alt 9</kbd> |
+| 新建工作区 | <kbd>⌘ ⇧ N</kbd> | <kbd>Ctrl ⇧ N</kbd> |
+| 切换工作区 | <kbd>⌘ ⇧ O</kbd> | <kbd>Ctrl ⇧ O</kbd> |
+| 新建窗口 | <kbd>⌘ N</kbd> | — |
+| 新建智能体标签页 | <kbd>⌘ ⇧ A</kbd> | — |
+
+<a id="panes"></a>
+## 窗格
+
+| 操作 | macOS | Windows |
+|---|---|---|
+| 向右拆分 | <kbd>⌘ D</kbd> | <kbd>Ctrl ⇧ D</kbd> |
+| 向下拆分 | <kbd>⌘ ⇧ D</kbd> | <kbd>Ctrl Alt ⇧ D</kbd> |
+| 下一个窗格 · 上一个窗格 | <kbd>⌘ ]</kbd> · <kbd>⌘ [</kbd> | <kbd>Ctrl ⇧ ]</kbd> · <kbd>Ctrl ⇧ [</kbd> |
+| 聚焦左 / 右 / 上 / 下方窗格 | <kbd>⌘ ⌥ ←→↑↓</kbd> | <kbd>Alt ←→↑↓</kbd> |
+| 缩放窗格 | <kbd>⌘ ⇧ ⏎</kbd> | <kbd>Ctrl ⇧ ⏎</kbd> |
+| 进入全屏 | <kbd>⌘ ⏎</kbd> | <kbd>F11</kbd> |
+
+<a id="view"></a>
+## 视图
+
+| 操作 | macOS | Windows |
+|---|---|---|
+| 全局搜索 | <kbd>⌘ P</kbd> | <kbd>Ctrl ⇧ P</kbd> |
+| 切换左侧边栏 | <kbd>⌘ B</kbd> | <kbd>Ctrl ⇧ B</kbd> |
+| 切换右侧面板 | <kbd>⌘ J</kbd> | <kbd>Ctrl ⇧ J</kbd> |
+| 切换代码面板 | <kbd>⌘ ⇧ E</kbd> | <kbd>Ctrl ⇧ E</kbd> |
+| 增大字号 · 减小字号 · 重置字号 | <kbd>⌘ +</kbd> · <kbd>⌘ −</kbd> · <kbd>⌘ 0</kbd> | <kbd>Ctrl +</kbd> · <kbd>Ctrl −</kbd> · <kbd>Ctrl 0</kbd> |
+| 缩放字体 | <kbd>⌘</kbd> + 滚轮 | <kbd>Ctrl</kbd> + 滚轮 |
+
+<a id="terminal"></a>
+## 终端
+
+| 操作 | macOS | Windows |
+|---|---|---|
+| 在终端中查找 | <kbd>⌘ F</kbd> | <kbd>Ctrl ⇧ F</kbd> |
+| 查找下一个 · 上一个 | <kbd>⌘ G</kbd> · <kbd>⌘ ⇧ G</kbd> | <kbd>F3</kbd> · <kbd>⇧ F3</kbd> |
+| 清除回滚缓冲区 | <kbd>⌘ K</kbd> | <kbd>Ctrl ⇧ K</kbd> |
+| 复制 · 粘贴 | <kbd>⌘ C</kbd> · <kbd>⌘ V</kbd> | <kbd>Ctrl ⇧ C</kbd> · <kbd>Ctrl ⇧ V</kbd> · <kbd>⇧ Insert</kbd> |
+| 插入换行（在提示符处） | <kbd>⇧ ⏎</kbd> · <kbd>⌥ ⏎</kbd> | 同左 |
+| 模糊搜索历史记录 | <kbd>⌃ R</kbd> | 同左 |
+| 接受幽灵文本建议 | <kbd>→</kbd> | 同左 |
+| 补全菜单 | <kbd>⇥</kbd> | 同左 |
+
+在 Windows 上，单独使用 <kbd>Ctrl V</kbd> 也可以在 shell 提示符处粘贴。
+在全屏应用（vim、less、tmux）中，该组合键会原样传递给应用，
+因此其含义由应用决定（在 vim 中为可视块模式）；在这些应用中，
+请使用 <kbd>Ctrl ⇧ V</kbd> 或 <kbd>⇧ Insert</kbd> 粘贴。
+
+这一便利功能对应的是**粘贴（全屏应用之外）**绑定，你可以自行更改。
+清除此绑定后，<kbd>Ctrl V</kbd> 将在所有情况下交给 shell 处理，
+包括 readline 的 `quoted-insert`：
+
+```json
+{ "keybindings": { "AlternatePaste": "" } }
+```
+
+反过来，将“粘贴”本身绑定到这个组合键，就会在所有屏幕中执行粘贴，
+与 Windows Terminal 的默认行为相同：
+
+```json
+{ "keybindings": { "PasteText": "ctrl-v" } }
+```
+
+所有代表控制码的 <kbd>Ctrl</kbd> 组合键都会传递给正在运行的程序：
+<kbd>Ctrl 6</kbd> 和 <kbd>Ctrl ⇧ 6</kbd> 对应 `^^`（vim 的交替文件），
+<kbd>Ctrl /</kbd> 和 <kbd>Ctrl ⇧ −</kbd> 对应 `^_`（readline 的撤销），
+<kbd>Ctrl 3</kbd> 对应 Escape。lyrel 保留的普通 <kbd>Ctrl</kbd> 组合键
+都是不代表控制码的组合：<kbd>Ctrl ⇥</kbd> 用于切换到下一个标签页，
+而在 Windows 上，<kbd>Ctrl +</kbd> · <kbd>Ctrl −</kbd> · <kbd>Ctrl 0</kbd>
+用于调整字号。
+
+<a id="git-and-ssh"></a>
+## Git 与 SSH
+
+| 操作 | macOS | Windows |
+|---|---|---|
+| 提交（光标位于提交信息框中） | <kbd>⌘ ⏎</kbd> | <kbd>Ctrl ⏎</kbd> |
+| 保存（在编辑器中） | <kbd>⌘ S</kbd> | <kbd>Ctrl S</kbd> |
+| 重启 SSH 会话 | <kbd>⌘ ⇧ R</kbd> | <kbd>Ctrl ⇧ R</kbd> |
+
+<a id="application"></a>
+## 应用
+
+| 操作 | macOS | Windows |
+|---|---|---|
+| 设置 | <kbd>⌘ ,</kbd> | <kbd>Ctrl ,</kbd> |
+| 键盘快捷键 | <kbd>⌘ /</kbd> | — |
+| 隐藏 lyrel · 隐藏其他应用 · 最小化 | <kbd>⌘ H</kbd> · <kbd>⌘ ⌥ H</kbd> · <kbd>⌘ M</kbd> | — |
+| 退出 | <kbd>⌘ Q</kbd> | <kbd>Ctrl ⇧ Q</kbd> |
+
+<a id="actions-with-no-default-key"></a>
+## 没有默认快捷键的操作
+
+以下操作均可在全局搜索中找到，也都可以在**设置 →
+按键绑定**中绑定：
+
+| 分组 | 操作 |
+|---|---|
+| 标签页 | `RenameTab` · `NewWorktreeTab` · `MoveTabLeft` · `MoveTabRight` · `CloseOtherTabs` · `CloseTabsToTheRight` · `CopyWorkingDirectory` · `MarkTabUnread` · `HibernateTab` · `ToggleTabSidebar` |
+| 窗格 | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` |
+| 工作区 | `SelectWorkspace1`…`SelectWorkspace9` · `RenameWorkspace` · `StopWorkspace` · `DeleteWorkspace` |
+| 智能体 | `ForkAgentSession`（加上 `Right` / `Left` / `Down` / `Up`）· `CopyAgentSessionId` · `LaunchAgent:<slug>`（每个智能体各有一个，例如 `LaunchAgent:omp`） |
+| Git | `ScmStageAll` · `ScmUnstageAll` · `ScmDiscardAll` · `ScmCommitAmend` · `ScmRefresh` · `ScmSync` · `ScmPush` · `ScmPull` · `ScmFetch` · `ScmCheckoutBranch` · `ScmCreateBranch` · `ScmToggleGraph` · `ToggleDiffViewMode` |
+| 面板 | `ShowRightPanelInfo` · `ShowRightPanelFiles` · `ShowRightPanelSearch` · `ShowRightPanelChanges` · `ShowRightPanelGitHub` |
+| 文档 | `ToggleDocumentFill` · `DocumentWidthThird` · `DocumentWidthHalf` · `DocumentWidthTwoThirds` · `ToggleDocumentPreview` · `ToggleDocumentWrap` |
+| SSH | `ToggleSftp` · `ShowSshForwards` · `OpenSshProfiles` |
+| 应用 | `CloseWindow` · `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` |
+
+<a id="rebinding-syntax"></a>
+## 重新绑定语法
+
+```json
+{
+  "keybindings": {
+    "ResizePaneLeft": "ctrl-alt-left",
+    "ToggleSftp": "secondary-shift-u",
+    "ScmSync": "ctrl-b s"
+  }
+}
+```
+
+`secondary` 在 macOS 上表示 <kbd>⌘</kbd>，在其他平台上表示 <kbd>Ctrl</kbd>。
+空格用于分隔多步快捷键的各个步骤。
+[更多 →](/customization/keybindings)

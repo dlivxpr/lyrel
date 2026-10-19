@@ -1,0 +1,337 @@
+[package]
+name = "lyrel"
+version.workspace = true
+edition = "2024"
+description = "A terminal workbench: shells, persistent sessions, SSH, coding agents — GPU-rendered on GPUI Kit, pure Rust"
+repository = "https://github.com/dlivxpr/lyrel"
+license = "Apache-2.0"
+readme = "README.md"
+publish = false
+default-run = "lyrel-app"
+
+[[bin]]
+name = "lyrel-app"
+path = "src/main.rs"
+
+[[bin]]
+name = "lyrel-updater"
+path = "src/bin/lyrel-updater.rs"
+required-features = ["updater"]
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# The framework-free half of lyrel: wire protocol, session daemon, PTY, the
+# native SSH engine, and the domain model the headless `lyrel-server` shares with
+# this GUI. Everything that does *not* need gpui lives there.
+# `gssapi` is off in lyrel-core's defaults (a static musl `lyrel-server` cannot
+# link the system krb5 it binds); the GUI, which builds against a real desktop
+# toolchain, turns it on so managed SSH connections keep offering
+# `gssapi-with-mic` exactly as before.
+#
+# `remote-install` is off there for the same shape of reason: it pulls an HTTPS
+# client used only to *download* a `lyrel-server` onto a remote machine
+# (decision D5). The server binary is the thing being downloaded, so it can
+# never take that path; the GUI, which is the client that pushes it, can.
+#
+# `github` is the right panel's GitHub tab: the same HTTPS client, pointed at
+# api.github.com.
+lyrel-core = { path = "crates/lyrel-core", features = ["gssapi", "remote-install", "github", "terminal-width"] }
+
+gpui-kit = { workspace = true, features = ["tree-sitter-languages"] }
+
+anyhow.workspace = true
+log.workspace = true
+# Smart double-click selection patterns (URL/email/path). Already in the tree
+# transitively, so pinning it here adds no new native code.
+regex = "1"
+# Reuse the locked parser for stable release precedence and strict tag validation.
+semver = "=1.0.28"
+# Navigation must preserve unchanged lines inside atomic multiline replacements.
+# Keep the linear-space diff, without a character-level engine.
+similar = { version = "=3.2.0", default-features = false }
+# SIMD byte search for `ParkedCursorScanner`'s fast path
+# (`terminal::parked_cursor`), which scans every output batch the client
+# receives — the same skip-ahead the
+# tokenizers in `lyrel-core` already use. Already in the tree via `lyrel-core`,
+# so this pins no new code.
+memchr = "2"
+# Grapheme-cluster boundaries for the sidebar's label elision
+# (`ui::tab_strip`). Cutting a label by `char` tears emoji apart: a ZWJ
+# sequence loses its joiner, `❤️` loses the variation selector that makes it an
+# emoji, and half a flag renders as a bare letter. Already in the tree via
+# gpui, so this pins no new code.
+unicode-segmentation = "1"
+# Scalar widths remain needed by preedit ink detection and copy unwrapping.
+# Input-bar cluster widths instead use lyrel-core's optional terminal-width.
+rio-unicode.workspace = true
+# Fair reader/painter locking without maintaining an emulator-specific lock.
+parking_lot = "0.12"
+# Outline queries use the same published grammars as the editor highlighter.
+# Kit's editor shares the native library; the 0.27 links conflict is not resolvable yet.
+tree-sitter = "=0.26.13"
+smol.workspace = true
+smallvec.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tempfile = "3"
+# LaunchServices sends files and custom URL schemes through gpui's unified
+# open-URL callback. `url` keeps the decoding and SSH authority parsing here
+# standards-compliant rather than treating percent escapes as literal paths,
+# and `percent-encoding` — already in the tree under `url` — spells the
+# userinfo and man-page names back out.
+url = "2"
+percent-encoding = "2"
+# The code editor's language-server client (`ui::lsp`). The same version
+# gpui-component's LSP hooks take their types from.
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+
+# The code editor's file loading and saving (`ui::editor_text`). `encoding_rs`
+# decodes legacy-encoded text (GB18030, Windows-1252) and writes it back in the
+# same encoding, and `globset` matches `.editorconfig` section globs. Both are
+# already in the tree (via gpui's HTTP stack and its `ignore` walker), so they
+# pin no new code.
+encoding_rs = "0.8.35"
+globset = "0.4.20"
+
+# SSH profile ids in the connection manager UI (`ui::ssh_connect`,
+# `ui::settings`, the command palette). The profiles themselves — and the
+# secret-free `CredentialRef` they carry — live in `lyrel-core`, which `Config`
+# needs to parse `config.json` without gpui.
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+
+# The GUI credential vault uses the platform store on macOS and Windows.
+#
+# It sits here rather than in `lyrel-core` on purpose: every caller is in `ui::`
+# (`ssh_prompt`, `ssh_connect`, `settings`, `app`), and leaving it downstairs made
+# the headless `lyrel-server` — a static binary pushed onto machines that have no
+# keychain at all — link `zbus`/`secret-service` and thirty-odd crates behind them
+# for code it can never reach. Only the secret-free naming half (`CredentialRef`,
+# the account scheme) stays in core, where `config.json` parsing needs it.
+keyring = "4"
+
+# Theme files. lyrel themes are authored as YAML (`~/.config/lyrel/themes/*.yaml`,
+# our own schema); `plist` parses imported iTerm2 `.itermcolors` schemes (XML
+# plist) so the large iTerm color-scheme ecosystem drops straight in.
+# The maintained YAML parser reads desktop theme files.
+yaml_serde.workspace = true
+plist = "1"
+
+# Clipboard-image paste (`terminal::view`). When the clipboard holds a screenshot
+# and a coding-agent TUI (Claude Code &co.) is in the pane, off macOS we stage the
+# image to a temp file and paste its path — agents attach an image path the same way
+# they do a drag-drop. Windows screenshots arrive as BMP (`CF_DIB`), which agent
+# vision won't accept, so we transcode to PNG. `image` is already in the tree via
+# gpui's own clipboard code, so pinning it here adds no new native code.
+image = "0.25"
+
+# The published transport matches gpui-pre's HTTP types behind gpui-kit.
+# Its library name is `reqwest_client`; it owns its Tokio runtime.
+gpui-pre-reqwest-client = "=0.3.9"
+
+# See `[workspace.dependencies]`: the pin is shared with lyrel-cli, which parses
+# `capture` output through the same grid.
+rio-vt.workspace = true
+rio-graphics.workspace = true
+
+# Desktop notification fallback on Windows. On macOS only its
+# `set_application` is used — never `show`; see
+# `terminal::remote::macos_notify` for why.
+notify-rust = "4.18.2"
+
+# Filesystem watcher for live config reload: watches `config.json` and reloads
+# `Config` + re-applies the theme without a restart. The code panel (file tree /
+# editor, `ui::code`) reuses it to refresh the tree and detect external edits.
+notify = "8"
+
+# Rasterize the application tray SVG. Kit's platform/component layers also
+# carry their published SVG versions; do not patch those copies to unify them.
+resvg = { version = "0.48.1", default-features = false }
+
+# Native tray on Windows and macOS.
+tray-icon = "0.26.1"
+
+# `core::cli_install` edits HKCU\Environment to put the bundled CLI on PATH.
+# `setx` is not an option there: it truncates at 1024 characters, so a long user
+# PATH comes back mangled. 0.61 is already in the tree (tray-icon pulls it), so
+# this pins no new code.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    # ConvertStringSecurityDescriptorToSecurityDescriptorW + SECURITY_ATTRIBUTES:
+    # the elevated updater's %ProgramData% staging directory gets an explicit
+    # admin-only DACL (see `create_dir_admin_only` in lyrel-updater).
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Registry",
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
+    # `MessageBeep` (the terminal bell in `terminal::view`) is a user32 export,
+    # but the Win32 metadata files it under Diagnostics::Debug, so that is the
+    # module the binding needs — nothing here pulls in dbghelp.
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Threading",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    # Backdrop materials (`ui::backdrop`): the documented DwmSetWindowAttribute
+    # for DWMWA_SYSTEMBACKDROP_TYPE, and LibraryLoader to resolve user32's
+    # SetWindowCompositionAttribute the same way the gpui backend does.
+    "Win32_Graphics_Dwm",
+    "Win32_System_LibraryLoader",
+] }
+# The window's public `HasWindowHandle` handle is how `ui::backdrop` reaches
+# the HWND for the DWM calls. Already in the tree at 0.6 via gpui itself.
+raw-window-handle = "0.6"
+# Windows dictionary segmentation; macOS uses CFStringTokenizer instead.
+jieba-rs = "0.11.0"
+# The standalone updater extracts only Windows release ZIPs. Reuse the async
+# reader already present in Cargo.lock and enable only the Deflate codec emitted
+# by PowerShell's Compress-Archive.
+async_zip = { version = "0.0.19", default-features = false, features = ["deflate"], optional = true }
+# The standalone updater also verifies the staged portable package's bundled
+# ConPTY pair against the pinned manifest before any installed file moves,
+# reusing `crates/lyrel-core/conpty_files.rs` as an included module — that
+# shared source names sha2, already locked at 0.11 via lyrel-core.
+sha2 = { version = "0.11.1", optional = true }
+
+# COM for toast branding (`core::aumid`): IShellLinkW + IPropertyStore stamp
+# System.AppUserModel.ID onto the Start Menu shortcut, which Windows requires
+# before it honors an unpackaged app's toast identity (otherwise the toast
+# backend falls back to PowerShell's). Keep the published 0.62 binding line.
+windows = { version = "0.62.2", features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Win32_Foundation",
+    "Win32_Storage_EnhancedStorage",
+    # IShellLinkW::GetPath takes a WIN32_FIND_DATAW, so reading an existing
+    # shortcut's target back — which is how `aumid` decides whether it has to
+    # write at all — needs the file-system bindings too.
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+# Embeds `assets/favicon.ico` into the `.exe` so Windows shows the lyrel logo in
+# the taskbar / window / Explorer (macOS gets its icon from the `.app` bundle via
+# bundle.sh instead). Only needed at build time on Windows — see build.rs.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.34"
+
+# gpui only *reads* the macOS window appearance; it never sets it. We force the
+# app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
+# so the native traffic-light buttons render in the right light/dark style.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
+# CFStringTokenizer FFI for dictionary-based CJK word segmentation on
+# double-click (`terminal::smart_select`). Already in the tree transitively,
+# and it makes the Windows jieba fallback unnecessary here.
+core-foundation = "0.10.1"
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem"] }
+# NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
+# `set_dock_icon_for_bare_binary` in main.rs.
+# NSUserNotification is the click-to-reveal notification path — see
+# `terminal::remote::macos_notify` for why it is driven directly.
+# NSUserDefaults (with NSDictionary for the domain it returns) is how a test
+# checks that `font_thicken: false` leaves `AppleFontSmoothing` alone — see
+# `ui::platform`.
+# NSMenu/NSMenuItem back the native-menu key-equivalent repair in
+# `ui::theme::fix_native_menu_key_equivalents` (gpui 0.3.9 does not map
+# "enter"/"tab", so the app rewrites those equivalents itself).
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification", "NSLocale", "NSArray"] }
+# `oneshot::Receiver` appears in the `Platform` trait's prompt/screen-capture
+# signatures, which the full-delegation wrapper in `ui::platform` must name.
+# Already in the tree at 0.3.34 via gpui.
+futures-channel = "0.3"
+
+
+# The Kit test-support feature enables its real App/Window test harness.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true
+
+[features]
+default = []
+updater = ["dep:async_zip", "dep:sha2"]
+
+# Shared pins keep the GUI and its consumers on one published framework chain.
+[workspace]
+members = ["crates/*"]
+# Windows／macOS 默认覆盖全部成员；Linux 仅构建／测试三个 headless crate。
+# Linux 使用 `--workspace --exclude lyrel`，根桌面包会明确拒绝不支持的平台。
+default-members = [".", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli"]
+
+[workspace.package]
+edition = "2024"
+# 所有一起发布的 workspace 成员通过 version.workspace 继承此版本。
+# 发布时只修改这一处，不将应用版本与 IPC 协议版本混用。
+version = "0.1.0"
+
+[workspace.dependencies]
+# The public facade supplies component, base, assets and platform layers.
+gpui-kit = "=0.7.3"
+
+# The published Rio VT parser + grid (`Crosswords`/`ansi::Processor`). Two
+# packages read it and they must agree, hence this being a workspace pin rather
+# than one each — the GUI (`terminal::remote`) to render the live mirror, and
+# lyrel-cli to turn a captured pane back into text (`lyrel capture --plain`).
+# The daemon parses nothing; it is a byte pipe, and its PTY is driven by
+# `portable-pty`.
+#
+# Only the parser/grid library is taken: Rio's own PTY, windowing and
+# Sugarloaf renderer stay out (`default-features = false`), and the keyboard
+# mode stacks the daemon folds for replay stay in `lyrel-core`'s own
+# `term_modes`.
+rio-vt = { version = "=0.5.28", default-features = false }
+# Scalar Unicode tables for preedit/copy helpers, matching Rio's pinned version.
+rio-unicode = "=0.5.28"
+# Types only: the `Handler` surface names `rio_graphics::GraphicData` for the
+# sixel/iTerm2/kitty callbacks the parse bridge delegates. Same pin as rio-vt.
+rio-graphics = "=0.5.28"
+
+anyhow = "1"
+log = "0.4"
+serde = { version = "1.0.219", features = ["derive"] }
+yaml_serde = "=0.10.7"
+serde_json = "1.0.154"
+smallvec = "1.16.3"
+smol = "2"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+type_complexity = "allow"
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+gpui-pre-macros = { opt-level = 3 }
+# The VT parser + grid run on every PTY byte; at opt-level 0 a `cat bigfile`
+# crawls under `cargo dev`.
+rio-vt = { opt-level = 3 }
+
+# The render/parse hot path crosses the lyrel ↔ rio-vt ↔ gpui crate
+# boundaries, so cross-crate inlining (thin LTO, like Zed ships) buys real
+# throughput there; single codegen unit for the same reason.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+

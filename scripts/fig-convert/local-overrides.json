@@ -1,0 +1,345 @@
+{
+  "sourceVersion": "2.692.3",
+  "sshHostGenerators": [
+    {
+      "script": [
+        "cat ~/.ssh/config $(awk 'tolower($1)==\"include\"{for(i=2;i<=NF;i++){p=$i;if(p ~ /^~\\//){sub(/^~/,ENVIRON[\"HOME\"],p)}else if(p !~ /^\\//){p=ENVIRON[\"HOME\"]\"/.ssh/\"p}print p}}' ~/.ssh/config 2>/dev/null) 2>/dev/null | awk 'tolower($1)==\"host\"{for(i=2;i<=NF;i++){if($i !~ /[*?!]/)print $i}}' | sort -u"
+      ]
+    },
+    {
+      "script": [
+        "awk '/^[|#@]/{next}{n=split($1,a,\",\");for(i=1;i<=n;i++){h=a[i];sub(/^\\[/,\"\",h);sub(/\\]:[0-9]+$/,\"\",h);sub(/\\]$/,\"\",h);print h}}' ~/.ssh/known_hosts 2>/dev/null | sort -u"
+      ]
+    }
+  ],
+  "descriptions": {
+    "brew": [
+      {
+        "path": [
+          "subcommands",
+          "edit"
+        ],
+        "description": "Open a formula, cask or tap in the editor set by $EDITOR or $HOMEBREW_EDITOR"
+      }
+    ],
+    "bundle": [
+      {
+        "path": [
+          "subcommands",
+          "config"
+        ],
+        "description": "Retrieve or set a configuration value"
+      },
+      {
+        "path": [
+          "subcommands",
+          "help"
+        ],
+        "description": "Describe available commands or one specific command"
+      }
+    ],
+    "cargo": [
+      {
+        "path": [
+          "subcommands",
+          "add",
+          "options",
+          "--color"
+        ],
+        "description": "Coloring: auto, always, never"
+      },
+      {
+        "path": [
+          "subcommands",
+          "remove",
+          "options",
+          "--color"
+        ],
+        "description": "Coloring: auto, always, never"
+      }
+    ],
+    "cmake": [
+      {
+        "path": [
+          "options",
+          "--help"
+        ],
+        "description": "Print usage information and exit"
+      },
+      {
+        "path": [
+          "subcommands",
+          "-E",
+          "subcommands",
+          "env",
+          "options",
+          "--unset"
+        ],
+        "description": "Unset an environment variable"
+      }
+    ],
+    "gh": [
+      {
+        "path": [
+          "subcommands",
+          "completion",
+          "options",
+          "-s"
+        ],
+        "description": "Shell type: bash, zsh, fish, powershell"
+      }
+    ],
+    "git": [
+      {
+        "path": [
+          "subcommands",
+          "blame"
+        ],
+        "description": "Show what revision and author last modified each line of a file"
+      },
+      {
+        "path": [
+          "subcommands",
+          "remote",
+          "subcommands",
+          "prune",
+          "options",
+          "-n"
+        ],
+        "description": "Dry run"
+      },
+      {
+        "path": [
+          "subcommands",
+          "remote",
+          "subcommands",
+          "update",
+          "options",
+          "-p"
+        ],
+        "description": "Prune remotes after fetching"
+      },
+      {
+        "path": [
+          "subcommands",
+          "stash",
+          "subcommands",
+          "push",
+          "options",
+          "--pathspec-from-file"
+        ],
+        "description": "Read pathspec from file"
+      },
+      {
+        "path": [
+          "subcommands",
+          "bisect",
+          "subcommands",
+          "help"
+        ],
+        "description": "Print a long usage message"
+      }
+    ],
+    "make": [
+      {
+        "path": [
+          "options",
+          "-j"
+        ],
+        "description": "Allow N jobs at once; infinite jobs with no arg"
+      }
+    ],
+    "npm": [
+      {
+        "path": [
+          "subcommands",
+          "run",
+          "options",
+          "--"
+        ],
+        "description": "Pass the remaining arguments to the script"
+      },
+      {
+        "path": [
+          "subcommands",
+          "restart",
+          "options",
+          "--"
+        ],
+        "description": "Pass the remaining arguments to the script"
+      },
+      {
+        "path": [
+          "subcommands",
+          "start",
+          "options",
+          "--"
+        ],
+        "description": "Pass the remaining arguments to the script"
+      },
+      {
+        "path": [
+          "subcommands",
+          "stop",
+          "options",
+          "--"
+        ],
+        "description": "Pass the remaining arguments to the script"
+      },
+      {
+        "path": [
+          "subcommands",
+          "team",
+          "subcommands",
+          "create"
+        ],
+        "description": "Create a new team"
+      },
+      {
+        "path": [
+          "subcommands",
+          "team",
+          "subcommands",
+          "destroy"
+        ],
+        "description": "Destroy an existing team"
+      },
+      {
+        "path": [
+          "subcommands",
+          "team",
+          "subcommands",
+          "add"
+        ],
+        "description": "Add a user to a team"
+      },
+      {
+        "path": [
+          "subcommands",
+          "team",
+          "subcommands",
+          "rm"
+        ],
+        "description": "Remove a user from a team"
+      },
+      {
+        "path": [
+          "subcommands",
+          "team",
+          "subcommands",
+          "ls"
+        ],
+        "description": "List teams in an org, or users in a team"
+      }
+    ],
+    "pip": [
+      {
+        "path": [
+          "subcommands",
+          "show",
+          "options",
+          "-f"
+        ],
+        "description": "Show the full list of installed files for each package"
+      },
+      {
+        "path": [
+          "subcommands",
+          "search",
+          "options",
+          "-i"
+        ],
+        "description": "Base URL of Python Package Index"
+      }
+    ],
+    "pip3": [
+      {
+        "path": [
+          "subcommands",
+          "show",
+          "options",
+          "-f"
+        ],
+        "description": "Show the full list of installed files for each package"
+      },
+      {
+        "path": [
+          "subcommands",
+          "search",
+          "options",
+          "-i"
+        ],
+        "description": "Base URL of Python Package Index"
+      }
+    ],
+    "rg": [
+      {
+        "path": [
+          "options",
+          "--no-pcre2-unicode"
+        ],
+        "description": "Deprecated: use --no-unicode instead"
+      },
+      {
+        "path": [
+          "options",
+          "--sort"
+        ],
+        "description": "Sort results in ascending order"
+      }
+    ],
+    "rustup": [
+      {
+        "path": [
+          "subcommands",
+          "target",
+          "subcommands",
+          "add",
+          "options",
+          "--toolchain"
+        ],
+        "description": "Toolchain name, such as 'stable', 'nightly', or '1.8.0'"
+      },
+      {
+        "path": [
+          "subcommands",
+          "target",
+          "subcommands",
+          "remove",
+          "options",
+          "--toolchain"
+        ],
+        "description": "Toolchain name, such as 'stable', 'nightly', or '1.8.0'"
+      },
+      {
+        "path": [
+          "subcommands",
+          "toolchain",
+          "subcommands",
+          "install",
+          "options",
+          "--profile"
+        ],
+        "description": "Installation profile: minimal, default, complete"
+      },
+      {
+        "path": [
+          "subcommands",
+          "doc",
+          "options",
+          "--unstable-book"
+        ],
+        "description": "The Unstable Book"
+      },
+      {
+        "path": [
+          "subcommands",
+          "set",
+          "subcommands",
+          "default-host"
+        ],
+        "description": "The triple used to identify toolchains when not specified"
+      }
+    ]
+  }
+}

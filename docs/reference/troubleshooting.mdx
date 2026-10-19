@@ -1,0 +1,172 @@
+---
+title: "故障排查"
+description: "常见问题及其实际含义。"
+---
+
+<a id="start-here"></a>
+## 从这里开始
+
+```bash
+lyrel doctor
+```
+
+一张表即可查看：服务器是否可访问、其通信协议是否与当前二进制文件匹配、三个环境变量、PID/运行时长/窗格，以及机器连接的数量。下文的大多数问题，都可以从这张表中找到具体答案。
+
+<a id="lyrel-command-not-found"></a>
+## `lyrel: command not found`
+
+应用首次启动时会将 CLI 加入 PATH。如果找不到命令：
+
+- 检查是否已开启 **设置 → 集成 → 将 lyrel 命令安装到 PATH**。
+- 在 Unix 上，它会在你的 PATH 已包含的目录中创建符号链接，候选目录为 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/bin`、`~/.cargo/bin`；如果 PATH 不包含其中任何一个，请添加一个。
+- 在 Windows 上，安装目录会追加到用户 PATH 中，需要打开新的 shell 才能生效。
+- 你自行安装的 `lyrel` 永远不会被替换，因此 PATH 中位置靠前的旧版本会优先生效。
+
+在 lyrel 窗格内，无论如何都可以使用该命令，因为窗格会继承应用的环境。
+
+<a id="the-server-is-unreachable"></a>
+## 无法访问服务器
+
+`lyrel doctor` 会报告这一情况，同时 GUI 无法打开窗格。
+
+使用 `lyrel server start` 启动服务器。如果你是智能体或脚本，**不要这样做**，而应告知用户。启动用户未要求启动的服务器，会改变其 GUI 连接的目标。
+
+查看日志：
+
+```bash
+lyrel server logs
+```
+
+日志级别默认为 `info`，无需设置环境变量。`lyrel.log` 会记录 UTC 日期、进程角色/PID、版本、守护进程生命周期和恢复尝试、窗格生命周期以及持久化失败。连续相同的消息每 30 秒最多记录五次；出现下一条不同消息或进入下一个时间窗口时，会报告被抑制的消息数量。`crash.log` 保留 Rust panic 回溯，`daemon-stderr.log` 则以大小受限的分块记录后台服务器的 stderr。
+
+每份日志保留三个编号归档（`.1` 为最新）。运行日志和 stderr 日志在达到 4 MiB 时轮转，panic 日志在达到 256 KiB 时轮转。在 Unix 上，新日志文件仅当前用户可访问。文件位于当前生效的配置目录下。配置目录的优先级为 `--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携模式的 `data` 目录 > 平台默认目录；Unix 默认为 `~/.config/lyrel`，Windows 默认为 `%APPDATA%\lyrel`。排查重启问题时，请一并提供归档日志。
+
+**在启动应用/服务器之前**设置 `LYREL_LOG=debug` 或 `trace`，可获得更详细的诊断信息；`LYREL_LOG=off` 会禁用运行日志和 stderr 日志（panic 报告仍保持启用）。`RUST_LOG` 是后备选项，接受相同的简单日志级别，不接受模块过滤表达式。无效值或空值会使用 `info`。诊断日志不会记录终端输入/输出或环境变量转储。不过，错误信息、路径和库的 stderr 仍可能包含隐私信息；分享日志前请先检查。
+
+握手失败不再自动终止仍持有服务器锁的守护进程。它会报告服务器仍在运行；稍等片刻后重试。显式重启后台服务器仍会结束其会话。
+
+<a id="panes-came-back-empty"></a>
+## 恢复后的窗格是空的
+
+崩溃、`kill -9` 或重启系统都会导致 shell 终止，这一点无法避免。但*屏幕内容*应该能够恢复：lyrel 会保存每个窗格末尾有限大小的输出（256 KiB），并将其交给以相同 ID 重新打开的窗格。
+
+这些内容只能恢复一次。如果一个窗格恢复后被关闭，然后再次打开，第二次就没有可恢复的内容了。这是设计行为，不是缺陷。
+
+<a id="the-background-server-is-still-running-build"></a>
+## "The background server is still running &lt;build&gt;"
+
+lyrel 已原地更新，因此应用是新版本，但窗格仍由之前的构建提供服务。重启服务器会启用新构建，并**结束所有窗格中的所有进程**。不必着急，等窗格空闲时再操作即可。
+[更新 →](/reference/updates)
+
+<a id="a-remote-machine-will-not-connect"></a>
+## 无法连接远程机器
+
+| 消息 | 含义 |
+|---|---|
+| *"running an old lyrel server that this copy cannot talk to"* | 远端服务器早于客户端所用的协议版本。让 lyrel 更新它，这会结束该机器上的所有会话。 |
+| *"running a newer lyrel server than this copy"* | 请更新本地 lyrel，或替换远端服务器。 |
+| *"answered, but not as a lyrel server"* | 有其他程序在监听，或者该二进制文件并非 lyrel 所预期的程序。 |
+| *"lyrel no longer has a way to reach &lt;machine&gt;"* | SSH 连接已断开。请从切换器重新连接。 |
+
+`lyrel -m <machine>` 按设计不会发起新连接，而是使用本地服务器已持有的连接。请先从 GUI 连接。
+
+<a id="-or--r-is-not-doing-what-i-expect"></a>
+## <kbd>⇥</kbd> 或 <kbd>⌃ R</kbd> 的行为不符合预期
+
+两者都有对应开关，关闭后，按键会直接交还给 shell：
+
+- **设置 → 终端 → 提示符与命令历史 → Tab 补全**
+- **设置 → 终端 → 提示符与命令历史 → 命令历史搜索**
+
+如果它们在某个窗格中完全没有作用，该窗格的 shell 很可能没有[ shell 集成](/reference/shell-integration)。elvish、xonsh 等 shell 可以正常运行，但不会获得提示符层功能。
+
+<a id="the-directory-stopped-following-my-shell"></a>
+## 目录不再跟随 shell 变化
+
+文件面板、新建拆分窗格以及侧边栏的仓库分组，都会跟随窗格 shell 报告的目录（`OSC 7`）。如果你不断执行 `cd`，窗格却停留在同一个目录，说明窗格中有某个环节没有报告目录。
+
+常见原因是你手动启动了另一个 shell。lyrel 只会向它为窗格启动的 shell 注入 [shell 集成](/reference/shell-integration)，不会注入其他 shell：在 bash 提示符下运行 `zsh`，这个嵌套 shell 就没有集成。在本地通常察觉不到，因为 oh-my-zsh 本身会报告目录，但其当前工作目录报告器位于 `lib/termsupport.zsh` 末尾，在以下代码之后：
+
+```zsh
+if [[ -n "$INSIDE_EMACS" || -n "$SSH_CLIENT" || -n "$SSH_TTY" ]]; then
+  return
+fi
+```
+
+因此，通过 SSH 连接时，sshd 会设置这些变量，加载执行到这里就会停止，目录报告器根本不会被定义；只有这行之前的标题钩子仍会运行。于是，远程主机上的嵌套 zsh 无论通过哪一方都不会报告目录，窗格便一直显示外层 shell 所在的位置。
+
+**让它成为 lyrel 启动的 shell。** 在远程主机上执行：
+
+```sh
+chsh -s /bin/zsh      # 然后重新连接
+```
+
+lyrel 会在连接时向主机查询 `$SHELL`，并为*这个* shell 执行引导初始化。因此，这样才能将集成移入你的 zsh，oh-my-zsh 仍可与之共同工作。从登录脚本启动 `zsh`，或从 `.bashrc` 执行 `exec zsh`，都无济于事：两者都在 lyrel 设置的 shell 之后运行，或直接替换它。
+
+**或者自行报告目录。** 如果无法更改登录 shell，请将以下内容添加到远端的 `~/.zshrc`。它只会恢复目录跟踪，不会恢复提示符标记或命令状态：
+
+```zsh
+# 向 lyrel 报告工作目录（OSC 7）。
+autoload -Uz add-zsh-hook
+__lyrel_cwd() { printf '\e]7;file://%s%s\a' "${HOST:-localhost}" "${PWD//\%/%25}" }
+add-zsh-hook precmd __lyrel_cwd
+```
+
+之后也可以安全地保留这段代码：当 lyrel *确实*为该 shell 提供集成时，两个钩子只会将相同目录报告两次。bash 中的对应方式是 `PROMPT_COMMAND`：
+
+```bash
+__lyrel_cwd() { printf '\e]7;file://%s%s\a' "${HOSTNAME:-localhost}" "${PWD//%/%25}"; }
+PROMPT_COMMAND="__lyrel_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+```
+
+窗格始终不报告目录，还可能有另外两个原因：
+
+- **该 shell 不在 lyrel 的集成范围内。** 本地支持向 zsh、bash、fish、PowerShell 和 nushell 注入集成，通过 SSH 则支持 zsh、bash 和 fish。如果远程主机的 `$SHELL` 是其他 shell，就不会执行引导初始化，也不会发出提示。
+- **你在 `shell` 或某个 `custom_shells` 条目中为 shell 提供了自定义参数**，这会按设计关闭注入。
+
+在 lyrel 能够看到窗格进程的情况下，它会回退到读取前台进程的工作目录。这就是为什么**远程工作区**中未集成的 shell 通常也能跟上目录变化。不过，这一后备机制使用轮询，仅在窗格产生输出时采样，因此执行 `cd` 后可能要等到窗格再次输出才会更新。**SSH 窗格**（进程位于远端）和 **Windows** 上的本地窗格均没有这种后备机制。
+
+<a id="-b-types--instead-of-moving-a-word"></a>
+## <kbd>⌥ B</kbd> 输入 `∫`，而不是按词移动
+
+这是 macOS 的默认行为。请开启 **设置 → 键盘与鼠标 → 键盘 → 将 Option (⌥) 用作 Meta**。
+
+<a id="cjk-characters-have-a-gap-on-the-right"></a>
+## CJK 字符右侧有空隙
+
+你的 CJK 后备字体的字符步进宽度为 1.0em，而主字体为 0.60205em，因此字形无法填满它占用的两列空间。请安装 [Maple Mono NF CN](https://github.com/subframe7536/maple-font)，它已经排在后备字体链的首位，并且与 Hack 完全匹配；也可以更换主字体。
+[完整说明 →](/customization/fonts#cjk-and-the-two-column-grid)
+
+<a id="a-theme-in-my-themes-folder-is-not-showing-up"></a>
+## themes 文件夹中的主题没有显示
+
+设置会在**未从 themes 文件夹加载**下列出该主题及原因。通常是缺少必需的键：`background`、`foreground`、`accent` 和 `ansi` 都是必需的，其中 `ansi` 必须包含八个 `normal` 条目和八个 `bright` 条目。
+
+<a id="my-configjson-edits-did-nothing"></a>
+## 修改 `config.json` 没有效果
+
+如果无法解析文件，lyrel 会使用默认配置启动，并将原文件保留为 `config.json.corrupt`，请检查是否存在该文件。否则，请注意：
+
+- 超出范围的数字会被**限制到有效范围内**，而不是直接按原值应用。
+- 无法识别的枚举值会回退到默认值，并记录一条日志。
+- `scrollback_limit` 仅适用于**新建**窗格。
+- `keybindings` 中未知的操作名称会被跳过，并产生警告。
+
+<a id="selecting-text-inside-vim--less-selects-the-apps-own-thing"></a>
+## 在 vim / less 中选择文本时，触发了应用自身的选择操作
+
+拖动时按住 <kbd>⇧</kbd> 可让手势由本地处理，或关闭**设置 → 键盘与鼠标 → 鼠标 → 向应用报告鼠标事件**。
+
+<a id="lyrel-capture---head--1-printed-a-rust-panic"></a>
+## `lyrel capture … | head -1` 输出了 Rust panic
+
+这是旧构建在读取端断开时的行为。你请求的数据仍然已经送达。使用这类构建时，请先重定向到文件，再从文件中截取所需部分，而不是通过管道传给 `head`。当前构建在 Unix 上会以 `141` 退出，与 `cat` 的行为完全一致。
+
+<a id="still-stuck"></a>
+## 仍未解决
+
+<CardGroup cols={2}>
+  <Card title="报告问题" icon="github" href="https://github.com/dlivxpr/lyrel/issues/new">
+    请附上 `lyrel doctor` 的输出和你的平台信息。
+  </Card>
+</CardGroup>

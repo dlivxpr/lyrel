@@ -1,0 +1,140 @@
+---
+title: "lyrel 命令"
+description: "通过脚本、Makefile 或其他智能体驱动工作台。"
+---
+
+`lyrel` 是 lyrel 服务器的轻量级非交互式客户端。每个子命令都会在执行后退出；`--json` 可使输出便于机器读取。**无需运行 GUI**——窗格由服务器管理。
+
+它随每个安装程序一同提供，并在启动时加入 PATH，因此可以在这台机器上的任何终端中使用。[安装 →](/getting-started/installation#the-lyrel-command)
+
+<a id="start-with-doctor"></a>
+## 从 `doctor` 开始
+
+```bash
+lyrel doctor
+```
+
+一张表即可回答你在进行其他操作前需要了解的所有问题：能否连接服务器、服务器的通信协议是否与当前二进制文件匹配，以及是否设置了 `LYREL_CONFIG_DIR` / `LYREL_WS` / `LYREL_PANE`——也就是说，你是否正在 lyrel 窗格*内部*运行。
+
+是否位于窗格内部很重要，因为接受目标地址的子命令（`split`、`send`、`capture`、`procs`、`wait`、`pane close`）默认使用 `$LYREL_PANE`，而 `run --keep` 会将其窗格归入 `$LYREL_WS`。在窗格外部，你必须指定目标；错误信息会明确提示这一点，而不会自行猜测。
+
+<a id="addresses"></a>
+## 地址
+
+| 格式 | 含义 | 是否稳定？ |
+|---|---|---|
+| `%42` | 窗格 | **是**——窗格在整个生命周期内保持同一 id |
+| `@7` | 标签页，按树形顺序在整台机器范围内编号 | **否**——任何工作区或标签页出现或消失时，编号都会变化 |
+| `api` · `76698a44` · 完整 UUID | 通过名称、唯一 id 前缀或 id 指定的工作区 | 是 |
+
+使用 `@N` 前应立即重新解析。窗格和工作区的 id 可以放心保存。
+
+<a id="two-ways-to-run-something"></a>
+## 运行任务的两种方式
+
+<a id="blocking-with-a-real-exit-code"></a>
+### 阻塞运行，返回真实退出码
+
+```bash
+lyrel run -- cargo test           # 流式输出到 stdout，并以 cargo 的退出码退出
+lyrel run --cwd /path -- make
+lyrel run --keep -- cargo build   # 将窗格保留为新标签页
+```
+
+这最接近你亲自运行命令的体验——区别在于，它会获得真正的 PTY（因此颜色、进度条和 TUI 都能正常工作），而且你可以在窗口中观察执行过程。
+
+<Note>
+  `--` 后的所有内容都属于子进程：`lyrel run -- cargo test --keep`
+  会将 `--keep` 传给 cargo，而不是 lyrel。
+</Note>
+
+<a id="non-blocking-a-pane-you-talk-to-over-time"></a>
+### 非阻塞运行：可持续交互的窗格
+
+这种方式值得优先考虑。获取一个窗格，给它分配任务，稍后再回来查看。
+
+```bash
+PANE=$(lyrel split --v)                    # 也可使用 --h；输出 "%83"
+lyrel send "$PANE" 'npm run dev' --enter
+# ……稍后
+lyrel capture "$PANE" --plain
+lyrel pane close "$PANE"
+```
+
+如果你不在 lyrel 窗格内部，就没有可供拆分的窗格，因此需要创建自己的工作空间：
+
+```bash
+lyrel new --json /path/to/repo    # {"id": "...", "pane": 83}
+```
+
+<a id="reading-a-pane"></a>
+## 读取窗格
+
+```bash
+lyrel capture %83 --plain
+```
+
+`capture` 返回服务器保存的内容。不带 `--plain` 时，返回的是原始字节，包括所有转义序列。带上 `--plain` 时，这些字节会在真正的终端网格中重放，返回由此生成的文本——这与自行剥离转义序列并不相同：
+
+- 被 shell 按窗格宽度折行的内容，返回时会合并为**一行**
+- 使用 `\r` 不断重写自身的进度条，读取到的是其**最终**值
+- 光标定位会将文本放在**程序指定的位置**，因此 TUI 屏幕内容会保留其绘制时的位置
+
+只要输出是供人阅读的，就应使用 `--plain`。
+
+如果你只想知道上一条命令最后的输出，就只请求这些内容：
+
+```bash
+lyrel capture %83 --plain --tail 5
+```
+
+`--tail N` 保留结果的最后 N 行，行数在 `--plain` 处理完折行后计算——因此无需通过管道传给 `tail(1)`，PATH 中也就少了一项必备工具。
+
+<Warning>
+  屏幕是一个矩形区域。滚出顶部的内容就消失了，而退出码从来就不在屏幕上。如果你想要的是*结果*而不是*画面*，请让 shell 将结果写到单独的位置：
+
+  ```bash
+  lyrel send "$PANE" 'cargo test > /tmp/t.log 2>&1; echo $? > /tmp/t.rc' --enter
+  ```
+</Warning>
+
+<a id="knowing-when-something-finished"></a>
+## 判断任务何时完成
+
+```bash
+lyrel procs %83
+```
+
+这会显示窗格内的进程树，按深度缩进，以 `*` 标记前台进程，并列出这些进程正在监听的端口。**当只剩下深度为 0 的 shell 这一项时，命令就已完成。** 这比在屏幕中用 grep 查找可能折行或重复回显的哨兵标记可靠得多。
+
+对于智能体，请使用 [`lyrel wait`](/agents/orchestration)，而不是轮询。
+
+<a id="looking-around"></a>
+## 查看环境
+
+```bash
+lyrel ls              # 所有工作区：标签页、窗格以及已连接的客户端
+lyrel ws tree api     # 以树形结构显示一个工作区
+lyrel pane ls --all   # 所有窗格，包括不属于任何工作区的孤立窗格
+lyrel agents          # 所有编程智能体及其状态
+lyrel status          # 服务器 pid、运行时长、窗格数量、构建信息、套接字
+lyrel machine ls      # 本机及所有已连接的远程机器
+lyrel events          # 流式输出服务器事件，直到被中断
+```
+
+这些命令均可使用 `--json`；使用 `-q` 可隐藏成功输出（错误仍会打印）。
+
+<a id="remote-machines"></a>
+## 远程机器
+
+```bash
+lyrel -m devbox ls
+lyrel -m devbox run -- cargo test
+```
+
+`-m` 通过本地服务器已有的连接进行路由。它不会建立新连接——请先从 GUI 连接。
+[远程工作区 →](/remote/workspaces)
+
+<Card title="完整命令参考" icon="book" href="/cli/reference">
+  所有子命令、标志和 JSON 结构。
+</Card>

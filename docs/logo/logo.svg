@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-labelledby="lyrel-icon-title">
+  <title id="lyrel-icon-title">lyrel 弦弧图标：雾紫色开放双臂、短弦与连续底弧</title>
+  <rect x="8" y="8" width="224" height="224" rx="50" fill="#29253F"/>
+  <path d="M58 55H87V104C87 131 99 145 119 145C139 145 151 131 151 104V55H180V105C180 148 157 175 119 175C81 175 58 148 58 105Z" fill="#C5B6FF"/>
+  <path d="M108 56H131V120H108Z" fill="#8C7BD7"/>
+</svg>

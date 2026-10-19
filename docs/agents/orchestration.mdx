@@ -1,0 +1,158 @@
+---
+title: "智能体编排"
+description: "让一个智能体为另一个智能体打开窗格、等待它，并读取结果。"
+---
+
+一旦智能体的状态可以由程序查询，一个智能体就能运行另一个智能体。lyrel 为这个循环提供了原语，而不必依赖屏幕抓取。
+
+<a id="the-loop"></a>
+## 循环流程
+
+```bash
+# 1. 为执行任务的智能体分配一个窗格
+PANE=$(lyrel split --v)
+
+# 2. 交给它一项任务
+lyrel send "$PANE" 'omp "为解析器添加测试"' --enter
+
+# 3. 等待，直到它需要你介入或完成任务
+lyrel wait "$PANE" --until waiting,done --changed --timeout 600
+
+# 4. 读取执行情况
+lyrel capture "$PANE" --plain
+
+# 5. 清理
+lyrel pane close "$PANE"
+```
+
+整个流程就是这样。值得关注的是第三步。
+
+<a id="lyrel-wait"></a>
+## `lyrel wait`
+
+```bash
+lyrel wait [%PANE] [--until STATE,…] [--changed] [--timeout SECS] [--interval MS]
+```
+
+阻塞等待，直到窗格进入你指定的某个状态。
+
+| 标志 | 默认值 | |
+|---|---|---|
+| `--until` | `waiting,done,exit` | 哪些状态会结束等待——见下文 |
+| `--changed` | 关闭 | 忽略窗格*原本就处于*的状态——只有在等待开始后进入指定状态时才唤醒 |
+| `--timeout` | 无 | 经过指定秒数后放弃等待，以退出码 124 退出 |
+| `--interval` | 500 ms | 轮询间隔 |
+
+退出码专为脚本设计：
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 已到达你指定的某个状态 |
+| `124` | 等待超时——遵循 `timeout(1)` 的惯例，因此可以区分“尚未完成”和“发生故障” |
+| `1` | 执行任务的进程先退出了；JSON 中会包含 `"status": "exit"` |
+
+响应中包含智能体自身的消息及其原生会话 ID，因此一旦唤醒，就可以直接采取行动。
+
+<a id="the-states"></a>
+### 状态
+
+其中四个是智能体自身的[状态](/agents/status)。另外三个与窗格有关，因为值得等待的不只有智能体：
+
+| 状态 | 含义 |
+|---|---|
+| `idle` `working` `waiting` `done` | 智能体钩子最近报告的状态 |
+| `no-agent` | 此窗格中没有任何程序报告状态——可能是普通 shell，也可能是缺少钩子的智能体 |
+| `free` | 前台命令已退出；窗格已回到未运行前台命令的 shell |
+| `exit` | 窗格已不存在。无论你是否指定此状态，它都会结束所有等待 |
+
+<a id="waiting-on-a-command-instead-of-an-agent"></a>
+### 等待命令，而不是智能体
+
+智能体会报告自己何时完成。`cargo test` 不会——因此，对于普通窗格，需要判断的是 shell 前台是否仍有程序在运行，而 `free` 回答的正是这个问题：
+
+```bash
+lyrel send "$PANE" 'cargo test > /tmp/t.log 2>&1; echo $? > /tmp/t.rc' --enter
+lyrel wait "$PANE" --until free --changed --timeout 900
+cat /tmp/t.rc /tmp/t.log
+```
+
+检查 `free` 每次轮询都需要额外发起一次请求，因此只有在你明确指定时才会检查——而且仅在智能体状态的逐级判定尚未给出结果时才检查，所以将它与 `waiting,done` 一起使用，绝不会让你错过指定的状态。
+
+<Warning>
+  `free` 根据进程树判定，这种方式有两个盲点。如果窗格自身的根进程*就是*该命令——也就是 `lyrel run` 启动的情况——那么它在整个运行期间都会看起来处于空闲状态；应改为等待 `lyrel run` 本身，它本来就会阻塞。另外，后台作业（`… &`）会在前台命令完成后继续让窗格保持忙碌状态。
+</Warning>
+
+<Note>
+  没有智能体的窗格会报告 `no-agent`，**而不是** `idle`。正因如此，不能用 `--until idle` 来表示“命令已完成”——`idle` 是智能体对自身状态的描述，忙碌的 shell 从不会报告它。
+</Note>
+
+<a id="why-changed-matters"></a>
+### 为什么 `--changed` 很重要
+
+服务器保存的状态是**持续状态，而不是事件**。`done` 会一直保持到下一轮开始；`waiting` 会一直保持到智能体再次行动。
+
+因此，紧跟在 `send` 后发出的 `wait` 可能会返回*上一轮*的状态，此时执行任务的智能体甚至还没读取输入。`--changed` 会拒绝接受窗格原本就处于的状态，这正是第一轮之后的每一轮所需要的行为。不使用它时，JSON 中的 `stale` 标志会告诉你是否发生了这种情况。
+
+`free` 也有同样的问题，但解决方式不同：shell 经历空闲 → 忙碌 → 空闲后，会回到初始状态，因此没有新状态可供比较。对于这种情况，`--changed` 表示“在我观察期间有程序运行过”，这正是紧接在 `send` 后面时所需要的行为。
+
+这也意味着，如果某条命令在两次轮询之间就已启动*并且*完成，就永远不会被观察到处于运行状态，等待也会一直持续到超时。如果你等待的操作可能这么快就完成，请提高轮询频率（`--interval 100`），或去掉 `--changed`，改用哨兵文件传递结果。发生这种情况时，超时提示也会说明这一点。
+
+<a id="answering-a-prompt"></a>
+## 回应提示
+
+执行任务的智能体停在 `waiting` 状态时，通常正在显示某种需要按键而非文本来回应的内容——例如通过方向键操作的权限提示、菜单，或需要关闭的 TUI。`send --key` 可以模拟按键：
+
+```bash
+lyrel wait "$PANE" --until waiting --changed   # 它需要你介入
+lyrel capture "$PANE" --plain | tail -20       # 查看它在询问什么
+lyrel send "$PANE" --key down --key enter      # 作出回应
+lyrel send "$PANE" --key C-c                   # 或者直接停止它
+```
+
+按键会以独立事件发送，间隔为 200 ms，因此处于原始模式的 TUI 会将其识别为按键序列，而不是粘贴内容。[完整的按键列表](/cli/reference#lyrel-send-pane-text-enter-key-key)见参考文档。
+
+<a id="when-an-agent-never-moves"></a>
+## 当智能体的状态始终不变时
+
+如果 `lyrel wait` 超时，且 `lyrel agents` 显示的状态始终不变，最可能的原因是智能体的状态钩子尚未安装或已过时——智能体本身工作正常，只是无法报告状态。`lyrel doctor` 会报告每个智能体的钩子状况，而 `lyrel agents` 在能检测到缺失时，会指出具体缺少的是哪个钩子。
+
+<a id="watching-everything-at-once"></a>
+## 同时查看所有智能体
+
+```bash
+lyrel agents          # 本机上的所有智能体：窗格、智能体、状态、消息
+lyrel agents --json   # 相同信息，采用可解析的格式
+```
+
+如果你自己也是智能体，你也会出现在该列表中。
+
+<a id="teaching-an-agent-to-do-this"></a>
+## 教会智能体执行这些操作
+
+lyrel 不会为此向智能体的技能目录安装任何内容——**设置 → 集成**中的任何开关都不会写入技能，以后也不会。智能体需要了解的内容随仓库提供，以技能的形式由你自行安装：
+
+```bash
+npx skills add dlivxpr/lyrel
+```
+
+该技能涵盖窗格操作这一部分——窗格在哪里、如何打开窗格、向窗格发送内容、读取窗格内容，以及下文的规则——参见[智能体技能](/cli/agent-skill)。`wait` 步骤则在本页说明。
+
+这里刻意采用技能而非全局指令：在需要使用它之前，只有一行技能描述会进入上下文，因此，从不操作其他窗格的智能体无需为它付出额外开销。
+
+<a id="rules-of-the-road"></a>
+## 操作准则
+
+<Warning>
+  本机上的窗格承载着他人的真实工作，其中一些窗格里还有正在执行任务的其他智能体。凡是并非由你创建的内容，都应视为只读。
+</Warning>
+
+- **绝不要向不是由你打开的窗格执行 `send`。** 先检查 `lyrel agents`。
+- **绝不要关闭不是由你创建的窗格、标签页或工作区。**
+- **绝不要执行 `server stop` 或 `server restart`。** 本机上的所有窗格都会随之终止。
+- **清理你自己创建的内容**——完成后执行 `lyrel pane close %83`。
+  被中断的 `run` 会留下窗格；`lyrel pane ls --all` 可以显示这些窗格，
+  `lyrel pane close --orphans` 可以清除它们。最后这个命令是供人类使用的
+  清理工具，而不是供智能体使用的：它会关闭本机上的所有孤立窗格，包括
+  其他人在命令执行中途遗留的窗格。
+
+面向智能体的完整约定见[技能文档](/cli/agent-skill)。

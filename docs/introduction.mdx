@@ -1,0 +1,81 @@
+---
+title: "简介"
+description: "终端工作台：持久会话、远程工作与智能体。"
+mode: "wide"
+---
+
+lyrel 是一款可以持续运行的终端。关闭窗口、重启机器，
+或换到另一台笔记本电脑——你启动的 shell 依然在那里，
+留在其中工作的编程智能体也一样。
+
+它使用 Rust 编写，通过 [GPUI Kit](https://gpui-kit.com/) 的 `gpui-pre` 路线在 GPU 上渲染；
+Kit 内部仍基于 GPUI。GUI 与 CLI 统一使用正式 `rio-vt 0.5.28` 解析 VT，
+daemon、PTY 与终端绘制仍由 lyrel 管理。
+
+<a id="what-makes-it-different"></a>
+## 有何不同
+
+<CardGroup cols={2}>
+  <Card title="应用退出后仍持续运行的会话" icon="power-off" href="/getting-started/concepts">
+    shell 由后台服务器管理，而不是由窗口管理。退出 lyrel 后，
+    构建任务仍会继续。无需学习或配置 tmux。
+  </Card>
+  <Card title="编辑器级输入体验" icon="keyboard" href="/terminal/prompt">
+    根据历史记录显示幽灵建议、为每个选项提供说明的 Tab 补全、
+    语法高亮、点击定位光标，以及真正的多行编辑。
+  </Card>
+  <Card title="智能体感知" icon="robot" href="/agents/overview">
+    内置身份仅保留 omp、Kimi Code、pi、OpenCode 2.x、Hermes。状态、通知、历史和恢复是不同能力，
+    支持范围取决于正式版本、集成授权及各项运行验收，不能由命令识别推定全部可用。
+  </Card>
+  <Card title="如同本地的远程工作体验" icon="server" href="/remote/workspaces">
+    原生 Rust SSH 协议栈，支持连接配置、SFTP 和端口转发；
+    还提供远程工作区，让文件、仓库和窗格都留在远端机器上。
+  </Card>
+  <Card title="Git 信息就在眼前" icon="code-branch" href="/git/source-control">
+    侧边栏每一行都显示分支与差异计数，另有源代码管理面板、
+    差异浮层，以及在同一个对话框中管理的工作树。
+  </Card>
+  <Card title="支持脚本控制" icon="terminal" href="/cli/overview">
+    内置 `lyrel` CLI，可打开窗格、发送按键、读取屏幕，
+    并阻塞等待直到智能体需要你介入，让脚本和智能体也能驱动工作台。
+  </Card>
+</CardGroup>
+
+<a id="start-here"></a>
+## 从这里开始
+
+<Steps>
+  <Step title="安装">
+    桌面端支持 macOS、Windows；Linux 保留 server、CLI 与从桌面连接的远程开发。
+    [安装 →](/getting-started/installation)
+  </Step>
+  <Step title="完成设置">
+    花五分钟调整设置，让后续工作更顺手。
+    [首次启动 →](/getting-started/first-launch)
+  </Step>
+  <Step title="了解三个术语">
+    工作区、标签页、窗格，以及支撑它们的服务器。
+    [核心概念 →](/getting-started/concepts)
+  </Step>
+</Steps>
+
+<a id="how-fast-exactly"></a>
+## 如何测量性能
+
+可复现工具与测试方法见
+[`scripts/bench/`](https://github.com/dlivxpr/lyrel/tree/main/scripts/bench)。
+比较时须保持相同的网格、窗口可见性和机器负载，并记录各终端版本、构建及原始结果。
+`cat` 输出排空、DOOM-fire 帧率和 GUI／daemon 内存测量的是不同指标，不代表相同的渲染成本。
+
+<a id="getting-help"></a>
+## 获取帮助
+
+<CardGroup cols={2}>
+  <Card title="Issues" icon="github" href="https://github.com/dlivxpr/lyrel/issues">
+    报告问题与提出功能请求。
+  </Card>
+  <Card title="更新日志" icon="list" href="https://github.com/dlivxpr/lyrel/blob/main/CHANGELOG.md">
+    按版本记录变更；lyrel 独立初版为 0.1.0，目前尚无实际发布资产。
+  </Card>
+</CardGroup>

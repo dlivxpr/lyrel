@@ -1,0 +1,2 @@
+# include_str! fixtures are compared byte-for-byte; autocrlf would add \r on Windows.
+src/terminal/view/fixtures/*.txt -text

@@ -1,0 +1,98 @@
+---
+title: "更新"
+description: "stable 更新的筛选、下载校验、安装及失败恢复。"
+---
+
+**Settings → About** 显示当前版本，并提供检查及安装更新的入口。
+**Settings → General → Updates** 保留自动检查、后台下载和代理设置。
+<a id="channels"></a>
+更新仅使用 stable 发布，不再提供渠道切换。
+
+lyrel 的独立初版版本／标签为 `0.1.0`／`v0.1.0`，发行源仅为
+[`dlivxpr/lyrel`](https://github.com/dlivxpr/lyrel/releases)。目前尚无实际发布资产；
+缺少 lyrel 发布包时，不会回退到上游下载，也不能据本地 fixture 声称在线更新成功。
+
+<a id="how-it-works"></a>
+## 检查、下载与安装
+
+<Steps>
+  <Step title="检查稳定发布">
+    应用启动时及之后每六小时检查一次。设置 `check_for_updates: false` 可以关闭自动检查；
+    **Check now** 仍可手动检查。
+
+    更新器分页读取本项目的 `/releases` 列表，跳过草稿、预发布、非桌面发布及桌面包
+    版本与标签不匹配的发布，再按 SemVer 选择最高稳定版本，而非依赖发布时间或
+    GitHub 手动选择的 latest。支持 `0.1.0` 与 `v0.1.0`；只有比当前版本更新的
+    stable 才会提示更新，相同版本（包括仅 build metadata 不同）和旧版本不会触发升级。
+  </Step>
+  <Step title="后台下载并校验">
+    `auto_download_updates` 默认为 `true`。应用只选择精确匹配当前平台、架构和安装形态的包，
+    并使用 `checksums.txt` 校验完整性。缺少匹配包或校验和时，不会猜选其他包或跳过验证，
+    而是说明原因并保留发布页入口。
+
+    下载完成不等于同意安装。已校验的包会等待用户选择；按流量计费时可以关闭后台下载。
+    包大小以实际发布资产为准，尚未发布的 lyrel 包不提供推测下载体积。
+  </Step>
+  <Step title="安装并重新启动">
+    用户选择安装后，专用 `lyrel-updater` 会检查包版本及安装布局；macOS 还检查代码签名要求。
+    失败信息会保留，重新启动失败时恢复原有安装。用户可以丢弃暂存包或取消下载。
+
+    “稍后”只推迟提示，不会永久忽略该版本。下次启动时安装也需要用户明确选择；需要提升
+    权限的安装不能作为无人值守的下次启动更新。
+  </Step>
+</Steps>
+
+<a id="platform-notes"></a>
+## 平台限制
+
+<AccordionGroup>
+  <Accordion title="macOS">
+    自动更新要求可安全替换的应用包和可写目录。不满足条件时，通过发布页手动安装。
+    新 GUI 在协议兼容时复用本地 server，使 shell 在更新后继续运行；协议不兼容时，
+    明确询问用户保留还是重启 server。
+  </Accordion>
+  <Accordion title="Windows">
+    自动更新识别 Inno Setup 与便携 ZIP 安装的标记、updater 和目录权限。
+    `.lyrel-inno-install` 必须为 `inno-v1`，`.lyrel-portable` 必须为 `portable-v1`；
+    同时存在或内容无效时拒绝自动安装，不猜测安装形态。安装器使用独立 AppId
+    `{E57DD2B4-E65D-4F13-9E2E-8D929125780A}`，不识别旧产品的安装注册。
+    Windows 不能替换正在运行的 daemon 镜像，因此更新会先停止本产品服务，并在用户确认前说明影响。
+    所有用户安装可能要求 UAC 提权；无法安全识别或替换的布局保留手动安装入口。
+    便携 ZIP 必须包含固定版本、匹配架构的 `conpty.dll`、`OpenConsole.exe` 和
+    `LICENSE-ConPTY.txt`；updater 在移动原安装文件前校验三者摘要。缺失或不匹配时
+    拒绝安装，请重新下载匹配的完整发行包，不要用系统宿主或其他版本文件补齐。
+  </Accordion>
+</AccordionGroup>
+
+暂存、替换、备份恢复和清理仅使用 lyrel 自有安装及资源。便携更新保留 `data/`；
+中断替换的 lyrel 备份不会被当成成功更新清除。其他产品的安装、标记、暂存及数据不参与扫描或恢复。
+
+## 发行资产与验证前提
+
+桌面包、精确平台／架构后缀、WSL server 布局及手动构建入口见
+[安装与手动打包](/getting-started/installation#在专用工作树中手动打包)。每次 stable
+发行使用统一版本，并附带 `checksums.txt`，其中每行是 SHA-256 和裸资产文件名。
+macOS 更新选择 ZIP，Windows 按安装形态选择 Setup 或便携 ZIP；不提供 Linux 桌面包或 AppImage 更新。Linux 远端 server 的安装与校验、Windows 随包 WSL server 不受影响。
+缺少精确包、checksum 条目或校验失败时不会执行替换。
+
+发布列表／资产选择 fixture 与 updater 测试只能证明确定性契约。真正在线更新需要本项目
+已发布且非 draft／prerelease 的新版本、相应平台包和真实校验和；平台安装、UAC、macOS
+签名／公证和失败恢复需在授权的隔离环境分别验收。当前没有这些在线发行前提，不能宣称
+Windows、macOS 均已完成安装或更新；Linux 仅保留 server／CLI，不纳入桌面更新验收。
+
+<a id="the-background-server-is-still-running-build"></a>
+## 后台 server 仍在运行旧版本
+
+GUI 更新后，窗格可能仍由此前启动的 server 提供服务。设置会显示其 build。
+重启 server 会结束窗格中的进程，包括 shell、agent 和 SSH 会话；请在工作空闲时主动选择。
+
+<a id="proxies"></a>
+## 代理
+
+更新检查及下载依次解析以下代理来源：
+
+1. `config.json` 的 `http_proxy`，例如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080`。
+2. 平台系统代理（Windows registry、macOS `SCDynamicStore`）。
+3. `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`。
+
+窗格内运行的程序不受该配置影响，它们仍使用自己的环境变量。

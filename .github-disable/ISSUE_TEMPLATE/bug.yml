@@ -1,0 +1,91 @@
+name: Bug report
+description: Something in lyrel doesn't work as expected
+labels: ["bug"]
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues and this isn't a duplicate.
+          required: true
+        - label: I'm on the latest lyrel release, or I've said below why I can't be.
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: The behaviour you saw, in a sentence or two.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Numbered steps starting from a freshly opened lyrel window. If a
+        specific command or escape sequence triggers it, paste the exact one —
+        "some TUI app" is rarely enough to reproduce a terminal bug.
+      placeholder: |
+        1. Open a new tab
+        2. Run `printf '\e[?2004h'`
+        3. Type a character — the pane freezes
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: lyrel version
+      description: Run `lyrel --version`, or check the About window.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - Windows
+        - Linux（server／CLI）
+    validations:
+      required: true
+
+  - type: input
+    id: context
+    attributes:
+      label: Shell and TUI app involved
+      description: >
+        The shell you were running, and the TUI app plus its version if one is
+        on screen when it happens.
+      placeholder: fish 3.7.1, neovim 0.10.2
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: >
+        lyrel only writes a log when `LYREL_LOG` is set (e.g. `LYREL_LOG=debug`),
+        so there is none by default: set it, quit lyrel completely, reproduce,
+        then paste the tail of `~/.config/lyrel/lyrel.log`
+        (`%APPDATA%\lyrel\lyrel.log` on Windows). After a crash, include
+        `crash.log` from the same folder — that one is always written. This is
+        rendered as code, so no backticks needed.
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, a recording, or anything else worth knowing.

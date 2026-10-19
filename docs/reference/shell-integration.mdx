@@ -1,0 +1,82 @@
+---
+title: "Shell 集成"
+description: "lyrel 向 shell 中注入了什么，以及它带来的功能。"
+---
+
+只能看到字节的终端，无法区分提示符和输出，也无法判断命令是已完成还是已挂起。lyrel 的 shell 集成弥补了这一缺口：shell 会报告提示符的起始位置、提交了什么命令、命令的退出码，以及当前所在的目录。
+
+**你无需安装它。** 它会在窗格的 shell 启动时自动注入；如果你在其他地方运行同一个 shell，它则不会介入。
+
+<a id="which-shells"></a>
+## 支持哪些 shell
+
+| Shell | 注入方式 |
+|---|---|
+| **zsh** | 使用临时 `ZDOTDIR`，其中的文件先加载你的文件，再加载 lyrel 的文件。你的 `LYREL_USER_ZDOTDIR` 会被保留。 |
+| **bash** | 使用一个先加载你自己的配置文件的 rcfile。 |
+| **fish** | 使用 `-C` 初始化命令。 |
+| **PowerShell** | 使用经过编码的初始化命令，包装现有的 `prompt` 函数和 PSReadLine 的行读取器。 |
+| **nushell** | 使用 `--config` 包装配置，其中的 `config.nu` 先加载你的配置，再添加 lyrel 的钩子。仅适用于本地窗格。 |
+| **WSL** *（Windows）* | 使用相同的脚本引导初始化发行版的 shell。 |
+| **远程窗格** | 通过 SSH 连接引导初始化上述三种 POSIX shell。可针对每个配置文件，在**设置 → SSH →** 某个配置文件 **→ 高级 → 会话 → Shell 集成**中切换。 |
+
+集成启用后会设置 `LYREL_SHELL_INTEGRATION`，防止 shell 嵌套时重复注入。它不会将集成带入嵌套的 shell——[你自行启动的 shell](#shells-you-start-yourself) 不会获得集成。
+
+<Note>
+  如果启动 shell 时使用了*你自己*填写的参数——`shell.args` 或 `custom_shells` 条目中的参数——lyrel 不会干预，因为注入会与你选择的标志冲突。lyrel 自身检测提供的参数（Git Bash 的 `-i -l`、WSL 条目的 `--distribution`）不在此列，因此这些条目仍会启用集成。
+</Note>
+
+Bash 4.4 及以上通过公开的 `PS0` 报告命令开始，保留你已有的 `PS0`、提示符钩子和 `DEBUG` trap；Bash 3.2 使用自有 `DEBUG` 兼容路径。lyrel 不再内嵌或下载 `bash-preexec`。如果你已自行加载它，lyrel 只接入其公开的函数数组。命令结束、目录和编辑模式报告不变。
+
+<a id="what-it-reports"></a>
+## 它会报告什么
+
+| 信号 | 序列 | 用途 |
+|---|---|---|
+| 提示符开始 / 输入开始 | `OSC 133;A`、`133;B` | [提示符层](/terminal/prompt)：建议、补全、多行编辑 |
+| 命令已提交 | `OSC 133;C` | 判断命令正在运行；在 ConPTY 不提供前台进程组信息的 Windows 上检测智能体 |
+| 命令已完成，并附带退出码 | `OSC 133;D` | “耗时 42 秒后完成”通知、[历史记录](/terminal/history)中的失败标记 |
+| 工作目录 | `OSC 7` | 让新标签页和拆分窗格在正确的位置打开、侧边栏的仓库分组、git 分支显示 |
+| 编辑模式（vi / emacs） | `OSC 133;V` | 让 lyrel 的按键处理与你的 shell 模式保持一致 |
+| 窗口标题 | `OSC 0` | 标签页标题。仅为 PowerShell 设置这一项——zsh、bash 和 fish 已经会自行设置标题，lyrel 会读取它们输出的标题 |
+
+<a id="what-turns-off-without-it"></a>
+## 没有集成时哪些功能会受影响
+
+运行 lyrel 未集成的 shell 时，以下所有功能仍然可用，只是会退回到精度较低的信息来源：
+
+- 灰字建议、补全菜单，以及 <kbd>⌃ R</kbd> 的模糊历史记录搜索
+- “命令已完成”通知和历史记录搜索中的失败标记
+- 精确的工作目录跟踪
+
+窗格、拆分、回滚缓冲区、搜索、SSH 和 CLI 不受影响。
+
+工作目录的回退机制值得详细了解，因为它并非在所有环境中都可用。在 lyrel 能查看窗格进程的环境中，它会改为读取前台进程自身的工作目录——包括 macOS 或 Linux 上的本地窗格，以及远程工作区中的窗格，后者由该主机上的 `lyrel-server` 负责读取。这是轮询，而非主动报告：仅在窗格产生输出时采样，每秒最多两次，因此执行 `cd` 后，目录显示可能要等到窗格再次输出内容才会更新。**Windows** 上的本地窗格和连接到 **SSH 主机**的窗格完全没有回退机制——无法读取 `ssh` 另一端的进程表，因此，如果 shell 不报告目录，窗格就会继续显示上一次收到报告的目录。
+
+<a id="shells-you-start-yourself"></a>
+## 你自行启动的 shell
+
+注入发生在窗格的 shell *启动时*。在 bash 提示符下输入 `zsh`——或 `bash`、`sh`、`docker exec … sh`——第二个 shell 就是一个新进程，由你的 shell 而非 lyrel 启动。它不会发出提示符标记，也不会发出 `OSC 7`，窗格会继续显示外层 shell 最后报告的目录，直到你退出并返回外层 shell。
+
+在你自己的机器上，这通常不会显现出来，因为提示符框架会自行报告目录：oh-my-zsh 通过 `lib/termsupport.zsh` 中的 `omz_termsupport_cwd` 完成这一工作。**通过 SSH 时则不一样。** 当设置了 `SSH_CLIENT` 或 `SSH_TTY` 时，该文件会提前返回，因此在远程主机上，你手动启动的 zsh 完全不会报告目录，lyrel 也无法代为报告。
+
+要让该 shell 获得集成，请将它设为 lyrel 启动的 shell：
+
+- **远程主机。** lyrel 连接时会向主机查询 `$SHELL`，并引导初始化该 shell，因此应使用 `chsh -s /bin/zsh` 切换，然后重新连接。在**高级 → 会话**下设置运行 `zsh` 的登录脚本*不能*实现这一点——这些行是在 shell 已经启动后输入会话的，因此与其他手动启动方式一样，只会形成嵌套。在 `.bashrc` 中执行 `exec zsh` 也不行：它会替换 lyrel 已配置好的进程。
+- **本地窗格。** 设置**设置 → 终端 → Shell → 程序**（或[配置](/reference/configuration)中的 `shell`），并将**参数**留空——你填写的参数会关闭注入。
+
+[如果文件面板不再跟随嵌套 shell 的目录变化 →](/reference/troubleshooting#the-directory-stopped-following-my-shell)
+
+<a id="per-pane-history"></a>
+## 每个窗格独立的历史记录
+
+启用 `per_pane_history` 后，这一功能也依赖集成才能工作。集成在你自己的 rc 文件*之后*运行——也正因如此，它才能实现这一功能：`$HISTFILE` 由你设置，可以指向任意位置，在此之前，shell 外部无法知道它指向哪里。
+
+具体顺序是：先用你的实际历史记录填充窗格的私有文件，避免从空白开始；记录填充了多少内容；重新设置 `$HISTFILE` 的指向；最后在窗格关闭时，将该标记之后的全部内容合并回去。
+
+[进一步了解历史记录 →](/terminal/history#one-history-or-one-per-pane)
+
+<a id="remote-shells"></a>
+## 远程 shell
+
+对于远程工作区或 SSH 窗格，相同的脚本会在登录时通过连接发送，因此远程窗格会像本地窗格一样报告工作目录、退出码和提示符标记。要针对特定主机关闭此功能，请前往该配置文件的**高级 → 会话**。

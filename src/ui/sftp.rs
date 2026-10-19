@@ -1,0 +1,2445 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, InteractiveElementExt as _, Sizable as _,
+    h_flex, v_flex,
+};
+use gpui_kit::{
+    AnyElement, App, Context, Div, ExternalPaths, FontWeight, PathPromptOptions, SharedString,
+    Stateful, Subscription, Window, div, prelude::*, px, rems,
+};
+
+use crate::daemon::protocol::{
+    SftpEntry, SftpEntryKind, SftpJobProgress, SftpJobState, SftpOp, SftpOpResult,
+    SftpTransferKind, SftpTransferSpec,
+};
+use crate::daemon::ssh::sftp::{remote_basename, remote_join, remote_parent, safe_local_name};
+use crate::terminal::RemoteTerminal;
+use crate::ui::app::{CONTENT_INSET, LyrelApp, TILE_GLYPH_SM, TILE_SIZE_SM};
+use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::right_panel::{
+    HEADING, META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT, TEXT_INSET,
+};
+
+/// A remote directory row: the local file tree's 26px row, on the panel's
+/// `ROW_FILL_RADIUS`, so the Files tab keeps its rhythm whichever machine it
+/// is showing.
+const SFTP_ROW_H: f32 = 26.;
+
+/// The gap between a row's icon, name and size — the file tree's.
+const SFTP_ROW_GAP: f32 = 6.;
+
+/// The transfer tray's disclosure chevron — the file tree's.
+const TRAY_CHEVRON: f32 = 10.;
+
+#[derive(Clone, Copy)]
+enum SftpMenuAction {
+    NewFolder,
+    NewFile,
+    Upload,
+    GotoShellCwd,
+    ToggleHistory,
+}
+
+pub(crate) enum SftpEdit {
+    NewFolder(gpui_kit::Entity<InputState>),
+    NewFile(gpui_kit::Entity<InputState>),
+    Rename {
+        original: String,
+        input: gpui_kit::Entity<InputState>,
+    },
+    Chmod {
+        path: String,
+        readable: String,
+        input: gpui_kit::Entity<InputState>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SftpRoute {
+    pane_id: u64,
+    workspace: Option<crate::terminal::PaneWorkspace>,
+}
+
+impl SftpRoute {
+    pub(crate) fn new(pane_id: u64, workspace: Option<crate::terminal::PaneWorkspace>) -> Self {
+        Self { pane_id, workspace }
+    }
+
+    /// What makes this route *this* route, for a [`HostId`]. Keyed by pane —
+    /// two panes into the same server are two routes, because every op is
+    /// addressed to a pane's SSH connection — and by workspace, because a
+    /// workspace pane's id was minted by the far daemon and can collide with
+    /// a local one.
+    ///
+    /// [`HostId`]: crate::ui::host_registry::HostId
+    pub(crate) fn connection_key(&self) -> String {
+        match &self.workspace {
+            Some(ws) => format!("sftp:{}:{}", ws.workspace, self.pane_id),
+            None => format!("sftp:{}", self.pane_id),
+        }
+    }
+
+    fn workspace_op(
+        &self,
+        op: crate::daemon::protocol::WorkspaceOp,
+    ) -> Option<crate::daemon::protocol::WorkspaceRequest> {
+        RemoteTerminal::workspace_request(self.workspace.as_ref()?, self.pane_id, op)
+    }
+
+    pub(crate) fn list(&self, path: &str) -> Result<Vec<SftpEntry>, String> {
+        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpList {
+            path: path.to_string(),
+        }) else {
+            return RemoteTerminal::sftp_list(self.pane_id, path);
+        };
+        match RemoteTerminal::on_workspace(req) {
+            Ok(crate::daemon::protocol::DaemonMsg::SftpEntries(e)) => Ok(e),
+            Ok(other) => Err(t_fmt(
+                L10nKey::SftpErrorUnexpectedReply,
+                &[("reply", &format!("{other:?}"))],
+            )),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn op(&self, op: SftpOp) -> SftpOpResult {
+        let Some(req) =
+            self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpOp { op: op.clone() })
+        else {
+            return RemoteTerminal::sftp_op(self.pane_id, op);
+        };
+        match RemoteTerminal::on_workspace(req) {
+            Ok(crate::daemon::protocol::DaemonMsg::SftpOpResult(r)) => r,
+            Ok(other) => SftpOpResult::Error(t_fmt(
+                L10nKey::SftpErrorUnexpectedReply,
+                &[("reply", &format!("{other:?}"))],
+            )),
+            Err(e) => SftpOpResult::Error(e.to_string()),
+        }
+    }
+
+    pub(crate) fn transfer_start(&self, spec: SftpTransferSpec) -> Result<u64, String> {
+        let Some(req) =
+            self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpTransferStart {
+                spec: spec.clone(),
+            })
+        else {
+            return RemoteTerminal::sftp_transfer_start(spec);
+        };
+        match RemoteTerminal::on_workspace(req) {
+            Ok(crate::daemon::protocol::DaemonMsg::SftpTransferStarted { job_id }) => Ok(job_id),
+            Ok(other) => Err(t_fmt(
+                L10nKey::SftpErrorUnexpectedReply,
+                &[("reply", &format!("{other:?}"))],
+            )),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn transfer_list(&self) -> Result<Vec<SftpJobProgress>, String> {
+        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::SftpTransferList)
+        else {
+            return RemoteTerminal::sftp_transfer_list(self.pane_id);
+        };
+        match RemoteTerminal::on_workspace(req) {
+            Ok(crate::daemon::protocol::DaemonMsg::SftpTransferProgress(jobs)) => Ok(jobs),
+            Ok(other) => Err(t_fmt(
+                L10nKey::SftpErrorUnexpectedReply,
+                &[("reply", &format!("{other:?}"))],
+            )),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+pub(crate) struct SftpPanelState {
+    pub(crate) open_pane_id: Option<u64>,
+    pub(crate) open_workspace: Option<crate::terminal::PaneWorkspace>,
+    pub(crate) cwd: String,
+    pub(crate) cwds: std::collections::HashMap<u64, String>,
+    /// The side panel has been closed since the browser last opened, so the
+    /// next open is the user asking to look at files again rather than the
+    /// browser following a pane switch. See [`sftp_start_dir`].
+    pub(crate) panel_was_closed: bool,
+    pub(crate) entries: Vec<SftpEntry>,
+    pub(crate) filter_input: gpui_kit::Entity<InputState>,
+    pub(crate) error: Option<String>,
+    pub(crate) jobs: Vec<SftpJobProgress>,
+    /// Why the last transfer poll came back empty-handed, if it did.
+    ///
+    /// Kept apart from `error`, which blanks the directory listing: a poll
+    /// that could not reach the daemon says nothing about the listing already
+    /// on screen, and the transfer tray is the only place it belongs.
+    jobs_error: Option<String>,
+    /// Uploads this panel started whose landing it has not listed yet.
+    ///
+    /// An upload is written to `<name>.lyrel-upload-<hex>` and renamed into
+    /// place at the very end, so any listing taken while one is in flight
+    /// shows the temporary name. These are the jobs a listing is owed to.
+    uploads_awaiting_listing: HashSet<u64>,
+    /// Local names handed to a download that has not created its file yet.
+    /// Two quick downloads of the same remote file would otherwise both find
+    /// the name free and the second would write over the first.
+    claimed_downloads: HashSet<PathBuf>,
+    dismissed_jobs: HashSet<u64>,
+    show_history: bool,
+    tray_expanded: bool,
+    pub(crate) loading: bool,
+    nav_gen: u64,
+    pub(crate) editing: Option<SftpEdit>,
+    editing_sub: Vec<Subscription>,
+    pub(crate) editing_path: Option<gpui_kit::Entity<InputState>>,
+    editing_path_sub: Vec<Subscription>,
+    pub(crate) poll_gen: u64,
+    scroll: gpui_kit::ScrollHandle,
+    transfers_scroll: gpui_kit::ScrollHandle,
+    _subs: Vec<Subscription>,
+}
+
+impl SftpPanelState {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::ui::i18n::t(crate::ui::i18n::L10nKey::SearchFiles))
+        });
+        let sub = cx.subscribe_in(&filter_input, window, |_this, _input, ev, _w, cx| {
+            if matches!(ev, gpui_kit::component::input::InputEvent::Change) {
+                cx.notify();
+            }
+        });
+        Self {
+            open_pane_id: None,
+            open_workspace: None,
+            cwd: "/".to_string(),
+            cwds: std::collections::HashMap::new(),
+            panel_was_closed: true,
+            entries: Vec::new(),
+            filter_input,
+            error: None,
+            jobs: Vec::new(),
+            jobs_error: None,
+            uploads_awaiting_listing: HashSet::new(),
+            claimed_downloads: HashSet::new(),
+            dismissed_jobs: HashSet::new(),
+            show_history: false,
+            tray_expanded: false,
+            loading: false,
+            nav_gen: 0,
+            editing: None,
+            editing_sub: Vec::new(),
+            editing_path: None,
+            editing_path_sub: Vec::new(),
+            poll_gen: 0,
+            scroll: gpui_kit::ScrollHandle::new(),
+            transfers_scroll: gpui_kit::ScrollHandle::new(),
+            _subs: vec![sub],
+        }
+    }
+}
+
+/// Of the uploads a listing is owed to, the ones that are still writing.
+///
+/// A job that has dropped off the list entirely counts as done: whether it
+/// finished, failed or was trimmed from the history, it is not going to rename
+/// anything into place later.
+fn uploads_still_running(owed: &HashSet<u64>, jobs: &[SftpJobProgress]) -> HashSet<u64> {
+    owed.iter()
+        .copied()
+        .filter(|id| {
+            jobs.iter()
+                .find(|job| job.job_id == *id)
+                .is_some_and(|job| job.state == SftpJobState::Running)
+        })
+        .collect()
+}
+
+/// What the tray shows after a poll: the jobs to draw, and the failure to say
+/// out loud beside them.
+///
+/// A poll that failed used to come back as an empty `Vec`, which reads as "the
+/// transfers are all gone" — the tray disappeared and every upload the panel
+/// was waiting on counted as landed. Over a link that is down that is not a
+/// blink but the permanent answer, so a failure keeps the previous list and is
+/// reported instead of replacing it.
+fn apply_poll(
+    previous: Vec<SftpJobProgress>,
+    reply: Result<Vec<SftpJobProgress>, String>,
+) -> (Vec<SftpJobProgress>, Option<String>) {
+    match reply {
+        Ok(jobs) => (jobs, None),
+        Err(e) => (previous, Some(e)),
+    }
+}
+
+fn is_dir_like(e: &SftpEntry) -> bool {
+    matches!(e.kind, SftpEntryKind::Dir)
+        || (matches!(e.kind, SftpEntryKind::Symlink) && e.target_is_dir)
+}
+
+pub(crate) fn sorted_filtered_entries<'a>(
+    entries: &'a [SftpEntry],
+    filter: &str,
+) -> Vec<&'a SftpEntry> {
+    let needle = filter.to_lowercase();
+    let mut out: Vec<&SftpEntry> = entries
+        .iter()
+        .filter(|e| needle.is_empty() || e.name.to_lowercase().contains(&needle))
+        .collect();
+    out.sort_by(|a, b| {
+        let (ad, bd) = (is_dir_like(a), is_dir_like(b));
+        bd.cmp(&ad)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    out
+}
+
+pub(crate) fn breadcrumb_segments(path: &str) -> Vec<(String, String)> {
+    let mut out = vec![("/".to_string(), "/".to_string())];
+    let mut acc = String::new();
+    for comp in path.split('/').filter(|s| !s.is_empty()) {
+        acc.push('/');
+        acc.push_str(comp);
+        out.push((comp.to_string(), acc.clone()));
+    }
+    out
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1}{}", UNITS[unit])
+    }
+}
+
+fn mode_string(mode: u32) -> String {
+    let rwx = |bits: u32| {
+        format!(
+            "{}{}{}",
+            if bits & 0o4 != 0 { 'r' } else { '-' },
+            if bits & 0o2 != 0 { 'w' } else { '-' },
+            if bits & 0o1 != 0 { 'x' } else { '-' },
+        )
+    };
+    format!(
+        "{}{}{}",
+        rwx((mode >> 6) & 0o7),
+        rwx((mode >> 3) & 0o7),
+        rwx(mode & 0o7)
+    )
+}
+
+fn local_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+pub(crate) fn local_download_dir() -> PathBuf {
+    local_home().join("Downloads")
+}
+
+/// `dir/name`, or the first `dir/name (n)` that is not taken. A dotfile keeps
+/// its leading dot and gets the number on the end, the way the OS numbers one.
+///
+/// `claimed` names the downloads already in flight: their files do not exist
+/// yet, so the filesystem alone would hand the same name out twice. `None`
+/// means every name in range is spoken for — better to say so than to return
+/// one of them and quietly overwrite it.
+pub(crate) fn free_local_path(
+    dir: &Path,
+    name: &str,
+    claimed: &HashSet<PathBuf>,
+) -> Option<PathBuf> {
+    let taken = |p: &PathBuf| p.exists() || claimed.contains(p);
+    let first = dir.join(name);
+    if !taken(&first) {
+        return Some(first);
+    }
+    let path = Path::new(name);
+    let ext = path.extension().map(|e| e.to_string_lossy().to_string());
+    let stem = path
+        .file_stem()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.to_string());
+    (2..1000u32)
+        .map(|n| match &ext {
+            Some(ext) => dir.join(format!("{stem} ({n}).{ext}")),
+            None => dir.join(format!("{stem} ({n})")),
+        })
+        .find(|candidate| !taken(candidate))
+}
+
+impl LyrelApp {
+    pub(crate) fn toggle_sftp(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        use crate::core::config::RightPanelTab;
+        if self.right_panel_visible && self.right_panel_tab == RightPanelTab::Files {
+            self.toggle_right_panel(cx);
+            return;
+        }
+        self.set_right_panel_tab(RightPanelTab::Files, cx);
+    }
+
+    pub(crate) fn sftp_sync_pane(
+        &mut self,
+        pane_id: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(pane_id) = pane_id else {
+            if self.sftp_panel.open_pane_id.is_some() {
+                self.sftp_close_browser(cx);
+            }
+            return false;
+        };
+        if self.sftp_panel.open_pane_id != Some(pane_id) {
+            self.sftp_open_at(pane_id, window, cx);
+        }
+        true
+    }
+
+    pub(crate) fn sftp_close_browser(&mut self, cx: &mut Context<Self>) {
+        self.sftp_panel.open_pane_id = None;
+        self.sftp_panel.entries.clear();
+        self.sftp_panel.error = None;
+        // No `Window` here, and none needed: the browser itself is going away
+        // or being re-pointed at another pane, so focus is settled by whoever
+        // did that, not by the form.
+        let _ = self.sftp_close_edit();
+        self.sftp_panel.editing_path = None;
+        self.sftp_panel.editing_path_sub.clear();
+        self.sftp_panel.jobs.clear();
+        self.sftp_panel.jobs_error = None;
+        self.sftp_panel.open_workspace = None;
+        self.sftp_panel.poll_gen = self.sftp_panel.poll_gen.wrapping_add(1);
+        cx.notify();
+    }
+
+    fn sftp_route(&self) -> SftpRoute {
+        SftpRoute {
+            pane_id: self.sftp_panel.open_pane_id.unwrap_or_default(),
+            workspace: self.sftp_panel.open_workspace.clone(),
+        }
+    }
+
+    fn pane_workspace(
+        &self,
+        pane_id: u64,
+        window: &Window,
+        cx: &App,
+    ) -> Option<crate::terminal::PaneWorkspace> {
+        let leaf = self
+            .tabs
+            .get(self.active)?
+            .pane
+            .focused_or_first(window, cx)?;
+        let leaf = leaf.read(cx);
+        (leaf.pane_id == pane_id).then(|| leaf.workspace().cloned())?
+    }
+
+    fn sftp_open_at(&mut self, pane_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.sftp_panel.open_pane_id = Some(pane_id);
+        self.sftp_panel.open_workspace = self.pane_workspace(pane_id, window, cx);
+        self.sftp_panel.entries.clear();
+        self.sftp_panel.error = None;
+        // No `Window` here, and none needed: the browser itself is going away
+        // or being re-pointed at another pane, so focus is settled by whoever
+        // did that, not by the form.
+        let _ = self.sftp_close_edit();
+        self.sftp_panel.editing_path = None;
+        self.sftp_panel.editing_path_sub.clear();
+        self.sftp_panel.show_history = false;
+        self.sftp_poll_jobs(cx);
+        self.sftp_start_polling(cx);
+
+        let fresh_open = std::mem::take(&mut self.sftp_panel.panel_was_closed);
+        let remembered = self.sftp_panel.cwds.get(&pane_id).cloned();
+        let shell = self.pane_shell_cwd(pane_id, window, cx);
+        if let Some(start) = sftp_start_dir(fresh_open, shell, remembered) {
+            self.sftp_navigate(start, cx);
+            return;
+        }
+        self.sftp_navigate_login_dir(pane_id, cx);
+    }
+
+    fn sftp_navigate_login_dir(&mut self, pane_id: u64, cx: &mut Context<Self>) {
+        self.sftp_panel.loading = true;
+        let route = self.sftp_route();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { route.op(SftpOp::Realpath { path: ".".into() }) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.sftp_panel.open_pane_id != Some(pane_id) {
+                    return;
+                }
+                let home = match result {
+                    SftpOpResult::Link(path) if path.starts_with('/') => path,
+                    _ => "/".to_string(),
+                };
+                this.sftp_navigate(home, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn pane_shell_cwd(&self, pane_id: u64, window: &Window, cx: &App) -> Option<String> {
+        let leaf = self
+            .tabs
+            .get(self.active)?
+            .pane
+            .focused_or_first(window, cx)?;
+        let leaf = leaf.read(cx);
+        if leaf.pane_id != pane_id {
+            return None;
+        }
+        let path = leaf.cwd()?;
+        let s = path.to_string_lossy().to_string();
+        s.starts_with('/').then_some(s)
+    }
+
+    pub(crate) fn sftp_navigate(&mut self, path: String, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.sftp_panel.open_pane_id else {
+            return;
+        };
+        self.sftp_panel.nav_gen = self.sftp_panel.nav_gen.wrapping_add(1);
+        let generation = self.sftp_panel.nav_gen;
+        self.sftp_panel.loading = true;
+        cx.notify();
+
+        let list_path = path.clone();
+        let route = self.sftp_route();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { route.list(&list_path) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.sftp_panel.open_pane_id != Some(pane_id)
+                    || this.sftp_panel.nav_gen != generation
+                {
+                    return;
+                }
+                this.sftp_panel.loading = false;
+                match result {
+                    Ok(mut entries) => {
+                        entries.sort_by(|a, b| a.name.cmp(&b.name));
+                        this.sftp_panel.cwds.insert(pane_id, path.clone());
+                        this.sftp_panel.cwd = path;
+                        this.sftp_panel.entries = entries;
+                        this.sftp_panel.error = None;
+                        this.sftp_panel.editing_path = None;
+                        this.sftp_panel.editing_path_sub.clear();
+                    }
+                    Err(e) => {
+                        this.sftp_panel.error = Some(e);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn sftp_refresh(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.sftp_panel.cwd.clone();
+        self.sftp_navigate(cwd, cx);
+    }
+
+    pub(crate) fn sftp_up(&mut self, cx: &mut Context<Self>) {
+        let parent = remote_parent(&self.sftp_panel.cwd);
+        self.sftp_navigate(parent, cx);
+    }
+
+    pub(crate) fn sftp_begin_edit_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sftp_panel.open_pane_id.is_none() {
+            return;
+        }
+        let cwd = self.sftp_panel.cwd.clone();
+        let input = crate::ui::prefill::filled_box(cwd, window, cx);
+        input.update(cx, |s, cx| s.focus(window, cx));
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this, _input, ev: &InputEvent, _window, cx| match ev {
+                InputEvent::PressEnter { .. } => this.sftp_commit_edit_path(cx),
+                InputEvent::Blur => this.sftp_cancel_edit_path(cx),
+                _ => {}
+            },
+        );
+        self.sftp_panel.editing_path = Some(input);
+        self.sftp_panel.editing_path_sub = vec![sub];
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_commit_edit_path(&mut self, cx: &mut Context<Self>) {
+        let Some(input) = self.sftp_panel.editing_path.take() else {
+            return;
+        };
+        self.sftp_panel.editing_path_sub.clear();
+        let value = input.read(cx).value().trim().to_string();
+        if value.is_empty() {
+            cx.notify();
+            return;
+        }
+        self.sftp_navigate(value, cx);
+    }
+
+    pub(crate) fn sftp_cancel_edit_path(&mut self, cx: &mut Context<Self>) {
+        self.sftp_panel.editing_path = None;
+        self.sftp_panel.editing_path_sub.clear();
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_clear_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sftp_panel
+            .filter_input
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// A click on a row and the row menu's first item both land here.
+    /// A directory opens in place; a file opens in the built-in editor, the
+    /// way it already does on a local or remote-workspace tree (#656). What
+    /// the editor cannot hold — binary, oversized — gets the same toast the
+    /// local tree gives it; a single click must never start a transfer, so
+    /// downloading lives in the row menu and nowhere else.
+    pub(crate) fn sftp_open_entry(
+        &mut self,
+        entry: SftpEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = remote_join(&self.sftp_panel.cwd, &entry.name);
+        if is_dir_like(&entry) {
+            self.sftp_navigate(target, cx);
+        } else if let Some(host) = self.sftp_editor_host() {
+            self.editor_open_on_host(host, Path::new(&target), window, cx);
+        }
+    }
+
+    /// The [`Host`] the editor reads and saves this pane's files through.
+    ///
+    /// Handed to the editor rather than filed in `HostRegistry`: that table
+    /// means "a machine this window has a link to", and its entries are
+    /// listed as machines and swept when no workspace is left holding one.
+    /// An SFTP channel borrowed from a pane is neither, so the buffer holds
+    /// the host itself and stays saveable for as long as it is open.
+    ///
+    /// [`Host`]: crate::ui::host_ops::Host
+    fn sftp_editor_host(&self) -> Option<crate::ui::host_ops::SharedHost> {
+        self.sftp_panel.open_pane_id?;
+        Some(std::sync::Arc::new(crate::ui::sftp_host::SftpHost::new(
+            self.sftp_route(),
+        )))
+    }
+
+    pub(crate) fn sftp_download_entry(&mut self, entry: SftpEntry, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.sftp_panel.open_pane_id else {
+            return;
+        };
+        if !safe_local_name(&entry.name) {
+            self.sftp_panel.error = Some(t_fmt(
+                L10nKey::SftpErrorUnsafeRemoteName,
+                &[("name", &format!("{:?}", entry.name))],
+            ));
+            cx.notify();
+            return;
+        }
+        let remote = remote_join(&self.sftp_panel.cwd, &entry.name);
+        // Downloading twice used to write over the first copy without a word.
+        // Browsers answer this by numbering the second one; that keeps the
+        // gesture one click and still cannot lose a file.
+        //
+        // A claim outlives its transfer only until the file lands, at which
+        // point `exists()` speaks for it and re-downloading something the user
+        // has since deleted starts again from the plain name.
+        self.sftp_panel.claimed_downloads.retain(|p| !p.exists());
+        let Some(local) = free_local_path(
+            &local_download_dir(),
+            &entry.name,
+            &self.sftp_panel.claimed_downloads,
+        ) else {
+            self.sftp_panel.error = Some(t_fmt(
+                L10nKey::SftpErrorNoFreeLocalName,
+                &[("name", &entry.name)],
+            ));
+            cx.notify();
+            return;
+        };
+        self.sftp_panel.claimed_downloads.insert(local.clone());
+        let recursive = matches!(entry.kind, SftpEntryKind::Dir);
+        let spec = SftpTransferSpec {
+            pane_id,
+            kind: SftpTransferKind::Download,
+            local,
+            remote,
+            recursive,
+        };
+        match self.sftp_route().transfer_start(spec) {
+            Ok(_) => self.sftp_panel.error = None,
+            Err(e) => self.sftp_panel.error = Some(e),
+        }
+        self.sftp_poll_jobs(cx);
+        self.sftp_start_polling(cx);
+    }
+
+    pub(crate) fn sftp_delete_entry(
+        &mut self,
+        entry: SftpEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane_id) = self.sftp_panel.open_pane_id else {
+            return;
+        };
+        let path = remote_join(&self.sftp_panel.cwd, &entry.name);
+        let is_dir = matches!(entry.kind, SftpEntryKind::Dir);
+        // The local file tree asks before it deletes. This is the same red
+        // Delete in the same shape of menu, on a machine the user cannot walk
+        // over to, and it used to go straight through.
+        let host = self
+            .remote_files_host(window, cx)
+            .unwrap_or_else(|| t(L10nKey::AppLocalServerName).to_string());
+        let body = t_fmt(
+            match is_dir {
+                true => L10nKey::SftpDeleteFolderBody,
+                false => L10nKey::SftpDeleteFileBody,
+            },
+            &[("host", &host)],
+        );
+        let answer = window.prompt(
+            gpui_kit::PromptLevel::Warning,
+            &t_fmt(L10nKey::FileTreeDeleteTitle, &[("name", &entry.name)]),
+            Some(&body),
+            &crate::ui::confirm_answers(t(L10nKey::Delete), t(L10nKey::Cancel)),
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(0) = answer.await else { return };
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.sftp_panel.open_pane_id != Some(pane_id) {
+                    return;
+                }
+                let op = match is_dir {
+                    true => SftpOp::RemoveDir { path },
+                    false => SftpOp::RemoveFile { path },
+                };
+                this.sftp_run_op(pane_id, op, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn sftp_follow_symlink(&mut self, entry: SftpEntry, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.sftp_panel.open_pane_id else {
+            return;
+        };
+        let cwd = self.sftp_panel.cwd.clone();
+        let path = remote_join(&cwd, &entry.name);
+        let route = self.sftp_route();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { route.op(SftpOp::Readlink { path }) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.sftp_panel.open_pane_id != Some(pane_id) {
+                    return;
+                }
+                match result {
+                    SftpOpResult::Link(target) => {
+                        let resolved = if target.starts_with('/') {
+                            target
+                        } else {
+                            remote_join(&cwd, &target)
+                        };
+                        let dest = if entry.target_is_dir {
+                            resolved
+                        } else {
+                            remote_parent(&resolved)
+                        };
+                        this.sftp_navigate(dest, cx);
+                    }
+                    SftpOpResult::Error(e) => {
+                        this.sftp_panel.error = Some(e);
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Takes a `Window` only so the success arm can hand the focus back: the
+    /// form is still up, still holding the caret, while the far side works.
+    fn sftp_run_op(
+        &mut self,
+        pane_id: u64,
+        op: SftpOp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let route = self.sftp_route();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx.background_spawn(async move { route.op(op) }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.sftp_panel.open_pane_id != Some(pane_id) {
+                    return;
+                }
+                match result {
+                    SftpOpResult::Error(e) => {
+                        this.sftp_panel.error = Some(e);
+                        cx.notify();
+                    }
+                    _ => {
+                        this.sftp_close_edit_in(window, cx);
+                        this.sftp_refresh(cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Puts one of the four edit forms up, ready to type into.
+    ///
+    /// Every other box in the app opens focused and answers Return; these four
+    /// opened cold, so naming a new folder meant clicking into the field
+    /// first, and Return did nothing once you had.
+    fn sftp_open_edit(
+        &mut self,
+        input: gpui_kit::Entity<InputState>,
+        edit: SftpEdit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        input.update(cx, |s, cx| s.focus(window, cx));
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this, _input, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { .. } => this.sftp_commit_edit(window, cx),
+                // OK is disabled while the box is empty, so the form has to
+                // redraw as the name is typed.
+                InputEvent::Change => cx.notify(),
+                _ => {}
+            },
+        );
+        self.sftp_panel.editing = Some(edit);
+        self.sftp_panel.editing_sub = vec![sub];
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_begin_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::ui::i18n::t(crate::ui::i18n::L10nKey::NewFolderName))
+        });
+        self.sftp_open_edit(input.clone(), SftpEdit::NewFolder(input), window, cx);
+    }
+
+    pub(crate) fn sftp_begin_new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::ui::i18n::t(crate::ui::i18n::L10nKey::NewFileName))
+        });
+        self.sftp_open_edit(input.clone(), SftpEdit::NewFile(input), window, cx);
+    }
+
+    pub(crate) fn sftp_begin_rename(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = crate::ui::prefill::filled_box(name.clone(), window, cx);
+        let edit = SftpEdit::Rename {
+            original: name,
+            input: input.clone(),
+        };
+        self.sftp_open_edit(input, edit, window, cx);
+    }
+
+    pub(crate) fn sftp_begin_chmod(
+        &mut self,
+        entry: SftpEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let octal = format!("{:o}", entry.permissions & 0o777);
+        let readable = mode_string(entry.permissions);
+        let path = remote_join(&self.sftp_panel.cwd, &entry.name);
+        let input = crate::ui::prefill::filled_box(octal, window, cx);
+        let edit = SftpEdit::Chmod {
+            path,
+            readable,
+            input: input.clone(),
+        };
+        self.sftp_open_edit(input, edit, window, cx);
+    }
+
+    /// Takes the form down and drops the subscription that was listening to
+    /// its box. The two travel together — a live subscription on a box nothing
+    /// is showing would answer Return for a form that is gone.
+    ///
+    /// Reports whether a form was actually up, because the box owned the focus
+    /// and whoever tore it down has to hand the focus back. It did not, so
+    /// naming a folder and then pressing Escape left the focus on an element
+    /// that no longer existed and the next keystroke went nowhere until you
+    /// clicked. `ssh_prompt` asserts in a comment *and* a test that every
+    /// overlay in the app hands focus back on the way out; these four forms
+    /// were the counterexample.
+    #[must_use]
+    fn sftp_close_edit(&mut self) -> bool {
+        let was_open = self.sftp_panel.editing.is_some();
+        self.sftp_panel.editing = None;
+        self.sftp_panel.editing_sub.clear();
+        was_open
+    }
+
+    /// `sftp_close_edit` plus the focus hand-back, for the callers that have a
+    /// `Window` to hand it back with.
+    fn sftp_close_edit_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sftp_close_edit() {
+            self.focus_active(window, cx);
+        }
+    }
+
+    pub(crate) fn sftp_cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sftp_close_edit_in(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_commit_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.sftp_panel.open_pane_id else {
+            return;
+        };
+        let op = match &self.sftp_panel.editing {
+            Some(SftpEdit::NewFolder(input)) => {
+                let name = input.read(cx).value().trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                Some(SftpOp::Mkdir {
+                    path: remote_join(&self.sftp_panel.cwd, &name),
+                })
+            }
+            Some(SftpEdit::NewFile(input)) => {
+                let name = input.read(cx).value().trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                Some(SftpOp::CreateFile {
+                    path: remote_join(&self.sftp_panel.cwd, &name),
+                })
+            }
+            Some(SftpEdit::Rename { original, input }) => {
+                let name = input.read(cx).value().trim().to_string();
+                if name.is_empty() || name == *original {
+                    self.sftp_close_edit_in(window, cx);
+                    cx.notify();
+                    return;
+                }
+                Some(SftpOp::Rename {
+                    from: remote_join(&self.sftp_panel.cwd, original),
+                    to: remote_join(&self.sftp_panel.cwd, &name),
+                })
+            }
+            Some(SftpEdit::Chmod { path, input, .. }) => {
+                match u32::from_str_radix(input.read(cx).value().trim(), 8) {
+                    Ok(mode) => Some(SftpOp::Chmod {
+                        path: path.clone(),
+                        mode,
+                    }),
+                    Err(_) => {
+                        self.sftp_panel.error =
+                            Some(t(L10nKey::SftpErrorInvalidOctalMode).to_string());
+                        cx.notify();
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
+        if let Some(op) = op {
+            self.sftp_run_op(pane_id, op, window, cx);
+        }
+    }
+
+    pub(crate) fn sftp_pick_upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sftp_panel.open_pane_id.is_none() {
+            return;
+        }
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: true,
+            multiple: true,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.sftp_upload_paths(paths, window, cx)
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn sftp_upload_paths(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Uploading into the directory on screen used to overwrite whatever was
+        // already there without a word. The listing being shown is the answer —
+        // no extra round trip to the far side to find out.
+        let clashes: Vec<String> = paths
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .filter(|name| self.sftp_panel.entries.iter().any(|e| &e.name == name))
+            .collect();
+        if clashes.is_empty() {
+            self.sftp_upload_paths_confirmed(paths, cx);
+            return;
+        }
+        let names = match clashes.len() {
+            1..=3 => clashes.join(", "),
+            _ => format!("{}, …", clashes[..3].join(", ")),
+        };
+        let body = crate::ui::i18n::t_plural(
+            L10nKey::SftpReplaceBody,
+            clashes.len(),
+            &[("names", &names)],
+        );
+        let answer = window.prompt(
+            gpui_kit::PromptLevel::Warning,
+            t(L10nKey::SftpReplaceTitle),
+            Some(&body),
+            &crate::ui::confirm_answers(t(L10nKey::Replace), t(L10nKey::Cancel)),
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(0) = answer.await else { return };
+            let _ = this.update(cx, |this, cx| this.sftp_upload_paths_confirmed(paths, cx));
+        })
+        .detach();
+    }
+
+    fn sftp_upload_paths_confirmed(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.sftp_panel.open_pane_id else {
+            return;
+        };
+        let cwd = self.sftp_panel.cwd.clone();
+        for path in paths {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name.is_empty() {
+                continue;
+            }
+            let recursive = path.is_dir();
+            let spec = SftpTransferSpec {
+                pane_id,
+                kind: SftpTransferKind::Upload,
+                local: path,
+                remote: remote_join(&cwd, &name),
+                recursive,
+            };
+            match self.sftp_route().transfer_start(spec) {
+                Ok(job_id) => {
+                    self.sftp_panel.uploads_awaiting_listing.insert(job_id);
+                }
+                Err(e) => self.sftp_panel.error = Some(e),
+            }
+        }
+        self.sftp_poll_jobs(cx);
+        self.sftp_start_polling(cx);
+        // No listing here on purpose. The upload has only just been handed to
+        // the daemon, so a listing taken now catches the temporary name it
+        // writes under; the one owed for it is taken when it settles.
+    }
+
+    pub(crate) fn sftp_cancel_job(&mut self, job_id: u64, cx: &mut Context<Self>) {
+        self.sftp_panel.jobs = RemoteTerminal::sftp_transfer_cancel(job_id);
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_toggle_history(&mut self, cx: &mut Context<Self>) {
+        self.sftp_panel.show_history = !self.sftp_panel.show_history;
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_toggle_tray(&mut self, cx: &mut Context<Self>) {
+        self.sftp_panel.tray_expanded = !self.sftp_panel.tray_expanded;
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_dismiss_tray(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<u64> = self.sftp_panel.jobs.iter().map(|j| j.job_id).collect();
+        self.sftp_panel.dismissed_jobs.extend(ids);
+        self.sftp_panel.show_history = false;
+        cx.notify();
+    }
+
+    pub(crate) fn sftp_reveal_download(&self, local: String, cx: &mut Context<Self>) {
+        let local = Path::new(&local);
+        cx.reveal_path(&crate::ui::path_display::native_separators(local));
+    }
+
+    fn sftp_poll_jobs(&mut self, cx: &mut Context<Self>) {
+        if self.sftp_panel.open_pane_id.is_some() {
+            let jobs = self.sftp_route().transfer_list();
+            self.sftp_apply_jobs(jobs, cx);
+        }
+    }
+
+    /// Take a fresh job list, and list the directory again once the uploads
+    /// that were running have stopped running.
+    ///
+    /// Nothing used to ask for that listing. An upload lands under
+    /// `<name>.lyrel-upload-<hex>` and is renamed into place at the end, so the
+    /// listing on screen was the one taken while the temporary name existed —
+    /// and it stayed, so a finished upload read as a file with a hash glued to
+    /// its name.
+    ///
+    /// A poll that failed is not a job list, so it settles nothing: the uploads
+    /// still owe their listing, and asking for one now would only refresh from
+    /// the same unreachable daemon.
+    fn sftp_apply_jobs(
+        &mut self,
+        reply: Result<Vec<SftpJobProgress>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = std::mem::take(&mut self.sftp_panel.jobs);
+        let (jobs, failure) = apply_poll(previous, reply);
+        let failed = failure.is_some();
+        self.sftp_panel.jobs = jobs;
+        self.sftp_panel.jobs_error = failure;
+        if failed {
+            cx.notify();
+            return;
+        }
+        let owed = &self.sftp_panel.uploads_awaiting_listing;
+        let still_running = uploads_still_running(owed, &self.sftp_panel.jobs);
+        let settled = still_running.len() != owed.len();
+        self.sftp_panel.uploads_awaiting_listing = still_running;
+        cx.notify();
+        if settled {
+            self.sftp_refresh(cx);
+        }
+    }
+
+    fn sftp_start_polling(&mut self, cx: &mut Context<Self>) {
+        self.sftp_panel.poll_gen = self.sftp_panel.poll_gen.wrapping_add(1);
+        let generation = self.sftp_panel.poll_gen;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let pane = this
+                    .update(cx, |this, cx| {
+                        if this.sftp_panel.poll_gen != generation {
+                            return None;
+                        }
+                        if !this.right_panel_open(cx) {
+                            this.sftp_panel.panel_was_closed = true;
+                            this.sftp_close_browser(cx);
+                            return None;
+                        }
+                        this.sftp_panel
+                            .open_pane_id
+                            .is_some()
+                            .then(|| this.sftp_route())
+                    })
+                    .ok()
+                    .flatten();
+                let Some(route) = pane else { break };
+                let jobs = cx
+                    .background_spawn(async move { route.transfer_list() })
+                    .await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        if this.sftp_panel.poll_gen != generation {
+                            return false;
+                        }
+                        this.sftp_apply_jobs(jobs, cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn render_panel_sftp(
+        &mut self,
+        host: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let controls = self.sftp_controls(cx);
+        let title = self.panel_title(
+            t(L10nKey::SftpPanelTitleFiles),
+            Some(host),
+            Some(controls),
+            window,
+            cx,
+        );
+        let breadcrumb = self.render_sftp_breadcrumb(cx);
+        let filter = div()
+            .id("panel-sftp-filter")
+            .child(self.panel_search(&self.sftp_panel.filter_input.clone(), cx))
+            .on_key_down(
+                cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
+                    if ev.keystroke.key == "escape" {
+                        this.sftp_clear_filter(window, cx);
+                    }
+                }),
+            );
+        let form = self.render_sftp_edit_form(cx);
+        let list = self.render_sftp_list(cx);
+
+        v_flex()
+            .id("panel-sftp")
+            .flex_1()
+            .min_h_0()
+            .child(title)
+            .child(breadcrumb)
+            .child(filter)
+            .children(form)
+            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+                "sftp-list-scrollbar",
+                list,
+                &self.sftp_panel.scroll,
+            ))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.sftp_upload_paths(paths.paths().to_vec(), window, cx);
+            }))
+            .into_any_element()
+    }
+
+    fn sftp_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let history = self.sftp_panel.show_history;
+        // The title bar's 24px chrome tile, the same one the Info tab puts its
+        // cwd actions in. It used to be built by hand — a 32px tile forced to
+        // 24 and then set `.xsmall()`, which overrode the 13px each icon below
+        // asked for with the button size's own 12, so the glyph never was the
+        // size the code claimed. `chrome_tile_sized` derives it from the tile
+        // instead, which is what every other 24px tile in the panel does.
+        let tile = |button: Button, selected: bool, cx: &mut Context<Self>| {
+            crate::ui::tab_strip::chrome_tile_sized(
+                button,
+                TILE_SIZE_SM,
+                TILE_GLYPH_SM,
+                selected,
+                cx,
+            )
+            .rounded_md()
+        };
+
+        h_flex()
+            .items_center()
+            .gap(px(2.))
+            .child(
+                div().occlude().child(
+                    tile(
+                        Button::new("panel-sftp-refresh")
+                            .icon(Icon::empty().path("icons/refresh.svg")),
+                        false,
+                        cx,
+                    )
+                    .tooltip(t(L10nKey::SftpTooltipRefresh))
+                    .on_click(cx.listener(|this, _, _w, cx| this.sftp_refresh(cx))),
+                ),
+            )
+            .child(
+                div().occlude().child(
+                    tile(
+                        Button::new("panel-sftp-menu")
+                            .icon(Icon::empty().path("icons/ellipsis.svg")),
+                        false,
+                        cx,
+                    )
+                    .tooltip(t(L10nKey::SftpTooltipMore))
+                    .dropdown_menu_with_anchor(gpui_kit::Anchor::TopRight, {
+                        let app = cx.entity().downgrade();
+                        move |menu, _window, _cx| {
+                            let mut menu = menu.min_w(px(190.));
+                            for (label, action) in [
+                                (t(L10nKey::SftpMenuNewFolder), SftpMenuAction::NewFolder),
+                                (t(L10nKey::SftpMenuNewFile), SftpMenuAction::NewFile),
+                                (t(L10nKey::SftpMenuUpload), SftpMenuAction::Upload),
+                                (
+                                    t(L10nKey::SftpMenuGotoShellCwd),
+                                    SftpMenuAction::GotoShellCwd,
+                                ),
+                            ] {
+                                menu = menu.item(PopupMenuItem::new(label).on_click({
+                                    let app = app.clone();
+                                    move |_, window, cx| {
+                                        let _ = app.update(cx, |this, cx| {
+                                            this.sftp_menu_action(action, window, cx)
+                                        });
+                                    }
+                                }));
+                            }
+                            menu.separator().item(
+                                PopupMenuItem::new(if history {
+                                    t(L10nKey::SftpMenuHideTransferHistory)
+                                } else {
+                                    t(L10nKey::SftpMenuTransferHistory)
+                                })
+                                .on_click({
+                                    let app = app.clone();
+                                    move |_, window, cx| {
+                                        let _ = app.update(cx, |this, cx| {
+                                            this.sftp_menu_action(
+                                                SftpMenuAction::ToggleHistory,
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    }
+                                }),
+                            )
+                        }
+                    }),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn sftp_menu_action(
+        &mut self,
+        action: SftpMenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SftpMenuAction::NewFolder => self.sftp_begin_new_folder(window, cx),
+            SftpMenuAction::NewFile => self.sftp_begin_new_file(window, cx),
+            SftpMenuAction::Upload => self.sftp_pick_upload(window, cx),
+            SftpMenuAction::GotoShellCwd => {
+                if let Some(pane_id) = self.sftp_panel.open_pane_id
+                    && let Some(cwd) = self.pane_shell_cwd(pane_id, window, cx)
+                {
+                    self.sftp_navigate(cwd, cx);
+                }
+            }
+            SftpMenuAction::ToggleHistory => self.sftp_toggle_history(cx),
+        }
+    }
+
+    fn render_sftp_breadcrumb(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        if let Some(input) = &self.sftp_panel.editing_path {
+            return h_flex()
+                .id("sftp-path-edit")
+                .px(px(CONTENT_INSET))
+                .pb(px(2.))
+                .child(Input::new(input).xsmall())
+                .on_key_down(
+                    cx.listener(|this, ev: &gpui_kit::KeyDownEvent, _window, cx| {
+                        if ev.keystroke.key == "escape" {
+                            this.sftp_cancel_edit_path(cx);
+                        }
+                    }),
+                );
+        }
+
+        let foreground = cx.theme().foreground;
+        let muted = cx.theme().muted_foreground;
+        let mut row = h_flex()
+            .id("sftp-breadcrumb")
+            .flex_wrap()
+            .items_center()
+            .gap_0p5()
+            // Text, not a row: on the panel's text column.
+            .px(px(TEXT_INSET))
+            .pb(px(4.))
+            .on_double_click(
+                cx.listener(|this, _, window, cx| this.sftp_begin_edit_path(window, cx)),
+            );
+        let segments = breadcrumb_segments(&self.sftp_panel.cwd);
+        let last = segments.len().saturating_sub(1);
+        for (i, (label, path)) in segments.into_iter().enumerate() {
+            if i > 0 {
+                row = row.child(div().text_xs().text_color(muted).child("›"));
+            }
+            let is_current = i == last;
+            let label = if i == 0 { "/".to_string() } else { label };
+            let weight = if i == 0 || is_current {
+                FontWeight::MEDIUM
+            } else {
+                FontWeight::NORMAL
+            };
+            let color = if is_current { foreground } else { muted };
+            let seg_id = SharedString::from(format!("sftp-crumb-{path}"));
+            row = row.child(
+                div()
+                    .id(seg_id)
+                    .text_xs()
+                    .font_weight(weight)
+                    .text_color(color)
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(foreground).underline())
+                    .child(label)
+                    .on_click(
+                        cx.listener(move |this, _, _w, cx| this.sftp_navigate(path.clone(), cx)),
+                    ),
+            );
+        }
+        row.child(div().flex_1().min_w(px(20.)).h(px(16.)))
+    }
+
+    fn render_sftp_edit_form(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let well = cx.theme().muted;
+        let foreground = cx.theme().foreground;
+        let surface: gpui_kit::Hsla =
+            gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.base).into();
+        let (title, input): (String, _) = match self.sftp_panel.editing.as_ref()? {
+            SftpEdit::NewFolder(input) => (t(L10nKey::SftpEditNewFolder).to_string(), input),
+            SftpEdit::NewFile(input) => (t(L10nKey::SftpEditNewFile).to_string(), input),
+            SftpEdit::Rename { input, .. } => (t(L10nKey::SftpEditRename).to_string(), input),
+            SftpEdit::Chmod {
+                readable, input, ..
+            } => (
+                t_fmt(L10nKey::SftpEditPermissions, &[("mode", readable)]),
+                input,
+            ),
+        };
+        // An empty box names nothing to create, rename to, or set. Committing
+        // one returned in silence, so OK read as broken rather than as not yet
+        // applicable — the same thing the worktree prompt's Create used to do.
+        let can_commit = !input.read(cx).value().trim().is_empty();
+        Some(
+            v_flex()
+                .id("panel-sftp-edit")
+                .gap(px(6.))
+                // Where a row's fill would be, its text on the row's text
+                // column.
+                .mx(px(CONTENT_INSET))
+                .mb(px(4.))
+                .p(px(ROW_INSET))
+                // A borderless faint well, the file tree's search shape, not
+                // an outlined card: it is part of the list, not over it.
+                .bg(well)
+                .rounded(px(7.))
+                // Escape backs out of the form, the way it backs out of the
+                // path editor above it and every sheet the app puts up.
+                .on_key_down(
+                    cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
+                        if ev.keystroke.key == "escape" {
+                            this.sftp_cancel_edit(window, cx);
+                        }
+                    }),
+                )
+                .child(
+                    div()
+                        .text_size(rems(HEADING))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(foreground)
+                        .child(title),
+                )
+                .child(Input::new(input).xsmall())
+                .child(
+                    h_flex()
+                        .gap(px(4.))
+                        .justify_end()
+                        .child(
+                            Button::new("sftp-edit-cancel")
+                                .label(t(L10nKey::Cancel))
+                                .ghost()
+                                .xsmall()
+                                .on_click(
+                                    cx.listener(|this, _, w, cx| this.sftp_cancel_edit(w, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new("sftp-edit-ok")
+                                .label(t(L10nKey::Ok))
+                                .xsmall()
+                                .custom(crate::ui::theme::inverted_button(surface, cx))
+                                .disabled(!can_commit)
+                                .on_click(
+                                    cx.listener(|this, _, w, cx| this.sftp_commit_edit(w, cx)),
+                                ),
+                        ),
+                ),
+        )
+    }
+
+    fn render_sftp_list(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let danger = cx.theme().danger;
+        let muted = cx.theme().muted_foreground;
+        let container = div()
+            .id("sftp-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.sftp_panel.scroll)
+            .px(px(CONTENT_INSET))
+            .pb(px(4.));
+
+        let note = |text: gpui_kit::SharedString, color| {
+            div()
+                .px(px(ROW_INSET))
+                .py(px(4.))
+                .text_size(rems(TEXT))
+                .text_color(color)
+                .child(text)
+        };
+
+        if let Some(err) = &self.sftp_panel.error {
+            return container.child(note(err.clone().into(), danger));
+        }
+
+        let filter = self.sftp_panel.filter_input.read(cx).value().to_string();
+        let entries = sorted_filtered_entries(&self.sftp_panel.entries, &filter);
+
+        let show_go_up = self.sftp_panel.cwd != "/" && filter.trim().is_empty();
+
+        if entries.is_empty() && !show_go_up {
+            // A filter that matched nothing is not an empty directory, and
+            // saying so about a machine you cannot see is worse than saying
+            // nothing. The local file tree already draws this distinction.
+            let text: gpui_kit::SharedString = if self.sftp_panel.loading {
+                t(L10nKey::SftpLoading).into()
+            } else if !filter.trim().is_empty() {
+                t_fmt(L10nKey::SettingsNothingMatches, &[("query", filter.trim())]).into()
+            } else {
+                t(L10nKey::SftpEmptyDirectory).into()
+            };
+            return container.child(note(text, muted));
+        }
+
+        let mut list = v_flex().gap(px(1.)).py(px(2.));
+        if show_go_up {
+            list = list.child(self.render_sftp_go_up_row(cx));
+        }
+        for entry in entries {
+            list = list.child(self.render_sftp_row(entry, cx));
+        }
+        container.child(list)
+    }
+
+    fn render_sftp_go_up_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let (name_ink, muted) = (theme.sidebar_foreground, theme.muted_foreground);
+        let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
+        h_flex()
+            .id("sftp-go-up")
+            .items_center()
+            .gap(px(SFTP_ROW_GAP))
+            .h(px(SFTP_ROW_H))
+            .px(px(ROW_INSET))
+            .rounded(ROW_FILL_RADIUS)
+            .cursor_pointer()
+            .hover(|s| s.bg(gpui_kit::rgb(sf.hover)))
+            .child(
+                Icon::new(IconName::FolderOpen)
+                    .size(px(ROW_GLYPH))
+                    .text_color(muted),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(rems(TEXT))
+                    .text_color(name_ink)
+                    .child(".."),
+            )
+            .on_click(cx.listener(|this, _, _w, cx| this.sftp_up(cx)))
+            .into_any_element()
+    }
+
+    fn render_sftp_row(&self, entry: &SftpEntry, cx: &mut Context<Self>) -> AnyElement {
+        // The file tree's row: every glyph in caption ink, the name in the
+        // rail's title ink, the size a tabular caption at the trailing end.
+        let name_ink = cx.theme().sidebar_foreground;
+        let muted = cx.theme().muted_foreground;
+        let list_hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().popover.hover);
+        let entry = entry.clone();
+        let dir_like = is_dir_like(&entry);
+        let icon = if dir_like {
+            IconName::Folder
+        } else {
+            IconName::File
+        };
+        let is_symlink = matches!(entry.kind, SftpEntryKind::Symlink);
+        let size = if dir_like {
+            String::new()
+        } else {
+            human_size(entry.size)
+        };
+        let name_label = if is_symlink {
+            format!("{} →", entry.name)
+        } else {
+            entry.name.clone()
+        };
+        let row_id = SharedString::from(format!("sftp-row-{}", entry.name));
+
+        let open_entry = entry.clone();
+        let menu_entry = entry.clone();
+        let app = cx.entity().downgrade();
+
+        h_flex()
+            .id(row_id)
+            .items_center()
+            .gap(px(SFTP_ROW_GAP))
+            .h(px(SFTP_ROW_H))
+            .px(px(ROW_INSET))
+            .rounded(ROW_FILL_RADIUS)
+            .cursor_pointer()
+            .hover(move |s| s.bg(list_hover))
+            // Single click, the same gesture the local file tree answers —
+            // this panel used to demand a double click because its open
+            // action was a download, and that caution outlived the download.
+            .on_mouse_down(
+                gpui_kit::MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.sftp_open_entry(open_entry.clone(), window, cx)
+                }),
+            )
+            .child(Icon::new(icon).size(px(ROW_GLYPH)).text_color(muted))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(rems(TEXT))
+                    .text_color(name_ink)
+                    .truncate()
+                    .child(name_label),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(rems(META))
+                    .font_features(crate::ui::theme::tabular_figures())
+                    .text_color(muted)
+                    .child(size),
+            )
+            .context_menu(move |menu, _window, cx| {
+                let danger = cx.theme().danger;
+                Self::sftp_row_context_menu(menu, &menu_entry, dir_like, is_symlink, danger, &app)
+            })
+            .into_any_element()
+    }
+
+    fn sftp_row_context_menu(
+        menu: gpui_kit::component::menu::PopupMenu,
+        entry: &SftpEntry,
+        dir_like: bool,
+        is_symlink: bool,
+        danger: gpui_kit::Hsla,
+        app: &gpui_kit::WeakEntity<Self>,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        let mut menu = menu.min_w(px(180.));
+
+        let primary_label = if dir_like {
+            t(L10nKey::SftpContextOpen)
+        } else {
+            t(L10nKey::SftpContextEdit)
+        };
+        menu = menu.item(PopupMenuItem::new(primary_label).on_click({
+            let app = app.clone();
+            let entry = entry.clone();
+            move |_, window, cx| {
+                let entry = entry.clone();
+                let _ = app.update(cx, |this, cx| this.sftp_open_entry(entry, window, cx));
+            }
+        }));
+
+        // Editing is the double-click now, but a copy in ~/Downloads is still
+        // a thing people come to this menu for.
+        if !dir_like {
+            menu = menu.item(PopupMenuItem::new(t(L10nKey::Download)).on_click({
+                let app = app.clone();
+                let entry = entry.clone();
+                move |_, _window, cx| {
+                    let entry = entry.clone();
+                    let _ = app.update(cx, |this, cx| this.sftp_download_entry(entry, cx));
+                }
+            }));
+        }
+
+        if is_symlink {
+            menu = menu.item(
+                PopupMenuItem::new(t(L10nKey::SftpContextFollowSymlink)).on_click({
+                    let app = app.clone();
+                    let entry = entry.clone();
+                    move |_, _window, cx| {
+                        let entry = entry.clone();
+                        let _ = app.update(cx, |this, cx| this.sftp_follow_symlink(entry, cx));
+                    }
+                }),
+            );
+        }
+
+        menu = menu
+            .item(PopupMenuItem::new(t(L10nKey::SftpContextRename)).on_click({
+                let app = app.clone();
+                let name = entry.name.clone();
+                move |_, window, cx| {
+                    let name = name.clone();
+                    let _ = app.update(cx, |this, cx| this.sftp_begin_rename(name, window, cx));
+                }
+            }))
+            .item(PopupMenuItem::new(t(L10nKey::SftpContextChmod)).on_click({
+                let app = app.clone();
+                let entry = entry.clone();
+                move |_, window, cx| {
+                    let entry = entry.clone();
+                    let _ = app.update(cx, |this, cx| this.sftp_begin_chmod(entry, window, cx));
+                }
+            }))
+            .separator();
+
+        menu.item(
+            PopupMenuItem::element(move |_window, _cx| {
+                div().text_color(danger).child(t(L10nKey::Delete))
+            })
+            .on_click({
+                let app = app.clone();
+                let entry = entry.clone();
+                move |_, window, cx| {
+                    let entry = entry.clone();
+                    let _ = app.update(cx, |this, cx| this.sftp_delete_entry(entry, window, cx));
+                }
+            }),
+        )
+    }
+
+    pub(crate) fn sftp_transfers_footer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.sftp_panel.open_pane_id?;
+        let history = self.sftp_panel.show_history;
+        let jobs: Vec<&SftpJobProgress> = self
+            .sftp_panel
+            .jobs
+            .iter()
+            .filter(|j| history || !self.sftp_panel.dismissed_jobs.contains(&j.job_id))
+            .collect();
+        // A poll that failed is worth a tray of its own. Without one the whole
+        // footer vanishes at the moment the panel stops being able to say
+        // anything about the transfers, which reads as "they are all finished".
+        let jobs_error = self.sftp_panel.jobs_error.as_ref();
+        if jobs.is_empty() && !history && jobs_error.is_none() {
+            return None;
+        }
+
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        // Progress in v4 is ink on a faint track, not the accent: the bar is a
+        // reading, and blue is kept for the things you can press.
+        let (ink, track) = (cx.theme().foreground, cx.theme().muted);
+        let divider = cx.theme().sidebar_border;
+        let hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.hover);
+        let expanded = self.sftp_panel.tray_expanded || history;
+
+        let running = jobs
+            .iter()
+            .filter(|j| matches!(j.state, SftpJobState::Running))
+            .count();
+        let (done, total): (u64, u64) = jobs
+            .iter()
+            .filter(|j| matches!(j.state, SftpJobState::Running))
+            .fold((0, 0), |(d, t), j| (d + j.bytes_done, t + j.bytes_total));
+        let failed = jobs
+            .iter()
+            .filter(|j| matches!(j.state, SftpJobState::Error))
+            .count();
+        let pct = if total > 0 {
+            ((done as f64 / total as f64) * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        // The failed poll outranks the counts, because the counts are only as
+        // fresh as the last poll that got through and the summary is the one
+        // line a collapsed tray gets to say.
+        let summary = if let Some(e) = jobs_error {
+            t_fmt(L10nKey::SftpTransferListFailed, &[("error", e)])
+        } else if running > 0 {
+            t_fmt(
+                L10nKey::SftpTransferSummaryRunning,
+                &[
+                    ("count", &running.to_string()),
+                    ("pct", &format!("{pct:.0}")),
+                ],
+            )
+        } else if failed > 0 {
+            t_fmt(
+                L10nKey::SftpTransferSummaryFailed,
+                &[("count", &failed.to_string())],
+            )
+        } else {
+            t(L10nKey::SftpTransferSummaryIdle).to_string()
+        };
+        let summary_color = if jobs_error.is_some() || (running == 0 && failed > 0) {
+            danger
+        } else {
+            muted
+        };
+
+        let head = h_flex()
+            .id("sftp-transfers-summary")
+            .items_center()
+            .gap(px(6.))
+            // The disclosure hangs in the gutter so the summary's text starts
+            // on the panel's text column, the way a tree row's chevron does.
+            .pl(px(TEXT_INSET - TRAY_CHEVRON - 6.))
+            .pr(px(CONTENT_INSET))
+            .h(px(28.))
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover))
+            .on_click(cx.listener(|this, _, _w, cx| this.sftp_toggle_tray(cx)))
+            .child(
+                Icon::new(match expanded {
+                    true => IconName::ChevronDown,
+                    false => IconName::ChevronRight,
+                })
+                .size(px(TRAY_CHEVRON))
+                .text_color(muted),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(rems(META))
+                    .font_features(crate::ui::theme::tabular_figures())
+                    .text_color(summary_color)
+                    .child(summary),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation()
+                    })
+                    .child(
+                        crate::ui::tab_strip::chrome_tile(
+                            Button::new("sftp-tray-close")
+                                .icon(IconName::Close)
+                                .xsmall(),
+                            false,
+                            cx,
+                        )
+                        .w(px(crate::ui::tab_strip::MIN_TARGET))
+                        .h(px(crate::ui::tab_strip::MIN_TARGET))
+                        .rounded(px(crate::ui::tab_strip::RAIL_TILE_RADIUS))
+                        .tooltip(t(L10nKey::Dismiss))
+                        .on_click(cx.listener(|this, _, _w, cx| this.sftp_dismiss_tray(cx))),
+                    ),
+            );
+
+        let underline = div().h(px(2.)).w_full().bg(track).child(
+            div()
+                .h_full()
+                .w(gpui_kit::relative((pct / 100.0) as f32))
+                .bg(if failed > 0 { danger } else { ink }),
+        );
+
+        let body = expanded.then(|| {
+            let inner: Div = if jobs.is_empty() {
+                // The summary above says the same thing when a poll failed, but
+                // it is a single truncated line; this one wraps, so it is where
+                // the reason is actually readable.
+                let (text, color): (gpui_kit::SharedString, _) = match jobs_error {
+                    Some(e) => (
+                        t_fmt(L10nKey::SftpTransferListFailed, &[("error", e)]).into(),
+                        danger,
+                    ),
+                    None => (t(L10nKey::SftpNoTransfers).into(), muted),
+                };
+                v_flex().child(
+                    div()
+                        .px(px(TEXT_INSET))
+                        .py(px(3.))
+                        .text_size(rems(META))
+                        .text_color(color)
+                        .child(text),
+                )
+            } else {
+                let mut list = v_flex().px(px(TEXT_INSET)).pb(px(8.)).gap(px(8.));
+                for job in jobs {
+                    list = list.child(self.render_sftp_job(job, cx));
+                }
+                list
+            };
+            // The list caps at 200px and scrolls past it; it was the last
+            // scroll area in the app with nothing to say so. This wrapper only
+            // overlays the bar, so the box keeps the height it already had.
+            crate::ui::scrollbar::over_vertical_scroll(
+                "sftp-transfers-scrollbar",
+                div()
+                    .id("sftp-transfers-list")
+                    .max_h(px(200.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.sftp_panel.transfers_scroll)
+                    .child(inner),
+                &self.sftp_panel.transfers_scroll,
+            )
+        });
+
+        Some(
+            // No fill: the tray is a child of the right panel, which already
+            // paints `workspace_surface_color`. Painting it again stacked a
+            // second src-over pass of the same translucent surface and left a
+            // visibly darker band with a hard seam under a backdrop material.
+            v_flex()
+                .flex_none()
+                .border_t_1()
+                .border_color(divider)
+                .child(head)
+                .when(running > 0 && !expanded, |this| this.child(underline))
+                .children(body)
+                .into_any_element(),
+        )
+    }
+
+    fn render_sftp_job(&self, job: &SftpJobProgress, cx: &mut Context<Self>) -> Div {
+        let foreground = cx.theme().foreground;
+        let track = cx.theme().muted;
+        let danger = cx.theme().danger;
+        let success = cx.theme().success;
+        let muted = cx.theme().muted_foreground;
+        let arrow = match job.kind {
+            SftpTransferKind::Upload => "↑",
+            SftpTransferKind::Download => "↓",
+        };
+        let name = remote_basename(&job.remote);
+        let pct = if job.bytes_total > 0 {
+            ((job.bytes_done as f64 / job.bytes_total as f64) * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        let status = match job.state {
+            SftpJobState::Running => t_fmt(
+                L10nKey::SftpTransferProgress,
+                &[
+                    ("done", &human_size(job.bytes_done)),
+                    ("total", &human_size(job.bytes_total)),
+                    ("pct", &format!("{pct:.0}")),
+                ],
+            ),
+            SftpJobState::Done => t(L10nKey::SftpTransferDone).to_string(),
+            SftpJobState::Cancelled => t(L10nKey::SftpTransferCancelled).to_string(),
+            SftpJobState::Error => job
+                .error
+                .clone()
+                .unwrap_or_else(|| t(L10nKey::SftpTransferError).to_string()),
+        };
+        let status_color = match job.state {
+            SftpJobState::Error => danger,
+            SftpJobState::Done => success,
+            _ => muted,
+        };
+        // The tray's own bar: body ink on the faint track, red once it fails.
+        let bar_color = if matches!(job.state, SftpJobState::Error) {
+            danger
+        } else {
+            foreground
+        };
+        let job_id = job.job_id;
+        let running = matches!(job.state, SftpJobState::Running);
+        let done_download = matches!(job.state, SftpJobState::Done)
+            && matches!(job.kind, SftpTransferKind::Download)
+            && !job.local.is_empty();
+        let local = job.local.clone();
+
+        v_flex()
+            .gap_0p5()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(rems(META))
+                            .text_color(foreground)
+                            .truncate()
+                            .child(format!("{arrow} {name}")),
+                    )
+                    .when(done_download, |this| {
+                        this.child(
+                            crate::ui::tab_strip::hit_target(
+                                Button::new(("sftp-reveal-job", job_id as usize))
+                                    .icon(IconName::FolderOpen)
+                                    .xsmall()
+                                    .ghost(),
+                            )
+                            .tooltip(crate::ui::right_panel::reveal_label())
+                            .on_click(cx.listener(
+                                move |this, _, _w, cx| this.sftp_reveal_download(local.clone(), cx),
+                            )),
+                        )
+                    })
+                    .when(running, |this| {
+                        this.child(
+                            crate::ui::tab_strip::hit_target(
+                                Button::new(("sftp-cancel-job", job_id as usize))
+                                    .icon(IconName::Close)
+                                    .xsmall()
+                                    .ghost(),
+                            )
+                            .tooltip(t(L10nKey::Cancel))
+                            .on_click(
+                                cx.listener(move |this, _, _w, cx| {
+                                    this.sftp_cancel_job(job_id, cx)
+                                }),
+                            ),
+                        )
+                    }),
+            )
+            .child(
+                div().h(px(3.)).w_full().rounded_full().bg(track).child(
+                    div()
+                        .h_full()
+                        .w(gpui_kit::relative((pct / 100.0) as f32))
+                        .rounded_full()
+                        .bg(bar_color),
+                ),
+            )
+            .child(
+                div()
+                    .text_size(rems(META))
+                    .font_features(crate::ui::theme::tabular_figures())
+                    .text_color(status_color)
+                    .child(status),
+            )
+    }
+}
+
+/// Where the browser starts when it opens on a pane.
+///
+/// Opening the panel afresh is a request to see where the shell is now, so the
+/// shell's directory wins over wherever the browser was left last time. When
+/// the browser instead follows a pane switch with the panel still open, the
+/// user never left it, so the directory they were browsing there comes back.
+/// Either falls back to the other; `None` means neither is known and the
+/// caller goes to the login directory.
+fn sftp_start_dir(
+    fresh_open: bool,
+    shell_cwd: Option<String>,
+    remembered: Option<String>,
+) -> Option<String> {
+    if fresh_open {
+        shell_cwd.or(remembered)
+    } else {
+        remembered.or(shell_cwd)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fresh_open_starts_at_the_shell_directory() {
+        let shell = Some("/srv/app".to_string());
+        let last = Some("/var/log".to_string());
+        assert_eq!(
+            sftp_start_dir(true, shell.clone(), last.clone()).as_deref(),
+            Some("/srv/app")
+        );
+        assert_eq!(
+            sftp_start_dir(true, None, last.clone()).as_deref(),
+            Some("/var/log"),
+            "no shell cwd (no shell integration) falls back to the last browsed"
+        );
+        assert_eq!(sftp_start_dir(true, None, None), None);
+    }
+
+    #[test]
+    fn a_pane_switch_returns_to_the_directory_browsed_there() {
+        let shell = Some("/srv/app".to_string());
+        let last = Some("/var/log".to_string());
+        assert_eq!(
+            sftp_start_dir(false, shell.clone(), last).as_deref(),
+            Some("/var/log")
+        );
+        assert_eq!(
+            sftp_start_dir(false, shell, None).as_deref(),
+            Some("/srv/app"),
+            "a pane never browsed starts at its shell directory"
+        );
+    }
+
+    fn upload(job_id: u64, state: SftpJobState) -> SftpJobProgress {
+        SftpJobProgress {
+            job_id,
+            pane_id: 1,
+            kind: SftpTransferKind::Upload,
+            state,
+            current: String::new(),
+            bytes_done: 0,
+            bytes_total: 0,
+            error: None,
+            local: "/here/note.txt".into(),
+            remote: "/there/note.txt".into(),
+        }
+    }
+
+    #[test]
+    fn an_upload_owes_a_listing_until_it_stops_running() {
+        let owed = HashSet::from([7]);
+        let running = uploads_still_running(&owed, &[upload(7, SftpJobState::Running)]);
+        assert_eq!(
+            running, owed,
+            "a listing taken now shows the temporary name"
+        );
+
+        for done in [
+            SftpJobState::Done,
+            SftpJobState::Error,
+            SftpJobState::Cancelled,
+        ] {
+            let running = uploads_still_running(&owed, &[upload(7, done)]);
+            assert!(running.is_empty(), "{done:?} still owes the listing");
+        }
+    }
+
+    #[test]
+    fn a_job_that_falls_off_the_list_is_not_waited_on_forever() {
+        let owed = HashSet::from([7]);
+        assert!(uploads_still_running(&owed, &[]).is_empty());
+    }
+
+    #[test]
+    fn one_upload_finishing_does_not_settle_the_one_beside_it() {
+        let owed = HashSet::from([7, 8]);
+        let running = uploads_still_running(
+            &owed,
+            &[
+                upload(7, SftpJobState::Done),
+                upload(8, SftpJobState::Running),
+            ],
+        );
+        assert_eq!(running, HashSet::from([8]));
+    }
+
+    #[test]
+    fn a_failed_poll_keeps_the_transfers_it_cannot_see() {
+        let previous = vec![upload(7, SftpJobState::Running)];
+        let (jobs, failure) = apply_poll(previous.clone(), Err("broken pipe".into()));
+        assert_eq!(jobs.len(), 1, "the last list anyone saw is still the truth");
+        assert_eq!(jobs[0].job_id, 7);
+        assert_eq!(failure.as_deref(), Some("broken pipe"));
+
+        // And the upload is still owed its listing, so nothing settles behind
+        // a link that has gone quiet.
+        assert_eq!(
+            uploads_still_running(&HashSet::from([7]), &jobs),
+            HashSet::from([7])
+        );
+    }
+
+    #[test]
+    fn a_poll_that_got_through_replaces_the_list_and_clears_the_failure() {
+        let previous = vec![upload(7, SftpJobState::Running)];
+        let (jobs, failure) = apply_poll(previous, Ok(vec![upload(8, SftpJobState::Done)]));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].job_id, 8);
+        assert!(failure.is_none());
+
+        // An empty reply from a daemon that answered really is an empty list.
+        let (jobs, failure) = apply_poll(jobs, Ok(Vec::new()));
+        assert!(jobs.is_empty());
+        assert!(failure.is_none());
+    }
+
+    #[test]
+    fn a_second_download_is_numbered_rather_than_written_over_the_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d = dir.path();
+        let free = HashSet::new();
+
+        // Nothing there: the plain name.
+        assert_eq!(
+            free_local_path(d, "notes.txt", &free),
+            Some(d.join("notes.txt"))
+        );
+
+        std::fs::write(d.join("notes.txt"), b"first").expect("write");
+        assert_eq!(
+            free_local_path(d, "notes.txt", &free),
+            Some(d.join("notes (2).txt"))
+        );
+        std::fs::write(d.join("notes (2).txt"), b"second").expect("write");
+        assert_eq!(
+            free_local_path(d, "notes.txt", &free),
+            Some(d.join("notes (3).txt"))
+        );
+
+        // Extensionless and dotfiles keep their shape.
+        std::fs::write(d.join("Makefile"), b"x").expect("write");
+        assert_eq!(
+            free_local_path(d, "Makefile", &free),
+            Some(d.join("Makefile (2)"))
+        );
+        std::fs::write(d.join(".env"), b"x").expect("write");
+        assert_eq!(free_local_path(d, ".env", &free), Some(d.join(".env (2)")));
+
+        // And the first file is still the first file.
+        assert_eq!(
+            std::fs::read(d.join("notes.txt")).expect("read"),
+            b"first".to_vec()
+        );
+    }
+
+    #[test]
+    fn a_download_still_in_flight_holds_its_name_before_the_file_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d = dir.path();
+
+        // The first download has been handed a name but has written nothing
+        // yet, so `exists()` cannot see it. A second one must not take it.
+        let claimed: HashSet<PathBuf> = [d.join("notes.txt")].into_iter().collect();
+        assert_eq!(
+            free_local_path(d, "notes.txt", &claimed),
+            Some(d.join("notes (2).txt"))
+        );
+    }
+
+    #[test]
+    fn every_name_taken_reports_rather_than_overwriting() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d = dir.path();
+        let mut claimed: HashSet<PathBuf> = HashSet::new();
+        claimed.insert(d.join("notes.txt"));
+        for n in 2..1000u32 {
+            claimed.insert(d.join(format!("notes ({n}).txt")));
+        }
+        assert_eq!(free_local_path(d, "notes.txt", &claimed), None);
+    }
+
+    #[test]
+    fn the_overwrite_question_counts_correctly_in_every_locale() {
+        use crate::ui::i18n::{L10nKey, t_plural};
+        for locale in ["en", "zh-CN"] {
+            crate::ui::i18n::set_locale(locale);
+            for n in [1usize, 2, 7] {
+                let body = t_plural(L10nKey::SftpReplaceBody, n, &[("names", "a.txt")]);
+                assert!(body.contains("a.txt"), "{locale}/{n}: {body}");
+                assert!(!body.contains("{names}"), "{locale}/{n}: {body}");
+            }
+        }
+        crate::ui::i18n::set_locale("en");
+    }
+
+    fn entry(name: &str, kind: SftpEntryKind, target_is_dir: bool) -> SftpEntry {
+        SftpEntry {
+            name: name.to_string(),
+            kind,
+            size: 0,
+            mtime: 0,
+            permissions: 0,
+            target_is_dir,
+        }
+    }
+
+    #[test]
+    fn breadcrumb_segments_splits_absolute_paths() {
+        assert_eq!(breadcrumb_segments("/"), vec![("/".into(), "/".into())]);
+        assert_eq!(
+            breadcrumb_segments("/home/deploy"),
+            vec![
+                ("/".to_string(), "/".to_string()),
+                ("home".to_string(), "/home".to_string()),
+                ("deploy".to_string(), "/home/deploy".to_string()),
+            ]
+        );
+        assert_eq!(
+            breadcrumb_segments("/项目/子"),
+            vec![
+                ("/".to_string(), "/".to_string()),
+                ("项目".to_string(), "/项目".to_string()),
+                ("子".to_string(), "/项目/子".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_puts_dirs_first_then_name_case_insensitively() {
+        let entries = vec![
+            entry("Zebra.txt", SftpEntryKind::File, false),
+            entry("apple", SftpEntryKind::Dir, false),
+            entry("beta.txt", SftpEntryKind::File, false),
+            entry("Alpha", SftpEntryKind::Dir, false),
+            entry("link-to-dir", SftpEntryKind::Symlink, true),
+            entry("link-to-file", SftpEntryKind::Symlink, false),
+        ];
+        let sorted: Vec<&str> = sorted_filtered_entries(&entries, "")
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(
+            sorted,
+            vec![
+                "Alpha",
+                "apple",
+                "link-to-dir",
+                "beta.txt",
+                "link-to-file",
+                "Zebra.txt",
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_is_case_insensitive_substring() {
+        let entries = vec![
+            entry("README.md", SftpEntryKind::File, false),
+            entry("src", SftpEntryKind::Dir, false),
+            entry("Cargo.toml", SftpEntryKind::File, false),
+        ];
+        let names: Vec<&str> = sorted_filtered_entries(&entries, "a")
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Cargo.toml", "README.md"]);
+    }
+
+    #[test]
+    fn human_size_scales_units() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1024), "1.0K");
+        assert_eq!(human_size(1536), "1.5K");
+        assert_eq!(human_size(1024 * 1024), "1.0M");
+    }
+
+    #[test]
+    fn mode_string_renders_rwx() {
+        assert_eq!(mode_string(0o755), "rwxr-xr-x");
+        assert_eq!(mode_string(0o644), "rw-r--r--");
+        assert_eq!(mode_string(0o000), "---------");
+        assert_eq!(mode_string(0o777), "rwxrwxrwx");
+    }
+}
+
+#[cfg(test)]
+mod gpui_tests {
+    use super::SftpEdit;
+    use crate::core::config::{Config, RightPanelTab};
+    use crate::core::session::Session;
+    use crate::ui::app::LyrelApp;
+    use gpui_kit::component::input::InputState;
+    use gpui_kit::{AppContext, Entity, Focusable as _, TestAppContext, VisualTestContext};
+
+    fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
+        crate::core::config::pin_test_config_dir();
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(Config::default());
+            crate::ui::keymap::init(cx);
+        });
+        let window = cx.add_window(|window, cx| {
+            let app =
+                cx.new(|cx| LyrelApp::with_session(None, Some(Session::default()), window, cx));
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        cx.background_executor.run_until_parked();
+        let app = window
+            .update(cx, |root, _, _| {
+                root.view()
+                    .clone()
+                    .downcast::<LyrelApp>()
+                    .unwrap_or_else(|_| panic!("window root wraps a LyrelApp"))
+            })
+            .unwrap();
+        let vcx = VisualTestContext::from_window(window.into(), cx);
+        (app, vcx)
+    }
+
+    fn panel(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> (bool, RightPanelTab) {
+        vcx.update(|_, cx| {
+            let app = app.read(cx);
+            (app.right_panel_visible, app.right_panel_tab)
+        })
+    }
+
+    /// The edit box owns the focus while the form is up, so taking the form
+    /// down has to hand the focus back.
+    ///
+    /// It did not. Naming a new folder and then pressing Escape left the caret
+    /// on an element that had stopped rendering, and the next keystroke went
+    /// nowhere until you clicked. `ssh_prompt` asserts in a comment *and* a
+    /// test that every overlay in the app hands focus back on the way out;
+    /// these four forms were the counterexample, and `sftp_cancel_edit` could
+    /// not have done it anyway — it took no `Window` at all.
+    #[gpui_kit::test]
+    fn cancelling_the_edit_form_hands_focus_back(cx: &mut TestAppContext) {
+        let (app, mut vcx) = harness(cx);
+
+        // One update, no frame in between: the harness has no panel to draw
+        // the box in, so a frame would count its focus as lost and hand it back
+        // to the app before the cancel ever ran.
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = cx.new(|cx| InputState::new(window, cx));
+            input.update(cx, |s, cx| s.focus(window, cx));
+            let handle = input.read(cx).focus_handle(cx);
+            app.sftp_panel.editing = Some(SftpEdit::NewFolder(input));
+            assert!(
+                handle.is_focused(window),
+                "the box should hold focus while the form is up"
+            );
+            app.sftp_cancel_edit(window, cx);
+            assert!(app.sftp_panel.editing.is_none(), "the form is down");
+            assert!(
+                !handle.is_focused(window),
+                "the focus the box held must have gone somewhere still on screen"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn toggle_sftp_opens_files_then_closes_the_panel(cx: &mut TestAppContext) {
+        let (app, mut vcx) = harness(cx);
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.right_panel_visible = false;
+            app.toggle_sftp(window, cx);
+        });
+        assert_eq!(panel(&app, &mut vcx), (true, RightPanelTab::Files));
+
+        app.update_in(&mut vcx, |app, window, cx| app.toggle_sftp(window, cx));
+        assert!(!panel(&app, &mut vcx).0, "second press should close");
+
+        app.update_in(&mut vcx, |app, window, cx| app.toggle_sftp(window, cx));
+        assert_eq!(panel(&app, &mut vcx), (true, RightPanelTab::Files));
+    }
+
+    #[gpui_kit::test]
+    fn toggle_sftp_switches_tabs_before_it_closes(cx: &mut TestAppContext) {
+        let (app, mut vcx) = harness(cx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.set_right_panel_tab(RightPanelTab::Info, cx);
+            app.toggle_sftp(window, cx);
+        });
+        assert_eq!(panel(&app, &mut vcx), (true, RightPanelTab::Files));
+    }
+}

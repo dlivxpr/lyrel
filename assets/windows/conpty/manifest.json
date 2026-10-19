@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "package": "Microsoft.Windows.Console.ConPTY",
+  "packageVersion": "1.25.260930003",
+  "fileVersion": "1.25.2609.30003",
+  "nupkgUrl": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.25.260930003/microsoft.windows.console.conpty.1.25.260930003.nupkg",
+  "nupkgSha512": "LuqMk9r5oTzeRne35IOlUdSQ7DkjorOIbcnODGZ81MvmUpTr/1VBQz3fAdCNCwkfuR0Mluq+H7rS3Hes/A1fOw==",
+  "licenseSha256": "6EFBD1329D65CB97FE1F5AA9E5B2D2C18840C73A4914008E201F9AC753D8F14C",
+  "files": {
+    "x64": {
+      "conpty.dll": "FEEEF341D891643C62D30B6B07800BC70F0BC148F44CB8C3BEE84AA557AE805A",
+      "OpenConsole.exe": "3D66B23D0A71BB8EED2B77EDC8B9DF9BF54CE6C8FB74C863A30E760997F80586"
+    }
+  }
+}

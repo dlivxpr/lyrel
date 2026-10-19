@@ -1,0 +1,4049 @@
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::{Context, PromptLevel, Window};
+use lyrel_core::host::HostId;
+use lyrel_core::host::remote::RemoteHost;
+
+use crate::core::config::Config;
+use crate::core::session::{RemoteRef, RemoteTarget, WorkspaceId, WorkspaceStore};
+use crate::daemon::control::{ControlEvent, ControlRequest, ReplyOk};
+use crate::daemon::install::InstallDecision;
+use crate::ui::app::LyrelApp;
+use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::remote_connect::{self, HostChoice, RemoteWorkspaceRow};
+
+pub enum ConnectFlow {
+    Connecting { choice: HostChoice },
+    Failed { choice: HostChoice, error: String },
+}
+
+impl ConnectFlow {
+    pub fn choice(&self) -> Option<&HostChoice> {
+        match self {
+            ConnectFlow::Connecting { choice } | ConnectFlow::Failed { choice, .. } => Some(choice),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoteStatus {
+    Disconnected,
+    Connecting,
+    Attached,
+    Reconnecting {
+        attempt: u32,
+        /// Why the previous attempt did not land. The pump overwrites the
+        /// state back to `Reconnecting` a quarter of a second after an attempt
+        /// fails, so without carrying the reason along the strip counts
+        /// attempts at a user who was never told what is going wrong.
+        last_error: Option<String>,
+    },
+    Preempted {
+        by: String,
+    },
+    Failed(String),
+    /// The machine answered, and answered as lyrel — with a server the other
+    /// side of a control-dialect bump. Carries the refusal verbatim so it can
+    /// be restated for a reader. Parked like `RouteLost`, because a retry is
+    /// just as hopeless: nothing about either build changes between attempts.
+    /// Unlike `RouteLost` there is something to do about it, so this one keeps
+    /// a button — the one that updates the server over there.
+    ServerMismatch(String),
+    /// The route itself is gone — the profile was deleted or the alias left
+    /// the ssh config — so no reconnect can ever succeed (#485). Parked: no
+    /// retry button, just the truth plus the way back.
+    RouteLost,
+}
+
+impl RemoteStatus {
+    pub fn strip_message(&self, machine: &str) -> Option<String> {
+        match self {
+            RemoteStatus::Attached => None,
+            RemoteStatus::Disconnected => Some(t_fmt(
+                L10nKey::RemoteStripDisconnected,
+                &[("machine", machine)],
+            )),
+            RemoteStatus::Connecting => Some(t_fmt(
+                L10nKey::RemoteStripConnecting,
+                &[("machine", machine)],
+            )),
+            RemoteStatus::Reconnecting {
+                attempt,
+                last_error,
+            } => Some(match (*attempt, last_error.as_deref()) {
+                (0, None) => t_fmt(L10nKey::RemoteStripReconnecting, &[("machine", machine)]),
+                (0, Some(error)) => t_fmt(
+                    L10nKey::RemoteStripReconnectingWhy,
+                    &[("machine", machine), ("error", error)],
+                ),
+                (attempt, None) => t_fmt(
+                    L10nKey::RemoteStripReconnectingAttempt,
+                    &[("machine", machine), ("count", &(attempt + 1).to_string())],
+                ),
+                (attempt, Some(error)) => t_fmt(
+                    L10nKey::RemoteStripReconnectingAttemptWhy,
+                    &[
+                        ("machine", machine),
+                        ("count", &(attempt + 1).to_string()),
+                        ("error", error),
+                    ],
+                ),
+            }),
+            RemoteStatus::Preempted { by } => {
+                Some(t_fmt(L10nKey::RemoteStripPreempted, &[("by", by)]))
+            }
+            RemoteStatus::Failed(e) => Some(t_fmt(
+                L10nKey::RemoteStripFailed,
+                &[("machine", machine), ("error", e)],
+            )),
+            // The protocol layer's wording reads like the far end is not lyrel
+            // at all, and it is 20 words of dialect numbers. Say which side is
+            // behind instead. Nothing becomes `ServerMismatch` unless the
+            // refusal parsed — `is_dialect_refusal` is that same parse — so the
+            // fallback is unreachable; it costs nothing and beats an empty
+            // strip if that ever stops being true.
+            RemoteStatus::ServerMismatch(e) => Some(
+                remote_connect::dialect_complaint(e, machine).unwrap_or_else(|| {
+                    t_fmt(
+                        L10nKey::RemoteStripFailed,
+                        &[("machine", machine), ("error", e)],
+                    )
+                }),
+            ),
+            RemoteStatus::RouteLost => Some(t_fmt(
+                L10nKey::RemoteStripRouteLost,
+                &[("machine", machine)],
+            )),
+        }
+    }
+
+    pub fn input_notice(&self) -> Option<&'static str> {
+        match self {
+            RemoteStatus::Attached => None,
+            RemoteStatus::Preempted { .. } => Some(t(L10nKey::RemoteNoticePreempted)),
+            _ => Some(t(L10nKey::RemoteNoticeDisconnected)),
+        }
+    }
+
+    pub fn action_label(&self) -> Option<&'static str> {
+        match self {
+            RemoteStatus::Attached | RemoteStatus::Connecting => None,
+            RemoteStatus::Reconnecting { .. } => Some(t(L10nKey::RemoteActionRetryNow)),
+            RemoteStatus::Preempted { .. } => Some(t(L10nKey::RemoteActionTakeBack)),
+            RemoteStatus::Disconnected => Some(t(L10nKey::RemoteActionConnect)),
+            RemoteStatus::Failed(_) => Some(t(L10nKey::RemoteActionRetry)),
+            // Not "retry" — retrying is what the strip used to offer here, and
+            // it can only fail the same way. The only move that changes the
+            // answer is installing the server this build speaks to.
+            RemoteStatus::ServerMismatch(e) => Some(t(mismatch_action_key(e))),
+            // A retry on a dead route fails deterministically; the switcher
+            // row carries the honest actions (forget the entry, or dismiss).
+            RemoteStatus::RouteLost => None,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "reached through `workspace_accepts_input`, whose callers are in terminal/view.rs"
+    )]
+    pub fn accepts_input(&self) -> bool {
+        matches!(self, RemoteStatus::Attached)
+    }
+}
+
+/// Which way the one button points.
+///
+/// Both directions do the same thing — put *this* build's server on that
+/// machine — and that is an update only while the machine is behind. On one
+/// that is ahead it is a downgrade, and the copy beside the button says so:
+/// updating lyrel here is the first suggestion, replacing the server there the
+/// second. The button is the second one, so it should not wear the first one's
+/// word.
+pub(crate) fn mismatch_action_key(refusal: &str) -> L10nKey {
+    match crate::daemon::control::parse_dialect_refusal(refusal) {
+        Some(r) if r.peer > r.ours => L10nKey::RemoteMismatchDowngradeServer,
+        _ => L10nKey::RemoteMismatchReplaceServer,
+    }
+}
+
+/// One line for an install in flight — bytes moved, or the wait for the far end
+/// to come back up. Shared by the switcher's progress bar and the strip's, so a
+/// user watching both is not told two different things.
+pub(crate) fn install_phase_caption(phase: crate::daemon::install::InstallPhase) -> String {
+    use crate::daemon::install::InstallPhase;
+    use crate::ui::remote_connect::human_bytes;
+    match phase {
+        InstallPhase::Restarting => t(L10nKey::SwitcherStartingServer).to_string(),
+        InstallPhase::Downloading { done, total } => match total {
+            Some(total) => t_fmt(
+                L10nKey::SwitcherDownloadingServerWithTotal,
+                &[("done", &human_bytes(done)), ("total", &human_bytes(total))],
+            ),
+            None => t_fmt(
+                L10nKey::SwitcherDownloadingServerNoTotal,
+                &[("done", &human_bytes(done))],
+            ),
+        },
+        InstallPhase::Uploading { done, total } => t_fmt(
+            L10nKey::SwitcherCopyingServer,
+            &[("done", &human_bytes(done)), ("total", &human_bytes(total))],
+        ),
+    }
+}
+
+/// How tall the filled bar is, wherever it is drawn.
+const PROGRESS_H: f32 = 3.0;
+
+/// The thin filled bar under an install's caption. `Restarting` has no
+/// fraction to show — the far end is either back or it is not — so it draws
+/// empty, which is what the switcher has always done and is still better than
+/// the bar vanishing for the last leg.
+///
+/// The switcher draws this one too. It used to build its own copy of exactly
+/// this shape, which is one copy too many for a bar whose whole point is that
+/// both places say the same thing.
+pub(crate) fn install_progress_bar(
+    phase: crate::daemon::install::InstallPhase,
+    cx: &gpui_kit::App,
+) -> impl gpui_kit::IntoElement + use<> {
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+    let theme = cx.theme();
+    gpui_kit::div()
+        .debug_selector(|| "remote-install-bar".into())
+        .w_full()
+        .h(gpui_kit::px(PROGRESS_H))
+        // The fill is a percentage of this track, and the track is rounded.
+        // Clipping to it means no fraction and no rounding can put a pixel of
+        // warning colour outside the groove it belongs in.
+        .overflow_hidden()
+        .rounded_full()
+        .bg(theme.border)
+        .child(
+            gpui_kit::div()
+                .h_full()
+                .w(gpui_kit::relative(phase.fraction().unwrap_or(0.0)))
+                .rounded_full()
+                .bg(theme.warning),
+        )
+}
+
+/// How wide a remote status card is when the window can spare the room.
+const STATUS_CARD_W: f32 = 560.0;
+
+/// How much of a narrow window a status card may take.
+const STATUS_CARD_MAX: f32 = 0.92;
+
+/// The frame both remote status strips share: home draws one under the logo, a
+/// window with tabs floats one over its panes. Same machine, same sentence, and
+/// — since a startup failure now carries the far end's own words — the same
+/// need to survive a message that is a paragraph rather than a phrase.
+///
+/// A definite width is the whole of it. Sized by its content instead, the card
+/// grew with the message: at 1440px, one startup failure laid it out 1978px
+/// wide, so the far half of the sentence and the retry button were off the
+/// screen. It also gives the progress bar's `w_full` something bounded to be a
+/// percentage of, which is what #774's first screenshot doubts — though a bar
+/// escaping its card never did reproduce here, before the change or after.
+pub(crate) fn status_card(cx: &gpui_kit::App) -> gpui_kit::Div {
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::{InteractiveElement as _, Styled as _};
+    let theme = cx.theme();
+    gpui_kit::component::v_flex()
+        .debug_selector(|| "remote-status-card".into())
+        .w(gpui_kit::px(STATUS_CARD_W))
+        .max_w(gpui_kit::relative(STATUS_CARD_MAX))
+        .min_w_0()
+        .gap(gpui_kit::px(6.))
+        .px(gpui_kit::px(12.))
+        .py(gpui_kit::px(6.))
+        .rounded(gpui_kit::px(10.))
+        .bg(theme.popover)
+        .border_1()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(theme.muted_foreground)
+}
+
+/// The row inside a status card: icon, message, and the one button. It wraps,
+/// so a long message pushes the button to a second line instead of off the
+/// window.
+pub(crate) fn status_row() -> gpui_kit::Div {
+    use gpui_kit::Styled as _;
+    gpui_kit::component::h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+}
+
+/// The message half of that row. `flex_1` with `min_w_0` is what lets it be
+/// narrower than its longest word, which is what makes wrapping possible at
+/// all.
+pub(crate) fn status_message(message: String) -> gpui_kit::Div {
+    use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+    gpui_kit::div()
+        .debug_selector(|| "remote-status-message".into())
+        .flex_1()
+        .min_w_0()
+        .whitespace_normal()
+        .child(message)
+}
+
+/// What the remote strip's button is for, once the status has been read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum StripAction {
+    /// Connect, reconnect, retry, take back — every move that amounts to
+    /// "try the link again now".
+    Retry,
+    UpdateServer {
+        target: RemoteTarget,
+        label: String,
+        /// The word for it, carried rather than recomputed: the confirmation
+        /// this ends in must offer the same one the button did.
+        action: L10nKey,
+    },
+}
+
+pub const RECONNECT_FIRST: std::time::Duration = std::time::Duration::from_secs(1);
+pub const RECONNECT_CAP: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long a link parked on a dialect refusal waits before looking again.
+///
+/// Not a backoff — it never grows, and it is two orders of magnitude off the
+/// reconnect clock on purpose. The refusal only stops being true when something
+/// happens on the far end that nobody here is told about, so this is a slow
+/// question about someone else's machine, not a retry of our own failure.
+pub const PARKED_RECHECK: std::time::Duration = std::time::Duration::from_secs(300);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Backoff {
+    attempt: u32,
+}
+
+impl Backoff {
+    pub fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    pub fn delay(&self) -> std::time::Duration {
+        let secs = 1u64.checked_shl(self.attempt).unwrap_or(u64::MAX);
+        RECONNECT_FIRST
+            .saturating_mul(u32::try_from(secs).unwrap_or(u32::MAX))
+            .min(RECONNECT_CAP)
+    }
+
+    pub fn advance(&mut self) -> std::time::Duration {
+        let delay = self.delay();
+        self.attempt = self.attempt.saturating_add(1);
+        delay
+    }
+
+    pub fn reset(&mut self) {
+        self.attempt = 0;
+    }
+}
+
+#[derive(Default)]
+#[allow(
+    dead_code,
+    reason = "the prompt relay that calls this is the other half of D7's start-up connect"
+)]
+pub struct AuthSheetQueue {
+    holder: Option<HostId>,
+    waiting: std::collections::VecDeque<HostId>,
+}
+
+#[allow(
+    dead_code,
+    reason = "the prompt relay that calls this is the other half of D7's start-up connect"
+)]
+impl AuthSheetQueue {
+    pub fn request(&mut self, who: HostId) -> bool {
+        match self.holder {
+            Some(current) if current == who => true,
+            Some(_) => {
+                if !self.waiting.contains(&who) {
+                    self.waiting.push_back(who);
+                }
+                false
+            }
+            None => {
+                self.holder = Some(who);
+                self.waiting.retain(|w| *w != who);
+                true
+            }
+        }
+    }
+
+    pub fn release(&mut self, who: HostId) -> Option<HostId> {
+        if self.holder != Some(who) {
+            self.waiting.retain(|w| *w != who);
+            return None;
+        }
+        self.holder = self.waiting.pop_front();
+        self.holder
+    }
+
+    pub fn withdraw(&mut self, who: HostId) {
+        self.waiting.retain(|w| *w != who);
+    }
+
+    pub fn holder(&self) -> Option<HostId> {
+        self.holder
+    }
+
+    pub fn waiting(&self) -> usize {
+        self.waiting.len()
+    }
+}
+
+impl LyrelApp {
+    pub(crate) fn spawn_host(&self, cx: &gpui_kit::App) -> HostId {
+        WorkspaceStore::host_of(cx, self.workspace)
+    }
+
+    pub(crate) fn can_spawn_locally(&self, cx: &gpui_kit::App) -> bool {
+        self.spawn_host(cx).is_local()
+    }
+
+    pub(crate) fn guard_local_spawn(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.can_spawn_locally(cx) {
+            return true;
+        }
+        match self.window_workspace(cx) {
+            Some(ws) if ws.route_header().is_ok() => true,
+            _ => {
+                let machine = self.remote_machine_label(cx);
+                window.push_notification(
+                    t_fmt(L10nKey::RemoteNoConnectionDetails, &[("machine", &machine)]),
+                    cx,
+                );
+                false
+            }
+        }
+    }
+
+    pub(crate) fn window_workspace(
+        &self,
+        cx: &gpui_kit::App,
+    ) -> Option<crate::terminal::PaneWorkspace> {
+        pane_workspace_for(cx, self.workspace)
+    }
+
+    pub(crate) fn remote_machine_label(&self, cx: &gpui_kit::App) -> String {
+        match WorkspaceStore::remote_ref(cx, self.workspace) {
+            Some(host) => remote_connect::route_label(cx, &host),
+            None => t(L10nKey::RemoteThisComputer).to_string(),
+        }
+    }
+
+    pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &gpui_kit::App) {
+        if crate::core::session::crosses_machines(previous, self.spawn_host(cx)) {
+            self.closed.clear();
+        }
+    }
+
+    pub(crate) fn default_shell_label(&self, _cx: &gpui_kit::App) -> String {
+        // ShellInventory maps configured programs to their displayed labels,
+        // including friendly Windows names that differ from the executable.
+        self.shells.default_name.clone()
+    }
+
+    pub(crate) fn refresh_shells(&mut self, cx: &mut Context<Self>) {
+        let host_id = self.spawn_host(cx);
+        self.shells_host = host_id;
+        let Some(host) = crate::ui::host_registry::HostRegistry::get(cx, host_id) else {
+            self.shells = Default::default();
+            cx.notify();
+            return;
+        };
+        crate::ui::host_ops::HostOps::run(
+            host,
+            cx,
+            |h| h.shells(),
+            move |app, out, cx| {
+                if app.shells_host != host_id {
+                    return;
+                }
+                app.shells = match out {
+                    Ok(inventory) => inventory,
+                    Err(e) => {
+                        log::warn!("could not list the shells of this window's machine: {e}");
+                        Default::default()
+                    }
+                };
+                cx.notify();
+            },
+        );
+    }
+
+    pub(crate) fn panes(&self) -> Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>> {
+        self.tabs
+            .iter()
+            .flat_map(|tab| tab.pane.terminals())
+            .collect()
+    }
+
+    pub(crate) fn remote_status(&self, cx: &gpui_kit::App) -> Option<RemoteStatus> {
+        // A workspace on this computer has no link of its own to report on,
+        // only whether another client took it: the same strip, the same pill
+        // and the same Take Back as a remote workspace that was taken over.
+        let Some(own) = WorkspaceStore::remote_ref(cx, self.workspace) else {
+            return crate::ui::local_link::LocalLink::status_of(cx, self.workspace);
+        };
+        let supervised = RemoteLinks::status_of(cx, self.workspace);
+        let resolvable = remote_connect::route_resolvable(cx, &own.target);
+        resolve_status(self.connect.as_ref(), &own.target, supervised, resolvable)
+    }
+
+    /// The strip's one button: its label, and what pressing it does.
+    ///
+    /// These used to be decided separately — `action_label` picked the word and
+    /// the button always called `remote_retry` — which is exactly how the one
+    /// state a retry cannot fix ended up wearing a Retry Now button and looping
+    /// on it forever.
+    pub(crate) fn remote_strip_action(
+        &self,
+        status: &RemoteStatus,
+        cx: &gpui_kit::App,
+    ) -> Option<(&'static str, StripAction)> {
+        let label = status.action_label()?;
+        let RemoteStatus::ServerMismatch(refusal) = status else {
+            return Some((label, StripAction::Retry));
+        };
+        // Only a machine whose server is ours to install can be updated from
+        // here. Anything else — a `--stdio` program, a peer someone else runs —
+        // keeps the explanation and loses the button, which is the truth.
+        let own = WorkspaceStore::remote_ref(cx, self.workspace)?;
+        own.target.hosts_our_server().then(|| {
+            (
+                label,
+                StripAction::UpdateServer {
+                    target: own.target.clone(),
+                    label: self.remote_machine_label(cx),
+                    action: mismatch_action_key(refusal),
+                },
+            )
+        })
+    }
+
+    /// What the install running against *this* window's machine has reached, if
+    /// one is running at all.
+    ///
+    /// The switcher has drawn this since installs got a progress bar, but the
+    /// strip never did — so pressing Update Server on a parked workspace with
+    /// no switcher open froze the screen for as long as the download took and
+    /// then produced a modal, with nothing in between. Same source, so
+    /// the two cannot disagree about how far along it is.
+    pub(crate) fn remote_strip_progress(
+        &self,
+        cx: &gpui_kit::App,
+    ) -> Option<crate::daemon::install::InstallPhase> {
+        let own = WorkspaceStore::remote_ref(cx, self.workspace)?;
+        remote_connect::install_progress_for(own.target.host_id())
+    }
+
+    pub(crate) fn run_strip_action(
+        &mut self,
+        action: StripAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            StripAction::Retry => self.remote_retry(cx),
+            StripAction::UpdateServer {
+                target,
+                label,
+                action,
+            } => self.confirm_replace_remote_server(target, label, action, window, cx),
+        }
+    }
+
+    pub(crate) fn remote_retry(&mut self, cx: &mut Context<Self>) {
+        // The only button a local workspace's strip ever wears is Take Back.
+        if WorkspaceStore::remote_ref(cx, self.workspace).is_none() {
+            crate::ui::local_link::LocalLink::take_back(cx, self.workspace);
+            cx.notify();
+            return;
+        }
+        match &self.connect {
+            Some(ConnectFlow::Failed { choice, .. }) => {
+                let choice = choice.clone();
+                self.connect_to_host(choice, cx);
+            }
+            _ => RemoteLinks::retry_now(cx, self.workspace),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn connect_to_host(&mut self, choice: HostChoice, cx: &mut Context<Self>) {
+        remote_connect::register(cx);
+        // Whatever went wrong last time is about to be answered by this attempt.
+        self.remote_host_errors.remove(&choice.target.to_string());
+        let header = match remote_connect::control_route(&choice.target, cx) {
+            Ok(header) => header,
+            Err(e) => {
+                self.connect = Some(ConnectFlow::Failed { choice, error: e });
+                cx.notify();
+                return;
+            }
+        };
+        let target = choice.target.clone();
+        let label = choice.label.clone();
+        cx.default_global::<RemoteLinks>()
+            .suspended
+            .remove(&choice.target.host_id());
+        self.connect = Some(ConnectFlow::Connecting {
+            choice: choice.clone(),
+        });
+        cx.notify();
+
+        let host_id = choice.target.host_id();
+        remote_connect::clear_install_progress(host_id);
+        self.watch_for_install_consent(host_id, cx);
+        let launch_commands = cx.global::<Config>().agent_launch.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    remote_connect::connect_blocking(&target, header, &label, &launch_commands)
+                })
+                .await;
+            // Retired here rather than in `finish_connect`, which bows out
+            // early whenever `connect` has moved on — a disconnect from the
+            // switcher, or entering another workspace, both of which can land
+            // mid-install. The strip reads this entry with no link state to
+            // temper it, so one left behind freezes a progress bar on every
+            // window pointed at this machine *and* takes away the Update
+            // Server button, which is the one thing that could have fixed it.
+            remote_connect::clear_install_progress(host_id);
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_connect(result, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    fn watch_for_install_consent(&self, host: HostId, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut painted: Option<crate::daemon::install::InstallPhase> = None;
+            loop {
+                let connecting = this
+                    .update(cx, |this, _| {
+                        matches!(this.connect, Some(ConnectFlow::Connecting { .. }))
+                    })
+                    .unwrap_or(false);
+                if !connecting {
+                    return;
+                }
+                if let Some(pending) = remote_connect::take_pending_install() {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.prompt_install_consent(pending, window, cx)
+                    });
+                }
+                let reported = remote_connect::install_progress_for(host);
+                if reported != painted {
+                    painted = reported;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
+                cx.update(pump_auth_sheets);
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+            }
+        })
+        .detach();
+    }
+
+    fn finish_connect(
+        &mut self,
+        result: Result<remote_connect::Connected, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(choice) = self.connect.as_ref().and_then(ConnectFlow::choice).cloned() else {
+            return;
+        };
+        match result {
+            Ok(connected) => {
+                let home = connected.home.clone();
+                let rows = connected.rows.clone();
+                self.host_snapshots.insert(
+                    choice.target.host_id(),
+                    crate::ui::switcher::HostSnapshot {
+                        target: choice.target.clone(),
+                        rows: rows.clone(),
+                    },
+                );
+                remote_connect::HostLinks::insert(cx, connected.host, home.clone());
+                // The listing outlives the link: mirrored into the store so
+                // the switcher still knows this machine's workspaces after a
+                // restart, without a connection.
+                let listing: Vec<(WorkspaceId, String, u64)> = rows
+                    .iter()
+                    .map(|r| (r.id, r.name.clone(), r.last_active))
+                    .collect();
+                WorkspaceStore::sync_remote(cx, &choice.target, &listing);
+                self.prompt_remote_daemon_mismatch_later(cx);
+                self.connect = None;
+                // A create that was waiting on this link (the switcher's form,
+                // asked of a machine that was not connected yet) can now run:
+                // the link just told us the home directory to root it at.
+                if let Some(pending) = self.take_create_waiting_on(&choice.target) {
+                    self.close_switcher(window, cx);
+                    self.create_remote_workspace(pending.target, home, window, cx);
+                    self.name_fresh_workspace(pending.name, window, cx);
+                }
+            }
+            Err(error) => {
+                log::warn!("connect to {} failed: {error}", choice.label);
+                if self
+                    .pending_create
+                    .as_ref()
+                    .is_some_and(|p| p.target == choice.target)
+                {
+                    // A dialect refusal is the one failure with a button on
+                    // it — the "update server" this window is about to offer.
+                    // The create moves aside to wait for that answer instead
+                    // of dying with the attempt, or the update would end in
+                    // nothing and the user would have to ask all over again.
+                    // Every other failure still calls the create off.
+                    if crate::daemon::control::is_dialect_refusal(&error) {
+                        self.parked_create = self.pending_create.take();
+                    } else {
+                        self.pending_create = None;
+                    }
+                }
+                self.connect = Some(ConnectFlow::Failed { choice, error });
+            }
+        }
+        cx.notify();
+    }
+
+    /// The create waiting on this machine's link, wherever it waits: parked on
+    /// the app by the form (`pending_create`), or set aside by a dialect
+    /// refusal until the server over there was updated (`parked_create`).
+    /// Either way it is spent by the connect that finally lands.
+    fn take_create_waiting_on(
+        &mut self,
+        target: &RemoteTarget,
+    ) -> Option<crate::ui::switcher::PendingCreate> {
+        for slot in [&mut self.pending_create, &mut self.parked_create] {
+            if slot.as_ref().is_some_and(|p| &p.target == target) {
+                return slot.take();
+            }
+        }
+        None
+    }
+
+    /// The far end was just cycled into a server this build speaks to — the
+    /// answer a create refused for the dialect has been waiting on. Reconnects
+    /// whatever the restart cut, and connects at the machine again if a create
+    /// is still parked on it, so the workspace the user asked for finally
+    /// exists; `finish_connect` finds the create via `take_create_waiting_on`.
+    fn server_replaced(
+        &mut self,
+        target: &RemoteTarget,
+        label: &str,
+        origin: &str,
+        cx: &mut Context<Self>,
+    ) {
+        reconnect_after_restart(origin, cx);
+        if self
+            .parked_create
+            .as_ref()
+            .is_some_and(|p| &p.target == target)
+        {
+            self.connect_to_host(
+                HostChoice {
+                    target: target.clone(),
+                    label: label.to_string(),
+                    detail: String::new(),
+                },
+                cx,
+            );
+        }
+    }
+
+    pub(crate) fn open_remote_workspace(
+        &mut self,
+        target: RemoteTarget,
+        row: RemoteWorkspaceRow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let host = RemoteRef::new(target, row.id);
+        let id = WorkspaceStore::claim_remote(cx, host);
+        self.enter_remote_workspace(id, window, cx);
+    }
+
+    pub(crate) fn create_remote_workspace(
+        &mut self,
+        target: RemoteTarget,
+        home: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let host = RemoteRef::new(target.clone(), WorkspaceId::new());
+        let id = WorkspaceStore::claim_remote(cx, host);
+        log::info!(
+            "new remote workspace on {target} rooted at {}",
+            home.display()
+        );
+        self.enter_remote_workspace(id, window, cx);
+    }
+
+    fn enter_remote_workspace(
+        &mut self,
+        id: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.connect = None;
+        RemoteLinks::ensure_running(cx);
+        let previous = self.spawn_host(cx);
+        self.switch_workspace(Some(id), window, cx);
+        self.rebind_host(previous, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn reopen_remote_at_startup(&self, cx: &mut Context<Self>) {
+        RemoteLinks::supervise(cx, self.workspace);
+    }
+
+    pub(crate) fn prompt_install_consent(
+        &mut self,
+        pending: remote_connect::PendingInstall,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = remote_connect::install_title(&pending.request);
+        let detail = remote_connect::install_detail(&pending.request);
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &title,
+            Some(&detail),
+            &crate::ui::confirm_answers(t(L10nKey::SettingsInstall), t(L10nKey::Cancel)),
+            cx,
+        );
+        cx.spawn(async move |_, _| {
+            let decision = match answer.await {
+                Ok(0) => InstallDecision::Approve,
+                _ => InstallDecision::Decline,
+            };
+            pending.answer(decision);
+        })
+        .detach();
+    }
+
+    pub(crate) fn prompt_remote_daemon_mismatch(window: &mut Window, cx: &mut Context<Self>) {
+        let queue = crate::daemon::install::take_mismatched_remote_daemons();
+        Self::ask_next_daemon_mismatch(queue, window, cx);
+    }
+
+    /// One question at a time. Reconnecting to three machines whose servers are
+    /// all behind used to raise three native modals in a single pass, stacked
+    /// on each other, each about a machine the previous one did not name.
+    fn ask_next_daemon_mismatch(
+        mut queue: Vec<crate::daemon::install::MismatchedRemoteDaemon>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mismatch) = queue.pop() else {
+            return;
+        };
+        let title = remote_connect::mismatch_title(&mismatch);
+        let detail = remote_connect::mismatch_detail(&mismatch);
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &title,
+            Some(&detail),
+            &remote_connect::mismatch_answers(),
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let answered = answer.await;
+            let restart = matches!(answered, Ok(0));
+            // The window went away with the question open. Arm the rest again
+            // rather than swallowing machines nobody was ever asked about.
+            if answered.is_err() {
+                queue.push(mismatch.clone());
+                crate::daemon::install::record_remote_mismatches(queue);
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                if restart {
+                    this.restart_mismatched_remote_server(mismatch, window, cx);
+                }
+                Self::ask_next_daemon_mismatch(queue, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn restart_mismatched_remote_server(
+        &mut self,
+        mismatch: crate::daemon::install::MismatchedRemoteDaemon,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = mismatch.host.clone();
+        match remote_connect::mismatch_target(&mismatch) {
+            Some(target) => self.replace_remote_server(target, label, false, window, cx),
+            None => {
+                let e = t_fmt(L10nKey::RemoteNoRouteToHost, &[("machine", &label)]);
+                self.report_remote_host_error(None, &label, &e, window, cx);
+            }
+        }
+    }
+
+    pub(crate) fn confirm_restart_remote_server(
+        &mut self,
+        target: RemoteTarget,
+        label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &t_fmt(L10nKey::RemoteRestartTitle, &[("machine", &label)]),
+            Some(&t_fmt(L10nKey::RemoteRestartBody, &[("machine", &label)])),
+            &crate::ui::confirm_answers(t(L10nKey::RestartServer), t(L10nKey::Cancel)),
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.restart_remote_server(target, label, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn restart_remote_server(
+        &mut self,
+        target: RemoteTarget,
+        label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_remote_host_error(&target);
+        let header = match remote_connect::control_route(&target, cx) {
+            Ok(header) => header.restart_server(),
+            Err(e) => {
+                self.report_remote_host_error(Some(&target), &label, &e, window, cx);
+                return;
+            }
+        };
+        let host = header.target.origin_key();
+        let host_id = target.host_id();
+        let target_for_error = target.clone();
+        log::info!("restarting lyrel's server on {label} at the user's request");
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        self.watch_for_restart_consent(host_id, running.clone(), cx);
+        cx.spawn(async move |this, cx| {
+            let for_task = label.clone();
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { remote_connect::restart_server_blocking(header, &for_task) })
+                .await;
+            running.store(false, std::sync::atomic::Ordering::Relaxed);
+            remote_connect::clear_install_progress(host_id);
+            let _ = this.update_in(cx, |this, window, cx| match outcome {
+                Ok(()) => {
+                    log::info!("{label} is now serving this client's build");
+                    this.server_replaced(&target_for_error, &label, &host, cx);
+                }
+                Err(e) => {
+                    log::warn!("could not restart lyrel's server on {label}: {e}");
+                    this.report_remote_host_error(Some(&target_for_error), &label, &e, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// `action` is the word the thing that led here used on its own button —
+    /// Update or Replace, depending on which side is behind. A confirmation
+    /// that renames the act between the click and the prompt is asking about
+    /// something the user did not choose.
+    pub(crate) fn confirm_replace_remote_server(
+        &mut self,
+        target: RemoteTarget,
+        label: String,
+        action: L10nKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &t_fmt(L10nKey::RemoteMismatchTitle, &[("machine", &label)]),
+            Some(&t_fmt(L10nKey::RemoteReplaceBody, &[("machine", &label)])),
+            &crate::ui::confirm_answers(t(action), t(L10nKey::Cancel)),
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.replace_remote_server(target, label, false, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// The palette's "Update lyrel server" for a remote host: put this build's
+    /// server there even when one of our dialect already is. Between dialect
+    /// bumps that is the only way a daemon-side fix reaches a machine — the
+    /// mismatch path never fires, and a restart relaunches the same old file.
+    ///
+    /// Asked for only where the local daemon can route it. One that predates
+    /// the action cannot even decode the request and hangs up without a word,
+    /// so the user is told which server to update first instead.
+    pub(crate) fn confirm_update_remote_server(
+        &mut self,
+        target: RemoteTarget,
+        label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !crate::daemon::spawn::local_daemon_supports(
+            crate::daemon::protocol::FEATURE_UPDATE_SERVER,
+        ) {
+            window.push_notification(
+                t_fmt(
+                    L10nKey::RemoteUpdateNeedsLocalServer,
+                    &[("machine", &label)],
+                ),
+                cx,
+            );
+            return;
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &t_fmt(L10nKey::RemoteMismatchTitle, &[("machine", &label)]),
+            Some(&t_fmt(L10nKey::RemoteUpdateBody, &[("machine", &label)])),
+            &crate::ui::confirm_answers(
+                t(L10nKey::RemoteMismatchReplaceServer),
+                t(L10nKey::Cancel),
+            ),
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.replace_remote_server(target, label, true, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// `force` uploads even over a server that already speaks our dialect —
+    /// the update, as opposed to the mismatch repair.
+    fn replace_remote_server(
+        &mut self,
+        target: RemoteTarget,
+        label: String,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_remote_host_error(&target);
+        let route = match remote_connect::control_route(&target, cx) {
+            Ok(header) if force => header.update_server(),
+            Ok(header) => header.replace_server(),
+            Err(e) => {
+                log::warn!("could not address {label} to replace its server: {e}");
+                self.report_remote_host_error(Some(&target), &label, &e, window, cx);
+                return;
+            }
+        };
+        let host = route.target.origin_key();
+        let host_id = target.host_id();
+        let target_for_error = target.clone();
+        log::info!("replacing lyrel's server on {label} at the user's request");
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        self.watch_for_restart_consent(host_id, running.clone(), cx);
+        cx.spawn(async move |this, cx| {
+            let for_task = label.clone();
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { remote_connect::restart_server_blocking(route, &for_task) })
+                .await;
+            running.store(false, std::sync::atomic::Ordering::Relaxed);
+            remote_connect::clear_install_progress(host_id);
+            let _ = this.update_in(cx, |this, window, cx| match outcome {
+                Ok(()) => {
+                    log::info!("{label} is now serving this client's build");
+                    this.server_replaced(&target_for_error, &label, &host, cx);
+                }
+                Err(e) => {
+                    log::warn!("could not replace lyrel's server on {label}: {e}");
+                    this.report_remote_host_error(Some(&target_for_error), &label, &e, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Retire everything still on screen about this host's last failure. The
+    /// switcher paints a failed `connect` in preference to `remote_host_errors`,
+    /// so leaving one behind would show the stale complaint again in place of
+    /// whatever this attempt has to say.
+    fn clear_remote_host_error(&mut self, target: &RemoteTarget) {
+        self.remote_host_errors.remove(&target.to_string());
+        if let Some(ConnectFlow::Failed { choice, .. }) = &self.connect
+            && &choice.target == target
+        {
+            self.connect = None;
+        }
+    }
+
+    fn report_remote_host_error(
+        &mut self,
+        target: Option<&RemoteTarget>,
+        label: &str,
+        error: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The grouped report is only visible while the switcher is open. Anywhere
+        // else — the window menu's "restart server", or a mismatch raised mid-connect
+        // — the modal is the only thing the user would see, so keep it.
+        if let (Some(target), true) = (target, self.switcher.is_some()) {
+            let key = target.to_string();
+            self.remote_host_errors.insert(key, error.to_string());
+            cx.notify();
+            return;
+        }
+
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &t_fmt(L10nKey::RemoteRestartFailedTitle, &[("machine", label)]),
+            Some(&t_fmt(
+                L10nKey::RemoteRestartFailedBody,
+                &[("error", error)],
+            )),
+            &[t(L10nKey::Ok)],
+            cx,
+        );
+        cx.spawn(async move |_, _| {
+            let _ = answer.await;
+        })
+        .detach();
+    }
+
+    fn watch_for_restart_consent(
+        &self,
+        host: HostId,
+        running: Arc<std::sync::atomic::AtomicBool>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let mut painted: Option<crate::daemon::install::InstallPhase> = None;
+            while running.load(std::sync::atomic::Ordering::Relaxed) {
+                let reported = remote_connect::install_progress_for(host);
+                if reported != painted {
+                    painted = reported;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
+                cx.update(pump_auth_sheets);
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+            }
+        })
+        .detach();
+    }
+
+    fn prompt_remote_daemon_mismatch_later(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |_, window, cx| {
+                LyrelApp::prompt_remote_daemon_mismatch(window, cx);
+            });
+        })
+        .detach();
+    }
+}
+
+/// Which of the two accounts of this window's machine the strip should believe.
+///
+/// `connect` is one window's memory of one manual attempt; the supervisor holds
+/// every link and keeps holding it long after that attempt is over. Two things
+/// follow. A flow that named a *different* machine has nothing to say here — a
+/// failed connect to the GPU box used to replace the strip of a window sitting
+/// happily on the build box. And once the supervisor reports the link as
+/// Attached, or the workspace as taken over, that is what happened, however
+/// badly the window's own last attempt went.
+///
+/// Everything else keeps the old order, so a connect that is still in flight
+/// still says so while the supervisor is still calling the machine unknown.
+fn resolve_status(
+    connect: Option<&ConnectFlow>,
+    own: &RemoteTarget,
+    supervised: Option<RemoteStatus>,
+    route_resolvable: bool,
+) -> Option<RemoteStatus> {
+    let mine = connect.filter(|flow| flow.choice().is_some_and(|c| &c.target == own));
+    if matches!(
+        supervised,
+        Some(RemoteStatus::Attached | RemoteStatus::Preempted { .. })
+    ) {
+        return supervised;
+    }
+    // A route that no longer resolves parks the workspace (#485): nothing it
+    // could try would ever succeed, so say that instead of retrying. A live
+    // or preempted link outranks it — those panes work regardless of what
+    // happened to the profile that made them.
+    if !route_resolvable {
+        return Some(RemoteStatus::RouteLost);
+    }
+    match mine {
+        Some(ConnectFlow::Connecting { .. }) => Some(RemoteStatus::Connecting),
+        // A connect the user ran by hand fails on the dialect exactly as the
+        // supervisor's does, and deserves the same answer — the restatement and
+        // the Update Server button, not a Retry that cannot work.
+        Some(ConnectFlow::Failed { error, .. })
+            if crate::daemon::control::is_dialect_refusal(error) =>
+        {
+            Some(RemoteStatus::ServerMismatch(error.clone()))
+        }
+        Some(ConnectFlow::Failed { error, .. }) => Some(RemoteStatus::Failed(error.clone())),
+        None => supervised,
+    }
+}
+
+pub(crate) fn pane_workspace_for(
+    cx: &gpui_kit::App,
+    workspace: WorkspaceId,
+) -> Option<crate::terminal::PaneWorkspace> {
+    let host = WorkspaceStore::remote_ref(cx, workspace)?;
+    let spec = remote_connect::public_spec_for(&host.target, cx)
+        .ok()
+        .map(|spec| Box::new(spec.without_secrets()));
+    // Answered here because the terminal cannot ask the network itself: the
+    // host's control hello carries the pane daemon's features, and the route
+    // built from this value hands the answer to `resize_echoed`. A relink
+    // comes back through here too, so a reconnected (possibly upgraded)
+    // server is re-asked.
+    let resize_echo = remote_connect::HostLinks::peer_supports(
+        cx,
+        host.host_id(),
+        crate::daemon::protocol::FEATURE_RESIZE_ECHO,
+    );
+    // The workspace's own name where it has one, the machine's otherwise —
+    // what the pane's tab falls back to when nothing has titled it, and what
+    // a dead link's "— disconnected" suffix hangs off.
+    let label = WorkspaceStore::all(cx)
+        .get(workspace)
+        .and_then(|w| w.label.clone())
+        .or_else(|| Some(remote_connect::route_label(cx, &host)))
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty());
+    let pane = crate::terminal::PaneWorkspace {
+        workspace,
+        target: host.target,
+        spec,
+        label,
+        resize_echo,
+    };
+    if let Ok(header) = pane.route_header() {
+        remote_connect::note_origin(&header.target, &pane.target);
+    }
+    Some(pane)
+}
+
+pub(crate) fn pane_route_for(
+    cx: &gpui_kit::App,
+    workspace: WorkspaceId,
+) -> crate::terminal::PaneRoute {
+    crate::terminal::PaneRoute::for_workspace(pane_workspace_for(cx, workspace).as_ref())
+}
+
+pub(crate) const PUMP_TICK: Duration = Duration::from_millis(250);
+
+struct MachineLink {
+    state: LinkState,
+    backoff: Backoff,
+    next_attempt: Option<Instant>,
+    attempting: bool,
+    /// What the last attempt said when it failed. `Reconnecting` overwrites
+    /// `Failed` on the very next tick, so this is the only place the reason
+    /// survives long enough for anyone to read it.
+    last_error: Option<String>,
+    /// The failure the user dismissed in the switcher, word for word. The
+    /// band stays quiet while the machine keeps failing the same way and
+    /// speaks again on a different reason; the link coming up forgets it.
+    dismissed_error: Option<String>,
+    /// The workspaces this client has sent a `WorkspaceAttach` for over the
+    /// link that is up right now, whether or not the far end took it. Scoped
+    /// to one link on purpose: a new link has heard nothing from us.
+    attach_sent: std::collections::HashSet<WorkspaceId>,
+}
+
+/// The retry clock for one workspace's dead panes, kept while its machine's
+/// control link is up. A pane whose stream dies alone — its exec channel
+/// closed under it, siblings untouched — is invisible to the machine-level
+/// reconnect, which only watches the control connection; this is the state
+/// that keeps asking for such a pane back. Batched per workspace on purpose:
+/// panes usually die together, and one clock per workspace means one dial per
+/// try instead of a storm of them.
+#[derive(Default)]
+struct PaneRetry {
+    backoff: Backoff,
+    next_attempt: Option<Instant>,
+    /// A batch of relinks is on the wire; the pump leaves the entry alone
+    /// until it reports back, or one slow attempt would be joined by a new
+    /// one every 250 ms tick.
+    inflight: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LinkState {
+    Connecting,
+    Attached,
+    Reconnecting,
+    Failed(String),
+    /// The far end refused the control hello over the dialect. The pump leaves
+    /// this one alone — see `pump_tick` — so it is the one state that survives
+    /// a tick without being rewritten to `Reconnecting`.
+    Mismatched(String),
+}
+
+/// What the supervisor knows about one *machine's* link, for readers outside
+/// this module. `RemoteStatus` answers for a single workspace; the switcher
+/// draws a machine, and until it had this it had to guess from whether a
+/// `HostLinks` entry happened to exist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MachineStatus {
+    Connecting,
+    Attached,
+    Reconnecting {
+        attempt: u32,
+        last_error: Option<String>,
+    },
+    Failed(String),
+}
+
+#[derive(Default)]
+pub(crate) struct RemoteLinks {
+    machines: std::collections::HashMap<HostId, MachineLink>,
+    /// Dead panes being asked for again, one clock per workspace — see
+    /// [`PaneRetry`].
+    pane_retries: std::collections::HashMap<WorkspaceId, PaneRetry>,
+    preempted: std::collections::HashMap<WorkspaceId, String>,
+    /// Workspaces whose takeover the user has asked to undo, each still
+    /// carrying the name of the client that displaced it — an attach that
+    /// fails has to be able to put the marker back where it found it.
+    reclaiming: std::collections::HashMap<WorkspaceId, String>,
+    /// Workspaces with a `WorkspaceAttach` on the wire. The pump ticks four
+    /// times a second and the request's deadline is ten seconds, so without
+    /// this one reclaim would be sent forty times.
+    attaching: std::collections::HashSet<WorkspaceId>,
+    /// Machines the pump leaves alone until a person asks for them again:
+    /// disconnected from the switcher, or — since #820 — an authentication
+    /// the user closed the sheet on rather than answered.
+    suspended: std::collections::HashSet<HostId>,
+    instances: std::collections::HashMap<HostId, String>,
+    #[allow(
+        dead_code,
+        reason = "read by the prompt relay's drain, which lands with the routed auth sheet"
+    )]
+    pub(crate) auth: AuthSheetQueue,
+    pumping: bool,
+}
+
+impl gpui_kit::Global for RemoteLinks {}
+
+static EVENTS: Mutex<Vec<(HostId, ControlEvent)>> = Mutex::new(Vec::new());
+
+pub(crate) fn install_event_observer() {
+    crate::daemon::control::set_event_observer(Arc::new(|host, event| {
+        if let Ok(mut queue) = EVENTS.lock() {
+            queue.push((host, event));
+        }
+    }));
+}
+
+impl RemoteLinks {
+    pub(crate) fn ensure_running(cx: &mut gpui_kit::App) {
+        install_event_observer();
+        if cx.default_global::<RemoteLinks>().pumping {
+            return;
+        }
+        cx.default_global::<RemoteLinks>().pumping = true;
+        cx.spawn(async move |cx| {
+            loop {
+                let carry_on = cx.update(pump_tick);
+                if !carry_on {
+                    cx.update(|cx| cx.default_global::<RemoteLinks>().pumping = false);
+                    return;
+                }
+                cx.background_executor().timer(PUMP_TICK).await;
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn supervise(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
+        let Some(host) = WorkspaceStore::remote_ref(cx, workspace) else {
+            return;
+        };
+        remote_connect::register(cx);
+        log::info!(
+            "supervising {} for a workspace that just opened",
+            host.target
+        );
+        RemoteLinks::ensure_running(cx);
+    }
+
+    pub(crate) fn status_of(cx: &gpui_kit::App, workspace: WorkspaceId) -> Option<RemoteStatus> {
+        let host = WorkspaceStore::remote_ref(cx, workspace)?;
+        let Some(links) = cx.try_global::<RemoteLinks>() else {
+            return Some(RemoteStatus::Disconnected);
+        };
+        // A Take Back that is still on the wire is neither of the two things it
+        // sits between. It is not Preempted any more — the request to undo that
+        // is out — and it is emphatically not Attached: the panes are still
+        // released and the far end has not answered yet. Connecting is the
+        // honest word, and it is also the one state `action_label` offers no
+        // button for, so the same reclaim cannot be started twice.
+        if links.reclaiming.contains_key(&workspace) {
+            return Some(RemoteStatus::Connecting);
+        }
+        if let Some(by) = links.preempted.get(&workspace) {
+            return Some(RemoteStatus::Preempted { by: by.clone() });
+        }
+        Some(match links.machines.get(&host.host_id()) {
+            Some(link) => match &link.state {
+                LinkState::Connecting => RemoteStatus::Connecting,
+                LinkState::Attached => RemoteStatus::Attached,
+                LinkState::Reconnecting => RemoteStatus::Reconnecting {
+                    attempt: link.backoff.attempt(),
+                    last_error: link.last_error.clone(),
+                },
+                LinkState::Failed(e) => RemoteStatus::Failed(e.clone()),
+                LinkState::Mismatched(e) => RemoteStatus::ServerMismatch(e.clone()),
+            },
+            None => RemoteStatus::Disconnected,
+        })
+    }
+
+    /// The supervisor's view of one machine, for the switcher. `None` means it
+    /// has never had anything to do with this machine — not that the link is
+    /// down, which is `Reconnecting`.
+    pub(crate) fn machine_status(cx: &gpui_kit::App, host: HostId) -> Option<MachineStatus> {
+        let link = cx.try_global::<RemoteLinks>()?.machines.get(&host)?;
+        Some(match &link.state {
+            LinkState::Connecting => MachineStatus::Connecting,
+            LinkState::Attached => MachineStatus::Attached,
+            LinkState::Reconnecting => MachineStatus::Reconnecting {
+                attempt: link.backoff.attempt(),
+                last_error: link.last_error.clone(),
+            },
+            LinkState::Failed(e) => MachineStatus::Failed(e.clone()),
+            // Failed, as far as the switcher is concerned: a parked machine is
+            // not reachable and not being retried. The refusal travels with it,
+            // which is all the error band needs — it already recognises one and
+            // grows an Update Server button.
+            LinkState::Mismatched(e) => MachineStatus::Failed(e.clone()),
+        })
+    }
+
+    /// What the switcher's error band should say for this machine, if
+    /// anything: the supervisor's last failure, unless an attempt is on the
+    /// wire right now (the band says Connecting then, or a Try Again would
+    /// look like it did nothing) or the user already dismissed this very
+    /// failure.
+    pub(crate) fn machine_error(cx: &gpui_kit::App, host: HostId) -> Option<String> {
+        let link = cx.try_global::<RemoteLinks>()?.machines.get(&host)?;
+        if link.attempting {
+            return None;
+        }
+        let error = match &link.state {
+            LinkState::Reconnecting => link.last_error.clone()?,
+            LinkState::Failed(e) | LinkState::Mismatched(e) => e.clone(),
+            LinkState::Connecting | LinkState::Attached => return None,
+        };
+        (link.dismissed_error.as_ref() != Some(&error)).then_some(error)
+    }
+
+    /// The switcher's Dismiss on a failure the supervisor reported. Only that
+    /// failure is silenced — the next different one is shown again.
+    pub(crate) fn dismiss_machine_error(cx: &mut gpui_kit::App, host: HostId, error: &str) {
+        if let Some(link) = cx.default_global::<RemoteLinks>().machines.get_mut(&host) {
+            link.dismissed_error = Some(error.to_string());
+        }
+        cx.refresh_windows();
+    }
+
+    /// The open workspaces on this machine that another client is holding.
+    pub(crate) fn preempted_on(cx: &gpui_kit::App, host: HostId) -> Vec<WorkspaceId> {
+        if host.is_local() {
+            return crate::ui::local_link::LocalLink::preempted(cx);
+        }
+        let Some(links) = cx.try_global::<RemoteLinks>() else {
+            return Vec::new();
+        };
+        workspaces_on(cx, host)
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| links.preempted.contains_key(id))
+            .collect()
+    }
+
+    pub(crate) fn retry_now(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
+        let Some(host) = WorkspaceStore::remote_ref(cx, workspace) else {
+            return;
+        };
+        let links = cx.default_global::<RemoteLinks>();
+        if let Some(by) = links.preempted.remove(&workspace) {
+            links.reclaiming.insert(workspace, by);
+        }
+        RemoteLinks::retry_machine_now(cx, host.host_id());
+    }
+
+    /// Ask the supervisor to dial this machine on the next tick, backoff
+    /// reset. The switcher's Try Again lands here when the failure on screen
+    /// is the supervisor's: a second connect of its own would race the
+    /// reconnect already scheduled, and the band would go on showing the
+    /// supervisor's old reason the whole time.
+    pub(crate) fn retry_machine_now(cx: &mut gpui_kit::App, host: HostId) {
+        let links = cx.default_global::<RemoteLinks>();
+        links.suspended.remove(&host);
+        let link = links.machines.entry(host).or_insert(MachineLink {
+            state: LinkState::Reconnecting,
+            backoff: Backoff::default(),
+            next_attempt: None,
+            attempting: false,
+            last_error: None,
+            dismissed_error: None,
+            attach_sent: Default::default(),
+        });
+        link.backoff.reset();
+        link.next_attempt = Some(Instant::now());
+        // Leaving a park, the refusal that caused it is the *previous* answer:
+        // carrying it over would put "that server is too old" back on the strip
+        // underneath a fresh attempt, as though this one had failed too. Every
+        // other reason is still the last thing that actually happened, and the
+        // strip says so while the attempt is in flight — pressing Retry Now on
+        // an unreachable machine should not cost the user the reason why.
+        if matches!(link.state, LinkState::Mismatched(_)) {
+            link.last_error = None;
+        }
+        if !link.attempting {
+            link.state = LinkState::Reconnecting;
+        }
+        RemoteLinks::ensure_running(cx);
+        cx.refresh_windows();
+    }
+
+    pub(crate) fn disconnect(cx: &mut gpui_kit::App, host: HostId) {
+        cx.default_global::<RemoteLinks>().suspended.insert(host);
+        for (workspace, _) in workspaces_on(cx, host) {
+            release_panes(cx, workspace);
+            let links = cx.default_global::<RemoteLinks>();
+            links.preempted.remove(&workspace);
+            links.reclaiming.remove(&workspace);
+            links.attaching.remove(&workspace);
+        }
+        remote_connect::HostLinks::remove(cx, host);
+        cx.default_global::<RemoteLinks>().machines.remove(&host);
+        log::info!("disconnected from a machine at the user's request");
+        cx.refresh_windows();
+    }
+
+    fn mark(cx: &mut gpui_kit::App, host: HostId, f: impl FnOnce(&mut MachineLink)) {
+        let link = cx
+            .default_global::<RemoteLinks>()
+            .machines
+            .entry(host)
+            .or_insert(MachineLink {
+                state: LinkState::Connecting,
+                backoff: Backoff::default(),
+                next_attempt: None,
+                attempting: false,
+                last_error: None,
+                dismissed_error: None,
+                attach_sent: Default::default(),
+            });
+        f(link);
+    }
+}
+
+fn pump_tick(cx: &mut gpui_kit::App) -> bool {
+    drain_events(cx);
+    pump_auth_sheets(cx);
+
+    let bound = bound_machines(cx);
+    if bound.is_empty() {
+        let links = cx.default_global::<RemoteLinks>();
+        let forgotten = links.machines.len();
+        links.machines.clear();
+        links.pane_retries.clear();
+        links.preempted.clear();
+        links.reclaiming.clear();
+        links.attaching.clear();
+        links.suspended.clear();
+        log::info!("supervisor stopped: no open remote workspace ({forgotten} link(s) dropped)");
+        return false;
+    }
+
+    prune_suspended(&mut cx.default_global::<RemoteLinks>().suspended, &bound);
+    let suspended = cx.default_global::<RemoteLinks>().suspended.clone();
+
+    let now = Instant::now();
+    let mut changed = false;
+    for (host, target) in bound {
+        if suspended.contains(&host) {
+            continue;
+        }
+        let live =
+            remote_connect::HostLinks::get(cx, host).is_some_and(|h| h.client().is_connected());
+        let attempting = cx
+            .try_global::<RemoteLinks>()
+            .and_then(|l| l.machines.get(&host))
+            .is_some_and(|l| l.attempting);
+
+        if live {
+            let mut became = false;
+            RemoteLinks::mark(cx, host, |link| {
+                became = link.state != LinkState::Attached;
+                link.state = LinkState::Attached;
+                link.backoff.reset();
+                link.next_attempt = None;
+                link.last_error = None;
+                link.dismissed_error = None;
+            });
+            // A live link is not an attachment. Preemption of a GUI client
+            // leaves the control connection alone (only a `dedicated` client is
+            // hung up on), and a link brought up by the switcher's own connect
+            // never sends `WorkspaceAttach` at all — so the far end can be
+            // talking to us happily while holding none of our workspaces. This
+            // runs before anything below that touches a window's contents: a
+            // workspace wants to be claimed for this client before we start
+            // rebuilding its tabs and their panes on the machine.
+            pump_attachments(cx, host);
+            // A pane whose stream died while this link stayed up: the
+            // machine-level reconnect never fires for it, so the pump itself
+            // asks for it back.
+            pump_pane_relinks(cx, host);
+            if became {
+                changed = true;
+                log::info!("link to {target} is attached");
+                crate::ui::machine_mirror::MachineMirrors::refresh(cx, host);
+                // Some window watched an earlier attempt to this machine fail
+                // and is still saying so. The supervisor is the one that got
+                // through, so nobody else is going to retire that.
+                clear_window_failures_for(cx, &target);
+                // A link this machine's windows never asked for — the switcher
+                // connected it, or `finish_connect` installed it — comes up
+                // without any reconnect attempt finishing, so nothing else
+                // tells the windows on it that their machine can be reached
+                // now. One of them may be sitting empty owing a pull.
+                crate::ui::tree_sync::on_link_up(cx, host);
+            }
+            continue;
+        }
+        if attempting {
+            continue;
+        }
+
+        // A route that no longer resolves — the profile was deleted, or the
+        // alias left the ssh config — can only fail, deterministically and
+        // forever (#485). Park the entry: drop any dead link state, but no
+        // backoff, no attempt, no error. Its label comes from the route
+        // snapshot, and the switcher offers to forget it.
+        let resolvable = remote_connect::route_resolvable(cx, &target);
+        if remote_connect::HostLinks::get(cx, host).is_some() {
+            remote_connect::HostLinks::remove(cx, host);
+            if resolvable {
+                log::info!("lost the control connection to {target}; reconnecting");
+            }
+        }
+        if !resolvable {
+            continue;
+        }
+
+        let due = {
+            let mut due = false;
+            RemoteLinks::mark(cx, host, |link| {
+                // Parked on a dialect refusal: the answer is known, so no
+                // backoff and no attempt counter. What gets out of it is
+                // normally a person — `retry_now`, which the Update Server flow
+                // ends in, or a manual connect the `live` branch above adopts.
+                //
+                // But this machine's build is not ours to know. Someone else's
+                // client can update that server, and the machine can come back
+                // from a reboot on a build that speaks to us; nothing tells us
+                // when. So look again on a slow clock — far enough apart that
+                // it is not the retry loop this replaced, close enough that a
+                // machine which quietly got fixed does not sit here claiming to
+                // be broken for the rest of the session.
+                if matches!(link.state, LinkState::Mismatched(_)) {
+                    match link.next_attempt {
+                        None => link.next_attempt = Some(now + PARKED_RECHECK),
+                        Some(at) if at <= now => {
+                            due = true;
+                            link.next_attempt = None;
+                        }
+                        Some(_) => {}
+                    }
+                    return;
+                }
+                if !matches!(link.state, LinkState::Reconnecting) {
+                    changed = true;
+                    link.state = LinkState::Reconnecting;
+                }
+                // Whatever we told the far end went down with the link.
+                link.attach_sent.clear();
+                match link.next_attempt {
+                    // Scheduling is not failing: the counter moves in
+                    // `finish_attempt` when an attempt actually comes back
+                    // wrong, so the strip's "attempt N" stays the number of
+                    // tries that really happened, not one ahead of it.
+                    None => link.next_attempt = Some(now + link.backoff.delay()),
+                    Some(at) if at <= now => {
+                        due = true;
+                        link.next_attempt = None;
+                    }
+                    Some(_) => {}
+                }
+            });
+            due
+        };
+        if due {
+            launch_attempt(cx, host, target);
+            changed = true;
+        }
+    }
+
+    if changed {
+        cx.refresh_windows();
+    }
+    true
+}
+
+/// The workspaces on this machine the far end has not been told about yet,
+/// marked as in flight on the way out so the next tick leaves them alone.
+///
+/// Two things land here. A Take Back sits in `reclaiming` until an attach
+/// answers for it, and a workspace nobody has ever attached over the link that
+/// is up now is just as detached as one that was displaced — `connect_blocking`
+/// brings a control link up and stops there, so every switcher-initiated
+/// connect used to leave the daemon with no attachment at all.
+///
+/// A workspace someone else is holding is deliberately left out: taking it back
+/// is the user's call, not the pump's.
+fn reclaims_due(cx: &mut gpui_kit::App, host: HostId) -> Vec<(WorkspaceId, String)> {
+    let open = workspaces_on(cx, host);
+    let links = cx.default_global::<RemoteLinks>();
+    let sent = links
+        .machines
+        .get(&host)
+        .map(|link| link.attach_sent.clone())
+        .unwrap_or_default();
+    let due: Vec<(WorkspaceId, String)> = open
+        .into_iter()
+        .filter(|(id, _)| !links.attaching.contains(id))
+        .filter(|(id, _)| !links.preempted.contains_key(id))
+        .filter(|(id, _)| links.reclaiming.contains_key(id) || !sent.contains(id))
+        .collect();
+    for (id, _) in &due {
+        links.attaching.insert(*id);
+    }
+    due
+}
+
+fn pump_attachments(cx: &mut gpui_kit::App, host: HostId) {
+    let Some(link) = remote_connect::HostLinks::get(cx, host) else {
+        return;
+    };
+    for (workspace, key) in reclaims_due(cx, host) {
+        // Never on the UI thread: the request's deadline is ten seconds, and a
+        // far end that has stopped answering would freeze every window.
+        let client = Arc::clone(link.client());
+        cx.spawn(async move |cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    client
+                        .call(ControlRequest::WorkspaceAttach { id: key })
+                        .map_err(|e| e.to_string())
+                })
+                .await;
+            cx.update(|cx| finish_reclaim(cx, host, workspace, outcome));
+        })
+        .detach();
+    }
+}
+
+fn finish_reclaim(
+    cx: &mut gpui_kit::App,
+    host: HostId,
+    workspace: WorkspaceId,
+    outcome: Result<ReplyOk, String>,
+) {
+    let reclaimed = {
+        let links = cx.default_global::<RemoteLinks>();
+        links.attaching.remove(&workspace);
+        match &outcome {
+            Ok(_) => links.reclaiming.remove(&workspace).is_some(),
+            // Put the takeover back on the strip. The user asked to undo it and
+            // it did not happen, so the window is still read-only and the Take
+            // Back button is still the only thing that can change that.
+            Err(_) => {
+                if let Some(by) = links.reclaiming.remove(&workspace) {
+                    links.preempted.insert(workspace, by);
+                }
+                false
+            }
+        }
+    };
+    let failure = match outcome {
+        Ok(ReplyOk::Attached {
+            took_over_from: Some(who),
+        }) => {
+            log::info!("workspace {workspace} taken back from {who}");
+            None
+        }
+        Ok(_) => None,
+        Err(e) => {
+            log::warn!("could not attach to workspace {workspace}: {e}");
+            Some(e)
+        }
+    };
+    RemoteLinks::mark(cx, host, |link| {
+        // Sent either way. A refusal that repeats every 250ms would be a flood,
+        // and the user has a Take Back button for the one case worth retrying.
+        link.attach_sent.insert(workspace);
+        if failure.is_some() {
+            link.last_error = failure.clone();
+        }
+    });
+    if reclaimed {
+        // The other client had this workspace for a while and may have moved
+        // every pane in it. Only the tree knows what it looks like now.
+        crate::ui::tree_sync::resync_window_from_tree(cx, workspace);
+        refresh_window_shells(cx, workspace);
+    }
+    cx.refresh_windows();
+}
+
+/// Retire what the *windows* still say about a failed connect to this machine.
+///
+/// `ConnectFlow::Failed` and `remote_host_errors` belong to whichever window
+/// ran the manual attempt, and the switcher paints both in preference to
+/// anything the supervisor knows. A link the supervisor brought up on its own
+/// therefore leaves the last failure on screen forever, because the window that
+/// recorded it never hears that the machine came back.
+fn clear_window_failures_for(cx: &mut gpui_kit::App, target: &RemoteTarget) {
+    let host = target.host_id();
+    for (_, app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+        let Some(app) = app.upgrade() else {
+            continue;
+        };
+        let key = target.to_string();
+        app.update(cx, |app, cx| {
+            let failed = match &app.connect {
+                Some(ConnectFlow::Failed { choice, .. }) if choice.target.host_id() == host => {
+                    Some(choice.target.clone())
+                }
+                _ => None,
+            };
+            let had_error = app.remote_host_errors.remove(&key).is_some();
+            match failed {
+                Some(target) => app.clear_remote_host_error(&target),
+                None if !had_error => return,
+                None => {}
+            }
+            cx.notify();
+        });
+    }
+}
+
+fn prune_suspended(
+    suspended: &mut std::collections::HashSet<HostId>,
+    bound: &[(HostId, RemoteTarget)],
+) {
+    suspended.retain(|host| bound.iter().any(|(id, _)| id == host));
+}
+
+/// Does this machine's entry survive a profile deletion (#485)? A live link
+/// or an in-flight attempt does: the connection holds an authenticated spec,
+/// not a profile reference, and forgetting the entry would release the link
+/// under any window still attached to it.
+pub(crate) fn link_alive_or_connecting(cx: &mut gpui_kit::App, host: HostId) -> bool {
+    if remote_connect::HostLinks::get(cx, host).is_some() {
+        return true;
+    }
+    cx.try_global::<RemoteLinks>()
+        .and_then(|links| links.machines.get(&host))
+        .is_some_and(|link| link.attempting || matches!(link.state, LinkState::Connecting))
+}
+
+fn bound_machines(cx: &gpui_kit::App) -> Vec<(HostId, RemoteTarget)> {
+    let mut out: Vec<(HostId, RemoteTarget)> = Vec::new();
+    for workspace in &WorkspaceStore::all(cx).views {
+        let Some(host) = workspace.host.as_ref() else {
+            continue;
+        };
+        if !workspace.open {
+            continue;
+        }
+        let id = host.host_id();
+        if !out.iter().any(|(seen, _)| *seen == id) {
+            out.push((id, host.target.clone()));
+        }
+    }
+    out
+}
+
+fn workspaces_on(cx: &gpui_kit::App, host: HostId) -> Vec<(WorkspaceId, String)> {
+    WorkspaceStore::all(cx)
+        .views
+        .iter()
+        .filter(|w| w.open)
+        .filter_map(|w| {
+            let remote = w.host.as_ref()?;
+            (remote.host_id() == host).then(|| (w.id, remote.store_key()))
+        })
+        .collect()
+}
+
+pub(crate) fn drain_events(cx: &mut gpui_kit::App) {
+    let events = match EVENTS.lock() {
+        Ok(mut queue) => std::mem::take(&mut *queue),
+        Err(_) => return,
+    };
+    for (host, event) in events {
+        match event {
+            // This computer's own daemon: the windows here hold its workspaces
+            // by their tree ids, through `LocalLink`'s claims.
+            ControlEvent::Preempted { workspace, by } if host.is_local() => {
+                crate::ui::local_link::LocalLink::on_preempted(cx, &workspace, by);
+            }
+            ControlEvent::Preempted { workspace, by } => {
+                let Some(id) = client_id_for(cx, host, &workspace) else {
+                    log::warn!(
+                        "preempted on {host:?} for a workspace this client has no window on"
+                    );
+                    continue;
+                };
+                log::info!("workspace {id} was taken over by {by}");
+                cx.default_global::<RemoteLinks>()
+                    .preempted
+                    .insert(id, by.clone());
+                release_panes(cx, id);
+                crate::ui::tree_sync::on_preempted(cx, id);
+                cx.refresh_windows();
+            }
+            ControlEvent::Layout { workspace, delta } => {
+                crate::ui::tree_sync::on_layout_delta(cx, host, &workspace, delta);
+            }
+            ControlEvent::LayoutResync => {
+                log::info!("{host:?} dropped layout deltas for this client; re-pulling");
+                crate::ui::machine_mirror::MachineMirrors::refresh(cx, host);
+                for (workspace, _) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+                    if WorkspaceStore::host_of(cx, workspace) != host {
+                        continue;
+                    }
+                    if workspace_is_preempted(cx, workspace) {
+                        continue;
+                    }
+                    crate::ui::tree_sync::resync_window_from_tree(cx, workspace);
+                }
+            }
+            ControlEvent::GuiOpen { workspace, .. } if host.is_local() && workspace.is_some() => {
+                let workspace = workspace.expect("guarded above");
+                crate::ui::windows::open_named_workspace_from_cli(cx, workspace);
+            }
+            ControlEvent::GuiOpen { path, .. } if host.is_local() => {
+                crate::ui::windows::open_from_cli(cx, path.map(std::path::PathBuf::from));
+            }
+            other => log::debug!("unhandled control event from {host:?}: {other:?}"),
+        }
+    }
+}
+
+fn reconnect_after_restart(origin: &str, cx: &mut gpui_kit::App) {
+    // The mismatch note this machine's old daemon earned is answered now —
+    // the restart just put this build's server there. Left in the queue it
+    // outlives the fix, and the next successful connect raises it again as a
+    // second "update this server?" about a server that was already updated.
+    crate::daemon::install::forget_remote_mismatch(origin);
+    let Some(host) = remote_connect::origin_host(origin) else {
+        return;
+    };
+    remote_connect::HostLinks::remove(cx, host);
+    for (workspace, _) in workspaces_on(cx, host) {
+        RemoteLinks::retry_now(cx, workspace);
+    }
+    RemoteLinks::ensure_running(cx);
+    cx.refresh_windows();
+}
+
+fn client_id_for(cx: &gpui_kit::App, host: HostId, store_key: &str) -> Option<WorkspaceId> {
+    workspaces_on(cx, host)
+        .into_iter()
+        .find(|(_, key)| key == store_key)
+        .map(|(id, _)| id)
+}
+
+fn launch_attempt(cx: &mut gpui_kit::App, host: HostId, target: RemoteTarget) {
+    // Not `target.to_string()`: a `Profile` target spells itself as its config
+    // UUID, and this label is what the failure the strip shows names the
+    // machine (#485). The reconnect banner beside it already reads the live
+    // config for the same name, so the two disagreed mid-sentence.
+    let label = remote_connect::target_label(cx, &target);
+    let header = match remote_connect::control_route(&target, cx) {
+        Ok(header) => header,
+        Err(e) => {
+            RemoteLinks::mark(cx, host, |link| {
+                link.last_error = Some(e.clone());
+                link.state = LinkState::Failed(e);
+                link.next_attempt = None;
+                link.attempting = false;
+            });
+            cx.refresh_windows();
+            return;
+        }
+    };
+    let keys: Vec<String> = workspaces_on(cx, host)
+        .into_iter()
+        .map(|(_, key)| key)
+        .collect();
+
+    RemoteLinks::mark(cx, host, |link| link.attempting = true);
+    // Same bookkeeping the switcher's own connect does, and for the same
+    // reason — see `connect_to_host`. An entry left behind here is worse than
+    // a stale caption: the strip and the switcher both draw an install in
+    // flight *instead of* the failure and its button, so a machine that needed
+    // Update Server sat under a frozen bar at 100% with nothing to press,
+    // counting attempts, for the rest of the session. The automatic path is
+    // the one that reaches this state, because it is the one that retries.
+    remote_connect::clear_install_progress(host);
+    let for_finish = target.clone();
+    let launch_commands = cx.global::<Config>().agent_launch.clone();
+    cx.spawn(async move |cx| {
+        let label_for_task = label.clone();
+        let outcome = cx
+            .background_executor()
+            .spawn(async move {
+                let connected = remote_connect::connect_blocking(
+                    &target,
+                    header,
+                    &label_for_task,
+                    &launch_commands,
+                )?;
+                // What the far end was actually told, so the pump does not go
+                // on to send the same attach a second time over this link.
+                let mut sent: Vec<String> = Vec::new();
+                for key in &keys {
+                    match connected
+                        .host
+                        .client()
+                        .call(ControlRequest::WorkspaceAttach { id: key.clone() })
+                    {
+                        Ok(ReplyOk::Attached {
+                            took_over_from: Some(who),
+                        }) => {
+                            log::info!("took workspace {key} back from {who}");
+                            sent.push(key.clone());
+                        }
+                        Ok(_) => sent.push(key.clone()),
+                        Err(e) => log::warn!("could not attach to workspace {key}: {e}"),
+                    }
+                }
+                Ok::<_, String>((connected, sent))
+            })
+            .await;
+        cx.update(|cx| finish_attempt(cx, host, &for_finish, outcome));
+    })
+    .detach();
+}
+
+fn finish_attempt(
+    cx: &mut gpui_kit::App,
+    host: HostId,
+    target: &RemoteTarget,
+    outcome: Result<(remote_connect::Connected, Vec<String>), String>,
+) {
+    // Nothing is being installed once the attempt is back, whichever way it
+    // went. Retiring it here is what lets the failure — and the button that
+    // answers it — reach the screen at all.
+    remote_connect::clear_install_progress(host);
+    let label = remote_connect::target_label(cx, target);
+    match outcome {
+        Ok((connected, sent)) => {
+            let restarted = server_restarted(cx, host, &connected.host);
+            let rows = connected.rows.clone();
+            remote_connect::HostLinks::insert(cx, connected.host, connected.home);
+            // Every successful attach carries the machine's own workspace
+            // listing, not just the switcher's explicit connect: a workspace
+            // another client created on this machine only becomes visible
+            // here if this path merges the listing too.
+            let listing: Vec<(WorkspaceId, String, u64)> = rows
+                .iter()
+                .map(|r| (r.id, r.name.clone(), r.last_active))
+                .collect();
+            WorkspaceStore::sync_remote(cx, target, &listing);
+            for (_, app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+                let Some(app) = app.upgrade() else {
+                    continue;
+                };
+                app.update(cx, |app, cx| {
+                    app.host_snapshots.insert(
+                        host,
+                        crate::ui::switcher::HostSnapshot {
+                            target: target.clone(),
+                            rows: rows.clone(),
+                        },
+                    );
+                    cx.notify();
+                });
+            }
+            for (id, key) in workspaces_on(cx, host) {
+                let reclaimed = {
+                    let links = cx.default_global::<RemoteLinks>();
+                    links.preempted.remove(&id).is_some() | links.reclaiming.remove(&id).is_some()
+                };
+                if sent.contains(&key) {
+                    RemoteLinks::mark(cx, host, |link| {
+                        link.attach_sent.insert(id);
+                    });
+                }
+                if restarted || reclaimed {
+                    crate::ui::tree_sync::resync_window_from_tree(cx, id);
+                } else {
+                    relink_panes(cx, id);
+                    crate::ui::tree_sync::hydrate_window_from_tree(cx, id);
+                }
+                // Whatever a pane's retry clock said about the old link is
+                // stale on the new one; the pump re-collects survivors fresh.
+                cx.default_global::<RemoteLinks>().pane_retries.remove(&id);
+                refresh_window_shells(cx, id);
+            }
+            RemoteLinks::mark(cx, host, |link| {
+                link.state = LinkState::Attached;
+                link.backoff.reset();
+                link.next_attempt = None;
+                link.attempting = false;
+                link.last_error = None;
+            });
+            clear_window_failures_for(cx, target);
+            log::info!("reconnected to {label}");
+        }
+        Err(e) => {
+            // A dialect refusal is not a transient failure. Both builds are
+            // fixed, so the next attempt fails identically and the one after
+            // that too; all the backoff buys is a strip that counts to thirty
+            // for the rest of the session. Park it and give the user the move
+            // that actually changes the answer.
+            let parked = crate::daemon::control::is_dialect_refusal(&e);
+            // Somebody closed the password sheet. Retrying that is retrying a
+            // question the user has already answered, and the backoff answers
+            // it again a second later and every thirty seconds after that —
+            // which is the half of #820 where the window "cannot be closed".
+            // Suspend the machine instead: the strip says why and offers
+            // Retry, which is the user asking to be asked again.
+            let declined = !parked && crate::daemon::ssh::is_auth_declined(&e);
+            if parked {
+                log::warn!("{label} is served by a build this one cannot speak to: {e}");
+            } else if declined {
+                log::info!("not reconnecting to {label}: {e}");
+            } else {
+                log::warn!("reconnect to {label} failed: {e}");
+            }
+            RemoteLinks::mark(cx, host, |link| {
+                link.attempting = false;
+                link.state = if parked {
+                    LinkState::Mismatched(e.clone())
+                } else if declined {
+                    LinkState::Failed(e.clone())
+                } else {
+                    LinkState::Reconnecting
+                };
+                if !parked && !declined {
+                    // The counter is the number of attempts that came back
+                    // wrong. It moves here, not when the pump schedules one:
+                    // a first try still in flight is attempt 1 on the strip,
+                    // not attempt 2. A parked look stays off the backoff.
+                    link.backoff.advance();
+                }
+                link.next_attempt = None;
+                link.last_error = Some(e.clone());
+            });
+            // `Failed` on its own is not a park — the pump rewrites every
+            // state but `Mismatched` back to `Reconnecting` on its next tick.
+            // This is what actually stops the clock, and `retry_now` and the
+            // switcher's own connect are what start it again.
+            if declined {
+                cx.default_global::<RemoteLinks>().suspended.insert(host);
+            }
+        }
+    }
+    cx.refresh_windows();
+}
+
+fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
+    let route = pane_route_for(cx, workspace);
+    if matches!(route, crate::terminal::PaneRoute::Local) {
+        return;
+    }
+    let panes = panes_of(cx, workspace);
+    if panes.is_empty() {
+        return;
+    }
+    log::info!("relinking {} pane(s) of workspace {workspace}", panes.len());
+    for view in panes {
+        // Claimed before the dial so the pump's sweep, which runs every
+        // 250 ms and sees these panes as dead until they adopt, does not fire
+        // a second `Attach` for the same pane and kick this one off the
+        // daemon's single subscriber slot.
+        let (pane_id, size, cell_w, cell_h) = view.update(cx, |view, _| {
+            view.mark_relinking();
+            view.relink_plan()
+        });
+        let opening = route.clone();
+        let adopting = route.clone();
+        cx.spawn(async move |cx| {
+            let opened = cx
+                .background_executor()
+                .spawn(async move {
+                    crate::terminal::RemoteTerminal::open_relink(
+                        &opening, pane_id, size, cell_w, cell_h,
+                    )
+                    .map_err(|e| e.to_string())
+                })
+                .await;
+            match opened {
+                Ok((stream, buffered)) => {
+                    view.update(cx, |view, cx| {
+                        if let Err(e) =
+                            view.adopt_relink(stream, buffered, &adopting, size, cell_w, cell_h, cx)
+                        {
+                            view.relink_settled();
+                            log::warn!("pane {pane_id} re-attached but could not be adopted: {e}");
+                        }
+                    });
+                }
+                Err(e) => {
+                    view.update(cx, |view, _| view.relink_settled());
+                    log::warn!("could not relink pane {pane_id}: {e}");
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+/// Finds panes whose links died while their machine's control link stayed up,
+/// and asks for them back on a per-workspace backoff. Runs from the pump's
+/// `live` branch, so a machine that is unreachable never gets here — its
+/// panes come back through `relink_panes` when the machine-level reconnect
+/// lands.
+fn pump_pane_relinks(cx: &mut gpui_kit::App, host: HostId) {
+    let now = Instant::now();
+    for (id, _) in workspaces_on(cx, host) {
+        // Released panes are gone on purpose (preempted, or a Take Back on
+        // the wire); an attach still in flight will rebuild them itself.
+        let paused = {
+            let links = cx.default_global::<RemoteLinks>();
+            links.preempted.contains_key(&id)
+                || links.reclaiming.contains_key(&id)
+                || links.attaching.contains(&id)
+        };
+        if paused {
+            continue;
+        }
+        let dead: Vec<_> = panes_of(cx, id)
+            .into_iter()
+            .filter(|view| view.read(cx).wants_relink())
+            .collect();
+        if dead.is_empty() {
+            // A batch on the wire owns the clock until it reports back — its
+            // panes read as claimed, not dead, and dropping the entry here
+            // would throw away the backoff the batch is about to advance.
+            let links = cx.default_global::<RemoteLinks>();
+            if !links.pane_retries.get(&id).is_some_and(|r| r.inflight) {
+                links.pane_retries.remove(&id);
+            }
+            continue;
+        }
+        let due = {
+            let retry = cx
+                .default_global::<RemoteLinks>()
+                .pane_retries
+                .entry(id)
+                .or_default();
+            match (retry.inflight, retry.next_attempt) {
+                (true, _) => false,
+                // First sighting: ask right away. The backoff only starts
+                // once an attempt has actually come back wrong.
+                (false, None) => true,
+                (false, Some(at)) => at <= now,
+            }
+        };
+        if due {
+            relink_dead_panes(cx, id, dead);
+        }
+    }
+}
+
+/// One batch of relinks for one workspace's dead panes. Every pane dials
+/// concurrently; the batch reports back as a whole, and one transient failure
+/// puts the whole workspace on the next backoff step. A refusal is final for
+/// that pane — the machine said the pane is gone — so it is marked abandoned
+/// instead of counted against the clock.
+fn relink_dead_panes(
+    cx: &mut gpui_kit::App,
+    workspace: WorkspaceId,
+    panes: Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>>,
+) {
+    let route = pane_route_for(cx, workspace);
+    if route.header().is_none() {
+        // Local can't happen for a workspace with a host; Unroutable means
+        // the route stopped resolving, which is the machine supervisor's
+        // problem — count it as a miss and let the clock run.
+        note_pane_relink_outcome(cx, workspace, panes.len());
+        return;
+    }
+    {
+        let retry = cx
+            .default_global::<RemoteLinks>()
+            .pane_retries
+            .entry(workspace)
+            .or_default();
+        retry.inflight = true;
+        log::info!(
+            "asking for {} dead pane(s) of workspace {workspace} back (attempt {})",
+            panes.len(),
+            retry.backoff.attempt() + 1
+        );
+    }
+    // Claimed pane by pane as well as workspace by workspace: the machine
+    // supervisor's own `relink_panes` reads the same flag, and two `Attach`es
+    // for one pane_id do not queue — the daemon's second one kicks the first.
+    let plans: Vec<_> = panes
+        .iter()
+        .map(|view| {
+            let plan = view.update(cx, |view, _| {
+                view.mark_relinking();
+                view.relink_plan()
+            });
+            (view.clone(), plan)
+        })
+        .collect();
+    cx.spawn(async move |cx| {
+        let attempts: Vec<_> = plans
+            .into_iter()
+            .map(|(view, (pane_id, size, cell_w, cell_h))| {
+                let opening = route.clone();
+                let opened = cx.background_executor().spawn(async move {
+                    crate::terminal::RemoteTerminal::open_relink(
+                        &opening, pane_id, size, cell_w, cell_h,
+                    )
+                });
+                (view, opened, pane_id, size, cell_w, cell_h)
+            })
+            .collect();
+        let mut misses = 0usize;
+        for (view, opened, pane_id, size, cell_w, cell_h) in attempts {
+            match opened.await {
+                Ok((stream, buffered)) => {
+                    let adopted = view.update(cx, |view, cx| {
+                        view.adopt_relink(stream, buffered, &route, size, cell_w, cell_h, cx)
+                    });
+                    match adopted {
+                        Ok(()) => log::info!("pane {pane_id} came back on its own"),
+                        Err(e) => {
+                            misses += 1;
+                            view.update(cx, |view, _| view.relink_settled());
+                            log::warn!("pane {pane_id} re-attached but could not be adopted: {e}");
+                        }
+                    }
+                }
+                Err(e) if crate::terminal::attach_refused(&e) => {
+                    view.update(cx, |view, _| view.abandon_relink());
+                    log::warn!("pane {pane_id} is gone on its machine ({e}); not asking again");
+                }
+                Err(e) => {
+                    misses += 1;
+                    view.update(cx, |view, _| view.relink_settled());
+                    log::warn!("could not relink pane {pane_id}: {e}");
+                }
+            }
+        }
+        cx.update(|cx| note_pane_relink_outcome(cx, workspace, misses));
+    })
+    .detach();
+}
+
+/// Lands a batch's verdict on the workspace's retry clock: all found their
+/// way back (or are past asking) and the entry retires; any miss advances the
+/// backoff and books the next try.
+fn note_pane_relink_outcome(cx: &mut gpui_kit::App, workspace: WorkspaceId, misses: usize) {
+    let links = cx.default_global::<RemoteLinks>();
+    if misses == 0 {
+        links.pane_retries.remove(&workspace);
+        return;
+    }
+    let Some(retry) = links.pane_retries.get_mut(&workspace) else {
+        return;
+    };
+    retry.inflight = false;
+    let delay = retry.backoff.advance();
+    retry.next_attempt = Some(Instant::now() + delay);
+}
+
+fn server_restarted(cx: &mut gpui_kit::App, host: HostId, peer: &RemoteHost) -> bool {
+    let instance = peer.peer().instance.clone();
+    let seen = &mut cx.default_global::<RemoteLinks>().instances;
+    crate::ui::tree_sync::note_instance(seen.entry(host).or_default(), &instance)
+}
+
+fn refresh_window_shells(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
+    let Some(app) =
+        crate::ui::windows::WindowRegistry::app_for(cx, workspace).and_then(|app| app.upgrade())
+    else {
+        return;
+    };
+    app.update(cx, |app, cx| app.refresh_shells(cx));
+}
+
+/// Detaches every pane of `workspace`'s window from its daemon. A detach ends
+/// the stream only; the process in the pane runs on for whoever drives it next.
+pub(crate) fn release_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
+    for view in panes_of(cx, workspace) {
+        view.update(cx, |view, cx| view.detach_link(cx));
+    }
+}
+
+pub(crate) fn pump_auth_sheets(cx: &mut gpui_kit::App) {
+    #[cfg(test)]
+    let _turn = remote_connect::claim_mailbox();
+
+    let mut inbox: Vec<remote_connect::PendingAuth> = Vec::new();
+    while let Some(pending) = remote_connect::take_pending_auth() {
+        inbox.push(pending);
+    }
+    if let Ok(mut parked) = PARKED.lock() {
+        inbox.append(&mut parked);
+    }
+
+    // First take down any sheet whose attempt has stopped listening, so the
+    // host's gate is free again for a prompt that is still wanted.
+    retract_abandoned_sheets(cx);
+
+    for pending in inbox {
+        // Nobody is waiting for this answer any more. Raising it would put up
+        // a sheet whose password goes nowhere; parking it would bring that
+        // sheet up later, behind whichever one is on screen now (#820).
+        if pending.is_abandoned() {
+            log::debug!("dropping a routed auth prompt its attempt gave up on");
+            continue;
+        }
+        let host = pending.host;
+        if !cx.default_global::<RemoteLinks>().auth.request(host) {
+            park(pending);
+            continue;
+        }
+        match raise_auth_sheet(cx, pending) {
+            SheetOutcome::Raised => {}
+            outcome => {
+                cx.default_global::<RemoteLinks>().auth.release(host);
+                if let SheetOutcome::GiveBack(pending) = outcome {
+                    park(pending);
+                }
+            }
+        }
+    }
+}
+
+/// A routed sheet stays up until someone answers it, and nothing on screen
+/// knows when the attempt that raised it has given up — so the pump looks, and
+/// takes those down itself.
+fn retract_abandoned_sheets(cx: &mut gpui_kit::App) {
+    if !cx.has_global::<crate::ui::windows::WindowRegistry>() {
+        return;
+    }
+    for (workspace, app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+        let Some(app) = app.upgrade() else {
+            continue;
+        };
+        if !app.read(cx).routed_auth_abandoned() {
+            continue;
+        }
+        let Some(handle) = crate::ui::windows::WindowRegistry::window_for(cx, workspace) else {
+            continue;
+        };
+        let _ = handle.update(cx, |_, window, cx| {
+            app.update(cx, |app, cx| app.retract_abandoned_routed_auth(window, cx))
+        });
+    }
+}
+
+pub(crate) enum SheetOutcome {
+    Raised,
+    GiveBack(remote_connect::PendingAuth),
+    Lost,
+}
+
+fn raise_auth_sheet(cx: &mut gpui_kit::App, pending: remote_connect::PendingAuth) -> SheetOutcome {
+    let host = pending.host;
+    let Some((workspace, _)) = workspaces_on(cx, host).into_iter().next() else {
+        return SheetOutcome::GiveBack(pending);
+    };
+    let Some(handle) = crate::ui::windows::WindowRegistry::window_for(cx, workspace) else {
+        return SheetOutcome::GiveBack(pending);
+    };
+    let Some(app) =
+        crate::ui::windows::WindowRegistry::app_for(cx, workspace).and_then(|app| app.upgrade())
+    else {
+        return SheetOutcome::GiveBack(pending);
+    };
+    handle
+        .update(cx, move |_, window, cx| {
+            app.update(cx, |app, cx| app.raise_routed_auth(pending, window, cx))
+        })
+        .unwrap_or(SheetOutcome::Lost)
+}
+
+pub(crate) fn release_auth_sheet(host: HostId, cx: &mut gpui_kit::App) {
+    cx.default_global::<RemoteLinks>().auth.release(host);
+}
+
+static PARKED: Mutex<Vec<remote_connect::PendingAuth>> = Mutex::new(Vec::new());
+
+fn park(pending: remote_connect::PendingAuth) {
+    if let Ok(mut parked) = PARKED.lock() {
+        parked.push(pending);
+    }
+}
+
+fn panes_of(
+    cx: &mut gpui_kit::App,
+    workspace: WorkspaceId,
+) -> Vec<gpui_kit::Entity<crate::terminal::view::TerminalView>> {
+    let Some(app) = crate::ui::windows::WindowRegistry::app_for(cx, workspace) else {
+        return Vec::new();
+    };
+    let Some(app) = app.upgrade() else {
+        return Vec::new();
+    };
+    app.read(cx).panes()
+}
+
+#[allow(
+    dead_code,
+    reason = "the five keystroke entry points that call this live in terminal/view.rs"
+)]
+pub(crate) fn workspace_accepts_input(cx: &gpui_kit::App, workspace: WorkspaceId) -> bool {
+    RemoteLinks::status_of(cx, workspace)
+        .or_else(|| crate::ui::local_link::LocalLink::status_of(cx, workspace))
+        .is_none_or(|s| s.accepts_input())
+}
+
+/// Whether another client is driving `workspace` — on a remote machine, or on
+/// this one.
+pub(crate) fn workspace_is_preempted(cx: &gpui_kit::App, workspace: WorkspaceId) -> bool {
+    cx.try_global::<RemoteLinks>()
+        .is_some_and(|links| links.preempted.contains_key(&workspace))
+        || crate::ui::local_link::LocalLink::is_preempted(cx, workspace)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The per-workspace relink clock: a miss puts the workspace on the next
+    /// backoff step, panes all found their way back retires the entry — so a
+    /// pane that cannot come back is asked for on a widening interval, and a
+    /// recovered workspace costs the pump nothing.
+    #[gpui_kit::test]
+    fn a_pane_retry_backs_off_on_misses_and_retires_on_success(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            let ws = WorkspaceId::new();
+            cx.default_global::<RemoteLinks>()
+                .pane_retries
+                .entry(ws)
+                .or_default()
+                .inflight = true;
+
+            note_pane_relink_outcome(cx, ws, 2);
+            let links = cx.default_global::<RemoteLinks>();
+            let retry = links.pane_retries.get(&ws).expect("a miss keeps the clock");
+            assert!(!retry.inflight, "the batch reported back");
+            assert_eq!(retry.backoff.attempt(), 1);
+            assert!(retry.next_attempt.is_some(), "the next try is booked");
+
+            note_pane_relink_outcome(cx, ws, 0);
+            assert!(
+                cx.default_global::<RemoteLinks>()
+                    .pane_retries
+                    .get(&ws)
+                    .is_none(),
+                "every pane back means no clock left to run"
+            );
+        });
+    }
+
+    /// A reconnect that got as far as copying the server and then failed used
+    /// to leave its progress entry behind forever. That entry is not just a
+    /// stale caption: the strip and the switcher both draw an install in
+    /// flight *instead of* the failure and its button, so the machine sat
+    /// under a bar frozen at 100%, counting attempts, with nothing to press —
+    /// including the Update Server that would have fixed it.
+    #[gpui_kit::test]
+    fn a_finished_attempt_retires_the_install_it_was_running(cx: &mut gpui_kit::TestAppContext) {
+        use crate::daemon::install::InstallProgress as _;
+        cx.update(|cx| {
+            cx.set_global(crate::core::config::Config::default());
+            crate::core::session::WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews::default(),
+            );
+            let target = RemoteTarget::Alias {
+                alias: "build-box".into(),
+            };
+            let host = target.host_id();
+
+            remote_connect::GuiInstallProgress.report(
+                &target.connection_key(),
+                crate::daemon::install::InstallPhase::Uploading {
+                    done: 9_227_468,
+                    total: 9_227_468,
+                },
+            );
+            assert!(
+                remote_connect::install_progress_for(host).is_some(),
+                "the copy is on screen"
+            );
+
+            finish_attempt(
+                cx,
+                host,
+                &target,
+                Err("the remote lyrel-server did not start".into()),
+            );
+
+            assert!(
+                remote_connect::install_progress_for(host).is_none(),
+                "and the attempt that was running it is over, so it comes off"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn taking_back_marks_the_workspace_for_a_whole_rebuild(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::core::config::Config::default());
+            let host = RemoteRef::new(
+                RemoteTarget::Alias {
+                    alias: "build-box".into(),
+                },
+                WorkspaceId::new(),
+            );
+            let view = crate::core::session::WindowView {
+                host: Some(host),
+                ..Default::default()
+            };
+            let id = view.id;
+            crate::core::session::WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![view],
+                    active: None,
+                },
+            );
+            cx.default_global::<RemoteLinks>()
+                .preempted
+                .insert(id, "laptop".into());
+
+            RemoteLinks::retry_now(cx, id);
+
+            let links = cx.default_global::<RemoteLinks>();
+            assert!(
+                !links.preempted.contains_key(&id),
+                "the takeover is being reversed; the read-only state ends now"
+            );
+            assert!(
+                links.reclaiming.contains_key(&id),
+                "the attach that lands must know to rebuild this window from the tree"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_stopped_supervisor_restarts_when_a_remote_workspace_comes_back(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let id = cx.update(|cx| {
+            cx.set_global(crate::core::config::Config::default());
+            crate::core::session::WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews::default(),
+            );
+            RemoteLinks::ensure_running(cx);
+            assert!(cx.default_global::<RemoteLinks>().pumping);
+            WorkspaceId::new()
+        });
+        cx.background_executor.run_until_parked();
+        cx.update(|cx| {
+            assert!(
+                !cx.default_global::<RemoteLinks>().pumping,
+                "with no remote workspace open the pump is expected to stop"
+            );
+
+            let host = RemoteRef::new(
+                RemoteTarget::Alias {
+                    alias: "build-box".into(),
+                },
+                WorkspaceId::new(),
+            );
+            crate::core::session::WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![crate::core::session::WindowView {
+                        id,
+                        host: Some(host),
+                        open: true,
+                        ..Default::default()
+                    }],
+                    active: Some(id),
+                },
+            );
+            RemoteLinks::supervise(cx, id);
+
+            assert!(
+                cx.default_global::<RemoteLinks>().pumping,
+                "reopening a remote workspace has to start the supervisor again"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_plain_reconnect_is_not_marked_for_a_rebuild(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::core::config::Config::default());
+            let host = RemoteRef::new(
+                RemoteTarget::Alias {
+                    alias: "build-box".into(),
+                },
+                WorkspaceId::new(),
+            );
+            let view = crate::core::session::WindowView {
+                host: Some(host),
+                ..Default::default()
+            };
+            let id = view.id;
+            crate::core::session::WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![view],
+                    active: None,
+                },
+            );
+
+            RemoteLinks::retry_now(cx, id);
+
+            assert!(
+                !cx.default_global::<RemoteLinks>()
+                    .reclaiming
+                    .contains_key(&id),
+                "nothing was taken over, so nothing needs the Replace path"
+            );
+        });
+    }
+
+    /// A refusal as the daemon writes it — what `finish_connect` receives when
+    /// the machine's server is the other side of a dialect bump.
+    fn a_dialect_refusal() -> String {
+        "build-box answered, but not as a lyrel server: control peer (build 26.7.7-nightly) \
+         speaks control v4, this build speaks v5"
+            .to_string()
+    }
+
+    /// A live `Connected` over a socketpair, served by a real control server in
+    /// a thread — what a connect that finally landed hands `finish_connect`.
+    #[cfg(unix)]
+    fn fake_connected(connection_key: &str) -> remote_connect::Connected {
+        use lyrel_core::daemon::control::ControlHello;
+        use lyrel_core::host::local::LocalHost;
+        use lyrel_core::host::server::{Services, serve_with};
+
+        let (server, client) = std::os::unix::net::UnixStream::pair().unwrap();
+        std::thread::spawn(move || {
+            let _ = serve_with(server, LocalHost::new(), Services::none());
+        });
+        let hello = ControlHello::host_rpc("test-token", "test-client");
+        let host = RemoteHost::over_unix(client, connection_key, &hello)
+            .expect("the fake server answers the hello");
+        remote_connect::Connected {
+            host,
+            home: std::path::PathBuf::from("/tmp"),
+            rows: Vec::new(),
+        }
+    }
+
+    /// The regression behind "I clicked update and nothing happened": a create
+    /// whose connect was refused for the dialect used to die with the attempt,
+    /// so the update the refusal button ran had nothing left to finish and the
+    /// user had to create the workspace all over again.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn a_create_refused_for_dialect_runs_once_the_machine_connects(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::VisualContext as _;
+
+        let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        // Entering the created workspace walks the registry, so the window has
+        // to be in it — the same setup the create form's own test needs.
+        let handle = vcx.window_handle();
+        let weak = app.downgrade();
+        app.update(cx, |app, cx| {
+            crate::core::session::WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews::default(),
+            );
+            crate::ui::windows::WindowRegistry::init(cx);
+            crate::ui::windows::WindowRegistry::register(cx, app.workspace, handle, weak);
+        });
+        let target = RemoteTarget::Alias {
+            alias: "lyrel-test-refused-box".into(),
+        };
+        let choice = HostChoice {
+            target: target.clone(),
+            label: "refused-box".into(),
+            detail: String::new(),
+        };
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.pending_create = Some(crate::ui::switcher::PendingCreate {
+                target: target.clone(),
+                name: Some("deploy".into()),
+            });
+            app.connect = Some(ConnectFlow::Connecting {
+                choice: choice.clone(),
+            });
+            app.finish_connect(Err(a_dialect_refusal()), window, cx);
+        });
+
+        // The server over there was updated and the machine finally connected —
+        // whether over `server_replaced`'s kick or the band's own retry, it
+        // ends in the same place.
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.finish_connect(Ok(fake_connected("lyrel-test-refused-box")), window, cx);
+        });
+
+        app.update(cx, |app, cx| {
+            let own = WorkspaceStore::remote_ref(cx, app.workspace)
+                .expect("the parked create ran and this window entered its workspace");
+            assert_eq!(own.target, target);
+            assert_eq!(
+                crate::ui::tree_sync::chosen_name_for(cx, app.workspace).as_deref(),
+                Some("deploy"),
+                "the name travels with the create it was typed for"
+            );
+        });
+    }
+
+    /// The moment the replacement lands the machine is connected at again
+    /// without waiting for the user — the parked create stays put for that
+    /// connect to spend, not for a click that will never come.
+    #[gpui_kit::test]
+    fn a_server_replacement_connects_back_for_the_parked_create(cx: &mut gpui_kit::TestAppContext) {
+        let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let target = RemoteTarget::Alias {
+            alias: "lyrel-test-refused-box".into(),
+        };
+        let choice = HostChoice {
+            target: target.clone(),
+            label: "refused-box".into(),
+            detail: String::new(),
+        };
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.pending_create = Some(crate::ui::switcher::PendingCreate {
+                target: target.clone(),
+                name: None,
+            });
+            app.connect = Some(ConnectFlow::Connecting {
+                choice: choice.clone(),
+            });
+            app.finish_connect(Err(a_dialect_refusal()), window, cx);
+        });
+
+        app.update(cx, |app, cx| {
+            app.server_replaced(&target, "refused-box", "lyrel-test-unknown-origin", cx);
+            // The old refusal is still `Failed { target }` too, so the target
+            // alone proves nothing — what has to change is the failure itself:
+            // a fresh attempt ran and left its own outcome in its place.
+            match app.connect.as_ref() {
+                Some(ConnectFlow::Connecting { choice }) => assert_eq!(choice.target, target),
+                Some(ConnectFlow::Failed { choice, error }) => {
+                    assert_eq!(choice.target, target);
+                    assert!(
+                        !crate::daemon::control::is_dialect_refusal(error),
+                        "the refusal was never retried: {error}"
+                    );
+                }
+                None => panic!("the replacement kicks a connect at the machine"),
+            }
+            assert!(
+                app.parked_create.is_some(),
+                "the create keeps waiting for that connect to land"
+            );
+        });
+    }
+
+    /// The second half of the double-prompt: the note a mismatched daemon
+    /// earned used to outlive the very replacement that answered it, so the
+    /// next successful connect asked to update a server that was already
+    /// updated — and confirming killed the fresh daemon all over again.
+    #[gpui_kit::test]
+    fn a_restart_retires_the_mismatch_note_it_answers(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            let origin = "lyrel-test-stale-origin";
+            crate::daemon::install::record_remote_mismatches(vec![
+                crate::daemon::install::MismatchedRemoteDaemon {
+                    host: origin.into(),
+                    running_version: Some("0.8.0".into()),
+                    running_exe: None,
+                    wanted_version: "0.9.0".into(),
+                },
+            ]);
+
+            reconnect_after_restart(origin, cx);
+
+            let drained = crate::daemon::install::take_mismatched_remote_daemons();
+            let (ours, others): (Vec<_>, Vec<_>) =
+                drained.into_iter().partition(|m| m.host == origin);
+            // Notes about other machines are still owed; put back what the
+            // drain took.
+            crate::daemon::install::record_remote_mismatches(others);
+            assert!(
+                ours.is_empty(),
+                "the restart just answered this note; raising it again is the double prompt"
+            );
+        });
+    }
+
+    #[test]
+    fn the_status_strip_speaks_unless_everything_is_working() {
+        crate::ui::i18n::set_locale("en");
+        assert_eq!(RemoteStatus::Attached.strip_message("build-box"), None);
+        assert_eq!(
+            RemoteStatus::Disconnected.strip_message("build-box"),
+            Some(t_fmt(
+                L10nKey::RemoteStripDisconnected,
+                &[("machine", "build-box")]
+            ))
+        );
+        assert_eq!(
+            RemoteStatus::Connecting.strip_message("build-box"),
+            Some(t_fmt(
+                L10nKey::RemoteStripConnecting,
+                &[("machine", "build-box")]
+            ))
+        );
+        assert_eq!(
+            RemoteStatus::Failed("connection refused".into()).strip_message("build-box"),
+            Some(t_fmt(
+                L10nKey::RemoteStripFailed,
+                &[("machine", "build-box"), ("error", "connection refused")]
+            ))
+        );
+    }
+
+    #[test]
+    fn input_is_gated_on_being_attached() {
+        assert!(RemoteStatus::Attached.accepts_input());
+        assert!(!RemoteStatus::Disconnected.accepts_input());
+        assert!(!RemoteStatus::Connecting.accepts_input());
+        assert!(!RemoteStatus::Failed("x".into()).accepts_input());
+    }
+
+    #[test]
+    fn every_flow_state_names_its_machine() {
+        let choice = HostChoice {
+            target: RemoteTarget::Alias {
+                alias: "build-box".into(),
+            },
+            label: "build-box".into(),
+            detail: "me@build-box".into(),
+        };
+        let flow = ConnectFlow::Connecting {
+            choice: choice.clone(),
+        };
+        assert_eq!(flow.choice(), Some(&choice));
+        let flow = ConnectFlow::Failed {
+            choice: choice.clone(),
+            error: "no route to host".into(),
+        };
+        assert_eq!(flow.choice(), Some(&choice));
+    }
+
+    /// What the comparison itself answers is pinned where it now lives, in
+    /// `tree_sync`. What is this module's own is the slot it reads: one per
+    /// host, keyed the way `server_restarted` keys it, so a machine that
+    /// restarted says nothing about the one next to it.
+    #[test]
+    fn instances_are_per_machine() {
+        let mut seen = std::collections::HashMap::new();
+        let a = HostId::from_connection_key("ssh:box-a");
+        let b = HostId::from_connection_key("ssh:box-b");
+
+        assert!(!crate::ui::tree_sync::note_instance(
+            seen.entry(a).or_default(),
+            "a1"
+        ));
+        assert!(!crate::ui::tree_sync::note_instance(
+            seen.entry(b).or_default(),
+            "b1"
+        ));
+        assert!(crate::ui::tree_sync::note_instance(
+            seen.entry(a).or_default(),
+            "a2"
+        ));
+        assert!(
+            !crate::ui::tree_sync::note_instance(seen.entry(b).or_default(), "b1"),
+            "box-b never changed; box-a restarting is not its business"
+        );
+    }
+
+    #[test]
+    fn the_backoff_doubles_to_thirty_seconds_and_stays_there() {
+        let mut b = Backoff::default();
+        let seen: Vec<u64> = (0..8).map(|_| b.advance().as_secs()).collect();
+        assert_eq!(seen, vec![1, 2, 4, 8, 16, 30, 30, 30]);
+        assert_eq!(b.attempt(), 8, "every attempt is counted, capped or not");
+    }
+
+    #[test]
+    fn a_success_resets_the_schedule() {
+        let mut b = Backoff::default();
+        for _ in 0..5 {
+            b.advance();
+        }
+        assert_eq!(b.delay(), RECONNECT_CAP);
+        b.reset();
+        assert_eq!(b.attempt(), 0);
+        assert_eq!(b.delay(), RECONNECT_FIRST);
+    }
+
+    #[test]
+    fn the_backoff_survives_absurd_attempt_counts() {
+        let mut b = Backoff::default();
+        for _ in 0..200 {
+            assert!(b.advance() <= RECONNECT_CAP);
+        }
+        assert_eq!(b.delay(), RECONNECT_CAP, "still retrying, still capped");
+    }
+
+    fn host(key: &str) -> HostId {
+        HostId::from_connection_key(key)
+    }
+
+    #[test]
+    fn only_one_machine_may_raise_a_sheet_at_a_time() {
+        let mut q = AuthSheetQueue::default();
+        let (a, b, c) = (
+            host("ssh-alias:a"),
+            host("ssh-alias:b"),
+            host("ssh-alias:c"),
+        );
+
+        assert!(q.request(a), "the first asker goes straight through");
+        assert!(!q.request(b));
+        assert!(!q.request(c));
+        assert_eq!(q.waiting(), 2);
+        assert_eq!(q.holder(), Some(a));
+
+        assert_eq!(q.release(a), Some(b));
+        assert_eq!(q.waiting(), 1);
+        assert_eq!(q.release(b), Some(c));
+        assert_eq!(q.release(c), None);
+        assert_eq!(q.holder(), None);
+        assert_eq!(q.waiting(), 0);
+    }
+
+    #[test]
+    fn the_holder_may_ask_again_without_deadlocking() {
+        let mut q = AuthSheetQueue::default();
+        let a = host("ssh-alias:a");
+        assert!(q.request(a));
+        assert!(q.request(a));
+        assert_eq!(q.waiting(), 0);
+    }
+
+    #[test]
+    fn a_connect_that_gave_up_leaves_the_queue() {
+        let mut q = AuthSheetQueue::default();
+        let (a, b, c) = (
+            host("ssh-alias:a"),
+            host("ssh-alias:b"),
+            host("ssh-alias:c"),
+        );
+        q.request(a);
+        q.request(b);
+        q.request(c);
+
+        q.withdraw(b);
+        assert_eq!(q.waiting(), 1);
+        assert_eq!(q.release(a), Some(c), "b is gone, c is next");
+
+        assert_eq!(q.release(b), None);
+        assert_eq!(q.holder(), Some(c));
+    }
+
+    #[test]
+    fn two_windows_on_one_machine_share_a_place_in_the_queue() {
+        let mut q = AuthSheetQueue::default();
+        let (a, b) = (host("ssh-alias:build"), host("ssh-alias:other"));
+        assert!(q.request(a));
+        assert!(!q.request(b));
+        assert!(q.request(a));
+        assert_eq!(q.waiting(), 1);
+    }
+
+    #[test]
+    fn every_state_says_what_it_means_for_the_keyboard() {
+        crate::ui::i18n::set_locale("en");
+        let cases = [
+            (RemoteStatus::Attached, true, None, None),
+            (
+                RemoteStatus::Disconnected,
+                false,
+                Some(t(L10nKey::RemoteNoticeDisconnected)),
+                Some(t(L10nKey::RemoteActionConnect)),
+            ),
+            (
+                RemoteStatus::Connecting,
+                false,
+                Some(t(L10nKey::RemoteNoticeDisconnected)),
+                None,
+            ),
+            (
+                RemoteStatus::Reconnecting {
+                    attempt: 2,
+                    last_error: None,
+                },
+                false,
+                Some(t(L10nKey::RemoteNoticeDisconnected)),
+                Some(t(L10nKey::RemoteActionRetryNow)),
+            ),
+            (
+                RemoteStatus::Preempted {
+                    by: "desktop".into(),
+                },
+                false,
+                Some(t(L10nKey::RemoteNoticePreempted)),
+                Some(t(L10nKey::RemoteActionTakeBack)),
+            ),
+            (
+                RemoteStatus::Failed("no route to host".into()),
+                false,
+                Some(t(L10nKey::RemoteNoticeDisconnected)),
+                Some(t(L10nKey::RemoteActionRetry)),
+            ),
+            (
+                RemoteStatus::ServerMismatch(a_refusal()),
+                false,
+                Some(t(L10nKey::RemoteNoticeDisconnected)),
+                Some(t(L10nKey::RemoteMismatchReplaceServer)),
+            ),
+            (
+                RemoteStatus::ServerMismatch(a_refusal_between(7, 6)),
+                false,
+                Some(t(L10nKey::RemoteNoticeDisconnected)),
+                Some(t(L10nKey::RemoteMismatchDowngradeServer)),
+            ),
+        ];
+        for (status, accepts, notice, action) in cases {
+            assert_eq!(status.accepts_input(), accepts, "{status:?}");
+            assert_eq!(status.input_notice(), notice, "{status:?}");
+            assert_eq!(status.action_label(), action, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn the_new_states_name_what_happened() {
+        crate::ui::i18n::set_locale("en");
+        assert_eq!(
+            RemoteStatus::Reconnecting {
+                attempt: 0,
+                last_error: None,
+            }
+            .strip_message("build-box"),
+            Some(t_fmt(
+                L10nKey::RemoteStripReconnecting,
+                &[("machine", "build-box")]
+            )),
+            "the first attempt does not need a count"
+        );
+        assert_eq!(
+            RemoteStatus::Reconnecting {
+                attempt: 3,
+                last_error: None,
+            }
+            .strip_message("build-box"),
+            Some(t_fmt(
+                L10nKey::RemoteStripReconnectingAttempt,
+                &[("machine", "build-box"), ("count", "4")]
+            ))
+        );
+        assert_eq!(
+            RemoteStatus::Preempted {
+                by: "desktop".into()
+            }
+            .strip_message("build-box"),
+            Some(t_fmt(L10nKey::RemoteStripPreempted, &[("by", "desktop")]))
+        );
+    }
+
+    fn machine(alias: &str) -> (HostId, RemoteTarget) {
+        let target = RemoteTarget::Alias {
+            alias: alias.to_string(),
+        };
+        (target.host_id(), target)
+    }
+
+    /// A machine the pump will actually think about.
+    ///
+    /// An `Alias` is only resolvable while that name is in the ssh config of
+    /// whoever is running the tests, and the pump drops an unresolvable route
+    /// before it reaches anything else — so a test that asserts on what the
+    /// pump does to a link must not use one, or it passes by not getting there.
+    fn resolvable_machine(name: &str) -> (HostId, RemoteTarget) {
+        let target = RemoteTarget::Wsl {
+            distro: name.to_string(),
+        };
+        (target.host_id(), target)
+    }
+
+    /// The strip's "attempt N" is the number of tries that actually came back
+    /// wrong. The pump scheduling a try is not one: a first connect still in
+    /// flight used to read "attempt 2" on a link that had never failed.
+    #[gpui_kit::test]
+    fn scheduling_a_try_is_not_a_failed_attempt(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            crate::core::config::pin_test_config_dir();
+            cx.set_global(crate::core::config::Config::default());
+            crate::ui::windows::WindowRegistry::init(cx);
+
+            let (host, target) = resolvable_machine("build-box");
+            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+                target.clone(),
+                WorkspaceId::new(),
+            ));
+            entry.open = true;
+            WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![entry],
+                    active: None,
+                },
+            );
+
+            pump_tick(cx);
+            let attempt = |cx: &mut gpui_kit::App| {
+                cx.default_global::<RemoteLinks>()
+                    .machines
+                    .get(&host)
+                    .expect("the machine is known")
+                    .backoff
+                    .attempt()
+            };
+            assert_eq!(attempt(cx), 0, "the first try is scheduled, not failed");
+
+            finish_attempt(cx, host, &target, Err("connection refused".into()));
+            assert_eq!(attempt(cx), 1, "a try that came back wrong is one");
+
+            pump_tick(cx);
+            assert_eq!(attempt(cx), 1, "rescheduling the next try adds nothing");
+        });
+    }
+
+    /// A parked machine with one open workspace on it, wound forward to the
+    /// moment after the refusal.
+    fn parked_on_a_refusal(cx: &mut gpui_kit::App) -> (HostId, RemoteTarget, WorkspaceId) {
+        crate::core::config::pin_test_config_dir();
+        cx.set_global(crate::core::config::Config::default());
+        crate::ui::windows::WindowRegistry::init(cx);
+
+        let (host, target) = resolvable_machine("build-box");
+        let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+            target.clone(),
+            WorkspaceId::new(),
+        ));
+        entry.open = true;
+        let id = entry.id;
+        WorkspaceStore::install_for_test(
+            cx,
+            crate::core::session::WindowViews {
+                views: vec![entry],
+                active: None,
+            },
+        );
+        finish_attempt(cx, host, &target, Err(a_refusal()));
+        (host, target, id)
+    }
+
+    #[test]
+    fn a_disconnect_ends_when_the_last_window_on_that_machine_closes() {
+        let (build, build_t) = machine("build-box");
+        let (gpu, gpu_t) = machine("gpu-lab");
+        let mut suspended = std::collections::HashSet::from([build, gpu]);
+
+        prune_suspended(&mut suspended, &[(build, build_t.clone()), (gpu, gpu_t)]);
+        assert_eq!(suspended.len(), 2);
+
+        prune_suspended(&mut suspended, &[(build, build_t)]);
+        assert_eq!(
+            suspended.into_iter().collect::<Vec<_>>(),
+            vec![build],
+            "closing one machine's window must not resume another"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_dialect_refusal_parks_the_link_instead_of_counting_attempts(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::core::config::pin_test_config_dir();
+            cx.set_global(crate::core::config::Config::default());
+            crate::ui::windows::WindowRegistry::init(cx);
+
+            let (host, target) = resolvable_machine("build-box");
+            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+                target.clone(),
+                WorkspaceId::new(),
+            ));
+            entry.open = true;
+            let id = entry.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![entry],
+                    active: None,
+                },
+            );
+
+            finish_attempt(cx, host, &target, Err("connection refused".into()));
+            assert!(
+                matches!(
+                    RemoteLinks::status_of(cx, id),
+                    Some(RemoteStatus::Reconnecting { .. })
+                ),
+                "an ordinary failure is worth another go"
+            );
+
+            finish_attempt(cx, host, &target, Err(a_refusal()));
+            let parked = RemoteLinks::status_of(cx, id);
+            assert!(
+                matches!(parked, Some(RemoteStatus::ServerMismatch(_))),
+                "a refusal both builds will repeat verbatim is not a reconnect: {parked:?}"
+            );
+
+            // Whatever the pump does with a parked machine, it must not be to
+            // put it back on the backoff — that is the loop this replaced.
+            for _ in 0..4 {
+                pump_tick(cx);
+            }
+            let link = cx.default_global::<RemoteLinks>().machines.get(&host);
+            let link = link.expect("the machine is still known");
+            assert!(
+                matches!(link.state, LinkState::Mismatched(_)),
+                "four ticks later it is still parked, not back on the backoff"
+            );
+            assert!(!link.attempting);
+            assert_eq!(
+                link.backoff.attempt(),
+                1,
+                "the counter still reads the one ordinary failure before the \
+                 park; neither the refusal nor the parked ticks moved it"
+            );
+            let wait = link
+                .next_attempt
+                .expect("a parked link still looks again eventually")
+                .saturating_duration_since(Instant::now());
+            assert!(
+                wait > RECONNECT_CAP,
+                "the next look is on the slow clock, not the reconnect one: {wait:?}"
+            );
+
+            // The one way out that does not involve waiting, and the one Update
+            // Server ends in.
+            RemoteLinks::retry_now(cx, id);
+            assert!(
+                matches!(
+                    RemoteLinks::status_of(cx, id),
+                    Some(RemoteStatus::Reconnecting { .. })
+                ),
+                "asking by hand un-parks it"
+            );
+        });
+    }
+
+    /// What `connect_blocking` hands back when the person at the keyboard
+    /// closed the password sheet instead of filling it in, localised wrapper
+    /// and all.
+    fn a_decline() -> String {
+        t_fmt(
+            L10nKey::RemoteHostUnreachable,
+            &[
+                ("machine", "build-box"),
+                ("error", crate::daemon::ssh::AUTH_DECLINED),
+            ],
+        )
+    }
+
+    /// #820. A reconnect that kept asking while nobody was at the keyboard
+    /// left one prompt behind per attempt, parked behind the sheet on screen.
+    /// Only the newest had anyone waiting on it; the rest came up one after
+    /// another once the user was back, and answering them went nowhere. The
+    /// pump has to drop a prompt its attempt gave up on — and still keep the
+    /// one that is live.
+    #[gpui_kit::test]
+    fn the_pump_drops_a_prompt_its_attempt_gave_up_on(cx: &mut gpui_kit::TestAppContext) {
+        let host = HostId(0x0820_0820);
+        let prompt = || crate::daemon::protocol::AuthPromptKind::Password {
+            user: "me".into(),
+            host: "dropped-box".into(),
+        };
+        let (stale, _stale_rx, stale_asker) = remote_connect::PendingAuth::for_test(host, prompt());
+        let (live, _live_rx, _live_asker) = remote_connect::PendingAuth::for_test(host, prompt());
+        drop(stale_asker);
+        {
+            let _turn = remote_connect::claim_mailbox();
+            remote_connect::post_pending_auth(stale);
+            remote_connect::post_pending_auth(live);
+        }
+
+        cx.update(|cx| {
+            crate::ui::windows::WindowRegistry::init(cx);
+            pump_auth_sheets(cx);
+        });
+
+        // Under the mailbox turn, so no other test's pump is holding ours
+        // half-way through.
+        let _turn = remote_connect::claim_mailbox();
+        let mut parked = PARKED.lock().unwrap();
+        let ours: Vec<_> = parked.iter().filter(|p| p.host == host).collect();
+        assert_eq!(
+            ours.len(),
+            1,
+            "the live prompt waits for a window; the abandoned one is gone"
+        );
+        assert!(!ours[0].is_abandoned(), "and the one kept is the live one");
+        parked.retain(|p| p.host != host);
+    }
+
+    /// #820. Closing the sheet is an answer. The backoff put the same question
+    /// back a second later and every thirty seconds after that, so the window
+    /// could not be got rid of — which is what the report calls "无法关闭".
+    #[gpui_kit::test]
+    fn a_declined_password_stops_the_reconnect_clock(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            crate::core::config::pin_test_config_dir();
+            cx.set_global(crate::core::config::Config::default());
+            crate::ui::windows::WindowRegistry::init(cx);
+
+            let (host, target) = resolvable_machine("build-box");
+            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+                target.clone(),
+                WorkspaceId::new(),
+            ));
+            entry.open = true;
+            let id = entry.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![entry],
+                    active: None,
+                },
+            );
+
+            finish_attempt(cx, host, &target, Err(a_decline()));
+            let after = RemoteLinks::status_of(cx, id);
+            assert!(
+                matches!(after, Some(RemoteStatus::Failed(_))),
+                "a refusal to authenticate is not a machine that could not be \
+                 reached: {after:?}"
+            );
+
+            for _ in 0..4 {
+                pump_tick(cx);
+            }
+            let link = cx.default_global::<RemoteLinks>().machines.get(&host);
+            let link = link.expect("the machine is still known");
+            assert!(
+                matches!(link.state, LinkState::Failed(_)),
+                "four ticks later the sheet has not been raised again"
+            );
+            assert!(!link.attempting, "and nothing is dialling behind it");
+            assert_eq!(
+                link.backoff.attempt(),
+                0,
+                "declining is not a failed attempt, so nothing counted one"
+            );
+
+            // Retry is the user asking to be asked again, and it is the action
+            // the strip already offers on a `Failed` link.
+            assert_eq!(
+                RemoteStatus::Failed(a_decline()).action_label(),
+                Some(t(L10nKey::RemoteActionRetry))
+            );
+            RemoteLinks::retry_now(cx, id);
+            assert!(
+                !cx.default_global::<RemoteLinks>().suspended.contains(&host),
+                "asking by hand puts the machine back on the clock"
+            );
+            pump_tick(cx);
+            assert!(
+                cx.default_global::<RemoteLinks>()
+                    .machines
+                    .get(&host)
+                    .is_some_and(|l| l.attempting || l.state == LinkState::Reconnecting),
+                "and the pump picks it up again"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_parked_link_looks_again_when_the_slow_clock_runs_out(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            let (host, _, _) = parked_on_a_refusal(cx);
+            pump_tick(cx);
+
+            // Standing in for five minutes of nobody touching anything. The
+            // machine's build is not ours to know: someone else's client can
+            // update that server, and nothing over here is told when.
+            cx.default_global::<RemoteLinks>()
+                .machines
+                .get_mut(&host)
+                .expect("the machine is still known")
+                .next_attempt = Some(Instant::now() - std::time::Duration::from_secs(1));
+            pump_tick(cx);
+
+            let link = cx.default_global::<RemoteLinks>().machines.get(&host);
+            let link = link.expect("the machine is still known");
+            assert!(
+                link.attempting,
+                "the slow clock ran out, so it looked again"
+            );
+            assert!(
+                matches!(link.state, LinkState::Mismatched(_)),
+                "and said nothing new on the strip while it did: a look that fails \
+                 the same way must not read as a fresh problem"
+            );
+            assert_eq!(
+                link.backoff.attempt(),
+                0,
+                "looking again is not the backoff coming back"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_park_that_is_still_true_goes_straight_back_on_the_slow_clock(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let (host, target, _) = parked_on_a_refusal(cx);
+            // The look the slow clock bought, answered the same way as before.
+            finish_attempt(cx, host, &target, Err(a_refusal()));
+            pump_tick(cx);
+
+            let link = cx.default_global::<RemoteLinks>().machines.get(&host);
+            let link = link.expect("the machine is still known");
+            let wait = link
+                .next_attempt
+                .expect("still parked, so still looking again later")
+                .saturating_duration_since(Instant::now());
+            assert!(
+                wait > RECONNECT_CAP,
+                "a refusal that repeats resets the slow clock rather than tightening it: {wait:?}"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn disconnecting_rests_at_not_connected_and_connect_undoes_it(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::core::config::pin_test_config_dir();
+            cx.set_global(crate::core::config::Config::default());
+            crate::ui::windows::WindowRegistry::init(cx);
+
+            let (host, target) = machine("build-box");
+            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+                target,
+                WorkspaceId::new(),
+            ));
+            entry.open = true;
+            let id = entry.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![entry],
+                    active: None,
+                },
+            );
+
+            RemoteLinks::disconnect(cx, host);
+            assert!(cx.default_global::<RemoteLinks>().suspended.contains(&host));
+            assert_eq!(
+                RemoteLinks::status_of(cx, id),
+                Some(RemoteStatus::Disconnected),
+                "a disconnected machine rests where a never-connected one does"
+            );
+
+            RemoteLinks::retry_now(cx, id);
+            assert!(
+                !cx.default_global::<RemoteLinks>().suspended.contains(&host),
+                "asking to connect must outrank having asked to disconnect"
+            );
+        });
+    }
+
+    #[test]
+    fn a_reconnect_says_what_went_wrong_last_time() {
+        crate::ui::i18n::set_locale("en");
+        assert_eq!(
+            RemoteStatus::Reconnecting {
+                attempt: 0,
+                last_error: Some("connection refused".into()),
+            }
+            .strip_message("build-box"),
+            Some(t_fmt(
+                L10nKey::RemoteStripReconnectingWhy,
+                &[("machine", "build-box"), ("error", "connection refused")]
+            )),
+            "the first attempt still needs no count, but it does need a reason"
+        );
+        assert_eq!(
+            RemoteStatus::Reconnecting {
+                attempt: 3,
+                last_error: Some("connection refused".into()),
+            }
+            .strip_message("build-box"),
+            Some(t_fmt(
+                L10nKey::RemoteStripReconnectingAttemptWhy,
+                &[
+                    ("machine", "build-box"),
+                    ("count", "4"),
+                    ("error", "connection refused")
+                ]
+            ))
+        );
+    }
+
+    /// What `connect_blocking` hands back when the far end answers the hello
+    /// with another dialect, localised wrapper and all.
+    fn a_refusal() -> String {
+        a_refusal_between(5, 6)
+    }
+
+    fn a_refusal_between(peer: u32, ours: u32) -> String {
+        let error = format!(
+            "control peer (build 26.8.1) speaks control v{peer}, this build speaks v{ours}"
+        );
+        t_fmt(
+            L10nKey::RemoteHostNotLyrel,
+            &[("machine", "build-box"), ("error", &error)],
+        )
+    }
+
+    #[test]
+    fn the_button_calls_a_downgrade_a_downgrade() {
+        crate::ui::i18n::set_locale("en");
+        assert_eq!(
+            t(mismatch_action_key(&a_refusal_between(5, 6))),
+            "Update Server",
+            "that machine is behind, so putting our server there moves it forward"
+        );
+        assert_eq!(
+            t(mismatch_action_key(&a_refusal_between(7, 6))),
+            "Replace Server",
+            "that machine is ahead: the same button takes it back a version, and \
+             the copy beside it offers updating *this* computer first"
+        );
+    }
+
+    #[test]
+    fn a_hand_run_connect_refused_on_the_dialect_gets_the_same_answer() {
+        let target = RemoteTarget::Alias {
+            alias: "build-box".into(),
+        };
+        let flow = ConnectFlow::Failed {
+            choice: HostChoice {
+                target: target.clone(),
+                label: "build-box".into(),
+                detail: String::new(),
+            },
+            error: a_refusal(),
+        };
+        assert!(
+            matches!(
+                resolve_status(Some(&flow), &target, None, true),
+                Some(RemoteStatus::ServerMismatch(_))
+            ),
+            "the switcher's own attempt hits the same wall as the supervisor's"
+        );
+    }
+
+    #[test]
+    fn a_server_of_another_dialect_is_named_rather_than_quoted() {
+        crate::ui::i18n::set_locale("en");
+        let shown = RemoteStatus::ServerMismatch(a_refusal())
+            .strip_message("build-box")
+            .expect("a parked link still has something to say");
+        assert!(
+            shown.contains("build-box") && shown.contains("26.8.1"),
+            "which machine, and which build is over there: {shown}"
+        );
+        assert!(
+            !shown.contains("control v"),
+            "the protocol layer's wording never reaches the strip: {shown}"
+        );
+        assert_eq!(
+            shown,
+            crate::ui::remote_connect::dialect_complaint(&a_refusal(), "build-box").unwrap(),
+            "the strip and the switcher's error band say the same thing"
+        );
+    }
+
+    fn failed_flow(alias: &str) -> ConnectFlow {
+        ConnectFlow::Failed {
+            choice: HostChoice {
+                target: RemoteTarget::Alias {
+                    alias: alias.to_string(),
+                },
+                label: alias.to_string(),
+                detail: alias.to_string(),
+            },
+            error: "no route to host".into(),
+        }
+    }
+
+    #[test]
+    fn a_live_link_outranks_this_windows_memory_of_a_failed_connect() {
+        let (_, target) = machine("build-box");
+        let flow = failed_flow("build-box");
+
+        assert_eq!(
+            resolve_status(Some(&flow), &target, Some(RemoteStatus::Attached), true),
+            Some(RemoteStatus::Attached),
+            "the supervisor got through; the failure the window remembers is over"
+        );
+        assert_eq!(
+            resolve_status(
+                Some(&flow),
+                &target,
+                Some(RemoteStatus::Preempted {
+                    by: "desktop".into()
+                }),
+                true
+            ),
+            Some(RemoteStatus::Preempted {
+                by: "desktop".into()
+            }),
+            "being displaced is news the failed connect cannot answer for"
+        );
+        assert_eq!(
+            resolve_status(Some(&flow), &target, Some(RemoteStatus::Disconnected), true),
+            Some(RemoteStatus::Failed("no route to host".into())),
+            "with nothing better on offer the window's own failure still stands"
+        );
+    }
+
+    #[test]
+    fn a_route_that_no_longer_resolves_parks_the_workspace() {
+        // #485: the profile is gone, so retrying is pointless — but a link
+        // that is up, or one someone else has taken, still outranks it: those
+        // panes work no matter what happened to the profile that made them.
+        let (_, target) = machine("build-box");
+        let flow = failed_flow("build-box");
+
+        assert_eq!(
+            resolve_status(
+                Some(&flow),
+                &target,
+                Some(RemoteStatus::Disconnected),
+                false
+            ),
+            Some(RemoteStatus::RouteLost),
+            "nothing it could try would succeed, so say that instead of retrying"
+        );
+        assert_eq!(
+            resolve_status(None, &target, None, false),
+            Some(RemoteStatus::RouteLost),
+            "with no connect flow of its own either"
+        );
+        assert_eq!(
+            resolve_status(Some(&flow), &target, Some(RemoteStatus::Attached), false),
+            Some(RemoteStatus::Attached),
+            "a live link outranks a lost route"
+        );
+        assert_eq!(
+            resolve_status(
+                Some(&flow),
+                &target,
+                Some(RemoteStatus::Preempted {
+                    by: "desktop".into()
+                }),
+                false
+            ),
+            Some(RemoteStatus::Preempted {
+                by: "desktop".into()
+            }),
+            "so does being displaced — that is news a lost route cannot answer for"
+        );
+    }
+
+    #[test]
+    fn a_failure_on_one_machine_does_not_speak_for_another() {
+        let (_, target) = machine("build-box");
+        let flow = failed_flow("gpu-lab");
+
+        assert_eq!(
+            resolve_status(Some(&flow), &target, Some(RemoteStatus::Attached), true),
+            Some(RemoteStatus::Attached)
+        );
+        assert_eq!(
+            resolve_status(Some(&flow), &target, Some(RemoteStatus::Disconnected), true),
+            Some(RemoteStatus::Disconnected),
+            "a window on the build box has no business showing the GPU box's error"
+        );
+    }
+
+    /// The whole point of the reclaim pass: a Take Back has to reach the wire
+    /// exactly once, and a refusal has to leave the strip where it found it.
+    #[gpui_kit::test]
+    fn a_take_back_is_sent_once_and_undone_when_it_is_refused(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            crate::core::config::pin_test_config_dir();
+            cx.set_global(crate::core::config::Config::default());
+            crate::ui::windows::WindowRegistry::init(cx);
+
+            let (host, target) = machine("build-box");
+            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+                target,
+                WorkspaceId::new(),
+            ));
+            entry.open = true;
+            let id = entry.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![entry],
+                    active: None,
+                },
+            );
+            cx.default_global::<RemoteLinks>()
+                .preempted
+                .insert(id, "desktop".into());
+
+            // Nothing is due while someone else holds it: taking it back is the
+            // user's call.
+            assert!(reclaims_due(cx, host).is_empty());
+
+            RemoteLinks::retry_now(cx, id);
+            assert_eq!(
+                reclaims_due(cx, host).len(),
+                1,
+                "the Take Back has to reach the far end"
+            );
+            assert!(
+                reclaims_due(cx, host).is_empty(),
+                "and it has to reach it once, not once every pump tick"
+            );
+            assert_eq!(
+                RemoteLinks::status_of(cx, id),
+                Some(RemoteStatus::Connecting),
+                "a reclaim in flight is neither taken over nor attached"
+            );
+
+            finish_reclaim(cx, host, id, Err("workspace is busy".into()));
+            let links = cx.default_global::<RemoteLinks>();
+            assert_eq!(
+                links.preempted.get(&id).map(String::as_str),
+                Some("desktop"),
+                "the refusal puts the takeover back, with the name that came with it"
+            );
+            assert!(!links.attaching.contains(&id));
+            assert!(!links.reclaiming.contains_key(&id));
+            assert_eq!(
+                links.machines.get(&host).and_then(|l| l.last_error.clone()),
+                Some("workspace is busy".into())
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_reclaim_that_lands_leaves_nothing_behind(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            crate::core::config::pin_test_config_dir();
+            cx.set_global(crate::core::config::Config::default());
+            crate::ui::windows::WindowRegistry::init(cx);
+
+            let (host, target) = machine("build-box");
+            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+                target,
+                WorkspaceId::new(),
+            ));
+            entry.open = true;
+            let id = entry.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![entry],
+                    active: None,
+                },
+            );
+            cx.default_global::<RemoteLinks>()
+                .preempted
+                .insert(id, "desktop".into());
+            RemoteLinks::retry_now(cx, id);
+            assert_eq!(reclaims_due(cx, host).len(), 1);
+
+            finish_reclaim(
+                cx,
+                host,
+                id,
+                Ok(ReplyOk::Attached {
+                    took_over_from: Some("desktop".into()),
+                }),
+            );
+
+            let links = cx.default_global::<RemoteLinks>();
+            assert!(!links.preempted.contains_key(&id));
+            assert!(!links.reclaiming.contains_key(&id));
+            assert!(!links.attaching.contains(&id));
+            assert!(
+                links
+                    .machines
+                    .get(&host)
+                    .is_some_and(|l| l.attach_sent.contains(&id)),
+                "the far end has been told; this link needs no second attach"
+            );
+            assert!(reclaims_due(cx, host).is_empty());
+        });
+    }
+
+    /// A link the switcher brought up never sends `WorkspaceAttach` of its own,
+    /// so the pass that does has to notice a workspace it has never spoken for.
+    #[gpui_kit::test]
+    fn a_workspace_never_attached_on_this_link_is_due(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            crate::core::config::pin_test_config_dir();
+            cx.set_global(crate::core::config::Config::default());
+            crate::ui::windows::WindowRegistry::init(cx);
+
+            let (host, target) = machine("build-box");
+            let mut entry = crate::core::session::WindowView::on_remote(RemoteRef::new(
+                target,
+                WorkspaceId::new(),
+            ));
+            entry.open = true;
+            let id = entry.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                crate::core::session::WindowViews {
+                    views: vec![entry],
+                    active: None,
+                },
+            );
+
+            assert_eq!(
+                reclaims_due(cx, host),
+                workspaces_on(cx, host),
+                "nothing has been said to this machine yet, so everything open on it is due"
+            );
+            finish_reclaim(
+                cx,
+                host,
+                id,
+                Ok(ReplyOk::Attached {
+                    took_over_from: None,
+                }),
+            );
+            assert!(
+                reclaims_due(cx, host).is_empty(),
+                "one attach per workspace per link"
+            );
+        });
+    }
+
+    /// The switcher's error band reads the supervisor through `machine_error`.
+    /// Dismiss has to silence exactly the failure on screen — the band used
+    /// to come straight back on the next frame — and Try Again has to turn
+    /// the band into Connecting while the dial is out.
+    #[gpui_kit::test]
+    fn the_switcher_band_hears_dismiss_and_retry(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            let (host, _) = resolvable_machine("dismissed-box");
+            RemoteLinks::mark(cx, host, |link| {
+                link.state = LinkState::Reconnecting;
+                link.last_error = Some("connection timed out".into());
+            });
+            assert_eq!(
+                RemoteLinks::machine_error(cx, host).as_deref(),
+                Some("connection timed out")
+            );
+
+            RemoteLinks::dismiss_machine_error(cx, host, "connection timed out");
+            assert_eq!(
+                RemoteLinks::machine_error(cx, host),
+                None,
+                "the same failure again stays dismissed"
+            );
+
+            RemoteLinks::mark(cx, host, |link| {
+                link.last_error = Some("host key changed".into());
+            });
+            assert_eq!(
+                RemoteLinks::machine_error(cx, host).as_deref(),
+                Some("host key changed"),
+                "a different failure is news"
+            );
+
+            RemoteLinks::mark(cx, host, |link| link.attempting = true);
+            assert_eq!(
+                RemoteLinks::machine_error(cx, host),
+                None,
+                "an attempt on the wire is Connecting, not the old reason"
+            );
+
+            RemoteLinks::mark(cx, host, |link| {
+                link.attempting = false;
+                link.state = LinkState::Reconnecting;
+                link.backoff = Backoff::default();
+            });
+            RemoteLinks::retry_machine_now(cx, host);
+            let links = cx.default_global::<RemoteLinks>();
+            let link = links.machines.get(&host).expect("still supervised");
+            assert!(
+                link.next_attempt.is_some_and(|at| at <= Instant::now()),
+                "Try Again dials on the next tick instead of waiting out the backoff"
+            );
+            assert!(!links.suspended.contains(&host));
+        });
+    }
+}

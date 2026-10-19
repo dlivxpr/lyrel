@@ -1,0 +1,233 @@
+---
+title: "config.json"
+description: "lyrel 读取的每个配置键、类型及默认值。"
+---
+
+| | |
+|---|---|
+| macOS / Linux | `~/.config/lyrel/config.json` |
+| Windows | `%APPDATA%\lyrel\config.json` |
+| Windows 便携模式 | `<lyrel-app.exe 所在文件夹>\data\config.json` |
+| 覆盖整个目录 | `LYREL_CONFIG_DIR` 或 `--config-dir` |
+
+所有配置键都是可选的——缺少某个键时会使用其默认值，因此只需填写要修改的配置。超出范围的数字会被限制在有效范围内，而不是被拒绝；无法识别的枚举值会回退到默认值并记录一条日志，不会导致整个文件加载失败。
+
+```json
+{
+  "font_family": "JetBrains Mono",
+  "font_size": 14,
+  "theme_follow_system": true,
+  "theme_preset_light": "one_light",
+  "theme_preset_dark": "dracula",
+  "macos_option_as_alt": true,
+  "scrollback_limit": 50000
+}
+```
+
+<a id="where-the-directory-comes-from"></a>
+## 目录如何确定
+
+配置目录保存实例需要保留的所有内容，不仅仅是 `config.json`，还包括主题、会话、回滚缓冲区、历史记录以及后台服务器的套接字。以下来源按优先级从高到低排列，首先匹配的生效：
+
+1. 命令行上的 `--config-dir <dir>`——例如 `lyrel-app.exe --config-dir D:\lyrel-data`，或在其他平台上使用 `lyrel-app --config-dir ~/lyrel-alt`。应用会将该参数传递给它启动的服务器，因此整个实例的数据都会迁移到此目录。
+2. `LYREL_CONFIG_DIR` 环境变量。与命令行参数不同，它还会影响无法直接控制参数的启动方式——资源管理器中的**在 lyrel 中打开**、桌面启动文件，以及其他终端中的 `lyrel` 命令。
+3. **Windows 便携模式**：解压便携 ZIP 后，`lyrel-app.exe` 旁的 `data` 文件夹（该 ZIP 带有 `.lyrel-portable` 文件）。参见[安装](/getting-started/installation)。
+4. 上表中的平台默认目录。
+
+两个目录对应两个独立实例，各自拥有自己的服务器和会话。
+
+<a id="typography"></a>
+## 字体排版
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `font_family` | string | `"Hack"` | 主字体。应用内置 Hack。 |
+| `font_fallbacks` | string[] | 平台字体列表 | 按顺序使用的后备字体。平台自带字体会追加到你填写的列表末尾。 |
+| `font_family_bold` | string | — | 单独指定的粗体字体。 |
+| `font_family_italic` | string | — | 单独指定的斜体字体。 |
+| `font_features` | object | — | OpenType 标签，例如 `{"calt": true, "liga": 1}`。每个标签由四个字母或数字组成。 |
+| `font_thicken` | bool | `true` | macOS：允许字体平滑加粗笔画，对浅色文字的影响最明显。`false` 按字形本身的字重绘制。重启后生效。 |
+| `font_size` | number | `15` | 终端文字大小，单位为 px（4–256）。 |
+| `line_height` | number | `1.4` | 字体大小的倍数（0.5–4）。 |
+| `ui_font_size` | number | `16` | 界面的根字号，单位为 px（12–24）。 |
+| `ui_font_family` | string | — | 终端网格之外所有界面元素的字体。未设置时使用系统 UI 字体。 |
+
+[更多字体说明 →](/customization/fonts)
+
+<a id="theme-and-window"></a>
+## 主题与窗口
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `theme_preset` | string | `"light"` | 当前主题 ID。 |
+| `theme_follow_system` | bool | `false` | 跟随操作系统的外观。 |
+| `theme_preset_light` | string | `"light"` | 跟随系统时使用的浅色主题。 |
+| `theme_preset_dark` | string | `"dark"` | 跟随系统时使用的深色主题。 |
+| `theme_legible_palette` | bool | `true` | 调亮或调暗在背景上难以辨认的亮色 ANSI 颜色。 |
+| `window_opacity` | number | — | 0.2–1.0。未设置时跟随主题。 |
+| `window_blur` | bool | — | 对半透明窗口背后的内容应用模糊（macOS）。未设置时跟随主题。 |
+| `window_backdrop` | enum | `"auto"` | 仅限 Windows：`auto`、`blur`、`mica`、`mica-alt`、`acrylic`、`off`。 |
+| `dim_inactive_panes` | bool | `true` | 调暗未获得焦点的窗格。 |
+| `auto_hide_titlebar_buttons` | bool | `false` | 仅当指针悬停在按钮所在的标题栏区域时，显示新建标签页和侧边栏按钮。 |
+| `startup_mode` | enum | `"normal"` | `normal`、`maximized`、`fullscreen`。 |
+| `remember_window_size` | bool | `true` | 按上次的大小和位置重新打开窗口。 |
+| `restore_session` | bool | `true` | 恢复上次窗口的标签页、分屏和目录。 |
+| `gui_language` | enum | `"system"` | 选择模式：`system`、`en`、`zh-CN`。`system` 读取操作系统最高优先界面语言，明确简体中文时使用 `zh-CN`，其他情况使用 `en`；显式脚本优先于地区。旧日语、俄语及无效值回退 `en`，仅加载不重写文件。[规则详情 →](/customization/settings#language) |
+
+内置主题 ID：`light`、`one_light`、`catppuccin_latte`、`rose_pine_dawn`、
+`dark`、`dracula`、`harbor`、`one_dark_pro`、`rose_pine`。自定义主题的 ID 来自其文件名。[更多主题说明 →](/customization/themes)
+
+<a id="tabs-sidebar-panels"></a>
+## 标签页、侧边栏与面板
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `tab_bar_position` | enum | `"left"` | `left`（侧边栏）或 `top`（顶部标签栏）。 |
+| `new_tab_position` | enum | `"after-current"` | 也可设为 `end`。 |
+| `confirm_close` | enum | `"when-busy"` | 关闭标签页或窗格时是否先询问：`never`、`when-busy`（仍有程序或智能体运行）、`always`（即使 shell 空闲也询问）。无论此项如何设置，都会遵循 `ssh_warn_on_close`。 |
+| `sidebar_auto_grouping` | bool | `true` | 按仓库对未固定的标签页分组（SSH 标签页按主机分组）。关闭后，在固定分组下方显示平铺列表；固定分组始终显示。固定分组和折叠状态随工作区保存，不保存在此处。 |
+| `sidebar_width` | number | `220` | 像素（100–2000）。 |
+| `sidebar_collapsed` | bool | `false` | |
+| `right_panel_visible` | bool | `false` | |
+| `right_panel_width` | number | `260` | 像素（100–2000）。 |
+| `right_panel_tab` | enum | `"info"` | `info`、`changes`、`files`。 |
+| `diff_view` | enum | `"split"` | 也可设为 `unified`。全局生效，而非按文件设置。 |
+| `document_layout` | enum | `"dock"` | 打开的文件或差异视图的显示位置：`dock` 停靠在终端旁，`fill` 覆盖工作区。此项决定新标签页的初始布局，之后各标签页分别保留自己的布局。 |
+| `document_ratio` | number | `0.5` | 停靠列相对于终端列的宽度比例（0.2–0.8）。预设宽度值为 `0.333`、`0.5`、`0.667`。 |
+| `scm_graph_expanded` | bool | `false` | 历史记录区域是否默认展开。 |
+| `editor_soft_wrap` | bool | `false` | 文件在代码面板中打开时是否启用自动换行。与状态栏的“自动换行”开关保持一致，保留上次设置的状态。 |
+| `editor_markdown_preview` | bool | `false` | Markdown 文件打开时是否显示渲染结果而非源码。同样与“预览 / 编辑”开关保持一致。 |
+| `show_tray_icon` | bool | `true` | 托盘 / 菜单栏状态图标。 |
+
+<a id="terminal"></a>
+## 终端
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `shell` | object | — | `{"program": "fish", "args": ["-l"]}`。未设置时使用平台默认值。填写的 `args` 会原样用于启动，同时会关闭该 shell 的 [shell 集成](/reference/shell-integration)——若要保留集成，请省略此字段。 |
+| `custom_shells` | array | `[]` | 新建标签页菜单中的额外条目：`[{"label": "Ubuntu", "program": "wsl.exe", "args": ["-d", "Ubuntu"]}]`。严格按照配置启动，列在检测到的 shell 之后——在打开该列表前，它们位于菜单的**其他 Shell…** 列表中；在“全局搜索”的“终端”标签页中，显示为 *Shell：* 后接其标签。为条目指定参数后，lyrel 也会跳过其 [shell 集成](/reference/shell-integration)，因此它不会有提示符标记、工作目录跟踪或命令完成通知；如果条目没有参数，且 shell 能被 lyrel 识别，则会像旁边自动检测到的条目一样启用集成。缺少 `program` 的条目会被跳过；缺少 `label` 时则以程序名命名。 |
+| `working_directory` | object | `{"strategy":"inherit"}` | `strategy` 为 `inherit`、`home` 或 `custom`；设为 `custom` 时使用 `path`。 |
+| `env` | object | `{}` | 为每个窗格添加的环境变量。 |
+| `scrollback_limit` | number | `10000` | 每个窗格的回滚行数（100–100,000）。仅对新窗格生效。 |
+| `cursor_style` | enum | `"block"` | `block`、`bar`、`underline`。 |
+| `prompt_cursor_style` | enum | `"follow"` | shell 提示符处的光标：`follow`、`block`、`bar`、`underline`。`follow` 在所有位置使用 `cursor_style`；其他值仅让 shell 运行的程序使用 `cursor_style`。例如，此处设为 `bar` 且 `cursor_style: "block"` 时，提示符处显示竖线光标，而未自行设置光标形状的 TUI 中显示块状光标。vi 模式下的 shell 提示符保留自己的光标形状。 |
+| `cursor_blink` | bool | `true` | |
+| `bell` | enum | `"visual"` | `none`、`visual`、`audible`、`both`。 |
+| `per_pane_history` | bool | `false` | 为每个窗格使用独立的 shell 历史记录文件。 |
+
+<a id="mouse-and-scrolling"></a>
+## 鼠标与滚动
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `mouse_scroll_multiplier` | number | `1.0` | 0.1–10。 |
+| `smooth_scroll` | bool | `true` | 平滑处理滚轮每一格的滚动。触控板不受影响。 |
+| `mouse_reporting` | bool | `true` | 允许全屏应用处理点击和滚动。 |
+| `mouse_zoom_modifier` | enum | `"none"` | 配合滚轮调整字号的修饰键：`platform`（macOS 上为 ⌘，其他平台为 Ctrl）、`ctrl`、`alt`、`none`（滚轮始终不缩放）。 |
+| `mouse_hide_while_typing` | bool | `true` | |
+| `focus_follows_mouse` | bool | `false` | |
+
+<a id="input-and-clipboard"></a>
+## 输入与剪贴板
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `prompt_editor` | bool | `true` | 由 lyrel 编辑 shell 提示符处的输入。关闭后，提示符处的每次按键都会发送给 shell，由其自身的行编辑器（ZLE、readline）负责编辑。shell 集成仍保持启用。 |
+| `tab_completion` | bool | `true` | 按 <kbd>⇥</kbd> 显示 lyrel 的补全菜单。关闭后将该按键交给 shell。需要启用 `prompt_editor`。 |
+| `history_search` | bool | `true` | 按 <kbd>⌃ R</kbd> 使用 lyrel 的模糊历史搜索。关闭后将该按键交给 shell。需要启用 `prompt_editor`。 |
+| `smart_select` | bool | `true` | 双击选中 URL、路径、括号对或中日韩词语。 |
+| `word_separators` | string | 见下文 | 用于分隔单词的字符。关闭智能选择时使用。 |
+| `copy_on_select` | bool | `false` | |
+| `clipboard_trim_trailing_spaces` | bool | `false` | |
+| `macos_option_as_alt` | bool | `false` | <kbd>⌥</kbd>+按键发送转义组合键，而不是输入特殊字符。 |
+| `keybindings` | object | `{}` | `{"SplitRight": "cmd-d"}`。[语法 →](/customization/keybindings) |
+| `keybinding_preset` | string | `"default"` | 也可设为 `"tmux"`。 |
+| `prefix` | string | `"ctrl-b"` | tmux 预设的前缀键。 |
+
+默认的 `word_separators` 包括逗号、制表符绘制竖线、反引号、管道符、冒号、单引号和双引号、空格、六个括号字符、左右尖括号，以及制表符：
+
+```json
+{ "word_separators": ",│`|:\"' ()[]{}<>\t" }
+```
+
+<a id="links"></a>
+## 链接
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `link_url` | bool | `true` | 为 URL 添加下划线，并在 ⌘/Ctrl+单击时打开。 |
+| `link_file_open` | string | `internal` | 文件链接的打开方式：`internal`（lyrel 编辑器，并定位到相应行）、`system`（操作系统的文件关联）、`command`。另一台机器上的文件始终使用 `internal`。 |
+| `link_file_command` | string | — | `link_file_open: command` 时用于打开文件链接的命令。会替换 `{path}`、`{line}`、`{column}`；缺少值的选项会被移除。 |
+| `ssh_loopback_forward` | bool | `true` | 转发远程窗格开始提供服务的端口，并通过这些转发打开其 `localhost:PORT` 链接。 |
+
+<a id="notifications"></a>
+## 通知
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `notify_on_command_finish` | enum | `"unfocused"` | `never`、`unfocused`、`always`。 |
+| `notify_threshold_secs` | number | `10` | 命令至少运行多长时间才触发通知（1–3600 秒）。 |
+
+<a id="agents"></a>
+## 智能体
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `agent_commands` | object | `{}` | 将显式包装命令映射到受支持标识：`{"work-pi": "pi"}`。目标仅允许 `omp`、`kimi`、`pi`、`opencode`、`hermes`；未知或退役目标忽略。 |
+| `agent_launch` | object | `{}` | 按受支持标识指定快速启动命令行：`{"omp": "omp --model selected"}`。未设置时以正式可执行文件名启动，退役标识的旧条目不执行。[更多说明 →](/agents/overview#quick-launch) |
+| `agent_frecency` | object | `{}` | 由 lyrel 写入：记录每个智能体的运行频率和最近运行时间，用于快速启动排序。 |
+| `restore_agent_sessions` | bool | `true` | 恢复丢失的窗格时，重新启动智能体对话。 |
+| `install_cli_on_path` | bool | `true` | 启动时将内置的 `lyrel` 命令加入 PATH。 |
+
+[智能体标识 →](/agents/overview#your-own-wrapper)
+
+退役智能体的快捷键、启动条目和专属 `copy_join_wrapped` 不再生效，但不会使其他配置加载失败，也不会映射为另一个产品。仅加载配置不为清理而强制重写文件。普通复制、通用 shell 与现有工作进程保持可用；旧 hooks 由用户[核对 lyrel 归属后手工清理](/agents/overview#retired-hooks)。
+
+
+<a id="ssh"></a>
+## SSH
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `verify_host_keys` | bool | `true` | |
+| `ssh_warn_on_close` | bool | `false` | 关闭活动连接前进行确认。 |
+
+<a id="serversjson"></a>
+### servers.json
+
+保存的主机不在 `config.json` 中，而是存放在同一目录下的 `servers.json` 中，因此可以在机器之间同步 `config.json`，而不必同时同步服务器列表。文件以 `0600` 权限写入，读取时与 `config.json` 一样宽容；如果无法解析，lyrel 会在 `servers.json.corrupt` 保留副本，并在修复前停止保存该文件。
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `ssh_profiles` | array | `[]` | 通过**设置 → SSH** 管理。机密信息保存在操作系统钥匙串中，绝不会存放在此处。 |
+| `ssh_profile_frecency` | object | `{}` | 每台主机的使用频率和最近使用时间，用于排序。由应用写入。 |
+
+如果旧版 `config.json` 仍包含 `ssh_profiles`，支持拆分存储的 lyrel 首次读取时会将其拆分：先写入 `servers.json`，然后才从 `config.json` 中移除这两个键，其余内容保持原样。如果两个文件都包含主机，则以 `servers.json` 为准，并在下次保存设置时移除 `config.json` 中的副本。
+
+`ssh_profiles` 中的每个对象还可以设置：
+
+| 键 | 类型 | 默认值 | |
+|---|---|---|---|
+| `remote_clipboard_write` | bool | `false` | 允许该 SSH 主机上的程序通过 OSC 5522 将 PNG、JPEG、GIF 或 WebP 图片写入本机剪贴板。 |
+
+<a id="updates-and-network"></a>
+## 更新与网络
+
+仅提供 stable 更新，不提供更新渠道配置。
+
+| 配置键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `check_for_updates` | bool | `true` | 启动时及之后每六小时检查 stable 发布。 |
+| `auto_download_updates` | bool | `true` | 在后台下载并校验；安装需要用户确认。体积以实际发布资产为准。 |
+| `http_proxy` | string | — | 仅用于 lyrel 自身的更新检查、下载和远端 server 安装。支持 `http://…` 或 `socks5://…`，不改变窗格内程序的代理。 |
+
+[更新 →](/reference/updates)
+
+<a id="keys-lyrel-manages-itself"></a>
+## lyrel 自行管理的键
+
+`shell_frecency` 和 `command_frecency` 记录打开 shell 或运行命令的频率及最近时间，以便新建标签页菜单和“全局搜索”进行排序。它们由应用写入，无需手动编辑。
+
+<Note>
+  如果文件无法解析，lyrel 会使用默认配置启动，将原始文件保留为 `config.json.corrupt`，并记录原因。它绝不会静默覆盖你写入的内容。
+</Note>

@@ -1,0 +1,131 @@
+---
+title: "首次启动"
+description: "开始工作前值得调整的几项设置。"
+---
+
+打开 lyrel 后，你会看到一个包含一个标签页和一个 shell 的窗口，左侧是标签页侧边栏。
+下文中的所有设置都是可选的，但这些设置通常迟早都会调整，不妨现在花五分钟设置好。
+
+按 <kbd>⌘ ,</kbd>（Windows 上为 <kbd>Ctrl ,</kbd>）打开设置，
+也可以通过全局搜索打开（<kbd>⌘ P</kbd> → *设置*）。
+
+<a id="1-pick-a-theme"></a>
+## 1. 选择主题
+
+**设置 → 外观 → 主题。** 内置九款主题：Light、One Light、
+Catppuccin Latte、Rosé Pine Dawn、Dark、Dracula、Harbor、One Dark Pro 和
+Rosé Pine。默认主题为 **Light**。
+
+开启**跟随系统**，即可分别选择浅色和深色主题；
+lyrel 随后会实时跟随操作系统的外观切换。
+
+透明度也在同一页面的**透明度**选项中设置。不透明度适用于所有主题，
+而*跟随主题*会使用主题自身的设置。Windows 上还提供**背景材质**选择器（Mica、
+Acrylic 等）。
+
+[进一步了解主题 →](/customization/themes)
+
+<a id="2-choose-your-shell"></a>
+## 2. 选择 shell
+
+**设置 → 终端 → Shell。** 将**程序**留空即可使用平台默认的 shell。
+也可以填写 PATH 中的可执行文件名或绝对路径
+（`zsh`、`fish`、`pwsh`、`nu`、`/opt/homebrew/bin/bash`），并设置**参数**，
+例如使用 `-l` 启动登录 shell。参数按命令行的规则拆分，
+因此包含空格的内容需要加引号：`-c "echo hi"` 是两个参数，而不是
+三个。
+
+**起始目录**决定*全新* shell 在哪个目录中打开：lyrel 的启动目录
+（默认）、你的主目录，或某个固定路径。无论如何设置，新标签页和拆分窗格
+仍会继承当前活动窗格的目录。
+
+<a id="3-macos-only-decide-what-option-does"></a>
+## 3. 仅限 macOS：决定 Option 键的行为
+
+**设置 → 键盘与鼠标 → 键盘 → 将 Option (⌥) 用作 Meta。**
+
+关闭时（默认），<kbd>⌥ B</kbd> 会输入 `∫`，这与 macOS 一贯的行为
+一致。开启后，它会发送 shell 所期望的转义组合键，因此 <kbd>⌥ B</kbd> 会向前
+移动一个单词，<kbd>⌥ ⌫</kbd> 会删除一个单词。如果你经常使用 readline，
+可以开启；如果你需要输入带重音符号的字符，则保持关闭。
+
+<a id="4-if-you-use-coding-agents-install-the-hooks"></a>
+## 4. 如果使用编程智能体，请安装钩子
+
+**设置 → 集成。** lyrel 会自行根据进程名称检测 25 种编程 CLI，
+自动显示品牌头像和标签页标签。*状态圆点*、“需要你的授权”通知以及 `lyrel wait`
+还需要额外配置一项：一个由智能体调用、用于报告自身活动的小型
+钩子。
+
+在 omp、Kimi Code、pi、OpenCode 2.x 中选择已接通的集成并点击**安装**。Hermes 的状态通道按其正式适配与验收进度确认，名称识别不代表通道已经可用。安装会写入所选智能体自己的配置目录，
+也可以在同一行中移除。
+
+[进一步了解智能体 →](/agents/status)
+
+<a id="5-know-what-quit-does"></a>
+## 5. 了解退出的行为
+
+普通的**退出**会关闭窗口，但后台服务器会继续运行。
+你的 shell、构建任务和智能体当前轮次都会继续执行，再次打开 lyrel 时会重新连接
+到它们。
+
+要真正停止所有任务，请使用托盘图标菜单中的**退出并停止服务器…**。
+执行前会明确提示：shell 中仍在运行的任务都会被终止，
+但标签页和布局会保留，重新打开时会启动新的
+shell。
+
+<Note>
+  这就是这里不需要 tmux 的原因。持久运行并不是 shell 配置提供的功能，
+  而是由底层服务器实现的。
+  [核心概念 →](/getting-started/concepts)
+</Note>
+
+<a id="6-tune-the-notifications"></a>
+## 6. 调整通知
+
+**设置 → 常规 → 通知。** 默认情况下，运行超过 10 秒的前台命令
+结束时，lyrel 会发送桌面通知，但仅在窗口未获得焦点时发送。
+你可以将**命令结束时通知**设为*从不*或*始终*；
+如果 10 秒不适合你的工作，也可以调整这个阈值。
+
+智能体通知（“需要你的授权…”、“已完成，用时 42 秒”）遵循
+相同的策略。
+
+<a id="7-coming-from-tmux"></a>
+## 7. 从 tmux 迁移而来？
+
+**设置 → 键盘与鼠标 → 键盘快捷键 → 预设 → tmux** 会将窗格和标签页操作重新映射为
+前缀键组合，默认前缀为 <kbd>⌃ B</kbd>。<kbd>⌃ B</kbd> <kbd>C</kbd> 打开标签页，
+<kbd>⌃ B</kbd> <kbd>%</kbd> 拆分窗格，<kbd>⌃ B</kbd> 后接方向键则移动焦点。
+
+单独按下前缀键后，大约一秒后会将其发送给 shell；前缀键加未绑定的按键
+则会直接透传，因此未被重新映射的 tmux 按键绑定仍会传递给
+当前运行的程序。
+
+[进一步了解按键绑定 →](/customization/keybindings)
+
+<a id="where-things-live"></a>
+## 文件存放位置
+
+| | macOS／Linux（仅 headless） | Windows |
+|---|---|---|
+| 设置文件 | `~/.config/lyrel/config.json` | `%APPDATA%\lyrel\config.json` |
+| 自定义主题 | `~/.config/lyrel/themes/` | `%APPDATA%\lyrel\themes\` |
+
+设置窗口中的所有更改都会写入 `config.json`，你也可以手动编辑它，
+详见[配置参考](/reference/configuration)。
+配置目录的优先级从高到低为：`--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携版的 `data` 目录 > 平台默认目录。
+上表列出的是平台默认位置；设置 `LYREL_CONFIG_DIR` 可以将整个配置目录迁移到其他位置。
+开发环境使用 `.lyrel-dev`。
+
+<a id="next"></a>
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="核心概念" icon="cube" href="/getting-started/concepts">
+    工作区、标签页、窗格，以及管理它们的服务器。
+  </Card>
+  <Card title="命令提示符" icon="terminal" href="/terminal/prompt">
+    建议、补全和历史搜索——你最常接触的部分。
+  </Card>
+</CardGroup>

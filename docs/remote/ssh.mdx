@@ -1,0 +1,234 @@
+---
+title: "SSH"
+description: "原生 Rust SSH 协议栈：快速连接、已保存的配置、钥匙串凭据和跳板主机。"
+---
+
+lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。它从不调用
+`ssh` 二进制程序，也没有会这样做的兼容模式。
+
+正因如此，以下功能才得以实现：将凭据存入操作系统钥匙串、在侧面板中使用
+[SFTP](/remote/sftp)、在会话期间添加[端口转发](/remote/port-forwarding)，
+以及在窗格内以浮层形式显示身份验证提示，而不是让密码回显到 shell 中。
+
+协议层使用正式 registry 发布的 `russh 0.63.3` 与 `russh-sftp 2.4.0`，精确身份由
+`Cargo.lock` 固定。依赖升级不改变主机密钥信任模型：不协商 OpenSSH 主机证书，
+也不把证书中的裸密钥自动视为可信；当前不支持 CA 信任。
+
+主机密钥仍按 `known_hosts` 校验。未知或变更的密钥由用户决定是否接受、是否记住；
+拒绝或取消不会写入新信任。标为 `@revoked` 的密钥即使关闭普通主机密钥验证也会拒绝。
+用户接受并记住替换密钥时，会先移除被替代的信任记录，避免旧密钥继续被信任。
+
+<a id="four-ways-to-connect"></a>
+## 四种连接方式
+
+<AccordionGroup>
+  <Accordion title="快速连接 — 输入地址">
+    打开全局搜索（<kbd>⌘ P</kbd>），然后输入地址。IPv6 地址需用
+    方括号括起。
+
+    ```
+    me@devbox
+    me@devbox:2222
+    me@[2001:db8::1]:22
+    ```
+  </Accordion>
+
+  <Accordion title="已保存的配置">
+    配置位于**设置 → SSH → 主机**中。在全局搜索的“主机”选项卡中开始输入
+    名称，或打开 *SSH：管理配置…* 命令。
+  </Accordion>
+
+  <Accordion title="~/.ssh/config 中的别名">
+    输入已有的别名，lyrel 会原生解析它——尽力处理常用字段——然后通过 russh 连接。
+    **设置 → SSH → 从 ~/.ssh/config 导入**可将别名转换为实际的配置。
+
+    <Note>
+      不支持 `Match`、`canonicalize*` 和 GSSAPI 指令；遇到这些指令时，
+      也不会回退到系统 `ssh`。
+    </Note>
+  </Accordion>
+
+  <Accordion title="远程工作区">
+    同一个连接不仅可以承载单个 shell，还可以承载远程机器上的整个工作区。
+    [远程工作区 →](/remote/workspaces)
+  </Accordion>
+</AccordionGroup>
+
+<a id="profiles"></a>
+## 配置
+
+**设置 → SSH → 主机**包含完整的连接配置。基本字段如下：
+
+| 字段 | |
+|---|---|
+| **名称** | 此连接的标签 |
+| **主机** | 主机名或 IP 地址 |
+| **用户** | 登录用户——留空则在连接时确定 |
+| **身份验证** | *自动*（尝试所有适用的方法）、*GSSAPI*、*密码*、*密钥*、*代理*或*双重验证* |
+| **跳板主机** | 另一个配置，或一条 `ProxyJump` 链 |
+| **端口转发** | 随连接建立而启用的规则 |
+
+列表顶部的**默认设置**会由所有主机继承，因此需要全局应用的设置只需配置一次。
+
+右键单击 SSH 标签页会打开该连接的主机表单——对于已保存的连接，菜单项为**编辑主机…**；
+对于手动输入地址建立的连接，则为**另存为 SSH 主机…**。工作区切换器的机器菜单中也有
+相同的菜单项，因此发现主机名或密码输入错误时，可以直接从当前标签页进行修正。
+菜单操作针对的是打开菜单的标签页，而不是当前获得焦点的窗格。保存时，表单会基于
+整个活动连接打开——包含代理、密钥、端口转发以及地址——因此最终保存的主机就是
+你当前连接的那一台。
+
+已保存的主机保存在与 `config.json` 同目录的 `servers.json` 中，而不是保存在
+`config.json` 内，因此在机器之间同步 `config.json` 时不会携带这些主机。
+密码和密钥口令存入**操作系统钥匙串**，绝不会存入这两个文件，也绝不会以明文形式
+写入磁盘。配置菜单中的**忘记密码**会移除已存储的密码。
+
+删除配置会删除其钥匙串凭据，并移除通过该配置连接的远程工作区条目——
+确认对话框会先统计这些条目的数量。机器上的会话本身会继续运行；
+[这些条目会如何处理 →](/remote/workspaces#deleting-a-profile)
+
+<a id="advanced"></a>
+### 高级
+
+配置中的**高级**选项按以下类别分组：
+
+| 分组 | 字段 |
+|---|---|
+| **身份验证** | 身份文件（每行一个路径，支持展开 `%h`/`%r`）、代理转发 |
+| **代理** | ProxyCommand（替换 `%h`/`%p`/`%r`）、SOCKS5 代理、HTTP 代理 |
+| **算法** | KEX 算法、加密算法、MAC、主机密钥算法、压缩 |
+| **连接** | 保活间隔和次数、连接超时、X11 转发 |
+| **会话** | Shell 集成、登录脚本、跳过横幅 |
+| **安全** | 主机密钥验证、远程剪贴板图像写入 |
+
+所有留空的字段都表示“使用库的默认值”，因此只需填写确实需要覆盖的选项。
+
+<a id="copying-a-remote-image-to-this-machine"></a>
+## 将远程图像复制到本机
+
+SSH 主机上的程序可以使用 OSC 5522 剪贴板协议，将 PNG、JPEG、GIF 或 WebP 图像
+写入运行 lyrel 的机器的系统剪贴板。请先为该已保存的主机启用
+**高级 → 安全 → 远程剪贴板图像**。此功能默认关闭，否则任何能够输出终端内容的
+程序都可以替换剪贴板内容。
+
+可以将以下 Python 脚本以 `lyrel-copy-image` 的名称安装到远程主机上：
+
+```python
+#!/usr/bin/env python3
+import base64
+import os
+import pathlib
+import re
+import select
+import secrets
+import sys
+import termios
+import time
+import tty
+
+path = pathlib.Path(sys.argv[1])
+mime = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}.get(path.suffix.lower())
+if mime is None:
+    raise SystemExit("supported formats: png, jpg, jpeg, gif, webp")
+
+data = path.read_bytes()
+if len(data) > 16 * 1024 * 1024:
+    raise SystemExit("image exceeds lyrel's 16 MiB clipboard limit")
+
+osc, st = b"\x1b]5522;", b"\x1b\\"
+encoded_mime = base64.b64encode(mime.encode())
+request_id = secrets.token_hex(8)
+out = sys.stdout.buffer
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+status = None
+try:
+    tty.setraw(fd)
+    rid = request_id.encode()
+    out.write(osc + b"type=write:id=" + rid + st)
+    for offset in range(0, len(data), 4096):
+        chunk = base64.b64encode(data[offset:offset + 4096])
+        out.write(
+            osc + b"type=wdata:id=" + rid + b":mime=" + encoded_mime + b";" + chunk + st
+        )
+    out.write(osc + b"type=wdata:id=" + rid + st)
+    out.flush()
+
+    reply = bytearray()
+    pattern = re.compile(
+        rb"\x1b\]5522;type=write:status=([A-Z]+):id=" + rid + rb"\x1b\\"
+    )
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([fd], [], [], deadline - time.monotonic())
+        if not ready:
+            break
+        reply.extend(os.read(fd, 4096))
+        match = pattern.search(reply)
+        if match:
+            status = match.group(1).decode()
+            break
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+if status != "DONE":
+    raise SystemExit(f"clipboard write failed: {status or 'timeout'}")
+```
+
+运行 `lyrel-copy-image screenshot.png`。符合协议的发送端可以包含 OSC 5522
+请求 ID，并等待 lyrel 的 `DONE`、`EPERM`、`EINVAL` 或 `ENOSYS` 响应。
+剪贴板控制数据包不会保留在回滚缓冲区中，也不会在重新连接后重放。
+
+<a id="authentication-prompts"></a>
+## 身份验证提示
+
+密码、密钥口令和双重验证提示会在窗格内以浮层形式显示，并在适用时提供
+**记住（钥匙串）**选项。
+
+GSSAPI 仅在启用 `gssapi` feature 的 Unix 构建中可用，使用系统 Kerberos 凭据，
+不会把票据存入 lyrel 配置或钥匙串。Linux 源码构建需要 Kerberos 开发库
+（Ubuntu 的 `libkrb5-dev`），可用 `LIBGSSAPI_IMPL=mit` 明确选择 MIT 实现。
+验证需要启用 `gssapi-with-mic` 的真实 SSH 服务与有效本地票据；普通单元测试或
+ignored 用例不会证明该路径已工作。维护者可在隔离的 `KRB5_CONFIG`、`KRB5CCNAME`
+环境中设置 `LYREL_LIVE_SSH_HOST`、`LYREL_LIVE_SSH_USER` 和 `LYREL_LIVE_SSH_PORT`，
+显式运行现有实连用例：
+
+```bash
+cargo test --locked -p lyrel-core --features gssapi \
+  daemon::ssh::tests::live_gssapi_connects_and_opens_a_channel -- --ignored --exact
+```
+
+该实连用例关闭普通主机密钥验证，只适用于维护者控制的隔离服务，不能用作
+主机信任策略证明。安全回归另用临时 `known_hosts` 完成真实握手矩阵。
+
+<a id="host-keys"></a>
+## 主机密钥
+
+默认情况下，会使用 `known_hosts` 验证主机密钥。首次连接时会要求你确认指纹；
+如果密钥**发生变化**，则会显示更醒目的提示，要求输入 `yes` 才能覆盖，
+因为密钥变化值得如此慎重对待。
+
+**设置 → SSH → 安全 → 验证主机密钥**可以关闭普通密钥匹配与首次信任询问，
+但不会豁免 `@revoked` 撤销记录。默认开启验证；拒绝或取消不会写入新信任。
+
+“安全”下还有一个选项：关闭活动连接前的**关闭前警告**，默认关闭。
+
+<a id="reconnecting"></a>
+## 重新连接
+
+<kbd>⌘ ⇧ R</kbd>——或全局搜索中的 *SSH：重新连接*——会重新启动当前窗格中的会话。
+适合在笔记本电脑休眠后或网络发生变化后使用。
+
+<a id="what-is-not-supported"></a>
+## 不支持的功能
+
+- 不会回退到系统 `ssh` 二进制程序
+- 不支持 `~/.ssh/config` 中的 `Match` 或 `canonicalize*` 指令
+- 不支持 `~/.ssh/config` 中的 GSSAPI *指令*。Kerberos `gssapi-with-mic` 本身
+  是受支持的——在配置的“身份验证”字段中选择 **GSSAPI** 即可——只是配置文件
+  解析流程不会读取这类设置

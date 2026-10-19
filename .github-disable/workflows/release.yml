@@ -1,0 +1,454 @@
+name: Release
+# 禁用材料：保持在 .github-disable/，不得移入 .github/workflows/。
+# 手动打包和验证直接运行本文件引用的 .github-disable/scripts/ 入口。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # The Windows installer embeds the Linux musl `lyrel-server` so a WSL distro
+    # can be served the binary the client already shipped with, instead of
+    # downloading one (WSL installs nothing over the network). That
+    # binary comes from `server-musl`, so the two jobs can no longer run in
+    # parallel. Serialising all four platforms behind it costs a few minutes on
+    # a release — cheap next to splitting the Windows entry into its own job and
+    # duplicating the whole toolchain/caching preamble.
+    needs: server-musl
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            os: macos
+            arch: arm64
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            os: windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+            wsl-server: lyrel-server-linux-x86_64-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout lyrel
+        uses: actions/checkout@v4
+        with:
+          path: lyrel
+
+      # GUI 依赖通过 registry 的 gpui-kit 解析，不需要额外源码 checkout。
+
+      - name: Check stable version and tag
+        working-directory: lyrel
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "::error::Cargo.toml must declare a stable version"; exit 1;
+          }
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::release tag must match Cargo.toml: v$VERSION"; exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lyrel
+          # Two Windows legs share a runner OS; without the target in the key
+          # they would overwrite each other's cache.
+          key: ${{ matrix.target }}
+
+      # Windows build.rs fails without the prepared ConPTY pair: fetch and
+      # verify the pinned nupkg before compiling. Not a release download — this
+      # is the same prepare entry a developer runs.
+      - name: Prepare ConPTY
+        if: matrix.os == 'windows'
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./scripts/prepare-conpty.ps1'
+
+      # `--locked` because a release must ship the dependency set the tag
+      # recorded, not whatever cargo would re-resolve at build time. Nothing
+      # rewrites Cargo.toml: this is a plain checkout of the tagged commit.
+      # 桌面 updater 仅随 macOS bundle 和 Windows 包分发。
+
+      - name: Build
+        working-directory: lyrel
+        shell: bash
+        run: |
+          cargo build --release --locked --target "${{ matrix.target }}"
+          cargo build --release --locked --features updater \
+            --bin lyrel-updater --target "${{ matrix.target }}"
+
+      # ---- Packaging: one step per OS ----------------------------------------
+      # macOS 提供签名、公证的 DMG；Windows 提供 Inno Setup 与便携 ZIP。
+      - name: Bundle macOS DMG
+        if: matrix.os == 'macos'
+        working-directory: lyrel
+        env:
+          # macOS code signing — the cert is imported into a throwaway keychain.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          # Notarization — required for Developer ID builds to pass Gatekeeper.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github-disable/scripts/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
+
+      # 完整 stable Windows 包必须带同架构 WSL server；缺失时停止打包。
+      - name: Fetch the bundled Linux server
+        if: matrix.os == 'windows'
+        uses: actions/download-artifact@v8
+        with:
+          name: release-${{ matrix.wsl-server }}
+          path: lyrel/bundled-server
+
+      - name: Package Windows installer + zip
+        if: matrix.os == 'windows'
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./.github-disable/scripts/bundle-windows.ps1 "${{ matrix.target }}" "${{ matrix.arch }}"'
+
+      # The in-app updater refuses a package whose marker, helper or stamped
+      # version is wrong — on the user's machine, after the download. Check the
+      # same facts here so a packaging mistake fails the release instead.
+      - name: Verify Windows update package
+        if: matrix.os == 'windows'
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./.github-disable/scripts/verify-windows-package.ps1 "${{ matrix.arch }}"'
+
+      # Hand the artifacts to the assemble job rather than uploading them to the
+      # release here. Four parallel jobs each publishing their own slice would
+      # make the release "latest" the moment the *first* platform finished — the
+      # in-app update check (src/core/update.rs) reads /releases/latest, so users
+      # would be prompted to download a release that was still missing most of
+      # its assets. Same glob list as before: the bundle scripts leave
+      # intermediates in dist/ (lyrel.app, entitlements.plist, the Windows staging
+      # dir) that must not reach the release assets.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            lyrel/dist/*.dmg
+            lyrel/dist/*.zip
+            lyrel/dist/*-setup.exe
+          if-no-files-found: error
+
+  # The headless server binary remote workspaces install on the far machine
+  # (decision D10). Statically linked against musl so a single binary runs
+  # on any distro whatever its glibc vintage, and shipped as a bare executable
+  # rather than an archive so the client can fetch exactly one file and verify it
+  # against checksums.txt. The asset names are a contract with the installer:
+  # `lyrel_core::daemon::install::asset` derives them from `uname -sm`.
+  #
+  # Separate from the `build` matrix above because it shares nothing with it: no
+  # GUI toolchain, no bundling, no code signing, two targets off one runner.
+  server-musl:
+    strategy:
+      fail-fast: false
+      # `target` is the build triple; `asset` is the published filename. They
+      # are deliberately not the same string — the triple's vendor field is
+      # `unknown`, which says nothing to anyone reading the releases page. See
+      # `install::asset::ASSET_X86_64`, which pins these two names as literals.
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            asset: lyrel-server-linux-x86_64-musl
+          - target: aarch64-unknown-linux-musl
+            asset: lyrel-server-linux-aarch64-musl
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -C strip=symbols
+    steps:
+      - name: Checkout lyrel
+        uses: actions/checkout@v4
+        with:
+          path: lyrel
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # zig provides the musl sysroot and the C cross-compiler for both targets
+      # from one x86_64 runner — see the same job in ci.yml for why the
+      # alternatives (cross, musl-tools) do not cope with aws-lc-rs' cmake build.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lyrel
+          key: ${{ matrix.target }}
+
+      # lyrel-server 已是 workspace 成员，完整 stable 发行不再允许跳过 server。
+
+      # `--locked` for the same reason the GUI build uses it: a release ships the
+      # dependency set the tag recorded. `-p lyrel-server` both addresses the
+      # package independently of its path and keeps feature unification off the
+      # GUI's `gssapi` feature, which cannot build under musl.
+      - name: Build static lyrel-server
+        working-directory: lyrel
+        run: cargo zigbuild --release --locked -p lyrel-server --target ${{ matrix.target }}
+
+      - name: Assert the binary is static
+        working-directory: lyrel
+        run: bash .github-disable/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"
+
+      # Flat, version-free asset name — the tag in the download URL carries the
+      # version. See `install::asset` for the contract the client
+      # installer derives this name from.
+      - name: Stage the asset
+        working-directory: lyrel
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/lyrel-server" \
+             "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.asset }}
+          path: lyrel/dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # The same server for remote Macs, published under the same contract: flat,
+  # version-free names that `install::asset` derives from `uname -sm`. Separate
+  # from `server-musl` because an Apple target needs an Apple runner, and the
+  # arm64 slice comes off one arm64 runner. See ci.yml's `server-macos` for the
+  # rest of the reasoning; keep the workflow matrices and `install::asset` in
+  # sync.
+  #
+  # Not code-signed or notarized, and deliberately: this binary is never
+  # downloaded by the destination Mac. The client fetches it, verifies it against
+  # checksums.txt and writes it over SFTP, which sets no quarantine attribute, so
+  # Gatekeeper is not in the path at all. The ad-hoc signature the linker applies
+  # is all arm64 asks for, and `assert-macho.sh` checks it is there.
+  server-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+            asset: lyrel-server-macos-aarch64
+    runs-on: macos-latest
+    env:
+      RUSTFLAGS: -C strip=symbols
+    steps:
+      - name: Checkout lyrel
+        uses: actions/checkout@v4
+        with:
+          path: lyrel
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lyrel
+          key: ${{ matrix.target }}
+
+
+      - name: Build lyrel-server
+        working-directory: lyrel
+        run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
+
+      # Ad-hoc — no identity, no secrets, and nothing to do with the notarized
+      # signing the GUI bundles get. It is what the arm64 kernel requires before
+      # it will execute a binary at all: the linker signs the arm64 slice
+      # itself, x86_64 comes out bare, and x86_64 is what a Rosetta shell on an
+      # Apple Silicon Mac asks for. `--force` makes it idempotent across both.
+      - name: Ad-hoc sign the binary
+        working-directory: lyrel
+        run: codesign --force --sign - "target/${{ matrix.target }}/release/lyrel-server"
+
+      - name: Assert the binary is self-contained
+        working-directory: lyrel
+        run: |
+          bash .github-disable/scripts/assert-macho.sh \
+            "target/${{ matrix.target }}/release/lyrel-server" "${{ matrix.arch }}"
+
+      - name: Stage the asset
+        working-directory: lyrel
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/lyrel-server" \
+             "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.asset }}
+          path: lyrel/dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # The server for remote Windows hosts (Windows OpenSSH), under the same
+  # contract: flat, version-free names that `install::asset` derives from the
+  # host's `PROCESSOR_ARCHITECTURE`, looked up in checksums.txt by exactly
+  # that name. The asset is a ZIP because the server cannot start a pane
+  # without the pinned ConPTY set beside it (`daemon::conpty` fails closed):
+  # `lyrel-server.exe` plus the `conpty.dll` / `OpenConsole.exe` /
+  # `LICENSE-ConPTY.txt` trio from the pinned official package, and the
+  # project's LICENSE.txt.
+  #
+  # No RUSTFLAGS here, unlike the other server jobs: setting it would replace
+  # `.cargo/config.toml`'s `+crt-static` wholesale, and a server that imports
+  # VCRUNTIME140.dll will not start on a Windows host without the Visual C++
+  # redistributable — which a headless server is the likeliest machine to lack.
+  # Symbols are stripped through the profile instead.
+  #
+  server-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            asset: lyrel-server-windows-x86_64.zip
+    runs-on: windows-latest
+    env:
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+    steps:
+      - name: Checkout lyrel
+        uses: actions/checkout@v4
+        with:
+          path: lyrel
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lyrel
+          key: ${{ matrix.target }}
+
+      # The server's build.rs fails closed without the prepared ConPTY pair,
+      # and the packaging step below zips exactly the files it staged beside
+      # the built executable — the same prepare entry a developer runs, so
+      # this asset and every dev/test executable carry the identical pinned
+      # set.
+      - name: Prepare ConPTY
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./scripts/prepare-conpty.ps1'
+
+      - name: Build lyrel-server
+        working-directory: lyrel
+        run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
+
+      - name: Assert the binary needs no VC++ redistributable
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./.github-disable/scripts/assert-no-vcruntime.ps1 "target/${{ matrix.target }}/release/lyrel-server.exe"'
+
+      # Zip the server with the ConPTY set build.rs staged beside it. The
+      # trio is re-hashed against the pinned manifest here so a staging
+      # mistake fails the release instead of shipping an uninstallable asset
+      # — the installer unpacks exactly this flat layout
+      # (`daemon::install::package`).
+      - name: Stage the asset
+        working-directory: lyrel
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Release = "target/${{ matrix.target }}/release"
+          $ConptyArch = @{ 'x86_64-pc-windows-msvc' = 'x64' }['${{ matrix.target }}']
+          if (-not $ConptyArch) { throw "no prepared ConPTY for ${{ matrix.target }}" }
+          $Manifest = Get-Content -LiteralPath 'assets/windows/conpty/manifest.json' -Raw | ConvertFrom-Json
+          foreach ($File in 'conpty.dll', 'OpenConsole.exe') {
+            $Path = "$Release/$File"
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "build did not stage $Path" }
+            if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ne $Manifest.files.$ConptyArch.$File) {
+              throw "$Path SHA-256 mismatch against the pinned ConPTY manifest"
+            }
+          }
+          if ((Get-FileHash -LiteralPath "$Release/LICENSE-ConPTY.txt" -Algorithm SHA256).Hash -ne $Manifest.licenseSha256) {
+            throw "$Release/LICENSE-ConPTY.txt SHA-256 mismatch against the pinned ConPTY manifest"
+          }
+          New-Item -ItemType Directory -Force dist/server-stage | Out-Null
+          Copy-Item "$Release/lyrel-server.exe" 'dist/server-stage/lyrel-server.exe'
+          Copy-Item "$Release/conpty.dll" 'dist/server-stage/conpty.dll'
+          Copy-Item "$Release/OpenConsole.exe" 'dist/server-stage/OpenConsole.exe'
+          Copy-Item "$Release/LICENSE-ConPTY.txt" 'dist/server-stage/LICENSE-ConPTY.txt'
+          Copy-Item 'LICENSE' 'dist/server-stage/LICENSE.txt'
+          Compress-Archive -Path 'dist/server-stage/*' -DestinationPath "dist/${{ matrix.asset }}" -Force
+          Remove-Item -Recurse -Force dist/server-stage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.asset }}
+          path: lyrel/dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # Single assembly step, after every GUI platform and every server slice
+  # succeeds. The release object is
+  # created as a **draft** and left that way: a draft is invisible to both
+  # /releases/latest and the releases page, so nothing can prompt a user to
+  # download a version whose asset set is incomplete or whose notes are still
+  # empty. Publishing is the release skill's job — it verifies the platform assets and
+  # writes the body first, then flips the draft. See .claude/skills/release/SKILL.md.
+  draft-release:
+    needs: [build, server-musl, server-macos, server-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: lyrel
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # 使用与手动发行相同的入口；只散列正式资产，排除各平台打包暂存目录。
+      - name: Generate checksums.txt
+        working-directory: lyrel
+        run: bash .github-disable/scripts/generate-checksums.sh "$GITHUB_WORKSPACE/dist"
+
+      # Reuse an existing release rather than failing: re-triggering a tag
+      # (force-push after a fixed platform) must top up the same draft. If the
+      # release was already published, --clobber just replaces its assets and it
+      # stays published.
+      #
+      # Existence is probed with `release list`, not `release view`: GitHub's
+      # get-release-by-tag endpoint does not return drafts, so a view-based check
+      # could miss the very draft a previous run left behind and create a second
+      # one (GitHub happily allows duplicate drafts on one tag).
+      - name: Assemble the draft release
+        run: |
+          set -euo pipefail
+          # Captured into a variable, not piped into `grep -q`: -q exits on the
+          # first match, and the resulting SIGPIPE would make `pipefail` report
+          # the pipeline as failed — i.e. "found" would read as "not found".
+          # `release list` includes drafts (cf. its --exclude-drafts flag).
+          EXISTING=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName -q '.[].tagName')
+          if grep -Fxq "$GITHUB_REF_NAME" <<<"$EXISTING"; then
+            echo "release $GITHUB_REF_NAME already exists; reusing it"
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --draft --title "$GITHUB_REF_NAME" --notes ""
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"

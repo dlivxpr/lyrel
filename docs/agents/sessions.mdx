@@ -1,0 +1,238 @@
+---
+title: "智能体会话"
+description: "重启后恢复对话、从运行中的对话创建分支，以及获取会话 ID。"
+---
+
+编程智能体会保留各自的对话历史，并通过会话 ID 进行标识。
+lyrel 通过各智能体的 hooks 或客户端插件接收真实主会话 ID，并用于以下操作。
+
+<a id="resume-after-a-restart"></a>
+## 重启后恢复
+
+当服务器停止运行时——无论是系统重启、崩溃，还是主动重启服务——Shell 也会随之退出。原本运行着智能体的窗格会在恢复时重新启动对话，而不是只显示一个空白命令提示符：
+
+```bash
+omp --resume /path/to/session.jsonl
+```
+
+原始启动参数会被重新应用，因此窗格会恢复到你启动时的状态，而不是使用默认设置。
+
+恢复能力取决于智能体的正式版本、持久化设置及会话的有效作用域；不能仅凭进程名称判断恢复成功。
+可通过 `restore_agent_sessions: false` 关闭自动恢复。恢复失败不会另建空会话来冒充成功。
+
+<Note>
+  恢复会话需要安装智能体的钩子，因为会话 ID 来自这些钩子。[安装钩子 →](/agents/status)
+</Note>
+
+<a id="fork-a-live-session"></a>
+## 从运行中的会话创建分支
+
+创建分支会将运行中的对话分出第二个独立对话。原对话不受影响，继续运行；两个对话从相同的历史记录出发，各自继续。
+
+右键点击**窗格**，即可在分屏中创建分支——菜单中可以选择放置位置——
+也可以右键点击**标签页或侧边栏条目**，在新标签页中打开分支。
+
+| 智能体 | lyrel 执行的命令 |
+|---|---|
+| OpenCode 2.x | 由源窗格本地 TUI 的已连接正式 `context.client.session.fork` 创建真实新 ID，经 Host 核验服务连接后原生 `--session <新 ID>` 打开 |
+| Oh My Pi | 先由原生 RPC 核定源身份，再以 `omp --fork <精确会话路径> --mode rpc` 取得真实新身份，最后在新窗格原生恢复 |
+| pi | 核对精确源文件 header，以正式 `pi --fork <路径> --mode rpc` 获取新 ID／文件，再在新窗格执行 `pi --session <新路径>` |
+| Kimi Code 2.2.0 | 在源 Host 原生 `kimi fork <id>`，严格验证stdout与实际新目标后，在新窗格原生 `kimi --session <新ID>` |
+| Hermes | 经正式 launcher 的 `--print-runtime-command --module tui_gateway.entry` 取得准确启动 argv，调用 `session.branch_stored` 返回持久化新 ID，再在新窗格原生恢复 |
+
+lyrel 只调用智能体自己的操作，不复制内部会话文件。原生操作与新窗格打开分为独立阶段；实际证明范围见[验收状态与已知限制](#acceptance-status)，不能把一条可构造的命令当作分叉已经成功。
+
+<Warning>
+  创建分支会在智能体的会话存储中创建独立记录，可能占用额外磁盘空间。操作始终在源会话所属的已连接 Host 上执行；目录检查也由该 Host 完成。没有可用 Host 的手动嵌套 SSH／WSL 不会被猜作本机会话。远端 server 不支持会话操作能力时明确要求更新，不发送它无法解码的请求，也不回退本地执行。
+</Warning>
+
+### 部分成功与重试
+
+原生分叉已完成而窗格创建、连接或启动准备失败时，错误通知保留真实目标 ID 及其启动上下文。
+对于已经进入连接阶段的远端窗格，失败页同时显示“会话已创建、窗格未能打开”、真实新 ID 和连接错误；
+点击“打开已保留的会话”只重新打开已捕获的目标命令。其他保留结果通过通知上的“重试”恢复已有目标，
+均不再次执行源会话分叉，也不删除已创建的记录。
+远端连接中断或原生进程在报告身份前失败时，可能无法确认是否已经创建记录；错误会明确要求先检查原生历史，不能把未知结果当作失败后安全重做。
+
+### 开发者操作契约
+
+共享 Interface 位于 `crates/lyrel-core/src/host/session_operations.rs`，通过
+`Host::session_operation(&SessionOperation)` 调用。Host 方法是阻塞 seam；GUI 必须经既有
+`HostOps::run_in` 异步调度，不在 UI 线程运行命令或检查远端目录。CLI／daemon 的调用方使用同一 Host 操作，不能自行拼第二条恢复／分叉路径。现有 CLI 的工作树新建只负责全新启动，没有单独的旧恢复／分叉命令需要迁移。
+
+- `SessionOperation` 包含 `expected_host`、智能体、`Resume`／`Fork`、完整 `source_id`、绝对工作目录、捕获的 `launch_argv` 和 `SessionScope`。不同主机上的相同 ID 不可互换。
+- `SessionScope` 保存 profile、session-dir、精确 session-file、目标 shell 和非凭据作用域环境选择器。默认选择器由执行 Host 的环境解析；不能把 GUI 本机 home 当成远端 home。`AgentFacts.session_scope`、`SessionPane.agent_session_scope` 和待连接窗格保留同一作用域。统一 `durable_scope` 规则保存所有适配的稳定选择器，剔除瞬态 OpenCode 客户端桥、服务 PID／动态 URL 和重复启动参数；认证 nonce 从不进入 scope、argv 或持久化数据。
+- `PreparedSession` 返回来源与真实目标、实际会话文件、有效作用域、启动 argv、可选启动命令及 `created`。成功结果必须有已校核的真实目标 ID 和可执行启动命令；不能把身份留给新窗格再创建。错误的保留结果可能只有已创建的身份与上下文，重试只恢复该目标。
+- `SessionOperationError` 区分主机、目录、身份、能力、命令、连接和窗格启动错误。`retained` 是部分成功结果；重新打开必须改用 `Resume` 并绑定其目标 ID／文件，不重发 `Fork`。
+- control 协议通过 `session-operations-v1` 能力协商 `SessionOperation` 请求与结构化结果；不发送旧 peer 无法解码的请求。本机 GUI 开窗另协商 pane 的 `spawn-claim` 能力，control／pane 编号仍分别为 13／7。
+
+本机 GUI 在后台创建 shell，用待连接窗格保留启动上下文，不将等待两秒视为创建失败。`Spawn.await_claim` 默认为 false；启用时，daemon 在同一连接收到匹配新 ID 的 `Attach` 后才将 pane 纳入持久 registry／handoff。此前取消、断连或目标窗口关闭只回收这次创建的 pane，不能向原 pane 投递启动命令。旧 daemon 缺能力时明确要求重启更新，不回退不安全路径。远端晚到结果沿准确 Host／pane ID 回收新建 pane；恢复的持久 pane 只断开连接。
+
+omp 基线在实施时复核为正式 `18.12.1`。原生 `get_state.sessionId` 是 provider-facing 身份，
+不能替代会话文件 header 的持久化 ID；恢复与分叉以真实 header 校核身份，并保留实际文件路径。
+准备进程只发送 `get_state`，不发送 prompt，不以 headless 推理代替新窗格的原生 TUI。
+`--api-key` 等凭据参数不会被复制进可显示命令；无法安全重放的参数给出明确限制。
+正式 CLI／配置／RPC 契约来自 [版本化 CLI 文档](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/cli-reference.md)、
+[配置文档](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/config-usage.md)及
+[RPC 实现](https://github.com/can1357/oh-my-pi/blob/v18.12.1/packages/coding-agent/src/modes/rpc/rpc-mode.ts)。
+这些来源及契约回归不构成真实正式智能体、daemon／PTY、新窗格或跨平台验收证据；实际证明范围见[验收状态与已知限制](#acceptance-status)。
+
+### pi 1.3.0 的独立契约
+
+这里的 pi 仅指 `earendil-works/pi`／`@earendil-works/pi-coding-agent@1.3.0`，
+不是 omp。实现位于 `host/session_operations/pi.rs`，没有复制 omp 的 profile 或事件契约。
+原生外部 `--fork` 复制整个会话树；会话内 `/fork` 从所选用户消息分叉，`/clone` 复制当前活动分支，三者不可混称。
+lyrel 不复制内部会话文件。准备阶段仅发送 RPC `get_state`，核对返回 ID 与实际 header，
+随后以原生 TUI 打开新 ID；不会用 RPC 推理代替交互界面。
+
+存储优先级为 `--session-dir`、`PI_CODING_AGENT_SESSION_DIR`、项目／全局
+`settings.json` 的 `sessionDir`，最后是有效 home 下 `.pi/agent/sessions/<项目>`。
+自定义 session-dir 是平铺目录。`PI_CODING_AGENT_DIR` 选择独立配置根；pi 没有 omp 的
+`--profile`。扩展报告实际 session-file／session-dir，历史条目保留精确文件和配置根，
+恢复时移除旧 `--session`／`--session-id`／`--fork`／`--continue`／`--resume`，保留有效存储、模型及扩展参数。
+目录和环境都由所选 Host 解释；远端缺少环境作用域能力时明确要求升级，不借用本机 home。
+
+没有既有窗格时，历史查询也使用 `agent_launch.pi` 的有效 home、配置根及显式 `--session-dir`，
+与集成管理和恢复共用作用域解析。Kimi 历史同样沿用 `agent_launch.kimi` 的有效 `KIMI_CODE_HOME`；
+配置私有存储不需要先打开一个窗格才能列出历史。无法确定作用域时明确报错，不退回 daemon 默认 home。
+空值或相对的 `KIMI_CODE_HOME` 依赖原生 pane 的 cwd；默认历史查询没有这一上下文时明确拒绝，
+不把空值当作“未设置”，也不借 GUI／daemon cwd 解释。已有真实 pane 捕获的有效 scope 继续用于恢复。
+
+历史标题优先采用最新 `session_info.name`，压缩记录读取 pi 正式字段 `summary`，
+不把 omp 的 `shortSummary` 当作 pi 字段。历史扫描只能枚举 Host 已知的存储根，
+无法凭空发现从未记录、也不在当前配置根中的任意项目私有目录；已有窗格的扩展作用域和明确历史条目不受此限制。
+
+历史扫描还复用已记录窗格的真实 session-dir／配置根，包含已知的私有存储，不将其重新解释为默认目录。
+
+正式接口来源：[CLI](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/cli.md)、
+[会话语义](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/sessions.md)、
+[存储环境](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/environment-variables.md)。
+已有隔离正式分发和 Host 消费者的原生分叉、源与新 ID 恢复证据；精确 header、`parentSession` 和作用域分别核对。
+这些证据不等同成功模型、lyrel 双 TUI 继续对话或活跃写入／并发验收，不能由一次失败 turn 推定成功状态链路成立。
+
+### Kimi Code 的有效来源与最终结果
+
+Kimi操作实现位于 `host/session_operations/kimi.rs`。历史、恢复和分叉固定同一Host的
+有效 `KIMI_CODE_HOME` 及精确会话摘要路径；有相同ID的其他home或已归档目标不作为备用。
+原生恢复会恢复保存的agent profile，不能把创建时的 `--agent` 再与 `--session` 拼接。
+默认作用域由 `Host::agent_environment()` 的非凭据白名单解析，pane桥报告的实际覆盖优先；
+旧远端server缺少环境元数据时明确要求更新，不拿本机环境猜远端位置。
+
+正式2.2.0分叉stdout不是JSON：lyrel仅接受该版本完整的 `Forked to … in …ms` 契约，
+并只读校验原生新记录的ID、forkedFrom、标题及工作目录。输出变化、版本变化、
+目标缺失或来源不匹配都失败，不打开空会话。新ID已经返回而后续校验／开窗失败时保留它，
+重试必须恢复该目标而不是再次分叉；未知创建结果先查原生历史。
+
+Kimi的 `Stop` 在所有阻断hooks决策之前发生，可能继续同一turn；它不是最终成功。
+已绑定主会话后，daemon只读主agent的正式protocol1.5 durable记录，按真实turn身份、
+interaction及后台task记录更新状态与请求快照，真实 `turn.ended` 才提供结束结果。
+轮询仅调度读取，不由EOF或静默时间推定完成；子agent和晚到状态hooks不覆盖主turn。
+关闭hooks／持久化、无法读取主历史或协议失配时显示能力限制，不能把未知显示为成功。
+
+正式 Kimi 的原生分叉、成功／取消及双 TUI 独立继续已有隔离证据，但这些原生对照没有完成 lyrel 桥的完整成功状态矩阵。
+原生 TUI 的自动首条任务仍缺正式公开的接收与安全交接契约；不以 print 模式、空启动或模拟键入替代。
+
+### Hermes 0.22.2
+
+身份／状态桥和操作适配分别位于 `core/agent_hooks/hermes.rs`（模板 `hermes.py`）及
+`host/session_operations/hermes.rs`。它们复用既有 hook 上报、`AgentSessionState`、
+`SessionScope` 与 Host 操作，不向原 pane 输入 `/branch`，不复制内部数据库或会话文件，
+也不建立第二套身份来源。代码落地不等于完整真实验收，未闭环项见[验收状态与已知限制](#acceptance-status)。
+
+身份来自正式 plain CLI observer 的 `on_session_start`／`on_session_reset`、每轮的
+`pre_llm_call` 及 CLI `pre_command.session_key`，只接受 `platform=cli`，排除有
+`parent_session_id` 或已由 `subagent_start` 标识的子会话；同一已报告身份不重复重置状态。
+回报真实持久化 ID、当前目录、官方解析的 profile 与 `HERMES_HOME`，不回报提示词、正文或凭据。
+**正式版的 `on_session_start` 仅在新建系统提示时触发，正常恢复可能完全跳过**；恢复由
+`pre_llm_call` 补齐。裸启动及部分 `/resume`／`/branch` 操作完成后、下一条命令／turn 前的
+即时身份更新仍缺正式事件与运行证据，不能声称已完整验收，也不从屏幕或内部 breadcrumb 猜 ID。
+
+网关由官方 source-install launcher 的公开
+`--print-runtime-command --module tui_gateway.entry` 返回准确 managed Python/bootstrap argv，
+再直接启动网关；这与正式 `--run-module tui_gateway.entry` 使用同一运行时契约，但避免
+Windows `.cmd` wrapper 在超时时遗留网关后代。不猜系统 Python，也不额外注册插件 CLI relay。
+准备进程不携带 pane 身份、不提交模型任务。操作返回后，以短 runtime `session_id` 调用公开 `session.close` 并确认释放，再关闭 stdio；关闭耗时仍受原有期限约束。分叉只接受 `stored_session_id`，恢复核对 `session.resume` 的 `session_key`；短 runtime ID 不得进入新窗格恢复目标。
+原生错误、空身份和目标失配均明确失败；已知新身份后的关闭／开窗错误保留同一目标。
+正式 `hermes acp` 的 fork 不适用于 `source=cli`，不是备用路径。
+
+历史由所选 Host 的 `hermes_sessions(&SessionOperation)` 在后台调用同一正式 launcher／
+`projects.tree`，仅把标题、原生 ID、目录、分支和 `last_active` 元数据传给搜索界面，
+不传 `preview` 或对话正文。正式树过滤归档、隐藏和子会话，包含未归属项目的 Home 桶；
+lyrel 只列出 `source=cli` 的普通 CLI 来源。观察到的 home/profile 与配置启动范围一同参与查询，
+不同 Host、profile 或 home 的同 ID 不合并；恢复继续使用同一保存作用域并校验真实目标。
+远端通过独立 `hermes-history-v1` 能力协商，不支持的 daemon 明确拒绝，不回查 GUI 本地文件。
+为避免把窗口当完整列表，查询 501 条元数据以检测 500 条窗口溢出；正式接口没有 offset/cursor，
+达到上限会明确报告无法取得完整列表，不静默显示截断历史。此限制尚未关闭。
+
+非空首条任务使用正式 TTY 保活入口 `hermes chat <有效参数> --query=<完整任务>`。
+内联值使以连字符开头的任务不是选项；显式 `chat` 防止子命令形状被分流，中文、多行、
+前后空白与 `/new` 等内容保持为同一个 literal seed。真实 TTY 上不带 `--oneshot`／`--quiet` 时，
+上游将该 seed 恰好放入原生 REPL；lyrel 不模拟键入，不使用 one-shot。已有 query、恢复动作、
+非交互输出模式或无法静态解析的包装命令会在建窗格前报错；裸启动保持自定义原生命令不变。
+正式入口见 [0.22.2 TTY gate](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/cli.py)
+与 [seeded query](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/hermes_cli/cli_single_query.py)；
+真实 GUI／daemon／PTY 恰好一次投递及返回交互仍待验收，不能据命令回显推定通过。
+
+协议的一手契约固定在 [v0.22.2 sessions](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/tui_gateway/contracts/sessions.py)、
+[plain CLI hooks](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/website/docs/user-guide/features/hooks.md) 与
+[插件接口](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/website/docs/developer-guide/plugins/index.md)及
+[正式 launcher 机器接口](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/hermes_cli/_launchers.py)。
+既有正式 managed 运行时与 Host 消费者已验证原生分叉、源与分支恢复、部分成功重开及缺失目标报错；关闭网关先执行 `session.close` 再 EOF。
+这不等于 lyrel 新窗格、并发活跃写入、首任务恰好一次投递或两个原生会话成功继续均已验收。
+
+
+
+<a id="copy-the-session-id"></a>
+## 复制会话 ID
+
+**复制会话 ID** 位于标签页的右键菜单中，在*复制工作目录*旁边，也可以通过全局搜索找到。它会将智能体的原生 ID 放入剪贴板。你可以将其用于对应产品的原生恢复命令，例如 `omp --resume`，或附在错误报告中。
+## OpenCode 2.x 的来源与操作
+
+正式基线为 `@opencode/cli@2.0.32`。历史只经 `session.list` 读取标题、目录、时间和原生身份元数据，不读旧 SQLite 表或对话正文；过滤 subagent 的 `parentID` 与归档项，保留原生 `fork` 来源的独立根会话。已有 TUI 的历史使用其已连接客户端；没有打开 OpenCode 窗格时，正常已安装／配置的默认作用域仍由实际 Host 的正式 `opencode api` 查询，并绑定查询返回的服务身份。
+
+运行中的分叉只能来自当前前台 route。每个本地 TUI 有独立 `client_id`，通过用户隔离的私有登记和已认证 loopback 通道调用自己的正式 client；后台 tab、另一终端或共享服务环境不能替代该来源。断线、前台切换、错误响应、身份或目录失配明确失败，不回退到另一默认服务。通道仅支持有界的 `info`／`get`／`list`／`fork`，没有额外 Node／Bun helper，不关闭默认共享服务。
+
+私有桥协议严格使用 v2：双方新 challenge 与标准 HMAC-SHA256 证明对端持有用户私有登记的 capability，并认证完整请求／响应及一次性会话上下文；原始 secret 不发送到 loopback 端口，不兼容旧的不安全首帧。认证从 accept 起有不可续期的绝对期限，未认证连接与正式操作使用独立容量。有效环境按已绑定 scope、显式启动赋值、Host 缺省的优先级合成。分叉响应后通过原 client 正式 `get` 再次核实新目标；核实失败保留真实已知 ID 及部分成功，不把返回一个名称当作分叉完成。
+
+恢复前先查询目标存在性，并核对 session ID、原生 project ID、创建时间与目录。保存的 Host、home／XDG／`OPENCODE_DB` 及默认或显式连接选择器用于重连；`:memory:` 不能冒充可恢复存储。保存元数据不是服务端稳定存储标识：正式 2.0.32 的 `server.info` 没有公开数据库来源标识，服务先在另一环境启动后的完整来源证明仍需真实集成验收，不能仅靠同 ID／目录宣称已验证。
+
+正式 2.0.32 的 `--standalone` 给原 TUI 私有服务生成闭包内认证密码，公开 Context 没有向第二个 TUI 交接该认证的接口。lyrel 可通过原 client 完成真实分叉并保留新 ID，但不另起一个 standalone 服务假装打开了它；无法准备第二 TUI 时返回明确部分成功，保留目标身份，不删除或重复创建。默认共享服务、显式 `--server`、重连和真实新窗格须分别验证，不能将静态契约或单元回归当作已完成的正式 TUI 证据。
+## omp 的初始任务与有效存储范围
+
+工作树首条任务使用正式原生交互形式 `omp launch <有效参数> -- <一个任务参数>`。
+显式 `launch` 防止 `models` 等子命令形状被分流，`--` 防止 `--help` 等文本成为选项；
+中文、多行及原始任务内容作为一个参数提交，不使用 print／RPC 推理或向已有窗格键入。
+已带 print、传输 mode、旧会话操作或既有任务的自定义命令会明确拒绝，而不是静默改写
+模式或覆盖原会话。裸启动仍使用用户自己的有效启动命令。
+
+历史查询保留实际 profile、home、session-dir 与精确会话文件。默认目录及已迁移的
+macOS／Linux XDG data 目录遵循 omp 18.12.1 的发现规则；已报告并持久化的窗格
+`SessionScope` 使自定义 `--session-dir` 的历史也在所属 Host 上扫描。命名 profile
+不能被默认 profile 的 `PI_CODING_AGENT_DIR` 替代；子代理 `session_init` 记录与只读
+seance 来源不作为可恢复主会话列出。标题取正式 title slot／会话命名资料，时间取该
+会话的实际更新时间，不读取凭据或显示整段对话。
+
+原生恢复／分叉只走 `Host::session_operation`；旧 OMP 字符串恢复／分叉入口已停用。
+`session_start`、`session_switch`、`session_branch` 和 `session_tree` 及时更新主身份与
+作用域。会话 ID 与 scope 一起持久化，不用 provider-facing ID、窗格标题或子代理身份
+代替源 header；准备阶段与开窗部分成功的保留语义不变。
+
+正式来源：[CLI 18.12.1](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/cli-reference.md)、
+[配置发现](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/config-usage.md)、
+[扩展](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/extensions.md)、
+[会话目录实现](https://github.com/can1357/oh-my-pi/blob/v18.12.1/packages/utils/src/dirs.ts)。
+既有原生操作探针取得真实新 header ID，并分别恢复源与分叉；真实 Windows GUI 裸启动也已有独立证据。
+这些结果不能外推成功模型、多请求、审批、后台工作或两个会话继续对话的完整矩阵。
+
+<a id="acceptance-status"></a>
+## 验收状态与已知限制
+
+以下边界由此前实施与运行记录收敛，不是本次重新运行的结果；新增变更仍需在当前构建上验证。
+
+- 已有 Windows／Linux 构建、契约套件、真实 CLI→daemon→PTY、部分正式 Host 会话操作及隔离 SSH／SFTP 证据；Windows GUI 语言、shell 创建及 OpenCode 共享服务生命周期也有独立实跑记录。这些结果不代表五种智能体的完整成功模型矩阵均已通过。
+- Kimi Code 2.2.0 保留原生 TUI 的自动首任务仍缺公开接收／交接契约；Hermes 裸启动及部分恢复／分叉后的即时身份仍缺正式事件，不能从屏幕或内部 breadcrumb 猜测。各自的其他能力不能掩盖这些缺口。
+- 多请求、真实审批、重试／压缩、后台工作及活跃写入的完整组合仍需分别验收；模型连接错误和终态收敛不等同成功模型回复。
+- macOS 自有适配尚无完整原生实机证据，该独立验收门已获豁免并记录为已接受风险，而非通过。GSSAPI 需要票据与真实服务前提；Windows 没有该认证实现。
+- 远端晚到 pane 的 RAII 回收已修正，但没有新增真实 SSH 桌面取消场景的运行证明。平台包、在线更新、签名、公证及真实系统注册仍各自需要对应环境与资产，不能由本机测试外推。
+
+

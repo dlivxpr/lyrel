@@ -1,0 +1,108 @@
+---
+title: "远程工作区"
+description: "整个工作区托管在另一台机器上——文件、仓库、窗格和 git 都留在那里。"
+---
+
+SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一步：lyrel 在远端机器上运行服务器，整个工作台都指向它。标签页、分屏、文件树、git 面板、差异浮层、进程列表——所有内容都来自远程机器，并在这里呈现。
+
+不会同步或复制任何内容。仓库始终留在原处。
+
+<a id="connecting"></a>
+## 连接
+
+<Steps>
+  <Step title="打开“新建工作区”表单">
+    按 <kbd>⌘ ⇧ N</kbd>，或点击切换器（<kbd>⌘ ⇧ O</kbd>）底部的按钮。表单的主机下拉列表会列出*本机*、所有已保存的 SSH 配置、`~/.ssh/config` 中的别名，以及 Windows 上的所有 WSL 发行版——列表较长时，可以输入文字筛选。
+  </Step>
+  <Step title="选择一台机器">
+    lyrel 使用与其他功能相同的 SSH 技术栈连接，因此配置、钥匙串凭据和跳板主机均适用。对于尚未连接的机器，会先建立连接，再在其主目录中创建工作区。
+  </Step>
+  <Step title="首次批准安装服务器">
+    首次连接时会询问：
+
+    > lyrel 将把服务器二进制文件写入 *devbox*，以便本机可以在该机器上托管工作区。不会改动 *devbox* 上的其他任何内容，也不会使用 sudo。
+
+    在你同意之前，会显示确切的路径、版本、大小、来源和 SHA-256。之后在该机器上的升级会静默安装。lyrel 独立初版版本为 0.1.0，目前尚无实际发布资产；如果缺少所需服务器包，安装无法继续，也不会回退下载上游资产。
+  </Step>
+  <Step title="打开工作区">
+    此后，该机器的工作区会与本地工作区一起出现在切换器的扁平列表中，每一行都带有机器名称和连接状态；打开新工作区的方式与本地工作区相同。
+  </Step>
+</Steps>
+
+<a id="what-gets-installed"></a>
+## 安装内容
+
+| | |
+|---|---|
+| **内容** | Unix／WSL 为独立的 `lyrel-server`；Windows 为 server、固定配对 ConPTY 与必要许可 |
+| **Unix／WSL 位置** | `~/.local/share/lyrel/bin/lyrel-server-c<control>p<protocol>` |
+| **Windows OpenSSH 位置** | 用户配置文件目录下的 `AppData\Local\lyrel\bin\lyrel-server-c<control>p<protocol>.exe` |
+| **权限** | 无需额外权限。不使用 sudo，不会在主目录之外写入任何内容 |
+| **主机** | Linux（x86-64 或 aarch64）、macOS（Apple 芯片）以及 Windows OpenSSH（x64） |
+
+Linux 二进制文件完全静态链接 musl，因此无论 glibc 版本新旧，都能在任何发行版上运行。macOS 二进制文件只链接每台 Mac 都已具备的库。无论哪种情况，都不会额外安装其他内容。
+
+二进制文件按其使用的通信协议版本命名，因此客户端和服务器协议不一致时，不会悄悄进入只能部分工作的状态——lyrel 会改为安装匹配的版本。客户端与服务器的应用版本统一为 `0.1.0`；这不重置 IPC 协议，当前文件名为 `lyrel-server-c12p7`，Windows 加 `.exe`。stdio 连接使用该程序的 `--stdio` 入口；pane 连接沿用既有 `--pane` 参数。
+
+SSH 优先查找客户端旁的包内程序：`server/`、客户端目录本身，以及 macOS 的 `Resources/server/`；没有匹配资产时才从 `https://github.com/dlivxpr/lyrel/releases/download/v<version>/` 下载。Linux 资产是 `lyrel-server-linux-x86_64-musl` 或 `lyrel-server-linux-aarch64-musl`，macOS 是 `lyrel-server-macos-aarch64`（仅 Apple 芯片），Windows 是 `lyrel-server-windows-x86_64.zip`（仅 x64 主机；ARM64 主机会被拒绝）。下载必须通过同一 release 的 `checksums.txt` SHA-256 校验；缺 release、匹配包、校验和或校验失败都会终止安装，不猜选其他平台资产，也不回退上游。上传后的临时程序还必须报告匹配的 control／pane 协议，才能发布到最终路径并启动。
+
+Windows ZIP 的扁平内容固定为 `lyrel-server.exe`、`conpty.dll`、`OpenConsole.exe`、`LICENSE-ConPTY.txt` 与 `LICENSE.txt`。客户端拒绝缺件、额外文件、不安全路径、链接、重复项或解压完整性错误；先上传完整临时内容并核对程序协议，再将配套文件和 server 依次放入同一 `bin/` 目录。旧的单 exe 安装或配套缺失会触发修复；运行中的 daemon 需要重启后才能使用新配套。daemon 创建 pane 前再次校验官方固定摘要，不回退系统终端宿主。
+
+在 Windows 上，WSL 仅使用随客户端提供的 Linux 服务器，不会因缺包转向网络下载。可通过 `LYREL_BUNDLED_SERVER_DIR` 指定本机服务器资产目录，文件名必须与上述平台资产完全一致；WSL 缺少匹配文件会报告 `MissingBundled` 及搜索位置，其他产品的 server 文件不能替代。当前 lyrel 尚无实际发布资产，不能将此视为安装包已经可用。
+
+Windows OpenSSH 的探测、上传和启动使用 Windows 路径及 PowerShell 适配，不要求 POSIX 工具；SFTP 与登录 shell 必须看见同一个文件系统。若 OpenSSH 的 `DefaultShell` 运行 WSL 而 SFTP 指向 Windows，安装会拒绝这种混合布局并说明原因。
+
+Windows 后台 server 仍由 WMI 脱离 SSH 会话启动：在目标主机的 PATH 中发现 PowerShell 7 或更新版本时，使用其绝对路径运行 supervisor；未发现时使用系统 Windows PowerShell 5.1，不额外安装运行时。WMI 创建的隐藏 `cmd.exe` 仅调用这个已选解释器，保留启动日志、退出码和原会话环境；选定后的启动失败明确报错，不静默重试其他解释器或修改系统安全策略。
+
+lyrel 使用独立的配置、凭据、会话、启动日志、临时文件及进程身份。连接、重启、替换和清理只处理 lyrel；不会查找或导入其他产品的数据，也不会按其他产品的 server 名称终止进程。远端 agent hook 的刷新只认 lyrel 程序入口；共享 agent 配置中的其他产品及用户 hook 保留，不因同样使用 `agent-hook` 子命令而被接管。
+
+<a id="reattaching"></a>
+## 重新连接
+
+远程工作区让持久化的价值加倍：无论笔记本电脑是否处于唤醒状态，窗格都会在远程机器上继续运行，而且你还可以从另一台客户端重新连接。
+
+窗口顶部的状态条会显示连接当前的状态——*正在连接*、*正在重新连接（第 3 次尝试）*、*已断开连接*或*已被其他人接管*。重新连接会自动进行；如果工作区已被另一台客户端接管，界面会明确显示接管者的名称，而不是争抢控制权。
+
+<a id="deleting-a-profile"></a>
+## 删除配置
+
+删除 SSH 配置时，会移除所有通过该配置连接的本地工作区条目。确认对话框会显示该配置的端点，以及将一并移除的条目数量；该配置的钥匙串凭据也会被删除。受影响的只有本机上的书签——远程机器上的会话会继续运行；使用新配置再次连接该机器后，其工作区会从机器自身的列表重新出现在切换器中。
+
+仍有活动连接或正在建立连接的条目不会立即被移除，而是在连接断开后进入停放状态：它不再自动重新连接，会保留创建它的连接路由名称，而不是退回显示内部 id，并且其切换器条目会提供**移除条目**操作。对应的会话仍在远程机器上运行，等待通过新配置连接。
+
+<a id="keeping-the-server-current"></a>
+## 保持服务器为最新版本
+
+你可能会遇到以下两个对话框：
+
+<AccordionGroup>
+  <Accordion title="更新“devbox”上的 lyrel 服务器？">
+    该机器正在使用一个构建版本提供会话服务，而此客户端无法使用该版本的协议。出现此对话框时，lyrel 已安装了匹配的服务器，但你的会话仍由原先运行的服务器承载。**更新服务器**会替换它，并**结束它托管的所有会话**——包括当前窗口未显示的会话。取消则会让该机器保持原样。
+  </Accordion>
+  <Accordion title="重启“devbox”上的 lyrel 服务器？">
+    此操作会有意产生相同的后果：该机器上由此服务器托管的每个 shell 都会结束。工作区和布局会保留，并在恢复后使用新的 shell。
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  如果多人通过同一远端账户共用 lyrel，这两种操作都会终止该账户对应服务器承载的会话。lyrel 会在执行任一操作之前明确说明后果，请仔细阅读。其他产品的服务器不属于此操作范围。
+</Warning>
+
+<a id="what-a-remote-pane-cannot-do"></a>
+## 远程窗格无法执行的操作
+
+- **派生智能体会话。** 派生命令会针对*本地*智能体运行，因此 lyrel 不提供此操作。
+- **通过文件面板传输超大文件。** 将文件拖到文件树上即可上传；右键点击文件 → **下载**，即可将其复制到本机的下载文件夹中（通过编号避免覆盖，与 [SFTP](/remote/sftp) 相同）。两个方向的传输都受单个控制帧容量限制，约为 63 MB；超过此限制时，面板会提示原因，并引导你使用 SFTP、`scp` 或 `rsync`。
+
+<a id="from-the-cli"></a>
+## 通过 CLI 操作
+
+```bash
+lyrel machine ls              # 本机以及服务器持有的所有连接
+lyrel -m devbox ls            # 将任意命令路由到已连接的机器
+lyrel -m devbox run -- cargo test
+```
+
+`-m` 可以匹配完整的连接键（`me@devbox:22`），也可以只匹配主机名。它使用本地服务器*已经*持有的连接——不会新建连接；如果没有匹配的连接，会明确告知，而不是猜测。请先从切换器建立连接。
+
+[CLI 概览 →](/cli/overview)

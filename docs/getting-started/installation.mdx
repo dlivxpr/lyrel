@@ -1,0 +1,293 @@
+---
+title: "安装"
+description: "macOS、Windows 桌面构建，以及保留的 Linux server／CLI 和源码构建方法。"
+---
+
+lyrel 的独立初版版本为 `0.1.0`，目前尚无实际发布资产。发布资产可在
+[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 查看；以下介绍预期的原生安装包形式与使用方式，不表示这些安装包已发布或已完成签名、公证。安装包尚未提供时，请从源码构建，不要回退下载上游安装包。
+
+桌面端仅支持 macOS、Windows，字体内嵌于二进制文件中，无需预先安装运行时。
+Linux 不再提供 GUI、AppImage 或桌面 updater；共享核心、server、CLI、SSH 远程开发与 Windows WSL 仍受支持。
+
+lyrel 使用独立桌面身份 `io.github.dlivxpr.lyrel`，Windows 安装器 AppId 为
+`{E57DD2B4-E65D-4F13-9E2E-8D929125780A}`。安装、更新、系统入口及卸载只面向
+lyrel，不接管其他产品的安装，也不自动读取、迁移或清理其他产品的数据。
+
+<Tabs>
+  <Tab title="macOS">
+    安装包发布后，下载与你的 Mac 匹配的 DMG，并将 **lyrel** 拖入“应用程序”文件夹。
+
+    | Mac | 文件 |
+    |---|---|
+    | Apple 芯片（M1 及更新型号） | `lyrel-<version>-macos-arm64.dmg` |
+
+    macOS 桌面端仅支持 Apple 芯片；不提供 Intel 构建，也不在 Intel Mac 上运行。
+
+    lyrel 目前尚未提供已使用 Developer ID 证书签名并经 Apple 公证的构建，不能保证 Gatekeeper 会直接允许打开。
+
+    <Note>
+      GUI 支持从 macOS 15 起；这项支持承诺不表示已取得各系统的构建、安装、输入或签名／公证证据。macOS 独立原生实机验收门已由用户免除，相应证据缺口记为已接受风险，而非已验证兼容。
+    </Note>
+
+    应用内的“设为默认终端”会将 Unix 可执行文件的 Shell 处理程序及标准
+    `ssh:`、`x-man-page:` 协议处理程序设为 lyrel；不会把这些通用协议更名。
+    只有主动选择此操作才会更改关联。通知也使用同一 bundle identity。
+  </Tab>
+
+  <Tab title="Windows">
+    安装包有两种形式，均面向 x86-64（`x86_64`）构建：
+
+    | 文件 | 适用场景 |
+    |---|---|
+    | `lyrel-<version>-windows-x86_64-setup.exe` | 需要常规安装，包含“开始”菜单入口和卸载程序。 |
+    | `lyrel-<version>-windows-x86_64.zip` | 需要便携使用——解压到任意位置并运行 `lyrel-app.exe`。 |
+
+    lyrel 不提供原生 ARM64 构建；x86-64 包可经模拟在 ARM64 Windows 上安装运行。
+
+    “同一份安装”仅指当前 lyrel 安装，不包括其他产品或副本。默认安装目录为
+    `lyrel`，开始菜单和桌面快捷方式均指向 `lyrel-app.exe`，并使用
+    `io.github.dlivxpr.lyrel` 作为 AUMID，供任务栏和通知识别应用。
+
+    安装程序提供一项默认关闭的可选安装任务：**将“在 lyrel 中打开”添加到文件夹右键菜单**。它会在 `HKCU` 下写入 shell 操作项，因此只影响你自己的 Windows 账户；卸载程序始终会移除这些操作项。
+
+    便携版也可以自行添加或移除相同的菜单项：
+
+    ```powershell
+    lyrel-app.exe --register-explorer-menu
+    lyrel-app.exe --unregister-explorer-menu
+    ```
+
+    **便携模式。** 默认情况下，ZIP 版与安装版一样，将设置、会话和回滚内容保存在
+    `%APPDATA%\lyrel` 中。如果希望将这些数据保存在程序旁边——例如放在 U 盘上——请在 `lyrel-app.exe` 旁创建一个名为 `data` 的空文件夹：
+
+    ```text
+    lyrel\
+      lyrel-app.exe
+      lyrel.exe
+      .lyrel-portable
+      data\          <- 配置、会话和回滚内容保存在这里
+    ```
+
+    lyrel 会从下次启动起使用该文件夹；请先退出 lyrel（在托盘菜单中选择**退出并停止服务器**），以便后台服务器也在该位置重新启动。
+    若要迁移现有设置，请将 `%APPDATA%\lyrel` 中的内容复制到 `data`。
+    应用内更新只替换 ZIP 中附带的文件，因此会保留 `data`。
+    同一文件夹中的 `lyrel` 命令会找到相同的数据。配置目录的优先级为
+    `--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携版 `data` > 平台默认目录；
+    Unix 默认使用 `~/.config/lyrel`，Windows 默认使用 `%APPDATA%\lyrel`。
+    `.lyrel-portable` 的内容必须为 `portable-v1`，它与安装版的
+    `.lyrel-inno-install`（`inno-v1`）互斥；请勿互相复制或移除。
+    便携数据不等于“无系统痕迹”：CLI 自动安装可以写入用户 PATH，通知可以创建
+    lyrel 的开始菜单快捷方式；若不需要 CLI 安装，可在设置中关闭。
+    请参阅 [config.json](/reference/configuration#where-the-directory-comes-from)。
+
+    无需预先安装其他组件。可执行文件静态链接 Visual C++
+    运行时，因此不需要预先安装“Visual C++ 2015–2022 Redistributable”。
+
+    <Note>
+      完整 Windows 分发附带 Linux musl `lyrel-server`，位于
+      `server/lyrel-server-linux-x86_64-musl`，供 WSL 离线使用。完整 stable 手动打包在缺少该真实资产时直接失败，不产出缺 WSL server 的分发包。非完整开发副本的 WSL 连接仍会如实报告缺少随包 server，不回退下载。请参阅[远程工作区](/remote/workspaces)。
+    </Note>
+  </Tab>
+
+</Tabs>
+
+<a id="the-lyrel-command"></a>
+## `lyrel` 命令
+
+每个安装包都会在应用旁附带 `lyrel` CLI，应用会在首次启动时将其加入
+PATH。这样，脚本或在其他终端中运行的编程智能体就能打开窗格并读取其中的内容。
+
+- **在 macOS 上**，在可写候选目录中创建符号链接，优先使用 PATH 已涵盖的目录；候选包括
+  `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/bin` 和 `~/.cargo/bin`。
+- **在 Windows 上**，应用目录会追加到用户 PATH 中，Inno 卸载程序会移除该目录条目。ZIP 版没有卸载钩子，需按下文手动移除。
+
+你自行安装的 `lyrel`（例如通过 `cargo install` 构建的版本或包管理器安装的副本）绝不会被替换。若要完全关闭此功能，请取消勾选**设置 → 集成 → 将 lyrel 命令安装到 PATH**。
+
+<Tip>
+  在 lyrel 窗格内，无论 PATH 如何设置，CLI 都能正常工作，因为窗格会继承应用的环境。
+  Linux 的 CLI 与 server 独立构建和放置；裸 `lyrel`／`lyrel <目录>` 不启动 Linux GUI，使用 `lyrel --help` 查看 headless 子命令。
+</Tip>
+
+<a id="updating"></a>
+## 更新
+
+lyrel 仅提供 stable 更新。应用启动时及之后每六小时检查一次；也可以在 **Settings →
+About → Check now** 手动检查，然后选择 **Update and relaunch**。发布包在后台下载并
+校验，安装需要用户确认。**Settings → General → Updates** 保留自动检查、后台下载
+和代理设置，不再提供更新渠道切换。
+
+筛选、校验及各平台安装限制见[更新说明](/reference/updates)。
+
+lyrel 独立初版为 `0.1.0`，目前尚无实际发布资产；缺少匹配包时不会回退下载上游安装包。
+
+<a id="building-from-source"></a>
+## 从源码构建
+
+Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列排除根桌面包的命令，直接构建根包会明确拒绝。
+
+GUI 统一通过正式 `gpui-kit 0.7.3` 使用 `gpui-pre 0.3.9` 配套链，GUI HTTP 使用 `gpui-pre-reqwest-client 0.3.9`；不启用 `gpui-fast`。具体传递包身份以 `Cargo.lock` 为准，registry 包内部的上游快照不等于应用仍维护旧 fork。
+
+GUI 与 CLI 的终端解析统一采用正式 `rio-vt =0.5.28`（不启用默认 features），保留 lyrel 自有 daemon、PTY 和渲染。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。依赖包内部的上游快照和多版本副本仍以正式解析结果为准。
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    git clone https://github.com/dlivxpr/lyrel
+    cd lyrel
+    cargo build --release --locked
+    ```
+  </Tab>
+  <Tab title="Windows">
+    Windows 的 GUI、server、CLI 与测试构建共用已准备的 ConPTY（见 `assets/windows/conpty/README.md`）。
+    首次构建或准备目录缺失／损坏时运行 `pwsh scripts/prepare-conpty.ps1`，
+    `LYREL_CONPTY_DIR` 可复用共享准备目录。之后 ConPTY 的构建消费不再联网；
+    Cargo 的 Rust 依赖仍需按锁文件获取或事先缓存。
+
+    ```powershell
+    git clone https://github.com/dlivxpr/lyrel
+    cd lyrel
+    pwsh scripts/prepare-conpty.ps1
+    cargo build --release --locked
+    ```
+
+    若启用的 TLS 依赖需要构建 `aws-lc-sys`，须提供 NASM；在 x86_64 MSVC 上也可于本次构建终端设置 `$env:AWS_LC_SYS_PREBUILT_NASM = '1'`，使用该正式 crate 随包提供的预构建汇编对象。此选项不禁用汇编、不修改下载源码，也不应通过覆盖 `RUSTFLAGS` 丢失项目的静态 CRT 参数。
+
+    `cargo run` 等构建产物不会写入或改写开始菜单快捷方式。任务栏按钮通常使用 exe
+    内嵌图标；唯一例外是已存在指向 lyrel 的快捷方式且其目标仍然存在时，开发窗口
+    会借用该安装版身份分组。若快捷方式目标已删除，开发构建会退回 exe 自身图标，
+    而不会清理或修复该快捷方式——失效入口需按[卸载说明](#uninstalling)手动移除。
+  </Tab>
+  <Tab title="Linux（server／CLI）">
+    仅构建无 GUI 的 core、server 与 CLI，不需要 X11／Wayland／桌面字体开发库。
+    以下完整 feature 验证包含既有 Unix GSSAPI，需要 MIT Kerberos 开发包；GSSAPI 仍按平台与 feature 启用，不表示 Windows 新增该认证能力。
+
+    ```bash
+    sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
+    LIBGSSAPI_IMPL=mit cargo build --release --locked --workspace --exclude lyrel --all-features
+    LIBGSSAPI_IMPL=mit cargo test --locked --workspace --exclude lyrel --all-features
+    ```
+
+    不需要可选客户端功能时，可省略 `--all-features`；独立静态 server 使用下文的 musl 构建入口。
+  </Tab>
+</Tabs>
+
+<Warning>
+  从源码构建的版本不会自行更新，也不会替换已安装副本的服务器。如果同时运行两者，请参阅
+  [故障排查](/reference/troubleshooting)。
+</Warning>
+
+## 在专用工作树中手动打包
+
+`.github-disable/` 中的脚本可手动执行，但工作流仍保持禁用。这些脚本会删除当前
+工作目录的 `dist/`，因此仅可在专用、可丢弃的打包工作树根目录运行，不能在含用户产物的
+工作树运行。以下命令是验证入口，不表示
+已经在各系统执行；不得为打包验收自行安装、注册应用或配置签名凭据。
+
+所有桌面包都使用同版本 GUI、CLI 和 updater。`--target` 不可省略，因为脚本读取
+`target/<target>/release/`。脚本直接读取根 `Cargo.toml` 的 stable 版本，首次为 `0.1.0`；
+禁用的 release workflow 还要求标签精确等于 `v<version>`。完整分发不要设置跳过 updater 的
+`LYREL_PACKAGE_*` 开关，不以旧版本或历史发布元数据推断新版本。
+
+### Windows
+
+需要 MSVC 工具链与 Inno Setup 6（本机已提供 6.7.3）。`ISCC.exe` 优先从 PATH
+发现，否则使用 `Program Files (x86)/Inno Setup 6/ISCC.exe`。在打包前，将真实
+x86_64 的 Linux musl server 放在 `bundled-server/` 中；不要用占位文件冒充 WSL 资源。
+
+```powershell
+pwsh scripts/prepare-conpty.ps1
+cargo build --locked --release --target x86_64-pc-windows-msvc --package lyrel --package lyrel-cli --features updater
+& ./.github-disable/scripts/bundle-windows.ps1 x86_64-pc-windows-msvc x86_64
+& ./.github-disable/scripts/verify-windows-package.ps1 x86_64
+```
+
+脚本输出安装器和 ZIP；ZIP 根目录直接
+包含 `lyrel-app.exe`、`lyrel.exe`、`lyrel-updater.exe`、便携标记、`completions/`、
+ConPTY 配对文件与许可，及必须存在的 `server/`；Inno 使用相同 payload，替换为安装标记。
+包检查不执行安装器，也不证明真实系统注册或卸载已经成功。Windows 包仍为未签名。
+
+打包脚本消费的 ConPTY 与开发构建相同，来自 `scripts/prepare-conpty.ps1`
+准备的目录（`LYREL_CONPTY_DIR` 或仓库默认 `.conpty/`），不是仓库内副本；
+构建、打包及 daemon 首次创建 pane 前均核验固定文件摘要；缺失、损坏、架构或版本不匹配时明确停止。恢复旁加载文件后需重启 daemon。
+
+### macOS
+
+在 Apple 芯片的 macOS 工具链中执行：
+
+```bash
+cargo build --locked --release --target aarch64-apple-darwin --package lyrel --package lyrel-cli --features updater
+bash .github-disable/scripts/bundle-macos.sh aarch64-apple-darwin arm64
+```
+
+DMG 和更新 ZIP 都承载 `lyrel.app`。`Contents/MacOS/` 内包含 `lyrel-app`、`lyrel`、
+`lyrel-updater`；`Contents/Resources/` 内包含 `lyrel.icns` 和 `completions/`。
+图标从已批准图形的 `assets/lyrel.icns` 派生资源复制而来，生产脚本与打包脚本使用同一文件名。
+脚本会进行架构与签名检查；无证书时采用 ad-hoc 签名，不等于 Developer ID 签名或
+Apple 公证。公开分发所需的签名／公证是独立前提，本任务不授权配置外部凭据。
+
+
+### server 资产及 SHA-256 清单
+
+各平台正式资产使用统一版本／标签，保留以下精确命名。桌面标签 `<arch>` 使用 `arm64`，
+server 标签使用 `aarch64`，两者不可互换；Linux 只分发 headless server，不提供桌面包。
+Windows 桌面与 server 均只发布 x86-64。
+
+| 平台 | 桌面包 | server 资产 |
+| --- | --- | --- |
+| macOS | `lyrel-0.1.0-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
+| Windows | `lyrel-0.1.0-windows-x86_64.zip`、对应 `-setup.exe` | `lyrel-server-windows-x86_64.zip` |
+| Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
+
+macOS／Windows server 在对应工具链中使用 `cargo build --release --locked -p lyrel-server --target <target>`；
+Linux musl server 按保留的 release 材料使用 Zig 与 cargo-zigbuild：
+
+```bash
+cargo zigbuild --release --locked -p lyrel-server --target x86_64-unknown-linux-musl
+bash .github-disable/scripts/assert-static.sh target/x86_64-unknown-linux-musl/release/lyrel-server
+```
+Windows 包内 WSL server 固定为 x86_64：构建 `x86_64-unknown-linux-musl` 后，将实际二进制复制并命名为
+`bundled-server/lyrel-server-linux-x86_64-musl`，再打 Windows 包；不能放占位文件，也不能重命名其他架构的产物。
+macOS server 沿用 ad-hoc 签名和 `assert-macho.sh` 检查，Windows server 使用
+`assert-no-vcruntime.ps1` 检查；目标和参数以 `.github-disable/workflows/release.yml` 为准。
+
+Windows server 资产不是裸 exe：先准备 x64 的官方 ConPTY，再把构建的 `lyrel-server.exe`、x64 `conpty.dll`／`OpenConsole.exe`、`LICENSE-ConPTY.txt` 和项目 `LICENSE.txt` 以扁平布局打入上述 ZIP。禁用的 `server-windows` workflow 与开发构建共用 `scripts/prepare-conpty.ps1`，打包前重新核对固定 SHA-256；整个 ZIP 纳入同一份 `checksums.txt`。不要仅重命名 exe 为 ZIP，也不要省略配套文件。
+
+将各平台的正式桌面及 server 资产汇总到同一目录后，使用与禁用 workflow 相同的入口：
+
+```bash
+bash .github-disable/scripts/generate-checksums.sh <asset-dir>
+```
+
+该入口需要 Bash 与 GNU coreutils，生成并复核按裸文件名排序的 SHA-256 `checksums.txt`，
+排除打包暂存目录。校验和必须与实际发布字节一致，不能用 fixture 清单代替。
+上述命令仅构建、打包和本地验证，不启用 Actions，不创建 tag／release，也不执行安装。
+
+### 品牌切换后的维护与验收
+
+修改安装或更新链路时，同步核对生产者与消费者：桌面包中的 GUI／CLI／updater、随包 server、安装标记、平台身份及 checksum 裸文件名必须一致。应用版本与 IPC 协议分别演进；control／pane 的当前编号以 `crates/lyrel-core/src/daemon/control.rs` 与 `protocol.rs` 为准，不能为了应用版本重新编号。
+
+本地冒烟使用 Cargo build tree、显式临时 `LYREL_CONFIG_DIR` 与隔离的用户目录；不要启动真实安装器、改默认终端关联、刷新外部 agent 配置，或把其他产品的进程当作清理目标。关闭 GUI 后验证会话仍可由 CLI 访问，清理只针对本次创建的进程与临时目录。
+
+项目交付文件中的产品标识、资源路径与当前文档统一使用 lyrel；保留适用的原始版权、许可证与第三方来源，不将上游成果改称本项目原创。隔离 fixture 使用中性的外部产品标识，继续验证其他产品的数据和进程不受影响。
+
+验收记录必须注明实际构建基线、命令、平台、退出结果、真实 GUI 截图与清理边界，分别列出确定性 fixture、真实进程链路和外部前提；Windows 本机观察不代表 Unix、签名、公证、远端部署或在线更新已通过。当前智能体能力与未验收边界见[会话契约](/agents/sessions#acceptance-status)。
+
+<a id="uninstalling"></a>
+## 卸载
+
+<AccordionGroup>
+  <Accordion title="macOS">
+    退出 lyrel（在托盘菜单中选择**退出并停止服务器**，以便同时停止后台服务器），然后将应用拖入废纸篓。
+    如已安装 CLI，请先确认 PATH 中 `lyrel` 符号链接指向本次移除的应用，再只移除该链接；不要删除其他安装提供的同名命令。
+    设置保存在 `~/.config/lyrel` 中，不会自动删除。默认终端与协议关联如需恢复，请通过系统设置明确选择目标应用。
+  </Accordion>
+  <Accordion title="Windows">
+    使用**添加或删除程序**卸载 lyrel；其独立 AppId 不会卸载其他产品。卸载程序会移除当前用户 PATH 中该安装目录的条目，以及 lyrel 自有的文件夹右键菜单注册表项；不会删除 `%APPDATA%\lyrel` 设置。
+    ZIP 版没有卸载程序：如曾主动添加 Explorer 菜单，请在删除程序前运行 `lyrel-app.exe --unregister-explorer-menu`；退出并停止 lyrel 服务器后，删除解压目录。按需从用户 PATH 移除该 ZIP 目录，并只移除指向该副本的 `lyrel.lnk` 开始菜单快捷方式。
+    便携 `data` 位于解压目录内，删除目录也会删除其中数据；默认 `%APPDATA%\lyrel` 不受影响。不要移除其他产品或副本的条目。
+  </Accordion>
+  <Accordion title="Linux server／CLI">
+    先停止本次安装的独立 lyrel server，再移除对应的 server／CLI 文件；不要停止其他产品或副本。
+    `~/.config/lyrel` 不会自动删除。旧 Linux GUI 的历史文件不由本次退役扫描、迁移或清理。
+  </Accordion>
+</AccordionGroup>

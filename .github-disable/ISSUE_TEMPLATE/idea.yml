@@ -1,0 +1,35 @@
+name: Idea
+description: Suggest an improvement or a new capability
+labels: ["enhancement"]
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues and this isn't already proposed.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem?
+      description: >
+        What you were trying to do, and where lyrel got in the way. Leave the
+        solution for the next box — the problem is the part we can't guess.
+    validations:
+      required: true
+
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: How should it behave?
+      description: The shape you have in mind, if you have one.
+
+  - type: textarea
+    id: prior_art
+    attributes:
+      label: Prior art and workarounds
+      description: >
+        How other terminals handle it, and what you're doing today to work
+        around it.

@@ -1,0 +1,655 @@
+//! Reflows a pane's grid without stranding the prompt the shell is about to
+//! redraw (#654), and re-anchors rows the way conhost does on a ConPTY pane
+//! (#415).
+//!
+//! A shell sitting at its prompt answers a `SIGWINCH` by redrawing the prompt
+//! relative to where it left the cursor: zsh and bash move up as many rows as
+//! the prompt's last line and the command being edited took at the width they
+//! last drew at, return to column 0, and clear everything below. A column
+//! change reflows the grid underneath that arithmetic. A prompt whose right
+//! side sits near the edge — an `RPROMPT` clock, a right-aligned segment —
+//! wraps onto a second row when the pane narrows by two columns or more, the
+//! grid keeps the cursor on the row holding the wrapped tail, and the redraw
+//! starts there: the head of the old prompt stays behind, still marked as
+//! wrapping into the new one. Every such step of a window drag leaves another,
+//! and a later widening joins them into one long line of prompt fragments
+//! across the pane — the shell and the grid agreed on the width the whole time.
+//!
+//! So a reflow at a prompt hands the prompt back first, the way kitty does for
+//! a shell with integration: the cursor's line, from its first row down, is
+//! the shell's to repaint and is cleared, and after the reflow the cursor is
+//! put back as many rows below that line's start as it was before — the count
+//! the shell is about to move up by. A second reflow that lands before the
+//! shell has redrawn (a drag outrunning the prompt) finds those rows blank and
+//! unwrapped, so it leaves them where they are and the count still holds.
+//!
+//! Only the cursor's own line is handed back. A multi-line prompt's upper
+//! lines end in a newline, not a wrap, so they reflow like any other output;
+//! they are also the rows the shell redraws without being told where they are.
+
+use rio_vt::ansi::ClearMode;
+use rio_vt::crosswords::Crosswords;
+use rio_vt::crosswords::Mode;
+use rio_vt::crosswords::grid::Dimensions as _;
+use rio_vt::crosswords::pos::{Column, Line, Pos};
+use rio_vt::event::EventListener;
+use rio_vt::performer::handler::Handler as _;
+
+use super::size::{MIN_COLUMNS, TermSize};
+
+/// Resizes `term` to `size`. `shell_redraws` says the pane is at a shell
+/// prompt that will repaint itself for the new width — the caller's shell
+/// integration state; `conpty` says a conhost stands behind the pty, which
+/// repaints nothing and keeps addressing the buffer it re-anchored — see
+/// [`resize_conpty`]. Anything else resizes exactly as `Crosswords::resize`.
+pub(super) fn resize<T: EventListener>(
+    term: &mut Crosswords<T>,
+    size: TermSize,
+    shell_redraws: bool,
+    conpty: bool,
+) {
+    // Rows alone reflow nothing, and the alternate screen is a full-screen
+    // program's, which repaints the whole of it.
+    let reflows = size.cols.max(MIN_COLUMNS) != term.columns();
+    if conpty {
+        // A conhost repaint re-addresses the prompt itself, so the prompt
+        // handback would only move the cursor off the row conhost named.
+        resize_conpty(term, size);
+        return;
+    }
+    if !shell_redraws || !reflows || term.mode().contains(Mode::ALT_SCREEN) {
+        term.resize(size);
+        return;
+    }
+
+    let cursor = term.grid.cursor.pos;
+    // Stops at the top of the screen: the shell's cursor-up stops there too,
+    // so rows already in scrollback are not part of what it will move over.
+    let start = wrapped_line_start(term, cursor.row);
+    let rows_up = (cursor.row.0 - start.0) as usize;
+
+    term.grid.cursor.pos = Pos::new(start, Column(0));
+    term.grid.cursor.should_wrap = false;
+    term.clear_screen(ClearMode::Below);
+    term.resize(size);
+
+    // Linefeeds rather than a jump: a line that sat low on the screen has to
+    // scroll the output above it up, as the shell's own layout would have.
+    for _ in 0..rows_up {
+        term.linefeed();
+    }
+    let last = Column(term.columns() - 1);
+    term.grid.cursor.pos.col = cursor.col.min(last);
+}
+
+/// Resize with ConPTY's row semantics, compensated on top of the public grid
+/// API (#415).
+///
+/// Windows ConPTY emits no repaint after a resize; conhost silently
+/// re-anchors its viewport and keeps painting with absolute cursor addresses
+/// computed against that layout. A grid that resizes any other way ends up
+/// with its rows offset from every subsequent paint. Conhost's model, as
+/// measured against a live ConPTY:
+///
+/// - Growing the screen adds blank rows at the bottom; nothing is restored
+///   from scrollback and the cursor row does not move.
+/// - Shrinking scrolls the *last written* row (not just the cursor row —
+///   e.g. PSReadLine keeps a continuation hint on the row below the prompt)
+///   to the new bottom, pushing the rows above out into history.
+///
+/// `Crosswords::resize` pulls history during growth and anchors shrinking to
+/// the cursor. Keep the row and column steps separate: content below the
+/// cursor must be scrolled into view before Rio can discard it, and cursor
+/// anchors must be restored before any column reflow.
+fn resize_conpty<T: EventListener>(term: &mut Crosswords<T>, size: TermSize) {
+    let old_rows = term.grid.screen_lines();
+    let new_rows = size.rows.max(super::size::MIN_SCREEN_LINES);
+    // Column-only changes reflow identically under both models.
+    if new_rows == old_rows || term.mode().contains(Mode::ALT_SCREEN) {
+        term.resize(size);
+        return;
+    }
+
+    let old_cols = term.columns();
+    let history_before = term.grid.history_size();
+    let display_offset = term.grid.display_offset();
+    let cursor_row = term.grid.cursor.pos.row.0 as usize;
+    let saved_row = term.grid.saved_cursor.pos.row;
+    let extra = if new_rows < old_rows {
+        let last_written = (0..old_rows)
+            .rev()
+            .find(|&line| !term.grid[Line(line as i32)].is_clear())
+            .unwrap_or(0)
+            .max(cursor_row);
+        let vanilla = (cursor_row + 1).saturating_sub(new_rows);
+        let by_content = (last_written + 1).saturating_sub(new_rows);
+        vanilla.max(by_content.min(cursor_row)) - vanilla
+    } else {
+        0
+    };
+    if extra > 0 {
+        term.grid
+            .scroll_up(&(Line(0)..Line(old_rows as i32)), extra);
+    }
+
+    term.resize(TermSize::new(old_cols, new_rows));
+
+    if new_rows > old_rows {
+        let pulled = history_before.min(new_rows - old_rows);
+        if pulled > 0 {
+            term.grid
+                .scroll_up(&(Line(0)..Line(new_rows as i32)), pulled);
+        }
+        term.grid.cursor.pos.row = Line(cursor_row as i32);
+        term.grid.saved_cursor.pos.row = saved_row;
+        term.grid
+            .scroll_display(rio_vt::crosswords::grid::Scroll::Bottom);
+        term.grid
+            .scroll_display(rio_vt::crosswords::grid::Scroll::Delta(
+                display_offset.saturating_sub(new_rows - old_rows) as i32,
+            ));
+    } else {
+        term.grid.cursor.pos.row -= extra;
+        let scrolled = (cursor_row + 1).saturating_sub(new_rows) + extra;
+        term.grid.saved_cursor.pos.row = Line(
+            (saved_row.0 as usize)
+                .saturating_sub(scrolled)
+                .min(new_rows - 1) as i32,
+        );
+    }
+    term.resize(size);
+}
+
+/// The two prompt marks the shell brackets its prompt with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptMark {
+    /// OSC 133;A — a fresh prompt is about to be drawn.
+    Opened,
+    /// OSC 133;B — the prompt is drawn and input begins here.
+    Ready,
+}
+
+impl PromptMark {
+    /// Reads an OSC payload (`133;A`, `133;B`, …).
+    pub fn parse(payload: &[u8]) -> Option<Self> {
+        let mark = payload.strip_prefix(b"133;")?;
+        let (&kind, rest) = mark.split_first()?;
+        if !(rest.is_empty() || rest.first() == Some(&b';')) {
+            return None;
+        }
+        match kind {
+            b'A' => Some(Self::Opened),
+            b'B' => Some(Self::Ready),
+            _ => None,
+        }
+    }
+}
+
+/// Puts the line break back between output that did not end in a newline and
+/// the prompt after it.
+///
+/// zsh's `PROMPT_SP` moves such a prompt onto a line of its own by writing
+/// the `%` end-of-line mark and then padding it with spaces until the cursor
+/// *wraps*. To the grid that is one wrapped line: `printf xyz` and the prompt
+/// under it read as a single line of text, so the reflow above took the
+/// output for the prompt's own first row and erased it on the next resize,
+/// and widening the pane joined the two onto one row.
+///
+/// The marks say where that happened. `A` comes from precmd, before
+/// `PROMPT_SP`: a cursor off column 0 there is output left dangling. By `B`
+/// the prompt is drawn, and if the row that output ended on is now padding
+/// all the way to its last column and wraps into the rows below, that wrap is
+/// the padding's, not the text's — so it becomes a hard break. A prompt that
+/// simply carried on from the output (bash has no `PROMPT_SP`) leaves its own
+/// text on that row rather than blanks, and is left alone.
+#[derive(Default)]
+pub struct PromptBreak {
+    /// Where `A` found a dangling line: how many rows into its wrapped line
+    /// the cursor was, the column, and the character it had just written —
+    /// the last to recognize the row by again at `B`, which the prompt may
+    /// have scrolled.
+    dangling: Option<(usize, Column, char)>,
+}
+
+impl PromptBreak {
+    pub fn apply<T: EventListener>(&mut self, term: &mut Crosswords<T>, mark: PromptMark) {
+        match mark {
+            PromptMark::Opened => {
+                let cursor = term.grid.cursor.pos;
+                // A full row leaves the cursor parked on its last cell: the
+                // text ends there, one column short of where it stands.
+                let end = match term.grid.cursor.should_wrap {
+                    true => cursor.col + 1,
+                    false => cursor.col,
+                };
+                self.dangling = (end.0 > 0).then(|| {
+                    let into = (cursor.row.0 - wrapped_line_start(term, cursor.row).0) as usize;
+                    let last = term.grid[cursor.row][end - 1].c();
+                    (into, end, last)
+                });
+            }
+            PromptMark::Ready => {
+                let Some((into, end, last)) = self.dangling.take() else {
+                    return;
+                };
+                let cursor = term.grid.cursor.pos.row;
+                let row = wrapped_line_start(term, cursor) + into;
+                if row >= cursor {
+                    return;
+                }
+                let cols = term.columns();
+                let grid = &term.grid;
+                let padded = end.0 < cols
+                    && grid[row][end - 1].c() == last
+                    && (end.0 + 1..cols)
+                        .all(|col| matches!(grid[row][Column(col)].c(), ' ' | '\0'))
+                    && grid[row][Column(cols - 1)].wrapline();
+                if padded {
+                    let cell = &mut term.grid[row][Column(cols - 1)];
+                    cell.set_wrapline(false);
+                }
+            }
+        }
+    }
+}
+
+/// The first row of the wrapped line `line` is part of, stopping at the top of
+/// the screen as the shell's own cursor-up does.
+fn wrapped_line_start<T: EventListener>(term: &Crosswords<T>, line: Line) -> Line {
+    let last = Column(term.columns() - 1);
+    let mut start = line;
+    while start > Line(0) && term.grid[Line(start.0 - 1)][last].wrapline() {
+        start -= 1;
+    }
+    start
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rio_vt::ansi::CursorShape;
+    use rio_vt::event::{VoidListener, WindowId};
+    use rio_vt::performer::handler::Processor;
+
+    const PRIOR: &[u8] = b"echo hi\r\nhi\r\n";
+    const CLOCK: &str = "16:46:33";
+
+    fn pane(cols: usize) -> (Crosswords<VoidListener>, Processor) {
+        pane_sized(cols, 12)
+    }
+
+    fn pane_sized(cols: usize, rows: usize) -> (Crosswords<VoidListener>, Processor) {
+        let mut term = Crosswords::new(
+            TermSize::new(cols, rows),
+            CursorShape::Block,
+            VoidListener,
+            WindowId::from(0),
+            0,
+            10_000,
+        );
+        let mut parser = Processor::default();
+        parser.advance(&mut term, PRIOR);
+        (term, parser)
+    }
+
+    /// What zsh 5.9 writes on `SIGWINCH` for `PROMPT='[~] '` with an
+    /// `RPROMPT` clock, as captured off a real pty: up the rows it last drew
+    /// above the cursor, back to column 0, clear below, and lay the prompt out
+    /// for `cols` — the clock right-aligned one column short of the edge, or
+    /// dropped when a long command line leaves it no room.
+    fn zsh_redraw(cols: usize, rows_up: usize, buffer: &str) -> Vec<u8> {
+        let mut out = "\x1b[A".repeat(rows_up);
+        out.push_str("\r\r\x1b[0m\x1b[J[~] ");
+        if buffer.is_empty() {
+            out.push_str(&format!(
+                "\x1b[K\x1b[{}C{CLOCK}\x1b[{}D",
+                cols - 13,
+                cols - 5
+            ));
+        } else {
+            out.push_str(buffer);
+            out.push_str("\x1b[K");
+        }
+        out.into_bytes()
+    }
+
+    /// Every non-blank row, scrollback included, trailing blanks trimmed.
+    fn text(term: &Crosswords<VoidListener>) -> Vec<String> {
+        let top = -(term.grid.history_size() as i32);
+        (top..term.grid.screen_lines() as i32)
+            .map(|line| {
+                term.bounds_to_string(
+                    Pos::new(Line(line), Column(0)),
+                    Pos::new(Line(line), Column(term.columns() - 1)),
+                )
+            })
+            .filter(|row| !row.is_empty())
+            .collect()
+    }
+
+    fn prompt_row(cols: usize) -> String {
+        format!("[~]{}{CLOCK}", " ".repeat(cols - 12))
+    }
+
+    /// The reported pattern: a clock prompt redrawn after each step of a drag
+    /// that narrows the pane by more than one column at a time, then widens it
+    /// back. Measured against the unguarded resize, so the test also proves it
+    /// reproduces the fragments rather than passing on a scenario that never
+    /// produced any.
+    #[test]
+    fn a_prompt_narrowed_under_its_right_side_leaves_no_fragments() {
+        let drag = |guarded: bool| {
+            let (mut term, mut parser) = pane(98);
+            parser.advance(&mut term, &zsh_redraw(98, 0, ""));
+            for cols in [95, 92, 89, 86, 89, 92, 95, 98] {
+                if guarded {
+                    resize(&mut term, TermSize::new(cols, 12), true, false);
+                } else {
+                    term.resize(TermSize::new(cols, 12));
+                }
+                parser.advance(&mut term, &zsh_redraw(cols, 0, ""));
+            }
+            text(&term)
+        };
+
+        let unguarded = drag(false);
+        assert!(
+            unguarded.iter().filter(|row| row.contains("[~]")).count() > 1,
+            "the scenario no longer strands a prompt without the guard: {unguarded:#?}"
+        );
+        assert_eq!(drag(true), ["echo hi", "hi", &prompt_row(98)]);
+    }
+
+    /// A command line long enough to wrap: zsh moves up by the rows it took at
+    /// the old width, which the reflow changes (two rows at 98 columns, three
+    /// at 60). Landing one row off either way strands a row of the old line or
+    /// clears a row of the output above it.
+    #[test]
+    fn a_wrapped_command_line_is_redrawn_in_place() {
+        let buffer = "x".repeat(150);
+        let (mut term, mut parser) = pane(98);
+        parser.advance(&mut term, &zsh_redraw(98, 0, &buffer));
+
+        resize(&mut term, TermSize::new(60, 12), true, false);
+        parser.advance(&mut term, &zsh_redraw(60, 1, &buffer));
+        assert_eq!(
+            text(&term),
+            [
+                "echo hi".to_string(),
+                "hi".to_string(),
+                format!("[~] {}", "x".repeat(56)),
+                "x".repeat(60),
+                "x".repeat(34),
+            ]
+        );
+
+        resize(&mut term, TermSize::new(98, 12), true, false);
+        parser.advance(&mut term, &zsh_redraw(98, 2, &buffer));
+        assert_eq!(
+            text(&term),
+            [
+                "echo hi".to_string(),
+                "hi".to_string(),
+                format!("[~] {}", "x".repeat(94)),
+                "x".repeat(56),
+            ]
+        );
+    }
+
+    /// A drag can outrun the shell: a second reflow lands before the redraw
+    /// for the first, on a line the first one already cleared. The shell still
+    /// moves up by the rows of the layout it drew last, which the cleared rows
+    /// above the cursor still are.
+    #[test]
+    fn back_to_back_reflows_before_the_redraw_strand_nothing() {
+        let (mut term, mut parser) = pane(98);
+        parser.advance(&mut term, &zsh_redraw(98, 0, ""));
+        resize(&mut term, TermSize::new(92, 12), true, false);
+        resize(&mut term, TermSize::new(86, 12), true, false);
+        parser.advance(&mut term, &zsh_redraw(86, 0, ""));
+        assert_eq!(text(&term), ["echo hi", "hi", &prompt_row(86)]);
+
+        let buffer = "x".repeat(150);
+        let (mut term, mut parser) = pane(98);
+        parser.advance(&mut term, &zsh_redraw(98, 0, &buffer));
+        resize(&mut term, TermSize::new(60, 12), true, false);
+        resize(&mut term, TermSize::new(80, 12), true, false);
+        parser.advance(&mut term, &zsh_redraw(80, 1, &buffer));
+        assert_eq!(
+            text(&term),
+            [
+                "echo hi".to_string(),
+                "hi".to_string(),
+                format!("[~] {}", "x".repeat(76)),
+                "x".repeat(74),
+            ]
+        );
+    }
+
+    /// Low on the screen, putting the cursor back below the cleared line means
+    /// scrolling: the shell's layout had those rows, so the output above moves
+    /// up rather than the redraw climbing into it.
+    #[test]
+    fn a_line_at_the_bottom_scrolls_the_output_above_it() {
+        let buffer = "x".repeat(150);
+        let mut term = crate::terminal::remote::test_term(TermSize::new(98, 4));
+        let mut parser = Processor::default();
+        parser.advance(&mut term, b"one\r\ntwo\r\n");
+        parser.advance(&mut term, &zsh_redraw(98, 0, &buffer));
+        assert_eq!(term.grid.cursor.pos.row, Line(3));
+
+        resize(&mut term, TermSize::new(60, 4), true, false);
+        parser.advance(&mut term, &zsh_redraw(60, 1, &buffer));
+        assert_eq!(
+            text(&term),
+            [
+                "one".to_string(),
+                "two".to_string(),
+                format!("[~] {}", "x".repeat(56)),
+                "x".repeat(60),
+                "x".repeat(34),
+            ]
+        );
+    }
+
+    /// Away from a prompt nothing is going to repaint the line, so it reflows
+    /// like any output — as does a prompt whose width did not change.
+    #[test]
+    fn only_a_column_change_at_a_prompt_is_handed_back() {
+        let (mut term, mut parser) = pane(98);
+        parser.advance(&mut term, "y".repeat(150).as_bytes());
+        resize(&mut term, TermSize::new(60, 12), false, false);
+        resize(&mut term, TermSize::new(98, 12), false, false);
+        assert_eq!(
+            text(&term),
+            [
+                "echo hi".to_string(),
+                "hi".to_string(),
+                "y".repeat(98),
+                "y".repeat(52)
+            ]
+        );
+
+        let (mut term, mut parser) = pane(98);
+        parser.advance(&mut term, &zsh_redraw(98, 0, ""));
+        resize(&mut term, TermSize::new(98, 8), true, false);
+        assert_eq!(text(&term), ["echo hi", "hi", &prompt_row(98)]);
+    }
+
+    /// The alternate screen belongs to a full-screen program, which repaints
+    /// all of it; a stale prompt flag must not blank it.
+    #[test]
+    fn the_alternate_screen_is_left_alone() {
+        let (mut term, mut parser) = pane(60);
+        parser.advance(&mut term, b"\x1b[?1049h\x1b[Hstatus bar");
+        resize(&mut term, TermSize::new(98, 12), true, false);
+        assert_eq!(text(&term), ["status bar"]);
+    }
+
+    /// What zsh 5.9 writes between precmd's `A` and the prompt when the last
+    /// output did not end in a newline, as captured off a real pty: the
+    /// standout `%` end-of-line mark, `cols - 1` spaces to force a wrap, then
+    /// back to column 0 and clear below.
+    fn prompt_sp(cols: usize) -> Vec<u8> {
+        let mut out = b"\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m".to_vec();
+        out.extend(std::iter::repeat_n(b' ', cols - 1));
+        out.extend_from_slice(b"\r \r\r\x1b[0m\x1b[27m\x1b[24m\x1b[J");
+        out
+    }
+
+    /// `printf xyz` at a zsh prompt, through a stream the reader has cut at
+    /// the prompt marks, then drawn out at `cols`.
+    fn dangling_output(cols: usize, guarded: bool) -> (Crosswords<VoidListener>, Processor) {
+        let (mut term, mut parser) = pane(cols);
+        let mut marks = PromptBreak::default();
+        parser.advance(&mut term, b"xyz");
+        if guarded {
+            marks.apply(&mut term, PromptMark::Opened);
+        }
+        parser.advance(&mut term, &prompt_sp(cols));
+        parser.advance(&mut term, &zsh_redraw(cols, 0, ""));
+        if guarded {
+            marks.apply(&mut term, PromptMark::Ready);
+        }
+        (term, parser)
+    }
+
+    /// `PROMPT_SP` wraps the dangling output's row into the prompt's. Taken
+    /// for the prompt's own first row, that output was cleared by the next
+    /// resize at the prompt — `printf xyz` simply vanished when a panel
+    /// opened. Measured against the stream without the marks' fix, so the
+    /// test also proves the scenario loses the output there.
+    #[test]
+    fn output_without_a_newline_survives_a_resize_at_the_prompt() {
+        let narrow = |guarded: bool| {
+            let (mut term, mut parser) = dangling_output(98, guarded);
+            resize(&mut term, TermSize::new(60, 12), true, false);
+            parser.advance(&mut term, &zsh_redraw(60, 0, ""));
+            text(&term)
+        };
+        assert!(
+            !narrow(false).iter().any(|row| row.starts_with("xyz")),
+            "the scenario no longer loses the output without the fix"
+        );
+        assert_eq!(narrow(true), ["echo hi", "hi", "xyz%", &prompt_row(60)]);
+    }
+
+    /// Widening joins wrapped rows back together, and the padding's wrap
+    /// joined the output and the prompt onto one row.
+    #[test]
+    fn widening_keeps_dangling_output_off_the_prompt_row() {
+        let (mut term, mut parser) = dangling_output(60, true);
+        resize(&mut term, TermSize::new(98, 12), true, false);
+        parser.advance(&mut term, &zsh_redraw(98, 0, ""));
+        assert_eq!(text(&term), ["echo hi", "hi", "xyz%", &prompt_row(98)]);
+    }
+
+    /// A prompt that carries straight on from the output — bash has no
+    /// `PROMPT_SP` — wraps on its own text, not on padding, and that wrap is
+    /// the shell's to count.
+    #[test]
+    fn a_prompt_continuing_the_output_row_keeps_its_wrap() {
+        let (mut term, mut parser) = pane(20);
+        let mut marks = PromptBreak::default();
+        parser.advance(&mut term, b"xyz");
+        marks.apply(&mut term, PromptMark::Opened);
+        parser.advance(&mut term, b"user@host:~/some/long/path$ ");
+        marks.apply(&mut term, PromptMark::Ready);
+        let row: Line = term.grid.cursor.pos.row - 1;
+        assert!(term.grid[row][Column(19)].wrapline());
+    }
+
+    /// ConPTY growth keeps content and cursor where they are and opens blank
+    /// rows below — nothing comes back out of scrollback (#415). A maximized
+    /// pane drawing anything absolute (PSReadLine's per-keystroke prompt
+    /// repaint) depends on the grid agreeing with conhost about which row is
+    /// which.
+    #[test]
+    fn a_conpty_growth_pulls_nothing_out_of_history() {
+        let mut out = Vec::new();
+        for i in 0..30 {
+            out.extend_from_slice(format!("line {i:02}\r\n").as_bytes());
+        }
+        let (mut term, mut parser) = pane_sized(80, 10);
+        parser.advance(&mut term, &out);
+        let history_before = term.grid.history_size();
+        let cursor_before = term.grid.cursor.pos.row;
+        let top_before =
+            term.bounds_to_string(Pos::new(Line(0), Column(0)), Pos::new(Line(0), Column(7)));
+        resize(&mut term, TermSize::new(80, 20), false, true);
+
+        assert_eq!(
+            term.grid.history_size(),
+            history_before,
+            "a ConPTY growth has no scrollback to restore rows from"
+        );
+        assert_eq!(term.grid.cursor.pos.row, cursor_before);
+        let top = term.bounds_to_string(Pos::new(Line(0), Column(0)), Pos::new(Line(0), Column(7)));
+        assert_eq!(top, top_before, "the rows on screen do not move");
+        assert!(
+            (10..20).all(|line| term.grid[Line(line)].is_clear()),
+            "the growth opens blank rows below"
+        );
+    }
+
+    #[test]
+    fn a_conpty_growth_larger_than_history_preserves_the_visible_rows() {
+        let (mut term, mut parser) = pane_sized(80, 10);
+        for i in 0..12 {
+            parser.advance(&mut term, format!("line {i:02}\r\n").as_bytes());
+        }
+        let history = term.grid.history_size();
+        assert!(history > 0 && history < 30);
+        let before = text(&term);
+        let cursor = term.grid.cursor.pos;
+        resize(&mut term, TermSize::new(80, 40), false, true);
+        assert_eq!(text(&term), before);
+        assert_eq!(term.grid.history_size(), history);
+        assert_eq!(term.grid.cursor.pos, cursor);
+        assert!((10..40).all(|line| term.grid[Line(line)].is_clear()));
+    }
+
+    #[test]
+    fn a_conpty_shrink_restores_the_saved_cursor_to_its_scrolled_content() {
+        let (mut term, mut parser) = pane_sized(80, 10);
+        parser.advance(&mut term, b"\x1b[9;1HPS>\x1b7\x1b[10;1Hhint\x1b[9;4H");
+        resize(&mut term, TermSize::new(80, 6), false, true);
+        parser.advance(&mut term, b"\x1b8@");
+        let row = term.bounds_to_string(Pos::new(Line(4), Column(0)), Pos::new(Line(4), Column(3)));
+        assert_eq!(row, "PS>@", "restoring must address the same content row");
+        assert_eq!(
+            term.bounds_to_string(Pos::new(Line(5), Column(0)), Pos::new(Line(5), Column(3)),),
+            "hint",
+            "the restored cursor must not overwrite the continuation hint"
+        );
+    }
+
+    /// ConPTY shrink scrolls the *last written* row — below the cursor when a
+    /// continuation hint sits there — to the new bottom; a cursor-anchored
+    /// scroll strands it above.
+    #[test]
+    fn a_conpty_shrink_anchors_the_last_written_row() {
+        let (mut term, mut parser) = pane_sized(80, 10);
+        // Paint the prompt and hint at explicit screen addresses so the
+        // fixture does not depend on the cursor left by PRIOR.
+        parser.advance(&mut term, b"\x1b[9;1HPS>\x1b[10;1Hhint\x1b[9;4H");
+        resize(&mut term, TermSize::new(80, 6), false, true);
+        let hint: String = (0..4)
+            .map(|col| term.grid[Line(5)][Column(col)].c())
+            .collect();
+        assert_eq!(hint, "hint", "the last written row lands at the new bottom");
+        let prompt: String = (0..3)
+            .map(|col| term.grid[Line(4)][Column(col)].c())
+            .collect();
+        assert_eq!(prompt, "PS>", "and the row above it is its prompt");
+    }
+
+    #[test]
+    fn prompt_marks_parse() {
+        assert_eq!(PromptMark::parse(b"133;A"), Some(PromptMark::Opened));
+        assert_eq!(PromptMark::parse(b"133;B"), Some(PromptMark::Ready));
+        assert_eq!(PromptMark::parse(b"133;A;k=s"), Some(PromptMark::Opened));
+        assert_eq!(PromptMark::parse(b"133;C"), None);
+        assert_eq!(PromptMark::parse(b"133;AB"), None);
+    }
+}

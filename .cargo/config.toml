@@ -1,0 +1,45 @@
+# `cargo dev` — run the app against a throwaway config directory (`.lyrel-dev/`)
+# instead of the real `~/.config/lyrel/`, so debugging never clobbers your live
+# config/session/history. Extra args pass through, e.g. `cargo dev -- --foo`.
+[alias]
+dev = "run -- --config-dir .lyrel-dev"
+
+# Link the Visual C++ runtime statically on Windows (#902).
+#
+# The default MSVC target links the CRT dynamically, so every shipped binary
+# imports VCRUNTIME140.dll — a file Windows does not carry in the box. On a
+# machine without the "Visual C++ 2015-2022 Redistributable" installed, the
+# loader fails before `main` with "VCRUNTIME140.dll was not found", which is
+# what winget's install validation hit (microsoft/winget-pkgs#415841).
+#
+# The UCRT half (`api-ms-win-crt-*`) is in-box from Windows 10 onwards and is
+# not the problem; VCRUNTIME140 is the one piece that has to come from the
+# redistributable. `+crt-static` pulls both in statically, so the binaries have
+# no CRT imports left at all.
+#
+# It lives here rather than in the release workflow on purpose: CI's Windows
+# `build & test` job then compiles under the same flag as a release, so a
+# dependency that cannot link statically fails a pull request instead of a tag.
+# Keep in mind for future work:
+#   * `cc`-built C/C++ dependencies pick this up through
+#     CARGO_CFG_TARGET_FEATURE and switch to /MT, so the CRT choice stays
+#     consistent across the whole link.
+#   * It only holds while nothing sets the RUSTFLAGS environment variable for
+#     a Windows build — that variable replaces these flags wholesale rather
+#     than adding to them. `.github-disable/scripts/assert-no-vcruntime.ps1` is the
+#     backstop: it fails the build if VCRUNTIME140/MSVCP140 reappear.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# Skip the compact-unwind table on macOS. ld warns "__eh_frame section too
+# large (max 16MB) to encode dwarf unwind offsets in compact unwind table" on
+# every debug link of this workspace — the FDE set of the full workspace
+# exceeds what compact unwind can encode, so the linker falls back to
+# eh_frame for those functions anyway and the warning is pure noise.
+# Rust panic unwinding uses eh_frame directly, so dropping the compact table
+# costs nothing here.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-no_compact_unwind"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-no_compact_unwind"]

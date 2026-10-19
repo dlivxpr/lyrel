@@ -1,0 +1,90 @@
+---
+title: "设置"
+description: "各个分区包含的内容，以及设置文件的工作方式。"
+---
+
+<kbd>⌘ ,</kbd> 可打开设置。顶部的搜索框可匹配设置名称和关键词，通常比回想某项设置位于哪个分区更快。
+
+<a id="the-seven-sections"></a>
+## 七个分区
+
+<CardGroup cols={2}>
+  <Card title="通用" icon="sliders">
+    界面语言、默认终端、启动窗口、窗口大小与布局恢复、托盘图标、标签页的打开位置与排列位置、侧边栏自动分组，以及命令完成通知。
+  </Card>
+  <Card title="外观" icon="palette" href="/customization/themes">
+    主题与颜色、界面与终端字体、光标、背景图片、透明度，以及非活动窗格。
+  </Card>
+  <Card title="终端" icon="terminal">
+    Shell 与起始目录、提示符编辑器、补全与命令历史、回滚缓冲区、滚动、响铃，以及链接和文件的打开方式。
+  </Card>
+  <Card title="键盘与鼠标" icon="keyboard" href="/customization/keybindings">
+    键盘快捷键、将 Option 用作 Meta、鼠标行为、选择，以及剪贴板。
+  </Card>
+  <Card title="SSH" icon="server" href="/remote/ssh">
+    最近使用和已保存的主机，可直接在此打开和编辑各主机，以及主机密钥安全设置。
+  </Card>
+  <Card title="集成" icon="robot" href="/agents/status">
+    每台机器上的 AI 智能体钩子，以及 PATH 中的 lyrel 命令。
+  </Card>
+  <Card title="关于" icon="circle-info" href="/reference/updates">
+    版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
+  </Card>
+</CardGroup>
+
+<a id="search-and-edit"></a>
+## 搜索与编辑
+
+搜索可匹配设置名称、描述、英文别名，以及 `mouse_zoom_modifier` 等配置键。结果按分区分组，可直接编辑；点击分区名称即可打开该分区。按 ⌘F（Ctrl+F）可跳转到搜索框。
+
+使用**仅显示已修改项**可查找与默认值不同的设置。已修改的设置会在名称旁提供**重置**操作；安装和维护操作不提供通用的重置功能。
+
+普通控件会自动保存。文本字段会在按下 Enter 或焦点离开字段时提交有效值。自定义主题的编辑在保存前仅作预览；取消会恢复原始主题。SSH 主机也需要显式保存。
+
+录制已被其他操作使用的键盘快捷键时，会先询问是否接管：**替换**会将快捷键移交给当前操作，**取消**则让两个操作都保持原样。
+离开已编辑的表单时，会提示保存、放弃更改或继续编辑。
+
+<a id="the-settings-file"></a>
+## 设置文件
+
+设置窗口写入的所有设置都保存在同一个文件中：
+
+| | |
+|---|---|
+| macOS / Linux | `~/.config/lyrel/config.json` |
+| Windows | `%APPDATA%\lyrel\config.json` |
+
+唯一的例外是已保存的 SSH 主机，它们保存在同一目录下的 `servers.json` 中，因此可以在机器之间同步 `config.json`，而不必同时携带服务器信息。[servers.json →](/reference/configuration#ssh)
+
+可通过 `--config-dir` 或 `LYREL_CONFIG_DIR` 将整个目录（包括配置、主题和状态）移至其他位置。配置目录的优先级为：`--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携模式的 `data` 目录 > 平台默认目录。
+
+你可以手动编辑此文件；少数选项只能在文件中设置。有关每个配置键、类型及默认值，请参阅[配置参考](/reference/configuration)。
+
+<a id="how-it-handles-mistakes"></a>
+### 如何处理错误
+
+文件以原子方式写入，读取时则采用宽容处理：
+
+- **缺少配置键**时使用默认值，因此只需写入要修改的设置。
+- **数值超出范围**时会被限制在允许的范围内，而不是被拒绝。
+- **无法识别的枚举值**会回退到默认值并记录一条日志，而不会导致整个文件加载失败。
+- **无法解析的文件**不会被覆盖。lyrel 会使用默认值启动，将副本保存在 `config.json.corrupt`，并在日志中说明情况。
+
+<Note>
+  文件开头允许存在 UTF-8 BOM；如果你使用 Windows 编辑器编辑过文件，这一点尤为重要。
+</Note>
+
+<a id="language"></a>
+## 语言
+
+**设置 → 通用 → 语言**提供「跟随系统」「English」「简体中文」三种选择，实际翻译只有英文和简体中文。新配置或未设置 `gui_language` 时默认跟随系统；手动固定的语言优先于系统。
+
+跟随系统读取 Windows 的最高优先界面语言或 macOS 的首选界面语言，不读取 shell 的 `LANG`／`LC_*`。明确 `Hans` 脚本使用简体中文；未指定脚本时，`CN`／`SG` 地区使用简体中文。显式脚本优先于地区，所以 `zh-Hans-TW` 使用简体中文、`zh-Hant-CN` 使用英文。繁体、裸 `zh`、其他语言或读取失败均使用英文。
+
+切换选择后界面立即更新，并保存选择模式；`system` 不会被当时解析出的语言覆盖。下次启动重新读取系统偏好，运行期间不监听系统语言变化。已有明确保存的 `en`／`zh-CN` 保持原选择；旧日语、俄语和其他无效值回退英文，其他配置继续加载，仅加载不强制重写配置文件。
+
+设置、应用菜单、托盘和已注册的 Explorer 菜单标签随语言更新；这不会新增 Explorer 菜单注册。CLI 输出始终保持英文，shell 字符环境、终端文字、编程语言与 LSP 行为不变。
+
+```json
+{ "gui_language": "system" }
+```

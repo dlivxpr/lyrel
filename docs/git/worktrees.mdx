@@ -1,0 +1,128 @@
+---
+title: "工作树"
+description: "每个任务一个检出目录：创建新分支、完成初始化并交给智能体——只需一个对话框。"
+---
+
+在同一个仓库中同时运行两个智能体，会让它们争用工作树。Git 工作树可以解决这个问题，而 lyrel 将整个过程简化为一个对话框：
+创建检出目录、准备运行环境，然后在其中启动智能体。
+
+<a id="creating-one"></a>
+## 创建工作树
+
+**新建工作树标签页…**——可从全局搜索、标签页右键菜单和应用程序菜单中打开——会询问以下内容：
+
+| 字段 | 默认值 |
+|---|---|
+| **工作树名称** | 一个未被任何分支、目录或已移除的工作树使用过的新名称 |
+| **新分支** | 与工作树名称相同，可编辑 |
+| **起始位置** | 远程仓库的默认分支（`origin/main`），使用前先获取更新；没有远程仓库时使用当前分支 |
+| **启动** | 下拉菜单：Shell 或此计算机上的任意智能体——默认选中上次使用的选项 |
+| **任务** | 请求智能体原生交互界面的第一条任务；能力与限制见各产品集成说明 |
+
+每个字段都会预填一个建议值，你可以直接接受，也可以输入内容覆盖它。
+
+<Warning>
+  **Kimi Code 初始任务尚不可用。** 以正式 `@moonshot-ai/kimi-code@2.2.0` 复核，
+  `--prompt` 会进入非交互模式，不能替代原生 TUI。lyrel 尚未验证能向原生 TUI
+  恰好投递一次任务的公开就绪协议；若指定 Kimi 和非空任务，会在创建工作树或窗格前明确报错，
+  不会丢弃任务后启动空会话，也不会向已有窗格注入输入。留空任务仍按原配置启动原生 Kimi。
+  这不是初始任务功能已经完成的声明。
+</Warning>
+
+确认后，lyrel 会创建工作树，复制 `.worktreeinclude` 指定的内容，在其中打开一个标签页，然后先运行 `.lyrel/setup`，再启动智能体。
+[侧边栏](/window/sidebar)会将它归入与父检出目录相同的仓库分组中，并显示其独立分支。
+
+首条任务与工作目录命令按目标 Host 报告的默认 shell 渲染，不按 GUI 所在平台猜测。
+例如 Windows 桌面连接 Linux Host 时使用远端 shell 的参数引用与执行语法，不发送 PowerShell 的 `& omp`／`& hermes`。
+无法取得目标默认 shell 时，在创建工作树前明确报错；任务仍只作为一条原生交互任务提交。
+
+新分支不会跟踪 `origin/main`：首次执行 `git push -u` 时，会推送到与自身同名的分支。
+
+<a id="files-a-checkout-needs-worktreeinclude"></a>
+## 检出目录所需的文件：`.worktreeinclude`
+
+新建的检出目录不包含任何被 Git 忽略的文件——没有 `.env`，也没有本地设置。
+请在仓库根目录的 `.worktreeinclude` 中，使用 gitignore 语法列出所需文件：
+
+```
+.env
+.env.local
+config/local/*.json
+```
+
+只有路径匹配规则**且**被 Git 忽略时，才会复制。
+
+在文件系统支持的情况下（macOS 上的 APFS，Linux 上的 btrfs 和 XFS），复制采用写时复制机制：在任意一方发生更改之前，复制的目录不会额外占用磁盘空间。
+不会创建任何符号链接，因为两个检出目录如果共享同一棵依赖树，一旦锁文件不一致，就会互相干扰。
+在远程计算机上，这些文件会通过连接传输，总大小上限为 64 MB——足以传输配置文件，但不适合传输 `node_modules`。
+
+<a id="making-it-runnable-lyrelsetup"></a>
+## 准备运行环境：`.lyrel/setup`
+
+在 `.lyrel/setup` 提交一个可执行文件——可使用任何语言，但需带有 shebang——每个新工作树都会在第一个标签页中、启动智能体之前运行它。
+在此脚本中安装依赖，而不是复制依赖：
+
+```sh
+#!/bin/sh
+set -e
+pnpm install
+echo "PORT=$LYREL_PORT" > .env.local
+```
+
+| 变量 | 值 |
+|---|---|
+| `LYREL_ROOT_PATH` | 主检出目录 |
+| `LYREL_WORKTREE_PATH` | 新工作树 |
+| `LYREL_WORKTREE_NAME` | 工作树的目录名 |
+| `LYREL_PORT` | 此工作树独占的十个端口中的第一个 |
+
+`LYREL_PORT` 根据工作树路径确定，因此在其中启动的开发服务器不会与其他工作树发生端口冲突，而且同一工作树始终会获得相同的端口。
+初始化脚本与智能体按目标 shell 的条件执行语法串联（POSIX 使用 `&&`）：如果初始化失败，智能体不会启动，错误信息会保留在屏幕上。
+
+脚本是仓库中的代码，因此 lyrel 会在首次运行前请求确认，并在其内容每次发生更改后再次请求确认。
+如果没有初始化脚本，对话框会根据你的锁文件建议一个初始化命令（`pnpm install`、`uv sync` 等）。
+初始化脚本会在 macOS 和 Linux 上运行；Windows 工作树会跳过此步骤。
+
+<a id="where-they-go"></a>
+## 存放位置
+
+工作树位于仓库内部，路径如下：
+
+```
+<repo>/.lyrel/worktrees/<name>
+```
+
+该目录会列入 `.git/info/exclude`，因此不会出现在 `git status` 中，而位于旁边的 `.lyrel/setup` 仍可提交。
+
+<a id="removing-one"></a>
+## 移除工作树
+
+关闭工作树标签页时，会询问是否一并移除工作树：
+
+- **工作树干净**——可选择*移除工作树*或*保留*。
+- **工作树有未提交的更改**——对话框会明确提示，只有选择*丢弃更改并移除*才会移除。
+
+在删除任何内容之前，检出目录的状态——包括未提交的更改和未跟踪的文件——都会保存到 `refs/lyrel/trash/<name>` 下。
+即使丢弃了更改，也能恢复：
+
+```bash
+git checkout refs/lyrel/trash/<name> -- .
+```
+
+只有已合并的分支才会被删除；否则 lyrel 会提示已保留该分支。
+*保留*会将工作树留在磁盘上，之后可通过 `lyrel worktree ls` 找到它。
+
+<a id="from-the-command-line"></a>
+## 从命令行操作
+
+```bash
+lyrel worktree new --agent opencode --task "fix the flaky login test"
+lyrel worktree ls
+lyrel worktree rm quiet-otter
+```
+
+参见 [CLI 参考](/cli/reference#worktree--one-checkout-per-task)。
+
+<Tip>
+  配合[智能体会话](/agents/sessions)使用：为每个智能体分配一个工作树，两个独立的智能体实例就能在同一仓库中工作，而不会互相干扰对方的文件。
+</Tip>

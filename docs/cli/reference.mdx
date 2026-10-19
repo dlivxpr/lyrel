@@ -1,0 +1,457 @@
+---
+title: "命令参考"
+description: "各个命令、对应的标志，以及使用 --json 时输出的 JSON。"
+---
+
+<a id="global-flags"></a>
+## 全局标志
+
+可放在命令行的任意位置，子命令之前或之后均可。
+
+| 标志 | 效果 |
+|---|---|
+| `-m, --machine <MACHINE>` | 通过本地服务器已有的连接，将请求路由到已连接的机器。可匹配完整连接键（`me@devbox:22`）或仅主机名（`devbox`）。仅支持 SSH 连接；如果连接已断开，或存在跳板/代理链，则会拒绝请求并说明原因，而不是重新建立连接。 |
+| `--json` | 在 stdout 上输出一个 JSON 对象，而不是供人阅读的表格。 |
+| `-q, --quiet` | 成功时不输出任何内容。错误仍输出到 stderr。 |
+
+<a id="environment"></a>
+## 环境变量
+
+在每个 lyrel 窗格内设置，并由从该窗格启动的所有程序继承。
+
+| 变量 | 含义 |
+|---|---|
+| `LYREL_PANE` | 当前窗格的 id，例如 `71` 或 `%71`（两种形式均可接受）。作为 `split`、`send`、`capture`、`procs`、`wait`、`pane close` 的默认目标。 |
+| `LYREL_WS` | 当前窗格的工作区 id。作为 `run --keep`、`tab new`、`tab ls`、`ws tree` 的默认工作区。 |
+| `LYREL_CONFIG_DIR` | 服务器的配置目录，CLI 据此找到正确的服务器。无需传入套接字路径。 |
+
+在 lyrel shell 之外，需要指定目标地址的命令会失败，并显示：
+`not inside a lyrel shell — pass an explicit %pane/@tab/workspace`。
+
+<a id="exit-codes"></a>
+## 退出码
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 成功 |
+| `1` | 命令失败；在 stderr 上输出一行信息，以 `lyrel:` 为前缀 |
+| `2` | 用法错误：未知命令、缺少参数或类型错误 |
+| `124` | `lyrel wait` 超时（遵循 `timeout(1)` 的约定） |
+| `141` | 仅限 Unix：读取端已关闭，例如通过管道传给 `head -1` 时，SIGPIPE 会终止进程，与终止 `cat` 的方式完全相同。这不算失败。Windows 没有对应的信号可模拟，因此在相同情况下返回 0。 |
+| *其他* | 仅来自 `lyrel run`，它会原样传递子进程的退出码 |
+
+如果 `run` 无法获知子进程的退出码，它会在 stderr 上输出说明并以 1 退出，
+同时在 JSON 中包含 `"exit_code_known": false`，据此可以区分真正的退出码 1
+和代用值。
+
+<a id="top-level-verbs"></a>
+## 顶层命令
+
+<a id="lyrel-path"></a>
+### `lyrel [PATH]`
+
+不带子命令时操作 GUI。如果已有运行中的窗口，会请求将其置于前台并在 `PATH`
+处打开一个标签页；如果没有已注册的窗口，则启动应用。
+JSON：`{"path","delivered","launched"}`。`delivered` 表示已有窗口接收了请求，
+`launched` 表示启动了新进程。
+
+不带 `PATH` 时只激活应用。不接受 `-m`：此命令操作的是*本机*上的 GUI。
+
+<a id="lyrel-ls"></a>
+### `lyrel ls`
+
+与 `ws ls` 相同。表格：`WORKSPACE NAME TABS PANES ATTACHED`。
+JSON：`{"workspaces":[{"id","name","tabs","panes","attached"}]}`。
+
+`ATTACHED` 表示当前占用该工作区的宿主，即 GUI 窗口或其他客户端；
+无人占用时为 `-`。
+
+<a id="lyrel-run---keep---cwd-dir---ws-workspace----cmd"></a>
+### `lyrel run [--keep] [--cwd DIR] [--ws WORKSPACE] -- CMD...`
+
+创建运行 `CMD` 的窗格，将其输出流式传输到 stdout，等待命令结束，
+并使用其退出码退出。命令必须放在 `--` 之后。
+
+- `--keep` 会在结束后将窗格保留为新标签页。此选项需要工作区，因此必须提供
+  `--ws` 或 `$LYREL_WS`；缺少工作区会报错，不会静默回退。
+- `--cwd` 设置工作目录。`--ws` 还会设置窗格的 `LYREL_WS`。
+- 中断 `run` 可能会留下孤立窗格，参见 `pane ls --all`。
+
+JSON：`{"pane","exit","exit_code_known","kept"}`，在流式输出**之后**打印。
+合并后的输出流不是有效的 JSON，请读取最后一行。
+
+<a id="lyrel-new-path---open"></a>
+### `lyrel new [PATH] [--open]`
+
+创建工作区及其首个标签页和 shell；如果提供了 `PATH`，则在该路径下创建。
+打印工作区 id。JSON：`{"id","pane","opened"}`。
+
+如果本机正在运行 GUI，`--open` 还会打开窗口显示该工作区。
+不带此选项时，工作区仍会出现在切换器中，只是等待打开。
+
+<a id="lyrel-split-pane---v--h---ratio-r"></a>
+### `lyrel split [%PANE] (--v|--h) [--ratio R]`
+
+`pane split` 的别名。拆分 `%PANE`（默认为 `$LYREL_PANE`），
+在相同工作目录下启动 shell。必须且只能指定一个轴：
+`--v`/`--vertical` 将新窗格放在下方，`--h`/`--horizontal` 将其放在右侧。
+`--ratio`（默认为 `0.5`）表示*现有*窗格保留的比例，会被限制在
+`0.05`–`0.95` 范围内；例如 `--ratio 70` 会静默变为 `0.95`，而不是报错。
+打印 `%NN`。JSON：`{"pane"}`。
+
+<a id="lyrel-send-pane-text---enter---key-key"></a>
+### `lyrel send [%PANE] [TEXT] [--enter] [--key KEY]…`
+
+以按键输入的方式向窗格输入 `TEXT`；`--enter` 是 `--key enter` 的简写，
+会在文本末尾追加 CR，没有文本时则单独按下 Enter。因此
+`lyrel send %42 --enter` 会执行窗格 42 中已经输入的内容。
+只有一个参数时，该参数作为文本，窗格取自 `$LYREL_PANE`；
+但单独的 `%42`（或不带前缀的 `42`，即 `pane ls --json` 打印的形式）
+会被视为缺少文本的错误，而不是输入内容，除非 `--key` 指定了要执行的操作。
+只有使用 `%` 标记的写法时，`--enter` 才算作这个按键：
+`lyrel send 83 --enter` 会被拒绝，因为它既可能表示向当前窗格输入 `83`，
+也可能表示在窗格 83 中按下 Enter。错误信息会给出消除歧义的两种写法
+（`send %83 --enter`、`send %PANE 83 --enter`）。
+`%` 后跟数字但仍无法解析的内容（如 `%3x`）属于地址错误，
+绝不会被当作发给当前窗格的文本；而仅以 `%` 开头的文本
+（`%s/foo/bar/`、`%!sort`）会按原样输入，不带标记且不是纯数字的内容
+（`3x`、`+5`）也是如此。要输入形似地址的字符串，请同时指定窗格：
+`lyrel send %42 %3x`。
+
+`--key` 会按下按键，而不是输入字符。当窗格中已经有程序运行时，
+通常需要这种方式：回答只接受方向键的提示、使用 `escape` 关闭 TUI，
+或使用 `C-c` 停止构建。重复指定可形成按键序列，也可与 `TEXT` 组合使用；
+文本会先发送。
+
+| | |
+|---|---|
+| 命名按键 | `enter` `escape` `tab` `backtab` `space` `backspace` `delete` `up` `down` `right` `left` `home` `end` `pageup` `pagedown` |
+| 组合键 | `C-<char>`（Ctrl，例如 `C-c`）、`M-<char>`（Alt） |
+| 别名 | `return` `cr` `esc` `del` `bs` `shift-tab` `pgup` `pgdn` `pgdown` |
+
+按键名称不区分大小写，未知名称属于用法错误（退出码 `2`），
+会在发送任何内容之前报错：向正在运行的窗格发送半截按键序列，比完全不发送更糟。
+大小写有一个例外：Alt 通过前置 ESC 实现，因此其字符会严格按原样发送，
+`M-X` 不等于 `M-x`（Ctrl 不受影响，`C-c` 和 `C-C` 是相同的字节）。
+每次按键都会作为独立事件发送，间隔 200 毫秒，
+使原始模式下的 TUI 将序列识别为按键序列，而不是粘贴内容。
+
+JSON：`{"pane","sent","enter","keys"}`。
+
+<a id="lyrel-capture-pane---plain---scrollback---tail-n"></a>
+### `lyrel capture [%PANE] [--plain] [--scrollback] [--tail N]`
+
+回放窗格内容。有三个相互独立的选项：
+
+**回放范围**：默认使用最新的回滚片段，使用 `--scrollback` 则读取整个环形缓冲区。
+调整大小时，环形缓冲区会分割为多个片段，因此对于从未调整过大小的窗格，
+两者完全相同。
+
+<Warning>
+  默认形式的范围由窗格上次**调整大小**的时刻决定，而调整大小是窗口事件，
+  不是窗格输出中的事件。调整大小会封存包含此前所有输出的片段，并打开新片段；
+  在 Unix 上，shell 会响应 SIGWINCH，重新绘制提示符。
+  因此，刚调整大小后，最新片段可能只有重新绘制的提示符，
+  而命令输出仍在前一个片段中。字节流中没有信息能区分重绘和真正的输出，
+  所以 `capture` 无法替你判断。当读取窗口大小可能发生过变化的窗格时，
+  也就是 GUI 下的任何窗格，请使用 `--scrollback`；
+  如果只想要末尾内容而不是整个环形缓冲区，再加上 `--tail N`。
+</Warning>
+
+**输出形式**：不带 `--plain` 时，输出存储的字节，保留 ANSI 转义序列，
+并按 UTF-8 解码（无效字节会变为 U+FFFD）。使用 `--plain` 时，
+会通过终端网格回放这些字节，并打印它们生成的文本。
+
+**行数**：默认输出所有行，`--tail N` 则只输出最后 `N` 行，
+无需通过管道传给 `tail(1)`（Windows 没有此程序），
+即可回答“上一条命令最终如何结束？”。
+裁剪发生在最后，即 `--plain` 确定如何划分行之后：
+自动折行的逻辑行在网格中仍算一行，因此 `--plain --tail 1`
+会返回完整的最后一行，而不是它最后显示的那一行。
+`N` 必须至少为 1，否则不返回任何内容会被误认为空白窗格。
+守护进程仍会完整回放环形缓冲区；节省的是管道处理，不是网络传输量。
+
+无论采用哪种方式，返回的都是快照而非流：它会收集回放内容，
+等待约 300 毫秒使其稳定，然后返回。再次调用可获取更新的快照。
+
+JSON：`{"pane","text","bytes"}`。`text` 是打印的内容，已应用 `--tail`；
+`bytes` 是回放携带的字节数，在 `--plain` 渲染或 `--tail` 裁剪之前计数。
+它可以帮助区分 `text` 为空的情况：`0` 表示窗格从未输出任何内容；
+字节数非零但没有文本，则表示这些字节未在屏幕上产生可见内容
+（例如窗格已被清屏）。后一种情况还会在 stderr 上打印一行信息，
+因此即使脚本从不读取 JSON，也能看到提示。
+
+<a id="lyrel-procs-pane"></a>
+### `lyrel procs [%PANE]`
+
+显示窗格内的进程树，按深度缩进，前台进程带有 `*` 标记；
+随后第二张表列出这些进程监听的端口。两者均为空时打印
+`nothing running in this pane`。
+
+JSON：`{"procs":[{"pid","name","depth","foreground"}],"ports":[{"port","pid","name","addr"}],"context":{...}}`。
+`addr` 是套接字绑定的地址（`*`、`0.0.0.0`、`127.0.0.1`、
+`[::1]` 或特定网络接口地址）。
+
+`context` 表明进程列表实际覆盖了窗格的多少上下文：
+`{"remote","local_pty","at_prompt","remote_prompt_seen"}`。
+进程树始终属于*本机*，因此对于位于连接本地端的窗格，
+列出的是隧道进程，而不是远端执行的任务。
+对于路由到远程守护进程的窗格，`local_pty` 为 `false`
+（本地没有可遍历的进程）；其他情况下，`remote` 指明主机。
+`at_prompt` 来自窗格自身的 shell 集成，在它发出第一个标记之前不会出现。
+旧版服务器完全不包含 `context`。
+
+<a id="lyrel-agents"></a>
+### `lyrel agents`
+
+列出所有正在运行已识别编程代理的窗格。表格：
+`PANE AGENT STATUS MESSAGE`，状态为 `idle` / `working` / `waiting` /
+`done` 之一。JSON：`{"agents":[...]}`；当代理的状态钩子缺失或过时时，
+还会附带 `"diagnostics"` 数组，这也解释了为何代理可能出现在列表中，
+状态却始终不变。
+
+<a id="lyrel-wait-pane---until-state---changed---timeout-secs---interval-ms"></a>
+### `lyrel wait [%PANE] [--until STATE,…] [--changed] [--timeout SECS] [--interval MS]`
+
+阻塞等待，直到窗格达到指定状态之一。
+
+| 标志 | 默认值 | |
+|---|---|---|
+| `--until` | `waiting,done,exit` | 参见下方状态表 |
+| `--changed` | 关闭 | 仅在窗格于等待开始*之后*进入某个状态时唤醒 |
+| `--timeout` | 无 | N 秒后放弃，以 `124` 退出 |
+| `--interval` | `500` | 轮询间隔，单位为毫秒（50–3,600,000） |
+
+状态来自两个来源。其中四种是由代理的[钩子](/agents/status)
+报告的自身状态；最后三种则描述窗格本身的情况：
+
+| 状态 | 含义 |
+|---|---|
+| `idle` `working` `waiting` `done` | 代理的状态 |
+| `no-agent` | 没有程序在此报告状态：可能是普通 shell，或未安装钩子的代理 |
+| `free` | 窗格的 shell 前台没有正在运行的程序，现在可以接受输入 |
+| `exit` | 窗格本身已不存在。无论是否请求此状态，都会结束所有等待 |
+| `unknown` | 只会报告，不能作为等待目标：完全无法判断是否空闲。参见下文 |
+
+`free` 用于等待**命令**而不是代理，也是唯一会让每次轮询多发一个请求的状态，
+因此只有显式指定它，且请求的代理状态都尚未匹配时，才会检查它。
+与 `--changed` 一起使用时，它表示“某个程序运行后结束”，
+这正是在 `send` 之后通常需要等待的情况；
+如果命令快到在一个 `--interval` 内就完成，就不会被观察到正在运行，
+超时信息会说明这一点。
+
+判断依据有两种。如果窗格的 shell 在本机，依据就是进程树：
+不存在比 shell 更深的进程就表示空闲。对于**远程或 SSH 窗格**，
+进程树描述的是连接的本地端，即只要保持登录就始终忙碌的 `ssh` 本身，
+或者对于路由到远程守护进程的窗格，本地根本没有进程。
+因此，此时由远端 shell 自身的[提示符标记](/reference/shell-integration)决定。
+此类窗格上的提示符标记只可能来自远端，因为连接占用本地 shell 的 pty 时，
+本地 shell 不可能处于提示符状态。在本地窗格中，标记也优先于更深层的进程，
+所以 `free` 的含义是“可以接受输入”，而不严格等于“回到最外层 shell”：
+停在嵌套 shell 提示符处的窗格也算空闲。
+
+如果远端主机没有加载 shell 集成，本地就无法区分空闲的远程提示符和
+正在运行的远程命令。`wait` 会明确报告这种情况：
+`status: unknown`、退出码 `1`，以及指明主机的 `free_unknown` 字符串，
+而不是一直轮询到 `--timeout` 结束。它会先宽限一次轮询，
+以便尚在进行的握手完成；而且只有在 `free` 成为唯一仍可能给出结果的状态时
+才会放弃：`--until done,free` 会继续等待 `done`。
+
+响应包含代理的消息和原生会话 id。JSON 的 `stale` 标志表示
+该结果是否可能属于上一轮。
+
+JSON：`{"pane","status","matched","stale","activity","message","session_id"}`。
+超时时以 `124` 退出，返回相同对象并附带 `"timed_out": true`；
+此时 `matched` 为 `false`，`stale` 仍表示观察期间窗格是否发生过变化，
+如果请求了 `free` 却始终无法确定，`free_unknown` 会包含原因。
+[编排 →](/agents/orchestration)
+
+<a id="lyrel-events"></a>
+### `lyrel events`
+
+持续流式输出服务器事件，直到被中断，每行一个事件，包括窗格退出、
+代理状态变化、工作区控制权抢占和布局增量变更。
+`--json` 会将输出变为 NDJSON。此命令会一直阻塞，
+请配合超时运行，或放在后台运行。
+
+<a id="lyrel-status"></a>
+### `lyrel status`
+
+与 `server status` 相同：显示 pid、运行时长、窗格数量、通信方言版本、
+构建信息和套接字路径。JSON 即 `ServerStatus` 对象本身
+（`pid`、`uptime_secs`、`panes`、`control_version`、
+`protocol_version`、`build`、`socket`）。
+
+<a id="lyrel-doctor"></a>
+### `lyrel doctor`
+
+检查安装情况：三个环境变量、服务器是否响应、服务器的控制和协议版本是否
+与当前二进制文件匹配、pid/运行时长/窗格数、机器连接数量，
+以及各个代理的[状态钩子](/agents/status)情况。
+如果不在 lyrel shell 中，还会添加一条说明。
+
+钩子这一行可以解释一个常见疑问：没有钩子，代理就不会报告任何状态，
+所以 `lyrel agents` 显示它一直不动，`lyrel wait` 则一直等待直到超时。
+过时的钩子也会以同样无声的方式失效。钩子安装在本地，
+因此使用 `-m` 时，这一行显示为 `unknown`。
+
+JSON：`{"context":{"config_dir","workspace","pane"},"server":{"reachable","dialect_ok","build","status","routes"},"hooks":{"installed","outdated","not_installed"}}`。
+其中 context 字段是布尔值，而不是具体值；每个 `hooks` 字段都是代理 slug 的列表。
+
+<a id="ws--workspaces"></a>
+## `ws` — 工作区
+
+可使用名称、完整 id，或唯一的 id 前缀（`lyrel ls` 打印的 8 字符前缀）
+指定工作区。如果名称或前缀存在歧义，会报错并列出候选项。
+
+| 命令 | 效果 | JSON |
+|---|---|---|
+| `ws ls` | 列出所有工作区 | `{"workspaces":[...]}` |
+| `ws tree [WORKSPACE]` | 以树形显示一个工作区：标签页、拆分轴及比例、窗格及其工作目录 | 完整工作区对象：`{"id","name","last_active","active_tab","groups":{"pinned":[…]},"tabs":[{"id","name","group","last_auto","root",…}]}` |
+| `ws new [NAME]` | 创建空工作区（无标签页、无窗格） | `{"id","name"}` |
+| `ws rename WORKSPACE NAME` | 命名或重命名 | `{"id","name"}` |
+| `ws rm WORKSPACE` | 删除工作区并挂断其窗格 | `{"removed"}` |
+| `ws attach WORKSPACE` | 成为其控制客户端 | `{"attached","took_over_from"}` |
+| `ws detach WORKSPACE` | 释放控制权，不中断任何任务 | `{"detached"}` |
+
+<Warning>
+  `ws rm` 会挂断工作区持有的窗格。如果命令报告某些窗格无法挂断，
+  它们会作为不属于任何工作区的孤立窗格继续运行。
+  使用 `pane ls --all` 找到它们，然后逐个关闭。
+</Warning>
+
+如果希望创建后即可使用，请优先使用 `lyrel new <path>`，而不是 `ws new`：
+`ws new` 会留下需要自行填充的空工作区，而 `lyrel new --json`
+会一次返回工作区和窗格两个 id。
+
+`ws tree --json` 中的 `root` 节点采用外部标签格式，
+因此叶节点为 `{"Leaf":{"pane":31}}`，
+拆分节点为 `{"Split":{"axis","ratio","a","b"}}`，
+其中 `a`/`b` 以相同方式嵌套。
+
+<a id="tab--tabs"></a>
+## `tab` — 标签页
+
+`@N` 按树形顺序为**整台机器**上的标签页编号，从 `@1` 开始连续排列。
+每当创建或删除工作区或标签页时，编号都会变化，因此应在使用前立即解析。
+也支持完整的标签页 UUID：`@<uuid>`。
+
+| 命令 | 效果 | JSON |
+|---|---|---|
+| `tab ls [WORKSPACE]` | 列出工作区的标签页 | `{"workspace","tabs":[{"ordinal","id","name","label","agent","group","panes":[…],"hibernated"}]}` |
+| `tab new [WORKSPACE] [--cwd DIR]` | 添加包含新 shell 的标签页 | `{"tab","pane"}` |
+| `tab new [WORKSPACE] --pane %PANE` | 为已在运行的窗格添加标签页 | `{"tab","pane"}` |
+| `tab close @TAB` | 关闭标签页及其中所有窗格 | `{"closed"}` |
+| `tab rename @TAB NAME` | 命名或重命名 | `{"tab","name"}` |
+| `tab move @TAB INDEX` | 在所属工作区内调整位置 | `{"tab","to"}` |
+
+`--pane` 会重新安置窗格，而不是创建新窗格：它为服务器已经在运行的窗格
+构建标签页，使孤立窗格重新显示在屏幕上。仅接受没有被任何标签页持有的窗格；
+要向已有标签页添加窗格，请使用 `pane split`。
+如果没有指定 `WORKSPACE`，也没有 `LYREL_WS`，窗格会回到最初为其创建的工作区，
+即 `pane ls --all` 打印的 `owner`。初始信息会从窗格注册表重建，
+因此标签页会使用窗格记录的工作目录（除非用 `--cwd` 覆盖），
+但不会保留窗格最初启动时的 shell 或 SSH 配置：
+持有窗格的标签页关闭时，树中会删除该窗格的记录，只剩注册表。
+这只会在 shell 之后终止时产生影响，因为届时恢复操作将没有可供恢复的原始信息。
+
+`GROUP` 是标签页所属的侧边栏固定分组，显示其名称或文件夹路径的最后一段；
+对于由 GUI 自动分组的标签页则为 `-`。
+JSON 包含分组的 `id`、`name` 和 `folder`（或 `null`）。
+自动分组不会列出：GUI 根据各标签页的工作目录推导它们，
+不会存储有关自动分组的信息。
+
+`label` 按现有信息择优回退：如果有人设置了名称，就使用名称；
+否则使用其中运行的代理，再否则使用工作目录的最后一段，最后使用前台进程。
+`name` 保持原样，以便脚本区分真正设置的名称和代用值。
+
+<a id="worktree--one-checkout-per-task"></a>
+## `worktree` — 每个任务一个检出目录
+
+创建与 GUI 的**新建工作树标签页…**相同的工作树
+（参见[工作树](/git/worktrees)），供脚本使用，
+也供代理将任务交给其他代理。仅在本机运行 git；不接受 `-m`。
+
+| 命令 | 效果 | JSON |
+|---|---|---|
+| `worktree new [NAME] [--branch B] [--from REF] [--agent A] [--task TEXT] [--no-setup] [--ws WORKSPACE] [--repo DIR]` | 创建工作树，在其中打开标签页，先运行 `.lyrel/setup`，再运行代理 | `{"path","branch","base","tab","pane","setup","port","copied","skipped","command"}` |
+| `worktree ls [--repo DIR]` | 列出仓库的所有检出目录；标记 lyrel 管理的目录，并显示各目录中工作的窗格 | `{"worktrees":[{"path","branch","main","managed","panes"}]}` |
+| `worktree rm NAME\|PATH [--force] [--close-panes] [--repo DIR]` | 移除 lyrel 工作树，移除前先创建快照 | `{"path","branch","snapshot","branch_kept","closed_panes"}` |
+
+```bash
+lyrel worktree new --agent opencode --task "修复不稳定的登录测试"
+```
+
+`new` 会先打印路径，因此可以使用 `cd "$(lyrel worktree new | head -1)"`。
+除非指定 `--no-setup`，否则会运行设置脚本：GUI 首次运行仓库脚本前会询问，
+但任何能够运行此命令的人，本来就能手动运行该脚本。
+只要还有窗格在检出目录内工作，`rm` 就会拒绝操作；
+传入 `--close-panes` 可先关闭这些窗格。
+
+<a id="pane--panes"></a>
+## `pane` — 窗格
+
+| 命令 | 效果 | JSON |
+|---|---|---|
+| `pane ls [WORKSPACE]` | 列出窗格及其工作区、标签页、工作目录、运行状态标记（休眠标签页的窗格为 `asleep`） | `{"panes":[…]}` |
+| `pane ls --all` | 列出服务器的完整窗格注册表，包括孤立窗格 | `{"panes":[…],"orphans":N}` |
+| `pane split …` | 与顶层 `split` 完全相同 | `{"pane"}` |
+| `pane close [%PANE…]` | 关闭窗格；其 shell 会被挂断 | `{"closed":[…]}` |
+| `pane close --orphans` | 关闭所有未被任何工作区持有的窗格 | `{"closed":[…]}` |
+
+`--all` 可以显示泄漏的窗格。每个条目的格式为
+`{"pane","workspace","orphan","owner","title","cwd","live"}`：
+`owner` 是允许接入该窗格的工作区 id（没有工作区可接入时省略），
+`orphan: true` 表示没有工作区持有它。被中断的 `run` 会在这里留下孤立窗格，
+报告部分窗格无法挂断的 `ws rm` 也是如此。
+
+孤立窗格不一定是无用的，其 shell 可能仍在执行实际任务，
+因此有两种方式让它离开此列表。
+`tab new --pane %<id>` 会将它放回标签页；
+当窗格因工作区消失而孤立，而不是因 `run` 中断而孤立时，这是恢复途径。
+另一种方式是 `pane close`。
+
+`--orphans` 专门清理这些窗格。它只关闭 `pane ls --all`
+列为孤立的窗格，不影响工作区持有的窗格；
+没有可清理内容时返回空列表而不是报错，因此脚本无需事先检查。
+某个窗格无法关闭时，不会放弃整批操作：仍会尝试处理其余窗格，
+错误信息输出到 stderr，命令以 1 退出并返回
+`{"closed":[…],"failed":[…]}`，提供重试所需的列表。
+
+<Warning>
+  `--orphans` 会关闭本机上的所有孤立窗格，而孤立窗格可能仍在执行实际任务：
+  被中断的 `run` 会让命令继续运行。请先查看 `pane ls --all`。
+</Warning>
+
+`title` 通常是正在运行的命令，例如 `omp`、`nvim`、`cargo`，
+因此 `pane ls --all --json` 可用于快速查找“运行 X 的窗格”。
+
+<a id="machine--remotes"></a>
+## `machine` — 远程机器
+
+`machine ls` 列出本机以及服务器持有的所有连接：
+`MACHINE KIND CONNECTED`。JSON：`{"machines":[{"key","kind","connected"}]}`。
+
+<a id="server--the-daemon"></a>
+## `server` — 守护进程
+
+| 命令 | 效果 |
+|---|---|
+| `server status` | 与 `lyrel status` 相同 |
+| `server logs` | 持续输出服务器日志的末尾内容并打印日志路径；默认启用 info 级别日志（`LYREL_LOG=off` 可禁用） |
+| `server start` | 在本机启动服务器 |
+| `server stop` | 停止服务器：**本机上的所有窗格都会终止** |
+| `server restart` | 先停止再启动，后果相同 |
+
+<Warning>
+  不要代替他人运行 `start`、`stop` 或 `restart`。
+  它们会改变或销毁用户 GUI 当前连接的对象。
+</Warning>
+
+<a id="not-implemented-yet"></a>
+## 尚未实现
+
+以下命令可以解析，但随后会以 1 退出并说明原因：
+
+- `ws stop`：控制方言尚无停止工作区的请求
+- `machine connect` / `machine disconnect`：请使用 GUI 的连接管理器

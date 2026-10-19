@@ -1,0 +1,967 @@
+/* Landing page (index.mdx, mode: custom). Everything is scoped under .lyrel-home so
+   Mintlify's global CSS include never leaks into the docs pages. The window
+   mockup follows the v5 redesign tokens and flips with the docs theme. */
+
+.lyrel-home {
+  --fg: #111113;
+  --muted: #5d5d66;
+  --faint: #8a8a93;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.14);
+  --card: rgba(0, 0, 0, 0.015);
+  --card-hover: rgba(0, 0, 0, 0.03);
+  --primary: #0fa968;
+  --primary-text: #0b8453;
+  --primary-soft: rgba(15, 169, 104, 0.1);
+  --bar: rgba(0, 0, 0, 0.12);
+
+  /* window — v5 light */
+  --w-bg: #fcfcfb;
+  --w-rail: #f5f5f3;
+  --w-fg: #1c1c1e;
+  --w-a03: rgba(0, 0, 0, 0.03);
+  --w-a04: rgba(0, 0, 0, 0.04);
+  --w-a05: rgba(0, 0, 0, 0.05);
+  --w-a07: rgba(0, 0, 0, 0.07);
+  --w-a08: rgba(0, 0, 0, 0.08);
+  --w-a15: rgba(0, 0, 0, 0.15);
+  --w-a35: rgba(0, 0, 0, 0.35);
+  --w-a45: rgba(0, 0, 0, 0.45);
+  --w-a55: rgba(0, 0, 0, 0.55);
+  --w-a72: rgba(0, 0, 0, 0.72);
+  --w-green: #2f8a52;
+  --w-amber: #b7791f;
+  --w-red: #d93025;
+  --w-pop: #fff;
+  --w-pop-sh: 0 0 0 0.5px rgba(0, 0, 0, 0.14), 0 24px 64px -12px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --w-scrim: rgba(20, 20, 18, 0.14);
+  --w-choice: rgba(31, 107, 240, 0.12);
+  --w-btn-bg: #1c1c1e;
+  --w-btn-fg: #fff;
+  --w-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 30px 80px -20px rgba(0, 0, 0, 0.25);
+
+  color: var(--fg);
+  font-feature-settings: "cv11";
+  overflow-x: clip;
+}
+
+html.dark .lyrel-home {
+  --fg: #ececed;
+  --muted: #a1a1aa;
+  --faint: #71717a;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --card: rgba(255, 255, 255, 0.02);
+  --card-hover: rgba(255, 255, 255, 0.04);
+  --primary: #3fdd8c;
+  --primary-text: #3fdd8c;
+  --primary-soft: rgba(63, 221, 140, 0.1);
+  --bar: rgba(255, 255, 255, 0.14);
+
+  /* window — v5 dark */
+  --w-bg: #18181a;
+  --w-rail: #1e1e20;
+  --w-fg: #ececed;
+  --w-a03: rgba(255, 255, 255, 0.04);
+  --w-a04: rgba(255, 255, 255, 0.055);
+  --w-a05: rgba(255, 255, 255, 0.07);
+  --w-a07: rgba(255, 255, 255, 0.09);
+  --w-a08: rgba(255, 255, 255, 0.08);
+  --w-a15: rgba(255, 255, 255, 0.16);
+  --w-a35: rgba(255, 255, 255, 0.36);
+  --w-a45: rgba(255, 255, 255, 0.5);
+  --w-a55: rgba(255, 255, 255, 0.6);
+  --w-a72: rgba(255, 255, 255, 0.78);
+  --w-green: #4cc27a;
+  --w-amber: #e0a345;
+  --w-red: #f0685c;
+  --w-pop: #232326;
+  --w-pop-sh: 0 0 0 0.5px rgba(0, 0, 0, 0.8), inset 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+  --w-scrim: rgba(0, 0, 0, 0.45);
+  --w-choice: rgba(120, 168, 245, 0.18);
+  --w-btn-bg: #ececed;
+  --w-btn-fg: #18181a;
+  --w-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.8), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
+    0 30px 80px -20px rgba(0, 0, 0, 0.7);
+}
+
+.lyrel-home a { text-decoration: none; }
+
+/* Mintlify tags every content <a> with .link and draws a primary-coloured
+   bottom border on it; none of the landing page's links want that. */
+.lyrel-home a.link { border-bottom: 0; }
+.lyrel-home a.link.lyrel-home-card, .lyrel-home a.link.lyrel-home-chip { border-bottom: 1px solid var(--line); }
+.lyrel-home a.link.lyrel-home-btn-ghost { border-bottom: 1px solid var(--line-strong); }
+.lyrel-home a.link.lyrel-home-card:hover { border-bottom-color: var(--primary); }
+.lyrel-home * { box-sizing: border-box; }
+
+.lyrel-home-wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ---------- hero ---------- */
+
+.lyrel-home-hero {
+  position: relative;
+  padding: 88px 0 0;
+  text-align: center;
+}
+
+.lyrel-home-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 720px;
+  background: radial-gradient(60% 50% at 50% 0%, var(--primary-soft), transparent 70%);
+  pointer-events: none;
+}
+
+.lyrel-home-eyebrow {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.lyrel-home-eyebrow i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.lyrel-home-hero h1 {
+  position: relative;
+  margin: 24px auto 0;
+  max-width: 820px;
+  font-size: clamp(38px, 6vw, 64px);
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  font-weight: 650;
+  color: var(--fg);
+  text-wrap: balance;
+}
+
+.lyrel-home-lede {
+  position: relative;
+  margin: 22px auto 0;
+  max-width: 600px;
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+.lyrel-home-ctas {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.lyrel-home-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 20px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 550;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.lyrel-home-btn-primary {
+  background: #0fa968;
+  color: #fff !important;
+}
+
+.lyrel-home-btn-primary:hover { background: #0c9a5e; }
+
+.lyrel-home-btn-ghost {
+  border: 1px solid var(--line-strong);
+  color: var(--fg) !important;
+}
+
+.lyrel-home-btn-ghost:hover { background: var(--card-hover); }
+
+.lyrel-home-platforms {
+  position: relative;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--faint);
+}
+
+.lyrel-home-stage {
+  position: relative;
+  margin: 64px auto 0;
+  max-width: 1200px;
+  padding: 0 24px;
+}
+
+/* ---------- window mockup (v5) ---------- */
+
+.lyrel-window {
+  position: relative;
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr) 276px;
+  height: 588px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--w-bg);
+  box-shadow: var(--w-shadow);
+  color: var(--w-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: normal;
+  letter-spacing: -0.005em;
+  text-align: left;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.lyrel-window-mono { font-family: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", monospace; }
+
+.lyrel-window-lights {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  display: flex;
+  gap: 8px;
+  z-index: 2;
+}
+
+.lyrel-window-lights span { width: 12px; height: 12px; border-radius: 50%; }
+.lyrel-window-lights span:nth-child(1) { background: #ff5f57; }
+.lyrel-window-lights span:nth-child(2) { background: #febc2e; }
+.lyrel-window-lights span:nth-child(3) { background: #28c840; }
+
+.lyrel-window-sb {
+  background: var(--w-rail);
+  border-right: 0.5px solid var(--w-a08);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.lyrel-window-bar {
+  height: 48px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.lyrel-window-sb .lyrel-window-bar { justify-content: flex-end; padding: 0 12px; }
+
+.lyrel-window-iconbtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+}
+
+.lyrel-window-sbtop {
+  padding: 4px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lyrel-window-ws {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  font-weight: 600;
+}
+
+.lyrel-window-ws-init {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--w-a07);
+  color: var(--w-a55);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  margin-left: -1px;
+}
+
+.lyrel-window-search {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--w-a04);
+  color: var(--w-a45);
+}
+
+.lyrel-window-groups {
+  flex: 1;
+  overflow: hidden;
+  padding: 0 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.lyrel-window-group { display: flex; flex-direction: column; gap: 1px; }
+
+.lyrel-window-ghead {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  color: var(--w-a55);
+}
+
+.lyrel-window-ghead b { font-weight: 500; flex: 1; }
+.lyrel-window-ghead span { font-variant-numeric: tabular-nums; }
+
+.lyrel-window-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  height: 30px;
+  border-radius: 7px;
+  color: var(--w-a72);
+}
+
+.lyrel-window-row.is-tall { height: 42px; }
+.lyrel-window-row.is-on { background: var(--w-a05); color: var(--w-fg); font-weight: 500; }
+
+.lyrel-window-glyph {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.06em;
+}
+
+.lyrel-window-glyph.is-shell { background: var(--w-a07); color: var(--w-a55); }
+
+/* The agent's own mark as a white mask, 54% of the disc — as avatar_disc. */
+.lyrel-window-mark {
+  width: 54%;
+  height: 54%;
+  background: #fff;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+/* A dark disc can dissolve into a dark surface; a hairline keeps it
+   a disc, the same rule as presets::needs_edge. */
+html.dark .lyrel-window-glyph.is-edge { box-shadow: inset 0 0 0 1px var(--w-a15); }
+
+.lyrel-window-rtext { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.lyrel-window-rtext > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.lyrel-window-branch {
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--w-a45);
+  font-weight: 400;
+}
+
+/* Status dots follow AgentStatus::dot_rgb: working blue (blinks), waiting
+   a hollow amber ring, done green. */
+.lyrel-window-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.lyrel-window-dot.is-working { background: #3b82f6; animation: lyrel-window-pulse 1.2s steps(1) infinite; }
+.lyrel-window-dot.is-waiting { background: transparent; box-shadow: inset 0 0 0 1px #f59e0b; }
+.lyrel-window-dot.is-done { background: #22c55e; }
+
+@keyframes lyrel-window-pulse {
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lyrel-window-dot.is-working, .lyrel-window-caret, .lyrel-window-pop, .lyrel-window-toast, .lyrel-window-pane2 { animation: none; }
+  .lyrel-window { transition: none; }
+}
+
+/* main */
+
+.lyrel-window-main { display: flex; flex-direction: column; min-width: 0; }
+
+.lyrel-window-main .lyrel-window-bar { justify-content: center; padding: 0 16px; }
+
+.lyrel-window-pal {
+  height: 28px;
+  width: 400px;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 5px 0 10px;
+  border-radius: 7px;
+  background: var(--w-a03);
+  font-size: 12px;
+  color: var(--w-a55);
+}
+
+.lyrel-window-pal > span:nth-child(2) { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.lyrel-window-kbd {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--w-a45);
+  box-shadow: inset 0 0 0 0.5px var(--w-a15);
+}
+
+.lyrel-window-term {
+  flex: 1;
+  padding: 8px 28px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow: hidden;
+}
+
+.lyrel-window-prompt { display: flex; gap: 9px; align-items: center; }
+.lyrel-window-prompt .p-arrow { color: var(--w-a35); }
+.lyrel-window-prompt .p-dir { font-weight: 500; }
+.lyrel-window-prompt .p-br { color: var(--w-a45); }
+.lyrel-window-prompt .p-dirty { color: var(--w-amber); }
+.lyrel-window-out { color: var(--w-a72); }
+.lyrel-window-out .o-head { color: var(--w-a45); }
+.lyrel-window-out .o-working { color: #3b82f6; }
+.lyrel-window-out .o-idle { color: var(--w-a45); }
+.lyrel-window-out .o-waiting { color: var(--w-amber); }
+.lyrel-window-out .o-done { color: var(--w-green); }
+
+.lyrel-window-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 15px;
+  background: var(--w-fg);
+  animation: lyrel-window-blink 1.1s steps(1) infinite;
+}
+
+@keyframes lyrel-window-blink {
+  50% { opacity: 0; }
+}
+
+.lyrel-window-prompt .p-cmd { white-space: pre; }
+.lyrel-window-out.o-dim { color: var(--w-a45); }
+.lyrel-window-out.o-omp { color: #f97316; }
+.lyrel-window-out.o-done-ok { color: var(--w-green); }
+.lyrel-window .o-ghost { color: var(--w-a35); }
+.lyrel-window .o-cmd { font-weight: 600; color: var(--w-fg); }
+.lyrel-window .o-flag { color: var(--w-amber); }
+.lyrel-window .o-arg { color: var(--w-a72); }
+.lyrel-window-caret { vertical-align: -3px; margin-left: 1px; }
+.lyrel-window-prompt .lyrel-window-caret { margin-left: 0; }
+
+.lyrel-window-split { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.lyrel-window-split.is-split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.lyrel-window-split .lyrel-window-term { padding-right: 16px; }
+/* A narrow pane wraps like a terminal does: at the column, back to the
+   left edge, not a hanging indent. */
+.lyrel-window-split .lyrel-window-prompt { display: block; word-break: break-all; }
+.lyrel-window-split .lyrel-window-prompt > span { margin-right: 9px; }
+.lyrel-window-split .lyrel-window-prompt > .p-cmd { margin-right: 0; }
+.lyrel-window-split .p-cmd, .lyrel-window-split .lyrel-window-out { white-space: pre-wrap; word-break: break-all; }
+.lyrel-window-pane2 { border-left: 0.5px solid var(--w-a08); padding-left: 20px !important; animation: lyrel-window-in 0.18s ease-out; }
+
+.lyrel-window-anchor { position: relative; }
+
+.lyrel-window-pop {
+  background: var(--w-pop);
+  box-shadow: var(--w-pop-sh);
+  border-radius: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+  font-size: 13px;
+  white-space: normal;
+  animation: lyrel-window-pop 0.14s ease-out;
+}
+
+@keyframes lyrel-window-pop {
+  from { opacity: 0; transform: scale(0.98); }
+}
+
+@keyframes lyrel-window-in {
+  from { opacity: 0; }
+}
+
+.lyrel-window-complete {
+  position: absolute;
+  top: 24px;
+  left: 148px;
+  width: 440px;
+  padding: 5px;
+  z-index: 3;
+  transform-origin: top left;
+}
+
+.lyrel-window-crow { height: 26px; display: flex; align-items: center; gap: 12px; padding: 0 8px; border-radius: 6px; }
+.lyrel-window-crow .n { width: 96px; flex-shrink: 0; white-space: nowrap; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.lyrel-window-crow .d { color: var(--w-a55); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyrel-window-crow.is-sel { background: var(--w-choice); }
+
+.lyrel-window-pal.is-press { background: var(--w-a07); }
+
+.lyrel-window-scrim { position: absolute; inset: 0; background: var(--w-scrim); z-index: 3; animation: lyrel-window-in 0.14s ease-out; }
+
+.lyrel-window-palette {
+  position: absolute;
+  z-index: 4;
+  top: 56px;
+  left: 50%;
+  width: min(560px, calc(100% - 32px));
+  margin-left: calc(min(560px, 100% - 32px) / -2);
+  transform-origin: top center;
+  overflow: hidden;
+}
+
+.lyrel-window-pinput { height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 16px; font-size: 14px; border-bottom: 0.5px solid var(--w-a08); }
+.lyrel-window-pinput .ph { color: var(--w-a45); }
+.lyrel-window-pinput .ph .lyrel-window-caret { margin: 0 1px 0 0; }
+
+.lyrel-window-scopes { display: flex; gap: 4px; padding: 8px 10px 4px; font-size: 12px; color: var(--w-a45); }
+.lyrel-window-scopes span { height: 24px; padding: 0 9px; display: grid; place-items: center; border-radius: 6px; }
+.lyrel-window-scopes .is-on { background: var(--w-a05); color: var(--w-fg); font-weight: 500; }
+
+.lyrel-window-presults { padding: 2px 6px 8px; }
+.lyrel-window-pgroup { height: 26px; display: flex; align-items: center; padding: 0 10px; font-size: 11.5px; font-weight: 500; color: var(--w-a55); }
+.lyrel-window-prow { height: 30px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border-radius: 7px; }
+.lyrel-window-prow.is-sel { background: var(--w-a05); }
+.lyrel-window-prow .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyrel-window-prow .meta { color: var(--w-a45); font-size: 12px; white-space: nowrap; }
+.lyrel-window-prow mark { background: none; color: inherit; font-weight: 650; }
+.lyrel-window-kbd-plain { color: var(--w-a45); font-size: 12px; }
+
+.lyrel-window-toast {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  right: 12px;
+  width: 300px;
+  display: flex;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: var(--w-pop);
+  box-shadow: var(--w-pop-sh);
+  animation: lyrel-window-toast 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes lyrel-window-toast {
+  from { opacity: 0; transform: translateX(24px); }
+}
+
+.lyrel-window-toast img { width: 30px; height: 30px; flex-shrink: 0; }
+.lyrel-window-toast > div { min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; }
+.lyrel-window-toast b { font-weight: 600; }
+.lyrel-window-toast .sub { color: var(--w-a55); font-size: 12px; }
+
+/* persist chapter: the window leaves, the server doesn't */
+.lyrel-window-stagebox { position: relative; }
+.lyrel-window { transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.45s cubic-bezier(0.4, 0, 0.2, 1); }
+.lyrel-window.is-gone { transform: scale(0.94); opacity: 0; }
+
+.lyrel-window-afterlife {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+  font-size: 13px;
+  text-align: left;
+  color: var(--fg);
+  animation: lyrel-window-in 0.4s ease-out;
+}
+
+.lyrel-window-al-title { text-align: center; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 14px; }
+.lyrel-window-al-row { width: 320px; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); }
+.lyrel-window-al-row span:nth-child(2) { flex: 1; }
+
+/* chapter bar */
+.lyrel-home-chapter-now { display: none; margin-top: 10px; text-align: center; font-size: 13px; font-weight: 500; color: var(--fg); }
+.lyrel-home-chapters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 20px auto 0; max-width: 900px; }
+
+.lyrel-home-chapter {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--faint);
+}
+
+.lyrel-home-chapter:hover, .lyrel-home-chapter.is-on { color: var(--fg); }
+.lyrel-home-chapter-bar { height: 2px; border-radius: 1px; background: var(--line-strong); overflow: hidden; }
+.lyrel-home-chapter-bar span { display: block; height: 100%; background: var(--primary); }
+.lyrel-home-chapter-label { font-size: 13px; font-weight: 500; }
+.lyrel-home-chapter:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 2px; }
+
+/* inspector */
+
+.lyrel-window-ins {
+  border-left: 0.5px solid var(--w-a08);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lyrel-window-ins .lyrel-window-bar { gap: 18px; padding: 0 8px 0 22px; font-size: 12.5px; color: var(--w-a45); }
+.lyrel-window-ins .lyrel-window-bar .is-on { color: var(--w-fg); font-weight: 500; display: flex; align-items: center; }
+.lyrel-window-ins .lyrel-window-bar .is-on::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  margin-left: 5px;
+  background: var(--w-amber);
+}
+
+.lyrel-window-pr {
+  padding: 8px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  font-size: 12.5px;
+}
+
+.lyrel-window-prhead { display: flex; flex-direction: column; gap: 10px; padding: 4px 8px 0; }
+.lyrel-window-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--w-a55); }
+.lyrel-window-meta .grow { flex: 1; }
+.lyrel-window-prtitle { font-size: 14px; line-height: 19px; font-weight: 600; }
+.lyrel-window-prbranch { font-size: 11.5px; color: var(--w-a45); }
+.lyrel-window-prbranch b { font-weight: 400; color: var(--w-a72); }
+.lyrel-window-practs { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+
+.lyrel-window-merge {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: var(--w-btn-bg);
+  color: var(--w-btn-fg);
+  font-size: 12px;
+  font-weight: 500;
+  display: grid;
+  place-items: center;
+  opacity: 0.45;
+}
+
+.lyrel-window-practs .note { flex: 1; font-size: 11.5px; color: var(--w-a45); }
+
+.lyrel-window-sect { display: flex; flex-direction: column; }
+
+.lyrel-window-shead {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--w-a55);
+}
+
+.lyrel-window-shead b { flex: 1; font-weight: 500; }
+.lyrel-window-shead span { font-weight: 400; font-variant-numeric: tabular-nums; }
+
+.lyrel-window-item {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.lyrel-window-item .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyrel-window-item .dim { color: var(--w-a45); font-variant-numeric: tabular-nums; font-size: 11.5px; }
+
+.lyrel-window-ck { width: 12px; height: 12px; flex-shrink: 0; display: grid; place-items: center; }
+
+.lyrel-window-spin {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.4px solid var(--w-amber);
+  border-right-color: transparent;
+  animation: lyrel-window-spin 0.9s linear infinite;
+}
+
+@keyframes lyrel-window-spin {
+  to { transform: rotate(360deg); }
+}
+
+.lyrel-window-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--w-a07);
+  color: var(--w-a55);
+  display: grid;
+  place-items: center;
+  font-size: 9.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.lyrel-window-pritem { padding: 6px 8px; display: flex; gap: 8px; align-items: flex-start; }
+.lyrel-window-pritem .lyrel-window-ck { margin-top: 2px; }
+.lyrel-window-pritem > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lyrel-window-pritem .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lyrel-window-pritem .m { font-size: 11.5px; color: var(--w-a45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- sections ---------- */
+
+.lyrel-home-section { padding: 120px 0 0; }
+
+.lyrel-home-kicker {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--primary-text);
+}
+
+.lyrel-home-h2 {
+  margin: 12px 0 0;
+  font-size: clamp(28px, 3.6vw, 40px);
+  line-height: 1.12;
+  letter-spacing: -0.028em;
+  font-weight: 650;
+  color: var(--fg);
+  text-wrap: balance;
+}
+
+.lyrel-home-sub {
+  margin: 16px 0 0;
+  max-width: 620px;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+.lyrel-home-grid {
+  margin-top: 48px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.lyrel-home-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--fg) !important;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.lyrel-home-card:hover { border-color: var(--primary); background: var(--card-hover); }
+
+.lyrel-home-card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--primary-soft);
+  margin-bottom: 6px;
+}
+
+.lyrel-home-card h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg); }
+.lyrel-home-card p { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--muted); }
+
+.lyrel-home-more {
+  margin-top: auto;
+  padding-top: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--primary-text);
+}
+
+/* agents split */
+
+.lyrel-home-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 64px;
+  align-items: center;
+}
+
+.lyrel-home-list { margin: 28px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+
+.lyrel-home-list li { display: flex; gap: 12px; font-size: 15px; line-height: 1.55; color: var(--muted); }
+.lyrel-home-list li b { color: var(--fg); font-weight: 600; }
+
+.lyrel-home-tick {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--primary-soft);
+}
+
+.lyrel-home-chips { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 8px; }
+
+.lyrel-home-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.lyrel-home-chip.is-more { padding: 0 12px; color: var(--muted); }
+
+.lyrel-home-panel {
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--w-rail);
+  box-shadow: var(--w-shadow);
+  color: var(--w-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+  font-size: 13px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  user-select: none;
+}
+
+.lyrel-home-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 4px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--w-bg);
+  box-shadow: 0 0 0 0.5px var(--w-a15), 0 8px 24px -8px rgba(0, 0, 0, 0.25);
+}
+
+.lyrel-home-toast > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lyrel-home-toast b { font-weight: 600; font-size: 12.5px; }
+.lyrel-home-toast span { font-size: 12px; color: var(--w-a55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.lyrel-home-footnote { margin-top: 20px; font-size: 13.5px; color: var(--faint); }
+.lyrel-home-footnote a { color: var(--primary-text); font-weight: 500; }
+
+/* steps */
+
+.lyrel-home-steps {
+  margin-top: 48px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.lyrel-home-step-n {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-text);
+  border: 1px solid var(--line-strong);
+  margin-bottom: 6px;
+}
+
+/* closing */
+
+.lyrel-home-end {
+  margin: 120px 0 96px;
+  padding: 64px 32px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  text-align: center;
+  background: radial-gradient(70% 90% at 50% 100%, var(--primary-soft), transparent 70%), var(--card);
+}
+
+.lyrel-home-end .lyrel-home-sub { margin-left: auto; margin-right: auto; }
+
+.lyrel-home-end-links { margin-top: 20px; display: flex; justify-content: center; gap: 24px; font-size: 14px; }
+.lyrel-home-end-links a { color: var(--muted) !important; }
+.lyrel-home-end-links a:hover { color: var(--fg) !important; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1080px) {
+  .lyrel-window { grid-template-columns: 232px minmax(0, 1fr); }
+  .lyrel-window-ins { display: none; }
+  .lyrel-home-grid, .lyrel-home-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lyrel-home-split { grid-template-columns: minmax(0, 1fr); gap: 48px; }
+}
+
+@media (max-width: 720px) {
+  .lyrel-home-hero { padding-top: 56px; }
+  .lyrel-home-stage { margin-top: 48px; padding: 0 16px; }
+  .lyrel-home-wrap { padding: 0 16px; }
+  .lyrel-window { grid-template-columns: minmax(0, 1fr); height: 340px; }
+  .lyrel-window-sb { display: none; }
+  .lyrel-window-main .lyrel-window-bar { padding-left: 84px; }
+  .lyrel-window-term { padding: 4px 14px; font-size: 9.5px; line-height: 1.65; }
+  .lyrel-window-split .lyrel-window-term { padding-right: 8px; }
+  .lyrel-window-pane2 { padding-left: 10px !important; }
+  .lyrel-home-grid, .lyrel-home-steps { grid-template-columns: minmax(0, 1fr); }
+  .lyrel-home-chapters { gap: 6px; margin-top: 16px; }
+  .lyrel-home-chapter { padding: 4px 0; }
+  .lyrel-home-chapter-label { display: none; }
+  .lyrel-home-chapter-now { display: block; }
+  .lyrel-window-toast { top: auto; bottom: 10px; right: 10px; width: 230px; padding: 9px 10px; }
+  .lyrel-window-toast img { width: 24px; height: 24px; }
+  .lyrel-window-palette { top: 44px; }
+  .lyrel-window-prow .meta { display: none; }
+  .lyrel-window-complete { left: 16px; width: 300px; }
+  .lyrel-window-afterlife .lyrel-window-al-row { width: 280px; }
+  .lyrel-home-section { padding-top: 88px; }
+  .lyrel-home-end { margin: 88px 0 64px; padding: 48px 20px; }
+}

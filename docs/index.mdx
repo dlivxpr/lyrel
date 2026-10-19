@@ -1,0 +1,573 @@
+---
+title: "lyrel"
+description: "终端工作台：持久会话、远程工作与智能体。"
+mode: "custom"
+---
+
+{/* 对应 CLIAgent::accent_rgb / icon_path：实心品牌圆盘上叠加
+   以白色蒙版显示的智能体标志，与 tab_strip.rs 中 avatar_disc 的绘制方式一致。 */}
+export const AGENTS = {
+  omp: { name: "omp", c: "#F97316" },
+  pi: { name: "pi", c: "#0EA5E9" },
+  kimi: { name: "Kimi Code", c: "#027AFF" },
+  opencode: { name: "OpenCode 2.x", c: "#6E56CF" },
+  hermes: { name: "Hermes", c: "#8B5CF6" },
+};
+
+export const GROUPS = [
+  { name: "atlas-api", meta: "main", items: [
+    { a: "omp", t: "启动预发布实例", s: "working" },
+    { a: "pi", t: "检查 CLI 错误日志", s: "working" },
+  ] },
+  { name: "northwind", meta: "", items: [
+    { a: "opencode", t: "重构会话认证", b: "feat/session-auth", s: "waiting" },
+    { a: "kimi", t: "修复价格获取超时", b: "fix/pricing-fetch-timeout", s: "working" },
+  ] },
+  { name: "orbit", meta: "main  ·  +104 −12", items: [
+    { shell: true, t: "~/code/orbit", on: true },
+    { a: "omp", t: "优化路线规划器" },
+  ] },
+  { name: "lumen-web", meta: "main  ·  +259 −191", items: [
+    { a: "hermes", t: "回测搜索排名" },
+  ] },
+];
+
+export const Glyph = ({ a, shell }) => shell
+  ? <span className="lyrel-window-glyph is-shell">{">_"}</span>
+  : a === "hermes" ? <span className="lyrel-window-glyph" style={{ background: AGENTS[a].c, color: "white" }} title="Hermes">H</span>
+  : <span className={"lyrel-window-glyph" + (AGENTS[a].edge ? " is-edge" : "")} style={{ background: AGENTS[a].c }} title={AGENTS[a].name}>
+      <span className="lyrel-window-mark" style={{ WebkitMaskImage: "url(/images/agents/" + a + ".svg)", maskImage: "url(/images/agents/" + a + ".svg)" }} />
+    </span>;
+
+export const Row = ({ it }) => (
+  <div className={"lyrel-window-row" + (it.b ? " is-tall" : "") + (it.on ? " is-on" : "")}>
+    <Glyph a={it.a} shell={it.shell} />
+    <div className="lyrel-window-rtext">
+      <span>{it.t}</span>
+      {it.b ? <span className="lyrel-window-branch">{it.b}</span> : null}
+    </div>
+    {it.s ? <span className={"lyrel-window-dot is-" + it.s} /> : null}
+  </div>
+);
+
+export const Group = ({ g }) => (
+  <div className="lyrel-window-group">
+    <div className="lyrel-window-ghead"><b>{g.name}</b><span>{g.meta}</span></div>
+    {g.items.map((it) => <Row key={it.t} it={it} />)}
+  </div>
+);
+
+export const Search = () => (
+  <svg width="11" height="11" viewBox="0 0 12 12" style={{ flexShrink: 0 }}>
+    <circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--w-a35)" strokeWidth="1.2" />
+    <path d="M8 8l2.8 2.8" stroke="var(--w-a35)" strokeWidth="1.2" strokeLinecap="round" />
+  </svg>
+);
+
+export const Check = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="var(--w-green)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+);
+
+export const Cross = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3.5 3.5l5 5M8.5 3.5l-5 5" fill="none" stroke="var(--w-red)" strokeWidth="1.4" strokeLinecap="round" /></svg>
+);
+
+export const State = ({ s }) => (
+  <span className="lyrel-window-ck">{s === "ok" ? <Check /> : s === "fail" ? <Cross /> : <span className="lyrel-window-spin" />}</span>
+);
+
+export const CHECKS = [["代码检查", "ok", "18 秒"], ["类型检查", "ok", "41 秒"], ["测试 (py3.12)", "run", "2 分钟"], ["构建镜像", "ok", "1 分 12 秒"]];
+export const PRS = [
+  ["添加导出端点", "#214  ·  1 天前已合并", "ok"],
+  ["重构会话认证", "#228  ·  feat/session-auth  ·  草稿", "run"],
+  ["修复价格获取超时", "#229  ·  1 项检查失败", "fail"],
+];
+
+export const Inspector = () => (
+  <aside className="lyrel-window-ins">
+    <div className="lyrel-window-bar"><span>信息</span><span>文件</span><span>更改</span><span className="is-on">拉取请求</span></div>
+    <div className="lyrel-window-pr">
+      <div className="lyrel-window-prhead">
+        <div className="lyrel-window-meta"><span>#231</span><span>·</span><span>开放中</span><span className="grow" /><span>12 分钟前</span></div>
+        <div className="lyrel-window-prtitle">处理空的每日摘要</div>
+        <div className="lyrel-window-prbranch"><b>fix/report-daily-summary</b> → main</div>
+        <div className="lyrel-window-practs"><span className="lyrel-window-merge">压缩并合并</span><span className="note">正在等待 1 项检查</span></div>
+      </div>
+      <div className="lyrel-window-sect">
+        <div className="lyrel-window-shead"><b>检查</b><span>4 项中有 3 项通过</span></div>
+        {CHECKS.map(([n, s, t]) => (
+          <div className="lyrel-window-item" key={n}><State s={s} /><span className="grow">{n}</span><span className="dim">{t}</span></div>
+        ))}
+      </div>
+      <div className="lyrel-window-sect">
+        <div className="lyrel-window-shead"><b>审查</b></div>
+        <div className="lyrel-window-item"><span className="lyrel-window-avatar">M</span><span className="grow">mara</span><span className="dim" style={{ color: "var(--w-green)" }}>已批准</span></div>
+        <div className="lyrel-window-item"><span className="lyrel-window-avatar">J</span><span className="grow">jonas</span><span className="dim">已请求审查</span></div>
+      </div>
+      <div className="lyrel-window-sect">
+        <div className="lyrel-window-shead"><b>拉取请求</b></div>
+        {PRS.map(([t, m, s]) => (
+          <div className="lyrel-window-pritem" key={t}><State s={s} /><div><span className="t">{t}</span><span className="m">{m}</span></div></div>
+        ))}
+      </div>
+    </div>
+  </aside>
+);
+
+{/* 首屏演示分为五个章节；每个章节按开始后的秒数 t 绘制，可点击跳转。此演示不是实际应用验收截图。 */}
+
+export const CHAPTERS = [
+  { key: "agents", label: "所有智能体", d: 7.5 },
+  { key: "cli", label: "由智能体驱动", d: 9.5 },
+  { key: "prompt", label: "编辑器级提示符", d: 7.5 },
+  { key: "search", label: "⌘P 搜索一切", d: 8 },
+  { key: "persist", label: "退出后继续运行", d: 7.5 },
+];
+
+export const typed = (s, t, t0, cps = 22) => (t < t0 ? "" : s.slice(0, Math.floor((t - t0) * cps)));
+export const typingDone = (s, t, t0, cps = 22) => t >= t0 + s.length / cps;
+export const hl = (s, q) => {
+  const i = q ? s.toLowerCase().indexOf(q) : -1;
+  return i < 0 ? s : <>{s.slice(0, i)}<mark>{s.slice(i, i + q.length)}</mark>{s.slice(i + q.length)}</>;
+};
+
+export const P = ({ br = "main", caret, children }) => (
+  <div className="lyrel-window-prompt">
+    <span className="p-arrow">→</span><span className="p-dir">orbit</span><span className="p-br">{br}</span><span className="p-dirty">●</span>
+    <span className="p-cmd">{children}{caret ? <span className="lyrel-window-caret" /> : null}</span>
+  </div>
+);
+
+export const O = ({ c = "", children }) => <div className={"lyrel-window-out " + c}>{children}</div>;
+
+{/* 每帧的侧边栏：基础分组加上当前章节的更改。
+   分屏仍位于同一个标签页中；标签页会显示智能体的状态。 */}
+export const sidebar = (ch, t) => {
+  const g = GROUPS.map((x) => ({ ...x, items: x.items.map((it) => ({ ...it })) }));
+  const find = (title) => g.flatMap((x) => x.items).find((it) => it.t === title);
+  if (ch === 0) find("重构会话认证").s = t < 3.1 ? "working" : "waiting";
+  if (ch === 1 && t >= 3.2) find("~/code/orbit").s = t < 6.4 ? "working" : "done";
+  if ((ch === 3 && t >= 4.1) || ch === 4) {
+    find("~/code/orbit").on = false;
+    g[0].items.unshift({ a: "omp", t: "处理空的每日摘要", s: ch === 4 && t >= 5.2 ? "done" : "working", on: true });
+  }
+  return g;
+};
+
+export const AgentsTable = ({ cursor }) => (
+  <>
+    <O c="o-head">{"窗格  智能体   状态     消息"}</O>
+    {AGENT_ROWS.map(([p, a, s, m]) => {
+      const st = a === "opencode" ? cursor : s;
+      return <O key={p}>{p.padEnd(6)}{a.padEnd(9)}<span className={"o-" + st}>{{ working: "工作中", waiting: "等待中", done: "已完成" }[st].padEnd(9)}</span>{m}</O>;
+    })}
+  </>
+);
+
+export const AGENT_ROWS = [
+  ["%12", "omp", "working", "启动预发布实例"],
+  ["%14", "pi", "working", "检查 CLI 错误日志"],
+  ["%21", "opencode", "working", "重构会话认证"],
+  ["%22", "kimi", "working", "修复价格获取超时"],
+  ["%31", "omp", "done", "优化路线规划器"],
+];
+
+export const TermAgents = ({ t }) => {
+  const c1 = "lyrel agents", c2 = "lyrel wait %21 --until waiting";
+  return (
+    <div className="lyrel-window-term lyrel-window-mono">
+      <P caret={t < 1.3}>{typed(c1, t, 0.4, 18)}</P>
+      {t >= 1.3 ? <AgentsTable cursor="working" /> : null}
+      {t >= 1.5 ? <P caret={!typingDone(c2, t, 1.7, 26)}>{typed(c2, t, 1.7, 26)}</P> : null}
+      {t >= 3.1 ? <O>{"%21  "}<span className="o-waiting">等待中</span></O> : null}
+      {t >= 3.1 ? <P caret /> : null}
+    </div>
+  );
+};
+
+export const TermCli = ({ t }) => {
+  const a = "lyrel split --h", b = "lyrel send %12 'omp \"fix flaky test\"' --enter";
+  const c = "lyrel wait %12 --until done", d = "lyrel capture %12 --tail 1";
+  const split = t >= 1.3;
+  return (
+    <div className={"lyrel-window-split" + (split ? " is-split" : "")}>
+      <div className="lyrel-window-term lyrel-window-mono">
+        <P caret={t < 1.3}>{typed(a, t, 0.4, 18)}</P>
+        {t >= 1.3 ? <O c="o-dim">%12</O> : null}
+        {t >= 1.5 ? <P caret={!typingDone(b, t, 1.6, 30)}>{typed(b, t, 1.6, 30)}</P> : null}
+        {t >= 3.3 ? <P caret={t >= 3.3 && t < 6.4 && typingDone(c, t, 3.5, 26)}>{typed(c, t, 3.5, 26)}</P> : null}
+        {t >= 6.5 ? <P caret={!typingDone(d, t, 6.6, 26)}>{typed(d, t, 6.6, 26)}</P> : null}
+        {t >= 7.7 ? <O c="o-done-ok">✓ 已修复 warmup() 竞态 · 214 项通过</O> : null}
+        {t >= 7.7 ? <P caret /> : null}
+      </div>
+      {split ? (
+        <div className="lyrel-window-term lyrel-window-mono lyrel-window-pane2">
+          <P caret={t < 3.2}>{t >= 3.2 ? "omp \"fix flaky test\"" : ""}</P>
+          {t >= 3.7 ? <O c="o-omp">✻ 正在读取 cache_test.rs</O> : null}
+          {t >= 4.6 ? <O c="o-omp">✻ 正在运行 cargo test ×20</O> : null}
+          {t >= 5.6 ? <O c="o-done-ok">✓ 已发现 warmup() 中的竞态</O> : null}
+          {t >= 6.3 ? <O c="o-done-ok">✓ 已修复 warmup() 竞态 · 214 项通过</O> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+export const COMPLETIONS = [
+  ["checkout", "切换分支或恢复工作区文件"],
+  ["cherry-pick", "应用已有提交引入的更改"],
+  ["cherry", "查找尚未应用到上游的提交"],
+];
+
+export const TermPrompt = ({ t }) => {
+  const menu = t >= 1.8 && t < 3.6;
+  const sel = t < 2.4 ? 0 : t < 3.0 ? 1 : 0;
+  const accepted = t >= 4.5, ran = t >= 5.3;
+  let line;
+  if (t < 3.6) line = <>{typed("git ch", t, 0.4, 12)}{!menu && t >= 1.0 ? <span className="o-ghost">eckout -b fix/pricing</span> : null}</>;
+  else if (!accepted) line = <>{"git checkout "}{t >= 3.8 ? <span className="o-ghost">-b fix/pricing</span> : null}</>;
+  else line = <><b className="o-cmd">git</b> <span>checkout</span> <span className="o-flag">-b</span> <span className="o-arg">fix/pricing</span></>;
+  return (
+    <div className="lyrel-window-term lyrel-window-mono">
+      <P>cargo test --quiet</P>
+      <O c="o-dim">测试结果：成功。214 项通过；0 项失败</O>
+      <div className="lyrel-window-anchor">
+        <P caret={!ran}>{line}</P>
+        {menu ? (
+          <div className="lyrel-window-pop lyrel-window-complete">
+            {COMPLETIONS.map(([n, d], i) => (
+              <div className={"lyrel-window-crow" + (i === sel ? " is-sel" : "")} key={n}><span className="n">{n}</span><span className="d">{d}</span></div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {ran ? <O>{"已切换到新分支 'fix/pricing'"}</O> : null}
+      {ran ? <P br="fix/pricing" caret /> : null}
+    </div>
+  );
+};
+
+export const PAL = {
+  Terminals: [["omp", "启动预发布实例", "atlas-api"], ["pi", "检查 CLI 错误日志", "atlas-api"], ["opencode", "重构会话认证", "northwind  ·  feat/session-auth"]],
+  Actions: [["向右分屏", "⌘D"], ["缩放窗格", "⇧⌘↩"], ["新建工作树标签页…", ""]],
+  Sessions: [["omp", "处理空的每日摘要", "atlas-api  ·  12 分钟前"], ["pi", "添加导出端点", "atlas-api  ·  昨天"], ["omp", "汇总基准测试结果摘要", "research  ·  上周"]],
+};
+
+export const Palette = ({ t }) => {
+  const q = typed("摘要", t, 2.2, 7).toLowerCase();
+  const m = (s) => !q || s.toLowerCase().includes(q);
+  const groups = [
+    ["Terminals", PAL.Terminals.filter((x) => m(x[1]))],
+    ["Actions", PAL.Actions.filter((x) => m(x[0]))],
+    ["Sessions", PAL.Sessions.filter((x) => m(x[1]))],
+  ].filter(([, xs]) => xs.length);
+  if (q) groups.sort((x, y) => (x[0] === "Sessions" ? -1 : y[0] === "Sessions" ? 1 : 0));
+  let i = 0;
+  return (
+    <div className="lyrel-window-pop lyrel-window-palette">
+      <div className="lyrel-window-pinput">
+        <Search />
+        {q ? <span>{q}<span className="lyrel-window-caret" /></span> : <span className="ph"><span className="lyrel-window-caret" />搜索标签页、会话、主机和操作</span>}
+      </div>
+      <div className="lyrel-window-scopes">{["All", "Actions", "Terminals", "Sessions", "Hosts"].map((s) => <span key={s} className={s === "All" ? "is-on" : ""}>{{ All: "全部", Actions: "操作", Terminals: "终端", Sessions: "会话", Hosts: "主机" }[s]}</span>)}</div>
+      <div className="lyrel-window-presults">
+        {groups.map(([name, xs]) => (
+          <div key={name}>
+            <div className="lyrel-window-pgroup">{{ Terminals: "终端", Actions: "操作", Sessions: "会话" }[name]}</div>
+            {xs.map((x) => {
+              const sel = i++ === 0;
+              return name === "Actions" ? (
+                <div className={"lyrel-window-prow" + (sel ? " is-sel" : "")} key={x[0]}><span className="lyrel-window-glyph is-shell">{"›"}</span><span className="grow">{hl(x[0], q)}</span><span className="lyrel-window-kbd-plain">{x[1]}</span></div>
+              ) : (
+                <div className={"lyrel-window-prow" + (sel ? " is-sel" : "")} key={x[1]}><Glyph a={x[0]} /><span className="grow">{hl(x[1], q)}</span><span className="meta">{x[2]}</span></div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export const TermResumed = ({ t, t0, extra }) => (
+  <div className="lyrel-window-term lyrel-window-mono">
+    <P>{t >= t0 ? "omp --resume 3f9c2a" : ""}</P>
+    {t >= t0 + 0.5 ? <O c="o-omp">✻ 正在恢复“处理空的每日摘要”</O> : null}
+    {t >= t0 + 1.2 ? <O c="o-dim">  已读取 report_service.py · 3 处编辑待处理</O> : null}
+    {t >= t0 + 1.9 ? <O c="o-omp">✻ 正在运行 pytest tests/test_report_service.py</O> : null}
+    {extra}
+  </div>
+);
+
+export const TermSearch = ({ t }) => (t < 4.1
+  ? (
+    <div className="lyrel-window-term lyrel-window-mono">
+      <P>lyrel agents</P>
+      <AgentsTable cursor="waiting" />
+      <P caret />
+    </div>
+  )
+  : <TermResumed t={t} t0={4.1} />);
+
+export const TermPersist = ({ t }) => (
+  <TermResumed t={9} t0={0} extra={<>
+    {t >= 4.6 ? <O c="o-done-ok">✓ 18 项通过 · 空摘要返回 EMPTY_SUMMARY</O> : null}
+    {t >= 5.2 ? <O c="o-omp">⏺ 已完成。3 个文件已更改，+41 −6</O> : null}
+  </>} />
+);
+
+export const PERSIST_PANES = [["omp", "处理空的每日摘要"], ["omp", "启动预发布实例"], ["pi", "检查 CLI 错误日志"], ["kimi", "修复价格获取超时"]];
+
+export const Frame = ({ ch, t }) => {
+  const k = CHAPTERS[ch].key;
+  const groups = sidebar(ch, t);
+  const title = (k === "search" && t >= 4.1) || k === "persist" ? "处理空的每日摘要" : "~/code/orbit";
+  const gone = k === "persist" && t >= 0.9 && t < 3.7;
+  const palOpen = k === "search" && t >= 0.7 && t < 4.0;
+  const toast = k === "agents" && t >= 3.2 && t < 6.9;
+  return (
+    <div className="lyrel-window-stagebox">
+      <div className={"lyrel-window" + (gone ? " is-gone" : "")} aria-hidden="true">
+        <div className="lyrel-window-lights"><span /><span /><span /></div>
+        <aside className="lyrel-window-sb">
+          <div className="lyrel-window-bar">
+            <span className="lyrel-window-iconbtn"><svg width="11" height="11" viewBox="0 0 11 11"><path d="M5.5 1v9M1 5.5h9" stroke="var(--w-a45)" strokeWidth="1.2" strokeLinecap="round" /></svg></span>
+          </div>
+          <div className="lyrel-window-sbtop">
+            <div className="lyrel-window-ws"><span className="lyrel-window-ws-init">W</span><span>工作</span></div>
+            <div className="lyrel-window-search"><Search /><span>搜索</span></div>
+          </div>
+          <div className="lyrel-window-groups">{groups.map((g) => <Group key={g.name} g={g} />)}</div>
+        </aside>
+        <main className="lyrel-window-main">
+          <div className="lyrel-window-bar">
+            <div className={"lyrel-window-pal" + (k === "search" && t >= 0.35 && t < 0.7 ? " is-press" : "")}><Search /><span>{title}</span><span className="lyrel-window-kbd">⌘P</span></div>
+          </div>
+          {k === "agents" ? <TermAgents t={t} /> : k === "cli" ? <TermCli t={t} /> : k === "prompt" ? <TermPrompt t={t} /> : k === "search" ? <TermSearch t={t} /> : <TermPersist t={t} />}
+        </main>
+        <Inspector />
+        {palOpen ? <div className="lyrel-window-scrim" /> : null}
+        {palOpen ? <Palette t={t} /> : null}
+        {toast ? (
+          <div className="lyrel-window-toast">
+            <img src="/logo/logo.svg" alt="" />
+            <div><b>OpenCode</b><span>需要你的授权…</span><span className="sub">northwind · 重构会话认证</span></div>
+          </div>
+        ) : null}
+      </div>
+      {k === "persist" && t >= 1.1 && t < 3.8 ? (
+        <div className="lyrel-window-afterlife">
+          <div className="lyrel-window-al-title">窗口已关闭。服务器仍在运行。</div>
+          {PERSIST_PANES.map(([a, s]) => (
+            <div className="lyrel-window-al-row" key={s}><Glyph a={a} /><span>{s}</span><span className="lyrel-window-dot is-working" /></div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+{/* Mintlify 文档说明 MDX 支持 useState 和 useEffect，
+   因此可变时钟和元素句柄保存在 state 中，而不是 ref 中。
+
+   此文件每个 export 的函数体内都不要放置 JS 注释，包括行注释和块注释：
+   托管的 Mintlify 构建无法解析含有此类注释的页面，
+   只会显示 "parsing error" 占位内容。mint dev 和 mint validate 都会接受它，
+   因此问题只会在线上站点出现。请像这样在顶层添加注释。 */}
+export const Demo = () => {
+  const [st, setSt] = useState({ ch: 0, t: 0 });
+  const [c0] = useState(() => ({ ch: 0, start: 0, visible: true, last: 0, paused: 0 }));
+  const [el, setEl] = useState(null);
+  useEffect(() => {
+    const c = c0;
+    c.start = performance.now();
+    let raf = 0;
+    const tick = (now) => {
+      raf = requestAnimationFrame(tick);
+      if (!c.visible || document.hidden) { c.start = now - c.paused; return; }
+      let t = (now - c.start) / 1000;
+      if (t >= CHAPTERS[c.ch].d) { c.ch = (c.ch + 1) % CHAPTERS.length; c.start = now; t = 0; }
+      c.paused = now - c.start;
+      if (now - c.last < 33) return;
+      c.last = now;
+      setSt({ ch: c.ch, t });
+    };
+    c.paused = 0;
+    raf = requestAnimationFrame(tick);
+    const io = new IntersectionObserver(([e]) => { c.visible = e.isIntersecting; }, { threshold: 0.05 });
+    if (el) io.observe(el);
+    return () => { cancelAnimationFrame(raf); io.disconnect(); };
+  }, [el]);
+  const go = (i) => {
+    const c = c0;
+    c.ch = i; c.start = performance.now(); c.paused = 0;
+    setSt({ ch: i, t: 0 });
+  };
+  const cur = CHAPTERS[st.ch];
+  return (
+    <div className="lyrel-home-demo" ref={setEl}>
+      <Frame ch={st.ch} t={st.t} />
+      <div className="lyrel-home-chapters" role="tablist" aria-label="lyrel 演示">
+        {CHAPTERS.map((c, i) => (
+          <button key={c.key} role="tab" aria-selected={i === st.ch} className={"lyrel-home-chapter" + (i === st.ch ? " is-on" : "")} onClick={() => go(i)}>
+            <span className="lyrel-home-chapter-bar"><span style={{ width: (i === st.ch ? Math.min(1, st.t / cur.d) * 100 : i < st.ch ? 100 : 0) + "%" }} /></span>
+            <span className="lyrel-home-chapter-label">{c.label}</span>
+          </button>
+        ))}
+      </div>
+      <div className="lyrel-home-chapter-now">{cur.label}</div>
+    </div>
+  );
+};
+
+export const Ico = ({ d }) => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary-text)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
+);
+
+export const FEATURES = [
+  { t: "比应用更持久的会话", href: "/getting-started/concepts",
+    d: "M12 3v8M6.3 6.3a8 8 0 1 0 11.4 0",
+    p: "你的 shell 由后台服务器管理，而非窗口。退出 lyrel 后，构建仍会继续。无需学习或配置 tmux。" },
+  { t: "编辑器级输入体验", href: "/terminal/prompt",
+    d: "M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM7 10h.01M11 10h.01M15 10h.01M8 14h8",
+    p: "根据历史记录显示灰字建议、解释每个选项的 Tab 补全、语法高亮、点击定位光标，以及真正的多行编辑。" },
+  { t: "感知智能体", href: "/agents/overview",
+    d: "M8 8h8a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3zM12 4v4M9.5 13h.01M14.5 13h.01",
+    p: "识别 omp、Kimi Code、pi、OpenCode 2.x、Hermes 五种内置产品。状态、通知与恢复取决于正式版本、集成授权和各项运行验收，不由名称识别推定。" },
+  { t: "如同本地般的远程工作", href: "/remote/workspaces",
+    d: "M5 4h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM5 13h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zM7 7.5h.01M7 16.5h.01",
+    p: "原生 Rust SSH 协议栈，支持连接配置、SFTP 和端口转发；远程工作区则让文件、仓库和窗格都留在远程机器上。" },
+  { t: "目光所及即是 Git", href: "/git/source-control",
+    d: "M6 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 7v10M18 9v1a4 4 0 0 1-4 4H6",
+    p: "侧边栏每行都显示分支和差异计数，还提供源代码管理面板、差异浮层、GitHub 议题和拉取请求，以及集中管理工作树的对话框。" },
+  { t: "支持脚本控制", href: "/cli/overview",
+    d: "M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM7 9l3 3-3 3M13 15h4",
+    p: "随附 lyrel CLI，可打开窗格、发送按键、读取屏幕，并阻塞等待直到智能体需要你介入，让脚本和智能体都能驱动工作台。" },
+];
+
+export const Features = () => (
+  <div className="lyrel-home-grid">
+    {FEATURES.map((f) => (
+      <a className="lyrel-home-card" href={f.href} key={f.t}>
+        <span className="lyrel-home-card-icon"><Ico d={f.d} /></span>
+        <h3>{f.t}</h3>
+        <p>{f.p}</p>
+      </a>
+    ))}
+  </div>
+);
+
+export const Tick = () => (
+  <span className="lyrel-home-tick"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="var(--primary-text)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></span>
+);
+
+export const AgentPanel = () => (
+  <div className="lyrel-home-panel" role="img" aria-label="lyrel 侧边栏中的智能体标签页，每个都有实时状态指示点，并显示 OpenCode 正在等待输入的通知">
+    {GROUPS.slice(0, 2).map((g) => <Group key={g.name} g={g} />)}
+    <div className="lyrel-home-toast">
+      <Glyph a="opencode" />
+      <div><b>OpenCode 需要你的授权…</b><span>northwind · 重构会话认证</span></div>
+      <span className="lyrel-window-kbd">⌘1</span>
+    </div>
+  </div>
+);
+
+
+export const STEPS = [
+  { t: "安装", p: "桌面端支持 macOS、Windows；Linux 保留 server 和 CLI，以及从桌面连接的远程开发。lyrel 独立初版为 0.1.0，目前尚无实际发布资产；请先查看安装文档。", href: "/getting-started/installation", l: "安装指南" },
+  { t: "设置", p: "花五分钟设置 shell、字体、主题和快捷键，之后便能持续受益。", href: "/getting-started/first-launch", l: "首次启动" },
+  { t: "了解三个概念", p: "工作区、标签页、窗格，以及在底层维持它们运行的服务器。", href: "/getting-started/concepts", l: "核心概念" },
+];
+
+export const Home = () => (
+  <div className="lyrel-home">
+    <section className="lyrel-home-hero">
+      <div className="lyrel-home-wrap">
+        <span className="lyrel-home-eyebrow"><i />开源 · 使用 Rust 编写</span>
+        <h1>让终端持续运行，放心离开。</h1>
+        <p className="lyrel-home-lede">关闭窗口、重启电脑、换一台笔记本——你启动的 shell 会话依然可用，留在其中工作的编程智能体也能恢复。</p>
+        <div className="lyrel-home-ctas">
+          <a className="lyrel-home-btn lyrel-home-btn-primary" href="https://github.com/dlivxpr/lyrel/releases">查看 lyrel 发布状态</a>
+          <a className="lyrel-home-btn lyrel-home-btn-ghost" href="/introduction">阅读文档 →</a>
+        </div>
+        <div className="lyrel-home-platforms">macOS · Windows 桌面；Linux server／CLI · 独立初版 0.1.0，目前尚无实际发布资产；缺包时不会回退下载上游版本。</div>
+      </div>
+      <div className="lyrel-home-stage"><Demo /></div>
+    </section>
+
+    <section className="lyrel-home-section">
+      <div className="lyrel-home-wrap">
+        <div className="lyrel-home-kicker">与众不同之处</div>
+        <h2 className="lyrel-home-h2">是工作台，不只是窗口。</h2>
+        <p className="lyrel-home-sub">执行命令之余需要的一切——会话、主机、分支、智能体——都在终端旁边，无需切换到其他应用。</p>
+        <Features />
+      </div>
+    </section>
+
+    <section className="lyrel-home-section">
+      <div className="lyrel-home-wrap lyrel-home-split">
+        <div>
+          <div className="lyrel-home-kicker">编程智能体</div>
+          <h2 className="lyrel-home-h2">同时运行五个智能体，无需逐个盯守。</h2>
+          <p className="lyrel-home-sub">lyrel 从不包装你的智能体，而是根据窗格中的命令识别它们，并从外部跟踪状态。</p>
+          <ul className="lyrel-home-list">
+            <li><Tick /><span><b>每个标签页都有状态。</b>工作中、等待中、已完成——每个窗格一个指示点，按仓库分组。</span></li>
+            <li><Tick /><span><b>需要你时及时通知。</b>智能体等待你介入时立即通知，一轮任务结束时也会通知。</span></li>
+            <li><Tick /><span><b>重启后恢复。</b>智能体会话会在原来的窗格中从之前的位置继续。</span></li>
+          </ul>
+          <div className="lyrel-home-chips">
+            {["omp", "pi", "kimi", "opencode", "hermes"].map((a) => (
+              <span className="lyrel-home-chip" key={a}><Glyph a={a} />{AGENTS[a].name}</span>
+            ))}
+            <a className="lyrel-home-chip is-more" href="/agents/overview">查看五种智能体的支持范围</a>
+          </div>
+        </div>
+        <AgentPanel />
+      </div>
+    </section>
+
+    <section className="lyrel-home-section">
+      <div className="lyrel-home-wrap">
+        <div className="lyrel-home-kicker">基准测试</div>
+        <h2 className="lyrel-home-h2">按相同条件复现测量。</h2>
+        <p className="lyrel-home-sub">性能取决于构建、硬件、网格与机器负载。本项目不将继承的成绩视为 lyrel 实测。</p>
+        <p className="lyrel-home-footnote"><a href="https://github.com/dlivxpr/lyrel/tree/main/scripts/bench">查看基准测试工具与复现方法 →</a></p>
+      </div>
+    </section>
+
+    <section className="lyrel-home-section">
+      <div className="lyrel-home-wrap">
+        <div className="lyrel-home-kicker">从这里开始</div>
+        <h2 className="lyrel-home-h2">三步开始使用。</h2>
+        <div className="lyrel-home-steps">
+          {STEPS.map((s, i) => (
+            <a className="lyrel-home-card" href={s.href} key={s.t}>
+              <span className="lyrel-home-step-n">{i + 1}</span>
+              <h3>{s.t}</h3>
+              <p>{s.p}</p>
+              <span className="lyrel-home-more">{s.l} →</span>
+            </a>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <div className="lyrel-home-wrap">
+      <section className="lyrel-home-end">
+        <h2 className="lyrel-home-h2">你的 shell 会话依然在这里。</h2>
+        <p className="lyrel-home-sub">免费且开源。桌面端支持 macOS、Windows，远程开发保留 Linux 主机支持。lyrel 独立初版 0.1.0 目前尚无实际发布资产。</p>
+        <div className="lyrel-home-ctas">
+          <a className="lyrel-home-btn lyrel-home-btn-primary" href="https://github.com/dlivxpr/lyrel/releases">查看 lyrel 发布状态</a>
+          <a className="lyrel-home-btn lyrel-home-btn-ghost" href="/introduction">阅读文档 →</a>
+        </div>
+        <div className="lyrel-home-end-links">
+          <a href="https://github.com/dlivxpr/lyrel">GitHub</a>
+          <a href="https://github.com/dlivxpr/lyrel/issues">问题反馈</a>
+          <a href="https://github.com/dlivxpr/lyrel/blob/main/CHANGELOG.md">更新日志</a>
+        </div>
+      </section>
+    </div>
+  </div>
+);
+
+<Home />

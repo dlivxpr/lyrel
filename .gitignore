@@ -1,0 +1,43 @@
+/target
+/dist
+.DS_Store
+
+# Prepared ConPTY tree + nupkg cache (scripts/prepare-conpty.ps1). Several
+# worktrees can share one via LYREL_CONPTY_DIR / LYREL_CONPTY_NUPKG.
+.conpty/
+.conpty-cache/
+
+# Local dev-tool state — kept out of the repo but retained on disk.
+/CLAUDE.md
+/AUDIT.md
+.brooks-lint-history.json
+openwiki/.last-update.json
+
+# dev-build throwaway config dirs (`cargo dev`, plus per-branch ones passed as
+# --config-dir so a test run can't disturb a real profile)
+.lyrel-dev*/
+
+# Claude Code agent worktrees (transient)
+.claude/worktrees/
+
+# local scratch notes (never committed)
+/todo.md
+
+# repomix generated output
+repomix-output.*
+
+# local freeze-forensics helper — kept on disk, not shipped
+/scripts/diagnose-freeze.sh
+
+# benchmark harness work dir + generated fixtures (scripts/bench/)
+.bench/
+/big.log
+
+# Lavish review artifacts (design surfaces rendered for a single review pass)
+/.lavish/
+
+# Impeccable skill state and critique reports (local to one machine)
+/.impeccable/
+
+# Scratch design mockups (HTML previews made while designing, not shipped)
+/design/

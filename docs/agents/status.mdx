@@ -1,0 +1,220 @@
+---
+title: "状态与通知"
+description: "安装钩子、识别状态圆点，以及在智能体需要你时收到通知。"
+---
+
+一个已工作两分钟的智能体，与一个九十秒前就已停下、正在等待权限的智能体，
+从外部看起来并无区别。lyrel 让智能体主动报告自己的状态，从而解决这个问题。
+
+<a id="installing-the-hooks"></a>
+## 安装钩子
+
+**设置 → 集成**列出了所有能够报告状态的智能体，每个智能体旁边都有一个
+**安装**按钮：
+
+| 智能体 | |
+|---|---|
+| omp · Kimi Code · pi · OpenCode 2.x | 已有集成管理入口，完整状态语义按正式版本实跑验收 |
+| Hermes | 同一 opt-in plain CLI observer 提供身份、请求与有判决字段的轮次结果；历史经 Host 原生协议查询，完整运行验收仍未通过 |
+
+安装会将钩子写入该智能体自己的配置目录。安装后，该行会新增一个
+**卸载**按钮，原来的按钮则变为**重新安装**；当 lyrel 提供更新版本的钩子时，
+该行会显示**已过期**状态，原来的按钮则变为**更新**。
+
+集成设置中的常规诊断随界面语言显示英文或简体中文；上游技术错误、路径和命令保留原文。
+核心只提供诊断类别与参数，CLI 的操作错误仍为英文。状态 `Done` 仅表示本轮结束，
+不等于成功；收到真实结果后，桌面通知和已打开的输入框工具栏显示成功、失败、中断或拒绝及其原因。
+所有实际携带 `result` 的 hooks 都要求 daemon 支持 `agent-results`，不仅限于 OpenCode；
+旧 daemon 会明确拒绝，必须更新或重新连接，不能静默丢弃失败原因。control 仍为同一未发布版本 13，pane 仍为 7。
+
+### pi 1.3.0
+
+pi 使用独立的 `@earendil-works/pi-coding-agent@1.3.0` 扩展，不与 omp 共用生命周期模板。
+扩展写入所选 Host 的有效 `PI_CODING_AGENT_DIR/extensions/lyrel/index.ts`；未设时使用该
+Host 的 `.pi/agent`。安装、更新和卸载只操作 lyrel 自有桥，保留用户条目。
+旧远端不支持环境作用域查询、配置根是无法确定基准的相对路径时，明确报错，不写到本机或猜测目录。
+设置和 CLI 诊断使用已配置的原生 launch 命令中的非凭据作用域覆盖，与 Host 默认环境合并；
+复杂 shell／不明确包装器不会被执行或回退到默认根。
+`pi --offline`、`-ne` 等已确认的原生开关不会阻断安装、更新或卸载；禁用扩展发现仍会阻止运行中的状态报告，不会被安装动作自动解除。
+
+原生终端启动使用位置任务及 `--` 参数边界，多行、中文和以 `-` 开头的首条任务作为单个参数提交。
+自定义 `--print`／JSON／RPC 模式不被偷偷改成 TUI；携带交互首条任务时会明确拒绝这种模式。
+pi 即使在 `--` 后仍将前导 `@` 解释为附件，因此这种正文当前不能通过该 CLI 接口原样投递，会明确报错。
+
+`agent_settled` 是最终结束的唯一依据，包括首轮；`agent_end` 只是一次尝试结束，重试、
+压缩与排队续跑不会提前显示完成。`agent_before_settle.outcome` 和实际 `aborted` 保留成功、失败、
+中断结果，普通工具失败不结束整轮。会话 start／shutdown 使用真实身份；不从子进程终端内容猜 ID。
+`before_agent_start` 报告启动阶段的实际工作；桥只接受正式 `ctx.mode === "tui"` 的事件，
+继承 owner 标记的子 Pi 不注册主窗格桥，RPC／print／JSON 子进程不覆盖前台 TUI 的身份。
+
+`ui_prompt_start`／`ui_prompt_end` 进入共享请求集合；回答一个不同身份的问题不会清除另一个。
+pi 正式 TUI 事件没有请求 ID 和批准／拒绝值：桥按生命周期分配稳定 ID，
+若同时出现相同 kind／title、无法无歧义对应的提示，会保留未决项并报告诊断，
+不冒称已经批准或拒绝。拒绝、超时和程序化取消的真实模型／TUI 时序仍需集中实跑。
+
+`--no-extensions`／`-ne` 会禁用发现的桥；`--no-session` 禁用历史、恢复和分叉；
+项目未信任、运行时加载失败等应结合 pi 自身诊断处理，不自动批准资源。
+集成诊断说明这些限制；“文件已安装”不等于“桥已加载”，没有事件不等于完成。
+完整原生 TUI、模型、远端和并发的证明范围见[验收状态与已知限制](/agents/sessions#acceptance-status)，静态接口与确定性回归不代替运行证明。
+
+### omp 18.12.1
+
+omp 与 pi 使用独立的正式扩展，不共享结束事件假设。omp 的 `agent_end` 只有在
+`willContinue` 与 `awaitingAsyncWork` 均不为 `true` 时才报告本轮结束；重试、压缩续跑、
+后台任务等待及系统 turn 保持工作状态。不注册 pi 专属的 `agent_settled`，也不以固定
+静默时间、Escape／Ctrl+C 后的等待时间或程序退出推定成功。
+
+工具审批、`ask` 提问及计划审阅以稳定请求 ID 分别打开／解决。一个权限答复或普通
+工具完成不会清空其他未决请求；在空闲时打开的选择框关闭后仍为空闲。未提供可关联
+ID 的真实人工请求保持等待并显示关联受限诊断，不静默忽略。运行状态与结果分离：
+`done` 仅表示最终结束，结果另存为成功、失败、中断或拒绝及实际原因；普通工具失败
+不直接结束整轮。子代理以正式 `ctx.agent.kind` 排除，不能覆盖主会话身份。
+
+安装位置按所选 Host 的有效 `HOME`／`USERPROFILE`、`PI_CONFIG_DIR`、
+`OMP_PROFILE`／`PI_PROFILE` 与 `PI_CODING_AGENT_DIR` 解析。命名 profile 使用自己的
+`profiles/<name>/agent/extensions/lyrel/index.ts`，忽略默认 profile 的 agent-dir 覆盖；
+显式空 `OMP_PROFILE` 选择默认 profile，不继承 `PI_PROFILE`。旧远端未提供环境能力、
+profile 无效或相对覆盖目录缺少原生启动工作目录时明确报错，不回退本地或默认目录。
+
+安装／更新／卸载只处理 lyrel 标记的扩展文件，保留用户文件。`--no-extensions`、
+`disabledExtensions` 或 `--trusted-extension` allowlist 可排除状态桥，lyrel 不修改这些
+策略或绕过同意；“已安装”不保证当前窗格已加载。桥的加载／传输限制会保留诊断，
+缺少 `agent-requests` 能力的旧 daemon 被明确拒绝，需更新／重连。
+
+以上是当前适配契约，不能据此推定真实 GUI／PTY、模型调用或跨平台验收均已通过；
+实际证明范围见[验收状态与已知限制](/agents/sessions#acceptance-status)。
+
+### OpenCode 2.x
+
+本次适配固定官方 `@opencode/cli@2.0.32`；可执行名称为 `opencode` 和
+`opencode2`。裸启动保持原生 TUI，首条任务使用正式 `--prompt` 参数；不在启动前
+强制探测版本，不自动升级程序，也不强制 `--standalone` 或关闭默认共享服务。
+
+桥接安装到 `$XDG_CONFIG_HOME/opencode/plugins/lyrel/tui.ts`，未设置
+`XDG_CONFIG_HOME` 时使用 `~/.config`。这是本地 TUI 插件，不是共享服务插件：
+当前 route 决定前台会话 ID，当前客户端 tabs 及其会话 family 决定聚合集合。
+后台 tab 的执行与未决权限／表单也会影响状态；同一会话的多个视图可以共同报告，
+不会由最后收到的服务事件抢占唯一归属。
+
+正式 execution、permission 和 form 事件触发权威快照刷新；首次连接、重连和定期
+同步重新读取 active、outcome 及未决请求，不依赖 live-only 事件重放。
+失败、中断与拒绝保留为独立结果；客户端关闭或同步失败不等于服务端执行成功。
+`done` 仅表示本客户端聚合的执行已结束，不等于 `succeeded`。
+
+安装／更新／卸载仍按所选本地或已连接远端 Host 执行，仅替换带 lyrel 归属标记的
+文件，不改用户 `cli.json`、共享服务模式或插件授权。旧 lyrel 自有 `plugins/lyrel.js`
+在授权更新时迁移；不删除用户自有同名文件。`cli.json` 中禁用 `lyrel` 或匹配通配符
+会显示诊断，安装不会解除禁用。JSONC、项目级覆盖和运行时加载限制应结合
+`opencode plugin list` 与原生 TUI 插件提示诊断；“文件已安装”不是“插件已加载”。
+旧 daemon 缺少 `agent-results` 能力时，桥接明确失败，需更新／重连 daemon。
+
+代码与确定性状态回归不能替代正式智能体和 GUI 实测；双窗格、多个 tabs、同会话双视图、
+服务先启动、真实模型执行和断线重连须分别验证，参见[验收边界](/agents/sessions#acceptance-status)。
+
+
+
+### Hermes 0.22.2 的 plain CLI observer
+
+安装仅准备有效 Hermes home 下 `plugins/lyrel/__init__.py` 和 `plugin.yaml` 两个自有文件；
+home 由所选 Host 的非凭据环境元数据解析：显式 `HERMES_HOME` 优先；Windows 默认
+`$LOCALAPPDATA/hermes`（缺省为 `~/AppData/Local/hermes`），Unix 默认为 `~/.hermes`，
+并保留正式 `HERMES_DATA_DIR_SUFFIX`。配置 `agent_launch.hermes` 的显式 `--profile`／`-p` 优先；未显式选择时，root home 跟随只读 `active_profile` 选择器，
+不创建缺失、已删除或没有身份标记的 named profile；读取 `.env`／`auth.json` 等身份标记时只查询元数据，不读取凭据内容。
+旧远端缺少 `agent-environment` 元数据时明确诊断并拒绝写入，不拿 GUI 本地环境猜路径。
+更新与卸载只处理带 lyrel 归属标记的文件，保留同目录用户文件、配置及授权。
+**文件已安装不等于用户已同意执行插件**：须在同一个 home/profile 中自行运行
+`hermes plugins enable lyrel`，然后以 `hermes plugins list` 检查启用状态。
+lyrel 不写 `plugins.enabled`、shell-hook allowlist，不添加 `--accept-hooks`，也不解除安全模式。
+`HERMES_SAFE_MODE`、禁用插件或运行时依赖未就绪会阻止桥加载；诊断与原生启动错误必须保留，
+不能用缺失事件推断任务已结束。该插件只使用覆盖 plain CLI 的正式 observer，
+不将 messaging-only `session:start` 等 gateway hooks 冒充终端接口。
+
+身份报告只携带真实 ID、目录和非凭据作用域选择器。`pre_llm_call` 报告主轮次开始；
+`on_session_end` 的 `completed`／`failed`／`interrupted` 与 `turn_exit_reason` 分别决定结果与原因。
+`post_llm_call`、单次 API 错误、普通工具失败、`on_session_finalize` 和静默都不是最终成功。
+同一 `turn_id` 内压缩后的持久化 ID 可更新恢复目标；迟到的旧轮次、子代理及其他平台事件不结束主窗格。
+原生 `on_human_input_request`／`on_human_input_resolved` 的 UUID 映射为独立未决权限／问题；
+空会话身份的 CLI 请求不伪造身份，解决一个请求不清除其他请求，不传出提示词、命令、密码或回答。
+自动审批的 `pre_approval_request` 不另建 Waiting；异步子代理尚未完成时，主轮次结束不产生 Done，
+子代理完成也不冒充其后系统续跑的结果，等待原生主续跑轮次的最终事件。
+
+**已知协议缺口仍在范围内**：正式 `turn_facade` 的 lease 拒绝、`conversation_loop` 的部分早退错误／
+压缩超时以及独立 `codex_runtime` 可以绕过 `on_session_end`；不能把最后一次 API 错误或无事件改成 Done。
+后台进程完成队列与插件 observer 没有同一完整最终态契约，尚未证明覆盖全部后台／系统任务。
+未提交首轮、`/resume`／`/branch` 切换后下一条命令或 turn 前的即时身份仍缺正式事件。
+这些情况保留原状态或明确诊断，不使用内部 breadcrumb、数据库轮询或屏幕猜测补造事实；该协议缺口仍未关闭。
+
+<Note>
+  这些钩子仅在 lyrel 内生效。在其他终端中运行同一个智能体不会受到影响。
+</Note>
+
+钩子按机器分别安装。关联第二台[机器](/remote/workspaces)后，
+表格上方会出现一排标签，用于选择要查看的机器，表格随后会显示该机器上的智能体——
+因此，你可以在同一个界面中，以相同的方式为开发机安装钩子。
+
+<a id="the-status-dot"></a>
+## 状态圆点
+
+每个标签页标签和侧边栏行都会显示一个圆点：
+
+| 圆点 | 含义 |
+|---|---|
+| 🔵 **蓝色** | 工作中 |
+| 🟠 **琥珀色** | 需要你的输入——例如权限提示或提问 |
+| ⚪ **中性灰色** | 当前轮次已结束；不表示执行成功 |
+
+
+这三种状态也对应 `lyrel agents` 报告的 `working` / `waiting` /
+`done`，并且是 [`lyrel wait`](/agents/orchestration) 阻塞等待时依据的状态。
+第四种状态 `idle` 不显示圆点——它表示智能体尚未开始一个轮次。
+
+状态事件的可选 `request` 为单个增量更新：
+`{"id":"上游稳定身份","kind":"permission|question|plan-review","resolved":false}`；
+`resolved: true` 只解决同类型与同 ID 的请求。可选 `requests` 数组为当前会话的权威
+快照，空数组明确清空，字段缺省则不改变集合。重连快照与增量共用
+`AgentSessionState.pending_requests`；OpenCode 的客户端权威聚合也同步这一集合。
+可选 `result` 为 `{"outcome":"succeeded|failed|interrupted|rejected","reason":"实际原因"}`。
+
+
+<a id="notifications"></a>
+## 通知
+
+通知有两种，都遵循你在**设置 → 常规 → 通知**中设定的策略：
+
+- **“需要你的许可……”**：智能体因等待你处理而阻塞时立即发送
+- **“已完成，耗时 42 秒”**：在一个轮次结束时发送
+
+这意味着，在默认的*未聚焦时*策略下，一旦你成为流程瓶颈，就会立即收到通知；
+而当你正在查看时，则不会受到打扰。
+
+程序也可以使用 OSC 9、OSC 777（`notify;title;body`）或 kitty 的 OSC 99
+发送自己的通知。lyrel 按照相同的策略显示这些通知，仅在你正在查看该窗格时
+暂不显示；点击通知即可显示对应窗格。该通用终端能力不受内置智能体名单限制；如果窗格中的受支持智能体已通过 lyrel 的 hooks 报告状态，则会跳过重复通知。
+
+<a id="the-tray-icon"></a>
+## 托盘图标
+
+lyrel 会在系统托盘（macOS 上为菜单栏）中保留一个状态图标。
+只要任何位置的*任意*智能体需要输入，它就会立即切换为需要关注的状态，
+因此即使窗口不在前台，你也能看到。
+
+它的菜单列出了每个智能体窗格，并显示相应的品牌头像和状态圆点——
+点击其中一项即可显示对应窗格——菜单中还提供通知策略切换选项和
+**退出并停止服务器……**。
+
+可通过**设置 → 常规 → 显示托盘图标**将其关闭
+（`show_tray_icon: false`）。
+
+<a id="sending-an-agent-some-context"></a>
+## 向智能体发送上下文
+
+“全局搜索”中的两个操作可以将你面前的内容整理成现成的提示词，
+交给窗格中正在运行的智能体：
+
+| 命令 | 发送内容 |
+|---|---|
+| **智能体：发送选中内容** | 当前终端中选中的内容 |
+| **智能体：发送 Git 差异以供审查** | 仓库的 `git diff` |
+
+如果没有可识别的智能体正在运行，lyrel 会提示 *"No running coding agent found"*，
+而不会将内容输入到你的 shell 中。

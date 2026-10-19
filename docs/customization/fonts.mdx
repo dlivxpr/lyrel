@@ -1,0 +1,106 @@
+---
+title: "字体"
+description: "内置默认字体、回退链、连字，以及为何需要专门说明中日韩文字。"
+---
+
+**设置 → 外观 → 终端文本**涵盖了日常选项；其余设置位于
+`config.json` 中。
+
+| 设置 | 默认值 | |
+|---|---|---|
+| **字体族** | Hack | 从系统已安装的字体中选择 |
+| **字号** | 15 px | 终端网格中的字号 |
+| **界面字号** | 16 px | 网格以外所有内容的字号（12–24） |
+| **界面字体族** | 系统界面字体 | 网格以外所有内容使用的字体 |
+| **行高** | 1.4 | 字号的倍数 |
+| **粗体字体** / **斜体字体** | — | 需要时可指定独立字体 |
+| **字体连字** | 关闭 | 除非主动开启，否则 `calt`、`liga` 和 `clig` 均保持关闭 |
+| **加粗笔画** | 开启 | 仅限 macOS——参见 [macOS 上的笔画粗细](#stroke-weight-on-macos) |
+
+<a id="hack-is-bundled"></a>
+## 内置 Hack 字体
+
+默认字体随二进制文件一同提供。它不依赖系统安装，在每台机器上的渲染效果都相同，因此新笔记本上的显示效果也能与你去年配置的那台一致。
+
+<a id="fallbacks"></a>
+## 字体回退
+
+`font_family` 是主字体；`font_fallbacks` 是一个有序列表，主字体缺少某个字符时，会依次尝试列表中的字体。
+
+```json
+{
+  "font_family": "JetBrains Mono",
+  "font_fallbacks": ["Maple Mono NF CN", "PingFang SC", "Apple Color Emoji"]
+}
+```
+
+省略 `font_fallbacks` 时，将使用平台的默认回退链：
+
+| | 默认回退字体，按顺序排列 |
+|---|---|
+| **macOS** | Menlo · Hasklug Nerd Font Mono · Maple Mono NF CN · PingFang SC · Apple Color Emoji |
+| **Windows** | Maple Mono NF CN · Cascadia Mono · Microsoft YaHei · Segoe UI Emoji |
+
+每条回退链都以宿主操作系统实际自带的字体收尾，这些系统字体名称也会追加到你自行编写的任何列表末尾，因此即使 `config.json` 是从其他平台复制而来的，也仍然能找到可用字体。
+
+<a id="opentype-features"></a>
+## OpenType 特性
+
+`font_features` 会将标签直接传递给文本塑形引擎：
+
+```json
+{
+  "font_features": { "calt": true, "liga": 1, "ss01": true, "zero": false }
+}
+```
+
+标签必须由四个字母或数字组成；`true`/`false` 会映射为 `1`/`0`。
+格式不正确的条目会被跳过并记录一条日志，而不会导致整个配置失效。
+
+只要写入*任意*标签，整套特性就都交由你控制：终端仅在未设置 `font_features` 时，才会自行指定
+`calt: 0`、`liga: 0` 和 `clig: 0`。因此，
+`{"font_features": {"zero": 1}}` 会启用斜线零，**同时**重新启用连字。
+如果希望启用斜线零并保持连字关闭，请明确指定：
+
+```json
+{
+  "font_features": { "zero": 1, "calt": 0, "liga": 0, "clig": 0 }
+}
+```
+
+<a id="stroke-weight-on-macos"></a>
+## macOS 上的笔画粗细
+
+macOS 字体平滑会加粗字形笔画，加粗程度取决于文本颜色：文本越浅，绘制出来就越粗。因此，与关闭了这一效果的终端相比，深色主题下的浅色文本在 lyrel 中可能显得更粗；这也是为什么换用同一字体族中更细的字重仍无法完全抵消这一效果。
+
+**设置 → 外观 → 终端文本 → 加粗笔画**（`font_thicken`）
+可以关闭这一效果，让字形无论采用何种颜色，都以字体自身的字重绘制：
+
+```json
+{
+  "font_thicken": false
+}
+```
+
+<Note>
+  更改会在下次启动 lyrel 时生效。它仅影响终端和 lyrel 自身的界面文本：菜单及其他原生 macOS 控件、其他应用和系统级设置的外观均保持不变。深色文本原本就几乎不会被加粗，因此在浅色主题下差异很小。
+</Note>
+
+保持开启则不会改变现有行为，因此已有的
+`defaults write io.github.dlivxpr.lyrel AppleFontSmoothing -int 0` 仍然有效。
+这一开关与 Ghostty 的 `font-thicken` 和 iTerm2 的细笔画选项作用相同，而 lyrel 默认采用 macOS 的外观。Windows 不采用这一笔画加粗机制，因此此配置键在 Windows 上不起作用。
+
+<a id="cjk-and-the-two-column-grid"></a>
+## 中日韩文字与双列网格
+
+<Info>
+  一个单元格的宽度等于主字体的一个字符前进宽度，而宽字符（中日韩字符）被固定为恰好占用两个单元格。只有当中日韩回退字体中表意文字的前进宽度**恰好是**主字体拉丁字符前进宽度的**两倍**时，这些字符才能严丝合缝地填满各自的位置。
+</Info>
+
+内置 Hack 的前进宽度为 0.60205em，因此双列位置的宽度为 1.2041em；而所有系统自带的中日韩字体（Microsoft YaHei、PingFang SC、Noto Sans CJK）的前进宽度均为 1.0em。
+这些字形会在各自的位置内左对齐，使每个字符右侧留下约 0.2em 的间隙。
+
+[Maple Mono NF CN](https://github.com/subframe7536/maple-font) 被纳入桌面平台的默认回退链，正是出于这一原因：它的拉丁字符宽度为 0.6em，中日韩字符宽度为 1.2em，能够与 Hack 的双单元格位置精确匹配。它在 Windows 的回退链中排在首位；在 macOS 上则位于 Menlo 和 Hasklug 之后，先由后两者覆盖拉丁字符和 Nerd Font 字形。这里只按名称引用它，并未将其内置（每种字重约 20 MB）——安装后，lyrel 就会自动使用，无需更改配置。
+
+如果你希望中日韩文字排得*紧凑*，而不只是间距均匀，就应改用其他**主字体**。
+前进宽度为 0.5em 的字体——例如 Sarasa Mono SC——能让两列的宽度恰好为 1.0em。

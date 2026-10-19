@@ -1,0 +1,74 @@
+# 更新日志
+
+本文件仅记录 lyrel 的当前变更，不继承衍生来源的发行版本。lyrel 从 `0.1.0` 独立编号，目前尚无实际发布资产。
+
+格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
+
+## [Unreleased]
+
+### lyrel 当前变更
+
+- 项目交付文件中的产品标识、内部样式、示例路径与图标打包输入统一清理；外部产品隔离 fixture 使用中性命名，保留不误连接、不认领及不删除其他资源的行为覆盖。原始版权、Apache-2.0 与第三方资源许可保持不变。
+- 移除继承的发行历史、性能成绩与过期截图／视频，保留可复现测量工具及方法，不将历史成绩改称 lyrel 实测。
+- 将产品术语、依赖政策、平台取舍、终端容量限制及智能体验收缺口收敛到现有正式文档，移除独立决策、术语与临时工单材料，并同步维护规则及文档路由。
+- 修复 Windows pane 清理误杀 detached 共享服务：以 ConPTY 的实际控制台归属挂断附着进程，不再按历史 ParentPID 终止整个后代树；真实 OpenCode 2.0.32 重连后，关闭拉起服务的父 TUI 或 pane 均保留共享服务。
+- 本机 GUI shell 创建迁至后台，通过 `spawn-claim` 与匹配 ID 的显式认领处理晚到结果和取消；未认领 pane 不进入持久 registry／handoff。关闭窗口／slot 后准确回收新建结果，恢复的持久 pane 不被误杀。Hermes 操作先公开 `session.close` 再关闭 stdio，保留真实目标与部分成功；headless OpenCode URL 校验直接使用锁图既有 `http` parser，不再误依赖可选 installer feature。
+- 修复真实运行暴露的三处问题：设置原生窗口标题随界面语言同步；OMP standalone扩展使用正式`@oh-my-pi/pi-utils`根包导出；OpenCode TUI桥直接消费SDK已解包的返回值，避免再次读取`.data`导致身份／会话查询失效。
+- 原生 Windows、Linux headless、桌面语言与重启，以及 Windows→Linux SSH／Host／SFTP／PTY 的验证范围分别记录；Hermes 即时身份、Kimi 自动首任务及完整模型／平台矩阵仍有缺口，不据套件通过推定全部能力已验收。
+- 修复双轴审查发现的八项可达问题：pi 集成管理复用已确认的原生开关契约，支持 `--offline`／`-ne`；工作树首任务按目标 Host 默认 shell 渲染；pi／Kimi 历史与管理及恢复共用有效配置作用域；集成常规诊断改为类型化数据并提供中英文界面；桌面通知及输入框显示真实 outcome／reason，`Done` 保持中性结束含义；所有实际结果载荷协商 `agent-results`；远端已创建分叉的连接失败保留并显示真实新 ID，重试只打开原目标；首页只列五种唯一产品并移除旧支持数量和失效演示名称。正式 GUI／平台验收须分别记录。
+- Hermes 11 在同一 opt-in observer 中接入原生 UUID 人工输入、按 turn 关联的最终 outcome、压缩身份更新与异步子代理续跑门控，复用通用请求集合而不新增超时状态机；配置显式 profile 与 Host home 范围参与 hooks／历史／恢复。历史经 Host 的正式 `projects.tree` 只返回元数据，远端独立能力协商；501 条探测使 500 条原生窗口溢出明确报错，不静默截断。首任务采用真实 TTY 下保活的 `chat --query=<literal seed>`，保留多行／中文／连字符与原生参数，拒绝 one-shot 和已有 query 冲突。上游早退绕过 observer、完整后台进程最终态、即时裸会话身份、历史分页以及真实 GUI／PTY／provider 和跨平台验收仍有明确缺口，
+- pi 独立适配正式 `@earendil-works/pi-coding-agent@1.3.0`：统一 Host 操作通过原生外部 `--fork`／RPC 核定真实新 ID 后打开原生 TUI，保留 session-dir、配置根、模型和自定义扩展参数，清除互斥旧会话选择；精确源缺失不新建空会话，开窗失败保留目标。扩展仅以 `agent_settled` 结束，按共享请求／结果契约保留未决输入和失败／中断，不使用首轮 `agent_end` 回退；增加原生交互首条任务、模式诊断、`PI_CODING_AGENT_SESSION_DIR`／`settings.sessionDir` 平铺历史和正式 `summary` 字段。未取得完整模型、GUI／daemon／PTY、远端、活跃写入／并发运行证据，不宣称全面验收。
+- omp 固定正式 `18.12.1`，使用独立扩展按 `willContinue`／`awaitingAsyncWork` 判定最终结束，覆盖工具审批、计划审阅、提问与主会话切换；通用状态机按稳定请求 ID 保留并解决未决集合，权威快照可恢复状态，不因一个工具完成清空其他等待。删除五种智能体的静默／键入超时假 Idle／Done，运行状态与失败／中断等结果分开；旧 daemon 通过 `agent-requests` 能力明确拒绝不适配的状态桥。OMP 工作树初始任务使用原生 `launch --` 安全边界；有效 profile／home／XDG 与已捕获 session-dir 参与安装、历史及统一 Host 会话操作，安装不改用户禁用策略或自有内容。真实 GUI／PTY、模型流程与跨平台未据源码或事件样本宣称通过。
+- Hermes 按正式 `0.22.2` 增加 opt-in Python observer 最小身份桥与自有插件文件管理；通过官方 source-install launcher 的公开 `--print-runtime-command --module tui_gateway.entry` 取得准确 managed Python/bootstrap argv，直接启动 stdio 网关，避免 Windows `.cmd` 超时遗留后代。统一 Host 操作以 `session.branch_stored` 返回持久化新 ID、以原生 chat 恢复；错误不退化为空会话，已知身份后的部分成功保留真实目标。不采用只支持 ACP 来源的 fork，不向原 pane 输入 `/branch`，不修改内部会话文件或绕过插件授权。正式 GUI／daemon／PTY 双窗格、活跃写入及即时身份覆盖仍未验收，
+- 内置智能体身份收敛为 omp、Kimi Code、pi、OpenCode 2.x、Hermes；移除其他产品的专属识别、入口、hooks、历史、恢复／分叉分支、composer 适配、图标与退役专属测试。旧配置和快捷键不再生效，普通 shell 不受执行白名单限制；未知继承身份仅失去专属标注，不丢弃整份 pane／machine／handoff 状态。移除 Claude 专属折行复制与 CopyRaw 入口，保留普通复制；提供按 lyrel 归属核对的人工旧 hooks 清理说明，不扫描清理用户目录或终止已有进程。新增行为回归待集成后统一运行，正式智能体、GUI 与真实旧 daemon 升级／handoff 尚未验收，不据静态改动宣称通过。
+- 恢复／分叉入口统一经共享核心 Host 会话操作与既有后台调度处理，删除失败后静默新建空会话的回退；omp 按正式 `18.12.1` 原生恢复／分叉及持久化身份校核返回真实目标。新增 Host 归属、目录与身份错误、部分成功保留和远端能力协商回归；窗格打开失败可恢复同一目标，不重复分叉。真实正式智能体、GUI／daemon／PTY 与平台验收须分别记录，不因代码落地视为通过。
+- OpenCode 桥接迁移到正式 `@opencode/cli@2.0.32` 的客户端本地 TUI 插件：以前台 route 和本客户端 tabs/family 绑定身份并聚合 execution、permission/form、outcome；重连及定期权威快照不把丢事件或关闭客户端当作成功。新增通用显式执行结果与 `agent-results` 能力，`Done` 改为中性结束标记。支持 `opencode2` 和原生 `--prompt`，保留默认共享服务，授权更新仅迁移 lyrel 自有旧桥，禁用项不自动解禁。代码回归与正式智能体／GUI 实测分开记录；未取得完整运行证据前不宣称全面支持。
+- OpenCode 2.x 历史／恢复改用正式 `api`／已连接 TUI client 的 `session.list/get`；实时分叉经每个客户端独立的私有认证通道调用原生 `session.fork`，返回真实新 ID 后核验连接再打开，不再拼根 `--fork`。历史保留来源作用域，过滤子会话和归档，错误与部分成功保留真实身份；修正正式 SDK `data` envelope 的状态读取。五种智能体的稳定 `SessionScope` 统一保存到 daemon／窗格恢复模型，瞬态桥与认证 nonce 不写持久化。正式共享服务／桌面矩阵、standalone 第二 TUI 认证交接及服务存储来源证明须分别记录，不能以接口实现冒充运行验收。
+- OpenCode客户端桥安全修复：严格v2以标准HMAC-SHA256和一次性双方challenge认证完整请求／响应，不再把原始capability发给可能被接管的loopback端口；accept绝对认证期限与独立未认证容量避免滴流占尽操作slot。原生fork后再次正式get核实新目标，失败保留已知ID；默认历史作用域优先级修正为绑定scope、显式启动环境、Host缺省，并在合成后检查存储限制。专项消费者回归已补，真实运行验收须分别记录。
+- Kimi 初始任务不再被静默丢弃：GUI 与 CLI 在创建工作树／窗格前传播明确错误，空任务仍保留自定义原生启动配置。隔离正式 `@moonshot-ai/kimi-code@2.2.0` 已实跑 CLI、ACP、KAP 和 `SessionStart` hook 探针；KAP 能接收任务，但原生 TUI 投递／就绪闭环尚未验证，模型授权也缺失，不能据此声明此功能完成。
+- Kimi Code固定正式2.2.0：补权限回复／提问／后台任务契约，主会话只读durable turn记录提供真实结果，不再把可阻断Stop或普通工具失败当作最终成功。有效Host环境采用非凭据白名单，远端home不借用本机环境；历史与恢复固定同一来源。原生fork取得新ID后严格校核stdout和真实目标，再恢复新窗格，部分成功保留ID。隔离正式CLI原生分叉已实跑；模型、GUI／PTY双端继续、并发及远端完整验收仍未通过，初始任务缺口独立保留。
+- 界面翻译收敛为英文与简体中文，默认跟随操作系统最高优先界面语言，并允许固定语言；选择模式与实际语言分离，明确脚本优先于地区，模糊中文、繁体及读取失败使用英文。旧日语、俄语与无效配置回退英文而保留其他设置，仅加载不强制改写；删除日俄翻译资源与专属复数／搜索入口。设置、菜单、托盘及已有 Explorer 标签随选择刷新，不自动新增注册；CLI 与 shell 字符环境不变。行为回归已补充，真实窗口及平台验收由集成阶段分别记录。
+- 更新 Cargo 直接依赖约束与正式锁文件，并适配 `russh 0.64.1`／`russh-sftp 3.0.1`、`ureq 3.4.2`、`rusqlite 0.40.2`、`portable-pty 0.9.0`、`gix-discover 0.57.0`、`miniz_oxide 0.9.1`、`sha2 0.11.1`、`resvg 0.48.1` 等发布版 API；保留 registry-only、Kit/pre 与 Rio 边界。`tree-sitter` 保持 Kit 依赖图可兼容的 `0.26.13`，不通过 fork／patch 绕过原生 `links` 冲突。
+- GUI 主题与共享 agent 历史的 YAML 直接调用统一切到已批准的 `yaml_serde 0.10.7`，不保留 `serde_yaml` 兼容别名；updater 的 ZIP 读取迁到受支持的 `async_zip::base::read1`，保留路径、符号链接、展开大小与 CRC 校验。
+- Fig 补全固定来源为 `@withfig/autocomplete 2.692.3` 并核验 npm SHA-512 integrity；将 34 处应用说明文案及 SSH／传输命令的主机、路径补充纳入显式生成流程，全部 97 份既有输出重新生成后与升级前逐字节一致。以真实 SSH 配置／Include／known_hosts 候选行为回归替代注册键文本检查；Windows／macOS 打包同时携带上游 MIT 版权通知，来源与 npm 许可元数据不一致见 `scripts/fig-convert/README.md`。
+- 品牌资源生成环境切到 Python 3.13+／Pillow 13.0.0，保留 `resvg-py 0.5.0`；实际重生成的 11 项资源保持全部图像帧像素与 SVG 不变。Hack 四个字重／字形文件核对为官方最新 3.003，字体与图标设计不改；独立 DOOM-fire 的 Zig 0.14.1 基准例外继续保留。
+- 修复共享核心 stdio／路由测试对 Windows 上 `cat`／`sleep` 的隐式依赖：Windows 使用系统 PowerShell 的原始字节流并禁用用户 profile，Unix 使用系统工具，不要求安装 Git Bash 或修改全局 `PATH`。字节往返回归覆盖 NUL、非 UTF-8 与 CRLF；释放链路的回归等待子进程就绪并实际核验退出，不再仅等待固定时长。仅调整测试夹具与断言，生产 SSH／WSL／stdio 行为不变。
+- 依赖升级后，Windows 隔离桌面实例已实跑中文／emoji／组合字符与 ANSI 输出、深浅主题切换、复制粘贴、Fig 键盘补全、分屏焦点、滚屏、最大化／还原、窄窗口重排及字号缩放；编辑器 Unicode 修改实际保存，Git 并排／统一 diff、全局搜索与 Escape 焦点恢复正常。Windows 拼音候选提交、终端／Kit 输入框双向切焦点与 composition 跨 pane 不串入已复验。关闭设置与主窗口时日志仍出现 `window not found`／`无效的窗口句柄`，未阻止 GUI 退出或 daemon 保留 pane，尚未确定是否由本次升级引入；不据此宣称 macOS 实机、性能基准、正式安装或在线更新已通过。
+- Windows 平台收窄为 x86-64：取消 `aarch64-pc-windows-msvc` 桌面 GUI 与 headless server 构建、发行腿与 ConPTY arm64 固定包；ARM64 Windows 远端主机（`PROCESSOR_ARCHITECTURE=ARM64`）被明确拒绝，不再安装 x64 模拟 server，与 macOS Intel 拒绝策略对齐。ARM64 Windows 桌面用户可改用手动安装的 x64 包（`x64compatible`），其在线更新继续取 x64 资产。发布材料、打包脚本、准备脚本、安装与远程工作区文档同步为 x64-only。
+
+- 平台适配迁入正式 GPUI 接口：Windows Acrylic/Mica 等背景材质由应用自有材质状态与官方 `DwmSetWindowAttribute` 接线保留，17763／22621 等 build 分流与 Blurred/Transparent 回退契约不变，主题切换、激活／失焦与窗口重建均重放材质并清理 WCA／DWM 两组属性；macOS `font_thicken` 经完整委派的 `Platform`／`PlatformTextSystem` 包装注入 `Application::with_platform`，dilation 真实进入字形光栅化与精灵缓存键，不写全局 `AppleFontSmoothing`；原生菜单 enter／tab 字形经官方 `NSMenuItem` 后处理修正，快捷键不变。平台构建与原生验收证据分别记录，不把实现存在当作全部平台通过。
+- GUI 框架入口统一迁到正式 `gpui-kit 0.7.3`／`gpui-pre 0.3.9`，组件状态、通知层、主题映射及测试入口按公开 API 适配；GUI HTTP 使用匹配的 `gpui-pre-reqwest-client 0.3.9`。正式集成工作树已完成 Windows 构建、实际启动及适用行为回归，完整原生工作流、性能和最终交付仍逐项验收。
+- GUI 与 CLI 的终端解析统一迁到正式 `rio-vt =0.5.28`（关闭默认 features），保留 lyrel 自有 daemon、PTY 和绘制；不引入 Rio 窗口／PTY／Sugarloaf。消费者宽度、选择与捕获随之迁移；约 65k 同时存活样式及 raw 缓存行作为 GC root 时的颜色回退属于已接受边界，不宣称长期无限保真。原生输入、resize 与最终性能结果仍逐项验收。
+- ConPTY 使用显式准备的官方固定包 `Microsoft.Windows.Console.ConPTY 1.25.260930003`（文件版本 `1.25.2609.30003`）：`pwsh scripts/prepare-conpty.ps1` 校验 nupkg SHA-512、逐文件 SHA-256、文件版本与 Authenticode，输出到不入库的 `.conpty/`；支持共享目录和 `-Offline` 复用。`lyrel-core` 构建脚本为 GUI、server、CLI 与测试程序统一暂存，打包校验相同摘要；daemon 首次创建 pane 前拒绝缺失、损坏、架构或版本不匹配的旁加载文件，不静默回退系统宿主。仓库不保存这对二进制副本。
+- 本地产品身份切换为 lyrel，GUI、CLI、共享核心、server 与 updater 从 `0.1.0` 独立编号；命令、crate 路径、构建和打包调用方同步更名。
+- 默认配置、状态、凭据服务、daemon 发现、shell 与 coding agent 集成采用独立 lyrel 命名空间及 `LYREL_*` 环境，不自动读取、迁移或停止其他产品的数据和实例。
+- 当前界面、所有支持语言、运行文档及项目入口同步更新；保留上游来源、第三方 fork、历史记录和既有 IPC 协议版本。平台注册、远端部署及在线发行验收分别记录，不因名称切换而视为已验证。
+- 远端 SSH、Windows OpenSSH 与 WSL server 采用独立 lyrel 路径、程序和资产；远端下载仅使用 `dlivxpr/lyrel` 并执行校验和验证，WSL 缺少随包 server 时明确失败，不回退上游或网络下载。
+- 修复共享 agent 配置仅按 `agent-hook` 子命令误认归属的问题：刷新、安装和卸载精确识别 lyrel 程序入口，保留其他产品与用户条目及混合 matcher 中的其他 hook；Windows 远端 hook 识别按协议命名的 server。
+- 平台安装与启动契约使用独立 AppId、AUMID 和 bundle identity；macOS 包内图标、便携／Inno 标记、CLI 和 WSL 随包 server 保持配套布局。Linux 不提供桌面安装或通知注册入口。
+- 禁用的打包与校验材料改用 `.github-disable/scripts/` 真实路径，支持受控工作树手动打包；保持 Actions 禁用，不执行真实安装、系统注册或发布。安装文档补全各平台布局、卸载边界和签名／公证前提。
+- stable 更新只读取 `dlivxpr/lyrel`，按严格 SemVer 从分页 feed 选择最高桌面稳定版，支持 `0.1.0`／`v0.1.0`，拒绝同旧版本、预发布、错误版本或平台包及缺失校验和。复用锁定的 `semver 1.0.28`，第三方 Rust 依赖统一采用正式 registry 发布包。
+- 完整 Windows 包必须携带精确架构的 WSL server；macOS ZIP、Windows Setup／ZIP 的更新形态及独立安装标记保持一致。保留其他产品资源共存下的替换／恢复隔离回归及 SHA-256 清单入口。在线更新仍以本项目真实 release 和平台资产为前提，未擅自发布或安装。
+- 整合验收修正 CLI capture tail 回归：使用无外部提示符的真实 PTY 输出，观察尾部行、前部裁剪、原始 byte 计数及退出清理，避免用户两行 prompt 令正确实现被误判。移除仅重复 GUI 程序名常量的测试，保留真实 GUI 启动与 CLI／daemon 行为验证。
+- stdin E2E 按实际外部 payload 的 byte 长度核对报告，不再硬编码改名前的长度；保留不回显秘密与真实 pane 送达验证。
+- 双轴审查修正 server hook 报告测试的哨兵长度：按正式 sentinel 的 byte 长度同时检测 socket 路径不写 TTY 与拒绝后回退 TTY，保留状态断言。Windows hook 生命周期测试通过既有 `HookTarget::local_for_exe` 使用隔离的 `lyrel-app` runner 路径，不再把 Cargo 测试程序名当作产品身份；保留旧 其他产品、用户配置、配置覆盖与幂等保护，不扩大生产归属范围。
+- 更新模块集中 Inno 标记内容，并让桌面资产版本解析与各平台包名构造共享精确后缀常量；支持的平台、架构、包形态及拒绝条件不变，不新增品牌注册中心。此次修正的运行结果由集中验收补记。
+- Unix 退出观察测试先等待 reaper 完成，再断言最终 PID 不存活，并核对真实退出信号为 SIGTERM；避免将并发回收过程的短暂观察当作退出失败，仍要求 helper 在原有 grace window 内确认退出，不改生产生命周期逻辑。
+- 当前快捷键说明不再将上游版本当作 lyrel 迁移历史；应用、窗口标记、托盘、安装器、文档与 favicon 使用已批准的 lyrel 图形及可复现生成入口，保持 UI 主题不变。跨平台真实 GUI、包内容与安装显示须分别验收。
+- SSH／SFTP 使用正式 registry 依赖，保留主机密钥、撤销、提示与记住决定，不新增证书／CA 信任。GSSAPI 使用正式接口，仍依赖适用平台的真实服务与本地票据，不能以编译或 ignored 状态代替验收。
+- 修复 LSP 初始化期间提前打开文件导致服务器退出的问题：客户端在同一发送闸门内先发 `initialized`，再释放排队的文档消息。保留协议顺序回归；Windows 正式工作台已用真实 `rust-analyzer` 完成符号重命名、同步修改引用与 UTF-8 磁盘保存。其他平台与最终原生验收分别记录，不由此推定全部迁移完成。
+- 修复终端与 Kit 输入框切换焦点时的预编辑归属：失焦清除原控件的未提交文本，Windows 在公开根准备阶段取消原生 composition，避免候选提交串入新焦点或取消消息误删新输入框选区。Windows 正式窗口已复验双向切换、提交／取消、终端 BackTab 与连续最新剪贴板；其他平台及最终候选仍分别记录。
+- Windows 便携 updater 在替换安装前核验固定 ConPTY 配对文件与 MIT 通知的 SHA-256；缺失、损坏、架构或版本不匹配时拒绝包并保留原安装，不再将系统宿主当作缺文件回退。受影响 updater 回归和只校验冒烟已运行；未执行真实安装或在线更新。
+- 修复同批输出内连续同名命令的标题退休顺序，按流内切点清理 Rio 标题去重状态，并保留同步输出结束后的 shell 标题；Windows 终端 1030 项回归通过。CLI resize E2E 使用真实有限 PTY 输出，验证内容而非把含模式恢复前导的 raw capture 错当作整段字节后缀。
+- 自有编辑命令的空白修剪保持非空活动选区的行作用域，保留选区之外内容与 CRLF；LSP 补全不再用客户端子串过滤丢弃服务器返回的 fuzzy 匹配。
+- Windows 远端 server 使用 `lyrel-server-windows-x86_64.zip`，携带同架构固定官方 ConPTY 和必要许可；完整暂存、协议核对与配套先行落位，旧裸 exe 安装或缺件会修复，禁止裸 exe 回退。未启用 Actions 或执行外部发布。
+- 普通双击选词、反向拖选与自动滚动沿用用户配置的 `word_separators`，包括双列分隔符；保留智能精确范围、括号、软换行和宽字符完整选择。GUI 输入栏与 CLI 表格共用 Rio 公开 grapheme／presentation 占列规则，避免 ZWJ emoji 与 VS16 导致光标及列对齐偏移；副屏期间修改的历史容量在返回主屏时应用最新值。
+- Windows 便携 updater 在校验整个下载包之后，读取包内 `ConPTY-manifest.json` 核验目标版本的文件摘要、PE 架构、配对版本与许可；旧 helper 不再把自身编译时的 ConPTY 固定版本误当成后续发行包的唯一合法版本，不执行目标程序来完成校验。缺件、损坏、混版与错误架构仍明确拒绝，尚未执行用户安装替换或在线更新。
+- 取消 Linux 桌面 GUI、AppImage、桌面 updater 与专属构建／打包接线；桌面端保留 Windows／macOS。Linux 的共享核心、server、CLI、SSH／SFTP、Host／PTY、GNU／musl server 资产及 Windows 随包 WSL server 保留。Linux 根桌面构建明确拒绝，CI 材料改为验证 headless crate；历史 Wayland IME 失败不记作已修复，Windows／macOS 的未验收项不因退役而自动通过。
+- 移除内嵌的 `bash-preexec` 实现，Bash 4.4 及以上改用公开 `PS0`，Bash 3.2 保留自有 `DEBUG` 兼容路径；用户自行加载的库只通过公开函数数组接入，不安装或下载第三方脚本。真实 PTY 覆盖命令边界、退出码、多行／控制字符转义、截断、用户 prompt／trap、vi 模式及远端临时目录清理。旧 Bash 的 prompt `$_`／`PIPESTATUS` 限制经冻结基线对照确认并保留，不将其误写为新回归或已修复。
+- 修复正式 Kit 编辑器水平滚动时正文穿入行号栏的问题；按用户批准，行号窄栏使用不透明语义主题底色，不再透出壁纸／渐变，正文背景、行号、折叠和滚动保留。正式 release 已实际打开同一中文长行样本并水平滚动复验；此限定外观差异不扩大到终端或窗口材质。
+- Windows 远端 detached 启动在目标机优先选择已安装的 PowerShell 7，未安装时保留系统 5.1；经 WMI 创建的隐藏 cmd 包装启动选定 supervisor，避免直接 WMI→PowerShell 在部分主机无法执行。解释器选择只执行一次，保留环境、日志及带 nonce 的退出码，不改安全策略或新增必装依赖。真实首装、运行中强制替换与缺件修复均已运行，
+- 降低 Rio 正式 viewport 消费成本：在同一锁定帧内复用已解析样式，直接读取源网格可见行切片，逐格保留文字、组合符、链接和选区；复用绘制缓冲区时只清空源网格外的 padding，避免全量默认初始化后再次覆盖。缓存不跨帧、不跨 palette／theme 变化，不影响隐藏 pane 持续解析与输出通知门控。正式小块 Unicode 绘制成本已回到冻结基线多轮范围，完整输出、隐藏恢复、大 diff／列表及最终无诊断候选范围须分别记录，不外推为所有平台或所有指标都加速。
+- macOS 支持范围收窄为 Apple Silicon：不再构建、发行或更新 Intel macOS 包，`lyrel-server` 仅发布 `macos-aarch64`；安装文档、README、远端主机说明、禁用发布矩阵与 bug 模板同步。更新器不再把 `-macos-x86_64` 视为桌面包，远端资产解析拒绝 Darwin x86_64 并提示 Apple Silicon。macOS 实机证据仍记录为未运行。
+
+- 更新收敛为仅 stable：删除渠道设置、搜索入口、专属配置及滚动发布元数据；保留 stable 发布分页、草稿与预发布排除、精确平台包选择、完整性校验和安装失败恢复。

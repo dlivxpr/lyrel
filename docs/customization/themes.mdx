@@ -1,0 +1,107 @@
+---
+title: "主题"
+description: "十三款内置主题、自定义 YAML 主题、iTerm2 导入和颜色编辑器。"
+---
+
+**设置 → 外观 → 主题**，或全局搜索中的**更改主题…**，均可打开主题选择器。
+
+<a id="built-in"></a>
+## 内置主题
+
+| 浅色 | 深色 |
+|---|---|
+| 浅色 *（默认）* · One Light · Catppuccin Latte · Rosé Pine Dawn | 深色 · Dracula · Harbor · One Dark Pro · Rosé Pine · Catppuccin Mocha · Gruvbox Dark · Nord · Tokyo Night |
+
+<a id="following-the-system"></a>
+## 跟随系统
+
+开启**与系统同步**，并分别为浅色和深色外观选择主题。lyrel 会实时跟随操作系统切换，无需重启或重新加载。
+
+```json
+{
+  "theme_follow_system": true,
+  "theme_preset_light": "one_light",
+  "theme_preset_dark": "dracula"
+}
+```
+
+<a id="legible-bright-colours"></a>
+## 清晰可辨的亮色
+
+有些调色板中的 ANSI 亮色与背景色过于接近，导致难以辨认。**提高亮色可读性**（默认开启）会适度调亮或调暗这些颜色，使其清晰可辨。如果希望完全使用作者原定的调色板，可设置 `theme_legible_palette: false` 关闭此功能。
+
+<a id="transparency"></a>
+## 透明效果
+
+**设置 → 外观 → 透明效果**：
+
+| | |
+|---|---|
+| **不透明度** | 0.2–1.0，应用于所有主题。选择*跟随主题*时，使用主题自身的 `opacity` 值。 |
+| **模糊** | 模糊半透明窗口后方的内容（macOS）。 |
+| **背景材质** | 仅限 Windows：*自动*、*模糊*、*Mica*、*Mica Alt*、*Acrylic*、*关闭*。仅列出当前 Windows 版本支持的预设。 |
+
+<a id="writing-your-own"></a>
+## 编写自定义主题
+
+设置中的**打开主题文件夹**会打开当前配置目录下的 `themes` 文件夹。默认路径为：
+
+| | |
+|---|---|
+| macOS / Linux | `~/.config/lyrel/themes/` |
+| Windows | `%APPDATA%\lyrel\themes\` |
+
+配置目录的优先级为：`--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携模式的 `data` 目录 > 平台默认目录。
+
+将 `.yaml` 文件放入其中，主题就会出现在选择器中。文件名是主题的 ID；`name` 是显示名称。
+
+```yaml
+name: "午夜"
+background: "#0d1117"
+foreground: "#c9d1d9"
+accent: "#3fdd8c"
+cursor: "#3fdd8c"
+selection: "#264f78"
+opacity: 0.95
+blur: true
+ansi:
+  normal:  ["#484f58", "#ff7b72", "#3fb950", "#d29922", "#58a6ff", "#bc8cff", "#39c5cf", "#b1bac4"]
+  bright:  ["#6e7681", "#ffa198", "#56d364", "#e3b341", "#79c0ff", "#d2a8ff", "#56d4dd", "#f0f6fc"]
+```
+
+除 `background`、`foreground`、`accent` 和 `ansi` 外，其余字段均为可选。
+
+<a id="gradients-and-images"></a>
+### 渐变和图片
+
+`background` 也可以接受两种颜色：
+
+```yaml
+background: { top: "#0d1117", bottom: "#161b22" }
+# 或
+background: { left: "#0d1117", right: "#161b22" }
+```
+
+主题还可以在终端背后显示图片：
+
+```yaml
+background_image:
+  path: "/Users/me/Pictures/wall.jpg"
+  opacity: 0.25
+```
+
+设置面板为这两项都提供了选择器，因此通常无需手动编写配置。
+
+<a id="editing-in-the-app"></a>
+## 在应用内编辑
+
+选择一个内置主题，然后点击**创建副本以编辑**。内置主题为只读，因此编辑器会修改你的副本。在编辑器中，你可以调整所有颜色，包括十六个 ANSI 色位，以及背景图片。更改会以 YAML 格式写回主题文件夹。
+
+<a id="importing-from-iterm2"></a>
+## 从 iTerm2 导入
+
+将 `.itermcolors` 文件放入主题文件夹，lyrel 即可直接读取，无需转换。
+
+<Note>
+  lyrel 无法加载的主题文件会列在设置中的**未能从主题文件夹加载**下，并显示原因，而不会被静默忽略。
+</Note>

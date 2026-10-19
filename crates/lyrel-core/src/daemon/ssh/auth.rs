@@ -1,0 +1,1772 @@
+#[cfg(unix)]
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
+use russh::keys::agent::AgentIdentity;
+use russh::keys::agent::client::AgentClient;
+use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKey};
+#[cfg(all(unix, feature = "gssapi"))]
+use russh::{GssapiAuthenticator, GssapiStep};
+use russh::{MethodKind, MethodSet};
+
+use crate::daemon::protocol::{AuthPromptKind, AuthResponse, KiPrompt, NativeSshSpec, SshAuthMode};
+
+use super::broker::PromptBroker;
+use super::handler::ClientHandler;
+
+pub async fn authenticate(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    broker: &Arc<PromptBroker>,
+) -> Result<(), String> {
+    let user = spec.user.clone();
+
+    let mut remaining = match handle
+        .authenticate_none(&user)
+        .await
+        .map_err(|e| format!("auth (none) failed: {e}"))?
+    {
+        AuthResult::Success => return Ok(()),
+        AuthResult::Failure {
+            remaining_methods, ..
+        } => remaining_methods,
+    };
+
+    let mut last_reason: Option<String> = None;
+    let mut attempted = false;
+
+    for family in method_order(spec.auth_mode) {
+        if !remaining.is_empty() && !remaining.contains(&family) {
+            continue;
+        }
+        let outcome = match family {
+            MethodKind::GssapiWithMic => try_gssapi(handle, spec).await,
+            MethodKind::PublicKey => try_publickeys(handle, spec, broker).await,
+            MethodKind::KeyboardInteractive => try_keyboard_interactive(handle, spec, broker).await,
+            MethodKind::Password => try_password(handle, spec, broker).await,
+            _ => Outcome::Skipped,
+        };
+        match outcome {
+            Outcome::Authenticated => return Ok(()),
+            // The user turned the question down. `password` and
+            // `keyboard-interactive` are one question asked two ways — a
+            // server offering both wants the same secret either way — so
+            // walking on to the next of them put the sheet the user had just
+            // closed straight back on screen, and on a link that reconnects by
+            // itself it kept coming back (#820). Nobody declined a *method*.
+            Outcome::Declined => return Err(AUTH_DECLINED.to_string()),
+            Outcome::Failed {
+                remaining_methods,
+                reason,
+            } => {
+                attempted = true;
+                if let Some(m) = remaining_methods
+                    && !m.is_empty()
+                {
+                    remaining = m;
+                }
+                if let Some(r) = reason {
+                    last_reason = Some(r);
+                }
+            }
+            Outcome::Skipped => {}
+        }
+    }
+
+    // "authentication failed" was the answer to two different situations, and
+    // the more confusing one is that nothing was ever tried: no key on disk, no
+    // agent, or a connection pinned to a method this server does not offer.
+    // Saying "failed" there sends people looking for a wrong password.
+    Err(match (attempted, last_reason) {
+        (_, Some(reason)) => reason,
+        (true, None) => "authentication failed".to_string(),
+        (false, None) => nothing_to_try(spec.auth_mode, &remaining),
+    })
+}
+
+/// Every method this connection would have used was either unavailable here or
+/// not offered by the server, so the round ended without a single attempt.
+fn nothing_to_try(mode: SshAuthMode, remaining: &MethodSet) -> String {
+    let offered: Vec<&str> = [
+        (MethodKind::PublicKey, "publickey"),
+        (MethodKind::Password, "password"),
+        (MethodKind::KeyboardInteractive, "keyboard-interactive"),
+        (MethodKind::GssapiWithMic, "gssapi-with-mic"),
+    ]
+    .into_iter()
+    .filter(|(k, _)| remaining.contains(k))
+    .map(|(_, name)| name)
+    .collect();
+
+    let wanted = match mode {
+        SshAuthMode::Auto => "no authentication method could be tried",
+        SshAuthMode::Gssapi => "gssapi-with-mic could not be tried",
+        SshAuthMode::PublicKey => "no usable private key was found",
+        SshAuthMode::Agent => "no agent identity was available",
+        SshAuthMode::Password => "password auth could not be tried",
+        SshAuthMode::KeyboardInteractive => "keyboard-interactive could not be tried",
+    };
+    match offered.is_empty() {
+        true => wanted.to_string(),
+        false => format!("{wanted}; the server offers {}", offered.join(", ")),
+    }
+}
+
+fn method_order(mode: SshAuthMode) -> Vec<MethodKind> {
+    match mode {
+        SshAuthMode::Auto => vec![
+            MethodKind::GssapiWithMic,
+            MethodKind::PublicKey,
+            MethodKind::Password,
+            MethodKind::KeyboardInteractive,
+        ],
+        SshAuthMode::Gssapi => vec![MethodKind::GssapiWithMic],
+        SshAuthMode::PublicKey | SshAuthMode::Agent => vec![MethodKind::PublicKey],
+        SshAuthMode::Password => vec![MethodKind::Password],
+        SshAuthMode::KeyboardInteractive => vec![MethodKind::KeyboardInteractive],
+    }
+}
+
+/// What the whole attempt failed with when the person at the keyboard closed
+/// the prompt. Distinct wording on purpose: a caller that retries — the
+/// workspace supervisor reconnects on a clock — can tell a refusal it should
+/// stop repeating from a credential that was merely wrong.
+pub const AUTH_DECLINED: &str = "authentication cancelled";
+
+/// Whether a failure is the one above, seen from wherever it ended up.
+///
+/// The reason travels a long way — route ack, `io::Error`, and a localised
+/// "could not reach {machine}: {error}" around the outside — so this asks
+/// whether the message *carries* the refusal rather than whether it is one,
+/// exactly as `control::is_dialect_refusal` does with its own marker.
+pub fn is_auth_declined(message: &str) -> bool {
+    message.contains(AUTH_DECLINED)
+}
+
+enum Outcome {
+    Authenticated,
+    /// Nobody answered the prompt this method raised: the user closed it, or
+    /// no window was there to show it. Either way the attempt is over — see
+    /// the arm in [`authenticate`].
+    Declined,
+    Failed {
+        remaining_methods: Option<MethodSet>,
+        reason: Option<String>,
+    },
+    Skipped,
+}
+
+fn failed(reason: impl Into<String>) -> Outcome {
+    Outcome::Failed {
+        remaining_methods: None,
+        reason: Some(reason.into()),
+    }
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+const KRB5_DER_OID: &[u8] = b"\x06\x09\x2a\x86\x48\x86\xf7\x12\x01\x02\x02";
+
+#[cfg(all(unix, feature = "gssapi"))]
+struct GssapiClient {
+    ctx: libgssapi::context::ClientCtx,
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+#[derive(Debug)]
+enum GssapiAuthError {
+    Send(russh::SendError),
+    Gssapi(libgssapi::error::Error),
+    Other(String),
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+impl std::fmt::Display for GssapiAuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GssapiAuthError::Send(_) => write!(f, "send error"),
+            GssapiAuthError::Gssapi(e) => write!(f, "{e}"),
+            GssapiAuthError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+impl From<russh::SendError> for GssapiAuthError {
+    fn from(value: russh::SendError) -> Self {
+        GssapiAuthError::Send(value)
+    }
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+impl From<libgssapi::error::Error> for GssapiAuthError {
+    fn from(value: libgssapi::error::Error) -> Self {
+        GssapiAuthError::Gssapi(value)
+    }
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+impl GssapiAuthenticator for GssapiClient {
+    type Error = GssapiAuthError;
+
+    async fn gssapi_step(
+        &mut self,
+        selected_mechanism: Option<Vec<u8>>,
+        input_token: Option<Vec<u8>>,
+        mic_data: Vec<u8>,
+    ) -> Result<GssapiStep, Self::Error> {
+        use libgssapi::context::SecurityContext;
+
+        // russh sends the server's mechanism choice on the first step only:
+        // `AuthGssapiResponse` carries `Some`, continuation tokens carry
+        // `None` (russh 0.63.3 `client::Handle::authenticate_gssapi_with_mic`).
+        // The guard therefore matches on `Some` rather than on the absence of
+        // an input token, which is what the fork's `Vec<u8>` form keyed on.
+        if let Some(selected) = selected_mechanism
+            && selected != KRB5_DER_OID
+        {
+            return Err(GssapiAuthError::Other(
+                "server selected an unsupported gssapi mechanism".to_string(),
+            ));
+        }
+        let output = self.ctx.step(input_token.as_deref(), None)?;
+        if self.ctx.is_complete() {
+            let mic = self.ctx.get_mic(&mic_data)?;
+            Ok(GssapiStep::Complete {
+                token: output.map(|buf| buf.to_vec()),
+                mic: Some(mic.to_vec()),
+            })
+        } else {
+            let Some(token) = output else {
+                return Err(GssapiAuthError::Other(
+                    "gssapi context stalled: incomplete with no output token".to_string(),
+                ));
+            };
+            Ok(GssapiStep::Continue {
+                token: token.to_vec(),
+            })
+        }
+    }
+}
+
+async fn try_gssapi(handle: &mut Handle<ClientHandler>, spec: &NativeSshSpec) -> Outcome {
+    #[cfg(all(unix, feature = "gssapi"))]
+    {
+        use libgssapi::context::{ClientCtx, CtxFlags};
+        use libgssapi::name::Name;
+        use libgssapi::oid::{GSS_MECH_KRB5, GSS_NT_HOSTBASED_SERVICE};
+
+        let service_hosts = gssapi_service_hosts(&spec.host).await;
+        let mut tried = Vec::new();
+        let mut errors = Vec::new();
+        let mut last_remaining = None;
+        let mut saw_rejection = false;
+
+        for service_host in service_hosts {
+            let service = format!("host@{service_host}");
+            tried.push(service.clone());
+            let name = match Name::new(service.as_bytes(), Some(GSS_NT_HOSTBASED_SERVICE)) {
+                Ok(name) => name,
+                Err(e) => {
+                    errors.push(format!("{service}: target name error: {e}"));
+                    continue;
+                }
+            };
+            let mut client = GssapiClient {
+                ctx: ClientCtx::new(
+                    None,
+                    name,
+                    CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG,
+                    Some(GSS_MECH_KRB5),
+                ),
+            };
+
+            match handle
+                .authenticate_gssapi_with_mic(&spec.user, vec![KRB5_DER_OID.to_vec()], &mut client)
+                .await
+            {
+                Ok(AuthResult::Success) => return Outcome::Authenticated,
+                Ok(AuthResult::Failure {
+                    remaining_methods, ..
+                }) => {
+                    saw_rejection = true;
+                    let can_retry = remaining_methods.is_empty()
+                        || remaining_methods.contains(&MethodKind::GssapiWithMic);
+                    last_remaining = Some(remaining_methods);
+                    if !can_retry {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("{service}: {e}"));
+                    break;
+                }
+            }
+        }
+
+        let tried = tried.join(", ");
+        if saw_rejection {
+            return Outcome::Failed {
+                remaining_methods: last_remaining,
+                reason: Some(format!("gssapi rejected (tried {tried})")),
+            };
+        }
+        if errors.is_empty() {
+            failed(format!("gssapi auth error (tried {tried})"))
+        } else {
+            failed(format!(
+                "gssapi auth error (tried {tried}): {}",
+                errors.join("; ")
+            ))
+        }
+    }
+    #[cfg(not(all(unix, feature = "gssapi")))]
+    {
+        let _ = (handle, spec);
+        failed("gssapi auth is not available in this build")
+    }
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+async fn gssapi_service_hosts(host: &str) -> Vec<String> {
+    let host = host.to_string();
+    let fallback = host.clone();
+    tokio::task::spawn_blocking(move || gssapi_service_hosts_blocking(&host))
+        .await
+        .unwrap_or_else(|_| vec![fallback])
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+fn gssapi_service_hosts_blocking(host: &str) -> Vec<String> {
+    gssapi_service_hosts_with_lookup(host, reverse_lookup_addr)
+}
+
+#[cfg(unix)]
+#[cfg_attr(not(feature = "gssapi"), allow(dead_code))]
+fn gssapi_service_hosts_with_lookup(
+    host: &str,
+    reverse_lookup: impl FnOnce(IpAddr) -> Option<String>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(host.to_string());
+    if let Ok(ip) = host.parse::<IpAddr>()
+        && let Some(name) = reverse_lookup(ip).map(|name| name.trim_end_matches('.').to_string())
+        && !name.is_empty()
+    {
+        out.push(name);
+    }
+    out.dedup();
+    out
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+fn reverse_lookup_addr(ip: IpAddr) -> Option<String> {
+    match ip {
+        IpAddr::V4(ip) => reverse_lookup_v4(ip),
+        IpAddr::V6(ip) => reverse_lookup_v6(ip),
+    }
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+fn reverse_lookup_v4(ip: std::net::Ipv4Addr) -> Option<String> {
+    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    set_sockaddr_in_len(&mut addr);
+    addr.sin_family = libc::AF_INET as _;
+    addr.sin_addr = libc::in_addr {
+        s_addr: u32::from_ne_bytes(ip.octets()),
+    };
+    reverse_lookup_sockaddr(
+        &addr as *const libc::sockaddr_in as *const libc::sockaddr,
+        std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+    )
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+fn reverse_lookup_v6(ip: std::net::Ipv6Addr) -> Option<String> {
+    let mut addr: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+    set_sockaddr_in6_len(&mut addr);
+    addr.sin6_family = libc::AF_INET6 as _;
+    addr.sin6_addr = libc::in6_addr {
+        s6_addr: ip.octets(),
+    };
+    reverse_lookup_sockaddr(
+        &addr as *const libc::sockaddr_in6 as *const libc::sockaddr,
+        std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+    )
+}
+
+#[cfg(all(unix, feature = "gssapi"))]
+fn reverse_lookup_sockaddr(addr: *const libc::sockaddr, len: libc::socklen_t) -> Option<String> {
+    const NI_MAXHOST_FALLBACK: usize = 1025;
+    let mut host = [0 as libc::c_char; NI_MAXHOST_FALLBACK];
+    let rc = unsafe {
+        libc::getnameinfo(
+            addr,
+            len,
+            host.as_mut_ptr(),
+            host.len() as libc::socklen_t,
+            std::ptr::null_mut(),
+            0,
+            libc::NI_NAMEREQD,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    let name = unsafe { std::ffi::CStr::from_ptr(host.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+#[cfg(all(unix, feature = "gssapi"))]
+fn set_sockaddr_in_len(addr: &mut libc::sockaddr_in) {
+    addr.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+#[cfg(all(unix, feature = "gssapi"))]
+fn set_sockaddr_in_len(_addr: &mut libc::sockaddr_in) {}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+#[cfg(all(unix, feature = "gssapi"))]
+fn set_sockaddr_in6_len(addr: &mut libc::sockaddr_in6) {
+    addr.sin6_len = std::mem::size_of::<libc::sockaddr_in6>() as u8;
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+#[cfg(all(unix, feature = "gssapi"))]
+fn set_sockaddr_in6_len(_addr: &mut libc::sockaddr_in6) {}
+
+async fn try_publickeys(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    broker: &Arc<PromptBroker>,
+) -> Outcome {
+    let mut last: Option<MethodSet> = None;
+    let mut round = KeyRound::default();
+
+    let named_own_keys = !spec.identity_files.is_empty();
+    let files = identity_offers(
+        &spec.identity_files,
+        crate::core::ssh_profile::default_identity_candidates,
+    );
+
+    for step in auth_steps(spec.auth_mode, named_own_keys) {
+        let outcome = match step {
+            AuthStep::IdentityFiles => {
+                try_identity_files(handle, spec, broker, &files, &mut round).await
+            }
+            AuthStep::Agent => try_agent(handle, spec, &mut round).await,
+        };
+        match outcome {
+            Outcome::Authenticated => return Outcome::Authenticated,
+            Outcome::Declined => return Outcome::Declined,
+            Outcome::Failed {
+                remaining_methods, ..
+            } => {
+                if remaining_methods.is_some() {
+                    last = remaining_methods;
+                }
+            }
+            Outcome::Skipped => {}
+        }
+    }
+
+    Outcome::Failed {
+        remaining_methods: last,
+        reason: Some(round.reason(spec.auth_mode, !spec.identity_files.is_empty())),
+    }
+}
+
+/// One leg of a publickey round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthStep {
+    IdentityFiles,
+    Agent,
+}
+
+/// The order a publickey round works through its sources, most plainly asked
+/// for first (#513). Every key offered spends one of the server's
+/// `MaxAuthTries` — six by default — whether or not the server wants it, so
+/// the order decides who gets locked out when the budget runs dry:
+///
+/// 1. a key the profile **names** — the user said "use this one"
+/// 2. the **agent** — the user said "I loaded these"
+/// 3. the `~/.ssh` **defaults** — nobody said anything and we are guessing
+///
+/// Steps 1 and 3 are the same leg: `identity_offers` already makes the two
+/// lists alternatives, so a profile that names a key has no defaults to
+/// reach and its named key goes first, while one that names none has only
+/// guesses and puts them after the agent. Offering the guesses first is what
+/// let three stale keys in `~/.ssh` exhaust the budget ahead of a working
+/// agent; offering the agent ahead of a *named* key would do the same to
+/// someone who spelled out exactly which key to use.
+fn auth_steps(mode: SshAuthMode, named_own_keys: bool) -> Vec<AuthStep> {
+    let mut steps = Vec::new();
+    if mode != SshAuthMode::Agent && named_own_keys {
+        steps.push(AuthStep::IdentityFiles);
+    }
+    if mode != SshAuthMode::PublicKey {
+        steps.push(AuthStep::Agent);
+    }
+    if mode != SshAuthMode::Agent && !named_own_keys {
+        steps.push(AuthStep::IdentityFiles);
+    }
+    steps
+}
+
+/// The identity files one publickey round will offer, in order, each tagged
+/// with where it came from. The `~/.ssh` defaults are the list a profile
+/// falls back to, not a list appended to its own: `IdentityFile` in
+/// ssh_config replaces the defaults the same way, and appending instead made
+/// a profile that names a key spend *more* of the server's `MaxAuthTries`
+/// than one that names none (#513). `defaults` is a thunk so that the common
+/// path — a profile with its own key — never goes looking for `$HOME`.
+fn identity_offers(
+    explicit: &[String],
+    defaults: impl FnOnce() -> Vec<String>,
+) -> Vec<(String, KeySource)> {
+    if explicit.is_empty() {
+        return defaults()
+            .into_iter()
+            .map(|path| (path, KeySource::Discovered))
+            .collect();
+    }
+    explicit
+        .iter()
+        .map(|path| (path.clone(), KeySource::Explicit))
+        .collect()
+}
+
+/// Where an identity file came from. Provenance decides failure behaviour:
+/// an explicit key is the user's own choice, so its failures are said aloud
+/// and its encrypted form may ask for a passphrase; a discovered `~/.ssh`
+/// default is none of the user's doing, so every failure of one is silent
+/// (#484).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeySource {
+    Explicit,
+    Discovered,
+}
+
+/// What one publickey round learned, kept so the final error can distinguish
+/// the two situations "no public key was accepted" used to paper over
+/// (#484): nothing local could be offered at all, or keys went to the server
+/// and it refused every one.
+#[derive(Default)]
+struct KeyRound {
+    /// File keys actually sent to the server, by their configured path.
+    offered_files: Vec<String>,
+    /// File keys the server rejected, same spelling.
+    rejected_files: Vec<String>,
+    /// Whether an agent answered, and how many of its identities were
+    /// sent / rejected.
+    agent_available: bool,
+    agent_offered: usize,
+    agent_rejected: usize,
+    /// Explicit files that could not be read or decoded, with the reason.
+    /// (Discovered candidates fail silently, so they never land here.)
+    unusable: Vec<String>,
+    /// Transport-level errors after a key was decoded.
+    errors: Vec<String>,
+}
+
+impl KeyRound {
+    /// `named_own_keys` is whether the profile listed identity files of its
+    /// own, which is what decides whether the `~/.ssh` defaults were in play
+    /// — the two are alternatives, so the "checked" list must name one or
+    /// the other and never both.
+    fn reason(&self, mode: SshAuthMode, named_own_keys: bool) -> String {
+        if !self.rejected_files.is_empty() || self.agent_rejected > 0 {
+            let mut what = self.rejected_files.clone();
+            if self.agent_rejected > 0 {
+                what.push(format!(
+                    "{} agent {}",
+                    self.agent_rejected,
+                    if self.agent_rejected == 1 {
+                        "identity"
+                    } else {
+                        "identities"
+                    }
+                ));
+            }
+            return format!("server rejected public key(s): {}", what.join(", "));
+        }
+        if self.offered_files.is_empty() && self.agent_offered == 0 {
+            let mut looked: Vec<String> = Vec::new();
+            if mode != SshAuthMode::Agent {
+                looked.push(if named_own_keys {
+                    "identity files".to_string()
+                } else {
+                    "~/.ssh default keys".to_string()
+                });
+            }
+            if mode != SshAuthMode::PublicKey {
+                looked.push(if self.agent_available {
+                    "the SSH agent".to_string()
+                } else {
+                    "the SSH agent (unavailable)".to_string()
+                });
+            }
+            let mut msg = format!(
+                "no usable private key was found (checked: {})",
+                looked.join(", ")
+            );
+            if !self.unusable.is_empty() {
+                msg.push_str(&format!("; {}", self.unusable.join("; ")));
+            }
+            return msg;
+        }
+        // Keys were offered and none was rejected or accepted: the transport
+        // broke, and the last error says where.
+        if let Some(e) = self.errors.last() {
+            return e.clone();
+        }
+        "no public key was accepted".to_string()
+    }
+}
+
+/// Decode-time policy for one identity file, split from the network so the
+/// source × encryption matrix stays unit-testable. The asymmetry is the
+/// point (#484 review): russh has no offer-without-signature probe, so
+/// trying an encrypted key means signing — i.e. prompting *before* the server
+/// has shown any interest in that key. An explicit key earns that prompt; a
+/// discovered default never does — not with no cached passphrase, and not with
+/// a cached one that turned out to be wrong (#486), which for an explicit key
+/// reopens the prompt but here would mean a sheet per stale `~/.ssh` entry on
+/// every connection.
+enum IdentityLoad {
+    Ready(russh::keys::PrivateKey),
+    /// Not worth an offer: a `.pub`, an undecodable file, or a discovered
+    /// candidate that is encrypted with no cached passphrase.
+    Skip,
+    /// An explicit key the user should hear about.
+    Unusable(String),
+    /// Explicit and encrypted, and no passphrase to hand opened it — ask the
+    /// user. `rejected` says a cached passphrase was tried first and refused,
+    /// which the sheet has to admit to before asking again (#486); without one
+    /// this is simply the first time anybody has been asked.
+    NeedsPassphrase {
+        rejected: bool,
+    },
+}
+
+fn load_identity(
+    contents: &str,
+    raw_path: &str,
+    source: KeySource,
+    cached: Option<&str>,
+) -> IdentityLoad {
+    if PublicKey::from_openssh(contents.trim()).is_ok() {
+        // A `.pub` handed in as the identity file is never an offer. Worth a
+        // line in the log when the user named it themselves — pointing
+        // IdentityFile at the public half is a common slip, and the round is
+        // otherwise silent about it.
+        if source == KeySource::Explicit {
+            log::warn!("identity file {raw_path} is a public key; skipping");
+        }
+        return IdentityLoad::Skip;
+    }
+    match russh::keys::decode_secret_key(contents, None) {
+        Ok(key) => IdentityLoad::Ready(key),
+        Err(russh::keys::Error::KeyIsEncrypted) => match cached {
+            Some(passphrase) => match russh::keys::decode_secret_key(contents, Some(passphrase)) {
+                Ok(key) => IdentityLoad::Ready(key),
+                Err(e) => {
+                    log::warn!("the stored passphrase did not decrypt {raw_path}: {e}");
+                    match source {
+                        // Ending the attempt here is what locked an explicit
+                        // key out for good once a wrong passphrase reached the
+                        // keychain: no prompt, and no way to correct it from
+                        // inside the app (#486). The secret is simply wrong, so
+                        // ask — and say that is why.
+                        KeySource::Explicit => IdentityLoad::NeedsPassphrase { rejected: true },
+                        // A stale cached passphrase for a key the user never
+                        // configured: skip, don't shout — and above all do not
+                        // prompt. #484's rule holds whatever the reason the
+                        // passphrase failed; nobody asked for this key, so it
+                        // must never be the thing that puts a sheet on screen.
+                        KeySource::Discovered => IdentityLoad::Skip,
+                    }
+                }
+            },
+            None => match source {
+                KeySource::Explicit => IdentityLoad::NeedsPassphrase { rejected: false },
+                KeySource::Discovered => IdentityLoad::Skip,
+            },
+        },
+        Err(e) => {
+            log::warn!("could not read identity file {raw_path}: {e}");
+            match source {
+                KeySource::Explicit => {
+                    IdentityLoad::Unusable(format!("could not read identity file {raw_path}: {e}"))
+                }
+                KeySource::Discovered => IdentityLoad::Skip,
+            }
+        }
+    }
+}
+
+/// Offer an identity list in order, stopping at the first key the server
+/// takes. A file that cannot be offered at all is skipped rather than ending
+/// the leg — `round` is what remembers why, for the failure text.
+async fn try_identity_files(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    broker: &Arc<PromptBroker>,
+    files: &[(String, KeySource)],
+    round: &mut KeyRound,
+) -> Outcome {
+    let mut last: Option<MethodSet> = None;
+    for (path, source) in files {
+        match try_identity_file(handle, spec, broker, path, *source, round).await {
+            Outcome::Authenticated => return Outcome::Authenticated,
+            Outcome::Declined => return Outcome::Declined,
+            Outcome::Failed {
+                remaining_methods, ..
+            } => {
+                if remaining_methods.is_some() {
+                    last = remaining_methods;
+                }
+            }
+            Outcome::Skipped => {}
+        }
+    }
+    Outcome::Failed {
+        remaining_methods: last,
+        reason: None,
+    }
+}
+
+async fn try_identity_file(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    broker: &Arc<PromptBroker>,
+    raw_path: &str,
+    source: KeySource,
+    round: &mut KeyRound,
+) -> Outcome {
+    let path =
+        crate::core::ssh_profile::expand_identity_placeholders(raw_path, &spec.host, &spec.user);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            return match source {
+                KeySource::Explicit => {
+                    round
+                        .unusable
+                        .push(format!("cannot read identity file {raw_path}: {e}"));
+                    Outcome::Failed {
+                        remaining_methods: None,
+                        reason: None,
+                    }
+                }
+                // A default candidate that is not there is the normal case,
+                // not a failure.
+                KeySource::Discovered => Outcome::Skipped,
+            };
+        }
+    };
+
+    let key = match load_identity(
+        &contents,
+        raw_path,
+        source,
+        stored_passphrase(spec, raw_path),
+    ) {
+        IdentityLoad::Ready(k) => k,
+        IdentityLoad::Skip => return Outcome::Skipped,
+        IdentityLoad::Unusable(reason) => {
+            round.unusable.push(reason);
+            return Outcome::Failed {
+                remaining_methods: None,
+                reason: None,
+            };
+        }
+        // One prompt serves both ways of arriving here — no passphrase to try,
+        // or one that was tried and refused. `rejected` is the only difference,
+        // and it only changes what the sheet says (#486).
+        IdentityLoad::NeedsPassphrase { rejected } => {
+            let resp = broker
+                .prompt(AuthPromptKind::KeyPassphrase {
+                    key_path: raw_path.to_string(),
+                    comment: String::new(),
+                    rejected,
+                })
+                .await;
+            // Skipped, not `Declined`, and on purpose. Closing this sheet
+            // declines *this key*, and the methods still to come ask a
+            // different question — "your password" is not "the passphrase for
+            // id_rsa", and someone who cannot remember the passphrase is
+            // usually closing it precisely to be asked the other one. What
+            // #820 is about is the two prompts that ask the same thing.
+            let AuthResponse::Secret(passphrase) = resp else {
+                return Outcome::Skipped;
+            };
+            // The user just typed this one, so a failure here is not stale
+            // state to heal — it is the answer being wrong, and saying so
+            // beats asking again forever.
+            match russh::keys::decode_secret_key(&contents, Some(&passphrase)) {
+                Ok(k) => k,
+                Err(e) => {
+                    log::warn!("could not decrypt identity file {path}: {e}");
+                    round
+                        .unusable
+                        .push(format!("could not decrypt identity file {raw_path}"));
+                    return Outcome::Failed {
+                        remaining_methods: None,
+                        reason: None,
+                    };
+                }
+            }
+        }
+    };
+
+    round.offered_files.push(raw_path.to_string());
+    let hash_alg = rsa_hash_alg(&key.algorithm());
+    let pk = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
+    match handle.authenticate_publickey(&spec.user, pk).await {
+        Ok(AuthResult::Success) => Outcome::Authenticated,
+        Ok(AuthResult::Failure {
+            remaining_methods, ..
+        }) => {
+            round.rejected_files.push(raw_path.to_string());
+            Outcome::Failed {
+                remaining_methods: Some(remaining_methods),
+                reason: None,
+            }
+        }
+        Err(e) => {
+            round
+                .errors
+                .push(format!("public-key auth error with {raw_path}: {e}"));
+            Outcome::Failed {
+                remaining_methods: None,
+                reason: None,
+            }
+        }
+    }
+}
+
+/// The passphrase this connection already carries for `raw_path`, if any.
+///
+/// The map is keyed by the identity path exactly as the spec lists it — the
+/// same string the prompt names, the GUI files the keychain entry under, and
+/// `default_identity_candidates` spells a discovered key with — so the lookup
+/// uses the raw path, not the one `expand_identity_placeholders` built for the
+/// filesystem.
+fn stored_passphrase<'a>(spec: &'a NativeSshSpec, raw_path: &str) -> Option<&'a str> {
+    spec.key_passphrases
+        .as_ref()?
+        .get(raw_path)
+        .map(String::as_str)
+}
+
+async fn try_agent(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    round: &mut KeyRound,
+) -> Outcome {
+    #[cfg(unix)]
+    {
+        let agent = match AgentClient::connect_env().await {
+            Ok(a) => a,
+            Err(_) => return Outcome::Skipped,
+        };
+        try_agent_identities(handle, spec, agent, round).await
+    }
+    #[cfg(windows)]
+    {
+        let pipe = std::env::var("SSH_AUTH_SOCK")
+            .unwrap_or_else(|_| r"\\.\pipe\openssh-ssh-agent".to_string());
+        let agent = match AgentClient::connect_named_pipe(&pipe).await {
+            Ok(a) => a,
+            Err(_) => return Outcome::Skipped,
+        };
+        try_agent_identities(handle, spec, agent, round).await
+    }
+}
+
+async fn try_agent_identities<S>(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    mut agent: AgentClient<S>,
+    round: &mut KeyRound,
+) -> Outcome
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    let identities = match agent.request_identities().await {
+        Ok(ids) => ids,
+        Err(_) => return Outcome::Skipped,
+    };
+    round.agent_available = true;
+    let mut last: Option<MethodSet> = None;
+    for identity in identities {
+        let pubkey: PublicKey = match &identity {
+            AgentIdentity::PublicKey { key, .. } => key.clone(),
+            AgentIdentity::Certificate { .. } => continue,
+        };
+        round.agent_offered += 1;
+        let hash_alg = rsa_hash_alg(&pubkey.algorithm());
+        match handle
+            .authenticate_publickey_with(&spec.user, pubkey, hash_alg, &mut agent)
+            .await
+        {
+            Ok(AuthResult::Success) => return Outcome::Authenticated,
+            Ok(AuthResult::Failure {
+                remaining_methods, ..
+            }) => {
+                round.agent_rejected += 1;
+                last = Some(remaining_methods);
+            }
+            Err(_) => continue,
+        }
+    }
+    Outcome::Failed {
+        remaining_methods: last,
+        reason: None,
+    }
+}
+
+async fn try_password(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    broker: &Arc<PromptBroker>,
+) -> Outcome {
+    if let Some(pw) = &spec.password {
+        match handle.authenticate_password(&spec.user, pw.clone()).await {
+            Ok(AuthResult::Success) => return Outcome::Authenticated,
+            Ok(AuthResult::Failure { .. }) => {}
+            Err(e) => return failed(format!("password auth error: {e}")),
+        }
+    }
+
+    let resp = broker
+        .prompt(AuthPromptKind::Password {
+            user: spec.user.clone(),
+            host: spec.host.clone(),
+        })
+        .await;
+    let pw = match resp {
+        AuthResponse::Secret(p) => p,
+        _ => return Outcome::Declined,
+    };
+    match handle.authenticate_password(&spec.user, pw).await {
+        Ok(AuthResult::Success) => Outcome::Authenticated,
+        Ok(AuthResult::Failure {
+            remaining_methods, ..
+        }) => Outcome::Failed {
+            remaining_methods: Some(remaining_methods),
+            reason: Some("password rejected".to_string()),
+        },
+        Err(e) => failed(format!("password auth error: {e}")),
+    }
+}
+
+async fn try_keyboard_interactive(
+    handle: &mut Handle<ClientHandler>,
+    spec: &NativeSshSpec,
+    broker: &Arc<PromptBroker>,
+) -> Outcome {
+    let mut resp = match handle
+        .authenticate_keyboard_interactive_start(&spec.user, None)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return failed(format!("keyboard-interactive start error: {e}")),
+    };
+
+    const MAX_ROUNDS: u32 = 16;
+    let mut rounds = 0u32;
+    let mut stored_password_used = false;
+    let mut stored_password_rejected = false;
+    let mut last_source = KiAnswerSource::Nothing;
+    loop {
+        rounds += 1;
+        if rounds > MAX_ROUNDS {
+            return failed("keyboard-interactive gave up after too many rounds");
+        }
+        match resp {
+            KeyboardInteractiveAuthResponse::Success => return Outcome::Authenticated,
+            KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods, ..
+            } => {
+                // OpenSSH ends a rejected kbdint request with a plain
+                // USERAUTH_FAILURE rather than another info request, so a
+                // round answered from the keychain used to end the method
+                // right here — the same stale password on every reconnect,
+                // and the user never once asked to type a different one.
+                // Start the request over instead, with the stored password
+                // now spent, so the next round reaches the prompt.
+                if should_retry_ki(last_source, &remaining_methods) {
+                    stored_password_used = true;
+                    stored_password_rejected = true;
+                    last_source = KiAnswerSource::Nothing;
+                    resp = match handle
+                        .authenticate_keyboard_interactive_start(&spec.user, None)
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return failed(format!("keyboard-interactive start error: {e}")),
+                    };
+                    continue;
+                }
+                return Outcome::Failed {
+                    remaining_methods: Some(remaining_methods),
+                    reason: Some(ki_rejection_reason(last_source, stored_password_rejected)),
+                };
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                if prompts.is_empty() {
+                    resp = match handle
+                        .authenticate_keyboard_interactive_respond(Vec::new())
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return failed(format!("keyboard-interactive error: {e}")),
+                    };
+                    continue;
+                }
+
+                // A device that asks again inside the same request has already
+                // turned the stored password down, exactly as a failed request
+                // that had to be restarted has.
+                stored_password_rejected |= last_source == KiAnswerSource::Stored;
+                let round = match collect_ki_answers(
+                    spec,
+                    broker,
+                    &name,
+                    &instructions,
+                    &prompts,
+                    !stored_password_used,
+                    stored_password_rejected,
+                )
+                .await
+                {
+                    Some(a) => a,
+                    None => return Outcome::Declined,
+                };
+                // Only a round that actually sent the stored password spends
+                // it. Marking it spent for every round refused it to an
+                // OTP-then-password flow, where the first round is the code
+                // and the password is not asked for until the second.
+                last_source = round.source;
+                stored_password_used |= round.source == KiAnswerSource::Stored;
+                resp = match handle
+                    .authenticate_keyboard_interactive_respond(round.answers)
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => return failed(format!("keyboard-interactive error: {e}")),
+                };
+            }
+        }
+    }
+}
+
+/// Where the answers of the keyboard-interactive round that just went out came
+/// from. It decides both whether a rejection is worth starting over for and
+/// what to tell the user the server turned down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KiAnswerSource {
+    /// No round has answered yet — the server refused the method before it
+    /// asked anything.
+    Nothing,
+    Stored,
+    Typed,
+}
+
+struct KiRound {
+    answers: Vec<String>,
+    source: KiAnswerSource,
+}
+
+/// A rejection is only worth a second request when the round the server turned
+/// down was answered from the keychain: nobody has been asked anything yet, so
+/// the attempt has not actually been spent. An answer the user typed is their
+/// answer, and re-asking for it in a loop is what a rejecting server would
+/// like us to do.
+///
+/// An empty `remaining_methods` is read as "the server did not say" and left
+/// retryable, which is how `try_gssapi` above reads it too. The retry cannot
+/// run away: it is reached only from `KiAnswerSource::Stored`, and the restart
+/// spends the stored password, so no second restart can ever qualify — and the
+/// round counter it shares with the info-request loop caps the whole method
+/// either way.
+fn should_retry_ki(last_source: KiAnswerSource, remaining: &MethodSet) -> bool {
+    last_source == KiAnswerSource::Stored
+        && (remaining.is_empty() || remaining.contains(&MethodKind::KeyboardInteractive))
+}
+
+/// "keyboard-interactive rejected" answered for three different situations,
+/// and the one worth naming is the stored password: the user typed nothing, so
+/// a message about their answer sends them looking for a typo they never made.
+/// `stored_rejected` carries that across a restarted request, where the round
+/// that spent the stored password belongs to the request before this one.
+fn ki_rejection_reason(last_source: KiAnswerSource, stored_rejected: bool) -> String {
+    match last_source {
+        KiAnswerSource::Typed => "keyboard-interactive: your answer was rejected".to_string(),
+        KiAnswerSource::Stored => {
+            "keyboard-interactive: the stored password was rejected".to_string()
+        }
+        KiAnswerSource::Nothing if stored_rejected => {
+            "keyboard-interactive: the stored password was rejected".to_string()
+        }
+        KiAnswerSource::Nothing => "keyboard-interactive rejected".to_string(),
+    }
+}
+
+async fn collect_ki_answers(
+    spec: &NativeSshSpec,
+    broker: &Arc<PromptBroker>,
+    name: &str,
+    instructions: &str,
+    prompts: &[russh::client::Prompt],
+    allow_stored: bool,
+    stored_rejected: bool,
+) -> Option<KiRound> {
+    let all_password_type = prompts
+        .iter()
+        .all(|p| !p.echo && p.prompt.to_lowercase().contains("password"));
+    if all_password_type && allow_stored {
+        if let Some(pw) = &spec.password {
+            return Some(KiRound {
+                answers: prompts.iter().map(|_| pw.clone()).collect(),
+                source: KiAnswerSource::Stored,
+            });
+        }
+    }
+
+    let ki_prompts: Vec<KiPrompt> = prompts
+        .iter()
+        .map(|p| KiPrompt {
+            text: p.prompt.clone(),
+            echo: p.echo,
+        })
+        .collect();
+    let resp = broker
+        .prompt(AuthPromptKind::KeyboardInteractive {
+            name: name.to_string(),
+            instructions: instructions.to_string(),
+            prompts: ki_prompts,
+            stored_rejected,
+        })
+        .await;
+    let answers = match resp {
+        AuthResponse::Secrets(v) if v.len() == prompts.len() => v,
+        AuthResponse::Secret(s) if prompts.len() == 1 => vec![s],
+        _ => return None,
+    };
+    Some(KiRound {
+        answers,
+        source: KiAnswerSource::Typed,
+    })
+}
+
+fn rsa_hash_alg(algorithm: &Algorithm) -> Option<HashAlg> {
+    if matches!(algorithm, Algorithm::Rsa { .. }) {
+        Some(HashAlg::Sha256)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::ssh::test_support::PasswordFake;
+    use std::sync::{Mutex, OnceLock};
+
+    /// A broker standing in for the window: it records the kind of every
+    /// prompt that reaches it and answers each from a script, at once.
+    ///
+    /// Answering from inside the emit closure works for the same reason
+    /// `declining_broker` does — `PromptBroker::prompt` files the waiting
+    /// sender before it emits — and it keeps these tests off the two-minute
+    /// prompt timeout.
+    fn scripted_broker(script: Vec<AuthResponse>) -> (Arc<Mutex<Vec<String>>>, Arc<PromptBroker>) {
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let script = Arc::new(Mutex::new(std::collections::VecDeque::from(script)));
+        let back: Arc<OnceLock<std::sync::Weak<PromptBroker>>> = Arc::new(OnceLock::new());
+
+        let asked = Arc::clone(&seen);
+        let emit_back = Arc::clone(&back);
+        let broker = PromptBroker::new(Box::new(move |msg| {
+            let crate::daemon::protocol::DaemonMsg::AuthPrompt { request_id, prompt } = msg else {
+                return true;
+            };
+            let label = match prompt {
+                AuthPromptKind::Password { .. } => "password",
+                AuthPromptKind::KeyboardInteractive { .. } => "keyboard-interactive",
+                AuthPromptKind::KeyPassphrase { .. } => "key-passphrase",
+                AuthPromptKind::Banner { .. } => return true,
+                _ => "host-key",
+            };
+            asked.lock().unwrap().push(label.to_string());
+            let answer = script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(AuthResponse::Cancelled);
+            if let Some(broker) = emit_back.get().and_then(std::sync::Weak::upgrade) {
+                broker.deliver(request_id, answer);
+            }
+            true
+        }));
+        let _ = back.set(Arc::downgrade(&broker));
+        (seen, broker)
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build test runtime")
+    }
+
+    /// #820. A server that offers `password` *and* `keyboard-interactive` is
+    /// offering two ways to hand over one secret. Closing the sheet used to
+    /// fail only the method that raised it, so the very next thing the user
+    /// saw was the other method asking for the same password — which, on a
+    /// link that redials by itself, is a window that cannot be closed.
+    #[test]
+    fn closing_the_password_sheet_ends_the_attempt_rather_than_asking_again() {
+        runtime().block_on(async {
+            let mut fake = PasswordFake::connect("hunter2").await;
+            let (seen, broker) = scripted_broker(vec![AuthResponse::Cancelled]);
+
+            let err = authenticate(&mut fake.handle, &fake.spec, &broker)
+                .await
+                .expect_err("a declined prompt cannot authenticate");
+
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                ["password"],
+                "one question was declined, so no second question is asked"
+            );
+            assert!(err.contains(AUTH_DECLINED), "{err}");
+            assert_eq!(
+                fake.kbdint_attempts(),
+                0,
+                "keyboard-interactive must not even reach the wire"
+            );
+        });
+    }
+
+    /// The other half of the rule: it is the *decline* that ends the attempt,
+    /// not a prompt having happened. A password the server turns down is a
+    /// wrong answer, and the method behind it is still worth trying.
+    #[test]
+    fn a_password_the_server_rejects_still_falls_through_to_the_next_method() {
+        runtime().block_on(async {
+            let mut fake = PasswordFake::connect("hunter2").await;
+            let (seen, broker) = scripted_broker(vec![
+                AuthResponse::Secret("wrong".into()),
+                AuthResponse::Cancelled,
+            ]);
+
+            let err = authenticate(&mut fake.handle, &fake.spec, &broker)
+                .await
+                .expect_err("neither answer was the password");
+
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                ["password", "keyboard-interactive"],
+                "a rejected answer is not a refusal to answer"
+            );
+            assert!(err.contains(AUTH_DECLINED), "{err}");
+            assert_eq!(fake.password_attempts(), 1);
+        });
+    }
+
+    #[test]
+    fn the_password_the_user_types_is_asked_for_once_and_authenticates() {
+        runtime().block_on(async {
+            let mut fake = PasswordFake::connect("hunter2").await;
+            let (seen, broker) = scripted_broker(vec![AuthResponse::Secret("hunter2".into())]);
+
+            authenticate(&mut fake.handle, &fake.spec, &broker)
+                .await
+                .expect("the right password authenticates");
+
+            assert_eq!(seen.lock().unwrap().as_slice(), ["password"]);
+            assert_eq!(fake.password_attempts(), 1);
+            assert_eq!(fake.kbdint_attempts(), 0);
+        });
+    }
+
+    #[test]
+    fn a_round_with_no_attempt_says_so_instead_of_saying_it_failed() {
+        // Nothing on this machine could satisfy the connection, and the server
+        // says what it would take. "authentication failed" here sends people
+        // looking for a wrong password that was never sent.
+        let offers = MethodSet::from(&[MethodKind::PublicKey][..]);
+        let msg = nothing_to_try(SshAuthMode::Auto, &offers);
+        assert!(
+            msg.contains("no authentication method could be tried"),
+            "{msg}"
+        );
+        assert!(msg.contains("publickey"), "{msg}");
+        assert!(!msg.contains("failed"), "{msg}");
+
+        // A connection pinned to one method names that method.
+        let msg = nothing_to_try(SshAuthMode::PublicKey, &offers);
+        assert!(msg.contains("no usable private key"), "{msg}");
+
+        // A server that offered nothing leaves the sentence without a tail
+        // rather than with an empty list.
+        let msg = nothing_to_try(SshAuthMode::Auto, &MethodSet::empty());
+        assert!(!msg.contains("offers"), "{msg}");
+        assert!(!msg.ends_with(' '), "{msg}");
+    }
+
+    #[test]
+    fn method_order_restricts_by_mode() {
+        assert_eq!(
+            method_order(SshAuthMode::Password),
+            vec![MethodKind::Password]
+        );
+        assert_eq!(
+            method_order(SshAuthMode::KeyboardInteractive),
+            vec![MethodKind::KeyboardInteractive]
+        );
+        assert_eq!(
+            method_order(SshAuthMode::Gssapi),
+            vec![MethodKind::GssapiWithMic]
+        );
+        assert_eq!(
+            method_order(SshAuthMode::Auto),
+            vec![
+                MethodKind::GssapiWithMic,
+                MethodKind::PublicKey,
+                MethodKind::Password,
+                MethodKind::KeyboardInteractive
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gssapi_service_hosts_keep_original_host_before_reverse_dns() {
+        let hosts = gssapi_service_hosts_with_lookup("10.37.108.28", |_| {
+            Some("n37-108-028.byted.org.".into())
+        });
+        assert_eq!(
+            hosts,
+            vec![
+                "10.37.108.28".to_string(),
+                "n37-108-028.byted.org".to_string()
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gssapi_service_hosts_dedup_reverse_dns() {
+        let hosts = gssapi_service_hosts_with_lookup("example.com", |_| {
+            panic!("non-ip hosts should not trigger reverse lookup")
+        });
+        assert_eq!(hosts, vec!["example.com".to_string()]);
+
+        let hosts = gssapi_service_hosts_with_lookup("10.0.0.1", |_| Some("10.0.0.1".into()));
+        assert_eq!(hosts, vec!["10.0.0.1".to_string()]);
+    }
+
+    fn spec_with(extra: &str) -> NativeSshSpec {
+        serde_json::from_str(&format!(
+            r#"{{"host":"h","port":22,"user":"u","auth_mode":"auto"{extra}}}"#
+        ))
+        .expect("the minimal spec shape is what the daemon already accepts on the wire")
+    }
+
+    #[test]
+    fn a_stored_passphrase_is_found_by_the_path_the_spec_lists() {
+        // The GUI files the entry under the identity path it put in the spec,
+        // tilde and all, and `try_identity_file` has to look it up under the
+        // same string rather than under the filesystem path it expanded to.
+        let spec = spec_with(r#","key_passphrases":{"~/.ssh/id_ed25519":"pp"}"#);
+        assert_eq!(stored_passphrase(&spec, "~/.ssh/id_ed25519"), Some("pp"));
+        assert_eq!(stored_passphrase(&spec, "/home/u/.ssh/id_ed25519"), None);
+        assert_eq!(stored_passphrase(&spec_with(""), "~/.ssh/id_ed25519"), None);
+    }
+
+    #[test]
+    fn only_a_stored_answer_earns_a_second_keyboard_interactive_request() {
+        let offers = MethodSet::from(&[MethodKind::KeyboardInteractive][..]);
+
+        // Nobody was asked anything, so nothing has been spent yet.
+        assert!(should_retry_ki(KiAnswerSource::Stored, &offers));
+
+        // The user answered and was turned down; asking them again in a loop
+        // is what a rejecting server would like us to do.
+        assert!(!should_retry_ki(KiAnswerSource::Typed, &offers));
+        assert!(!should_retry_ki(KiAnswerSource::Nothing, &offers));
+
+        // A server that no longer offers the method cannot be restarted into
+        // it; one that said nothing about what is left still can.
+        let elsewhere = MethodSet::from(&[MethodKind::PublicKey][..]);
+        assert!(!should_retry_ki(KiAnswerSource::Stored, &elsewhere));
+        assert!(should_retry_ki(KiAnswerSource::Stored, &MethodSet::empty()));
+    }
+
+    #[test]
+    fn a_rejection_says_whose_answer_it_was() {
+        let stored = ki_rejection_reason(KiAnswerSource::Stored, true);
+        assert!(stored.contains("stored password"), "{stored}");
+
+        let typed = ki_rejection_reason(KiAnswerSource::Typed, true);
+        assert!(typed.contains("your answer"), "{typed}");
+
+        // The restarted request carries the stored rejection across, even
+        // though its own rounds never sent anything.
+        let carried = ki_rejection_reason(KiAnswerSource::Nothing, true);
+        assert!(carried.contains("stored password"), "{carried}");
+
+        // A server that refused the method outright blames neither.
+        let neither = ki_rejection_reason(KiAnswerSource::Nothing, false);
+        assert!(!neither.contains("stored password"), "{neither}");
+        assert!(!neither.contains("your answer"), "{neither}");
+    }
+
+    #[test]
+    fn rsa_gets_sha256_others_none() {
+        assert_eq!(
+            rsa_hash_alg(&Algorithm::Rsa { hash: None }),
+            Some(HashAlg::Sha256)
+        );
+        assert_eq!(rsa_hash_alg(&Algorithm::Ed25519), None);
+    }
+
+    #[test]
+    fn a_named_key_outranks_the_agent_and_the_agent_outranks_a_guess() {
+        // #513: the budget is spent in order of how plainly the user asked
+        // for the key. Naming one puts it first; naming none leaves only
+        // guesses, which go behind the agent.
+        assert_eq!(
+            auth_steps(SshAuthMode::Auto, true),
+            vec![AuthStep::IdentityFiles, AuthStep::Agent],
+            "a key the profile names is offered before the agent's"
+        );
+        assert_eq!(
+            auth_steps(SshAuthMode::Auto, false),
+            vec![AuthStep::Agent, AuthStep::IdentityFiles],
+            "the ~/.ssh guesses come after the agent, never ahead of it"
+        );
+    }
+
+    #[test]
+    fn a_pinned_mode_runs_only_its_own_step() {
+        for named in [true, false] {
+            assert_eq!(
+                auth_steps(SshAuthMode::PublicKey, named),
+                vec![AuthStep::IdentityFiles],
+                "publickey-only never reaches the agent (named: {named})"
+            );
+            assert_eq!(
+                auth_steps(SshAuthMode::Agent, named),
+                vec![AuthStep::Agent],
+                "agent-only never reads a file (named: {named})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_defaults_stand_in_only_for_a_profile_that_names_no_key() {
+        // #513: the two lists are alternatives, never a concatenation. A
+        // profile naming one key must spend one attempt, not four.
+        let defaults = || {
+            vec![
+                "/home/me/.ssh/id_ed25519".to_string(),
+                "/home/me/.ssh/id_rsa".to_string(),
+            ]
+        };
+
+        assert_eq!(
+            identity_offers(&[], defaults),
+            vec![
+                (
+                    "/home/me/.ssh/id_ed25519".to_string(),
+                    KeySource::Discovered
+                ),
+                ("/home/me/.ssh/id_rsa".to_string(), KeySource::Discovered),
+            ],
+            "no key of its own falls back to the ~/.ssh defaults"
+        );
+
+        assert_eq!(
+            identity_offers(&["~/keys/work".to_string()], defaults),
+            vec![("~/keys/work".to_string(), KeySource::Explicit)],
+            "naming a key replaces the defaults rather than adding to them"
+        );
+    }
+
+    #[test]
+    fn a_named_key_is_offered_in_the_order_it_was_written() {
+        let offers = identity_offers(
+            &["~/keys/first".to_string(), "~/keys/second".to_string()],
+            Vec::new,
+        );
+        assert_eq!(
+            offers
+                .iter()
+                .map(|(p, _)| p.as_str())
+                .collect::<Vec<&str>>(),
+            vec!["~/keys/first", "~/keys/second"]
+        );
+    }
+
+    const PASSPHRASE: &str = "correct horse battery staple";
+
+    /// The throwaway ed25519 key these tests offer, built here rather than
+    /// pasted in as a PEM blob: a private key sitting in the tree is a
+    /// secret-scanner hit whatever its provenance, and a scanner that has to
+    /// be overridden to stay green is one nobody reads. The seed is fixed, so
+    /// the bytes are the same on every run, and this key exists nowhere but
+    /// these assertions.
+    fn fixture_key() -> russh::keys::PrivateKey {
+        russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(
+            &[7u8; 32],
+        ))
+    }
+
+    fn plain_key() -> String {
+        fixture_key()
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .expect("encode the fixture key")
+            .to_string()
+    }
+
+    /// The same key under `PASSPHRASE`. `encrypt_with` takes the KDF and
+    /// checkint rather than an RNG, which is what keeps this crate free of a
+    /// rand dependency it otherwise has no use for; the low bcrypt round count
+    /// is a test's, not a real key's.
+    fn encrypted_key() -> String {
+        fixture_key()
+            .encrypt_with(
+                russh::keys::ssh_key::Cipher::Aes256Ctr,
+                russh::keys::ssh_key::Kdf::Bcrypt {
+                    salt: vec![9u8; 16],
+                    rounds: 4,
+                },
+                0,
+                PASSPHRASE,
+            )
+            .expect("encrypt the fixture key")
+            .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+            .expect("encode the encrypted fixture key")
+            .to_string()
+    }
+
+    #[test]
+    fn load_identity_ready_for_plain_key_either_source() {
+        for source in [KeySource::Explicit, KeySource::Discovered] {
+            assert!(
+                matches!(
+                    load_identity(&plain_key(), "k", source, None),
+                    IdentityLoad::Ready(_)
+                ),
+                "plain key must load for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_identity_skips_public_key_content() {
+        let public = fixture_key()
+            .public_key()
+            .to_openssh()
+            .expect("encode the fixture public key");
+        for source in [KeySource::Explicit, KeySource::Discovered] {
+            assert!(
+                matches!(
+                    load_identity(&public, "k", source, None),
+                    IdentityLoad::Skip
+                ),
+                "a .pub is never an offer"
+            );
+        }
+    }
+
+    #[test]
+    fn load_identity_garbage_is_loud_for_explicit_quiet_for_discovered() {
+        assert!(matches!(
+            load_identity("not a key", "k", KeySource::Explicit, None),
+            IdentityLoad::Unusable(_)
+        ));
+        assert!(matches!(
+            load_identity("not a key", "k", KeySource::Discovered, None),
+            IdentityLoad::Skip
+        ));
+    }
+
+    #[test]
+    fn load_identity_encrypted_prompts_only_for_explicit() {
+        // The whole policy (#484): russh can only try an encrypted key by
+        // signing, so a discovered one with no cached passphrase is skipped
+        // rather than spending a prompt on a key the server may not want.
+        assert!(matches!(
+            load_identity(&encrypted_key(), "k", KeySource::Explicit, None),
+            IdentityLoad::NeedsPassphrase { rejected: false }
+        ));
+        assert!(matches!(
+            load_identity(&encrypted_key(), "k", KeySource::Discovered, None),
+            IdentityLoad::Skip
+        ));
+    }
+
+    #[test]
+    fn load_identity_encrypted_uses_a_cached_passphrase_for_either_source() {
+        for source in [KeySource::Explicit, KeySource::Discovered] {
+            assert!(
+                matches!(
+                    load_identity(&encrypted_key(), "k", source, Some(PASSPHRASE)),
+                    IdentityLoad::Ready(_)
+                ),
+                "cached passphrase must unlock for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_identity_wrong_cached_passphrase_asks_again_only_for_explicit() {
+        // #486 inside #484's matrix. A wrong stored passphrase used to be the
+        // end of an explicit key: `Unusable`, so "could not decrypt identity
+        // file" with no way to correct the secret from inside the app. It now
+        // reopens the prompt, flagged so the sheet can say the saved one was
+        // refused.
+        assert!(matches!(
+            load_identity(&encrypted_key(), "k", KeySource::Explicit, Some("wrong")),
+            IdentityLoad::NeedsPassphrase { rejected: true }
+        ));
+        // The discovered half is the one that must not move: a `~/.ssh` default
+        // nobody configured stays silent whether its cached passphrase is
+        // absent or stale, so a stale entry cannot turn every connection into a
+        // prompt for a key the user never asked to use.
+        assert!(matches!(
+            load_identity(&encrypted_key(), "k", KeySource::Discovered, Some("wrong")),
+            IdentityLoad::Skip
+        ));
+    }
+
+    #[test]
+    fn no_discovered_key_ever_asks_for_a_passphrase() {
+        // The seam where #484 and #486 meet: the self-heal reopens a prompt on
+        // a refused passphrase, and the probe hands this function keys the user
+        // never named. Whatever a discovered candidate's state, it must never
+        // be the thing that puts a sheet on screen — several of them would
+        // otherwise queue up a prompt storm on every connection.
+        for cached in [None, Some("wrong"), Some(PASSPHRASE)] {
+            assert!(
+                !matches!(
+                    load_identity(&encrypted_key(), "k", KeySource::Discovered, cached),
+                    IdentityLoad::NeedsPassphrase { .. }
+                ),
+                "a discovered key must not prompt (cached: {cached:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn reason_names_the_keys_the_server_rejected() {
+        let mut round = KeyRound::default();
+        round.offered_files = vec!["/home/me/.ssh/id_ed25519".to_string()];
+        round.rejected_files = round.offered_files.clone();
+        let msg = round.reason(SshAuthMode::Auto, true);
+        assert_eq!(
+            msg,
+            "server rejected public key(s): /home/me/.ssh/id_ed25519"
+        );
+
+        round.agent_offered = 2;
+        round.agent_rejected = 2;
+        let msg = round.reason(SshAuthMode::Auto, true);
+        assert_eq!(
+            msg,
+            "server rejected public key(s): /home/me/.ssh/id_ed25519, 2 agent identities"
+        );
+    }
+
+    #[test]
+    fn reason_for_nothing_offered_says_where_it_looked() {
+        let round = KeyRound::default();
+        let msg = round.reason(SshAuthMode::Auto, false);
+        assert!(msg.contains("no usable private key was found"), "{msg}");
+        assert!(msg.contains("~/.ssh default keys"), "{msg}");
+        assert!(msg.contains("agent (unavailable)"), "{msg}");
+
+        // An agent that answered but held nothing is "checked", not
+        // "unavailable".
+        let mut round = KeyRound::default();
+        round.agent_available = true;
+        let msg = round.reason(SshAuthMode::Auto, false);
+        assert!(msg.contains("the SSH agent"), "{msg}");
+        assert!(!msg.contains("unavailable"), "{msg}");
+
+        // Pinned modes name only what they would have used.
+        let msg = KeyRound::default().reason(SshAuthMode::Agent, false);
+        assert!(!msg.contains("default keys"), "{msg}");
+        let msg = KeyRound::default().reason(SshAuthMode::PublicKey, false);
+        assert!(!msg.contains("agent"), "{msg}");
+    }
+
+    #[test]
+    fn reason_appends_unusable_explicit_files() {
+        let mut round = KeyRound::default();
+        round
+            .unusable
+            .push("cannot read identity file /bad/key: denied".to_string());
+        let msg = round.reason(SshAuthMode::PublicKey, true);
+        assert!(
+            msg.contains("cannot read identity file /bad/key: denied"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn reason_falls_back_to_the_transport_error_after_an_offer() {
+        let mut round = KeyRound::default();
+        round.offered_files = vec!["/home/me/.ssh/id_ed25519".to_string()];
+        round.errors.push(
+            "public-key auth error with /home/me/.ssh/id_ed25519: connection lost".to_string(),
+        );
+        assert_eq!(
+            round.reason(SshAuthMode::Auto, true),
+            "public-key auth error with /home/me/.ssh/id_ed25519: connection lost"
+        );
+    }
+}

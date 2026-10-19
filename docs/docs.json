@@ -1,0 +1,143 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "lyrel",
+  "description": "终端工作台：会话常驻、远程开发、原生支持 agent。",
+  "colors": {
+    "primary": "#0FA968",
+    "light": "#3FDD8C",
+    "dark": "#0FA968"
+  },
+  "favicon": "/favicon.ico",
+  "logo": {
+    "light": "/logo/logo.svg",
+    "dark": "/logo/logo.svg",
+    "href": "/"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "文档",
+        "groups": [
+          {
+            "group": "开始使用",
+            "pages": [
+              "introduction",
+              "getting-started/installation",
+              "getting-started/first-launch",
+              "getting-started/concepts"
+            ]
+          },
+          {
+            "group": "窗口",
+            "pages": [
+              "window/tabs-and-splits",
+              "window/sidebar",
+              "window/search-everywhere",
+              "window/search",
+              "window/side-panel"
+            ]
+          },
+          {
+            "group": "终端",
+            "pages": [
+              "terminal/prompt",
+              "terminal/history",
+              "terminal/selection-and-clipboard",
+              "terminal/links",
+              "terminal/mouse-and-scrolling"
+            ]
+          },
+          {
+            "group": "编程 agent",
+            "pages": [
+              "agents/overview",
+              "agents/status",
+              "agents/sessions",
+              "agents/orchestration"
+            ]
+          },
+          {
+            "group": "远程开发",
+            "pages": [
+              "remote/ssh",
+              "remote/sftp",
+              "remote/port-forwarding",
+              "remote/workspaces"
+            ]
+          },
+          {
+            "group": "Git",
+            "pages": [
+              "git/source-control",
+              "git/diffs",
+              "git/worktrees"
+            ]
+          },
+          {
+            "group": "个性化设置",
+            "pages": [
+              "customization/settings",
+              "customization/themes",
+              "customization/fonts",
+              "customization/keybindings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI",
+        "groups": [
+          {
+            "group": "lyrel 命令",
+            "pages": [
+              "cli/overview",
+              "cli/reference",
+              "cli/agent-skill"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "参考",
+        "groups": [
+          {
+            "group": "参考",
+            "pages": [
+              "reference/configuration",
+              "reference/keyboard-shortcuts",
+              "reference/shell-integration",
+              "reference/updates",
+              "reference/privacy",
+              "reference/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/dlivxpr/lyrel"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "发行版本",
+      "href": "https://github.com/dlivxpr/lyrel/releases"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/dlivxpr/lyrel"
+    }
+  },
+  "redirects": [
+    {
+      "source": "/window/command-palette",
+      "destination": "/window/search-everywhere"
+    }
+  ]
+}

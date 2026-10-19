@@ -1,0 +1,139 @@
+---
+title: "编程智能体"
+description: "lyrel 仅内置 omp、Kimi Code、pi、OpenCode 2.x、Hermes，保留各自原生交互界面。"
+---
+
+lyrel 能识别窗格中运行的编程智能体，并围绕它们提供功能。它不会封装、代理这些智能体，
+也不会替换它们的界面：你启动的是哪个智能体，运行的就是哪个智能体，它在普通 PTY 中运行，
+使用自己的 UI。lyrel 补充的是终端适合提供的信息——谁在哪里运行、需要什么，以及发生了哪些变化。
+
+
+<a id="which-agents"></a>
+## 支持哪些智能体
+
+内置身份只保留以下五种。识别命令名称不等于状态、历史、恢复、分叉或首条任务已经通过正式版本实跑；这些能力分别依赖上游接口、集成授权和对应验收。
+
+| 智能体 | 正式命令 | 本次实施基线 |
+|---|---|---|
+| omp（Oh My Pi） | `omp` | 18.12.1 |
+| Kimi Code | `kimi` | 2.2.0 |
+| pi | `pi` | 1.3.0 |
+| OpenCode 2.x | `opencode`、`opencode2` | 2.0.32 |
+| Hermes | `hermes` | 0.22.2 |
+
+omp 与 pi 是独立产品，不共用命令身份、配置或会话来源。Kimi 指现行官方 Kimi Code，不迁移归档产品的数据。OpenCode 只维护 2.x；不会在每次启动前强制探测版本，同名 1.x 仍可能被名称识别，但不加载旧集成、不把不适用接口当作成功。
+
+当前已知运行限制：
+
+- **Hermes 即时身份**：plain CLI 的正式 observer 在首轮构建或命令事件后才报告会话身份；首次事件之前仍不能可靠绑定，不从内部 breadcrumb 或屏幕猜测 ID。
+- **Kimi 初始任务**：保留原生 TUI 的自动首任务交接尚未实现；非空任务会在创建工作树／窗格前明确拒绝，不改用非交互模式冒充完成。
+
+检测能够识别常见的命令变体：完整路径、Windows 上的 `.cmd` 或 `.exe` 后缀、
+命令前的环境变量赋值，以及通过解释器启动的形式（`node .../pi/cli.js`）。
+
+<a id="your-own-wrapper"></a>
+### 自定义包装脚本
+
+如果你通过包装脚本启动智能体，请在 `config.json` 中将脚本名称映射到相应智能体：
+
+```json
+{
+  "agent_commands": {
+    "work-omp": "omp",
+    "work-pi": "pi"
+  }
+}
+```
+
+键是你的显式命令别名；值只能是 `omp`、`kimi`、`pi`、`opencode`、`hermes`。无官方依据的旧内置别名（例如 `kimi-code`）不再自动识别；如需包装脚本，请明确配置其目标。
+
+<a id="quick-launch"></a>
+## 快速启动
+
+lyrel 在 `PATH` 中找到的每个智能体，都会在全局搜索中显示为一个条目：**智能体：
+omp**、**智能体：pi** 等，按使用频率从高到低排列——在其“终端”选项卡中输入 `agent`
+即可列出它们。“新建标签页”菜单会列出你实际运行过的智能体，最多三个；**其他智能体…**
+会打开同一列表，供你选择其余智能体。**新建智能体标签页**
+（macOS 上为 <kbd>⌘ ⇧ A</kbd>，其他平台未绑定快捷键）会启动你上次使用的智能体。
+
+每次启动都会在当前标签页的目录中新建一个标签页，并将智能体命令输入其中的 shell，
+因此智能体的检测、跟踪和恢复方式与你手动输入命令完全相同——退出智能体后，你会回到命令提示符。
+每个 `Agent: …` 命令也都可以通过 `LaunchAgent:<slug>` 绑定快捷键。
+
+默认情况下，智能体以不带参数的正式可执行文件启动（`omp`、`kimi`、`pi`、`opencode`、`hermes`）。使用 `agent_launch` 指定自定义命令行：
+
+```json
+{
+  "agent_launch": {
+    "omp": "omp --model selected",
+    "pi": "work-pi"
+  }
+}
+```
+
+在这里指定的包装脚本（如上面的 `work-pi`）无需添加 `agent_commands` 条目，就会被识别为对应智能体。
+要保留某个正在运行的智能体所使用的启动参数，请右键单击其窗格，选择**将当前启动参数设为默认值**；
+lyrel 会将这些参数写入 `agent_launch`，但会去掉用于恢复会话的参数以及任何提示词。
+
+在远程工作区中，lyrel 无法读取远程计算机的 `PATH`，因此只会提供它已在该远程计算机上见过运行的智能体：
+手动启动一次，智能体就会加入列表。本地 `agent_launch` 中指定的包装脚本，只有在远程
+`config.json` 中也配置了该名称，才能在远程被识别。
+
+<a id="what-you-get-for-free"></a>
+## 无需额外配置即可获得的功能
+
+只要在窗格中运行智能体，即可获得：
+
+<CardGroup cols={2}>
+  <Card title="品牌头像" icon="id-badge">
+    标签页标记和侧边栏条目会显示各处运行的是哪个智能体，即使打开十个标签页也能清晰辨认。
+  </Card>
+  <Card title="Git 上下文" icon="code-branch">
+    条目中显示分支和工作区差异，并随着智能体的工作持续刷新。
+  </Card>
+  <Card title="会话恢复" icon="rotate-left">
+    有真实会话身份及有效上游接口时，在原工作环境恢复；失败明确报告，不静默创建空对话。[了解更多 →](/agents/sessions)
+  </Card>
+  <Card title="上下文传递" icon="paper-plane">
+    通过操作将当前选中内容或仓库的 `git diff` 作为提示词传递给正在运行的智能体。
+  </Card>
+</CardGroup>
+
+<a id="what-needs-a-hook"></a>
+## 哪些功能需要钩子
+
+实时状态——**工作中**、**需要你输入**、**轮次结束**——来自智能体本身，通过获准的 hooks 或插件传递。轮次结束不代表成功；失败、中断和拒绝需要保留实际原因。
+
+在**设置 → 集成**中管理当前已接通的通道；识别名单中的名称不是全部能力已完成的承诺。[状态与通知 →](/agents/status)
+
+<a id="retired-hooks"></a>
+## 升级与旧 hooks
+
+名单外程序仍可在普通 shell 中手动运行，只是不再获得专属识别、启动入口、状态、历史或会话操作。退役身份及未知身份只移除智能体标注，不关闭已有 PTY、shell 或工作进程。Unix handoff 延续既有描述符继承机制；Windows 没有无损 `execve` handoff，不能把重启当作进程保留证明。control 与 pane 各自沿用独立协议协商，不兼容组件明确拒绝，不重置协议编号。
+
+旧 `agent_launch`、`agent_commands`、使用频率与 `LaunchAgent:<slug>` 快捷键中的退役项不再生效，也不会映射为另一个产品；其他配置仍可加载。仅加载配置不为清理而强制重写文件。专属的 `copy_join_wrapped` 与 `CopyRaw` 已退役，普通终端复制保持可用。
+
+lyrel **不自动扫描、刷新、卸载或删除名单外智能体的旧 hooks**，也不升级全局程序。需要清理时，由你在目标机器上执行以下人工核对：
+
+1. 先备份具体配置文件，检查你实际使用的 profile／home／配置目录；不要递归扫描或删除整个用户目录。
+2. 只认领命令同时含 `agent-hook <退役 slug>`、且可执行路径确实属于 lyrel 的条目：`lyrel-app`、`lyrel-server` 或 `lyrel-server-c<control>p<pane>`。单独出现 `agent-hook`、`lyrel` 字样或位于类似目录中都不足以证明归属。其他程序的 hooks 不属于 lyrel。
+3. 在共享 JSON hook-map 中只移除核对过的命令对象；同组其他命令、matcher 和设置保留。原来的命名集合只移除确认属于 lyrel 的那一个集合；TOML 只移除核对过的 hook entry／命令，不删除整张配置表。
+4. 独占生成文件或插件目录只有在文件头带 `// lyrel agent-hook <slug>`／`/* lyrel agent-hook <slug>`，或内容中的执行命令确实指向 lyrel 时才可移除；有自定义内容时先逐项核对，不按文件名批量删除。Muse 等已由上游插件管理器登记的项目，请核对安装位置与清单后使用该产品自己的卸载入口。
+5. 核对范围可能包括旧产品的 `.claude`、`.codex`、`.trae/cli`、`.gemini`、`.factory`、`.qwen`、`.qoder`、`.qoder-cn`、`.codebuddy`、`.cursor`、`.empryo`、`.jcode`、`.copilot/hooks`、`.grok/hooks`、`.agents/plugins/lyrel`、`.prime/agent/extensions/lyrel` 和 lyrel 的 `agent-hooks/muse` bundle；这些只是人工定位线索，不代表这些目录全部属于 lyrel。
+6. 不删除账号、凭据、历史、会话、归档 Kimi 数据或已安装程序；不要为清理而结束正在运行的任务。核对不清时保留条目并记录其路径，勿猜测归属。
+
+
+<a id="where-to-go-next"></a>
+## 接下来阅读
+
+<CardGroup cols={3}>
+  <Card title="状态与通知" icon="circle-dot" href="/agents/status">
+    钩子、状态圆点和托盘图标。
+  </Card>
+  <Card title="会话" icon="code-branch" href="/agents/sessions">
+    恢复会话、创建会话分支，以及复制会话 ID。
+  </Card>
+  <Card title="编排" icon="diagram-project" href="/agents/orchestration">
+    使用 `lyrel wait` 让一个智能体驱动另一个智能体。
+  </Card>
+</CardGroup>

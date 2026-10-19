@@ -1,0 +1,91 @@
+#!/bin/bash
+# Usage: assert-macho.sh <path-to-mach-o> <expected-arch>
+# Fail unless the binary is a Mach-O executable for <expected-arch> that depends
+# on nothing but the libraries every macOS already has, and carries a code
+# signature.
+#
+# The macOS counterpart of assert-static.sh, and the same decision (D10) behind
+# it: one `lyrel-server` binary is pushed to an arbitrary remote Mac and has to
+# run there with nothing installed alongside it. Static linking is not the
+# instrument on macOS — Apple does not ship a static libSystem and linking one
+# is unsupported — so the equivalent guarantee is "links only what the OS
+# guarantees is present". A stray Homebrew dependency picked up from the runner
+# would still compile, still pass a build-only job, and then fail on the first
+# Mac that does not have /opt/homebrew — far from the change that caused it.
+set -euo pipefail
+
+BIN="$1"
+WANT_ARCH="$2"
+
+if [ ! -f "$BIN" ]; then
+  echo "::error::assert-macho.sh: $BIN does not exist"
+  exit 1
+fi
+
+echo "--- file ---"
+file "$BIN"
+echo "--- otool -L ---"
+otool -L "$BIN"
+echo "--- otool -l (build version) ---"
+otool -l "$BIN" | grep -A 4 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX' || true
+
+fail=0
+
+# Each probe is captured into a variable and matched afterwards, never piped
+# into `grep -q`. Under `pipefail` that pipeline is a coin toss: -q exits on the
+# first match, the writer takes SIGPIPE, and the pipeline reports failure — so a
+# binary that passes would be reported as failing, on the runs where grep
+# happened to win the race.
+FILE_SAYS=$(file "$BIN")
+if [[ "$FILE_SAYS" != *"Mach-O 64-bit executable ${WANT_ARCH}"* ]]; then
+  echo "::error::$BIN is not a 64-bit Mach-O executable for ${WANT_ARCH}"
+  fail=1
+fi
+
+# Every dependency must live somewhere the OS owns. /usr/lib and
+# /System/Library are the two prefixes shipped with macOS itself; anything else
+# — /opt/homebrew, /usr/local, @rpath into a bundle we are not shipping — is a
+# library the destination Mac has no reason to have.
+#
+# `tail -n +2` drops otool's first line, which is the binary's own path and
+# would otherwise be judged as if it were a dependency.
+STRAY=$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
+  | grep -Ev '^(/usr/lib/|/System/Library/)' || true)
+if [ -n "$STRAY" ]; then
+  echo "::error::$BIN links libraries that are not part of macOS:"
+  echo "$STRAY"
+  fail=1
+fi
+
+# arm64 refuses to execute an unsigned binary outright, so an unsigned build
+# would not fail here but on the user's Mac, as "killed: 9" with no explanation.
+#
+# Asserted for the published arm64 slice. The linker ad-hoc signs it on its
+# own; the workflow also signs explicitly, and this catches the day it stops.
+# macOS support is Apple Silicon only, so there is no x86_64 slice to check.
+# The verdict is `codesign -dv`'s exit status, not a word in its output. It
+# spells the signature line differently per posture — `Signature=adhoc` for an
+# ad-hoc or linker signature, `Signature size=8968` for a Developer ID one with
+# a timestamp — so the `*"Signature="*` this used to match held only for ad-hoc.
+# While the script pointed at the standalone lyrel-server, which is ad-hoc
+# signed, that was invisible; #692 pointed it at the bundle's binaries as well,
+# and those are Developer ID signed whenever the signing secrets are present.
+# Pull requests do not see the secrets, so every PR run took the ad-hoc branch
+# and passed, and the first build that signed for real — the nightly — failed
+# on all three binaries with `Signature size=` in the very output it printed as
+# proof they were unsigned.
+#
+# Exit status has no such split: 0 for anything signed, 1 with `code object is
+# not signed at all` for anything not. The output is still captured so the
+# failure message can carry it.
+if ! SIGNING=$(codesign -dv "$BIN" 2>&1); then
+  echo "::error::$BIN carries no code signature — arm64 macOS will refuse to run it"
+  echo "$SIGNING"
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  exit 1
+fi
+
+echo "✅ $BIN is a self-contained ${WANT_ARCH} Mach-O ($(du -h "$BIN" | cut -f1))"
