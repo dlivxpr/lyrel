@@ -64,7 +64,8 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// v13 adds scoped `SessionOperation` requests and removes Cursor-only history
 /// directory hints. Both belong to one unpublished cutover; pane framing stays v7.
 /// v14 adds independently gated native statistics requests; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 14;
+/// v15 adds raw symbolic-link/junction target reads; pane framing stays v7.
+pub const CONTROL_VERSION: u32 = 15;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -145,6 +146,8 @@ pub const MAX_CONCURRENT_GIT_STREAMS: usize = 8;
 pub mod feature {
     pub const CONTROL: &str = "control";
     pub const HOST_RPC: &str = "host-rpc";
+    /// Raw symbolic-link/junction targets; older peers must be upgraded first.
+    pub const READ_LINK: &str = "read-link";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
     /// The peer can say what is running inside one of its panes, and what that
@@ -203,6 +206,10 @@ pub enum ControlRequest {
         path: String,
     },
     Canonicalize {
+        path: String,
+    },
+    /// Read the stored target without canonicalization. Gated on [`feature::READ_LINK`].
+    ReadLink {
         path: String,
     },
     ReadFile {
@@ -518,6 +525,7 @@ impl ControlRequest {
             | Stat { .. }
             | Exists { .. }
             | Canonicalize { .. }
+            | ReadLink { .. }
             | RepoRoot { .. }
             | WatchOpen { .. }
             | WatchSet { .. }
@@ -1729,6 +1737,9 @@ mod tests {
             ControlRequest::Canonicalize {
                 path: "/a/../b".into(),
             },
+            ControlRequest::ReadLink {
+                path: "/private/alias".into(),
+            },
             ControlRequest::ReadFile {
                 path: "/home/me/proj/Cargo.toml".into(),
                 max_bytes: 10 * 1024 * 1024,
@@ -2472,6 +2483,7 @@ mod tests {
             (R::Stat { path: "/".into() }, s(5)),
             (R::Exists { path: "/".into() }, s(5)),
             (R::Canonicalize { path: "/".into() }, s(5)),
+            (R::ReadLink { path: "/alias".into() }, s(5)),
             (R::RepoRoot { path: "/".into() }, s(5)),
             (R::WatchOpen { dirs: vec![] }, s(5)),
             (
