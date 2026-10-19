@@ -4,7 +4,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {
-            "statistics omp native history tokens cost sessions machine profile date range overview"
+            "statistics omp pi native history tokens cost sessions machine profile date range overview source"
         }
         L10nKey::StatisticsToday => "Today",
         L10nKey::StatisticsWeek => "This week",
@@ -13,8 +13,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsAll => "All time",
         L10nKey::StatisticsCustom => "Custom",
         L10nKey::StatisticsScope => {
-            "Read omp native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
+            "Read native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
         }
+        L10nKey::StatisticsAgent => "Agent source",
+        L10nKey::StatisticsAgentScope => "All implemented sources, or one independent agent. A failed source does not hide other readable history.",
+        L10nKey::StatisticsAllAgents => "All agents",
         L10nKey::StatisticsRange => "Date range",
         L10nKey::StatisticsCalendar => {
             "Calendar boundaries use the desktop timezone; weeks start on Monday. Comparisons use the preceding matching calendar period."
@@ -59,10 +62,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Previous period: {tokens} tokens · {cost} · {sessions} main sessions\nToken change: {change}"
         }
         L10nKey::StatisticsEmpty => {
-            "No native activity in this range. Check the selected machine and source paths, choose another range, or use omp and refresh."
+            "No verified native usage in this range. Check the machine, agent source, diagnostics and date range, then refresh."
         }
         L10nKey::StatisticsPrivacy => {
-            "Read-only · omp 18.12.1 JSONL · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Arbitrary undiscoverable custom stores require an explicit source association. Skipped symlinks and unknown lineage limit coverage."
+            "Read-only · omp 18.12.1 / pi 1.3.0 JSONL · structured in-memory accounting only; no retained prompts, conversation bodies, credentials or online price requests. Custom stores must be discoverable. pi tool/summarization usage has no inferred model; unknown lineage and scan limits are diagnosed."
         }
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::IntegrationPiExtension => {

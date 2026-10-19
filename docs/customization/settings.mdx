@@ -28,7 +28,7 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
     每台机器上的 AI 智能体钩子，以及 PATH 中的 lyrel 命令。
   </Card>
   <Card title="统计" icon="chart-simple">
-    明确选择本机或已连接远端，查看 omp 原生历史的 Token、记录费用与活跃主会话总览。
+    明确选择本机或已连接远端，筛选 omp／pi 原生历史的 Token、记录费用与活跃主会话总览。
   </Card>
   <Card title="关于" icon="circle-info" href="/reference/updates">
     版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
@@ -47,10 +47,10 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
 录制已被其他操作使用的键盘快捷键时，会先询问是否接管：**替换**会将快捷键移交给当前操作，**取消**则让两个操作都保持原样。
 离开已编辑的表单时，会提示保存、放弃更改或继续编辑。
 
-## omp 原生历史统计
+## 原生历史统计
 
-从**设置 → 统计**进入，或搜索「统计」「Token」「omp」。先选择本机或已连接远端；
-选择不会随当前 SSH 工作区隐式改变，一次只展示一台机器。
+从**设置 → 统计**进入，或搜索「统计」「Token」「omp」「pi」。先选择本机或已连接远端；
+选择不会随当前 SSH 工作区隐式改变，一次只展示一台机器。智能体来源可选全部已实现来源、omp 或 pi，二者不合并身份；来源失败保留其他可读来源与可见诊断。
 范围支持今天、本周、本月、本年、全部与自定义日期（`YYYY-MM-DD`，包含两端）。
 所有日期按桌面本机时区的日历边界解释，星期一为周起点；快照显示时间、时区与实际结果范围。
 本周／本月／本年比较截至当前日期的对应前期；全部不制造基期，无有效分母时显示「不可比较」。
@@ -62,6 +62,17 @@ macOS／Linux 的已存在 XDG 数据／状态目录按上游规则解析；自�
 `custom-session-files` 和 `terminal-sessions` 标记发现，不猜测任意项目路径。
 相对路径依赖原生 cwd 而无法核实时明确报错，不借用 GUI home。
 远端复用 Host 文件操作与非秘密环境元数据；旧 server 缺能力时要求升级，不回退本机。
+
+pi 独立按正式 `@earendil-works/pi-coding-agent@1.3.0` 解析，不使用 omp 的 profile、XDG 或 `model_usage` 字段。
+有效来源依次采用 `agent_launch.pi` 的 `--session-dir`、`PI_CODING_AGENT_SESSION_DIR`、有效配置根下 `settings.json:sessionDir`，否则读取 `PI_CODING_AGENT_DIR|~/.pi/agent` 下的 `sessions`。
+已知 Host 历史返回的会话作用域可补充原生 pane 捕获的存储、home 与配置根；捕获 cwd 可用于项目 `.pi/settings.json` 及相对路径。没有原生 cwd 的相对设置明确报错，绝不回退默认目录。历史发现 API 的最近 500 条窗口仅限制额外已知来源发现，不限制已发现目录内的完整计量扫描；不可发现的任意项目目录不自动猜测。
+
+pi 按官方 `usage-totals` 口径计入全文件全部分支：assistant（包括失败／中断）、toolResult 可选用量、顶层任意 `kind` 的 `usage`、compaction／branch_summary 可选用量。
+总 Token 使用 `input + output + cacheRead + cacheWrite`；`reasoning` 已包含在 output、`cacheWrite1h` 已包含在 cacheWrite，不重复相加，也不采用可能不同的 `totalTokens`。模型优先使用真实 `responseModel`；工具／摘要缺少 provider／model 时保留未知，不沿用前一个模型。
+原生 pi 无通用子代理身份字段，工具嵌套调用计入用量但不增加主会话；不凭文件夹名称或 `parentSession` 猜子代理身份。磁盘 v1／v2／v3 可读，v1 缺条目 ID 仅独立根文件按行身份计量，继承不可核实则受限。
+pi 的 `parentSession` 是精确父文件路径；只在相同 Host、home、有效配置根及存储作用域内核实继承条目 ID。缺父文件、跨作用域或循环时排除该文件不可核实的用量并显示排除条数，不冒充全额或免费。新用量不会因整个文件是分叉而丢弃；相同短 ID 但计量／时间／内容摘要不同的条目保留并报冲突。原始正文不进入结构化缓存。
+
+pi 格式与算法依据：[Session format](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/session-format.md)、[usage-totals.js](https://unpkg.com/@earendil-works/pi-coding-agent@1.3.0/dist/core/usage-totals.js)。记录费用是 pi 按自身模型价表计算的历史值（含合法零），不代表服务商账单。
 
 主会话按范围内活动计数，独立分叉仍计主会话；原生 artifact 子会话不计主会话，
 但可核实新增 Token 与费用计入总量。重复副本与可解析 `parentSession` 链的继承记录去重；

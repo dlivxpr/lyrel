@@ -200,6 +200,7 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<NativeSession> {
                     .and_then(Value::as_f64)
                     .filter(|v| v.is_finite() && *v >= 0.);
                 records.push(UsageRecord {
+                    fingerprint: None,
                     id: value
                         .get("id")
                         .and_then(Value::as_str)

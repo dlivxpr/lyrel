@@ -1,8 +1,10 @@
 //! 原生历史的结构化统计 seam；扫描只缓存计量元数据，不保留对话正文。
 mod omp;
+mod pi;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
+pub use pi::discover_pi;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -19,6 +21,10 @@ pub struct Source {
     root: PathBuf,
     scope: String,
     agent: String,
+    #[serde(default)]
+    max_depth: Option<u8>,
+    #[serde(default)]
+    discovery_issue: Option<String>,
 }
 impl Source {
     pub fn omp(root: PathBuf, scope: impl Into<String>) -> Self {
@@ -26,7 +32,12 @@ impl Source {
             root,
             scope: scope.into(),
             agent: "omp".into(),
+            max_depth: None,
+            discovery_issue: None,
         }
+    }
+    pub fn pi(root: PathBuf, scope: impl Into<String>) -> Self {
+        Self { root, scope: scope.into(), agent: "pi".into(), max_depth: Some(0), discovery_issue: None }
     }
     pub fn root(&self) -> &std::path::Path {
         &self.root
@@ -81,6 +92,8 @@ impl Tokens {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageRecord {
     id: String,
+    #[serde(default)]
+    fingerprint: Option<String>,
     timestamp: i64,
     provider: String,
     model: String,
@@ -165,6 +178,9 @@ impl Snapshot {
     pub fn issues(&self) -> &[ScanIssue] {
         &self.issues
     }
+    pub fn report_issue(&mut self, path: PathBuf, reason: String) {
+        self.issues.push(ScanIssue { path, reason });
+    }
     pub fn is_complete(&self) -> bool {
         self.issues.is_empty()
     }
@@ -176,11 +192,11 @@ impl Snapshot {
         let mut identities = HashMap::new();
         for file in &self.files {
             identities.insert(
-                (file.source.scope.as_str(), file.session.id.as_str()),
+                ((file.source.agent.as_str(), file.source.scope.as_str()), file.session.id.as_str()),
                 file.session.id.as_str(),
             );
             if let Some(path) = file.path.to_str() {
-                identities.insert((file.source.scope.as_str(), path), file.session.id.as_str());
+                identities.insert(((file.source.agent.as_str(), file.source.scope.as_str()), path), file.session.id.as_str());
             }
         }
         let mut parents = HashMap::new();
@@ -189,16 +205,16 @@ impl Snapshot {
                 .session
                 .parent
                 .as_deref()
-                .and_then(|p| identities.get(&(file.source.scope.as_str(), p)))
+                .and_then(|p| identities.get(&((file.source.agent.as_str(), file.source.scope.as_str()), p)))
             {
                 parents.insert(
-                    (file.source.scope.as_str(), file.session.id.as_str()),
+                    ((file.source.agent.as_str(), file.source.scope.as_str()), file.session.id.as_str()),
                     *parent,
                 );
             }
         }
         for file in &self.files {
-            let scope = file.source.scope.as_str();
+            let scope = (file.source.agent.as_str(), file.source.scope.as_str());
             let session = &file.session;
             let mut lineage = session.id.as_str();
             let mut visited = HashSet::new();
@@ -222,12 +238,10 @@ impl Snapshot {
                 }
                 // IDs are short and only meaningful within the verified lineage and scope.
                 let key = (scope, lineage, record.id.as_str());
-                if let Some(old) = records.insert(key, record) {
-                    if old != record {
-                        out.ambiguous_records += 1;
-                    }
-                    continue;
-                }
+                let variants = records.entry(key).or_insert_with(Vec::new);
+                if variants.contains(&record) { continue; }
+                if !variants.is_empty() { out.ambiguous_records += 1; }
+                variants.push(record);
                 out.tokens.add(&record.tokens, out.calls == 0);
                 out.calls += 1;
                 if let Some(cost) = record.recorded_usd {
@@ -293,7 +307,7 @@ impl Totals {
 }
 #[derive(Default)]
 pub struct StatisticsCache {
-    files: HashMap<(u64, String, PathBuf), (Meta, FileFacts)>,
+    files: HashMap<(u64, String, String, PathBuf), (Meta, FileFacts)>,
 }
 
 /// Blocking Host operation. GUI callers dispatch using HostOps. No network pricing.
@@ -321,6 +335,10 @@ pub fn scan(
     let mut files = 0;
     let mut bytes = 0;
     for source in sources {
+        if let Some(reason) = &source.discovery_issue {
+            snapshot.report_issue(source.root.clone(), reason.clone());
+            continue;
+        }
         let exact_file = host.stat(&source.root).is_ok_and(|m| !m.is_dir);
         let initial = if exact_file {
             let value = source.root.to_string_lossy();
@@ -335,14 +353,14 @@ pub fn scan(
             source.root.clone()
         };
         let child_root = if exact_file { &initial } else { &source.root };
-        let root_is_child = host
+        let root_is_child = source.agent == "omp" && host
             .stat(&PathBuf::from(format!(
                 "{}.jsonl",
                 child_root.to_string_lossy()
             )))
             .is_ok_and(|m| !m.is_dir);
-        let mut pending = vec![(initial, root_is_child)];
-        while let Some((path, child)) = pending.pop() {
+        let mut pending = vec![(initial, root_is_child, 0u8)];
+        while let Some((path, child, depth)) = pending.pop() {
             dirs += 1;
             if dirs > MAX_DIRS {
                 snapshot.issues.push(ScanIssue {
@@ -359,7 +377,7 @@ pub fn scan(
                         && !cache
                             .files
                             .keys()
-                            .any(|(id, scope, _)| *id == host.id().0 && *scope == source.scope) =>
+                            .any(|(id, agent, scope, _)| *id == host.id().0 && *agent == source.agent && *scope == source.scope) =>
                 {
                     continue;
                 }
@@ -384,9 +402,10 @@ pub fn scan(
                     continue;
                 }
                 if entry.is_dir {
+                    if source.max_depth.is_some_and(|limit| depth >= limit) { continue; }
                     let sibling = PathBuf::from(format!("{}.jsonl", path.to_string_lossy()));
-                    let nested = child || host.stat(&sibling).is_ok_and(|m| !m.is_dir);
-                    pending.push((path, nested));
+                    let nested = source.agent == "omp" && (child || host.stat(&sibling).is_ok_and(|m| !m.is_dir));
+                    pending.push((path, nested, depth.saturating_add(1)));
                     continue;
                 }
                 if !entry.name.ends_with(".jsonl") {
@@ -402,7 +421,7 @@ pub fn scan(
                         continue;
                     }
                 };
-                if !seen.insert((source.scope.clone(), path.clone())) {
+                if !seen.insert((source.agent.clone(), source.scope.clone(), path.clone())) {
                     continue;
                 }
                 files += 1;
@@ -414,7 +433,7 @@ pub fn scan(
                     pending.clear();
                     break;
                 }
-                let key = (host.id().0, source.scope.clone(), path.clone());
+                let key = (host.id().0, source.agent.clone(), source.scope.clone(), path.clone());
                 let result = (|| {
                     let meta = host.stat(&path)?;
                     if let Some((old, facts)) = cache.files.get(&key) {
@@ -430,7 +449,11 @@ pub fn scan(
                     }
                     bytes += meta.len;
                     let data = host.read_file(&path, MAX_FILE_BYTES)?;
-                    let session = omp::parse(&data)?;
+                    let session = match source.agent.as_str() {
+                        "omp" => omp::parse(&data)?,
+                        "pi" => pi::parse(&data)?,
+                        _ => return Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported native statistics agent")),
+                    };
                     Ok((
                         meta,
                         FileFacts {
@@ -461,23 +484,24 @@ pub fn scan(
         }
     }
     if !snapshot.issues.is_empty() {
-        for ((host_id, scope, path), (_, facts)) in &cache.files {
+        for ((host_id, agent, scope, path), (_, facts)) in &cache.files {
             if *host_id == host.id().0
-                && sources.iter().any(|s| s.scope == *scope)
+                && sources.iter().any(|s| s.agent == *agent && s.scope == *scope)
                 && !snapshot
                     .files
                     .iter()
-                    .any(|f| f.path == *path && f.source.scope == *scope)
+                    .any(|f| f.path == *path && f.source.agent == *agent && f.source.scope == *scope)
             {
                 snapshot.files.push(facts.clone());
             }
         }
     }
+    pi::resolve_inheritance(&mut snapshot);
     // Restrict lineage claims rather than silently treating an unresolved parent as reliable.
     for file in &snapshot.files {
         if let Some(parent) = &file.session.parent {
             if !snapshot.files.iter().any(|f| {
-                f.source.scope == file.source.scope
+                f.source.agent == file.source.agent && f.source.scope == file.source.scope
                     && (f.session.id == *parent || f.path.to_string_lossy() == parent.as_str())
             }) {
                 snapshot.issues.push(ScanIssue {
@@ -495,10 +519,10 @@ pub fn scan(
         }
     }
     if snapshot.issues.is_empty() {
-        cache.files.retain(|(id, scope, path), _| {
+        cache.files.retain(|(id, agent, scope, path), _| {
             *id != host.id().0
-                || !sources.iter().any(|s| s.scope == *scope)
-                || seen.contains(&(scope.clone(), path.clone()))
+                || !sources.iter().any(|s| s.agent == *agent && s.scope == *scope)
+                || seen.contains(&(agent.clone(), scope.clone(), path.clone()))
         });
     }
     Ok(snapshot)
