@@ -80,7 +80,7 @@ GitHub 仓库发现、授权解析和所有 tree／blob 下载始终在**桌面�
 | OpenCode 2.0.32 | `$XDG_CONFIG_HOME/opencode/skills`，默认 `~/.config/opencode/skills`；显式配置根为 `$OPENCODE_CONFIG_DIR/skills`。同时读取 `.opencode/skills`、兼容共享来源、平台系统来源及 `opencode.json(c)` 的额外本地路径。在线目录不会因只读浏览而自动下载，相关限制会报告 | `@skill-id` 或模型的 `skill` 工具；每个模型步骤刷新列表，不假定存在技能专用重载命令 |
 | Hermes 0.22.2 | 有效 `$HERMES_HOME/skills`，沿用原生 profile 与平台目录解析；用户共享目录必须在 `skills.external_dirs` 显式配置。项目 `.hermes/skills`／`.agents/skills` 仍需原生信任 | `/name` 或 `/skill name`；`/reload-skills` 重新扫描 |
 
-来源记录兼容 skills CLI 1.7.2：用户级 v3 `.skill-lock.json`（含 `XDG_STATE_HOME/skills` 路径）及项目级 v1 `skills-lock.json`。相对 `XDG_STATE_HOME` 只以目标 Host 的明确工作目录解释；远端没有可核实 cwd 时拒绝，不借用桌面 cwd 或猜测为 home。写入保留合法未知字段与无关条目；损坏或未知版本阻止安装，不强制重写。记录只绑定到对应共享目录的真实安装，不因名称相同而套到私有副本；声明来源不代表已在线核验当前本地修改。
+来源记录兼容 skills CLI 1.7.2：用户级 v3 `.skill-lock.json`（含 `XDG_STATE_HOME/skills` 路径）及项目级 v1 `skills-lock.json`。相对 `XDG_STATE_HOME` 通过现有 Host `canonicalize(".")` 取得目标 Host 的实际工作目录，安装与后续来源识别使用同一依据；无法核实时拒绝，不借用桌面 cwd 或猜测为 home。写入保留合法未知字段与无关条目；损坏或未知版本阻止安装，不强制重写。记录只绑定到对应共享目录的真实安装，不因名称相同而套到私有副本；声明来源不代表已在线核验当前本地修改。
 
 扫描在后台执行。刷新期间可保留旧快照，显示原有扫描时间；断连、权限不足和部分来源失败不会被显示为新的完整成功。切换机器、项目、离开页面及重新打开设置后，旧请求结果不能覆盖新范围。缓存仅属于当前设置会话，不复制原生配置或技能到 lyrel 持久化目录。
 一次快照最多保留 2,000 个安装与 32 MiB Markdown，单文件上限 1 MiB；目录与伴随文件遍历也有总上限，触及时显示不完整状态。OpenCode 的系统目录依据所选 Host 生成的 `LYREL_HOST_OS` 元数据区分平台，旧服务端未报告时明确提示升级，不采用桌面本机的平台作猜测。

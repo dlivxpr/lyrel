@@ -391,7 +391,8 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&local, cx);
-        super::super::test_host::install_on(&remote, remote_id, cx);
+        std::fs::create_dir(remote.join("cwd")).unwrap();
+        super::super::test_host::install_on(&remote, remote_id, true, cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);
         app.select_skills_host(remote_id, window, cx);
         app.active_settings_mut().unwrap().skills.install.github = Some(Arc::new(PublicRepository));
@@ -441,9 +442,27 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
         "---\nname: needle\ndescription: Public repository reference\n---\n# Installed content\n"
     );
     let lock: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(remote.join(".state/skills/.skill-lock.json")).unwrap(),
+        &std::fs::read(remote.join("cwd/.state/skills/.skill-lock.json")).unwrap(),
     )
     .unwrap();
+    app.update_in(&mut vcx, |app, _, _| {
+        let snapshot = app
+            .active_settings()
+            .unwrap()
+            .skills
+            .snapshot
+            .as_ref()
+            .unwrap();
+        let installed = snapshot
+            .installations()
+            .iter()
+            .find(|skill| skill.path() == remote.join(".agents/skills/needle"))
+            .unwrap();
+        assert_eq!(
+            installed.source_record().unwrap().source(),
+            "example/skills"
+        );
+    });
     assert_eq!(lock["skills"]["needle"]["source"], "example/skills");
     assert_eq!(
         lock["skills"]["needle"]["skillFolderHash"],

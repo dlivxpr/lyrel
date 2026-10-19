@@ -380,8 +380,12 @@ impl LyrelApp {
                 };
                 let home=keys.into_iter().find_map(|key|environment.get(key).filter(|v|!v.is_empty())).ok_or_else(||io::Error::new(io::ErrorKind::Unsupported,"selected Host did not report HOME/USERPROFILE; upgrade remote capability"))?;
                 let mut request = ScanRequest::new(home).with_launch_commands(launches);
-                if host.id() == HostId::LOCAL {
-                    request = request.with_working_directory(std::env::current_dir()?);
+                if host.id() == HostId::LOCAL
+                    || environment.get("XDG_STATE_HOME").is_some_and(|state| {
+                        !state.is_empty() && !host.is_absolute(Path::new(state))
+                    })
+                {
+                    request = request.with_working_directory(host.canonicalize(Path::new("."))?);
                 }
                 if let Some(project) = project {
                     request = request.with_project(project);

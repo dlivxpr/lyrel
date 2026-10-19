@@ -415,16 +415,12 @@ impl LyrelApp {
                         .get("XDG_STATE_HOME")
                         .filter(|s| !s.is_empty())
                         .map(PathBuf::from);
-                    let cwd = environment
-                        .get("PWD")
-                        .filter(|cwd| !cwd.is_empty())
-                        .map(PathBuf::from)
-                        .or_else(|| {
-                            (host.id() == HostId::LOCAL)
-                                .then(|| std::env::current_dir().ok())
-                                .flatten()
-                        })
-                        .unwrap_or_default();
+                    let cwd = if state.as_ref().is_some_and(|state| !host.is_absolute(state)) {
+                        host.canonicalize(Path::new("."))
+                            .map_err(|error| error.to_string())?
+                    } else {
+                        PathBuf::new()
+                    };
                     InstallTarget::user(host, PathBuf::from(home), state, cwd)
                 }
                 .map_err(|e| e.to_string())?;
