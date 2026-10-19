@@ -7,6 +7,7 @@ use std::rc::Rc;
 use super::kit::{self, BtnKind, Tk, fs};
 use super::*;
 use crate::ui::app::{TITLE_BAR_BORDER, TitleStripRow as _};
+use gpui_kit::TestSupportExt as _;
 
 /// What a menu row does when picked.
 pub(crate) type PickFn = Rc<dyn Fn(&mut LyrelApp, &mut Window, &mut Context<LyrelApp>)>;
@@ -1056,6 +1057,12 @@ impl LyrelApp {
                         cx.listener(|this, _, window, cx| this.close_settings_checked(window, cx)),
                     ),
             )
+            .when(!searching && section == SettingsSection::Skills, |root| {
+                root.children(self.render_skills_overlay(cx))
+            })
+            .when(!searching && section == SettingsSection::Usage, |root| {
+                root.children(self.render_usage_overlay(cx))
+            })
             // While a popover is open the page under it only takes one click:
             // the one that closes it.
             .when(menu_open, |r| {
@@ -1207,6 +1214,7 @@ impl LyrelApp {
                     "settings-nav-{}",
                     target.profile_label()
                 )))
+                .test_support()
                 .role(gpui_kit::Role::Tab)
                 .aria_label(t(target.title()))
                 .aria_selected(active)
@@ -1359,6 +1367,10 @@ impl LyrelApp {
     ) {
         let key = ev.keystroke.key.as_str();
         if key == "f" && ev.keystroke.modifiers.secondary() && !ev.keystroke.modifiers.shift {
+            if self.skills_modal_open() || self.usage_form_open(cx) {
+                cx.stop_propagation();
+                return;
+            }
             if let Some(s) = self.active_settings() {
                 let handle = s.search.read(cx).focus_handle(cx);
                 window.focus(&handle, cx);

@@ -100,7 +100,10 @@ fn browser_import_uses_selected_profile_keeps_material_out_of_vault_and_refuses_
         http.requests.lock().unwrap()[0].2,
         format!("{} {}", "Bearer", "selected-work-token")
     );
-    click(&mut vcx, "usage-cadence");
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.within("usage-cadence").click("input", cx);
+    });
     vcx.simulate_keystrokes("down enter");
     settle(&mut vcx, |d| d.stored.interval_secs == 60);
     let lock = rusqlite::Connection::open(&selected).unwrap();

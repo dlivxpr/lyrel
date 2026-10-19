@@ -12,7 +12,7 @@ use super::shell::MenuEntry;
 use super::*;
 use crate::ui::host_ops::HostOps;
 use crate::ui::host_registry::HostRegistry;
-use gpui_kit::component::Disableable;
+use gpui_kit::component::{Disableable, button::ButtonVariants};
 use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -232,8 +232,9 @@ impl LyrelApp {
             s.statistics.loading = true;
             s.statistics.error = None;
             if s.statistics.analysis.anchor.is_none() {
-                s.statistics.analysis.anchor =
-                    Some(gpui_kit::ScrollAnchor::for_handle(s.statistics.content_scroll.clone()));
+                s.statistics.analysis.anchor = Some(gpui_kit::ScrollAnchor::for_handle(
+                    s.statistics.content_scroll.clone(),
+                ));
             }
         }
         HostOps::run(
@@ -435,54 +436,135 @@ impl LyrelApp {
             .child(agent)
             .child(div().flex_1())
             .child(range)
-            .child(self.analysis_button(
-                "statistics-refresh",
-                t(L10nKey::StatisticsRefresh),
-                cx,
-                |this, _, cx| this.load_statistics(cx),
-            ).ghost().disabled(loading || state.management.busy));
+            .child(
+                self.analysis_button(
+                    "statistics-refresh",
+                    t(L10nKey::StatisticsRefresh),
+                    cx,
+                    |this, _, cx| this.load_statistics(cx),
+                )
+                .ghost()
+                .disabled(loading || state.management.busy),
+            );
         let mut rows = vec![toolbar.into_any_element()];
         if period == Period::Custom {
-            rows.push(h_flex().gap_2().min_w_0()
-                .child(Input::new(&start).id("statistics-start-date")
-                    .aria_label(t(L10nKey::StatisticsStartDate)).small().flex_1().min_w_0())
-                .child(Input::new(&end).id("statistics-end-date")
-                    .aria_label(t(L10nKey::StatisticsEndDate)).small().flex_1().min_w_0())
-                .child(self.analysis_button("statistics-apply", t(L10nKey::StatisticsApply), cx,
-                    |this, _, cx| this.load_statistics(cx)))
-                .into_any_element());
+            rows.push(
+                h_flex()
+                    .gap_2()
+                    .min_w_0()
+                    .child(
+                        Input::new(&start)
+                            .id("statistics-start-date")
+                            .aria_label(t(L10nKey::StatisticsStartDate))
+                            .small()
+                            .flex_1()
+                            .min_w_0(),
+                    )
+                    .child(
+                        Input::new(&end)
+                            .id("statistics-end-date")
+                            .aria_label(t(L10nKey::StatisticsEndDate))
+                            .small()
+                            .flex_1()
+                            .min_w_0(),
+                    )
+                    .child(self.analysis_button(
+                        "statistics-apply",
+                        t(L10nKey::StatisticsApply),
+                        cx,
+                        |this, _, cx| this.load_statistics(cx),
+                    ))
+                    .into_any_element(),
+            );
         }
         if loading {
-            rows.push(div().text_xs().text_color(tk.k5)
-                .child(t(L10nKey::StatisticsLoading)).into_any_element());
+            rows.push(
+                div()
+                    .text_xs()
+                    .text_color(tk.k5)
+                    .child(t(L10nKey::StatisticsLoading))
+                    .into_any_element(),
+            );
         }
         if let Some(error) = &state.error {
-            rows.push(div().text_sm().text_color(tk.danger).child(error.clone()).into_any_element());
+            rows.push(
+                div()
+                    .text_sm()
+                    .text_color(tk.danger)
+                    .child(error.clone())
+                    .into_any_element(),
+            );
         }
         let presentation = state.results.get(&(host, state.agent));
         rows.push(self.render_statistics_tiles(presentation, cx));
         if let Some(p) = presentation {
             rows.push(self.render_statistics_analysis(p, cx));
-            rows.push(div().text_xs().text_color(if p.totals.is_complete() { tk.k5 } else { tk.warn_text })
-                .child(t(if p.totals.is_complete() { L10nKey::StatisticsComplete } else { L10nKey::StatisticsPartial }))
-                .into_any_element());
-            rows.push(div().text_xs().text_color(tk.k5)
-                .child(t_fmt(L10nKey::StatisticsUpdated, &[
-                    ("time", &management::format_time(Some(p.snapshot.updated()))),
-                    ("zone", p.window.timezone()),
-                    ("range", &self.statistics_range_label(p)),
-                ])).into_any_element());
+            rows.push(
+                div()
+                    .text_xs()
+                    .text_color(if p.totals.is_complete() {
+                        tk.k5
+                    } else {
+                        tk.warn_text
+                    })
+                    .child(t(if p.totals.is_complete() {
+                        L10nKey::StatisticsComplete
+                    } else {
+                        L10nKey::StatisticsPartial
+                    }))
+                    .into_any_element(),
+            );
+            rows.push(
+                div()
+                    .text_xs()
+                    .text_color(tk.k5)
+                    .child(t_fmt(
+                        L10nKey::StatisticsUpdated,
+                        &[
+                            ("time", &management::format_time(Some(p.snapshot.updated()))),
+                            ("zone", p.window.timezone()),
+                            ("range", &self.statistics_range_label(p)),
+                        ],
+                    ))
+                    .into_any_element(),
+            );
         }
         rows.push(self.render_statistics_management_entry(cx));
-        rows.push(div().text_xs().text_color(tk.k5).child(t(L10nKey::StatisticsPrivacy)).into_any_element());
-        let body = div().id("statistics-content")
-            .size_full().min_w_0().min_h_0().overflow_y_scroll()
+        rows.push(
+            div()
+                .text_xs()
+                .text_color(tk.k5)
+                .child(t(L10nKey::StatisticsPrivacy))
+                .into_any_element(),
+        );
+        let body = div()
+            .id("statistics-content")
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_y_scroll()
             .track_scroll(&state.content_scroll)
-            .child(v_flex().min_w_0().gap_4().px_4().pt_2().pb_4().children(rows));
-        v_flex().id("statistics-page").size_full().flex_1().min_h_0().min_w_0()
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .gap_4()
+                    .px_4()
+                    .pt_2()
+                    .pb_4()
+                    .children(rows),
+            );
+        v_flex()
+            .id("statistics-page")
+            .size_full()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
             .child(crate::ui::scrollbar::with_vertical_scrollbar(
-                "statistics-content-scrollbar", body, &state.content_scroll,
-            )).into_any_element()
+                "statistics-content-scrollbar",
+                body,
+                &state.content_scroll,
+            ))
+            .into_any_element()
     }
 }
 
@@ -641,7 +723,21 @@ mod tests {
             cx.notify();
         });
         vcx.run_until_parked();
-        vcx.simulate_keystrokes("home right down enter");
+        vcx.simulate_keystrokes("home right");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx)
+                    .active_settings()
+                    .unwrap()
+                    .statistics
+                    .analysis
+                    .date
+                    .ordinal(),
+                8
+            );
+        });
+        vcx.simulate_keystrokes("down enter");
         vcx.run_until_parked();
         vcx.update(|_, cx| {
             let state = &app.read(cx).active_settings().unwrap().statistics.analysis;
@@ -659,14 +755,25 @@ mod tests {
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            assert_eq!(window.find("statistics-calendar-focus").focused(), Some(true),
-                "one Tab must leave the annual grid instead of visiting every date");
+            assert_eq!(
+                window.find("statistics-calendar-focus").focused(),
+                Some(true),
+                "one Tab must leave the annual grid instead of visiting every date"
+            );
         });
         vcx.simulate_keystrokes("shift-tab");
         vcx.run_until_parked();
         vcx.update(|window, cx| {
-            assert!(app.read(cx).active_settings().unwrap().statistics.analysis.focus.is_focused(window),
-                "Shift-Tab must return to the single keyboard calendar focus");
+            assert!(
+                app.read(cx)
+                    .active_settings()
+                    .unwrap()
+                    .statistics
+                    .analysis
+                    .focus
+                    .is_focused(window),
+                "Shift-Tab must return to the single keyboard calendar focus"
+            );
         });
         for (locale, width, mode) in [
             ("en", 1120., gpui_kit::component::ThemeMode::Light),
@@ -688,7 +795,12 @@ mod tests {
             vcx.update(|window, cx| {
                 window.render_frame(cx);
                 let top = window.find("statistics-analysis-metric").bounds().top();
-                let scroll = &app.read(cx).active_settings().unwrap().statistics.content_scroll;
+                let scroll = &app
+                    .read(cx)
+                    .active_settings()
+                    .unwrap()
+                    .statistics
+                    .content_scroll;
                 let offset = scroll.offset();
                 scroll.set_offset(gpui_kit::point(offset.x, offset.y - top + px(180.)));
                 window.render_frame(cx);
@@ -702,6 +814,36 @@ mod tests {
                 window.press("escape", cx);
             });
             vcx.run_until_parked();
+            app.update_in(&mut vcx, |app, window, cx| {
+                window.focus(
+                    &app.active_settings().unwrap().statistics.analysis.focus,
+                    cx,
+                );
+            });
+            for key in ["end", "home"] {
+                vcx.simulate_keystrokes(key);
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    let date = app
+                        .read(cx)
+                        .active_settings()
+                        .unwrap()
+                        .statistics
+                        .analysis
+                        .date;
+                    let cell = window.find(format!("statistics-day-{date}"));
+                    assert!(
+                        cell.visible(),
+                        "{locale}: {key} must scroll the selected date into view"
+                    );
+                    let cell = cell.bounds();
+                    assert!(
+                        (cell.size.width - cell.size.height).abs() <= px(1.),
+                        "{locale}: narrow windows must not crush calendar cells"
+                    );
+                });
+            }
             let mut found = false;
             for _ in 0..450 {
                 let focused = vcx.update(|window, cx| {

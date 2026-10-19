@@ -7783,6 +7783,8 @@ impl LyrelApp {
         content_scroll.set_offset(self.last_settings_location.1);
         let search_anchor = gpui_kit::ScrollAnchor::for_handle(content_scroll.clone());
         let usage = cx.new(|cx| crate::ui::settings::usage::UsagePage::new(window, cx));
+        // Account forms render above the whole settings shell, outside UsagePage.
+        subs.push(cx.observe(&usage, |_, _, cx| cx.notify()));
         if self.last_settings_location.0 == SettingsSection::Usage {
             usage.update(cx, |page, cx| page.set_visible(true, cx));
         }

@@ -1,7 +1,7 @@
 //! 来源关联和单价编辑属于统计页，不引入另一条扫描或聚合管线。
 use super::*;
 use gpui_kit::FocusHandle;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, button::Button};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, button::Button};
 use lyrel_core::statistics::{pricing::UnitPrice, sources::SourceBinding};
 use std::path::PathBuf;
 
@@ -67,16 +67,28 @@ struct ManagementDialog {
 }
 impl Render for ManagementDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.app.update(cx, |app, cx| app.render_statistics_management(cx))
+        self.app
+            .update(cx, |app, cx| app.render_statistics_management(cx))
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
 impl LyrelApp {
-    fn open_statistics_management(&mut self, surface: Editor, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(settings) = self.active_settings_mut() else { return; };
+    fn open_statistics_management(
+        &mut self,
+        surface: Editor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.active_settings_mut() else {
+            return;
+        };
         settings.statistics.management.surface = Some(surface);
         settings.statistics.management.editor = None;
-        settings.statistics.management.scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+        settings
+            .statistics
+            .management
+            .scroll
+            .set_offset(gpui_kit::point(px(0.), px(0.)));
         let app = cx.entity();
         let body = cx.new(|cx| ManagementDialog {
             app: app.downgrade(),
@@ -85,45 +97,52 @@ impl LyrelApp {
         let owner = app.downgrade();
         let cancel_owner = owner.clone();
         window.open_dialog(cx, move |dialog, window, _| {
-            let body_height = (window.viewport_size().height - window.rem_size() * 12.).max(window.rem_size() * 8.);
-            dialog.title(t(match surface {
-                Editor::Source => L10nKey::StatisticsSourcesTitle,
-                Editor::Price => L10nKey::StatisticsPricesTitle,
-            }))
-            .w(window.rem_size() * 42.)
-            .child(div().h(body_height).min_h_0().child(body.clone()))
-            .on_ok({
-                let owner = owner.clone();
-                move |_, _, cx| {
-                    let _ = owner.update(cx, |app, cx| {
-                        match app.active_settings().and_then(|s| s.statistics.management.editor) {
-                            Some(Editor::Source) => app.save_statistics_source(cx),
-                            Some(Editor::Price) => app.save_statistics_price(cx),
-                            None => {},
-                        }
-                    });
-                    false
-                }
-            })
-            .on_cancel({
-                let owner = cancel_owner.clone();
-                move |_, window, cx| {
-                    !owner.update(cx, |app, cx| app.cancel_statistics_editor(window, cx)).unwrap_or(false)
-                }
-            })
-            .on_close({
-                let owner = owner.clone();
-                move |_, _, cx| {
-                    let _ = owner.update(cx, |app, cx| {
-                        if let Some(settings) = app.active_settings_mut() {
-                            settings.statistics.management.surface = None;
-                            settings.statistics.management.editor = None;
-                            settings.statistics.management.return_focus = None;
-                        }
-                        cx.notify();
-                    });
-                }
-            })
+            let body_height = (window.viewport_size().height - window.rem_size() * 12.)
+                .max(window.rem_size() * 8.);
+            dialog
+                .title(t(match surface {
+                    Editor::Source => L10nKey::StatisticsSourcesTitle,
+                    Editor::Price => L10nKey::StatisticsPricesTitle,
+                }))
+                .w(window.rem_size() * 42.)
+                .child(div().h(body_height).min_h_0().child(body.clone()))
+                .on_ok({
+                    let owner = owner.clone();
+                    move |_, _, cx| {
+                        let _ = owner.update(cx, |app, cx| {
+                            match app
+                                .active_settings()
+                                .and_then(|s| s.statistics.management.editor)
+                            {
+                                Some(Editor::Source) => app.save_statistics_source(cx),
+                                Some(Editor::Price) => app.save_statistics_price(cx),
+                                None => {}
+                            }
+                        });
+                        false
+                    }
+                })
+                .on_cancel({
+                    let owner = cancel_owner.clone();
+                    move |_, window, cx| {
+                        !owner
+                            .update(cx, |app, cx| app.cancel_statistics_editor(window, cx))
+                            .unwrap_or(false)
+                    }
+                })
+                .on_close({
+                    let owner = owner.clone();
+                    move |_, _, cx| {
+                        let _ = owner.update(cx, |app, cx| {
+                            if let Some(settings) = app.active_settings_mut() {
+                                settings.statistics.management.surface = None;
+                                settings.statistics.management.editor = None;
+                                settings.statistics.management.return_focus = None;
+                            }
+                            cx.notify();
+                        });
+                    }
+                })
         });
         cx.notify();
     }
@@ -132,31 +151,84 @@ impl LyrelApp {
         let state = &self.active_settings().unwrap().statistics;
         let tk = Tk::of(cx);
         let sources = state.results.get(&(state.host, state.agent));
-        let source_status = sources.map(|p| t_fmt(L10nKey::StatisticsSourceSummary, &[
-            ("count", &p.snapshot.sources().len().to_string()),
-            ("issues", &p.snapshot.issues().len().to_string()),
-        ])).unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into());
-        let price_status = t_fmt(L10nKey::StatisticsPriceSummary, &[
-            ("count", &state.management.stored.pricing.custom.len().to_string()),
-            ("catalog", t(if state.management.stored.pricing.public_enabled {
-                L10nKey::StatisticsCatalogEnabled
-            } else { L10nKey::StatisticsCatalogDisabled })),
-        ]);
+        let source_status = sources
+            .map(|p| {
+                t_fmt(
+                    L10nKey::StatisticsSourceSummary,
+                    &[
+                        ("count", &p.snapshot.sources().len().to_string()),
+                        ("issues", &p.snapshot.issues().len().to_string()),
+                    ],
+                )
+            })
+            .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into());
+        let price_status = t_fmt(
+            L10nKey::StatisticsPriceSummary,
+            &[
+                (
+                    "count",
+                    &state.management.stored.pricing.custom.len().to_string(),
+                ),
+                (
+                    "catalog",
+                    t(if state.management.stored.pricing.public_enabled {
+                        L10nKey::StatisticsCatalogEnabled
+                    } else {
+                        L10nKey::StatisticsCatalogDisabled
+                    }),
+                ),
+            ],
+        );
         let mut rows = v_flex().gap_2().min_w_0();
         for (id, title, status, surface) in [
-            ("statistics-manage-sources", L10nKey::StatisticsManageSources, source_status, Editor::Source),
-            ("statistics-manage-prices", L10nKey::StatisticsManagePrices, price_status, Editor::Price),
+            (
+                "statistics-manage-sources",
+                L10nKey::StatisticsManageSources,
+                source_status,
+                Editor::Source,
+            ),
+            (
+                "statistics-manage-prices",
+                L10nKey::StatisticsManagePrices,
+                price_status,
+                Editor::Price,
+            ),
         ] {
-            rows = rows.child(self.statistics_management_button(id, t(title), cx,
-                move |this, window, cx| this.open_statistics_management(surface, window, cx))
-                .ghost().h_auto().w_full().min_w_0().p_3()
-                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(tk.k5).child(status)));
+            rows = rows.child(
+                self.statistics_management_button(id, t(title), cx, move |this, window, cx| {
+                    this.open_statistics_management(surface, window, cx)
+                })
+                .ghost()
+                .h_auto()
+                .w_full()
+                .min_w_0()
+                .p_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(tk.k5)
+                        .child(status),
+                ),
+            );
         }
         if let Some(error) = &state.management.error {
-            rows = rows.child(div().text_xs().text_color(tk.warn_text).child(error.clone()));
+            rows = rows.child(
+                div()
+                    .text_xs()
+                    .text_color(tk.warn_text)
+                    .child(error.clone()),
+            );
         }
         if let Some(error) = &state.management.stored.pricing.last_error {
-            rows = rows.child(div().text_xs().text_color(tk.warn_text).child(error.clone()));
+            rows = rows.child(
+                div()
+                    .text_xs()
+                    .text_color(tk.warn_text)
+                    .child(error.clone()),
+            );
         }
         rows.into_any_element()
     }
@@ -237,7 +309,9 @@ impl LyrelApp {
         state.editor_window = Some(window.window_handle());
         state.error = None;
         if editor == Editor::Source {
-            state.selector.update(cx, |input, cx| input.set_value("", window, cx));
+            state
+                .selector
+                .update(cx, |input, cx| input.set_value("", window, cx));
         }
         if editor == Editor::Price {
             state.editing_price = None;
@@ -542,53 +616,342 @@ impl LyrelApp {
         let sources = state.surface == Some(Editor::Source);
         let mut rows = Vec::new();
         if sources {
-        rows.push(div().text_xs().text_color(tk.k5).child(t(L10nKey::StatisticsSourcesHelp)).into_any_element());
-        rows.push(self.statistics_management_button(
-            "statistics-add-source", t(L10nKey::StatisticsAddSource), cx,
-            |this, window, cx| this.edit_statistics(Editor::Source, window, cx),
-        ).disabled(disabled).into_any_element());
-        if let Some(presentation) = settings
-            .statistics
-            .results
-            .get(&(settings.statistics.host, settings.statistics.agent))
-        {
-            for source in presentation.snapshot.sources() {
-                rows.push(div().text_xs().text_color(tk.k5)
-                    .child(format!("{} · {}\n{}", source.agent(), source.scope(), source.root().display()))
-                    .into_any_element());
+            rows.push(
+                div()
+                    .text_xs()
+                    .text_color(tk.k5)
+                    .child(t(L10nKey::StatisticsSourcesHelp))
+                    .into_any_element(),
+            );
+            rows.push(
+                self.statistics_management_button(
+                    "statistics-add-source",
+                    t(L10nKey::StatisticsAddSource),
+                    cx,
+                    |this, window, cx| this.edit_statistics(Editor::Source, window, cx),
+                )
+                .disabled(disabled)
+                .into_any_element(),
+            );
+            if let Some(presentation) = settings
+                .statistics
+                .results
+                .get(&(settings.statistics.host, settings.statistics.agent))
+            {
+                for source in presentation.snapshot.sources() {
+                    rows.push(
+                        div()
+                            .text_xs()
+                            .text_color(tk.k5)
+                            .child(format!(
+                                "{} · {}\n{}",
+                                source.agent(),
+                                source.scope(),
+                                source.root().display()
+                            ))
+                            .into_any_element(),
+                    );
+                }
+                for issue in presentation.snapshot.issues() {
+                    rows.push(
+                        div()
+                            .text_xs()
+                            .text_color(tk.warn_text)
+                            .child(format!(
+                                "{}\n{}",
+                                issue.path().display(),
+                                issue_text(issue.reason())
+                            ))
+                            .into_any_element(),
+                    );
+                }
+                if settings
+                    .statistics
+                    .agent
+                    .is_none_or(|agent| agent == "hermes")
+                {
+                    rows.push(
+                        div()
+                            .text_xs()
+                            .text_color(tk.k5)
+                            .child(t(L10nKey::StatisticsHermesLimits))
+                            .into_any_element(),
+                    );
+                }
+                for binding in &presentation.bindings {
+                    let remove = binding.clone();
+                    let check = binding.clone();
+                    let id = binding.key();
+                    rows.push(
+                        v_flex()
+                            .gap_2()
+                            .min_w_0()
+                            .child(div().text_sm().child(format!(
+                                "{} · {}\n{}\n{}",
+                                binding.agent, binding.host, binding.scope, binding.selector
+                            )))
+                            .child(
+                                h_flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(
+                                        self.statistics_management_button(
+                                            SharedString::from(format!(
+                                                "statistics-check-source:{id}"
+                                            )),
+                                            t(L10nKey::StatisticsCheckSource),
+                                            cx,
+                                            move |this, _, cx| {
+                                                this.check_statistics_source(check.clone(), cx)
+                                            },
+                                        )
+                                        .disabled(disabled),
+                                    )
+                                    .child(
+                                        self.statistics_management_button(
+                                            SharedString::from(format!(
+                                                "statistics-remove-source:{id}"
+                                            )),
+                                            t(L10nKey::StatisticsRemoveSource),
+                                            cx,
+                                            move |this, _, cx| {
+                                                let binding = remove.clone();
+                                                this.change_statistics_settings_on(
+                                                    HostId::LOCAL,
+                                                    Some(HostId(binding.host)),
+                                                    move |stored, _| {
+                                                        stored.sources.remove(&binding);
+                                                        Ok(())
+                                                    },
+                                                    cx,
+                                                );
+                                            },
+                                        )
+                                        .disabled(disabled),
+                                    ),
+                            )
+                            .into_any_element(),
+                    );
+                }
             }
-            for issue in presentation.snapshot.issues() {
-                rows.push(div().text_xs().text_color(tk.warn_text)
-                    .child(format!("{}\n{}", issue.path().display(), issue_text(issue.reason())))
-                    .into_any_element());
+            if !state.loaded && state.error.is_some() {
+                rows.push(
+                    self.statistics_management_button(
+                        "statistics-settings-retry",
+                        t(L10nKey::StatisticsRefresh),
+                        cx,
+                        |this, _, cx| {
+                            if let Some(s) = this.active_settings_mut() {
+                                s.statistics.management.error = None;
+                            }
+                            this.load_statistics(cx);
+                        },
+                    )
+                    .disabled(state.busy)
+                    .into_any_element(),
+                );
             }
-            if settings.statistics.agent.is_none_or(|agent| agent == "hermes") {
-                rows.push(div().text_xs().text_color(tk.k5)
-                    .child(t(L10nKey::StatisticsHermesLimits)).into_any_element());
+            if state.editor == Some(Editor::Source) {
+                let entries = ["omp", "pi", "kimi", "opencode", "hermes"]
+                    .into_iter()
+                    .map(|agent| {
+                        MenuEntry::item(agent, state.source_agent == agent, move |this, _, cx| {
+                            if let Some(s) = this.active_settings_mut() {
+                                s.statistics.management.source_agent = agent;
+                            }
+                            cx.notify();
+                        })
+                    })
+                    .collect();
+                rows.push(self.analysis_menu(
+                    "statistics-source-kind",
+                    state.source_agent,
+                    entries,
+                    cx,
+                ));
+                rows.push(
+                    div()
+                        .text_sm()
+                        .child(t(L10nKey::StatisticsSourceLocation))
+                        .into_any_element(),
+                );
+                rows.push(
+                    div()
+                        .text_xs()
+                        .text_color(tk.k5)
+                        .child(t(L10nKey::StatisticsSourceSelector))
+                        .into_any_element(),
+                );
+                rows.push(
+                    div()
+                        .text_sm()
+                        .text_color(tk.k5)
+                        .child(t_fmt(
+                            L10nKey::StatisticsSourceTarget,
+                            &[(
+                                "machine",
+                                &self
+                                    .agent_hooks_machines(cx)
+                                    .into_iter()
+                                    .find(|machine| machine.host == state.editor_host)
+                                    .map(|machine| machine.label)
+                                    .unwrap_or_else(|| t(L10nKey::StatisticsOffline).into()),
+                            )],
+                        ))
+                        .into_any_element(),
+                );
+                rows.push(
+                    Input::new(&state.selector)
+                        .id("statistics-source-selector")
+                        .aria_label(t(L10nKey::StatisticsSourceLocation))
+                        .w_full()
+                        .small()
+                        .disabled(disabled)
+                        .into_any_element(),
+                );
+                rows.push(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            self.statistics_management_button(
+                                "statistics-source-save",
+                                t(L10nKey::StatisticsSaveSource),
+                                cx,
+                                |this, _, cx| this.save_statistics_source(cx),
+                            )
+                            .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
+                            .disabled(disabled),
+                        )
+                        .child(self.statistics_management_button(
+                            "statistics-editor-cancel",
+                            t(L10nKey::Cancel),
+                            cx,
+                            |this, window, cx| {
+                                this.cancel_statistics_editor(window, cx);
+                            },
+                        ))
+                        .into_any_element(),
+                );
             }
-            for binding in &presentation.bindings {
-                let remove = binding.clone();
-                let check = binding.clone();
-                let id = binding.key();
+        }
+        if !sources {
+            rows.push(
+                div()
+                    .text_sm()
+                    .text_color(tk.k5)
+                    .child(t(L10nKey::StatisticsPricesHelp))
+                    .into_any_element(),
+            );
+            rows.push(
+                self.statistics_management_button(
+                    "statistics-add-price",
+                    t(L10nKey::StatisticsAddPrice),
+                    cx,
+                    |this, window, cx| this.edit_statistics(Editor::Price, window, cx),
+                )
+                .disabled(disabled)
+                .into_any_element(),
+            );
+            for price in &state.stored.pricing.custom {
+                let price = price.clone();
+                let remove = price.clone();
+                let edit = price.clone();
+                let key = format!("{}:{}:{}", price.provider, price.model, price.currency);
                 rows.push(
                     v_flex()
                         .gap_2()
-                        .min_w_0()
-                        .child(div().text_sm().child(format!(
-                            "{} · {}\n{}\n{}",
-                            binding.agent, binding.host, binding.scope, binding.selector
-                        )))
+                        .child(format!(
+                            "{} / {} · {}",
+                            price.provider, price.model, price.currency
+                        ))
+                        .child(
+                            div().text_xs().text_color(tk.k5).child(t_fmt(
+                                L10nKey::StatisticsPriceRow,
+                                &[
+                                    (
+                                        "input",
+                                        &price
+                                            .input
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "—".into()),
+                                    ),
+                                    (
+                                        "output",
+                                        &price
+                                            .output
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "—".into()),
+                                    ),
+                                    (
+                                        "reasoning",
+                                        &price
+                                            .reasoning
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "—".into()),
+                                    ),
+                                    (
+                                        "read",
+                                        &price
+                                            .cache_read
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "—".into()),
+                                    ),
+                                    (
+                                        "write",
+                                        &price
+                                            .cache_write
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "—".into()),
+                                    ),
+                                ],
+                            )),
+                        )
                         .child(
                             h_flex()
                                 .flex_wrap()
                                 .gap_2()
                                 .child(
                                     self.statistics_management_button(
-                                        SharedString::from(format!("statistics-check-source:{id}")),
-                                        t(L10nKey::StatisticsCheckSource),
+                                        SharedString::from(format!("statistics-edit-price:{key}")),
+                                        t(L10nKey::StatisticsEditPrice),
                                         cx,
-                                        move |this, _, cx| {
-                                            this.check_statistics_source(check.clone(), cx)
+                                        move |this, window, cx| {
+                                            this.edit_statistics(Editor::Price, window, cx);
+                                            if let Some(s) = this.active_settings_mut() {
+                                                s.statistics.management.editing_price = Some((
+                                                    edit.provider.clone(),
+                                                    edit.model.clone(),
+                                                    edit.currency.clone(),
+                                                ));
+                                                let values = [
+                                                    edit.provider.clone(),
+                                                    edit.model.clone(),
+                                                    edit.currency.clone(),
+                                                    edit.input
+                                                        .map(|v| v.to_string())
+                                                        .unwrap_or_default(),
+                                                    edit.output
+                                                        .map(|v| v.to_string())
+                                                        .unwrap_or_default(),
+                                                    edit.reasoning
+                                                        .map(|v| v.to_string())
+                                                        .unwrap_or_default(),
+                                                    edit.cache_read
+                                                        .map(|v| v.to_string())
+                                                        .unwrap_or_default(),
+                                                    edit.cache_write
+                                                        .map(|v| v.to_string())
+                                                        .unwrap_or_default(),
+                                                ];
+                                                for (input, value) in
+                                                    s.statistics.management.price.iter().zip(values)
+                                                {
+                                                    input.update(cx, |s, cx| {
+                                                        s.set_value(value, window, cx)
+                                                    });
+                                                }
+                                            }
                                         },
                                     )
                                     .disabled(disabled),
@@ -596,17 +959,19 @@ impl LyrelApp {
                                 .child(
                                     self.statistics_management_button(
                                         SharedString::from(format!(
-                                            "statistics-remove-source:{id}"
+                                            "statistics-delete-price:{key}"
                                         )),
-                                        t(L10nKey::StatisticsRemoveSource),
+                                        t(L10nKey::StatisticsDeletePrice),
                                         cx,
                                         move |this, _, cx| {
-                                            let binding = remove.clone();
-                                            this.change_statistics_settings_on(
-                                                HostId::LOCAL,
-                                                Some(HostId(binding.host)),
+                                            let p = remove.clone();
+                                            this.change_statistics_settings(
                                                 move |stored, _| {
-                                                    stored.sources.remove(&binding);
+                                                    stored.pricing.remove_custom(
+                                                        &p.provider,
+                                                        &p.model,
+                                                        &p.currency,
+                                                    );
                                                     Ok(())
                                                 },
                                                 cx,
@@ -619,302 +984,123 @@ impl LyrelApp {
                         .into_any_element(),
                 );
             }
-        }
-        if !state.loaded && state.error.is_some() {
+            if state.editor == Some(Editor::Price) {
+                let fields = [
+                    L10nKey::StatisticsPriceProvider,
+                    L10nKey::StatisticsPriceModel,
+                    L10nKey::StatisticsPriceCurrency,
+                    L10nKey::StatisticsInput,
+                    L10nKey::StatisticsOutput,
+                    L10nKey::StatisticsReasoning,
+                    L10nKey::StatisticsCacheRead,
+                    L10nKey::StatisticsCacheWrite,
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, key)| {
+                    v_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().text_xs().text_color(tk.k5).child(t(key)))
+                        .child(
+                            Input::new(&state.price[index])
+                                .id(SharedString::from(format!(
+                                    "statistics-price-field-{index}"
+                                )))
+                                .aria_label(t(key))
+                                .small()
+                                .disabled(disabled)
+                                .w_full(),
+                        )
+                        .into_any_element()
+                });
+                rows.push(
+                    div()
+                        .grid()
+                        .grid_cols(2)
+                        .gap_3()
+                        .min_w_0()
+                        .children(fields)
+                        .into_any_element(),
+                );
+                rows.push(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            self.statistics_management_button(
+                                "statistics-price-save",
+                                t(L10nKey::StatisticsSavePrice),
+                                cx,
+                                |this, _, cx| this.save_statistics_price(cx),
+                            )
+                            .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
+                            .disabled(disabled),
+                        )
+                        .child(self.statistics_management_button(
+                            "statistics-editor-cancel",
+                            t(L10nKey::Cancel),
+                            cx,
+                            |this, w, cx| {
+                                this.cancel_statistics_editor(w, cx);
+                            },
+                        ))
+                        .into_any_element(),
+                );
+            }
+            let enabled = state.stored.pricing.public_enabled;
             rows.push(
-                self.statistics_management_button(
-                    "statistics-settings-retry",
-                    t(L10nKey::StatisticsRefresh),
+                self.settings_row(
+                    t(L10nKey::StatisticsPublicCatalog),
+                    t(L10nKey::StatisticsPublicConsent),
+                    self.statistics_management_button(
+                        "statistics-catalog-enable",
+                        t(if enabled {
+                            L10nKey::StatisticsCatalogDisable
+                        } else {
+                            L10nKey::StatisticsCatalogEnable
+                        }),
+                        cx,
+                        move |this, _, cx| {
+                            this.change_statistics_settings(
+                                move |stored, _| {
+                                    stored.pricing.public_enabled = !enabled;
+                                    Ok(())
+                                },
+                                cx,
+                            )
+                        },
+                    )
+                    .disabled(disabled)
+                    .into_any_element(),
                     cx,
-                    |this, _, cx| {
-                        if let Some(s) = this.active_settings_mut() {
-                            s.statistics.management.error = None;
-                        }
-                        this.load_statistics(cx);
-                    },
                 )
-                .disabled(state.busy)
                 .into_any_element(),
             );
-        }
-        if state.editor == Some(Editor::Source) {
-            let entries = ["omp", "pi", "kimi", "opencode", "hermes"]
-                .into_iter()
-                .map(|agent| {
-                    MenuEntry::item(agent, state.source_agent == agent, move |this, _, cx| {
-                        if let Some(s) = this.active_settings_mut() {
-                            s.statistics.management.source_agent = agent;
-                        }
-                        cx.notify();
-                    })
-                })
-                .collect();
-            rows.push(self.analysis_menu(
-                "statistics-source-kind",
-                state.source_agent,
-                entries,
-                cx,
-            ));
             rows.push(
-                div()
-                    .text_sm()
-                    .child(t(L10nKey::StatisticsSourceLocation))
-                    .into_any_element(),
+                self.statistics_management_button(
+                    "statistics-catalog-check",
+                    t(L10nKey::StatisticsCatalogCheck),
+                    cx,
+                    |this, _, cx| this.check_statistics_catalog(cx),
+                )
+                .disabled(disabled || !enabled)
+                .into_any_element(),
             );
-            rows.push(div().text_xs().text_color(tk.k5)
-                .child(t(L10nKey::StatisticsSourceSelector)).into_any_element());
             rows.push(
                 div()
                     .text_sm()
                     .text_color(tk.k5)
-                    .child(t_fmt(L10nKey::StatisticsSourceTarget, &[("machine", &self.agent_hooks_machines(cx)
-                        .into_iter().find(|machine| machine.host == state.editor_host)
-                        .map(|machine| machine.label).unwrap_or_else(|| t(L10nKey::StatisticsOffline).into()))]))
-                    .into_any_element(),
-            );
-            rows.push(
-                Input::new(&state.selector)
-                    .id("statistics-source-selector")
-                    .aria_label(t(L10nKey::StatisticsSourceLocation))
-                    .w_full()
-                    .small().disabled(disabled)
-                    .into_any_element(),
-            );
-            rows.push(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(
-                        self.statistics_management_button(
-                            "statistics-source-save",
-                            t(L10nKey::StatisticsSaveSource),
-                            cx,
-                            |this, _, cx| this.save_statistics_source(cx),
-                        )
-                        .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
-                        .disabled(disabled),
-                    )
-                    .child(self.statistics_management_button(
-                        "statistics-editor-cancel",
-                        t(L10nKey::Cancel),
-                        cx,
-                        |this, window, cx| {
-                            this.cancel_statistics_editor(window, cx);
-                        },
+                    .child(t_fmt(
+                        L10nKey::StatisticsCatalogStatus,
+                        &[
+                            ("checked", &format_time(state.stored.pricing.checked_at)),
+                            ("fetched", &format_time(state.stored.pricing.fetched_at)),
+                            ("count", &state.stored.pricing.catalog.len().to_string()),
+                        ],
                     ))
                     .into_any_element(),
             );
-        }
-        }
-        if !sources {
-        rows.push(
-            div()
-                .text_sm()
-                .text_color(tk.k5)
-                .child(t(L10nKey::StatisticsPricesHelp))
-                .into_any_element(),
-        );
-        rows.push(
-            self.statistics_management_button(
-                "statistics-add-price",
-                t(L10nKey::StatisticsAddPrice),
-                cx,
-                |this, window, cx| this.edit_statistics(Editor::Price, window, cx),
-            )
-            .disabled(disabled)
-            .into_any_element(),
-        );
-        for price in &state.stored.pricing.custom {
-            let price = price.clone();
-            let remove = price.clone();
-            let edit = price.clone();
-            let key = format!("{}:{}:{}", price.provider, price.model, price.currency);
-            rows.push(
-                v_flex()
-                    .gap_2()
-                    .child(format!(
-                        "{} / {} · {}",
-                        price.provider, price.model, price.currency
-                    ))
-                    .child(div().text_xs().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsPriceRow, &[
-                        ("input", &price.input.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
-                        ("output", &price.output.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
-                        ("reasoning", &price.reasoning.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
-                        ("read", &price.cache_read.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
-                        ("write", &price.cache_write.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
-                    ])))
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                self.statistics_management_button(
-                                    SharedString::from(format!("statistics-edit-price:{key}")),
-                                    t(L10nKey::StatisticsEditPrice),
-                                    cx,
-                                    move |this, window, cx| {
-                                        this.edit_statistics(Editor::Price, window, cx);
-                                        if let Some(s) = this.active_settings_mut() {
-                                            s.statistics.management.editing_price = Some((
-                                                edit.provider.clone(),
-                                                edit.model.clone(),
-                                                edit.currency.clone(),
-                                            ));
-                                            let values = [
-                                                edit.provider.clone(),
-                                                edit.model.clone(),
-                                                edit.currency.clone(),
-                                                edit.input
-                                                    .map(|v| v.to_string())
-                                                    .unwrap_or_default(),
-                                                edit.output
-                                                    .map(|v| v.to_string())
-                                                    .unwrap_or_default(),
-                                                edit.reasoning
-                                                    .map(|v| v.to_string())
-                                                    .unwrap_or_default(),
-                                                edit.cache_read
-                                                    .map(|v| v.to_string())
-                                                    .unwrap_or_default(),
-                                                edit.cache_write
-                                                    .map(|v| v.to_string())
-                                                    .unwrap_or_default(),
-                                            ];
-                                            for (input, value) in
-                                                s.statistics.management.price.iter().zip(values)
-                                            {
-                                                input.update(cx, |s, cx| {
-                                                    s.set_value(value, window, cx)
-                                                });
-                                            }
-                                        }
-                                    },
-                                )
-                                .disabled(disabled),
-                            )
-                            .child(
-                                self.statistics_management_button(
-                                    SharedString::from(format!("statistics-delete-price:{key}")),
-                                    t(L10nKey::StatisticsDeletePrice),
-                                    cx,
-                                    move |this, _, cx| {
-                                        let p = remove.clone();
-                                        this.change_statistics_settings(
-                                            move |stored, _| {
-                                                stored.pricing.remove_custom(
-                                                    &p.provider,
-                                                    &p.model,
-                                                    &p.currency,
-                                                );
-                                                Ok(())
-                                            },
-                                            cx,
-                                        );
-                                    },
-                                )
-                                .disabled(disabled),
-                            ),
-                    )
-                    .into_any_element(),
-            );
-        }
-        if state.editor == Some(Editor::Price) {
-            let fields = [
-                L10nKey::StatisticsPriceProvider,
-                L10nKey::StatisticsPriceModel,
-                L10nKey::StatisticsPriceCurrency,
-                L10nKey::StatisticsInput,
-                L10nKey::StatisticsOutput,
-                L10nKey::StatisticsReasoning,
-                L10nKey::StatisticsCacheRead,
-                L10nKey::StatisticsCacheWrite,
-            ].into_iter().enumerate().map(|(index, key)| {
-                v_flex().min_w_0().gap_1()
-                    .child(div().text_xs().text_color(tk.k5).child(t(key)))
-                    .child(Input::new(&state.price[index])
-                        .id(SharedString::from(format!("statistics-price-field-{index}")))
-                        .aria_label(t(key)).small().disabled(disabled).w_full())
-                    .into_any_element()
-            });
-            rows.push(div().grid().grid_cols(2).gap_3().min_w_0().children(fields).into_any_element());
-            rows.push(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(
-                        self.statistics_management_button(
-                            "statistics-price-save",
-                            t(L10nKey::StatisticsSavePrice),
-                            cx,
-                            |this, _, cx| this.save_statistics_price(cx),
-                        )
-                        .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
-                        .disabled(disabled),
-                    )
-                    .child(self.statistics_management_button(
-                        "statistics-editor-cancel",
-                        t(L10nKey::Cancel),
-                        cx,
-                        |this, w, cx| {
-                            this.cancel_statistics_editor(w, cx);
-                        },
-                    ))
-                    .into_any_element(),
-            );
-        }
-        let enabled = state.stored.pricing.public_enabled;
-        rows.push(
-            self.settings_row(
-                t(L10nKey::StatisticsPublicCatalog),
-                t(L10nKey::StatisticsPublicConsent),
-                self.statistics_management_button(
-                    "statistics-catalog-enable",
-                    t(if enabled {
-                        L10nKey::StatisticsCatalogDisable
-                    } else {
-                        L10nKey::StatisticsCatalogEnable
-                    }),
-                    cx,
-                    move |this, _, cx| {
-                        this.change_statistics_settings(
-                            move |stored, _| {
-                                stored.pricing.public_enabled = !enabled;
-                                Ok(())
-                            },
-                            cx,
-                        )
-                    },
-                )
-                .disabled(disabled)
-                .into_any_element(),
-                cx,
-            )
-            .into_any_element(),
-        );
-        rows.push(
-            self.statistics_management_button(
-                "statistics-catalog-check",
-                t(L10nKey::StatisticsCatalogCheck),
-                cx,
-                |this, _, cx| this.check_statistics_catalog(cx),
-            )
-            .disabled(disabled || !enabled)
-            .into_any_element(),
-        );
-        rows.push(
-            div()
-                .text_sm()
-                .text_color(tk.k5)
-                .child(t_fmt(
-                    L10nKey::StatisticsCatalogStatus,
-                    &[
-                        ("checked", &format_time(state.stored.pricing.checked_at)),
-                        ("fetched", &format_time(state.stored.pricing.fetched_at)),
-                        ("count", &state.stored.pricing.catalog.len().to_string()),
-                    ],
-                ))
-                .into_any_element(),
-        );
         }
         if state.busy {
             rows.push(
@@ -942,11 +1128,23 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        let body = div().id("statistics-management-content").size_full().min_h_0().min_w_0()
-            .overflow_y_scroll().track_scroll(&state.scroll)
+        let body = div()
+            .id("statistics-management-content")
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .overflow_y_scroll()
+            .track_scroll(&state.scroll)
             .child(v_flex().min_w_0().gap_3().p_2().children(rows));
-        v_flex().size_full().min_h_0().min_w_0()
-            .child(crate::ui::scrollbar::with_vertical_scrollbar("statistics-management-scrollbar", body, &state.scroll))
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+                "statistics-management-scrollbar",
+                body,
+                &state.scroll,
+            ))
             .into_any_element()
     }
 }

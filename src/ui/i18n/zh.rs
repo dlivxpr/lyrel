@@ -309,7 +309,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsTokenDelta => "与上期相比：{change}",
         L10nKey::StatisticsRecordedSubtotal => "已知小计 · {count} 条记录缺少实际费用",
         L10nKey::StatisticsNativeEstimate => "原生估算（独立）：{value}",
-        L10nKey::StatisticsCurrencyEstimate => "{currency} 估算 · 自定义 {custom} · 目录 {catalog} · {partial} 条部分计价",
+        L10nKey::StatisticsCurrencyEstimate => {
+            "{currency} 估算 · 自定义 {custom} · 目录 {catalog} · {partial} 条部分计价"
+        }
         L10nKey::StatisticsPreviousValue => "上期：{value}",
         L10nKey::StatisticsSessionAverage => "每主会话 {value} Token（含子代理用量）",
         L10nKey::StatisticsRecordCount => "{calls} 条计量记录 · {cumulative} 条累计",
@@ -322,7 +324,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsManageSources => "来源…",
         L10nKey::StatisticsManagePrices => "Token 单价…",
         L10nKey::StatisticsSaveSource => "保存来源",
-        L10nKey::StatisticsPriceRow => "输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {read} · 缓存写入 {write}",
+        L10nKey::StatisticsPriceRow => {
+            "输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {read} · 缓存写入 {write}"
+        }
         L10nKey::StatisticsSourceLocation => "历史路径或原生服务 URL",
         L10nKey::StatisticsAddPrice => "添加单价…",
         L10nKey::StatisticsSourceTarget => "目标机器：{machine}",
