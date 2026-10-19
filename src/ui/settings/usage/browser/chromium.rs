@@ -60,6 +60,12 @@ pub(super) fn read(profile: &Path, origin: &str, name: &str) -> Result<String, B
             },
         );
     }
+    if !fs::canonicalize(&path)
+        .map_err(io_error)?
+        .starts_with(profile)
+    {
+        return Err(BrowserError::Denied);
+    }
     let lock = File::open(path.join("LOCK")).map_err(io_error)?;
     fs2::FileExt::try_lock_shared(&lock).map_err(|error| {
         if error.kind() == std::io::ErrorKind::WouldBlock

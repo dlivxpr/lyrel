@@ -95,6 +95,8 @@ pub(in super::super) fn query(
         plan: None,
         pools: Vec::new(),
         enhancement: None,
+        expired: None,
+        plan_expires: None,
         overdrawn: if web {
             value
                 .get("overdrawn")

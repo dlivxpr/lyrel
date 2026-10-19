@@ -489,6 +489,27 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageBrowserUnreadable => {
             "无法读取所选浏览器存储。未使用其他 profile；请检查文件权限与浏览器版本。"
         }
+        L10nKey::UsageStepFunHelp => {
+            "StepFun 私有控制台：仅请求 platform.stepfun.com 的 Dashboard QueryStepPlanRateLimit、UserInfo、GetStepPlanStatus。从本人的 Network 请求头复制已解码 Oasis-Token，从同站 LocalStorage 复制 web_id，粘贴为 Oasis-Token=…; Oasis-Webid=…。Oasis-Webid 是请求头，不从 JWT 推导。不提供 API key 查询；请求窗口与 Credit 套餐保留不同口径。"
+        }
+        L10nKey::UsageMiMoHelp => {
+            "MiMo 私有控制台：仅请求 platform.xiaomimimo.com/api/v1/balance、userProfile、tokenPlan/detail 与 tokenPlan/usage。粘贴本人会话的 api-platform_serviceToken（或 serviceToken）及 userId，不提供 API key 查询。账户余额与套餐 Credits 分开，缺失字段保留未知。"
+        }
+        L10nKey::UsageCookieInput => "必需的会话字段",
+        L10nKey::UsageCookieBrowserHelp => {
+            "仅读取所选 profile 的必需 Cookie；StepFun 另需精确平台 origin 的 LocalStorage web_id。支持 Firefox；macOS Chromium 仅主动导入时申请 Keychain 授权，刷新不弹授权。Windows App-Bound Encryption 无法绕过，请改用手工会话。浏览器材料从不保存，会话改变需主动重新导入。"
+        }
+        L10nKey::UsageCookieSource => "私有平台 · 浏览器 Cookie",
+        L10nKey::UsageBrowserProtected => {
+            "浏览器 Cookie 受到 App-Bound Encryption 保护，无法导入。Lyrel 不会关闭或绕过保护；请手工输入会话或选择支持的 Firefox profile。"
+        }
+        L10nKey::UsageUnknownValue => "未知",
+        L10nKey::UsageCash => "现金余额",
+        L10nKey::UsageGift => "赠送余额",
+        L10nKey::UsageFrozen => "冻结余额",
+        L10nKey::UsageOverdraft => "透支额度",
+        L10nKey::UsageSubscriptionCredit => "订阅 Credits",
+        L10nKey::UsageCreditBucket => "Credit 额度池",
         L10nKey::UsageAdd => "添加账户…",
         L10nKey::UsageRefreshAll => "全部刷新",
         L10nKey::UsageRefresh => "刷新",

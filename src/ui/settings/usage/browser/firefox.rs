@@ -99,6 +99,12 @@ pub(super) fn read(profile: &Path, origin: &str, name: &str) -> Result<String, B
         Ok(_) => return Err(BrowserError::Unreadable),
         Err(error) => return Err(io_error(error)),
     }
+    if !fs::canonicalize(&path)
+        .map_err(io_error)?
+        .starts_with(profile)
+    {
+        return Err(BrowserError::Denied);
+    }
     // Do not use immutable=1: it silently ignores committed WAL records. SQLite
     // performs its own shared locking and reads a consistent snapshot in-place.
     // Neither the database nor its WAL is copied to a temporary disk location.

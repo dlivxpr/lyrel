@@ -23,6 +23,7 @@ pub(super) enum UsageError {
     BrowserChanged,
     IdentityMismatch,
     BrowserUnreadable,
+    BrowserProtected,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +65,10 @@ pub(super) enum VerifiedSource<'a> {
         secret: &'a str,
     },
     Browser(super::browser::BrowserSelection),
+    BrowserCookies {
+        selection: super::browser::BrowserSelection,
+        provider: super::providers::Provider,
+    },
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Snapshot {
@@ -87,6 +92,10 @@ pub(super) enum Authentication {
     BrowserLocalStorage {
         selection: super::browser::BrowserSelection,
     },
+    BrowserCookies {
+        selection: super::browser::BrowserSelection,
+        provider: super::providers::Provider,
+    },
 }
 impl Authentication {
     fn slot(&self) -> Option<Uuid> {
@@ -94,7 +103,7 @@ impl Authentication {
             Self::ManualApiKey { slot }
             | Self::ManualSession { slot, .. }
             | Self::ProviderSession { slot, .. } => Some(*slot),
-            Self::BrowserLocalStorage { .. } => None,
+            Self::BrowserLocalStorage { .. } | Self::BrowserCookies { .. } => None,
         }
     }
 }
@@ -155,12 +164,23 @@ impl Accounts {
                 || match &account.auth {
                     Authentication::ManualSession { .. } => account.provider != Provider::DeepSeek,
                     Authentication::ProviderSession { provider, .. } => {
-                        *provider != account.provider || *provider != Provider::Kimi
+                        *provider != account.provider
+                            || !matches!(
+                                provider,
+                                Provider::Kimi | Provider::StepFun | Provider::MiMo
+                            )
                     }
                     Authentication::BrowserLocalStorage { .. } => {
-                        account.provider == Provider::CommandCode
+                        !matches!(account.provider, Provider::DeepSeek | Provider::Kimi)
                     }
-                    Authentication::ManualApiKey { .. } => false,
+                    Authentication::BrowserCookies { provider, .. } => {
+                        *provider != account.provider
+                            || !matches!(provider, Provider::StepFun | Provider::MiMo)
+                    }
+                    Authentication::ManualApiKey { .. } => !matches!(
+                        account.provider,
+                        Provider::DeepSeek | Provider::Kimi | Provider::CommandCode
+                    ),
                 }
             {
                 return Err(UsageError::Persistence);
@@ -239,6 +259,26 @@ impl Accounts {
         else {
             return;
         };
+        let result = result.and_then(|balance| {
+            if let (
+                Some(Snapshot {
+                    balance: Balance::Provider(previous),
+                    ..
+                }),
+                Balance::Provider(next),
+            ) = (&account.snapshot, &balance)
+            {
+                if previous.provider != next.provider
+                    || previous
+                        .identity
+                        .as_ref()
+                        .is_some_and(|identity| next.identity.as_ref() != Some(identity))
+                {
+                    return Err(UsageError::BrowserChanged);
+                }
+            }
+            Ok(balance)
+        });
         account.busy = false;
         match result {
             Ok(balance) => {
@@ -277,6 +317,7 @@ impl Accounts {
             VerifiedSource::Session { kind, secret } => (Some(*secret), Some(*kind)),
             VerifiedSource::ProviderSession { secret, .. } => (Some(*secret), None),
             VerifiedSource::Browser(_) => (None, None),
+            VerifiedSource::BrowserCookies { .. } => (None, None),
         };
         let slot = secret.map(|_| Uuid::new_v4());
         if let (Some(secret), Some(slot)) = (secret, slot) {
@@ -300,6 +341,13 @@ impl Accounts {
                 kind: kind.unwrap(),
             },
             VerifiedSource::Browser(selection) => Authentication::BrowserLocalStorage { selection },
+            VerifiedSource::BrowserCookies {
+                selection,
+                provider,
+            } => Authentication::BrowserCookies {
+                selection,
+                provider,
+            },
         };
         let mut next = self.stored.clone();
         let provider = match &balance {

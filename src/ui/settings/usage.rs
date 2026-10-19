@@ -42,6 +42,7 @@ enum HttpSource {
     CommandSummary,
     CommandSessionIdentity,
     CommandEnhancement,
+    Provider(Provider, u8),
 }
 struct UsageRequest<'a> {
     source: HttpSource,
@@ -67,6 +68,22 @@ impl UsageRequest<'_> {
             HttpSource::CommandSummary => "https://api.commandcode.ai/alpha/usage/summary",
             HttpSource::CommandSessionIdentity => providers::command_code::IDENTITY_ENDPOINT,
             HttpSource::CommandEnhancement => providers::command_code::SESSION_ENDPOINT,
+            HttpSource::Provider(provider, route) => match (provider, route) {
+                (Provider::StepFun, 0) => {
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit"
+                }
+                (Provider::StepFun, 1) => {
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/GetStepPlanStatus"
+                }
+                (Provider::StepFun, _) => {
+                    "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/UserInfo"
+                }
+                (Provider::MiMo, 0) => "https://platform.xiaomimimo.com/api/v1/balance",
+                (Provider::MiMo, 1) => "https://platform.xiaomimimo.com/api/v1/tokenPlan/detail",
+                (Provider::MiMo, 2) => "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage",
+                (Provider::MiMo, _) => "https://platform.xiaomimimo.com/api/v1/userProfile",
+                _ => unreachable!("console provider route"),
+            },
         };
         let mut params = url::form_urlencoded::Serializer::new(String::new());
         if let Some(org) = self.org {
@@ -94,6 +111,8 @@ impl UsageRequest<'_> {
             | HttpSource::CommandSubscriptions
             | HttpSource::CommandSummary => "Authorization",
             HttpSource::Platform(kind) => kind.header_name(),
+            HttpSource::Provider(Provider::StepFun, _) => "Oasis-Token",
+            HttpSource::Provider(..) => "Cookie",
         }
     }
     fn authorization_value(&self) -> String {
@@ -110,7 +129,18 @@ impl UsageRequest<'_> {
             | HttpSource::CommandSubscriptions
             | HttpSource::CommandSummary => format!("Bearer {}", self.secret),
             HttpSource::Platform(kind) => kind.authorization_value(self.secret),
+            HttpSource::Provider(Provider::StepFun, _) => {
+                self.session_field("Oasis-Token").to_owned()
+            }
+            HttpSource::Provider(..) => self.secret.to_owned(),
         }
+    }
+    fn session_field(&self, name: &str) -> &str {
+        self.secret
+            .split("; ")
+            .filter_map(|part| part.split_once('='))
+            .find_map(|(key, value)| (key == name).then_some(value))
+            .unwrap_or("")
     }
 }
 /// The varying external HTTP boundary; source selection, parsing and transitions remain real.
@@ -156,6 +186,37 @@ impl DeepSeekHttp {
                 .header("connect-protocol-version", "1")
                 .header("Content-Type", "application/json")
                 .send(r#"{"mute_notice":false}"#)
+        } else if matches!(request.source, HttpSource::Provider(Provider::StepFun, _)) {
+            agent
+                .post(endpoint)
+                .header("Content-Type", "application/json")
+                .header("Connect-Protocol-Version", "1")
+                .header("oasis-appid", "10300")
+                .header("oasis-platform", "web")
+                .header("Origin", "https://platform.stepfun.com")
+                .header("Referer", "https://platform.stepfun.com/")
+                .header("Accept", "application/json")
+                .header("Oasis-Token", authorization.as_str())
+                .header("Oasis-Webid", request.session_field("Oasis-Webid"))
+                .header(
+                    "Cookie",
+                    format!(
+                        "Oasis-Token={}",
+                        url::form_urlencoded::byte_serialize(
+                            request.session_field("Oasis-Token").as_bytes()
+                        )
+                        .collect::<String>()
+                    ),
+                )
+                .send("{}")
+        } else if matches!(request.source, HttpSource::Provider(Provider::MiMo, _)) {
+            agent
+                .get(endpoint)
+                .header("Accept", "application/json")
+                .header("Cookie", authorization.as_str())
+                .header("Origin", "https://platform.xiaomimimo.com")
+                .header("Referer", "https://platform.xiaomimimo.com/console/balance")
+                .call()
         } else {
             agent
                 .get(endpoint)
@@ -180,6 +241,9 @@ fn query(
     secret: &str,
     proxy: Option<&str>,
 ) -> Result<Balance, UsageError> {
+    if let HttpSource::Provider(provider, _) = source {
+        return providers::query(http, provider, secret, proxy);
+    }
     if secret.is_empty() || secret.contains(char::is_whitespace) {
         return Err(UsageError::Authentication);
     }
@@ -214,6 +278,7 @@ fn query_provider(
         Provider::CommandCode => {
             providers::command_code::query(http, secret, proxy).map(Balance::Provider)
         }
+        Provider::StepFun | Provider::MiMo => providers::query(http, provider, secret, proxy),
     }
 }
 fn now() -> u64 {
@@ -279,6 +344,11 @@ enum Material {
         browser::BrowserSelection,
         browser::SessionMaterial,
     ),
+    Cookies(
+        Provider,
+        browser::BrowserSelection,
+        zeroize::Zeroizing<String>,
+    ),
 }
 impl Material {
     fn secret(&self) -> &str {
@@ -288,6 +358,7 @@ impl Material {
             Self::Browser(_, v) => v.secret(),
             Self::ProviderSession(_, v) => v,
             Self::ProviderBrowser(_, _, v) => v.secret(),
+            Self::Cookies(_, _, v) => v,
         }
     }
     fn http_source(&self) -> HttpSource {
@@ -295,7 +366,15 @@ impl Material {
             Self::ApiKey(_) => HttpSource::Official,
             Self::Session(v) => HttpSource::Platform(v.kind()),
             Self::Browser(..) => HttpSource::Platform(platform::SessionKind::WebToken),
-            Self::ProviderSession(..) | Self::ProviderBrowser(..) => HttpSource::KimiWeb,
+            Self::ProviderSession(provider, _) => {
+                if *provider == Provider::Kimi {
+                    HttpSource::KimiWeb
+                } else {
+                    HttpSource::Provider(*provider, 0)
+                }
+            }
+            Self::ProviderBrowser(..) => HttpSource::KimiWeb,
+            Self::Cookies(provider, ..) => HttpSource::Provider(*provider, 0),
         }
     }
     fn verified(&self) -> VerifiedSource<'_> {
@@ -311,6 +390,10 @@ impl Material {
                 secret,
             },
             Self::ProviderBrowser(_, selection, _) => VerifiedSource::Browser(selection.clone()),
+            Self::Cookies(provider, selection, _) => VerifiedSource::BrowserCookies {
+                provider: *provider,
+                selection: selection.clone(),
+            },
         }
     }
 }
@@ -321,6 +404,15 @@ impl SelectItem for Provider {
     }
     fn value(&self) -> &Self {
         self
+    }
+}
+impl Provider {
+    fn sources(self) -> Vec<Source> {
+        match self {
+            Self::CommandCode => vec![Source::ApiKey],
+            Self::StepFun | Self::MiMo => vec![Source::Session, Source::Browser],
+            _ => vec![Source::ApiKey, Source::Session, Source::Browser],
+        }
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -457,7 +549,13 @@ impl UsagePage {
         });
         let provider = cx.new(|cx| {
             SelectState::new(
-                vec![Provider::DeepSeek, Provider::Kimi, Provider::CommandCode],
+                vec![
+                    Provider::DeepSeek,
+                    Provider::Kimi,
+                    Provider::CommandCode,
+                    Provider::StepFun,
+                    Provider::MiMo,
+                ],
                 None,
                 window,
                 cx,
@@ -497,14 +595,18 @@ impl UsagePage {
         subs.push(
             cx.subscribe_in(&provider, window, |page, _, event, window, cx| {
                 if let SelectEvent::Confirm(Some(provider)) = event {
-                    let items = if *provider == Provider::CommandCode {
-                        vec![Source::ApiKey]
-                    } else {
-                        vec![Source::ApiKey, Source::Session, Source::Browser]
-                    };
+                    let items = provider.sources();
                     page.source.update(cx, |s, cx| {
                         s.set_items(items, window, cx);
-                        s.set_selected_value(&Source::ApiKey, window, cx);
+                        s.set_selected_value(
+                            &if matches!(provider, Provider::StepFun | Provider::MiMo) {
+                                Source::Session
+                            } else {
+                                Source::ApiKey
+                            },
+                            window,
+                            cx,
+                        );
                     });
                     page.form_version.fetch_add(1, Ordering::SeqCst);
                     page.key.update(cx, |s, cx| s.set_value("", window, cx));
@@ -544,11 +646,11 @@ impl UsagePage {
             data,
             name,
             key,
+            provider,
             cadence,
             source,
             browsers,
             profiles,
-            provider,
             profile_items: Vec::new(),
             discovering: false,
             discovery_version: 0,
@@ -678,17 +780,8 @@ impl UsagePage {
         };
         self.provider
             .update(cx, |s, cx| s.set_selected_value(&provider, window, cx));
-        self.source.update(cx, |s, cx| {
-            s.set_items(
-                if provider == Provider::CommandCode {
-                    vec![Source::ApiKey]
-                } else {
-                    vec![Source::ApiKey, Source::Session, Source::Browser]
-                },
-                window,
-                cx,
-            )
-        });
+        self.source
+            .update(cx, |s, cx| s.set_items(provider.sources(), window, cx));
         let source = match edit {
             Edit::Replace(id) => self
                 .data
@@ -699,9 +792,10 @@ impl UsagePage {
                 .find(|a| a.id == id)
                 .map(|a| match a.auth {
                     Authentication::ManualApiKey { .. } => Source::ApiKey,
-                    Authentication::ManualSession { .. } => Source::Session,
-                    Authentication::ProviderSession { .. } => Source::Session,
-                    Authentication::BrowserLocalStorage { .. } => Source::Browser,
+                    Authentication::ManualSession { .. }
+                    | Authentication::ProviderSession { .. } => Source::Session,
+                    Authentication::BrowserLocalStorage { .. }
+                    | Authentication::BrowserCookies { .. } => Source::Browser,
                 })
                 .unwrap_or(Source::ApiKey),
             _ => Source::ApiKey,
@@ -886,7 +980,10 @@ impl UsagePage {
                         };
                         let verified = (|| {
                             let material = match (provider, source) {
-                                (_, Source::ApiKey) => Material::ApiKey(secret),
+                                (
+                                    Provider::DeepSeek | Provider::Kimi | Provider::CommandCode,
+                                    Source::ApiKey,
+                                ) => Material::ApiKey(secret),
                                 (Provider::DeepSeek, Source::Session) => {
                                     Material::Session(platform::parse_manual(&secret)?)
                                 }
@@ -897,7 +994,7 @@ impl UsagePage {
                                 (Provider::CommandCode, _) => {
                                     return Err(UsageError::Authentication);
                                 }
-                                (_, Source::Browser) => {
+                                (Provider::DeepSeek | Provider::Kimi, Source::Browser) => {
                                     let profile = profile.ok_or(UsageError::BrowserMissing)?;
                                     if provider == Provider::Kimi {
                                         let (selection, material) = shared
@@ -917,6 +1014,23 @@ impl UsagePage {
                                         )
                                     }
                                 }
+                                (_, Source::Session) => Material::ProviderSession(
+                                    provider,
+                                    providers::parse_manual(provider, &secret)?,
+                                ),
+                                (_, Source::Browser) => {
+                                    let profile = profile.ok_or(UsageError::BrowserMissing)?;
+                                    let (selection, material) = shared
+                                        .browser
+                                        .import_cookies(&profile, cookie_provider(provider)?, true)
+                                        .map_err(browser_error)?;
+                                    Material::Cookies(
+                                        provider,
+                                        selection,
+                                        providers::parse_session(provider, material.secret())?,
+                                    )
+                                }
+                                (_, Source::ApiKey) => return Err(UsageError::Authentication),
                             };
                             let mut balance = query_provider(
                                 &*shared.http,
@@ -1069,6 +1183,22 @@ impl UsagePage {
                             proxy.as_deref(),
                         )
                     }
+                    Authentication::BrowserCookies {
+                        selection,
+                        provider,
+                    } => {
+                        let material = shared
+                            .browser
+                            .resolve_cookies(&selection, cookie_provider(provider)?)
+                            .map_err(browser_error)?;
+                        let secret = providers::parse_session(provider, material.secret())?;
+                        query(
+                            &*shared.http,
+                            HttpSource::Provider(provider, 0),
+                            &secret,
+                            proxy.as_deref(),
+                        )
+                    }
                 });
                 if let Ok(Balance::Provider(report)) = &mut result {
                     if report.provider == Provider::CommandCode {
@@ -1133,6 +1263,14 @@ fn browser_error(error: browser::BrowserError) -> UsageError {
         browser::BrowserError::Unsupported => UsageError::BrowserUnsupported,
         browser::BrowserError::SourceChanged => UsageError::BrowserChanged,
         browser::BrowserError::Unreadable => UsageError::BrowserUnreadable,
+        browser::BrowserError::Protected => UsageError::BrowserProtected,
+    }
+}
+fn cookie_provider(provider: Provider) -> Result<browser::CookieProvider, UsageError> {
+    match provider {
+        Provider::StepFun => Ok(browser::CookieProvider::StepFun),
+        Provider::MiMo => Ok(browser::CookieProvider::MiMo),
+        _ => Err(UsageError::Authentication),
     }
 }
 fn error_text(error: UsageError) -> &'static str {
@@ -1152,6 +1290,7 @@ fn error_text(error: UsageError) -> &'static str {
         UsageError::BrowserUnsupported => L10nKey::UsageBrowserUnsupported,
         UsageError::BrowserChanged => L10nKey::UsageBrowserChanged,
         UsageError::BrowserUnreadable => L10nKey::UsageBrowserUnreadable,
+        UsageError::BrowserProtected => L10nKey::UsageBrowserProtected,
     })
 }
 fn bind_browser_identity(balance: &mut Balance, identity: Option<&str>) -> Result<(), UsageError> {
@@ -1183,6 +1322,13 @@ fn pool_label(kind: providers::PoolKind) -> &'static str {
         PoolKind::SandboxMinutes => L10nKey::UsageSandboxMinutes,
         PoolKind::OrganizationLimit => L10nKey::UsageOrganizationLimit,
         PoolKind::RawBalance => L10nKey::UsageRawBalance,
+        PoolKind::Balance => L10nKey::UsageBalance,
+        PoolKind::Cash => L10nKey::UsageCash,
+        PoolKind::Gift => L10nKey::UsageGift,
+        PoolKind::Frozen => L10nKey::UsageFrozen,
+        PoolKind::Overdraft => L10nKey::UsageOverdraft,
+        PoolKind::SubscriptionCredit => L10nKey::UsageSubscriptionCredit,
+        PoolKind::CreditBucket => L10nKey::UsageCreditBucket,
     })
 }
 fn button(
@@ -1289,13 +1435,11 @@ impl Render for UsagePage {
                         .accessibility_label(t(L10nKey::UsageProvider)),
                 );
                 if provider != Provider::DeepSeek {
-                    form = form.child(div().text_color(muted).child(t(
-                        if provider == Provider::Kimi {
-                            L10nKey::UsageKimiDisclosure
-                        } else {
-                            L10nKey::UsageCommandDisclosure
-                        },
-                    )));
+                    form = form.child(div().text_color(muted).child(t(match provider {
+                        Provider::Kimi => L10nKey::UsageKimiDisclosure,
+                        Provider::CommandCode => L10nKey::UsageCommandDisclosure,
+                        _ => provider.help(),
+                    })));
                 }
             }
             if matches!(edit, Edit::Add | Edit::Replace(_)) {
@@ -1319,27 +1463,23 @@ impl Render for UsagePage {
                         .child(Input::new(&self.key).id("usage-key").small().w_full());
                 } else {
                     form = form.child(div().text_color(muted).child(t(
-                        if provider == Provider::Kimi {
-                            L10nKey::UsageKimiDisclosure
-                        } else {
+                        if provider == Provider::DeepSeek {
                             L10nKey::UsagePrivateDisclosure
+                        } else {
+                            provider.help()
                         },
                     )));
                     if source == Source::Session {
                         form = form
-                            .child(t(if provider == Provider::Kimi {
+                            .child(t(if provider == Provider::DeepSeek {
+                                L10nKey::UsageSessionInput
+                            } else if provider == Provider::Kimi {
                                 L10nKey::UsageSessionSource
                             } else {
-                                L10nKey::UsageSessionInput
+                                L10nKey::UsageCookieInput
                             }))
                             .child(Input::new(&self.key).id("usage-key").small().w_full())
-                            .child(div().text_color(muted).child(t(
-                                if provider == Provider::Kimi {
-                                    L10nKey::UsageKimiHelp
-                                } else {
-                                    L10nKey::UsageSessionHelp
-                                },
-                            )));
+                            .child(div().text_color(muted).child(t(provider.help())));
                     } else {
                         form = form
                             .child(t(L10nKey::UsageBrowser))
@@ -1362,13 +1502,11 @@ impl Render for UsagePage {
                                     .placeholder(t(L10nKey::UsageChooseProfile))
                                     .accessibility_label(t(L10nKey::UsageProfile)),
                             )
-                            .child(div().text_color(muted).child(t(
-                                if provider == Provider::Kimi {
-                                    L10nKey::UsageKimiHelp
-                                } else {
-                                    L10nKey::UsageBrowserHelp
-                                },
-                            )));
+                            .child(div().text_color(muted).child(t(match provider {
+                                Provider::Kimi => L10nKey::UsageKimiHelp,
+                                Provider::DeepSeek => L10nKey::UsageBrowserHelp,
+                                _ => L10nKey::UsageCookieBrowserHelp,
+                            })));
                         if self.discovering {
                             form = form.child(t(L10nKey::UsageLoading));
                         }
@@ -1461,6 +1599,13 @@ impl Render for UsagePage {
                     selection.browser().label(),
                     selection.label()
                 ),
+                Authentication::ProviderSession { .. } => t(L10nKey::UsageSessionSource).to_owned(),
+                Authentication::BrowserCookies { selection, .. } => format!(
+                    "{} · {} · {}",
+                    t(L10nKey::UsageCookieSource),
+                    selection.browser().label(),
+                    selection.label()
+                ),
             }));
             row = row.child(t(if account.removing {
                 L10nKey::UsageRemoving
@@ -1525,6 +1670,16 @@ impl Render for UsagePage {
                         if report.overdrawn == Some(true) {
                             row = row
                                 .child(div().text_color(danger).child(t(L10nKey::UsageOverdrawn)));
+                        }
+                        if report.expired == Some(true) {
+                            row = row.child(t(L10nKey::UsageUnavailable));
+                        }
+                        if let Some(expires) = &report.plan_expires {
+                            row = row.child(format!(
+                                "{} · {} {expires}",
+                                t(L10nKey::UsagePlan),
+                                t(L10nKey::UsageExpires)
+                            ));
                         }
                         if let Some(plan) = &report.plan {
                             row = row.child(format!("{}: {plan}", t(L10nKey::UsagePlan)));

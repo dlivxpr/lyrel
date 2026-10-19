@@ -1,7 +1,14 @@
 use super::*;
 
-fn scroll_usage_to_bottom(vcx:&mut VisualTestContext){
-    vcx.update(|window,cx|{window.render_frame(cx);window.scroll("usage-refresh-all",gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.),gpui_kit::px(-4000.))),cx);});
+fn scroll_usage_to_bottom(vcx: &mut VisualTestContext) {
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.scroll(
+            "usage-refresh-all",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-4000.))),
+            cx,
+        );
+    });
     vcx.run_until_parked();
 }
 

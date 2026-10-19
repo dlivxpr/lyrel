@@ -162,6 +162,8 @@ pub(in super::super) fn query(
         pools,
         enhancement: None,
         overdrawn: None,
+        expired: None,
+        plan_expires: None,
     })
 }
 

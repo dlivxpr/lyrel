@@ -34,7 +34,7 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
     明确选择本机或已连接远端，查看 omp／pi／Kimi Code／OpenCode 原生历史的 Token、记录费用与活跃主会话总览。
   </Card>
   <Card title="用量" icon="coins">
-    DeepSeek 官方 API 余额、私有平台手工会话和所选浏览器 LocalStorage，以及仅页面可见期间的刷新。
+    DeepSeek 官方余额，StepFun Plan／Xiaomi MiMo 私有会话与主动选择浏览器来源，以及仅页面可见期间的刷新。
   </Card>
   <Card title="关于" icon="circle-info" href="/reference/updates">
     版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
@@ -292,7 +292,7 @@ DeepSeek 第一方 [deepseek-harness 凭据源码](https://github.com/deepseek-a
 
 ### 主动选择浏览器与 profile
 
-选择**私有平台 · 浏览器 LocalStorage**，先选择 Chrome、Edge、Brave、Chromium 或 Firefox，再选择明确的 profile，最后点击**验证并保存**。发现 profile 时只读所选浏览器的元数据；不扫描所有浏览器登录态、不自动验证候选。实际读取仅查询所选 profile 的精确 `https://platform.deepseek.com` origin 与 `userToken` 键，不读取 Cookie、其他服务商或刷新 token。只读数据库锁定、访问拒绝、格式不支持、profile 消失和会话失效分别显示，不会改用另一来源或当作零余额。
+选择**私有平台 · 浏览器**，先选择 Chrome、Edge、Brave、Chromium 或 Firefox，再选择明确的 profile，最后点击**验证并保存**。发现 profile 时只读所选浏览器的元数据；不扫描所有浏览器登录态、不自动验证候选。DeepSeek 实际读取仅查询所选 profile 的精确 `https://platform.deepseek.com` origin 与 `userToken` 键，不读取 Cookie、其他服务商或刷新 token。只读数据库锁定、访问拒绝、格式不支持、profile 消失和会话失效分别显示，不会改用另一来源或当作零余额。
 
 Windows／macOS 的 Chromium 系支持现行 LevelDB LocalStorage；恢复在内存文件系统中完成，不写秘密数据库临时副本。Firefox 支持现行每 origin SQLite、UTF-8／UTF-16 与 Snappy 压缩，并保留已提交 WAL 的读取语义。Safari、Firefox container origin 和 Chromium 新 SQLite LocalStorage 后端不支持，不绕过系统保护；浏览器版本变化可能使导入不可用，可改用手工会话。
 
@@ -329,3 +329,32 @@ API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com
 手工增强仅在身份与账务查询均成功后保存到独立系统凭据槽；失败、失配或保存失败不覆盖主要 API key 或旧增强凭据。刷新增强失败单独显示，仍展示成功查询的主要额度；移除只删除该账户自己的主要／增强槽。浏览器 Cookie 自动导入另属 #17，本票不读取真实 Cookie 或绕过系统保护。
 
 真实服务商账户、Windows／macOS 系统凭据库与真实浏览器读取均未获本票授权，因此仍为未验收项；没有发送服务商认证请求，没有读取用户真实浏览器或申请系统权限。
+## StepFun Plan 与 Xiaomi MiMo 用量账户
+
+在**服务商**选择 **StepFun Plan** 或 **Xiaomi MiMo**。两家使用控制台私有会话，不提供不存在的 API-key 查询入口；不请求推理端点、不从智能体配置中找密钥、不自动对账历史费用。页面显示查询目标与所需字段，私有网页接口可能随服务商升级而改变。
+
+### 手工会话：先验证，再安全保存
+
+- StepFun：从本人已登录 `https://platform.stepfun.com` 的 Network 请求头复制已解码的 `Oasis-Token`，从同站 LocalStorage 复制 `web_id`，粘贴为 `Oasis-Token=…; Oasis-Webid=…`。`Oasis-Webid` 是 HTTP 请求头，不是同名 Cookie，绝不从 JWT `device_id` 推导。浏览器导入会严格解码 Cookie 的 token，再发送官方 Oasis 请求头和最小 token Cookie。只请求该主机 Dashboard 的 `QueryStepPlanRateLimit`、`UserInfo`、`GetStepPlanStatus`，使用 ConnectRPC JSON；`UserInfo.uid` 为身份，不把会话当作官方推理 API key。
+- MiMo：从本人已登录 `https://platform.xiaomimimo.com` 的会话复制 `api-platform_serviceToken`（手工也接受字段别名 `serviceToken`）及 `userId`，粘贴为 `api-platform_serviceToken=…; userId=…`。只请求该主机 `/api/v1/balance`、`/api/v1/userProfile`、`/api/v1/tokenPlan/detail` 和 `/api/v1/tokenPlan/usage`。身份与 `userProfile.userId` 必须匹配，不把另一个账户的余额保存到当前来源。
+
+仅保留相应服务商所需会话字段；拒绝重复字段、跨服务商字段和请求头注入。验证成功后才将最小材料放入 lyrel 自有系统凭据槽。替换先验证、再写新槽；认证、权限、凭据库或本地保存失败不覆盖旧来源与旧快照。重命名、启停、单个／全部刷新、页面可见期间的刷新节奏及本地移除复用同一账户管线。
+
+### 主动选择 Cookie 来源
+
+选择浏览器来源后，明确选择浏览器与 profile，再点击**验证并保存**才读取所选来源。只查询 Cookie 的服务商域、名称、有效期、请求路径和未分区上下文；不读取其它网站会话、不合并同名歧义 Cookie、不自动切换 profile。
+StepFun 同时只读所选 profile 中精确 `https://platform.stepfun.com` 的 LocalStorage `web_id`；同名 `Oasis-Webid` Cookie 或 JWT claim 不能替代这个来源。
+
+- Firefox：直接只读 `cookies.sqlite`，尊重锁及已提交 WAL；浏览器 Cookie 不复制到磁盘临时文件。
+- Windows Chromium 系：遇 App-Bound Encryption 或 `v20` 明确拒绝，不注入浏览器、不提权、不改策略、不引导关闭保护；尚未实现的非 ABE 密文也明确不支持。可改为手工会话或受支持的 Firefox profile。
+- macOS Chromium 系：主动导入可调用官方 Keychain 授权读取对应浏览器 Safe Storage；刷新固定使用 `kSecUseAuthenticationUISkip`，绝不后台弹授权。拒绝／需要重新授权时明确失败；不解锁钥匙串或更改 ACL。Safari 不在当前可选来源中，不伪装为已支持。
+
+浏览器材料仅在请求期间驻留内存、不进入凭据库、配置、快照、日志或临时文件。只保存浏览器/profile 的非秘密引用和来源绑定指纹；每次刷新重读同一来源，材料轮换或身份变化保守要求主动重新导入。关闭页面不再启动新的周期请求。
+
+### 额度口径与验收边界
+
+StepFun 根据 `plan_family` 区分请求窗口与 Credit 套餐；直接剩余比例、Credit 额度池、重置与到期分别展示，不把不同单位相加。MiMo 账户总余额、现金、赠送、冻结与 Token Plan 分开；保留服务端金额及币种，缺失币种仅在 `userProfile.idc` 可确定区域时使用相应 CNY／USD。`tokenPlan/usage` 第一方结构为 `data.usage.items[]`，不是 `monthUsage`；每个池的名称、已用、上限与单位单列。`currentPeriodEnd` 为 UTC 到期时间，不冒充固定月度重置。缺失数值、未知余额或不可用套餐不补零／百分之百，失败保留带时间的旧快照。
+
+StepFun 契约核验来自[官方 SDK bundle](https://platform.stepfun.com/_next/static/chunks/28300-12e20e884619af74.js)、[Connect/protobuf 运行时](https://platform.stepfun.com/_next/static/chunks/40714-0dc15cb8037b0613.js)与[用量页](https://platform.stepfun.com/_next/static/chunks/app/(dashboard)/account-overview/page-e82dc4ae140e2d0f.js)：实际 JSON 字段使用 camelCase、枚举通常为字符串名；解析亦兼容 proto 字段名和数值枚举。窗口／额度池时间戳为 Unix 秒；订阅 `expiredAt` 与桶 `expireAt`／`nextResetAt` 分开保留。
+
+MiMo 契约核验来自[官方控制台主 bundle](https://platform.xiaomimimo.com/static/main.f2b8e14e661a38ce.chunk.js)、[余额页](https://platform.xiaomimimo.com/static/904.6fb4d0fff1570f70.chunk.js)和[套餐页](https://platform.xiaomimimo.com/static/279.8ef7328eee268de2.chunk.js)的公开源码。静态源码与隔离真实格式 SQLite／受控 HTTP 只能证明相应确定性路径；未读取真实浏览器、未发真实账户认证请求，也未在 macOS 实机验证 Keychain 允许／拒绝与后台静默。两家授权账户的手工／浏览器真实查询、系统凭据库和跨平台矩阵均保持未验收，不据构建或受控响应声称通过。
