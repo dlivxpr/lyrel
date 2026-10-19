@@ -34,7 +34,7 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
     明确选择本机或已连接远端，查看 omp 原生历史的 Token、记录费用与活跃主会话总览。
   </Card>
   <Card title="用量" icon="coins">
-    DeepSeek 官方 API 余额、本机查询账户与页面可见期间的刷新。
+    DeepSeek 官方 API 余额、私有平台手工会话和所选浏览器 LocalStorage，以及仅页面可见期间的刷新。
   </Card>
   <Card title="关于" icon="circle-info" href="/reference/updates">
     版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
@@ -172,13 +172,31 @@ SSH 主机单独保存在同一目录下的 `servers.json`。[servers.json →](
 
 ## DeepSeek 用量账户
 
-从**设置 → 用量**进入，或搜索 `DeepSeek`、余额、账户、刷新。点击**添加账户…**，输入便于区分的名称和 DeepSeek API key，再点击**验证并保存**。
+从**设置 → 用量**进入，或搜索 `DeepSeek`、余额、会话、浏览器、`LocalStorage`。点击**添加账户…**，输入便于区分的名称，在 **DeepSeek 认证来源**选择官方 API key、手工平台会话或浏览器 LocalStorage，再点击**验证并保存**。
 lyrel 从桌面本机请求 [DeepSeek 官方余额接口](https://api-docs.deepseek.com/api/get-user-balance)：`GET https://api.deepseek.com/user/balance`，认证为 `Authorization: Bearer <API key>`。仅验证成功才写入系统凭据库；不会读取智能体或远端机器的密钥，不导入 vortex 数据。
 
 余额保留接口返回的 CNY／USD 金额字符串，分别显示总余额、赠送余额、充值余额与更新时间，不换算币种、不伪造百分比。接口不提供用户姓名、邮箱、账单周期或重置时间，因此页面使用自定义名称及稳定的本地账户 ID 区分账户，不冒称已确认服务商用户身份。
 
-每个账户可重命名、停用／启用刷新、替换密钥、手动刷新及移除。相同名称不会合并账户。替换时先验证并写入新凭据槽，保存失败保留旧可用凭据。移除仅清理所选本地查询账户、快照及自己的凭据槽，不注销 DeepSeek 账户或撤销其 API key；清理失败可重试移除。
+每个账户可重命名、停用／启用刷新、替换来源、手动刷新及移除。相同名称不会合并账户。替换时先验证；长期秘密写入全新凭据槽，浏览器来源只保存非秘密引用。认证、读取、凭据库或本地保存失败均保留旧来源及旧快照，不切换到其他账户。移除仅清理所选本地查询账户、快照及自己的凭据槽，不注销 DeepSeek 账户、浏览器登录态或撤销 API key；清理失败可重试移除。
 
 默认仅手动刷新，可选择页面可见时每分钟或每 5 分钟刷新。应用启动不查询；离开用量页、进入搜索或关闭设置后，不再启动新的周期请求。已经发出的请求可以收尾，但不得重新启动轮询或恢复已移除／旧凭据的账户状态。请求使用 lyrel 的代理解析规则，连接超时 10 秒、总超时 30 秒，并拒绝重定向以避免认证材料发往其他来源。
 
 认证失败、限流、网络、服务响应结构、系统凭据库和本地保存错误分别显示。刷新失败保留旧快照并标注其时间与状态，不将未知余额填为零。没有授权的真实 DeepSeek 账户时，受控响应测试不能证明真实账户或系统凭据库集成已验收。
+
+### 私有平台手工会话
+
+选择**私有平台 · 手工会话**后，从 `https://platform.deepseek.com` 的开发者工具 → Application／Storage → LocalStorage 复制 `userToken`，可粘贴裸值、`userToken=…`／`user_token=…`、对应 JSON，或仅请求平台固定汇总端点的 Bearer cURL。lyrel 不执行 cURL，不接收 Cookie 头、其他站点请求或官方 API key 作为平台会话。只保存解析出的必要 token，不保存整段粘贴内容。
+
+私有查询固定为 `GET https://platform.deepseek.com/api/v0/users/get_user_summary`，钱包按 `normal_wallets`（充值）与 `bonus_wallets`（赠送）分开保留原币种、金额字符串，包括 `0E-16`；不相加冒充官方总余额、不换算历史费用，也不推测用户身份或周期。平台会话是私有兼容入口，不代表 DeepSeek 官方支持。
+
+DeepSeek 第一方 [deepseek-harness 凭据源码](https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317/packages/credentials/deepseek-account-platform/src) 的 Harness grant 与网页 token 不是同一种来源：grant JSON 必须含 `version: 1`、`token` 和精确 `issuer: "https://platform.deepseek.com"`，也接受官方 `{kind:"grant",payload:{…}}` 包装；验证 issuer 后用 `x-dsh-auth-token` 发送，仅将 token 长期存入系统凭据库。网页 `userToken` 则使用 Bearer。后者仅有第三方兼容实现佐证，本次无认证读取平台页面均返回 HTTP 429，尚未取得第一方 Web JS 或授权真实账户的有效性证据，不能据受控测试声称真实平台集成通过。
+
+### 主动选择浏览器与 profile
+
+选择**私有平台 · 浏览器 LocalStorage**，先选择 Chrome、Edge、Brave、Chromium 或 Firefox，再选择明确的 profile，最后点击**验证并保存**。发现 profile 时只读所选浏览器的元数据；不扫描所有浏览器登录态、不自动验证候选。实际读取仅查询所选 profile 的精确 `https://platform.deepseek.com` origin 与 `userToken` 键，不读取 Cookie、其他服务商或刷新 token。只读数据库锁定、访问拒绝、格式不支持、profile 消失和会话失效分别显示，不会改用另一来源或当作零余额。
+
+Windows／macOS 的 Chromium 系支持现行 LevelDB LocalStorage；恢复在内存文件系统中完成，不写秘密数据库临时副本。Firefox 支持现行每 origin SQLite、UTF-8／UTF-16 与 Snappy 压缩，并保留已提交 WAL 的读取语义。Safari、Firefox container origin 和 Chromium 新 SQLite LocalStorage 后端不支持，不绕过系统保护；浏览器版本变化可能使导入不可用，可改用手工会话。
+
+浏览器 token 只在请求期间驻留内存，材料类型不能序列化或调试输出，离开请求后释放；不写系统凭据库、配置、快照、日志或临时文件。持久化仅含浏览器、profile ID／显示名称，以及路径和原 token 的 SHA-256 绑定指纹，不含原始路径或 token。每次刷新重新读取同一 profile，后台从不请求系统权限；来源或 token 改变时保守要求主动重新导入，无法确认同一服务商身份时绝不静默接受另一账户。
+
+真实浏览器导入需要用户对目标浏览器、profile 与平台账户的明确授权。本次开发只使用临时 LevelDB／SQLite 样本和回环 HTTP，未获读取真实浏览器及查询真实 DeepSeek 平台账户的授权；Windows／macOS 实际浏览器、系统凭据库与真实平台查询仍须分别验收。
