@@ -390,6 +390,7 @@ fn handshake<R: Read>(
         feature::SESSION_OPERATIONS.to_string(),
         feature::HERMES_HISTORY.to_string(),
         feature::HERMES_STATISTICS.to_string(),
+        feature::OPENCODE_STATISTICS.to_string(),
     ];
     if host.agent_environment().is_ok() {
         features.push(feature::AGENT_ENVIRONMENT.to_string());
@@ -723,6 +724,10 @@ fn run_request(
         ),
         ControlRequest::OpenCodeSessions { request } => (
             ReplyOk::OpenCodeSessions(Box::new(h.opencode_sessions(&request))),
+            Vec::new(),
+        ),
+        ControlRequest::OpenCodeStatistics { request } => (
+            ReplyOk::OpenCodeStatistics(Box::new(h.opencode_statistics(&request))),
             Vec::new(),
         ),
         ControlRequest::HermesSessions { request } => (

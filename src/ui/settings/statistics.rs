@@ -8,10 +8,14 @@ use crate::ui::host_registry::HostRegistry;
 use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+type Discover = fn(
+    &dyn lyrel_core::host::Host,
+    &HashMap<String, String>,
+) -> std::io::Result<Vec<statistics::Source>>;
 
 pub(crate) struct StatisticsState {
     pub(crate) host: HostId,
-    agent: &'static str,
+    agent: Option<&'static str>,
     period: Period,
     start: Entity<InputState>,
     end: Entity<InputState>,
@@ -19,7 +23,7 @@ pub(crate) struct StatisticsState {
     loading: bool,
     error: Option<String>,
     cache: Arc<Mutex<StatisticsCache>>,
-    results: HashMap<(HostId, &'static str), Presentation>,
+    results: HashMap<(HostId, Option<&'static str>), Presentation>,
     analysis: analysis::AnalysisState,
 }
 struct Presentation {
@@ -35,7 +39,7 @@ impl StatisticsState {
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         Self {
             host: HostId::LOCAL,
-            agent: "all",
+            agent: None,
             period: Period::Month,
             start: cx.new(|cx| InputState::new(window, cx).default_value(date.clone())),
             end: cx.new(|cx| InputState::new(window, cx).default_value(date)),
@@ -143,6 +147,56 @@ impl LyrelApp {
         };
         let host_id = state.host;
         let agent = state.agent;
+        let mut opencode_sources = Vec::new();
+        if agent.is_none_or(|agent| agent == "opencode") {
+            use lyrel_core::host::session_operations::{
+                SessionOperation, SessionOperationKind, launch_context,
+            };
+            let native = crate::core::cli_agent::CLIAgent::OpenCode;
+            for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
+                let pane = leaf.read(cx);
+                if pane.host_id() != host_id || pane.agent() != Some(native) {
+                    continue;
+                }
+                let Some(session) = pane.agent_session() else {
+                    continue;
+                };
+                let (Some(scope), Some(cwd), Some(launch_argv)) = (
+                    session.readout.session_scope.clone(),
+                    pane.host_cwd(),
+                    launch_context(native, &session),
+                ) else {
+                    continue;
+                };
+                let selector = format!(
+                    "opencode:client:{}",
+                    scope
+                        .opencode
+                        .as_ref()
+                        .and_then(|context| context.bridge.as_ref())
+                        .map_or("disconnected", |bridge| bridge.client_id.as_str())
+                );
+                if opencode_sources
+                    .iter()
+                    .any(|source: &statistics::Source| source.scope() == selector)
+                {
+                    continue;
+                }
+                opencode_sources.push(statistics::Source::opencode(
+                    cwd.clone(),
+                    selector,
+                    SessionOperation {
+                        expected_host: host_id.0,
+                        agent: native,
+                        kind: SessionOperationKind::Resume,
+                        source_id: String::new(),
+                        cwd,
+                        launch_argv,
+                        scope,
+                    },
+                ));
+            }
+        }
         let cache = state.cache.clone();
         let analysis_agent = state.analysis.agent.clone();
         let analysis_year = state.analysis.year;
@@ -171,26 +225,34 @@ impl LyrelApp {
             move |host| -> std::io::Result<Presentation> {
                 let mut sources = Vec::new();
                 let mut discovery_errors = Vec::new();
-                type Discover = fn(
-                    &dyn lyrel_core::host::Host,
-                    &HashMap<String, String>,
-                ) -> std::io::Result<Vec<statistics::Source>>;
-                for (slug, discover) in [
+                for (name, discover) in [
                     ("omp", statistics::discover_omp as Discover),
+                    ("kimi", statistics::discover_kimi as Discover),
                     ("hermes", statistics::discover_hermes as Discover),
                 ] {
-                    if agent != "all" && agent != slug {
+                    if agent.is_some_and(|selected| selected != name) {
                         continue;
                     }
                     match discover(host, &launch) {
                         Ok(found) => sources.extend(found),
-                        Err(error) => discovery_errors.push((slug, error.to_string())),
+                        Err(error) => discovery_errors.push((name, error.to_string())),
+                    }
+                }
+                if agent.is_none_or(|agent| agent == "opencode") {
+                    // An explicitly bound client is never replaced by another default service.
+                    if opencode_sources.is_empty() {
+                        match statistics::discover_opencode(host, &launch) {
+                            Ok(found) => sources.extend(found),
+                            Err(error) => discovery_errors.push(("OpenCode", error.to_string())),
+                        }
+                    } else {
+                        sources.extend(opencode_sources);
                     }
                 }
                 let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
                 let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
-                for (slug, error) in discovery_errors {
-                    snapshot.record_issue(slug.into(), error);
+                for (name, error) in discovery_errors {
+                    snapshot = snapshot.with_issue(name.into(), error);
                 }
                 let totals = snapshot.aggregate(&window);
                 let previous = window.previous().map(|w| snapshot.aggregate(w));
@@ -257,10 +319,10 @@ impl LyrelApp {
         }
         self.load_statistics(cx);
     }
-    fn select_statistics_agent(&mut self, agent: &'static str, cx: &mut Context<Self>) {
-        if let Some(s) = self.active_settings_mut() {
-            s.statistics.agent = agent;
-            s.statistics.invalidate();
+    fn select_statistics_agent(&mut self, agent: Option<&'static str>, cx: &mut Context<Self>) {
+        if let Some(settings) = self.active_settings_mut() {
+            settings.statistics.agent = agent;
+            settings.statistics.invalidate();
         }
         self.load_statistics(cx);
     }
@@ -291,6 +353,33 @@ impl LyrelApp {
             })
             .collect();
         let machine = self.settings_dropdown("statistics-machine", label, None, entries, cx);
+        let selected = state.agent;
+        let agents = [
+            (None, t(L10nKey::StatisticsAllAgents)),
+            (Some("omp"), "omp"),
+            (Some("kimi"), "Kimi Code"),
+            (Some("opencode"), "OpenCode"),
+            (Some("hermes"), "Hermes"),
+        ]
+        .into_iter()
+        .map(|(agent, label)| {
+            MenuEntry::item(label, selected == agent, move |this, _, cx| {
+                this.select_statistics_agent(agent, cx)
+            })
+        })
+        .collect();
+        let agent = self.settings_dropdown(
+            "statistics-agent",
+            selected.map_or(t(L10nKey::StatisticsAllAgents), |agent| match agent {
+                "kimi" => "Kimi Code",
+                "opencode" => "OpenCode",
+                "hermes" => "Hermes",
+                other => other,
+            }),
+            None,
+            agents,
+            cx,
+        );
         let periods = [
             Period::Today,
             Period::Week,
@@ -313,29 +402,6 @@ impl LyrelApp {
             periods,
             cx,
         );
-        let agent_entries = [
-            ("all", t(L10nKey::StatisticsAllSources).to_string()),
-            ("omp", "omp".into()),
-            ("hermes", "Hermes".into()),
-        ]
-        .into_iter()
-        .map(|(slug, label)| {
-            MenuEntry::item(label, state.agent == slug, move |this, _, cx| {
-                this.select_statistics_agent(slug, cx)
-            })
-        })
-        .collect();
-        let agent_control = self.settings_dropdown(
-            "statistics-agent",
-            if state.agent == "all" {
-                t(L10nKey::StatisticsAllSources).to_string()
-            } else {
-                state.agent.to_string()
-            },
-            None,
-            agent_entries,
-            cx,
-        );
         let mut rows = vec![
             self.settings_row(
                 t(L10nKey::StatisticsTitle),
@@ -351,16 +417,23 @@ impl LyrelApp {
                 cx,
             )
             .into_any_element(),
-        ];
-        rows.push(
             self.settings_row(
-                t(L10nKey::StatisticsSource),
-                t(L10nKey::StatisticsHermesLimits),
-                agent_control,
+                t(L10nKey::StatisticsAgent),
+                t(L10nKey::StatisticsAgentScope),
+                agent,
                 cx,
             )
             .into_any_element(),
-        );
+        ];
+        if state.agent.is_none_or(|agent| agent == "hermes") {
+            rows.push(
+                div()
+                    .text_size(fs(12.))
+                    .text_color(tk.k5)
+                    .child(t(L10nKey::StatisticsHermesLimits))
+                    .into_any_element(),
+            );
+        }
         if period == Period::Custom {
             rows.push(
                 v_flex()
@@ -407,7 +480,7 @@ impl LyrelApp {
         }
         if let Some(p) = self
             .active_settings()
-            .and_then(|s| s.statistics.results.get(&(host, s.statistics.agent)))
+            .and_then(|s| s.statistics.results.get(&(host, state.agent)))
         {
             let totals = &p.totals;
             let range_label = match (p.window.start(), p.window.end()) {
@@ -468,6 +541,10 @@ impl LyrelApp {
                 (L10nKey::StatisticsSessions, session_count(totals)),
                 (L10nKey::StatisticsInput, number(totals.tokens().input())),
                 (L10nKey::StatisticsOutput, number(totals.tokens().output())),
+                (
+                    L10nKey::StatisticsReasoning,
+                    number(totals.tokens().reasoning()),
+                ),
                 (
                     L10nKey::StatisticsCacheRead,
                     number(totals.tokens().cache_read()),
@@ -591,6 +668,16 @@ mod tests {
             "{{\"type\":\"session\",\"version\":3,\"id\":\"gui-native\",\"timestamp\":\"{timestamp}\",\"cwd\":\"/work\"}}\n{{\"type\":\"model_usage\",\"id\":\"call\",\"timestamp\":\"{timestamp}\",\"provider\":\"test\",\"model\":\"fixture\",\"usage\":{{\"input\":8,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":10,\"cost\":{{\"total\":0}}}}}}\n"
         );
         std::fs::write(temp.path().join("sessions/native.jsonl"), sample).unwrap();
+        let kimi_home = temp.path().join("kimi");
+        let kimi_session = kimi_home.join("sessions/wd_test_0123456789ab/session_gui");
+        std::fs::create_dir_all(kimi_session.join("agents/main")).unwrap();
+        std::fs::write(kimi_session.join("state.json"), serde_json::json!({"id":"session_gui","cwd":"/work","createdAt":chrono::Utc::now().timestamp_millis()}).to_string()).unwrap();
+        let mut kimi_wire =
+            String::from("{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1}\n");
+        for scope in ["turn", "session"] {
+            kimi_wire.push_str(&format!("{}\n", serde_json::json!({"type":"usage.record","agentId":"main","model":"kimi-code/kimi-for-coding","usageScope":scope,"time":chrono::Utc::now().timestamp_millis(),"usage":{"inputOther":3,"output":2,"inputCacheRead":0,"inputCacheCreation":0}})));
+        }
+        std::fs::write(kimi_session.join("agents/main/wire.jsonl"), kimi_wire).unwrap();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             let mut config = Config::default();
@@ -600,6 +687,14 @@ mod tests {
                     "OMP_PROFILE=default PI_CODING_AGENT_DIR='{}' omp",
                     temp.path().display()
                 ),
+            );
+            config.agent_launch.insert(
+                "kimi".into(),
+                format!("KIMI_CODE_HOME='{}' kimi", kimi_home.display()),
+            );
+            config.agent_launch.insert(
+                "opencode".into(),
+                format!("'{}/missing/opencode'", temp.path().display()),
             );
             config.agent_launch.insert(
                 "hermes".into(),
@@ -627,7 +722,6 @@ mod tests {
                 s.set_value(t(L10nKey::StatisticsTitle), window, cx)
             });
             app.autoselect_settings_search(cx);
-            app.select_statistics_agent("omp", cx);
         });
         vcx.run_until_parked();
         vcx.simulate_keystrokes("enter");
@@ -646,13 +740,48 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             vcx.run_until_parked();
         }
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.select_statistics_agent(Some("opencode"), cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            if !vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "OpenCode source failure did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut vcx, |app, _, cx| {
+            let state = &app.active_settings().unwrap().statistics;
+            let failed = state
+                .results
+                .get(&(HostId::LOCAL, Some("opencode")))
+                .expect("diagnostic snapshot");
+            assert!(!failed.snapshot.is_complete());
+            assert_eq!(failed.totals.tokens().total(), None);
+            assert_eq!(
+                state
+                    .results
+                    .get(&(HostId::LOCAL, None))
+                    .unwrap()
+                    .totals
+                    .tokens()
+                    .total(),
+                Some(20)
+            );
+            app.select_statistics_agent(None, cx);
+        });
         app.update_in(&mut vcx, |app, window, cx| {
             let state = &app.active_settings().unwrap().statistics;
             window.focus(&state.analysis.focus, cx);
             assert!(
                 state
                     .results
-                    .get(&(HostId::LOCAL, "omp"))
+                    .get(&(HostId::LOCAL, None))
                     .unwrap()
                     .analysis
                     .as_ref()
@@ -746,15 +875,46 @@ mod tests {
             let totals = &state
                 .statistics
                 .results
-                .get(&(HostId::LOCAL, "omp"))
+                .get(&(HostId::LOCAL, None))
                 .expect("real native snapshot")
                 .totals;
-            assert_eq!(totals.tokens().total(), Some(10));
+            assert_eq!(totals.tokens().total(), Some(20));
             assert_eq!(totals.recorded_usd(), Some(0.));
-            assert_eq!(totals.main_sessions(), 1);
+            assert_eq!(totals.main_sessions(), 2);
+            assert_eq!(totals.unpriced_calls(), 2);
+            app.select_statistics_agent(Some("kimi"), cx);
         });
-        // A failing Hermes scope does not erase OMP, and selecting Hermes never borrows OMP totals.
-        for agent in ["all", "hermes"] {
+        vcx.run_until_parked();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Kimi filter did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            vcx.run_until_parked();
+        }
+        app.update_in(&mut vcx, |app, _, _| {
+            let presentation = app
+                .active_settings()
+                .unwrap()
+                .statistics
+                .results
+                .get(&(HostId::LOCAL, Some("kimi")))
+                .unwrap();
+            assert_eq!(presentation.totals.tokens().total(), Some(10));
+            assert_eq!(presentation.totals.recorded_usd(), None);
+            assert_eq!(presentation.totals.main_sessions(), 1);
+            assert_eq!(presentation.totals.unpriced_calls(), 2);
+            assert!(
+                presentation
+                    .snapshot
+                    .sources()
+                    .iter()
+                    .all(|source| source.agent() == "kimi")
+            );
+        });
+        for agent in [None, Some("hermes")] {
             app.update_in(&mut vcx, |app, _, cx| {
                 app.select_statistics_agent(agent, cx)
             });
@@ -775,10 +935,12 @@ mod tests {
                     .expect("source result");
                 assert_eq!(
                     result.totals.tokens().total(),
-                    if agent == "all" { Some(10) } else { None }
+                    if agent.is_none() { Some(20) } else { None }
                 );
                 assert!(!result.snapshot.is_complete());
-                assert!(!result.snapshot.issues().is_empty());
+                if agent == Some("hermes") {
+                    assert_eq!(session_count(&result.totals), t(L10nKey::StatisticsUnknown));
+                }
             });
         }
         app.update_in(&mut vcx, |app, window, cx| {
@@ -786,7 +948,11 @@ mod tests {
             app.select_statistics_host(HostId(123456), cx);
             let state = &app.active_settings().unwrap().statistics;
             assert!(state.error.is_some());
-            assert!(!state.results.contains_key(&(HostId(123456), "hermes")));
+            assert!(
+                !state
+                    .results
+                    .contains_key(&(HostId(123456), Some("hermes")))
+            );
             app.select_statistics_host(HostId::LOCAL, cx);
             app.navigate_settings(SettingsSection::General, None, window, cx);
             assert!(!app.active_settings().unwrap().statistics.loading);

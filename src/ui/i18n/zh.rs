@@ -63,7 +63,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsCopied => "已复制路径",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
-            "统计 omp Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+            "统计 omp kimi Kimi Code OpenCode Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
         }
         L10nKey::StatisticsToday => "今天",
         L10nKey::StatisticsWeek => "本周",
@@ -74,6 +74,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsScope => {
             "读取所选机器的原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
         }
+        L10nKey::StatisticsAgent => "智能体来源",
+        L10nKey::StatisticsAgentScope => {
+            "查看全部可用来源，或单个智能体的有效作用域。OpenCode 使用所选原生客户端或配置的服务，不回退另一默认服务。不可读来源保留诊断。"
+        }
+        L10nKey::StatisticsReasoning => "推理 Token",
         L10nKey::StatisticsRange => "日期范围",
         L10nKey::StatisticsCalendar => {
             "日历边界按桌面本机时区解释；每周从星期一开始。对比采用前一个对应日历期间。"
@@ -95,8 +100,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsTokens => "总 Token",
         L10nKey::StatisticsCost => "历史记录费用",
         L10nKey::StatisticsEstimatedCost => "原生估算费用（独立于实际费用）",
-        L10nKey::StatisticsAllSources => "全部来源",
-        L10nKey::StatisticsSource => "智能体来源",
         L10nKey::StatisticsHermesLimits => {
             "Hermes 使用正式 launcher 的有效 home/profile。公开历史不含子代理用量，也不支持分页。累计用量仅在日期范围覆盖整个会话时纳入，绝不摊日。实际与原生估算费用分别展示，不相加。"
         }
@@ -135,7 +138,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "此范围没有可计入的原生活动。请检查所选机器、来源和日期范围后刷新。跨越范围边界的累计记录仍不归入单日。"
         }
         L10nKey::StatisticsPrivacy => {
-            "只读原生历史 · omp 18.12.1 JSONL／Hermes 0.22.2 公开网关 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。覆盖限制与未知谱系在下方明确显示。"
+            "只读 · omp 18.12.1／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API／Hermes 0.22.2 公开网关 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 的 turn 与非 turn 调用均为增量，费用保持未知。覆盖、谱系和分页限制在下方显示。"
         }
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::StatisticsAnalysisTitle => "活动与明细",

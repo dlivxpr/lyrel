@@ -67,7 +67,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsCopied => "Path copied",
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {
-            "statistics omp Hermes native history tokens cost sessions machine profile date range overview"
+            "statistics omp kimi Kimi Code OpenCode Hermes native history tokens cost sessions machine profile date range overview"
         }
         L10nKey::StatisticsToday => "Today",
         L10nKey::StatisticsWeek => "This week",
@@ -76,8 +76,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsAll => "All time",
         L10nKey::StatisticsCustom => "Custom",
         L10nKey::StatisticsScope => {
-            "Read native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
+            "Read native history on the selected machine, including sessions from other terminals. The machine does not follow the workspace."
         }
+        L10nKey::StatisticsAgent => "Agent source",
+        L10nKey::StatisticsAgentScope => {
+            "All available sources or one agent’s effective scope. OpenCode uses the selected native client or configured service, without default-service fallback. Unreadable sources remain visible in diagnostics."
+        }
+        L10nKey::StatisticsReasoning => "Reasoning tokens",
         L10nKey::StatisticsRange => "Date range",
         L10nKey::StatisticsCalendar => {
             "Calendar boundaries use the desktop timezone; weeks start on Monday. Comparisons use the preceding matching calendar period."
@@ -107,8 +112,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsTokens => "Total tokens",
         L10nKey::StatisticsCost => "Recorded historical cost",
         L10nKey::StatisticsEstimatedCost => "Native estimated cost (separate from actual)",
-        L10nKey::StatisticsAllSources => "All sources",
-        L10nKey::StatisticsSource => "Agent source",
         L10nKey::StatisticsHermesLimits => {
             "Hermes uses the selected launcher's home/profile. Public history excludes child usage and has no pagination. Cumulative usage is included only when the range covers the entire session; it is never spread across days. Actual and native estimated costs are separate, not additive."
         }
@@ -149,7 +152,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "No attributable usage in this range. Check the selected machine, source and date range, then refresh. Cumulative records crossing the range remain unassigned."
         }
         L10nKey::StatisticsPrivacy => {
-            "Read-only native history · omp 18.12.1 JSONL / Hermes 0.22.2 public gateway · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Coverage limits and unknown lineage are reported below."
+            "Read-only · omp 18.12.1 / Kimi Code 2.2.0 durable 1.5 / OpenCode 2.x public API / Hermes 0.22.2 public gateway · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Kimi turn and non-turn calls are incremental; cost remains unknown. Coverage, lineage and pagination limits are reported below."
         }
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::StatisticsAnalysisTitle => "Activity and breakdowns",

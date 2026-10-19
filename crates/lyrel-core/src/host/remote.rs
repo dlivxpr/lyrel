@@ -557,6 +557,60 @@ impl Host for RemoteHost {
         }
     }
 
+    fn opencode_statistics(
+        &self,
+        request: &crate::host::session_operations::SessionOperation,
+    ) -> Result<
+        crate::host::session_operations::opencode::OpenCodeStatistics,
+        crate::host::session_operations::SessionOperationError,
+    > {
+        use crate::host::session_operations::{SessionErrorKind, SessionOperationError};
+        let error = |kind, message: &str| SessionOperationError {
+            kind,
+            message: message.into(),
+            retained: None,
+        };
+        if request.expected_host != self.id.0 {
+            return Err(error(
+                SessionErrorKind::WrongHost,
+                "OpenCode statistics belongs to another Host",
+            ));
+        }
+        if !self.is_connected() {
+            return Err(error(
+                SessionErrorKind::Connection,
+                "OpenCode statistics Host is disconnected",
+            ));
+        }
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::OPENCODE_STATISTICS)
+        {
+            return Err(error(
+                SessionErrorKind::Unsupported,
+                "update lyrel-server: opencode-statistics-v1 is required",
+            ));
+        }
+        let mut wire = request.clone();
+        wire.expected_host = 0;
+        match self
+            .call(ControlRequest::OpenCodeStatistics {
+                request: Box::new(wire),
+            })
+            .map_err(|_| {
+                error(
+                    SessionErrorKind::Connection,
+                    "OpenCode statistics Host did not answer",
+                )
+            })? {
+            ReplyOk::OpenCodeStatistics(result) => *result,
+            _ => Err(error(
+                SessionErrorKind::Identity,
+                "OpenCode statistics Host returned an incompatible response",
+            )),
+        }
+    }
+
     fn hermes_sessions(
         &self,
         request: &crate::host::session_operations::SessionOperation,
@@ -2034,6 +2088,64 @@ mod tests {
             crate::host::session_operations::SessionErrorKind::Unsupported
         );
         assert!(host.is_connected());
+    }
+
+    #[test]
+    fn opencode_statistics_requires_its_independent_remote_capability() {
+        let (host, _) = host_with_peer_announcing(
+            '/',
+            &[
+                crate::daemon::control::feature::HERMES_HISTORY,
+                crate::daemon::control::feature::SESSION_OPERATIONS,
+            ],
+            |_| panic!("must not send statistics to an old or Hermes-only peer"),
+        );
+        let mut request = session_request(host.id());
+        request.agent = crate::core::cli_agent::CLIAgent::OpenCode;
+        let error = host.opencode_statistics(&request).unwrap_err();
+        assert_eq!(
+            error.kind,
+            crate::host::session_operations::SessionErrorKind::Unsupported
+        );
+        assert!(host.is_connected());
+    }
+
+    #[test]
+    fn opencode_statistics_transports_only_the_selected_host_scope() {
+        use crate::host::session_operations::opencode::OpenCodeStatistics;
+        let (host, _) = host_with_peer_announcing(
+            '/',
+            &[crate::daemon::control::feature::OPENCODE_STATISTICS],
+            |request| {
+                let ControlRequest::OpenCodeStatistics { request } = request else {
+                    panic!("wrong request")
+                };
+                assert_eq!(request.expected_host, 0);
+                assert_eq!(
+                    request.scope.environment.get("HOME").map(String::as_str),
+                    Some("/remote/selected")
+                );
+                Some((
+                    ControlReply::Ok(ReplyOk::OpenCodeStatistics(Box::new(Ok(
+                        OpenCodeStatistics {
+                            identity: "remote-service".into(),
+                            sessions: vec![],
+                            issues: vec!["native service offline".into()],
+                        },
+                    )))),
+                    vec![],
+                ))
+            },
+        );
+        let mut request = session_request(host.id());
+        request.agent = crate::core::cli_agent::CLIAgent::OpenCode;
+        request
+            .scope
+            .environment
+            .insert("HOME".into(), "/remote/selected".into());
+        let found = host.opencode_statistics(&request).unwrap();
+        assert_eq!(found.identity, "remote-service");
+        assert_eq!(found.issues, ["native service offline"]);
     }
 
     #[test]

@@ -2,7 +2,13 @@
 mod hermes;
 pub use hermes::discover_hermes;
 pub mod analysis;
+mod kimi;
+#[cfg(test)]
+mod kimi_tests;
+pub use kimi::discover_kimi;
 mod omp;
+mod opencode;
+pub use opencode::discover_opencode;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
@@ -17,13 +23,25 @@ const MAX_DIRS: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SCAN_BYTES: u64 = 256 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
     root: PathBuf,
     scope: String,
     agent: String,
     #[serde(skip)]
+    opencode_request: Option<Box<crate::host::session_operations::SessionOperation>>,
+    #[serde(skip)]
     hermes_request: Option<std::sync::Arc<crate::host::session_operations::SessionOperation>>,
+}
+impl std::fmt::Debug for Source {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Source")
+            .field("root", &self.root)
+            .field("scope", &self.scope)
+            .field("agent", &self.agent)
+            .finish()
+    }
 }
 impl Source {
     pub fn omp(root: PathBuf, scope: impl Into<String>) -> Self {
@@ -31,6 +49,16 @@ impl Source {
             root,
             scope: scope.into(),
             agent: "omp".into(),
+            opencode_request: None,
+            hermes_request: None,
+        }
+    }
+    pub fn kimi(root: PathBuf, scope: impl Into<String>) -> Self {
+        Self {
+            root,
+            scope: scope.into(),
+            agent: "kimi".into(),
+            opencode_request: None,
             hermes_request: None,
         }
     }
@@ -50,10 +78,15 @@ pub struct Tokens {
     input: Option<u64>,
     output: Option<u64>,
     cache_read: Option<u64>,
+    #[serde(default)]
+    reasoning: Option<u64>,
     cache_write: Option<u64>,
     total: Option<u64>,
 }
 impl Tokens {
+    pub fn reasoning(&self) -> Option<u64> {
+        self.reasoning
+    }
     pub fn input(&self) -> Option<u64> {
         self.input
     }
@@ -80,6 +113,7 @@ impl Tokens {
         self.input = sum(self.input, other.input, first);
         self.output = sum(self.output, other.output, first);
         self.cache_read = sum(self.cache_read, other.cache_read, first);
+        self.reasoning = sum(self.reasoning, other.reasoning, first);
         self.cache_write = sum(self.cache_write, other.cache_write, first);
         self.total = sum(self.total, other.total, first);
     }
@@ -169,6 +203,8 @@ struct FileFacts {
     child: bool,
     observed: i64,
     session: NativeSession,
+    #[serde(default)]
+    metadata_stamp: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanIssue {
@@ -192,9 +228,6 @@ pub struct Snapshot {
     issues: Vec<ScanIssue>,
 }
 impl Snapshot {
-    pub fn record_issue(&mut self, path: PathBuf, reason: String) {
-        self.issues.push(ScanIssue { path, reason });
-    }
     pub fn host(&self) -> u64 {
         self.host
     }
@@ -209,6 +242,14 @@ impl Snapshot {
     }
     pub fn is_complete(&self) -> bool {
         self.issues.is_empty()
+    }
+    /// Attach a failed source discovery without discarding readable agents.
+    pub fn with_issue(mut self, path: PathBuf, reason: impl Into<String>) -> Self {
+        self.issues.push(ScanIssue {
+            path,
+            reason: reason.into(),
+        });
+        self
     }
     pub fn aggregate(&self, window: &DateWindow) -> Totals {
         let mut out = Totals::default();
@@ -422,7 +463,8 @@ impl Default for Totals {
 }
 #[derive(Default)]
 pub struct StatisticsCache {
-    files: HashMap<(u64, String, PathBuf), (Meta, FileFacts)>,
+    files: HashMap<(u64, String, String, PathBuf), (Meta, FileFacts)>,
+    opencode: HashMap<(u64, String), (Source, Vec<FileFacts>, i64)>,
     native: HashMap<(u64, String, String), Vec<FileFacts>>,
 }
 
@@ -441,7 +483,14 @@ pub fn scan(
     }
     let mut snapshot = Snapshot {
         host: host.id().0,
-        sources: sources.to_vec(),
+        sources: sources
+            .iter()
+            .cloned()
+            .map(|mut source| {
+                source.opencode_request = None;
+                source
+            })
+            .collect(),
         updated: chrono::Utc::now().timestamp(),
         files: Vec::new(),
         issues: Vec::new(),
@@ -453,6 +502,30 @@ pub fn scan(
     for source in sources {
         if source.agent == "hermes" {
             hermes::scan_source(host, source, cache, &mut snapshot);
+            continue;
+        }
+        if source.agent == "opencode" {
+            opencode::scan_source(host, source, &mut snapshot, cache);
+            continue;
+        }
+        if source.agent == "kimi" {
+            kimi::scan_source(
+                host,
+                source,
+                cache,
+                &mut snapshot,
+                &mut seen,
+                &mut dirs,
+                &mut files,
+                &mut bytes,
+            );
+            continue;
+        }
+        if source.agent != "omp" {
+            snapshot.issues.push(ScanIssue {
+                path: source.root.clone(),
+                reason: format!("unsupported native statistics agent: {}", source.agent),
+            });
             continue;
         }
         let exact_file = host.stat(&source.root).is_ok_and(|m| !m.is_dir);
@@ -490,10 +563,9 @@ pub fn scan(
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound
                         && path == source.root
-                        && !cache
-                            .files
-                            .keys()
-                            .any(|(id, scope, _)| *id == host.id().0 && *scope == source.scope) =>
+                        && !cache.files.keys().any(|(id, agent, scope, _)| {
+                            *id == host.id().0 && *agent == source.agent && *scope == source.scope
+                        }) =>
                 {
                     continue;
                 }
@@ -536,7 +608,7 @@ pub fn scan(
                         continue;
                     }
                 };
-                if !seen.insert((source.scope.clone(), path.clone())) {
+                if !seen.insert((source.agent.clone(), source.scope.clone(), path.clone())) {
                     continue;
                 }
                 files += 1;
@@ -548,7 +620,12 @@ pub fn scan(
                     pending.clear();
                     break;
                 }
-                let key = (host.id().0, source.scope.clone(), path.clone());
+                let key = (
+                    host.id().0,
+                    source.agent.clone(),
+                    source.scope.clone(),
+                    path.clone(),
+                );
                 let result = (|| {
                     let meta = host.stat(&path)?;
                     if let Some((old, facts)) = cache.files.get(&key) {
@@ -573,6 +650,7 @@ pub fn scan(
                             child,
                             observed: snapshot.updated,
                             session,
+                            metadata_stamp: None,
                         },
                     ))
                 })();
@@ -595,13 +673,17 @@ pub fn scan(
         }
     }
     if !snapshot.issues.is_empty() {
-        for ((host_id, scope, path), (_, facts)) in &cache.files {
+        for ((host_id, agent, scope, path), (_, facts)) in &cache.files {
             if *host_id == host.id().0
-                && sources.iter().any(|s| s.scope == *scope)
-                && !snapshot
-                    .files
+                && !host
+                    .stat(path)
+                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                && sources
                     .iter()
-                    .any(|f| f.path == *path && f.source.scope == *scope)
+                    .any(|s| s.agent == *agent && s.scope == *scope)
+                && !snapshot.files.iter().any(|f| {
+                    f.path == *path && f.source.agent == *agent && f.source.scope == *scope
+                })
             {
                 snapshot.files.push(facts.clone());
             }
@@ -611,8 +693,8 @@ pub fn scan(
     for file in &snapshot.files {
         if let Some(parent) = &file.session.parent {
             if !snapshot.files.iter().any(|f| {
-                f.source.scope == file.source.scope
-                    && f.source.agent == file.source.agent
+                f.source.agent == file.source.agent
+                    && f.source.scope == file.source.scope
                     && (f.session.id == *parent || f.path.to_string_lossy() == parent.as_str())
             }) {
                 snapshot.issues.push(ScanIssue {
@@ -630,10 +712,12 @@ pub fn scan(
         }
     }
     if snapshot.issues.is_empty() {
-        cache.files.retain(|(id, scope, path), _| {
+        cache.files.retain(|(id, agent, scope, path), _| {
             *id != host.id().0
-                || !sources.iter().any(|s| s.scope == *scope)
-                || seen.contains(&(scope.clone(), path.clone()))
+                || !sources
+                    .iter()
+                    .any(|s| s.agent == *agent && s.scope == *scope)
+                || seen.contains(&(agent.clone(), scope.clone(), path.clone()))
         });
     }
     Ok(snapshot)

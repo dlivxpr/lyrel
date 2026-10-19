@@ -12,6 +12,7 @@ impl Source {
             scope: scope.into(),
             agent: "hermes".into(),
             hermes_request: Some(std::sync::Arc::new(request)),
+            opencode_request: None,
         }
     }
 }
@@ -270,6 +271,7 @@ fn parse(
                 path: source.root.join(id),
                 child: false,
                 observed,
+                metadata_stamp: None,
                 session: NativeSession {
                     id: id.into(),
                     parent: None,
