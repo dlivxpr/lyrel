@@ -44,6 +44,21 @@ pub(super) fn profiles(
 }
 
 pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
+    read_for(profile, "https://platform.deepseek.com", "userToken")
+}
+
+pub(super) fn read_for(profile: &Path, origin: &str, key: &str) -> Result<String, BrowserError> {
+    let keys: [&[u8]; 2] = match (origin, key) {
+        ("https://platform.deepseek.com", "userToken") => [
+            b"_https://platform.deepseek.com\0\x01userToken",
+            b"_https://platform.deepseek.com\0\x00u\0s\0e\0r\0T\0o\0k\0e\0n\0",
+        ],
+        ("https://platform.stepfun.com", "web_id") => [
+            b"_https://platform.stepfun.com\0\x01web_id",
+            b"_https://platform.stepfun.com\0\x00w\0e\0b\0_\0i\0d\0",
+        ],
+        _ => return Err(BrowserError::Unsupported),
+    };
     let path = profile.join("Local Storage/leveldb");
     if !path.try_exists().map_err(io_error)? {
         // Chromium's new SQLite LocalStorage backend is a separate format, not
@@ -59,6 +74,9 @@ pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
                 BrowserError::NoSession
             },
         );
+    }
+    if !fs::canonicalize(&path).map_err(io_error)?.starts_with(profile) {
+        return Err(BrowserError::Denied);
     }
     let lock = File::open(path.join("LOCK")).map_err(io_error)?;
     fs2::FileExt::try_lock_shared(&lock).map_err(|error| {
@@ -125,13 +143,9 @@ pub(super) fn read(profile: &Path) -> Result<String, BrowserError> {
         std::io::copy(&mut source, &mut destination).map_err(io_error)?;
     }
     let mut db = DB::open(memory_root, options).map_err(|_| BrowserError::Unreadable)?;
-    // Both DOMString encodings are specified by Chromium. Never enumerate keys
-    // or scan for a token-shaped value: exact origin + exact userToken only.
+    // 两种规定的 DOMString 编码；只查询已批准的精确 origin/key，不枚举键。
     let snapshot = db.get_snapshot();
-    for key in [
-        b"_https://platform.deepseek.com\0\x01userToken".as_slice(),
-        b"_https://platform.deepseek.com\0\x00u\0s\0e\0r\0T\0o\0k\0e\0n\0".as_slice(),
-    ] {
+    for key in keys {
         if let Some(value) = db
             .get_at(&snapshot, key)
             .map_err(|_| BrowserError::Unreadable)?

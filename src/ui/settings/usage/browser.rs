@@ -1,8 +1,10 @@
-//! DeepSeek LocalStorage import. No cookies, authorization prompts, or other origins.
+//! Desktop-local browser sources. Metadata discovery never reads session material.
 //! Profile discovery reads only browser metadata; session reads require an explicit profile.
 
 mod chromium;
 mod firefox;
+mod cookies;
+pub(super) use cookies::CookieProvider;
 #[cfg(test)]
 mod tests;
 
@@ -102,6 +104,7 @@ pub(super) enum BrowserError {
     ProfileGone,
     SourceChanged,
     Unreadable,
+    Protected,
 }
 
 impl std::fmt::Display for BrowserError {
@@ -111,6 +114,7 @@ impl std::fmt::Display for BrowserError {
             Self::Denied => "Permission to read the selected browser profile was denied",
             Self::NoSession => "The selected profile has no DeepSeek platform session",
             Self::Unsupported => "This browser storage format is not supported",
+            Self::Protected => "Browser cookies are protected by App-Bound Encryption; protection will not be bypassed",
             Self::ProfileGone => "The selected browser profile is no longer available",
             Self::SourceChanged => {
                 "The selected browser session changed; explicitly import it again"
