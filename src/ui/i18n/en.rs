@@ -32,6 +32,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsSearch => "Search skills…",
         L10nKey::SkillsSource => "Source",
         L10nKey::SkillsAllSources => "All sources",
+        L10nKey::SkillsBrowserDescription => "Browse skills on the selected machine and project",
+        L10nKey::SkillsInvoke => "Invoke",
+        L10nKey::SkillsSourceReference => "Source reference",
+        L10nKey::SkillsSourceRecord => "Source record",
         L10nKey::SkillsUserShared => "User shared",
         L10nKey::SkillsProjectShared => "Project shared",
         L10nKey::SkillsPrivate => "Agent private",
@@ -211,6 +215,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsUpdated => {
             "Snapshot: {time} · desktop timezone: {zone}\nResult range: {range}"
         }
+        L10nKey::StatisticsSnapshotTime => "Observed {time}",
+        L10nKey::StatisticsStaleSnapshot => {
+            "Observed {time} · incomplete; cached data may be stale"
+        }
         L10nKey::StatisticsComplete => "Complete within discovered sources and scan limits",
         L10nKey::StatisticsPartial => {
             "Incomplete — retained values may be stale or restricted; inspect source diagnostics below"
@@ -246,6 +254,41 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsCacheWrite => "Cache write",
         L10nKey::StatisticsAverage => "Tokens per main session (including child usage)",
         L10nKey::StatisticsUnknown => "Unknown",
+        L10nKey::StatisticsLastSevenDays => "Last 7 days",
+        L10nKey::StatisticsDailyTrendCompact => "Daily · {start} – {end}",
+        L10nKey::StatisticsActivityCaption => {
+            "{metric} per day · dates outside the range are dimmed"
+        }
+        L10nKey::StatisticsKnownPeak => "Known peak {date} · {value}",
+        L10nKey::StatisticsPeak => "Peak {date} · {value}",
+        L10nKey::StatisticsLess => "Less",
+        L10nKey::StatisticsMore => "More",
+        L10nKey::StatisticsHeatmapCoverage => {
+            "Outlined days: unknown or restricted · see Data sources"
+        }
+        L10nKey::StatisticsHeatmapLowerBound => {
+            "Outlined activity shows known subtotals; blank outlined days stay unknown · see Data sources"
+        }
+        L10nKey::StatisticsKnownActivity => "At least {value} {metric} · known subtotal",
+        L10nKey::StatisticsRankUsage => "{tokens} tokens · {sessions} sessions",
+        L10nKey::StatisticsRankSpend => "{cost} · {tokens} tokens",
+        L10nKey::StatisticsObservedValues => "Known subtotals · source coverage may be incomplete",
+        L10nKey::StatisticsObservedTokens => "Known token composition: {value}",
+        L10nKey::UsageSubtitle => "Coding plan quota and API account balances",
+        L10nKey::UsageCodingPlansCaption => "Periodic quota and Credits",
+        L10nKey::UsageApiAccountsCaption => "Provider balances and account quota",
+        L10nKey::UsageEmptyHint => "Choose a provider below to add an account",
+        L10nKey::UsageAccountsUnavailable => "Accounts could not be loaded",
+        L10nKey::UsageSupportsApiKey => "Supports API keys",
+        L10nKey::UsageSupportsSessionBrowser => "Supports manual sessions and browser import",
+        L10nKey::UsageSupportsAllSources => "Supports API keys, manual sessions and browser import",
+        L10nKey::UsageAddHint => "Choose a source. Usage is verified before the account is saved.",
+        L10nKey::UsageCurrentSource => "Current account and source",
+        L10nKey::UsageReplaceHint => {
+            "Choose and verify a new source to replace this account’s source."
+        }
+        L10nKey::UsageVerifyReplace => "Verify and replace",
+        L10nKey::UsageVerifyImport => "Verify and import",
         L10nKey::StatisticsUnpriced => "Unpriced",
         L10nKey::StatisticsUnpricedCalls => {
             "Records without actual cost: {count}. Known actual costs are a subtotal, not a bill or account quota. Native estimates are separate. No prices are fetched or inferred."

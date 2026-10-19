@@ -12,6 +12,7 @@ use super::shell::MenuEntry;
 use super::*;
 use crate::ui::host_ops::HostOps;
 use crate::ui::host_registry::HostRegistry;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{Disableable, button::ButtonVariants};
 use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ pub(crate) struct StatisticsState {
     content_scroll: gpui_kit::ScrollHandle,
     agent: Option<&'static str>,
     period: Period,
+    requested_window: Option<DateWindow>,
     start: Entity<InputState>,
     end: Entity<InputState>,
     generation: Uuid,
@@ -50,6 +52,7 @@ impl StatisticsState {
             content_scroll: gpui_kit::ScrollHandle::new(),
             agent: None,
             period: Period::Month,
+            requested_window: None,
             start: cx.new(|cx| InputState::new(window, cx).default_value(date.clone())),
             end: cx.new(|cx| InputState::new(window, cx).default_value(date)),
             generation: Uuid::new_v4(),
@@ -64,11 +67,13 @@ impl StatisticsState {
     pub(crate) fn invalidate(&mut self) {
         self.generation = Uuid::new_v4();
         self.loading = false;
+        self.requested_window = None;
     }
 }
 fn period_key(period: Period) -> L10nKey {
     match period {
         Period::Today => L10nKey::StatisticsToday,
+        Period::LastSevenDays => L10nKey::StatisticsLastSevenDays,
         Period::Week => L10nKey::StatisticsWeek,
         Period::Month => L10nKey::StatisticsMonth,
         Period::Year => L10nKey::StatisticsYear,
@@ -230,6 +235,7 @@ impl LyrelApp {
         if let Some(s) = self.active_settings_mut() {
             s.statistics.generation = generation;
             s.statistics.loading = true;
+            s.statistics.requested_window = Some(window.clone());
             s.statistics.error = None;
             if s.statistics.analysis.anchor.is_none() {
                 s.statistics.analysis.anchor = Some(gpui_kit::ScrollAnchor::for_handle(
@@ -412,6 +418,7 @@ impl LyrelApp {
         );
         let periods = [
             Period::Today,
+            Period::LastSevenDays,
             Period::Week,
             Period::Month,
             Period::Year,
@@ -426,24 +433,64 @@ impl LyrelApp {
         })
         .collect();
         let range = self.analysis_menu("statistics-period", t(period_key(period)), periods, cx);
+        let presentation = state.results.get(&(host, state.agent));
+        let date_range = presentation
+            .map(|p| &p.window)
+            .or(state.requested_window.as_ref())
+            .map(|window| {
+                format!(
+                    "{} · {}",
+                    self.statistics_range_label(window),
+                    window.timezone()
+                )
+            })
+            .unwrap_or_else(|| "—".into());
         let toolbar = h_flex()
             .id("statistics-toolbar")
             .w_full()
             .min_w_0()
             .flex_wrap()
             .gap_2()
-            .child(machine)
-            .child(agent)
-            .child(div().flex_1())
-            .child(range)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id("statistics-date-range")
+                            .test_support()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(date_range),
+                    )
+                    .child(h_flex().flex_wrap().gap_1().child(machine).child(agent)),
+            )
             .child(
                 self.analysis_button(
-                    "statistics-refresh",
-                    t(L10nKey::StatisticsRefresh),
+                    "statistics-today",
+                    t(L10nKey::StatisticsToday),
                     cx,
-                    |this, _, cx| this.load_statistics(cx),
+                    |this, _, cx| this.select_statistics_period(Period::Today, cx),
                 )
+                .ghost(),
+            )
+            .child(
+                self.analysis_button(
+                    "statistics-week",
+                    t(L10nKey::StatisticsWeek),
+                    cx,
+                    |this, _, cx| this.select_statistics_period(Period::Week, cx),
+                )
+                .ghost(),
+            )
+            .child(range)
+            .child(
+                self.analysis_button("statistics-refresh", "↻", cx, |this, _, cx| {
+                    this.load_statistics(cx)
+                })
                 .ghost()
+                .accessibility_label(t(L10nKey::StatisticsRefresh))
                 .disabled(loading || state.management.busy),
             );
         let mut rows = vec![toolbar.into_any_element()];
@@ -495,48 +542,41 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        let presentation = state.results.get(&(host, state.agent));
-        rows.push(self.render_statistics_tiles(presentation, cx));
         if let Some(p) = presentation {
-            rows.push(self.render_statistics_analysis(p, cx));
-            rows.push(
-                div()
-                    .text_xs()
-                    .text_color(if p.totals.is_complete() {
-                        tk.k5
-                    } else {
-                        tk.warn_text
-                    })
-                    .child(t(if p.totals.is_complete() {
-                        L10nKey::StatisticsComplete
-                    } else {
-                        L10nKey::StatisticsPartial
-                    }))
-                    .into_any_element(),
+            let time = management::format_time(Some(p.snapshot.updated()));
+            let observed = t_fmt(
+                if p.totals.is_complete() {
+                    L10nKey::StatisticsSnapshotTime
+                } else {
+                    L10nKey::StatisticsStaleSnapshot
+                },
+                &[("time", &time)],
+            );
+            let details = t_fmt(
+                L10nKey::StatisticsUpdated,
+                &[
+                    ("time", &time),
+                    ("zone", p.window.timezone()),
+                    ("range", &self.statistics_range_label(&p.window)),
+                ],
             );
             rows.push(
                 div()
+                    .id("statistics-observed")
+                    .test_support()
+                    .role(gpui_kit::Role::Status)
+                    .aria_label(format!("{observed}\n{details}"))
                     .text_xs()
                     .text_color(tk.k5)
-                    .child(t_fmt(
-                        L10nKey::StatisticsUpdated,
-                        &[
-                            ("time", &management::format_time(Some(p.snapshot.updated()))),
-                            ("zone", p.window.timezone()),
-                            ("range", &self.statistics_range_label(p)),
-                        ],
-                    ))
+                    .child(observed)
                     .into_any_element(),
             );
         }
+        rows.push(self.render_statistics_tiles(presentation, cx));
+        if let Some(p) = presentation {
+            rows.push(self.render_statistics_analysis(p, cx));
+        }
         rows.push(self.render_statistics_management_entry(cx));
-        rows.push(
-            div()
-                .text_xs()
-                .text_color(tk.k5)
-                .child(t(L10nKey::StatisticsPrivacy))
-                .into_any_element(),
-        );
         let body = div()
             .id("statistics-content")
             .size_full()
@@ -777,6 +817,7 @@ mod tests {
         });
         for (locale, width, mode) in [
             ("en", 1120., gpui_kit::component::ThemeMode::Light),
+            ("en", 944., gpui_kit::component::ThemeMode::Dark),
             ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
         ] {
             crate::ui::i18n::set_locale(locale);
@@ -842,8 +883,27 @@ mod tests {
                         (cell.size.width - cell.size.height).abs() <= px(1.),
                         "{locale}: narrow windows must not crush calendar cells"
                     );
+                    let weekdays = window.find("statistics-weekdays");
+                    let viewport = window.find("statistics-year-weeks").bounds();
+                    assert!(
+                        weekdays.visible(),
+                        "{locale}: weekday labels must remain visible while dates scroll"
+                    );
+                    assert!(
+                        weekdays.bounds().right() <= viewport.left(),
+                        "{locale}: weekday labels must stay outside the scrolling date viewport"
+                    );
                 });
             }
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let days = window.find(("statistics-week", 0usize)).bounds();
+                let track = window.find("statistics-calendar-track").bounds();
+                assert!(
+                    track.top() >= days.bottom(),
+                    "{locale}: the horizontal scrollbar must have its own lane below all day rows"
+                );
+            });
             let mut found = false;
             for _ in 0..450 {
                 let focused = vcx.update(|window, cx| {

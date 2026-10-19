@@ -56,8 +56,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_sm()
                     .child(pool_label(pool.kind))
                     .when_some(pool.name.as_ref(), |label, name| {
                         label.child(format!(" · {name}"))
@@ -65,7 +64,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_sm()
                     .font_weight(gpui_kit::FontWeight::MEDIUM)
                     .child(format!(
                         "{} {} {}",
@@ -98,7 +97,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
     {
         metric = metric.child(
             div()
-                .h(gpui_kit::rems(0.375))
+                .h(gpui_kit::rems(0.25))
                 .w_full()
                 .rounded_sm()
                 .bg(cx.theme().muted)
@@ -107,7 +106,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
                         .h_full()
                         .w(gpui_kit::relative(ratio))
                         .rounded_sm()
-                        .bg(cx.theme().primary),
+                        .bg(cx.theme().foreground),
                 ),
         );
     }
@@ -132,7 +131,10 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
             detail = detail.child(format!("{} {value}", t(label)));
         }
     }
-    metric = metric.child(detail);
+    if pool.used.is_some() || pool.limit.is_some() || pool.reset.is_some() || pool.expires.is_some()
+    {
+        metric = metric.child(detail);
+    }
     metric
 }
 impl UsagePage {
@@ -160,19 +162,74 @@ impl UsagePage {
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let data = self.data.read(cx);
         let refreshing = !self.pending.is_empty() || data.stored.accounts.iter().any(|a| a.busy);
-        h_flex()
+        v_flex()
             .id("usage-header")
             .test_support()
             .w_full()
             .min_w_0()
             .flex_none()
-            .flex_wrap()
             .gap_2()
-            .pb_3()
+            .pb_4()
+            .child(
+                h_flex()
+                    .items_start()
+                    .flex_wrap()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(gpui_kit::rems(14.))
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t(L10nKey::UsageSubtitle)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t(L10nKey::UsageScope)),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .min_w_0()
+                            .gap_2()
+                            .child(
+                                // Select owns keyboard navigation; its wrapper constrains both axes.
+                                div().w(gpui_kit::rems(10.)).h_7().flex_none().child(
+                                    Select::new(&self.cadence)
+                                        .id("usage-cadence")
+                                        .small()
+                                        .disabled(self.submitting)
+                                        .accessibility_label(t(L10nKey::UsageCadence)),
+                                ),
+                            )
+                            .child(
+                                button(
+                                    "usage-refresh-all",
+                                    t(L10nKey::UsageRefreshAll),
+                                    BtnKind::Secondary,
+                                )
+                                .icon(IconName::RefreshCw)
+                                .loading(refreshing)
+                                .disabled(
+                                    data.loading
+                                        || !data
+                                            .stored
+                                            .accounts
+                                            .iter()
+                                            .any(|a| a.enabled && !a.removing),
+                                )
+                                .on_click(cx.listener(|page, _, _, cx| page.refresh_all(cx))),
+                            ),
+                    ),
+            )
             .child(
                 div()
-                    .flex_1()
-                    .min_w(gpui_kit::rems(12.))
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(t(if data.loading || refreshing {
@@ -180,47 +237,6 @@ impl UsagePage {
                     } else {
                         L10nKey::UsagePageVisible
                     })),
-            )
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .min_w_0()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(L10nKey::UsageCadence)),
-                    )
-                    .child(
-                        // Select 的外层为 size_full；由容器给定两个轴，避免挤出工具栏。
-                        div().w(gpui_kit::rems(10.)).h_7().flex_none().child(
-                            Select::new(&self.cadence)
-                                .id("usage-cadence")
-                                .small()
-                                .disabled(self.submitting)
-                                .accessibility_label(t(L10nKey::UsageCadence)),
-                        ),
-                    )
-                    .child(
-                        button(
-                            "usage-refresh-all",
-                            t(L10nKey::UsageRefreshAll),
-                            BtnKind::Secondary,
-                        )
-                        .ghost()
-                        .icon(IconName::RefreshCw)
-                        .loading(refreshing)
-                        .disabled(
-                            data.loading
-                                || !data
-                                    .stored
-                                    .accounts
-                                    .iter()
-                                    .any(|a| a.enabled && !a.removing),
-                        )
-                        .on_click(cx.listener(|page, _, _, cx| page.refresh_all(cx))),
-                    ),
             )
     }
     fn render_provider(
@@ -230,27 +246,17 @@ impl UsagePage {
         cx: &Context<Self>,
     ) -> gpui_kit::AnyElement {
         let data = self.data.read(cx);
-        let mut cards = h_flex().items_start().flex_wrap().gap_3().w_full();
+        let mut cards = v_flex().gap_2().w_full().min_w_0();
         let mut count = 0;
         for account in accounts.iter().filter(|a| a.provider == provider) {
             count += 1;
             cards = cards.child(self.render_account(account, cx));
         }
-        if count % 2 == 1 {
-            // An empty layout slot keeps a single account at the same width as
-            // its two-column peers. It has no text, role, focus or account ID.
-            cards = cards.child(
-                div()
-                    .flex_1()
-                    .flex_basis(gpui_kit::relative(0.48))
-                    .min_w(gpui_kit::rems(18.))
-                    .max_w_full(),
-            );
-        }
         let mut section = v_flex()
             .id(format!("usage-provider-{provider:?}"))
             .gap_2()
             .w_full()
+            .min_w_0()
             .child(
                 h_flex()
                     .gap_2()
@@ -283,10 +289,7 @@ impl UsagePage {
                     )
                     .child(
                         div()
-                            .rounded_sm()
-                            .px_1()
                             .text_xs()
-                            .bg(cx.theme().muted)
                             .text_color(cx.theme().muted_foreground)
                             .child(interface_label(provider, provider == Provider::DeepSeek)),
                     )
@@ -312,14 +315,29 @@ impl UsagePage {
             );
         if count == 0 {
             section = section.child(
-                div()
+                h_flex()
+                    .min_w_0()
+                    .flex_wrap()
+                    .gap_2()
                     .rounded_md()
-                    .bg(cx.theme().muted)
+                    .border_1()
+                    .border_color(cx.theme().border)
                     .px_3()
                     .py_2()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(L10nKey::UsageProviderEmpty)),
+                    .child(t(if data.loading {
+                        L10nKey::UsageLoading
+                    } else if data.error.is_some() {
+                        L10nKey::UsageAccountsUnavailable
+                    } else {
+                        L10nKey::UsageProviderEmpty
+                    }))
+                    .child(t(match provider {
+                        Provider::CommandCode => L10nKey::UsageSupportsApiKey,
+                        Provider::StepFun | Provider::MiMo => L10nKey::UsageSupportsSessionBrowser,
+                        Provider::DeepSeek | Provider::Kimi => L10nKey::UsageSupportsAllSources,
+                    })),
             );
         } else {
             section = section.child(cards);
@@ -408,38 +426,50 @@ impl UsagePage {
                 }
                 let owner = page.clone();
                 menu.separator().item(
-                    menu_item(format!("usage-remove-{id}"), t(L10nKey::UsageRemove))
-                        .disabled(submitting)
-                        .on_click(move |_, window, cx| {
-                            let _ = owner.update(cx, |page, cx| {
-                                page.open_edit(Edit::Remove(id), window, cx);
-                                page.return_focus = return_focus.clone();
-                            });
-                        }),
+                    PopupMenuItem::element(move |_, cx| {
+                        div()
+                            .id(format!("usage-remove-{id}"))
+                            .test_support()
+                            .aria_label(t(L10nKey::UsageRemove))
+                            .text_color(cx.theme().danger)
+                            .child(t(L10nKey::UsageRemove))
+                    })
+                    .disabled(submitting)
+                    .on_click(move |_, window, cx| {
+                        let _ = owner.update(cx, |page, cx| {
+                            page.open_edit(Edit::Remove(id), window, cx);
+                            page.return_focus = return_focus.clone();
+                        });
+                    }),
                 )
             });
         let mut row = v_flex()
             .id(format!("usage-account-{id}"))
             .test_support()
             .aria_label(account.name.clone())
-            .flex_1()
-            .flex_basis(gpui_kit::relative(0.48))
-            .min_w(gpui_kit::rems(18.))
-            .max_w_full()
-            .gap(gpui_kit::rems(0.625))
+            .w_full()
+            .min_w_0()
+            .gap_2()
             .p_3()
-            .rounded_xl()
-            .bg(crate::ui::settings::kit::Tk::of(cx).k04)
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().group_box)
             .child(
                 h_flex()
                     .items_start()
                     .gap_1()
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
                             .min_w_0()
-                            .font_weight(gpui_kit::FontWeight::MEDIUM)
-                            .child(account.name.clone()),
+                            .gap_1()
+                            .child(
+                                div()
+                                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                    .child(account.name.clone()),
+                            )
+                            .child(self.render_account_metadata(account, cx)),
                     )
                     .child(
                         Button::new(format!("usage-refresh-{id}"))
@@ -457,8 +487,7 @@ impl UsagePage {
                             .on_click(cx.listener(move |page, _, _, cx| page.refresh(id, cx))),
                     )
                     .child(menu),
-            )
-            .child(self.render_account_metadata(account, cx));
+            );
         if let Some(snapshot) = &account.snapshot {
             match &snapshot.balance {
                 Balance::Official(balance) => {
@@ -554,13 +583,13 @@ impl UsagePage {
         if let Some(error) = account.error {
             row = row.child(div().text_color(danger).child(error_text(error)));
         }
-        let mut footer = v_flex()
-            .gap_1()
+        let mut footer = h_flex()
+            .flex_wrap()
+            .min_w_0()
+            .gap_2()
             .id(format!("usage-updated-{id}"))
             .test_support()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .pt_2()
+            .pt_1()
             .text_xs()
             .text_color(muted);
         if let Some(snapshot) = &account.snapshot {
@@ -577,6 +606,20 @@ impl UsagePage {
             }
         } else {
             footer = footer.child(t(L10nKey::UsageUnknown));
+        }
+        if !enabled && !account.removing {
+            footer = footer.child(div().flex_1()).child(
+                button(
+                    format!("usage-enable-{id}"),
+                    t(L10nKey::UsageEnable),
+                    BtnKind::Secondary,
+                )
+                .ghost()
+                .disabled(blocked)
+                .on_click(cx.listener(move |page, _, window, cx| {
+                    page.work(window, cx, move |accounts| accounts.set_enabled(id, true))
+                })),
+            );
         }
         row = row.child(footer);
 
@@ -677,11 +720,70 @@ impl UsagePage {
             Edit::Remove(_) => L10nKey::UsageRemove,
             Edit::Enhance(_) => L10nKey::UsageEnhance,
         };
+        match edit {
+            Edit::Add => {
+                form = form.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t(L10nKey::UsageAddHint)),
+                );
+            }
+            Edit::Replace(id) => {
+                if let Some(account) = self
+                    .data
+                    .read(cx)
+                    .stored
+                    .accounts
+                    .iter()
+                    .find(|a| a.id == id)
+                {
+                    form = form.child(
+                        v_flex()
+                            .gap_1()
+                            .rounded_md()
+                            .bg(cx.theme().muted)
+                            .p_3()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t(L10nKey::UsageCurrentSource)),
+                            )
+                            .child(
+                                div()
+                                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                    .child(account.name.clone()),
+                            )
+                            .child(div().text_xs().text_color(muted).child(format!(
+                                "{} · {}",
+                                account.provider.label(),
+                                source_label(&account.auth)
+                            ))),
+                    );
+                }
+                form = form.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t(L10nKey::UsageReplaceHint)),
+                );
+            }
+            _ => {}
+        }
 
         if matches!(edit, Edit::Remove(_)) {
             form = form
-                .child(t(L10nKey::UsageRemoveWarning))
-                .child(self.name.read(cx).value());
+                .child(
+                    div()
+                        .font_weight(gpui_kit::FontWeight::MEDIUM)
+                        .child(self.name.read(cx).value()),
+                )
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(t(L10nKey::UsageRemoveWarning)),
+                );
         } else if matches!(edit, Edit::Enhance(_)) {
             form = form.child(self.name.read(cx).value());
         } else {
@@ -748,9 +850,14 @@ impl UsagePage {
                 ));
             } else {
                 if matches!(edit, Edit::Enhance(_)) {
-                    form = form.child(t(L10nKey::UsageCommandDisclosure));
+                    form = form.child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t(L10nKey::UsageCommandDisclosure)),
+                    );
                 }
-                form = form.child(div().text_color(muted).child(t(
+                form = form.child(div().text_xs().text_color(muted).child(t(
                     if provider == Provider::DeepSeek {
                         L10nKey::UsagePrivateDisclosure
                     } else {
@@ -802,7 +909,7 @@ impl UsagePage {
                                 .accessibility_label(t(L10nKey::UsageProfile)),
                             cx,
                         ))
-                        .child(div().text_color(muted).child(t(match provider {
+                        .child(div().text_xs().text_color(muted).child(t(match provider {
                             Provider::Kimi => L10nKey::UsageKimiHelp,
                             Provider::CommandCode => L10nKey::UsageCommandBrowserHelp,
                             Provider::DeepSeek => L10nKey::UsageBrowserHelp,
@@ -821,6 +928,7 @@ impl UsagePage {
                             ))
                             .child(
                                 div()
+                                    .text_xs()
                                     .text_color(muted)
                                     .child(t(L10nKey::UsageCommandCookieNameHelp)),
                             );
@@ -844,7 +952,13 @@ impl UsagePage {
                     "usage-submit",
                     t(if self.submitting {
                         L10nKey::UsageLoading
-                    } else if matches!(edit, Edit::Add | Edit::Replace(_) | Edit::Enhance(_)) {
+                    } else if matches!(edit, Edit::Replace(_)) {
+                        L10nKey::UsageVerifyReplace
+                    } else if matches!(edit, Edit::Add | Edit::Enhance(_))
+                        && self.source.read(cx).selected_value() == Some(&Source::Browser)
+                    {
+                        L10nKey::UsageVerifyImport
+                    } else if matches!(edit, Edit::Add | Edit::Enhance(_)) {
                         L10nKey::UsageVerify
                     } else if matches!(edit, Edit::Remove(_)) {
                         L10nKey::UsageRemoveCommit
@@ -853,13 +967,17 @@ impl UsagePage {
                     }),
                     BtnKind::Primary,
                 )
-                .custom(
-                    ButtonCustomVariant::new(cx)
-                        .color(cx.theme().foreground)
-                        .foreground(cx.theme().background)
-                        .hover(cx.theme().foreground.opacity(0.88))
-                        .active(cx.theme().foreground.opacity(0.8)),
-                )
+                .loading(self.submitting)
+                .when(matches!(edit, Edit::Remove(_)), |button| button.danger())
+                .when(!matches!(edit, Edit::Remove(_)), |button| {
+                    button.custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(cx.theme().foreground)
+                            .foreground(cx.theme().background)
+                            .hover(cx.theme().foreground.opacity(0.88))
+                            .active(cx.theme().foreground.opacity(0.8)),
+                    )
+                })
                 .disabled(
                     self.submitting
                         || self.name.read(cx).value().trim().is_empty()
@@ -916,37 +1034,66 @@ impl UsagePage {
 impl Render for UsagePage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let data = self.data.read(cx);
-        let mut sections = v_flex().gap_6().p_1();
-        for (title, providers) in [
-            (
-                L10nKey::UsageCodingPlans,
-                &[Provider::Kimi, Provider::CommandCode, Provider::StepFun][..],
-            ),
-            (
-                L10nKey::UsageApiAccounts,
-                &[Provider::DeepSeek, Provider::MiMo][..],
-            ),
-        ] {
-            let mut group = v_flex().gap_3().min_w_0().child(
-                div()
-                    .pb_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .text_sm()
-                    .font_weight(gpui_kit::FontWeight::MEDIUM)
-                    .child(t(title)),
-            );
-            for &provider in providers {
-                group = group.child(self.render_provider(provider, &data.stored.accounts, cx));
-            }
-            sections = sections.child(group);
-        }
+        let mut sections = v_flex().gap_5().min_w_0().pb_4();
         if let Some(error) = data.error.or(if self.edit.is_none() {
             self.error
         } else {
             None
         }) {
-            sections = sections.child(div().text_color(cx.theme().danger).child(error_text(error)));
+            sections = sections.child(
+                div()
+                    .id("usage-page-error")
+                    .text_color(cx.theme().danger)
+                    .child(error_text(error)),
+            );
+        } else if !data.loading && data.stored.accounts.is_empty() {
+            sections = sections.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(L10nKey::UsageEmptyHint)),
+            );
+        }
+        for (title, caption, providers) in [
+            (
+                L10nKey::UsageCodingPlans,
+                L10nKey::UsageCodingPlansCaption,
+                &[Provider::Kimi, Provider::CommandCode, Provider::StepFun][..],
+            ),
+            (
+                L10nKey::UsageApiAccounts,
+                L10nKey::UsageApiAccountsCaption,
+                &[Provider::DeepSeek, Provider::MiMo][..],
+            ),
+        ] {
+            let mut group = v_flex()
+                .gap_4()
+                .min_w_0()
+                .when(title == L10nKey::UsageApiAccounts, |group| {
+                    group.pt_4().border_t_1().border_color(cx.theme().border)
+                })
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(gpui_kit::rems(11.5 / 16.))
+                                .text_color(cx.theme().muted_foreground)
+                                .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                .child(t(title)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t(caption)),
+                        ),
+                );
+            for &provider in providers {
+                group = group.child(self.render_provider(provider, &data.stored.accounts, cx));
+            }
+            sections = sections.child(group);
         }
         let scroll = div()
             .id("usage-content")

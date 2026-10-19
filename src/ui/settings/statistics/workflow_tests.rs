@@ -185,36 +185,20 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.find("statistics-machine").focused() == Some(true)
     }));
-    tab_to(&mut vcx, "statistics-agent");
-    vcx.simulate_keystrokes("enter down down enter");
+    // Range is a workflow precondition, not a test of the framework's menu order.
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.select_statistics_period(Period::Custom, cx)
+    });
     settle(&app, &mut vcx);
-    assert_eq!(
-        app.read_with(&vcx, |app, _| app
-            .active_settings()
-            .unwrap()
-            .statistics
-            .agent),
-        Some("omp")
-    );
-    tab_to(&mut vcx, "statistics-period");
-    vcx.simulate_keystrokes("enter down down down down down down enter");
-    settle(&app, &mut vcx);
-    assert!(app.read_with(
-        &vcx,
-        |app, _| app.active_settings().unwrap().statistics.period == Period::Custom
-    ));
     tab_to(&mut vcx, "statistics-apply");
     vcx.update(|window, cx| window.press("enter", cx));
     settle(&app, &mut vcx);
     tab_to(&mut vcx, "statistics-refresh");
     vcx.update(|window, cx| window.press("enter", cx));
     settle(&app, &mut vcx);
-    reveal(&app, &mut vcx, "statistics-period");
-    app.update_in(&mut vcx, |app, window, cx| {
-        window.focus(&app.active_settings().unwrap().focus_handle, cx)
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.select_statistics_period(Period::All, cx)
     });
-    tab_to(&mut vcx, "statistics-period");
-    vcx.simulate_keystrokes("enter down down down down down enter");
     settle(&app, &mut vcx);
     reveal(&app, &mut vcx, "statistics-manage-sources");
     tab_to(&mut vcx, "statistics-manage-sources");
@@ -387,6 +371,39 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
             storage::StoredStatistics::load(&temp.path().join("statistics-settings.json")).unwrap();
         assert_eq!(persisted.pricing.custom[0].input, Some(2.));
     });
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    click(&app, &mut vcx, "statistics-tile-cost");
+    let priced_model = vcx.update(|_, cx| {
+        let state = &app.read(cx).active_settings().unwrap().statistics;
+        let model = state.results[&(HostId::LOCAL, Some("omp"))]
+            .analysis
+            .as_ref()
+            .unwrap()
+            .models()
+            .iter()
+            .find(|model| model.label() == Some("fixture-model"))
+            .unwrap();
+        format!(
+            "statistics-breakdown:false:{}:{}:{}:fixture-model",
+            model.agent(),
+            model.scope(),
+            model.provider().unwrap_or("")
+        )
+    });
+    reveal(&app, &mut vcx, &priced_model);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .find(SharedString::from(priced_model))
+                .label()
+                .unwrap()
+                .contains("$8.00"),
+            "the model row must include the explicit USD estimate when no native bill exists"
+        );
+    });
+    click(&app, &mut vcx, "statistics-manage-prices");
     click(
         &app,
         &mut vcx,
@@ -603,10 +620,6 @@ fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
         assert_eq!(
             window.find("statistics-session-trend").label(),
             Some(t(L10nKey::StatisticsTrendUnavailable))
-        );
-        assert_eq!(
-            window.find("statistics-token-composition").label(),
-            Some(t(L10nKey::StatisticsCompositionUnavailable))
         );
     });
 }

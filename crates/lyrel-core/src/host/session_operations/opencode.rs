@@ -704,10 +704,22 @@ pub(super) fn prepare(
             "OpenCode restore has no saved native session identity; select the real session from scoped history",
         ));
     }
+    let dialect = if context.bridge.is_some() {
+        ApiDialect::Current
+    } else {
+        ApiDialect::discover(&launch, &scope, &request.cwd)?
+    };
     let expected = match context.server.clone() {
         Some(server) => server,
         None if context.bridge.is_none() && request.kind == SessionOperationKind::Resume => {
-            let identity = server(&api(&launch, &scope, &request.cwd, "server.info", &[])?)?;
+            let identity = server(&native_api(
+                &launch,
+                &scope,
+                &request.cwd,
+                "server.info",
+                &[],
+                dialect,
+            )?)?;
             context.server = Some(identity.clone());
             scope.opencode = Some(context.clone());
             identity
@@ -722,12 +734,13 @@ pub(super) fn prepare(
     let source = if context.bridge.is_some() {
         bridge_call(&context, "get", &request.source_id, None)?["data"].clone()
     } else {
-        api(
+        native_api(
             &launch,
             &scope,
             &request.cwd,
             "session.get",
             &[format!("sessionID={}", request.source_id)],
+            dialect,
         )?["data"]
             .clone()
     };
@@ -745,7 +758,7 @@ pub(super) fn prepare(
     }
     let standalone = context.connection_argv == ["--standalone"];
     if !standalone {
-        verify_connection(&launch, &scope, &request.cwd, &expected)?;
+        verify_connection(&launch, &scope, &request.cwd, &expected, dialect)?;
     }
     let mut open = launch.clone();
     open.extend([
@@ -849,6 +862,7 @@ pub(super) fn prepare(
         &prepared.scope,
         &prepared.cwd,
         &expected,
+        dialect,
     ) {
         let kind = error.kind;
         let mut error = prepared.opening_failed(error.to_string());
@@ -863,8 +877,16 @@ fn verify_connection(
     scope: &SessionScope,
     cwd: &Path,
     expected: &OpenCodeServer,
+    dialect: ApiDialect,
 ) -> Result<(), SessionOperationError> {
-    let actual = server(&api(launch, scope, cwd, "server.info", &[])?)?;
+    let actual = server(&native_api(
+        launch,
+        scope,
+        cwd,
+        "server.info",
+        &[],
+        dialect,
+    )?)?;
     if &actual != expected {
         return Err(failure(
             SessionErrorKind::Identity,
@@ -878,7 +900,7 @@ fn verify_connection(
 /// Bound clients never fall back to this path after disconnecting.
 fn history_context(
     request: &SessionOperation,
-) -> Result<(SessionScope, Vec<String>, OpenCodeScope), SessionOperationError> {
+) -> Result<(SessionScope, Vec<String>, OpenCodeScope, ApiDialect), SessionOperationError> {
     let mut scope = request.scope.clone();
     if scope.opencode.is_none() {
         let mut context = OpenCodeScope::default();
@@ -915,10 +937,22 @@ fn history_context(
     }
     let launch = launch(request, &mut scope)?;
     let mut context = scope.opencode.clone().unwrap();
+    let dialect = if context.bridge.is_some() {
+        ApiDialect::Current
+    } else {
+        ApiDialect::discover(&launch, &scope, &request.cwd)?
+    };
     let actual = if context.bridge.is_some() {
         server(&bridge_call(&context, "info", "", None)?["server"])?
     } else {
-        server(&api(&launch, &scope, &request.cwd, "server.info", &[])?)?
+        server(&native_api(
+            &launch,
+            &scope,
+            &request.cwd,
+            "server.info",
+            &[],
+            dialect,
+        )?)?
     };
     if context
         .server
@@ -933,13 +967,13 @@ fn history_context(
     context.server = Some(actual);
     context.launch_argv = launch.clone();
     scope.opencode = Some(context.clone());
-    Ok((scope, launch, context))
+    Ok((scope, launch, context, dialect))
 }
 
 pub(crate) fn sessions(
     request: &SessionOperation,
 ) -> Result<Vec<PastSession>, SessionOperationError> {
-    let (scope, launch, context) = history_context(request)?;
+    let (scope, launch, context, dialect) = history_context(request)?;
     let mut out = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = std::collections::HashSet::new();
@@ -962,7 +996,14 @@ pub(crate) fn sessions(
             if let Some(cursor) = &cursor {
                 params = vec!["limit=100".into(), format!("cursor={cursor}")];
             }
-            api(&launch, &scope, &request.cwd, "session.list", &params)?
+            native_api(
+                &launch,
+                &scope,
+                &request.cwd,
+                "session.list",
+                &params,
+                dialect,
+            )?
         };
         let items = page["data"].as_array().ok_or_else(|| {
             failure(
@@ -1019,6 +1060,7 @@ pub(crate) fn sessions(
             &scope,
             &request.cwd,
             context.server.as_ref().unwrap(),
+            dialect,
         )?;
     }
     Ok(out)
@@ -1048,7 +1090,7 @@ pub(crate) fn statistics(
     request: &SessionOperation,
 ) -> Result<OpenCodeStatistics, SessionOperationError> {
     let deadline = Instant::now() + Duration::from_secs(60);
-    let (scope, launch, context) = history_context(request)?;
+    let (scope, launch, context, dialect) = history_context(request)?;
     let expected = context.server.as_ref().unwrap();
     let identity = serde_json::to_string(&json!({"agent":"opencode","server":expected,
         "environment":scope.environment,"connection":context.connection_argv}))
@@ -1082,7 +1124,7 @@ pub(crate) fn statistics(
         } else if operation != "stats" {
             params.push("order=asc".into());
         }
-        api(&launch, &scope, &request.cwd, native, &params)
+        native_api(&launch, &scope, &request.cwd, native, &params, dialect)
     };
     let mut out = OpenCodeStatistics {
         identity,
@@ -1235,7 +1277,7 @@ pub(crate) fn statistics(
         }
     }
     if context.bridge.is_none() {
-        verify_connection(&launch, &scope, &request.cwd, expected)?;
+        verify_connection(&launch, &scope, &request.cwd, expected, dialect)?;
     } else {
         let actual = server(&bridge_call(&context, "info", "", None)?["server"])?;
         if &actual != expected {
@@ -1308,15 +1350,99 @@ fn next_statistics_cursor(page: &Value) -> Result<Option<String>, SessionOperati
     }
 }
 
-fn api(
+#[derive(Clone, Copy)]
+enum ApiDialect {
+    Current,
+    InitialV2,
+}
+
+impl ApiDialect {
+    fn discover(
+        launch: &[String],
+        scope: &SessionScope,
+        cwd: &Path,
+    ) -> Result<Self, SessionOperationError> {
+        // The selected CLI owns discovery/authentication. Never probe a different URL.
+        let schema = api(launch, scope, cwd, &["GET", "/openapi.json"], &[])?;
+        if schema["paths"]["/api/info"]["get"]["operationId"] == "server.info" {
+            return Ok(Self::Current);
+        }
+        if schema["paths"]["/api/health"]["get"]["operationId"] == "v2.health.get"
+            && schema["paths"]["/api/server"]["get"]["operationId"] == "v2.server.get"
+            && schema["paths"]["/api/session"]["get"]["operationId"] == "v2.session.list"
+        {
+            return Ok(Self::InitialV2);
+        }
+        Err(failure(
+            SessionErrorKind::Unsupported,
+            "The selected OpenCode service exposes no supported public history/identity API; check its version and native service connection",
+        ))
+    }
+}
+
+fn initial_v2_identity(
+    mut query: impl FnMut(&str) -> Result<Value, SessionOperationError>,
+) -> Result<Value, SessionOperationError> {
+    // Early 2.x splits the same identity across health and server endpoints.
+    // Guard both sides of the URL read against a service restart or replacement.
+    let before = query("v2.health.get")?;
+    let mut address = query("v2.server.get")?;
+    let mut after = query("v2.health.get")?;
+    let stable = before["healthy"] == true
+        && after["healthy"] == true
+        && before["pid"].as_u64().is_some_and(|pid| pid > 0)
+        && before["pid"] == after["pid"]
+        && before["version"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty())
+        && before["version"] == after["version"];
+    if !stable {
+        return Err(failure(
+            SessionErrorKind::Identity,
+            "OpenCode service identity changed while reading its native metadata",
+        ));
+    }
+    Ok(json!({"pid":after["pid"].take(),"urls":address["urls"].take()}))
+}
+
+fn native_api(
     launch: &[String],
     scope: &SessionScope,
     cwd: &Path,
     operation: &str,
     params: &[String],
+    dialect: ApiDialect,
+) -> Result<Value, SessionOperationError> {
+    let operation = match dialect {
+        ApiDialect::Current => operation,
+        ApiDialect::InitialV2 => match operation {
+            "server.info" => {
+                return initial_v2_identity(|operation| api(launch, scope, cwd, &[operation], &[]));
+            }
+            "session.get" => "v2.session.get",
+            "session.list" => "v2.session.list",
+            "session.message.list" => "v2.message.list",
+            "experimental.session.stats" => "v2.session.stats",
+            _ => {
+                return Err(failure(
+                    SessionErrorKind::Unsupported,
+                    "Unsupported OpenCode public API operation",
+                ));
+            }
+        },
+    };
+    api(launch, scope, cwd, &[operation], params)
+}
+
+fn api(
+    launch: &[String],
+    scope: &SessionScope,
+    cwd: &Path,
+    operation: &[&str],
+    params: &[String],
 ) -> Result<Value, SessionOperationError> {
     let mut command = Command::new(&launch[0]);
-    command.arg("api").arg(operation);
+    command.arg("api").args(operation);
     if let Some(context) = &scope.opencode {
         command.args(&context.connection_argv);
     }
@@ -1409,6 +1535,25 @@ fn api(
 mod tests {
     use super::*;
     use crate::host::local::LocalHost;
+
+    #[test]
+    fn early_v2_identity_rejects_a_service_restart_between_metadata_reads() {
+        for final_pid in [42, 43] {
+            let mut replies = std::collections::VecDeque::from([
+                json!({"healthy":true,"version":"2.0.3","pid":42}),
+                json!({"urls":["http://127.0.0.1:12345/"]}),
+                json!({"healthy":true,"version":"2.0.3","pid":final_pid}),
+            ]);
+            let identity = initial_v2_identity(|_| Ok(replies.pop_front().unwrap()));
+            if final_pid == 42 {
+                let identity = server(&identity.unwrap()).unwrap();
+                assert_eq!(identity.pid, 42);
+                assert_eq!(identity.urls, ["http://127.0.0.1:12345/"]);
+            } else {
+                assert_eq!(identity.unwrap_err().kind, SessionErrorKind::Identity);
+            }
+        }
+    }
 
     fn request(cwd: &Path) -> SessionOperation {
         SessionOperation {
@@ -1900,7 +2045,7 @@ mod tests {
         let executable = cwd.path().join("opencode");
         // External CLI boundary: returned titles make the effective process
         // environment observable through real Host history metadata.
-        std::fs::write(&executable, "#!/bin/sh\ncase \"$2\" in\nserver.info) printf '%s\\n' '{\"pid\":55,\"urls\":[\"http://127.0.0.1:12345/\"]}' ;;\nsession.list) printf '{\"data\":[{\"id\":\"ses_fixture\",\"projectID\":\"proj_fixture\",\"title\":\"%s\",\"location\":{\"directory\":\"%s\"},\"time\":{\"created\":1690000000000,\"updated\":1700000000000}}],\"cursor\":{}}\\n' \"$HOME\" \"$PWD\" ;;\nesac\n").unwrap();
+        std::fs::write(&executable, "#!/bin/sh\ncase \"$2\" in\nGET) printf '%s\\n' '{\"paths\":{\"/api/info\":{\"get\":{\"operationId\":\"server.info\"}}}}' ;;\nserver.info) printf '%s\\n' '{\"pid\":55,\"urls\":[\"http://127.0.0.1:12345/\"]}' ;;\nsession.list) printf '{\"data\":[{\"id\":\"ses_fixture\",\"projectID\":\"proj_fixture\",\"title\":\"%s\",\"location\":{\"directory\":\"%s\"},\"time\":{\"created\":1690000000000,\"updated\":1700000000000}}],\"cursor\":{}}\\n' \"$HOME\" \"$PWD\" ;;\nesac\n").unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut request = request(cwd.path());
         request.launch_argv = vec![

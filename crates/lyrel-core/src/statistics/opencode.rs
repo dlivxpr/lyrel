@@ -309,8 +309,12 @@ mod tests {
             json!({"data":[message("msg_child",4000,30)],"cursor":{}}),
         );
         write_json("empty.json", json!({"data":[],"cursor":{}}));
+        write_json(
+            "schema.json",
+            json!({"paths":{"/api/info":{"get":{"operationId":"server.info"}}}}),
+        );
         let script = format!(
-            "#!/bin/sh\ncd '{}' || exit 1\ncase \"$2\" in\nserver.info) cat server.json;;\nexperimental.session.stats) cat stats.json;;\nsession.list) case \"$*\" in *cursor=sessions-next*) cat next.json;; *) cat first.json;; esac;;\nsession.message.list) case \"$*\" in *cursor=messages-next*) cat root-next.json;; *sessionID=ses_root*) cat root.json;; *sessionID=ses_fork*) cat fork.json;; *sessionID=ses_child*) cat child.json;; *sessionID=ses_empty*) cat empty.json;; *) exit 1;; esac;;\n*) exit 1;;\nesac\n",
+            "#!/bin/sh\ncd '{}' || exit 1\ncase \"$2\" in\nGET) cat schema.json;;\nserver.info) cat server.json;;\nexperimental.session.stats) cat stats.json;;\nsession.list) case \"$*\" in *cursor=sessions-next*) cat next.json;; *) cat first.json;; esac;;\nsession.message.list) case \"$*\" in *cursor=messages-next*) cat root-next.json;; *sessionID=ses_root*) cat root.json;; *sessionID=ses_fork*) cat fork.json;; *sessionID=ses_child*) cat child.json;; *sessionID=ses_empty*) cat empty.json;; *) exit 1;; esac;;\n*) exit 1;;\nesac\n",
             dir.path().display()
         );
         std::fs::write(&executable, script).unwrap();

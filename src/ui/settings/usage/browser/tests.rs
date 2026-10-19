@@ -1,6 +1,6 @@
 use super::*;
 use rusty_leveldb::{DB, Options};
-use std::fs;
+use std::{fs, path::Path};
 
 fn chromium_profile(root: &Path, name: &str, token: &str) -> PathBuf {
     let profile = root.join(name);

@@ -58,6 +58,22 @@ impl Day {
     pub fn value(&self, metric: Metric) -> Option<f64> {
         self.in_range.then(|| metric.value(&self.totals)).flatten()
     }
+    /// Positive token/session activity may expose a subtotal when source coverage is partial.
+    /// Partial cost and unobserved zero days remain unknown.
+    pub fn activity_value(&self, metric: Metric) -> Option<f64> {
+        if let Some(value) = self.value(metric) {
+            return Some(value);
+        }
+        if !self.in_range || self.totals.is_complete() || self.totals.ambiguous_records > 0 {
+            return None;
+        }
+        let value = match metric {
+            Metric::Tokens => self.totals.tokens().total().map(|value| value as f64),
+            Metric::Sessions => Some(self.totals.main_sessions() as f64),
+            Metric::Cost => None,
+        };
+        value.filter(|value| *value > 0.)
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Breakdown {
@@ -218,7 +234,8 @@ impl Snapshot {
                 .checked_add_days(Days::new(ix as u64))
                 .ok_or("invalid date")?;
             let day_window = DateWindow::calendar(Period::Custom, now.clone(), Some((date, date)))?;
-            let in_range = window.start().is_none_or(|s| day_window.end().unwrap() > s)
+            let in_range = date <= now.date_naive()
+                && window.start().is_none_or(|s| day_window.end().unwrap() > s)
                 && window.end().is_none_or(|e| day_window.start().unwrap() < e);
             days.push(Day {
                 date,
@@ -320,7 +337,32 @@ impl Snapshot {
                 days[ix].totals.main_sessions += 1;
             }
         }
-        let complete = self.is_complete()
+        // An unrelated source failure must not erase a selected agent's known history.
+        // Keep unscoped or overlapping failures conservative: they may affect this agent.
+        let scoped_complete = self.issues.iter().all(|issue| {
+            let Some(selected) = agent else {
+                return false;
+            };
+            let mut unrelated = false;
+            for source in &self.sources {
+                if issue.path.starts_with(&source.root) || source.root.starts_with(&issue.path) {
+                    if source.agent == selected {
+                        return false;
+                    }
+                    unrelated = true;
+                }
+            }
+            unrelated
+        });
+        let complete = scoped_complete
+            && self.issues.iter().all(|issue| {
+                !matches!(
+                    issue.reason.as_str(),
+                    "directory scan limit reached"
+                        | "file scan limit reached"
+                        | "statistics byte scan limit reached"
+                )
+            })
             && ambiguous == 0
             && self
                 .sources
@@ -330,6 +372,7 @@ impl Snapshot {
         totals.ambiguous_records = ambiguous;
         for day in &mut days {
             day.totals.complete &= complete;
+            day.totals.ambiguous_records = ambiguous;
         }
         let mut streaks = Streaks::default();
         if days

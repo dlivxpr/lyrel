@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use zeroize::Zeroizing;
 #[derive(Clone, Copy)]
 pub(super) enum StorageSource {
@@ -138,6 +138,7 @@ pub(super) enum BrowserError {
     SourceChanged,
     Unreadable,
     Protected,
+    #[cfg(target_os = "macos")]
     FullDiskAccess,
 }
 
@@ -146,6 +147,7 @@ impl std::fmt::Display for BrowserError {
         f.write_str(match self {
             Self::Locked => "Browser storage is locked; close the selected browser and try again",
             Self::Denied => "Permission to read the selected browser profile was denied",
+            #[cfg(target_os = "macos")]
             Self::FullDiskAccess => "Safari requires Full Disk Access and an explicit re-import; background reads will not request authorization",
             Self::NoSession => "The selected profile has no session for this provider",
             Self::Unsupported => "This browser storage format is not supported",
@@ -282,6 +284,7 @@ impl BrowserReader {
 
     /// A real isolated user-data root, not a fake storage implementation. Does not
     /// consult system roots, and rejects Firefox paths outside the supplied root.
+    #[cfg(test)]
     pub(super) fn with_root(browser: Browser, root: impl Into<PathBuf>) -> Self {
         Self {
             roots: vec![(browser, root.into())],

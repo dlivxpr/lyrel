@@ -409,3 +409,52 @@ fn native_hermes_statistics_real_ssh_host_preserves_profile_and_disconnects() {
         }
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn hermes_history_preserves_result_while_owned_gateway_finishes_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let gateway = dir.path().join("gateway.ps1");
+    std::fs::write(
+        &gateway,
+        r#"$ErrorActionPreference = 'Stop'
+[void][Console]::ReadLine()
+[Console]::WriteLine('{"jsonrpc":"2.0","id":"lyrel-hermes-operation","result":{"projects":[{"previewSessions":[{"id":"cleanup-session","source":"cli","title":"Stored history","last_active":1}]}]}}')
+[Console]::Out.Flush()
+[void][Console]::In.ReadToEnd()
+Start-Sleep -Seconds 6
+[IO.File]::WriteAllText((Join-Path $env:HERMES_HOME 'gateway-cleanup'), 'flushed')
+"#,
+    )
+    .unwrap();
+    let launcher = dir.path().join("hermes.cmd");
+    // Build the runtime JSON in PowerShell, so Unicode home paths do not pass through cmd's code page.
+    std::fs::write(
+        &launcher,
+        "@echo off\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); [Console]::WriteLine((ConvertTo-Json -InputObject @((Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $env:HERMES_HOME 'gateway.ps1')) -Compress))\"\r\n",
+    )
+    .unwrap();
+    let mut scope = SessionScope::default();
+    scope.environment.insert(
+        "HERMES_HOME".into(),
+        dir.path().to_string_lossy().into_owned(),
+    );
+    let request = SessionOperation {
+        expected_host: 0,
+        agent: CLIAgent::Hermes,
+        kind: SessionOperationKind::Resume,
+        source_id: String::new(),
+        cwd: dir.path().into(),
+        launch_argv: vec![launcher.to_string_lossy().into_owned()],
+        scope,
+    };
+    let sessions = crate::host::local::LocalHost::new()
+        .hermes_sessions(&request)
+        .expect("valid stored history must survive cleanup within the operation deadline");
+    assert_eq!(sessions[0].id, "cleanup-session");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("gateway-cleanup")).unwrap(),
+        "flushed",
+        "the owned gateway must finish its cleanup instead of being killed after its valid response"
+    );
+}

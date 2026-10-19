@@ -12,15 +12,6 @@ use crate::core::session::{SessionPane, SessionTab};
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 
-const LOGO: [&str; 4] = [
-    " ▄▄▄ ▄▄▄ ▄  ▄ ▄▄▄▄",
-    "  █   █  █  █    █",
-    "  █   █  ▀▄▄█   █",
-    "  ▀▄  ▀▄ ▄▄▄▀  █  ",
-];
-
-const LOGO_PX: f32 = 20.0;
-
 /// What a window with no tabs open can actually do. `SplitRight`/`SplitDown`
 /// were listed here too, but both need a pane to split and return without a
 /// word when there is none — the home page was advertising two chords that do
@@ -198,26 +189,18 @@ impl LyrelApp {
         let theme = cx.theme();
         let (muted, foreground, accent) = (theme.muted_foreground, theme.foreground, theme.primary);
 
-        let mut logo = v_flex()
+        let logo = h_flex()
             .font_family(self.font_family.clone())
-            .text_size(px(LOGO_PX))
-            .line_height(px(LOGO_PX))
-            .text_color(muted);
-        let (last, head) = LOGO.split_last().expect("LOGO is non-empty");
-        for line in head {
-            logo = logo.child(*line);
-        }
-        // `invisible()` rather than a zero opacity or dropping the child: the
-        // block keeps its width either way, so the logo does not step sideways
-        // twice a second.
-        logo = logo.child(
-            h_flex().child(*last).child(
+            .text_size(gpui_kit::rems(3.))
+            .line_height(gpui_kit::rems(3.5))
+            .text_color(muted)
+            .child("lyrel")
+            .child(
                 div()
                     .text_color(accent)
                     .when(!self.home_cursor_on, |cursor| cursor.invisible())
                     .child("▌"),
-            ),
-        );
+            );
 
         // In the order ⌘⇧T takes them: the machine's list first, where it
         // keeps one, then whatever this window kept itself.
@@ -749,14 +732,6 @@ mod tests {
                 !HOME_SHORTCUTS.contains(&action),
                 "{action} needs a pane, and the home page is what a window shows without one"
             );
-        }
-    }
-
-    #[test]
-    fn logo_rows_never_exceed_the_first_row_width() {
-        let width = LOGO[0].chars().count();
-        for row in &LOGO {
-            assert!(row.chars().count() <= width, "row {row:?} exceeds {width}");
         }
     }
 }

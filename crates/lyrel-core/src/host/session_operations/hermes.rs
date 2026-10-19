@@ -602,11 +602,13 @@ fn rpc(
             }
         });
     drop(stdin);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Response, native close, and process teardown share one absolute operation budget.
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) if Instant::now() < response_deadline => {
+                std::thread::sleep(Duration::from_millis(25))
+            }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();

@@ -1395,6 +1395,7 @@ fn browser_error(error: browser::BrowserError) -> UsageError {
         browser::BrowserError::SourceChanged => UsageError::BrowserChanged,
         browser::BrowserError::Unreadable => UsageError::BrowserUnreadable,
         browser::BrowserError::Protected => UsageError::BrowserProtected,
+        #[cfg(target_os = "macos")]
         browser::BrowserError::FullDiskAccess => UsageError::BrowserFullDiskAccess,
     }
 }
