@@ -172,6 +172,7 @@ pub mod feature {
     pub const SESSION_OPERATIONS: &str = "session-operations-v1";
     pub const AGENT_ENVIRONMENT: &str = "agent-environment";
     pub const HERMES_HISTORY: &str = "hermes-history-v1";
+    pub const HERMES_STATISTICS: &str = "hermes-statistics-v1";
     pub const OPENCODE_STATISTICS: &str = "opencode-statistics-v1";
 }
 
@@ -268,6 +269,9 @@ pub enum ControlRequest {
         request: Box<crate::host::session_operations::SessionOperation>,
     },
     HermesSessions {
+        request: Box<crate::host::session_operations::SessionOperation>,
+    },
+    HermesStatistics {
         request: Box<crate::host::session_operations::SessionOperation>,
     },
 
@@ -531,7 +535,7 @@ impl ControlRequest {
             // so a search that ran long still gets to say what it found.
             SearchContent { .. } => Duration::from_secs(30),
             Shells | AgentSessions => Duration::from_secs(20),
-            SessionOperation { .. } | OpenCodeSessions { .. } | OpenCodeStatistics { .. } | HermesSessions { .. } => Duration::from_secs(120),
+            SessionOperation { .. } | OpenCodeSessions { .. } | OpenCodeStatistics { .. } | HermesSessions { .. } | HermesStatistics { .. } => Duration::from_secs(120),
             WorkspaceAttach { .. } | WorkspaceDetach { .. } => Duration::from_secs(10),
             GuiOpen { .. } => Duration::from_secs(5),
             MachineGet
@@ -635,6 +639,9 @@ pub enum ReplyOk {
                 crate::host::session_operations::SessionOperationError,
             >,
         >,
+    ),
+    HermesStatistics(
+        Box<Result<serde_json::Value, crate::host::session_operations::SessionOperationError>>,
     ),
     Attached {
         took_over_from: Option<String>,

@@ -10,6 +10,7 @@ impl Source {
             scope: scope.into(),
             agent: "opencode".into(),
             opencode_request: Some(Box::new(request)),
+            hermes_request: None,
             max_depth: None,
             discovery_issue: None,
         }

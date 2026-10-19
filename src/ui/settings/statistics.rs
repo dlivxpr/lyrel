@@ -71,10 +71,37 @@ fn number(value: Option<u64>) -> String {
         .map(|v| group_thousands(v as usize))
         .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into())
 }
+fn session_count(totals: &Totals) -> String {
+    number(
+        (totals.main_sessions() > 0 || totals.calls() > 0 || totals.is_complete())
+            .then_some(totals.main_sessions()),
+    )
+}
 fn money(value: Option<f64>) -> String {
     value
         .map(|v| format!("USD {v:.4}"))
         .unwrap_or_else(|| t(L10nKey::StatisticsUnpriced).into())
+}
+fn issue_text(reason: &str) -> String {
+    let key = if reason.starts_with("Hermes public projects.tree excludes") {
+        Some(L10nKey::StatisticsHermesCoverage)
+    } else if reason.starts_with("Hermes empty response") {
+        Some(L10nKey::StatisticsHermesEmpty)
+    } else if reason.starts_with("Hermes global 501-session")
+        || reason.starts_with("Hermes project preview window")
+    {
+        Some(L10nKey::StatisticsHermesWindow)
+    } else if reason.starts_with("Hermes response profile differs") {
+        Some(L10nKey::StatisticsHermesProfile)
+    } else if reason.starts_with("Hermes overlapping native lineage") {
+        Some(L10nKey::StatisticsHermesLineage)
+    } else if reason.starts_with("Hermes stored usage has no reliable") {
+        Some(L10nKey::StatisticsHermesTime)
+    } else {
+        None
+    };
+    key.map(|key| t(key).to_string())
+        .unwrap_or_else(|| reason.to_owned())
 }
 impl LyrelApp {
     pub(crate) fn load_statistics(&mut self, cx: &mut Context<Self>) {
@@ -202,6 +229,7 @@ impl LyrelApp {
                     ("omp", statistics::discover_omp as Discover),
                     ("pi", statistics::discover_pi as Discover),
                     ("kimi", statistics::discover_kimi as Discover),
+                    ("hermes", statistics::discover_hermes as Discover),
                 ] {
                     if agent.is_some_and(|selected| selected != name) {
                         continue;
@@ -333,6 +361,7 @@ impl LyrelApp {
             (Some("pi"), "pi"),
             (Some("kimi"), "Kimi Code"),
             (Some("opencode"), "OpenCode"),
+            (Some("hermes"), "Hermes"),
         ]
         .into_iter()
         .map(|(agent, label)| {
@@ -346,6 +375,7 @@ impl LyrelApp {
             selected.map_or(t(L10nKey::StatisticsAllAgents), |agent| match agent {
                 "kimi" => "Kimi Code",
                 "opencode" => "OpenCode",
+                "hermes" => "Hermes",
                 other => other,
             }),
             None,
@@ -397,6 +427,15 @@ impl LyrelApp {
             )
             .into_any_element(),
         ];
+        if state.agent.is_none_or(|agent| agent == "hermes") {
+            rows.push(
+                div()
+                    .text_size(fs(12.))
+                    .text_color(tk.k5)
+                    .child(t(L10nKey::StatisticsHermesLimits))
+                    .into_any_element(),
+            );
+        }
         if period == Period::Custom {
             rows.push(
                 v_flex()
@@ -498,9 +537,10 @@ impl LyrelApp {
                 (L10nKey::StatisticsTokens, number(totals.tokens().total())),
                 (L10nKey::StatisticsCost, money(totals.recorded_usd())),
                 (
-                    L10nKey::StatisticsSessions,
-                    number(Some(totals.main_sessions())),
+                    L10nKey::StatisticsEstimatedCost,
+                    money(totals.estimated_usd()),
                 ),
+                (L10nKey::StatisticsSessions, session_count(totals)),
                 (L10nKey::StatisticsInput, number(totals.tokens().input())),
                 (L10nKey::StatisticsOutput, number(totals.tokens().output())),
                 (
@@ -556,7 +596,7 @@ impl LyrelApp {
                             &[
                                 ("tokens", &number(previous.tokens().total())),
                                 ("cost", &money(previous.recorded_usd())),
-                                ("sessions", &previous.main_sessions().to_string()),
+                                ("sessions", &session_count(previous)),
                                 ("change", &change),
                             ],
                         ))
@@ -591,7 +631,11 @@ impl LyrelApp {
                     div()
                         .text_size(fs(12.))
                         .text_color(tk.warn_text)
-                        .child(format!("{}\n{}", issue.path().display(), issue.reason()))
+                        .child(format!(
+                            "{}\n{}",
+                            issue.path().display(),
+                            issue_text(issue.reason())
+                        ))
                         .into_any_element(),
                 );
             }
@@ -664,6 +708,10 @@ mod tests {
                     temp.path().join("pi-agent").display(),
                     pi.display()
                 ),
+            );
+            config.agent_launch.insert(
+                "hermes".into(),
+                format!("HERMES_HOME='{}' hermes --safe-mode", temp.path().display()),
             );
             cx.set_global(config);
             crate::ui::keymap::init(cx);
@@ -908,7 +956,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             vcx.run_until_parked();
         }
-        app.update_in(&mut vcx, |app, window, cx| {
+        app.update_in(&mut vcx, |app, _, _| {
             let presentation = app
                 .active_settings()
                 .unwrap()
@@ -925,11 +973,46 @@ mod tests {
                     .iter()
                     .any(|issue| issue.path().to_string_lossy() == "pi")
             );
+        });
+        for agent in [None, Some("hermes")] {
+            app.update_in(&mut vcx, |app, _, cx| {
+                app.select_statistics_agent(agent, cx)
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                vcx.run_until_parked();
+                if !vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            vcx.update(|_, cx| {
+                let state = &app.read(cx).active_settings().unwrap().statistics;
+                let result = state
+                    .results
+                    .get(&(HostId::LOCAL, agent))
+                    .expect("source result");
+                assert_eq!(
+                    result.totals.tokens().total(),
+                    if agent.is_none() { Some(20) } else { None }
+                );
+                assert!(!result.snapshot.is_complete());
+                if agent == Some("hermes") {
+                    assert_eq!(session_count(&result.totals), t(L10nKey::StatisticsUnknown));
+                }
+            });
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
             // A disconnected machine must not borrow the local native snapshot.
             app.select_statistics_host(HostId(123456), cx);
             let state = &app.active_settings().unwrap().statistics;
             assert!(state.error.is_some());
-            assert!(!state.results.contains_key(&(HostId(123456), None)));
+            assert!(
+                !state
+                    .results
+                    .contains_key(&(HostId(123456), Some("hermes")))
+            );
             app.select_statistics_host(HostId::LOCAL, cx);
             app.navigate_settings(SettingsSection::General, None, window, cx);
             assert!(!app.active_settings().unwrap().statistics.loading);
