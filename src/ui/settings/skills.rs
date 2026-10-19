@@ -23,6 +23,8 @@ use std::{
     time::UNIX_EPOCH,
 };
 mod install;
+#[cfg(test)]
+mod test_host;
 
 #[cfg(test)]
 mod tests {
@@ -110,6 +112,7 @@ mod tests {
     }
     pub(super) fn isolate_native_roots(home: &Path, cx: &mut Context<LyrelApp>) {
         std::fs::create_dir_all(home).unwrap();
+        super::test_host::install(home, cx);
         let home = home.to_string_lossy();
         cx.global_mut::<Config>().agent_launch=["omp","pi","kimi","opencode","hermes"].into_iter().map(|agent| {
             let dir=if agent=="omp"{format!("{home}/.omp/agent")}else{format!("{home}/.pi/agent")};
@@ -498,79 +501,54 @@ impl LyrelApp {
         ];
         body.push(self.render_skills_install(cx));
         if !state.install.open {
-        let filter = state.filter;
-        let kinds = [
-            None,
-            Some(SourceKind::UserShared),
-            Some(SourceKind::ProjectShared),
-            Some(SourceKind::AgentPrivate),
-        ];
-        let filters = kinds
-            .into_iter()
-            .map(|kind| {
-                MenuEntry::item(
-                    t(kind.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
-                    kind == filter,
-                    move |this, _, cx| {
-                        if let Some(s) = this.active_settings_mut() {
-                            s.skills.filter = kind;
-                            s.skills.page = 0;
-                            s.skills.selected = None;
-                            s.skills.browser = None;
-                            s.skills.browser_generation += 1;
-                        }
-                        cx.notify();
-                    },
-                )
-            })
-            .collect();
-        body.push(
-            v_flex()
-                .gap_2()
-                .child(Input::new(&state.query).id("skills-query"))
-                .child(self.settings_dropdown(
-                    "skills-source",
-                    t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
-                    None,
-                    filters,
-                    cx,
-                ))
-                .child(
-                    Button::new("skills-refresh")
-                        .label(t(L10nKey::SkillsRefresh))
-                        .on_click(cx.listener(|this, _, _, cx| this.refresh_skills(cx))),
-                )
-                .into_any_element(),
-        );
-        if state.loading {
-            body.push(div().child(t(L10nKey::SkillsLoading)).into_any_element());
-        }
-        if !machines_connected(cx, host_id) || state.error.is_some() {
+            let filter = state.filter;
+            let kinds = [
+                None,
+                Some(SourceKind::UserShared),
+                Some(SourceKind::ProjectShared),
+                Some(SourceKind::AgentPrivate),
+            ];
+            let filters = kinds
+                .into_iter()
+                .map(|kind| {
+                    MenuEntry::item(
+                        t(kind.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
+                        kind == filter,
+                        move |this, _, cx| {
+                            if let Some(s) = this.active_settings_mut() {
+                                s.skills.filter = kind;
+                                s.skills.page = 0;
+                                s.skills.selected = None;
+                                s.skills.browser = None;
+                                s.skills.browser_generation += 1;
+                            }
+                            cx.notify();
+                        },
+                    )
+                })
+                .collect();
             body.push(
-                div()
-                    .text_color(cx.theme().warning)
-                    .child(t(L10nKey::SkillsIncomplete))
+                v_flex()
+                    .gap_2()
+                    .child(Input::new(&state.query).id("skills-query"))
+                    .child(self.settings_dropdown(
+                        "skills-source",
+                        t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
+                        None,
+                        filters,
+                        cx,
+                    ))
+                    .child(
+                        Button::new("skills-refresh")
+                            .label(t(L10nKey::SkillsRefresh))
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_skills(cx))),
+                    )
                     .into_any_element(),
             );
-        }
-        if let Some(error) = &state.error {
-            body.push(div().text_sm().child(error.clone()).into_any_element());
-        }
-        if let Some(snapshot) = &state.snapshot {
-            let time = snapshot
-                .scanned_at()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .to_string();
-            body.push(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)]))
-                    .into_any_element(),
-            );
-            if !snapshot.problems().is_empty() {
+            if state.loading {
+                body.push(div().child(t(L10nKey::SkillsLoading)).into_any_element());
+            }
+            if !machines_connected(cx, host_id) || state.error.is_some() {
                 body.push(
                     div()
                         .text_color(cx.theme().warning)
@@ -578,93 +556,118 @@ impl LyrelApp {
                         .into_any_element(),
                 );
             }
-            for problem in snapshot.problems() {
-                body.push(div().text_sm().child(problem.clone()).into_any_element());
+            if let Some(error) = &state.error {
+                body.push(div().text_sm().child(error.clone()).into_any_element());
             }
-            if let Some(skill) = state
-                .selected
-                .as_ref()
-                .and_then(|path| snapshot.installations().iter().find(|s| s.path() == path))
-            {
-                body.push(self.render_skill_detail(skill, cx));
-            } else {
-                let query = state.query.read(cx).value();
-                let matches = snapshot.filtered(&query, filter).collect::<Vec<_>>();
-                let page = state.page.min(matches.len().saturating_sub(1) / 50);
-                if matches.is_empty() {
-                    body.push(div().child(t(L10nKey::SkillsEmpty)).into_any_element());
-                }
-                for skill in matches.iter().skip(page * 50).take(50) {
-                    let path = skill.path().to_path_buf();
+            if let Some(snapshot) = &state.snapshot {
+                let time = snapshot
+                    .scanned_at()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .to_string();
+                body.push(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)]))
+                        .into_any_element(),
+                );
+                if !snapshot.problems().is_empty() {
                     body.push(
-                        v_flex()
-                            .gap_1()
-                            .min_w_0()
-                            .child(
-                                Button::new(SharedString::from(row_id(&path)))
-                                    .ghost()
-                                    .label(skill.name().to_string())
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                        div()
+                            .text_color(cx.theme().warning)
+                            .child(t(L10nKey::SkillsIncomplete))
+                            .into_any_element(),
+                    );
+                }
+                for problem in snapshot.problems() {
+                    body.push(div().text_sm().child(problem.clone()).into_any_element());
+                }
+                if let Some(skill) = state
+                    .selected
+                    .as_ref()
+                    .and_then(|path| snapshot.installations().iter().find(|s| s.path() == path))
+                {
+                    body.push(self.render_skill_detail(skill, cx));
+                } else {
+                    let query = state.query.read(cx).value();
+                    let matches = snapshot.filtered(&query, filter).collect::<Vec<_>>();
+                    let page = state.page.min(matches.len().saturating_sub(1) / 50);
+                    if matches.is_empty() {
+                        body.push(div().child(t(L10nKey::SkillsEmpty)).into_any_element());
+                    }
+                    for skill in matches.iter().skip(page * 50).take(50) {
+                        let path = skill.path().to_path_buf();
+                        body.push(
+                            v_flex()
+                                .gap_1()
+                                .min_w_0()
+                                .child(
+                                    Button::new(SharedString::from(row_id(&path)))
+                                        .ghost()
+                                        .label(skill.name().to_string())
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            if let Some(s) = this.active_settings_mut() {
+                                                s.skills.selected = Some(path.clone());
+                                                s.skills.browser = None;
+                                                s.skills.browser_generation += 1;
+                                                window.focus(&s.skills.focus, cx);
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    skill
+                                        .description()
+                                        .unwrap_or(t(L10nKey::SkillsUnknown))
+                                        .to_string(),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(skill.path().to_string_lossy().into_owned()),
+                                )
+                                .into_any_element(),
+                        );
+                    }
+                    if matches.len() > 50 {
+                        let last_page = matches.len().saturating_sub(1) / 50;
+                        body.push(
+                            h_flex()
+                                .gap_2()
+                                .child(Button::new("skills-prev").label("←").on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         if let Some(s) = this.active_settings_mut() {
-                                            s.skills.selected = Some(path.clone());
-                                            s.skills.browser = None;
-                                            s.skills.browser_generation += 1;
-                                            window.focus(&s.skills.focus, cx);
+                                            s.skills.page = s.skills.page.saturating_sub(1);
                                         }
                                         cx.notify();
-                                    })),
-                            )
-                            .child(
-                                skill
-                                    .description()
-                                    .unwrap_or(t(L10nKey::SkillsUnknown))
-                                    .to_string(),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(skill.path().to_string_lossy().into_owned()),
-                            )
-                            .into_any_element(),
-                    );
+                                    },
+                                )))
+                                .child(format!("{} / {}", page + 1, last_page + 1))
+                                .child(Button::new("skills-next").label("→").on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        if let Some(s) = this.active_settings_mut() {
+                                            s.skills.page = (page + 1).min(last_page);
+                                        }
+                                        cx.notify();
+                                    },
+                                )))
+                                .into_any_element(),
+                        );
+                    }
                 }
-                if matches.len() > 50 {
-                    let last_page = matches.len().saturating_sub(1) / 50;
-                    body.push(
-                        h_flex()
-                            .gap_2()
-                            .child(Button::new("skills-prev").label("←").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    if let Some(s) = this.active_settings_mut() {
-                                        s.skills.page = s.skills.page.saturating_sub(1);
-                                    }
-                                    cx.notify();
-                                },
-                            )))
-                            .child(format!("{} / {}", page + 1, last_page + 1))
-                            .child(Button::new("skills-next").label("→").on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    if let Some(s) = this.active_settings_mut() {
-                                        s.skills.page = (page + 1).min(last_page);
-                                    }
-                                    cx.notify();
-                                },
-                            )))
-                            .into_any_element(),
-                    );
-                }
+            } else if !state.loading && state.error.is_none() {
+                body.push(div().child(t(L10nKey::SkillsEmpty)).into_any_element());
             }
-        } else if !state.loading && state.error.is_none() {
-            body.push(div().child(t(L10nKey::SkillsEmpty)).into_any_element());
-        }
-        body.push(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(t(L10nKey::SkillsRuntimeNote))
-                .into_any_element(),
-        );
+            body.push(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(L10nKey::SkillsRuntimeNote))
+                    .into_any_element(),
+            );
         }
         v_flex()
             .gap_4()
@@ -673,18 +676,12 @@ impl LyrelApp {
             .children(body)
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
+                    if this.cancel_skills_install(window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     if let Some(s) = this.active_settings_mut().filter(|s| s.menu.is_none()) {
-                        if s.skills.install.cancel_review() {
-                            window.focus(&s.skills.install.source.read(cx).focus_handle(cx), cx);
-                            cx.stop_propagation();
-                            cx.notify();
-                        } else if s.skills.install.open && !s.skills.install.busy {
-                            s.skills.install.open = false;
-                            s.skills.install.invalidate();
-                            window.focus(&s.skills.query.read(cx).focus_handle(cx), cx);
-                            cx.stop_propagation();
-                            cx.notify();
-                        } else if s.skills.browser.take().is_some() || s.skills.selected.take().is_some() {
+                        if s.skills.browser.take().is_some() || s.skills.selected.take().is_some() {
                             if s.skills.selected.is_none() {
                                 window.focus(&s.skills.query.read(cx).focus_handle(cx), cx);
                             }

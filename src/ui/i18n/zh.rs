@@ -71,7 +71,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsDiscover => "发现技能",
         L10nKey::SkillsRegistryQuery => "搜索 skills.sh",
         L10nKey::SkillsRegistrySearch => "搜索目录",
-        L10nKey::SkillsRegistryNote => "使用 skills CLI 同款公开搜索接口。选择结果后仍需发现仓库、选择技能并审查安装，不会直接安装。",
+        L10nKey::SkillsRegistryNote => {
+            "使用 skills CLI 同款公开搜索接口。选择结果后仍需发现仓库、选择技能并审查安装，不会直接安装。"
+        }
         L10nKey::SkillsInstallScope => "共享安装作用域",
         L10nKey::SkillsInstallLocalOnly => "公开技能安装当前仅支持本机；仍可浏览远端技能。",
         L10nKey::SkillsInstallReview => "审查安装…",
@@ -81,7 +83,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsInstallCancel => "取消安装",
         L10nKey::SkillsInstallWorking => "正在获取或写入所选技能…",
         L10nKey::SkillsInstallEmpty => "没有发现候选。请尝试其他仓库、ref、子路径或搜索词。",
-        L10nKey::SkillsInstallSafety => "只写共享技能与 skills CLI 来源锁，不新建私有链接、不改原生配置、不向终端发送命令。同名目录默认保留，只有逐项确认后才替换。",
+        L10nKey::SkillsInstallSafety => {
+            "只写共享技能与 skills CLI 来源锁，不新建私有链接、不改原生配置、不向终端发送命令。同名目录默认保留，只有逐项确认后才替换。"
+        }
         L10nKey::SkillsInstallDone => "已安装：{name} — {path}",
         L10nKey::SkillsInstallRetained => "保持不变：{name} — {path}",
         L10nKey::SkillsInstallDestination => "审查固定目标与来源锁",

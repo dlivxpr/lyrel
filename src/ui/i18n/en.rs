@@ -75,17 +75,25 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsDiscover => "Discover skills",
         L10nKey::SkillsRegistryQuery => "Search skills.sh",
         L10nKey::SkillsRegistrySearch => "Search catalogue",
-        L10nKey::SkillsRegistryNote => "Uses the public search route used by skills CLI. Results still require repository discovery, selection and installation review.",
+        L10nKey::SkillsRegistryNote => {
+            "Uses the public search route used by skills CLI. Results still require repository discovery, selection and installation review."
+        }
         L10nKey::SkillsInstallScope => "Shared installation scope",
-        L10nKey::SkillsInstallLocalOnly => "Public installation is currently available on the local machine. Remote browsing remains available.",
+        L10nKey::SkillsInstallLocalOnly => {
+            "Public installation is currently available on the local machine. Remote browsing remains available."
+        }
         L10nKey::SkillsInstallReview => "Review installation…",
         L10nKey::SkillsInstallConfirm => "Install selected skills",
         L10nKey::SkillsInstallReplace => "Replace this existing directory",
         L10nKey::SkillsInstallKeep => "Keep existing content (default)",
         L10nKey::SkillsInstallCancel => "Cancel installation",
         L10nKey::SkillsInstallWorking => "Fetching or writing selected skills…",
-        L10nKey::SkillsInstallEmpty => "No candidates found. Try another repository, ref, subpath or search query.",
-        L10nKey::SkillsInstallSafety => "Writes only shared skills and the skills CLI source lock. No private links, native configuration changes or terminal commands. Existing names are kept unless individually approved for replacement.",
+        L10nKey::SkillsInstallEmpty => {
+            "No candidates found. Try another repository, ref, subpath or search query."
+        }
+        L10nKey::SkillsInstallSafety => {
+            "Writes only shared skills and the skills CLI source lock. No private links, native configuration changes or terminal commands. Existing names are kept unless individually approved for replacement."
+        }
         L10nKey::SkillsInstallDone => "Installed: {name} — {path}",
         L10nKey::SkillsInstallRetained => "Kept unchanged: {name} — {path}",
         L10nKey::SkillsInstallDestination => "Review the fixed destination and source lock",

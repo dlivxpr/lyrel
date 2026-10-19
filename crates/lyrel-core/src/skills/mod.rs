@@ -3,9 +3,9 @@
 //! or reconfigured; a discovered file is not evidence of runtime activation.
 #[cfg(feature = "github")]
 pub mod catalog;
+mod discovery;
 #[cfg(feature = "github")]
 pub mod install;
-mod discovery;
 mod packages;
 mod provenance;
 use crate::{
@@ -277,6 +277,23 @@ pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> 
             Err(error) => snapshot
                 .problems
                 .push(format!("{}: {error}", agent.display_name())),
+        }
+    }
+    // A shared installation belongs to the selected Host home even when every
+    // native launch profile overrides HOME. Browsable does not imply enabled.
+    let shared = under(host, &request.home, &[".agents", "skills"]);
+    for agent in HookAgent::ALL {
+        if !roots.iter().any(|root| {
+            root.agent == agent && root.kind == SourceKind::UserShared && root.path == shared
+        }) {
+            roots.push(Root {
+                path: shared.clone(),
+                agent,
+                kind: SourceKind::UserShared,
+                state: DiscoveryState::Unknown,
+                recursive: true,
+                flat_markdown: false,
+            });
         }
     }
     let mut identities = HashMap::<PathBuf, usize>::new();

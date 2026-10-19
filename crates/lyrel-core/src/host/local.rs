@@ -754,10 +754,22 @@ mod tests {
         let path = temp.path().join("socket");
         let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
         let host = LocalHost::new();
-        assert_eq!(host.read_file(&path, 1024).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            host.read_file(&path, 1024).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
         let fifo = temp.path().join("fifo");
-        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
-        assert_eq!(host.read_file(&fifo, 1024).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            host.read_file(&fifo, 1024).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
