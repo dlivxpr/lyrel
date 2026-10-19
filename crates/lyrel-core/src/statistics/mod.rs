@@ -33,7 +33,11 @@ impl Source {
         }
     }
     pub fn kimi(root: PathBuf, scope: impl Into<String>) -> Self {
-        Self { root, scope: scope.into(), agent: "kimi".into() }
+        Self {
+            root,
+            scope: scope.into(),
+            agent: "kimi".into(),
+        }
     }
     pub fn root(&self) -> &std::path::Path {
         &self.root
@@ -179,7 +183,10 @@ impl Snapshot {
     }
     /// Attach a failed source discovery without discarding readable agents.
     pub fn with_issue(mut self, path: PathBuf, reason: impl Into<String>) -> Self {
-        self.issues.push(ScanIssue { path, reason: reason.into() });
+        self.issues.push(ScanIssue {
+            path,
+            reason: reason.into(),
+        });
         self
     }
     pub fn aggregate(&self, window: &DateWindow) -> Totals {
@@ -190,23 +197,32 @@ impl Snapshot {
         let mut identities = HashMap::new();
         for file in &self.files {
             identities.insert(
-                ((file.source.agent.as_str(), file.source.scope.as_str()), file.session.id.as_str()),
+                (
+                    (file.source.agent.as_str(), file.source.scope.as_str()),
+                    file.session.id.as_str(),
+                ),
                 file.session.id.as_str(),
             );
             if let Some(path) = file.path.to_str() {
-                identities.insert(((file.source.agent.as_str(), file.source.scope.as_str()), path), file.session.id.as_str());
+                identities.insert(
+                    (
+                        (file.source.agent.as_str(), file.source.scope.as_str()),
+                        path,
+                    ),
+                    file.session.id.as_str(),
+                );
             }
         }
         let mut parents = HashMap::new();
         for file in &self.files {
-            if let Some(parent) = file
-                .session
-                .parent
-                .as_deref()
-                .and_then(|p| identities.get(&((file.source.agent.as_str(), file.source.scope.as_str()), p)))
-            {
+            if let Some(parent) = file.session.parent.as_deref().and_then(|p| {
+                identities.get(&((file.source.agent.as_str(), file.source.scope.as_str()), p))
+            }) {
                 parents.insert(
-                    ((file.source.agent.as_str(), file.source.scope.as_str()), file.session.id.as_str()),
+                    (
+                        (file.source.agent.as_str(), file.source.scope.as_str()),
+                        file.session.id.as_str(),
+                    ),
                     *parent,
                 );
             }
@@ -336,11 +352,23 @@ pub fn scan(
     let mut bytes = 0;
     for source in sources {
         if source.agent == "kimi" {
-            kimi::scan_source(host, source, cache, &mut snapshot, &mut seen, &mut dirs, &mut files, &mut bytes);
+            kimi::scan_source(
+                host,
+                source,
+                cache,
+                &mut snapshot,
+                &mut seen,
+                &mut dirs,
+                &mut files,
+                &mut bytes,
+            );
             continue;
         }
         if source.agent != "omp" {
-            snapshot.issues.push(ScanIssue { path:source.root.clone(), reason:format!("unsupported native statistics agent: {}",source.agent) });
+            snapshot.issues.push(ScanIssue {
+                path: source.root.clone(),
+                reason: format!("unsupported native statistics agent: {}", source.agent),
+            });
             continue;
         }
         let exact_file = host.stat(&source.root).is_ok_and(|m| !m.is_dir);
@@ -378,10 +406,9 @@ pub fn scan(
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound
                         && path == source.root
-                        && !cache
-                            .files
-                            .keys()
-                            .any(|(id, agent, scope, _)| *id == host.id().0 && *agent == source.agent && *scope == source.scope) =>
+                        && !cache.files.keys().any(|(id, agent, scope, _)| {
+                            *id == host.id().0 && *agent == source.agent && *scope == source.scope
+                        }) =>
                 {
                     continue;
                 }
@@ -436,7 +463,12 @@ pub fn scan(
                     pending.clear();
                     break;
                 }
-                let key = (host.id().0, source.agent.clone(), source.scope.clone(), path.clone());
+                let key = (
+                    host.id().0,
+                    source.agent.clone(),
+                    source.scope.clone(),
+                    path.clone(),
+                );
                 let result = (|| {
                     let meta = host.stat(&path)?;
                     if let Some((old, facts)) = cache.files.get(&key) {
@@ -486,12 +518,15 @@ pub fn scan(
     if !snapshot.issues.is_empty() {
         for ((host_id, agent, scope, path), (_, facts)) in &cache.files {
             if *host_id == host.id().0
-                && !host.stat(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
-                && sources.iter().any(|s| s.agent == *agent && s.scope == *scope)
-                && !snapshot
-                    .files
+                && !host
+                    .stat(path)
+                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                && sources
                     .iter()
-                    .any(|f| f.path == *path && f.source.agent == *agent && f.source.scope == *scope)
+                    .any(|s| s.agent == *agent && s.scope == *scope)
+                && !snapshot.files.iter().any(|f| {
+                    f.path == *path && f.source.agent == *agent && f.source.scope == *scope
+                })
             {
                 snapshot.files.push(facts.clone());
             }
@@ -501,7 +536,8 @@ pub fn scan(
     for file in &snapshot.files {
         if let Some(parent) = &file.session.parent {
             if !snapshot.files.iter().any(|f| {
-                f.source.agent == file.source.agent && f.source.scope == file.source.scope
+                f.source.agent == file.source.agent
+                    && f.source.scope == file.source.scope
                     && (f.session.id == *parent || f.path.to_string_lossy() == parent.as_str())
             }) {
                 snapshot.issues.push(ScanIssue {
@@ -521,7 +557,9 @@ pub fn scan(
     if snapshot.issues.is_empty() {
         cache.files.retain(|(id, agent, scope, path), _| {
             *id != host.id().0
-                || !sources.iter().any(|s| s.agent == *agent && s.scope == *scope)
+                || !sources
+                    .iter()
+                    .any(|s| s.agent == *agent && s.scope == *scope)
                 || seen.contains(&(agent.clone(), scope.clone(), path.clone()))
         });
     }

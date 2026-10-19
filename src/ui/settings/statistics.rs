@@ -7,7 +7,10 @@ use crate::ui::host_registry::HostRegistry;
 use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-type Discover = fn(&dyn lyrel_core::host::Host, &HashMap<String, String>) -> std::io::Result<Vec<statistics::Source>>;
+type Discover = fn(
+    &dyn lyrel_core::host::Host,
+    &HashMap<String, String>,
+) -> std::io::Result<Vec<statistics::Source>>;
 
 pub(crate) struct StatisticsState {
     pub(crate) host: HostId,
@@ -137,7 +140,9 @@ impl LyrelApp {
                     ("omp", statistics::discover_omp as Discover),
                     ("kimi", statistics::discover_kimi as Discover),
                 ] {
-                    if agent.is_some_and(|selected| selected != name) { continue; }
+                    if agent.is_some_and(|selected| selected != name) {
+                        continue;
+                    }
                     match discover(host, &launch) {
                         Ok(found) => sources.extend(found),
                         Err(error) => discovery_errors.push((name, error.to_string())),
@@ -236,9 +241,27 @@ impl LyrelApp {
             .collect();
         let machine = self.settings_dropdown("statistics-machine", label, None, entries, cx);
         let selected = state.agent;
-        let agents = [(None, t(L10nKey::StatisticsAllAgents)), (Some("omp"), "omp"), (Some("kimi"), "Kimi Code")]
-            .into_iter().map(|(agent,label)| MenuEntry::item(label, selected == agent, move |this,_,cx| this.select_statistics_agent(agent,cx))).collect();
-        let agent = self.settings_dropdown("statistics-agent", selected.map_or(t(L10nKey::StatisticsAllAgents), |agent| if agent == "kimi" { "Kimi Code" } else { agent }), None, agents, cx);
+        let agents = [
+            (None, t(L10nKey::StatisticsAllAgents)),
+            (Some("omp"), "omp"),
+            (Some("kimi"), "Kimi Code"),
+        ]
+        .into_iter()
+        .map(|(agent, label)| {
+            MenuEntry::item(label, selected == agent, move |this, _, cx| {
+                this.select_statistics_agent(agent, cx)
+            })
+        })
+        .collect();
+        let agent = self.settings_dropdown(
+            "statistics-agent",
+            selected.map_or(t(L10nKey::StatisticsAllAgents), |agent| {
+                if agent == "kimi" { "Kimi Code" } else { agent }
+            }),
+            None,
+            agents,
+            cx,
+        );
         let periods = [
             Period::Today,
             Period::Week,
@@ -276,7 +299,13 @@ impl LyrelApp {
                 cx,
             )
             .into_any_element(),
-            self.settings_row(t(L10nKey::StatisticsAgent), t(L10nKey::StatisticsAgentScope), agent, cx).into_any_element(),
+            self.settings_row(
+                t(L10nKey::StatisticsAgent),
+                t(L10nKey::StatisticsAgentScope),
+                agent,
+                cx,
+            )
+            .into_any_element(),
         ];
         if period == Period::Custom {
             rows.push(
@@ -504,11 +533,12 @@ mod tests {
         let kimi_session = kimi_home.join("sessions/wd_test_0123456789ab/session_gui");
         std::fs::create_dir_all(kimi_session.join("agents/main")).unwrap();
         std::fs::write(kimi_session.join("state.json"), serde_json::json!({"id":"session_gui","cwd":"/work","createdAt":chrono::Utc::now().timestamp_millis()}).to_string()).unwrap();
-        let mut kimi_wire = String::from("{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1}\n");
+        let mut kimi_wire =
+            String::from("{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1}\n");
         for scope in ["turn", "session"] {
             kimi_wire.push_str(&format!("{}\n", serde_json::json!({"type":"usage.record","agentId":"main","model":"kimi-code/kimi-for-coding","usageScope":scope,"time":chrono::Utc::now().timestamp_millis(),"usage":{"inputOther":3,"output":2,"inputCacheRead":0,"inputCacheCreation":0}})));
         }
-        std::fs::write(kimi_session.join("agents/main/wire.jsonl"),kimi_wire).unwrap();
+        std::fs::write(kimi_session.join("agents/main/wire.jsonl"), kimi_wire).unwrap();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             let mut config = Config::default();
@@ -519,7 +549,10 @@ mod tests {
                     temp.path().display()
                 ),
             );
-            config.agent_launch.insert("kimi".into(),format!("KIMI_CODE_HOME='{}' kimi",kimi_home.display()));
+            config.agent_launch.insert(
+                "kimi".into(),
+                format!("KIMI_CODE_HOME='{}' kimi", kimi_home.display()),
+            );
             cx.set_global(config);
             crate::ui::keymap::init(cx);
         });
@@ -573,22 +606,37 @@ mod tests {
             assert_eq!(totals.recorded_usd(), Some(0.));
             assert_eq!(totals.main_sessions(), 2);
             assert_eq!(totals.unpriced_calls(), 2);
-            app.select_statistics_agent(Some("kimi"),cx);
+            app.select_statistics_agent(Some("kimi"), cx);
         });
         vcx.run_until_parked();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while vcx.update(|_,cx|app.read(cx).active_settings().unwrap().statistics.loading) {
-            assert!(std::time::Instant::now()<deadline,"Kimi filter did not settle");
+        while vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Kimi filter did not settle"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
             vcx.run_until_parked();
         }
         app.update_in(&mut vcx, |app, window, cx| {
-            let presentation = app.active_settings().unwrap().statistics.results.get(&(HostId::LOCAL,Some("kimi"))).unwrap();
-            assert_eq!(presentation.totals.tokens().total(),Some(10));
-            assert_eq!(presentation.totals.recorded_usd(),None);
-            assert_eq!(presentation.totals.main_sessions(),1);
-            assert_eq!(presentation.totals.unpriced_calls(),2);
-            assert!(presentation.snapshot.sources().iter().all(|source|source.agent()=="kimi"));
+            let presentation = app
+                .active_settings()
+                .unwrap()
+                .statistics
+                .results
+                .get(&(HostId::LOCAL, Some("kimi")))
+                .unwrap();
+            assert_eq!(presentation.totals.tokens().total(), Some(10));
+            assert_eq!(presentation.totals.recorded_usd(), None);
+            assert_eq!(presentation.totals.main_sessions(), 1);
+            assert_eq!(presentation.totals.unpriced_calls(), 2);
+            assert!(
+                presentation
+                    .snapshot
+                    .sources()
+                    .iter()
+                    .all(|source| source.agent() == "kimi")
+            );
             // A disconnected machine must not borrow the local native snapshot.
             app.select_statistics_host(HostId(123456), cx);
             let state = &app.active_settings().unwrap().statistics;

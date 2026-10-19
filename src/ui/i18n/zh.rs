@@ -16,7 +16,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "读取所选机器的原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
         }
         L10nKey::StatisticsAgent => "智能体来源",
-        L10nKey::StatisticsAgentScope => "查看全部可用来源，或单个智能体的有效 home。不可读来源会保留诊断。",
+        L10nKey::StatisticsAgentScope => {
+            "查看全部可用来源，或单个智能体的有效 home。不可读来源会保留诊断。"
+        }
         L10nKey::StatisticsAllAgents => "全部智能体",
         L10nKey::StatisticsRange => "日期范围",
         L10nKey::StatisticsCalendar => {

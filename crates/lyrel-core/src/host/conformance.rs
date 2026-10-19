@@ -139,33 +139,52 @@ pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
 pub fn statistics_kimi_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
     use crate::statistics::{DateWindow, StatisticsCache, discover_kimi, scan};
     let home = h.join(sandbox.path(), "kimi-home");
-    let session = h.join(&home,"sessions/wd_work_0123456789ab/session_native");
-    let main = h.join(&session,"agents/main");
-    let child = h.join(&session,"agents/agent-1");
-    h.create_dir(&main,true).unwrap();
-    h.create_dir(&child,true).unwrap();
-    h.write_file(&h.join(&session,"state.json"),br#"{"id":"session_native","cwd":"/work","createdAt":1792320000000}"#).unwrap();
-    let metadata = "{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1792320000000}\n";
+    let session = h.join(&home, "sessions/wd_work_0123456789ab/session_native");
+    let main = h.join(&session, "agents/main");
+    let child = h.join(&session, "agents/agent-1");
+    h.create_dir(&main, true).unwrap();
+    h.create_dir(&child, true).unwrap();
+    h.write_file(
+        &h.join(&session, "state.json"),
+        br#"{"id":"session_native","cwd":"/work","createdAt":1792320000000}"#,
+    )
+    .unwrap();
+    let metadata =
+        "{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1792320000000}\n";
     let turn = "{\"type\":\"usage.record\",\"agentId\":\"main\",\"model\":\"kimi-code/kimi-for-coding\",\"time\":1792320001000,\"usageScope\":\"turn\",\"usage\":{\"inputOther\":10,\"output\":2,\"inputCacheRead\":3,\"inputCacheCreation\":0}}\n";
-    let operation = turn.replace("\"turn\"","\"session\"");
-    h.write_file(&h.join(&main,"wire.jsonl"),(metadata.to_owned()+turn+&operation).as_bytes()).unwrap();
-    h.write_file(&h.join(&child,"wire.jsonl"),(metadata.to_owned()+&turn.replace("\"main\"","\"agent-1\"")).as_bytes()).unwrap();
-    let launch = std::collections::HashMap::from([("kimi".into(),format!("KIMI_CODE_HOME='{}' kimi",home.display()))]);
-    let sources = discover_kimi(h,&launch).unwrap();
+    let operation = turn.replace("\"turn\"", "\"session\"");
+    h.write_file(
+        &h.join(&main, "wire.jsonl"),
+        (metadata.to_owned() + turn + &operation).as_bytes(),
+    )
+    .unwrap();
+    h.write_file(
+        &h.join(&child, "wire.jsonl"),
+        (metadata.to_owned() + &turn.replace("\"main\"", "\"agent-1\"")).as_bytes(),
+    )
+    .unwrap();
+    let launch = std::collections::HashMap::from([(
+        "kimi".into(),
+        format!("KIMI_CODE_HOME='{}' kimi", home.display()),
+    )]);
+    let sources = discover_kimi(h, &launch).unwrap();
     let mut cache = StatisticsCache::default();
-    let snapshot = scan(h,&sources,&mut cache).unwrap();
+    let snapshot = scan(h, &sources, &mut cache).unwrap();
     let totals = snapshot.aggregate(&DateWindow::all("UTC"));
-    assert!(totals.is_complete(),"{:?}",snapshot.issues());
-    assert_eq!(totals.tokens().total(),Some(45));
-    assert_eq!(totals.main_sessions(),1);
-    assert_eq!(totals.unpriced_calls(),3);
-    assert_eq!(totals.recorded_usd(),None);
-    h.write_file(&h.join(&child,"wire.jsonl"),b"truncated").unwrap();
-    let stale = scan(h,&sources,&mut cache).unwrap();
+    assert!(totals.is_complete(), "{:?}", snapshot.issues());
+    assert_eq!(totals.tokens().total(), Some(45));
+    assert_eq!(totals.main_sessions(), 1);
+    assert_eq!(totals.unpriced_calls(), 3);
+    assert_eq!(totals.recorded_usd(), None);
+    h.write_file(&h.join(&child, "wire.jsonl"), b"truncated")
+        .unwrap();
+    let stale = scan(h, &sources, &mut cache).unwrap();
     assert!(!stale.is_complete());
-    assert_eq!(stale.aggregate(&DateWindow::all("UTC")).tokens().total(),Some(45));
+    assert_eq!(
+        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(45)
+    );
 }
-
 
 #[doc(hidden)]
 #[macro_export]
