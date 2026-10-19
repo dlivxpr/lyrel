@@ -402,7 +402,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavAbout => "关于",
         L10nKey::SettingsNavUsage => "用量",
         L10nKey::UsageSearchKeywords => {
-            "Kimi Code Command Code DeepSeek StepFun Xiaomi MiMo 余额 套餐 Credit 配额 重置 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 Cookie 浏览器 profile LocalStorage userToken access_token"
+            "Kimi Code Command Code DeepSeek StepFun Xiaomi MiMo 余额 套餐 Credit 配额 重置 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 Cookie 浏览器 profile LocalStorage userToken access_token 增强 Firefox Safari Keychain 全盘访问 DPAPI App-Bound Encryption"
         }
         L10nKey::UsageScope => "桌面全局查询账户，独立于 SSH 机器，不读取智能体密钥。",
         L10nKey::UsageOfficial => {
@@ -417,9 +417,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "从所选 profile 的 https://www.kimi.com LocalStorage 复制 access_token 裸值或 access_token JSON。仅读取 access_token 与可选 msh_user_id，不读取 refresh_token 或 Cookie。浏览器材料仅在请求期驻留内存；手工 token 验证后保存。"
         }
         L10nKey::UsageCommandDisclosure => {
-            "私有接口：API key 仅发送至 api.commandcode.ai 的 /alpha/whoami、/alpha/billing/credits、/alpha/billing/subscriptions 与 /alpha/usage/summary。手工会话仅请求 /auth/get-session 核对身份及 /internal/billing/subscriptions；增强失败不影响主要来源。"
+            "私有接口：API key 仅发送至 api.commandcode.ai 的 /alpha/whoami、/alpha/billing/credits、/alpha/billing/subscriptions 与 /alpha/usage/summary。会话增强仅请求 /auth/get-session 核对身份及 /internal/billing/subscriptions；增强失败不影响主要来源。"
         }
-        L10nKey::UsageEnhance => "手工会话增强…",
+        L10nKey::UsageEnhance => "设置会话增强…",
         L10nKey::UsageEnhancementFailed => "会话增强未生效；API-key 主要用量仍可用",
         L10nKey::UsageIdentity => "服务商身份",
         L10nKey::UsagePlan => "套餐",
@@ -453,9 +453,15 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageCommandSessionHelp => {
             "从你已授权的 Command Code 登录请求中，明确复制一个会话 Cookie 的 name=value（不是 API key，也不是整段 Cookie）。仅在 api.commandcode.ai 验证会话用户与 API key 用户相同、并成功查询增强后保存；不假设 Cookie 名称或 subscription.userId。"
         }
+        L10nKey::UsageCommandBrowserHelp => "选择浏览器和 profile 后再验证。仅读取 Command Code 会话 Cookie，先由 /auth/get-session 匹配主要 API-key 身份，再查询账务增强；浏览器材料从不保存。Windows 拒绝 ABE，支持传统 DPAPI。macOS Chromium 仅本次主动操作可申请 Keychain；Safari 按 binarycookies 尽力读取，需全盘访问。后台从不弹授权，Safari 需主动重新导入。会话轮换后仍须重新核对身份。",
+        L10nKey::UsageCommandCookieName => "精确会话 Cookie 名称",
+        L10nKey::UsageCommandCookieNameHelp => "仅填写本人已授权 Command Code 登录请求中的精确会话 Cookie 名称，不填值。公开 BetterAuth 默认规则不能证明该服务端实际配置；Lyrel 不猜名称，仅读取你指定的、域适用于 api.commandcode.ai 的 Cookie，再核对 API-key 用户。名称仅作为非秘密来源选择器。",
+        L10nKey::UsageEnhancementBrowserSource => "增强来源 · 浏览器会话",
+        L10nKey::UsageEnhancementManualSource => "增强来源 · 系统凭据库中的手工会话",
+        L10nKey::UsageBrowserFullDiskAccess => "Safari Cookie 需要在 macOS 隐私与安全性中为 Lyrel 授予全盘访问。Lyrel 不修改系统权限，也不在后台读取 Safari。如你自行决定授权，请再次主动导入所选 Safari 来源。",
         L10nKey::UsageApiSource => "API 密钥",
         L10nKey::UsageSessionSource => "私有平台 · 手工会话",
-        L10nKey::UsageBrowserSource => "私有平台 · 浏览器 LocalStorage",
+        L10nKey::UsageBrowserSource => "私有平台 · 浏览器",
         L10nKey::UsageApiKey => "API 密钥",
         L10nKey::UsageSessionInput => "平台 userToken 或 Harness grant",
         L10nKey::UsageSessionHelp => {

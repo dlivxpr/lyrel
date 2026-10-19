@@ -25,16 +25,18 @@ pub(super) type FileReader = fn(&Path, &Path, u64) -> Result<Zeroizing<Vec<u8>>,
 pub(super) use mac::password as mac_password;
 
 #[derive(Clone, Copy)]
-pub(in super::super) enum CookieProvider {
+pub(in super::super) enum CookieProvider<'a> {
     StepFun,
     MiMo,
+    CommandCode(&'a str),
 }
 
-impl CookieProvider {
+impl<'a> CookieProvider<'a> {
     fn binding(self) -> &'static str {
         match self {
             Self::StepFun => "stepfun-cookie:",
             Self::MiMo => "mimo-cookie:",
+            Self::CommandCode(_) => "command-cookie:",
         }
     }
 
@@ -50,21 +52,23 @@ impl CookieProvider {
                 ".platform.xiaomimimo.com",
                 ".xiaomimimo.com",
             ],
+            Self::CommandCode(_) => ["api.commandcode.ai", ".api.commandcode.ai", ".commandcode.ai"],
         }
     }
 
-    fn names(self) -> [&'static str; 2] {
+    fn names(self) -> [&'a str; 2] {
         match self {
             Self::StepFun => ["Oasis-Token", "Oasis-Webid"],
             Self::MiMo => ["api-platform_serviceToken", "userId"],
+            Self::CommandCode(name) => [name, name],
         }
     }
 
-    fn cookie_names(self) -> [&'static str; 2] {
+    fn cookie_names(self) -> [&'a str; 2] {
         match self {
             // 固定两个 SQL 参数均为同一白名单键；Oasis-Webid 不是 Cookie。
             Self::StepFun => ["Oasis-Token", "Oasis-Token"],
-            Self::MiMo => self.names(),
+            Self::MiMo | Self::CommandCode(_) => self.names(),
         }
     }
 
@@ -81,16 +85,26 @@ impl CookieProvider {
                 "/api/v1/tokenPlan/usage",
                 "/api/v1/userProfile",
             ],
+            Self::CommandCode(_) => &["/auth/get-session", "/internal/billing/subscriptions"],
         }
     }
 
     fn token_fingerprint(self, material: &SessionMaterial) -> String {
+        if matches!(self, Self::CommandCode(_)) {
+            // Command Code bindings follow the verified API identity, not a rotating secret.
+            return self.binding().to_owned();
+        }
         format!(
             "{}{}",
             self.binding(),
             fingerprint(&[self.binding(), material.secret()])
         )
     }
+}
+
+pub(in super::super) fn valid_command_cookie_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 256
+        && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 impl BrowserReader {
@@ -100,6 +114,11 @@ impl BrowserReader {
         provider: CookieProvider,
         interactive: bool,
     ) -> Result<(BrowserSelection, SessionMaterial), BrowserError> {
+        if let CookieProvider::CommandCode(name) = provider {
+            if !valid_command_cookie_name(name) {
+                return Err(BrowserError::Unreadable);
+            }
+        }
         let current = self
             .profiles(profile.browser)?
             .into_iter()
@@ -114,6 +133,7 @@ impl BrowserReader {
             profile_label: current.label,
             profile_fingerprint: current.fingerprint,
             token_fingerprint: provider.token_fingerprint(&material),
+            cookie_name: match provider { CookieProvider::CommandCode(name) => Some(name.to_owned()), _ => None },
         };
         Ok((selection, material))
     }
@@ -125,6 +145,11 @@ impl BrowserReader {
     ) -> Result<SessionMaterial, BrowserError> {
         if !selection.token_fingerprint.starts_with(provider.binding()) {
             return Err(BrowserError::SourceChanged);
+        }
+        if let CookieProvider::CommandCode(name) = provider {
+            if selection.cookie_name.as_deref() != Some(name) || !valid_command_cookie_name(name) {
+                return Err(BrowserError::SourceChanged);
+            }
         }
         let profile = self
             .profiles(selection.browser)?
@@ -167,6 +192,13 @@ fn read(
     };
     let [first, second] = values;
     let first = first.ok_or(BrowserError::NoSession)?;
+    if let CookieProvider::CommandCode(name) = provider {
+        let mut header = Zeroizing::new(String::with_capacity(name.len() + 1 + first.len()));
+        header.push_str(name);
+        header.push('=');
+        header.push_str(&first);
+        return Ok(SessionMaterial(header, None));
+    }
     let first = if matches!(provider, CookieProvider::StepFun) {
         decode_stepfun_token(first)?
     } else {
@@ -179,6 +211,7 @@ fn read(
             super::chromium::read(&profile.path, "https://platform.stepfun.com", "web_id")?
         }),
         CookieProvider::MiMo => second.ok_or(BrowserError::NoSession)?,
+        CookieProvider::CommandCode(_) => unreachable!("single-cookie material returned above"),
     };
     validate_value(&second)?;
     let names = provider.names();
@@ -1127,11 +1160,38 @@ mod tests {
             profile_label: profile.label.clone(),
             profile_fingerprint: profile.fingerprint.clone(),
             token_fingerprint: "mimo-cookie:isolated-source-binding".to_owned(),
+            cookie_name: None,
         };
         reader.cookie_password = |_, interactive| {
             assert!(!interactive, "background must use Keychain UISkip");
             Err(BrowserError::Denied)
         };
         assert!(matches!(reader.resolve_cookies(&selection, CookieProvider::MiMo), Err(BrowserError::Denied)));
+    }
+    #[test]
+    fn command_cookie_reader_uses_only_explicit_name_host_and_profile_with_live_wal() {
+        let root = tempfile::tempdir().unwrap();
+        let (reader, profile, db) = firefox(root.path());
+        cookie(&db, "api.commandcode.ai", "chosen-session", "before", "/", i64::MAX, "");
+        cookie(&db, ".commandcode.ai", "__Secure-better-auth.session_token", "not-selected-default", "/", i64::MAX, "");
+        cookie(&db, "commandcode.ai", "chosen-session", "not-api-host-only", "/", i64::MAX, "");
+        cookie(&db, ".commandcode.ai.evil.invalid", "chosen-session", "wrong-domain", "/", i64::MAX, "");
+        cookie(&db, ".commandcode.ai", "chosen-session", "expired", "/", 1, "");
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE moz_cookies SET value='committed-wal-session' WHERE host='api.commandcode.ai'").unwrap();
+        let provider = CookieProvider::CommandCode("chosen-session");
+        let (selection, material) = reader.import_cookies(&profile, provider, true).unwrap();
+        assert_eq!(material.secret(), "chosen-session=committed-wal-session");
+        assert_eq!(selection.cookie_name(), Some("chosen-session"));
+        let metadata = serde_json::to_string(&selection).unwrap();
+        assert!(!metadata.contains("committed-wal-session") && !metadata.contains(root.path().to_str().unwrap()));
+        assert!(matches!(reader.import_cookies(&profile, CookieProvider::CommandCode("missing-name"), true), Err(BrowserError::NoSession)));
+        assert!(matches!(reader.resolve_cookies(&selection, CookieProvider::CommandCode("other-name")), Err(BrowserError::SourceChanged)));
+        for name in ["", "Cookie: chosen-session", "chosen-session; other", "chosen\r\nheader"] {
+            assert!(matches!(reader.import_cookies(&profile, CookieProvider::CommandCode(name), true), Err(BrowserError::Unreadable)));
+        }
+        db.execute("UPDATE moz_cookies SET value='rotated' WHERE host='api.commandcode.ai'", []).unwrap();
+        assert_eq!(reader.resolve_cookies(&selection, provider).unwrap().secret(), "chosen-session=rotated");
+        cookie(&db, ".api.commandcode.ai", "chosen-session", "ambiguous-account", "/", i64::MAX, "");
+        assert!(matches!(reader.import_cookies(&profile, provider, true), Err(BrowserError::Unreadable)));
     }
 }

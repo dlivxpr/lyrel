@@ -4,7 +4,7 @@
 mod chromium;
 mod cookies;
 mod firefox;
-pub(super) use cookies::CookieProvider;
+pub(super) use cookies::{CookieProvider, valid_command_cookie_name};
 #[cfg(test)]
 mod tests;
 
@@ -82,6 +82,8 @@ pub(super) struct BrowserSelection {
     profile_label: String,
     profile_fingerprint: String,
     token_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cookie_name: Option<String>,
 }
 
 impl BrowserSelection {
@@ -90,6 +92,9 @@ impl BrowserSelection {
     }
     pub(super) fn label(&self) -> &str {
         &self.profile_label
+    }
+    pub(super) fn cookie_name(&self) -> Option<&str> {
+        self.cookie_name.as_deref()
     }
 }
 
@@ -305,6 +310,7 @@ impl BrowserReader {
             profile_label: current.label,
             profile_fingerprint: current.fingerprint,
             token_fingerprint: material_fingerprint(source, &material),
+            cookie_name: None,
         };
         Ok((selection, material))
     }
