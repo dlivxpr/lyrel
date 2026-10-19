@@ -23,6 +23,7 @@ macro_rules! for_each_host_case {
             $($extra)*
             @cases
             read_dir_lists_and_sorts,
+            statistics_native_overview,
             read_dir_includes_hidden,
             read_dir_missing_is_not_found,
             read_dir_on_a_file_errors,
@@ -95,6 +96,44 @@ macro_rules! __host_case_table {
 }
 
 crate::for_each_host_case!(__host_case_table);
+
+pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
+    use crate::statistics::{DateWindow, StatisticsCache, discover_omp, scan};
+    let home = sandbox.path();
+    let config = h.join(home, "omp-config");
+    let agent = h.join(&h.join(&h.join(&config, "profiles"), "work"), "agent");
+    let sessions = h.join(&agent, "sessions");
+    h.create_dir(&sessions, true).unwrap();
+    let native = b"{\"type\":\"session\",\"version\":3,\"id\":\"stdio-native\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"cwd\":\"/work\"}\n{\"type\":\"model_usage\",\"id\":\"usage\",\"timestamp\":\"2026-03-08T09:00:00Z\",\"provider\":\"anthropic\",\"model\":\"test\",\"usage\":{\"input\":12,\"output\":3,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":15,\"cost\":{\"total\":0}}}\n";
+    h.write_file(&h.join(&sessions, "native.jsonl"), native)
+        .unwrap();
+    let command = format!(
+        "HOME='{}' USERPROFILE='{}' PI_CONFIG_DIR='{}' XDG_DATA_HOME='{}' XDG_STATE_HOME='{}' omp --profile work",
+        home.display(),
+        home.display(),
+        config.display(),
+        home.display(),
+        home.display()
+    );
+    let launch = std::collections::HashMap::from([("omp".into(), command)]);
+    let sources = discover_omp(h, &launch).unwrap();
+    let mut cache = StatisticsCache::default();
+    let snapshot = scan(h, &sources, &mut cache).unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(totals.tokens().total(), Some(15));
+    assert_eq!(totals.recorded_usd(), Some(0.));
+    assert_eq!(totals.main_sessions(), 1);
+    assert!(totals.is_complete());
+    // A failed refresh retains known values rather than turning history into zero.
+    h.write_file(&h.join(&sessions, "native.jsonl"), b"{broken")
+        .unwrap();
+    let stale = scan(h, &sources, &mut cache).unwrap();
+    assert!(!stale.is_complete());
+    assert_eq!(
+        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(15)
+    );
+}
 
 #[doc(hidden)]
 #[macro_export]
