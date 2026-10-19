@@ -227,6 +227,7 @@ l10n_keys! {
     StatisticsCatalogCheck,
     StatisticsCatalogStatus,
     StatisticsPriceEstimate,
+    StatisticsPricedCost,
     StatisticsOpen,
     StatisticsAnalysisTitle,
     StatisticsAllAgents,

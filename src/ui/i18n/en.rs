@@ -213,6 +213,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsCatalogCheck => "Check public prices",
         L10nKey::StatisticsCatalogStatus => "Last check: {checked}\nCached at: {fetched} · {count} model prices. Failed checks keep this cache.",
         L10nKey::StatisticsPriceEstimate => "{currency} · custom estimate {custom} · models.dev estimate {catalog}\n{priced} priced tokens · {unpriced} unpriced tokens · {partial} partially priced records",
+        L10nKey::StatisticsPricedCost => "Cost (recorded + explicit estimates)",
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::StatisticsAnalysisTitle => "Activity and breakdowns",
         L10nKey::StatisticsAllAgents => "All discovered agents",
@@ -228,7 +229,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::StatisticsAnalysisMetric => "Heatmap metric",
         L10nKey::StatisticsMetricScope => {
-            "Changes calendar intensity only. Details always show every metric; cost intensity uses complete recorded costs, never estimates or unpriced calls."
+            "Changes calendar intensity only. Details show every metric and price source. Cost intensity requires complete USD coverage from recorded costs or explicit custom/catalog estimates; native estimates remain separate. Partial pricing and mixed currencies stay unknown."
         }
         L10nKey::StatisticsAnalysisError => "Could not build the desktop calendar: {error}",
         L10nKey::StatisticsPreviousYear => "Previous year",

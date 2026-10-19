@@ -10,6 +10,7 @@ pub(super) struct Management {
     pub loaded: bool,
     pub busy: bool,
     pub error: Option<String>,
+    status: Option<String>,
     pub(super) path: Option<PathBuf>,
     editor: Option<Editor>,
     source_agent: &'static str,
@@ -23,8 +24,9 @@ pub(super) struct Management {
     editor_window: Option<gpui_kit::AnyWindowHandle>,
 }
 impl Management {
+    pub fn reset_scope(&mut self) { self.error = None; self.status = None; }
     pub fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
-        Self { stored: Default::default(), loaded: false, busy: false, error: None,
+        Self { stored: Default::default(), loaded: false, busy: false, error: None, status: None,
             path: crate::core::config::config_path("statistics-settings.json"), editor: None,
             source_agent: "omp", selector: cx.new(|cx| InputState::new(window, cx)),
             price: (0..8).map(|_| cx.new(|cx| InputState::new(window, cx))).collect(),
@@ -164,16 +166,25 @@ impl LyrelApp {
         let Some(settings) = self.active_settings_mut() else { return; };
         let state = &mut settings.statistics.management;
         if state.busy { return; }
-        state.busy = true; state.error = None;
+        state.busy = true; state.error = None; state.status = None;
+        let revision = Uuid::new_v4(); state.revision = revision;
+        let checked_host = HostId(binding.host);
         let stored = state.stored.clone();
         let Some(host) = HostRegistry::lookup(cx, HostId(binding.host)) else { if let Some(s) = self.active_settings_mut() { s.statistics.management.busy = false; s.statistics.management.error = Some(t(L10nKey::StatisticsOffline).into()); } cx.notify(); return; };
         HostOps::run(host, cx, move |host| -> std::io::Result<_> {
-            let source = stored.sources.check(host, &binding, &launch)?;
-            let snapshot = statistics::scan(host, &[source], &mut StatisticsCache::default())?;
-            if !snapshot.is_complete() { return Err(std::io::Error::other(snapshot.issues().iter().map(|i| i.reason()).collect::<Vec<_>>().join("\n"))); }
+            stored.sources.check(host, &binding, &launch)?;
             Ok(())
-        }, |this, result, cx| {
-            if let Some(s) = this.active_settings_mut() { s.statistics.management.busy = false; s.statistics.management.error = Some(match result { Ok(()) => t(L10nKey::StatisticsSourceChecked).into(), Err(error) => error.to_string() }); }
+        }, move |this, result, cx| {
+            if let Some(s) = this.active_settings_mut() {
+                if s.statistics.management.revision != revision { return; }
+                s.statistics.management.busy = false;
+                if s.statistics.host == checked_host {
+                    match result {
+                        Ok(()) => s.statistics.management.status = Some(t(L10nKey::StatisticsSourceChecked).into()),
+                        Err(error) => s.statistics.management.error = Some(error.to_string()),
+                    }
+                }
+            }
             this.load_statistics(cx); cx.notify();
         }); cx.notify();
     }
@@ -245,6 +256,7 @@ impl LyrelApp {
         rows.push(self.settings_button("statistics-catalog-check",t(L10nKey::StatisticsCatalogCheck),cx,|this,_,cx| this.check_statistics_catalog(cx)).disabled(disabled || !enabled).into_any_element());
         rows.push(div().text_sm().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsCatalogStatus,&[("checked",&format_time(state.stored.pricing.checked_at)),("fetched",&format_time(state.stored.pricing.fetched_at)),("count",&state.stored.pricing.catalog.len().to_string())])).into_any_element());
         if state.busy { rows.push(div().child(t(L10nKey::StatisticsLoading)).into_any_element()); }
+        if let Some(status) = &state.status { rows.push(div().text_color(tk.k5).child(status.clone()).into_any_element()); }
         for error in [&state.error, &state.stored.pricing.last_error].into_iter().flatten() { rows.push(div().text_color(tk.warn_text).child(error.clone()).into_any_element()); }
         v_flex().gap_3().min_w_0().children(rows).into_any_element()
     }

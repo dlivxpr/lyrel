@@ -3,7 +3,7 @@ use lyrel_core::statistics::{pricing::Pricing, sources::SourceBindings};
 use serde::{Deserialize, Serialize};
 use std::{io, path::Path, time::Duration};
 
-pub(super) const CATALOG_URL: &str = "https://models.dev/api.json";
+pub(super) const CATALOG_URL: &str = lyrel_core::statistics::pricing::CATALOG_URL;
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct StoredStatistics {

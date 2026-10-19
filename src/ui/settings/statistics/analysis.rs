@@ -45,7 +45,7 @@ impl AnalysisState {
 fn metric_key(metric: Metric) -> L10nKey {
     match metric {
         Metric::Tokens => L10nKey::StatisticsTokens,
-        Metric::Cost => L10nKey::StatisticsCost,
+        Metric::Cost => L10nKey::StatisticsPricedCost,
         Metric::Sessions => L10nKey::StatisticsSessions,
     }
 }

@@ -330,6 +330,7 @@ impl LyrelApp {
     fn select_statistics_host(&mut self, host: HostId, cx: &mut Context<Self>) {
         if let Some(s) = self.active_settings_mut() {
             s.statistics.host = host;
+            s.statistics.management.reset_scope();
             s.statistics.invalidate();
         }
         self.load_statistics(cx);

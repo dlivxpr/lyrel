@@ -11,6 +11,7 @@ mod opencode;
 pub use opencode::discover_opencode;
 mod pi;
 pub mod pricing;
+pub mod sources;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
@@ -561,6 +562,14 @@ pub fn scan(
     for source in sources {
         if let Some(reason) = &source.discovery_issue {
             snapshot = snapshot.with_issue(source.root.clone(), reason.clone());
+            if let Some(facts) = cache.native.get(&(host.id().0, source.agent.clone(), source.scope.clone())) {
+                snapshot.files.extend(facts.iter().filter(|fact| fact.source.root == source.root).cloned());
+            }
+            if source.agent == "opencode" {
+                if let Some((old, facts, _)) = cache.opencode.get(&(host.id().0, source.scope.clone())) {
+                    if old.root == source.root { snapshot.files.extend(facts.iter().cloned()); }
+                }
+            }
             continue;
         }
         if source.agent == "hermes" {

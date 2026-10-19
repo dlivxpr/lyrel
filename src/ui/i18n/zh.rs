@@ -195,6 +195,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsCatalogCheck => "检查公共价表",
         L10nKey::StatisticsCatalogStatus => "最近检查：{checked}\n缓存时间：{fetched} · {count} 个模型单价。检查失败继续保留此缓存。",
         L10nKey::StatisticsPriceEstimate => "{currency} · 自定义估算 {custom} · models.dev 估算 {catalog}\n已计价 {priced} Token · 未计价 {unpriced} Token · {partial} 条部分计价记录",
+        L10nKey::StatisticsPricedCost => "费用（记录＋明确估算）",
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::StatisticsAnalysisTitle => "活动与明细",
         L10nKey::StatisticsAllAgents => "全部已发现智能体",
@@ -210,7 +211,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::StatisticsAnalysisMetric => "热力图指标",
         L10nKey::StatisticsMetricScope => {
-            "仅改变日历深浅，详情始终显示全部指标。费用深浅仅使用完整记录费用，不使用估算或未计价调用。"
+            "仅改变日历深浅，详情保留全部指标与价格来源。费用深浅要求记录费用或明确自定义／目录估算完整覆盖且币种唯一为 USD；原生估算仍独立。部分计价与多币种保持未知。"
         }
         L10nKey::StatisticsAnalysisError => "无法构建桌面日历：{error}",
         L10nKey::StatisticsPreviousYear => "上一年",
