@@ -24,6 +24,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsProject => "项目",
         L10nKey::SkillsProjectHint => "所选机器上的绝对路径；留空只查看用户作用域",
         L10nKey::SkillsApplyProject => "应用项目",
+        L10nKey::SkillsOwnerProjectRequired => "维护此安装项前，请先将所选项目切换为 {project}",
         L10nKey::SkillsSearch => "搜索技能名称、描述与来源",
         L10nKey::SkillsSource => "来源",
         L10nKey::SkillsAllSources => "全部来源",

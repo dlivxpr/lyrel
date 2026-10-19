@@ -91,8 +91,13 @@ pub struct SkillSource {
     kind: SourceKind,
     entry: PathBuf,
     state: DiscoveryState,
+    project: Option<PathBuf>,
 }
 impl SkillSource {
+    /// Actual owner of a project shared root, including ancestor projects.
+    pub fn project(&self) -> Option<&Path> {
+        self.project.as_deref()
+    }
     pub fn agent(&self) -> HookAgent {
         self.agent
     }
@@ -249,6 +254,7 @@ struct Root {
     state: DiscoveryState,
     recursive: bool,
     flat_markdown: bool,
+    project: Option<PathBuf>,
 }
 
 /// Blocking; callers dispatch through HostOps. An unsupported old peer fails
@@ -313,6 +319,7 @@ pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> 
                 state: DiscoveryState::Unknown,
                 recursive: true,
                 flat_markdown: false,
+                project: None,
             });
         }
     }
@@ -352,6 +359,7 @@ pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> 
                         kind: root.kind,
                         entry: directory.clone(),
                         state: root.state,
+                        project: root.project.clone(),
                     };
                     if !snapshot.installations[ix].sources.contains(&source) {
                         snapshot.installations[ix].sources.push(source);
@@ -366,6 +374,7 @@ pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> 
                         kind: root.kind,
                         entry: directory.clone(),
                         state: root.state,
+                        project: root.project.clone(),
                     };
                     if let Some(&ix) = identities.get(&canonical) {
                         if !snapshot.installations[ix].sources.contains(&source) {
@@ -400,6 +409,7 @@ pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> 
                         kind: root.kind,
                         entry: directory.clone(),
                         state: root.state,
+                        project: root.project.clone(),
                     };
                     if let Some(&ix) = identities.get(&canonical) {
                         if !snapshot.installations[ix].sources.contains(&source) {
@@ -455,6 +465,7 @@ pub fn scan(host: &dyn Host, request: &ScanRequest) -> io::Result<ScanSnapshot> 
                                         kind: root.kind,
                                         entry: path.clone(),
                                         state: root.state,
+                                        project: root.project.clone(),
                                     };
                                     if let Some(&ix) = identities.get(&canonical) {
                                         if !snapshot.installations[ix].sources.contains(&source) {

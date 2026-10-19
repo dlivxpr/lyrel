@@ -98,6 +98,7 @@ l10n_keys! {
     SkillsProject,
     SkillsProjectHint,
     SkillsApplyProject,
+    SkillsOwnerProjectRequired,
     SkillsSearch,
     SkillsSource,
     SkillsAllSources,

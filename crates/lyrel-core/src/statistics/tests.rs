@@ -807,3 +807,111 @@ fn statistics_analysis_actual_zero_survives_parallel_native_estimate() {
         Some(0.0)
     );
 }
+
+#[test]
+fn discovery_failure_retains_only_same_host_launcher_scope_and_observation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let agent = tmp.path().join("pi-agent");
+    let history = tmp.path().join("selected-history");
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::create_dir(&history).unwrap();
+    std::fs::write(
+        agent.join("settings.json"),
+        serde_json::to_vec(&json!({"sessionDir":history})).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(history.join("a.jsonl"), header("pi-old", None) + "{\"type\":\"message\",\"id\":\"u\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"anthropic\",\"model\":\"test\",\"usage\":{\"input\":40,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0.25}}}}\n").unwrap();
+    let launch = HashMap::from([(
+        "pi".into(),
+        format!("PI_CODING_AGENT_DIR='{}' pi", agent.display()),
+    )]);
+    let host = LocalHost::new();
+    let mut cache = StatisticsCache::default();
+    let sources = cache.discover(&*host, "pi", &launch).unwrap();
+    let first = scan(&*host, &sources, &mut cache).unwrap();
+    assert_eq!(
+        first.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(42)
+    );
+    std::fs::write(agent.join("settings.json"), "unreadable settings").unwrap();
+    let failed_sources = cache.discover(&*host, "pi", &launch).unwrap();
+    let stale = scan(&*host, &failed_sources, &mut cache).unwrap();
+    assert_eq!(
+        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(42)
+    );
+    assert_eq!(stale.updated(), first.updated());
+    assert!(!stale.is_complete());
+    let changed = HashMap::from([(
+        "pi".into(),
+        format!(
+            "PI_CODING_AGENT_DIR='{}' pi",
+            tmp.path().join("other-agent").display()
+        ),
+    )]);
+    let changed_sources = cache.discover(&*host, "pi", &changed).unwrap();
+    assert_eq!(
+        scan(&*host, &changed_sources, &mut cache)
+            .unwrap()
+            .aggregate(&DateWindow::all("UTC"))
+            .main_sessions(),
+        0
+    );
+    assert_eq!(
+        scan(&*host, &[], &mut cache)
+            .unwrap()
+            .aggregate(&DateWindow::all("UTC"))
+            .main_sessions(),
+        0
+    );
+}
+
+#[test]
+fn omp_marker_discovery_failure_keeps_default_and_previously_confirmed_custom_history() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("agent");
+    std::fs::create_dir_all(root.join("sessions")).unwrap();
+    std::fs::create_dir(root.join("custom-session-files")).unwrap();
+    let custom = tmp.path().join("custom.jsonl");
+    std::fs::write(
+        &custom,
+        header("custom", None) + &usage("custom-u", 30, Some(0.0)),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("sessions/default.jsonl"),
+        header("default", None) + &usage("default-u", 10, Some(0.0)),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("custom-session-files/valid"),
+        custom.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    let launch = HashMap::from([(
+        "omp".into(),
+        format!(
+            "OMP_PROFILE=default PI_CODING_AGENT_DIR='{}' omp",
+            root.display()
+        ),
+    )]);
+    let host = LocalHost::new();
+    let mut cache = StatisticsCache::default();
+    let sources = cache.discover(&*host, "omp", &launch).unwrap();
+    let first = scan(&*host, &sources, &mut cache).unwrap();
+    assert_eq!(
+        first.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(44)
+    );
+    for index in 0..5001 {
+        std::fs::write(root.join(format!("custom-session-files/{index}")), b"").unwrap();
+    }
+    let sources = cache.discover(&*host, "omp", &launch).unwrap();
+    let stale = scan(&*host, &sources, &mut cache).unwrap();
+    assert_eq!(
+        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(44)
+    );
+    assert_eq!(stale.updated(), first.updated());
+    assert!(!stale.is_complete());
+}

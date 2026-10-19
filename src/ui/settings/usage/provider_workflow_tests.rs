@@ -940,3 +940,158 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
         }
     }
 }
+
+#[gpui_kit::test]
+fn canceled_cookie_forms_never_authorize_after_a_blocked_native_boundary(cx: &mut TestAppContext) {
+    for mode in [0, 1, 2] {
+        for leave in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("usage.json");
+            let root = dir.path().join("isolated-chrome");
+            let profile = root.join("Default");
+            std::fs::create_dir_all(&profile).unwrap();
+            let db = rusqlite::Connection::open(profile.join("Cookies")).unwrap();
+            db.execute_batch("CREATE TABLE meta(key TEXT,value TEXT); INSERT INTO meta VALUES('version','23'); CREATE TABLE cookies(host_key TEXT,name TEXT,path TEXT DEFAULT '/',value TEXT DEFAULT '',encrypted_value BLOB,top_frame_site_key TEXT DEFAULT '',has_cross_site_ancestor INTEGER DEFAULT 0,has_expires INTEGER DEFAULT 0,is_persistent INTEGER DEFAULT 0,expires_utc INTEGER DEFAULT 0);").unwrap();
+            let (host, name) = if mode == 2 {
+                (".commandcode.ai", "session")
+            } else {
+                (".xiaomimimo.com", "api-platform_serviceToken")
+            };
+            db.execute(
+                "INSERT INTO cookies(host_key,name,encrypted_value) VALUES(?1,?2,?3)",
+                rusqlite::params![host, name, b"v10controlled-native-material".as_slice()],
+            )
+            .unwrap();
+            drop(db);
+            let started = Arc::new(AtomicBool::new(false));
+            let authorized = Arc::new(AtomicU64::new(0));
+            let (release, blocked) = std::sync::mpsc::channel();
+            let blocked = Mutex::new(blocked);
+            let mut reader = browser::BrowserReader::with_root(browser::Browser::Chrome, &root);
+            reader.permission_boundary = Some(Arc::new({
+                let started = started.clone();
+                let authorized = authorized.clone();
+                move |permission| {
+                    started.store(true, Ordering::SeqCst);
+                    blocked
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                    // The same final generation check used immediately before
+                    // Keychain/TCC. No real system API is invoked by this adapter.
+                    if permission.interaction()? {
+                        authorized.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(browser::BrowserError::Denied)
+                }
+            }));
+            let (app, mut vcx) = harness(cx);
+            let vault = Arc::new(InMemoryCredentialStore::new());
+            let http = Arc::new(Http::default());
+            install(&mut vcx, path.clone(), vault.clone(), http.clone(), false);
+            vcx.update(|_, cx| {
+                let data = cx.global::<UsageGlobal>().0.clone();
+                data.update(cx, |data, _| {
+                    Arc::get_mut(&mut data.shared).unwrap().browser = Arc::new(reader)
+                });
+            });
+            open(&app, &mut vcx);
+            click(&mut vcx, "usage-add");
+            click(&mut vcx, "usage-provider");
+            vcx.simulate_keystrokes(if mode == 2 {
+                "down down enter"
+            } else {
+                "down down down down enter"
+            });
+            vcx.run_until_parked();
+            type_into(&mut vcx, "usage-name", "Explicit browser import");
+            if mode != 0 {
+                if mode == 2 {
+                    type_into(&mut vcx, "usage-key", "command-key");
+                    reply_command(&http);
+                } else {
+                    type_into(&mut vcx, "usage-key", "serviceToken=original; userId=1024");
+                    http.reply(
+                        200,
+                        br#"{"code":0,"data":{"balance":12.5,"cashBalance":10,"giftBalance":2.5}}"#,
+                    );
+                    http.reply(200, br#"{"code":0,"data":{"userId":"1024","idc":310}}"#);
+                    http.reply(200, br#"{"code":0,"data":{"expired":false,"planCode":"token-plan","currentPeriodEnd":"2026-10-31 23:59:59"}}"#);
+                    http.reply(200, br#"{"code":0,"data":{"usage":{"items":[{"name":"Monthly Credits","used":25,"limit":100,"percent":0.25}]}}}"#);
+                }
+                click(&mut vcx, "usage-submit");
+                settle(&mut vcx, |data| data.stored.accounts.len() == 1);
+                let id =
+                    vcx.update(|_, cx| cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0].id);
+                click(
+                    &mut vcx,
+                    &format!(
+                        "usage-{}-{id}",
+                        if mode == 2 { "enhance" } else { "replace" }
+                    ),
+                );
+            }
+            click(&mut vcx, "usage-source");
+            vcx.simulate_keystrokes("down enter");
+            vcx.run_until_parked();
+            if mode == 2 {
+                type_into(&mut vcx, "usage-cookie-name", "session");
+            }
+            click(&mut vcx, "usage-browser");
+            vcx.simulate_keystrokes("down enter");
+            let page = app.read_with(&vcx, |app, _| app.active_settings().unwrap().usage.clone());
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            loop {
+                vcx.run_until_parked();
+                if page.read_with(&vcx, |page, _| {
+                    !page.discovering && page.profile_items.len() == 1
+                }) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            click(&mut vcx, "usage-profile");
+            vcx.simulate_keystrokes("down enter");
+            vcx.run_until_parked();
+            let before = std::fs::read(&path).ok();
+            let slots = vault.len();
+            let calls = http.calls.load(Ordering::SeqCst);
+            click(&mut vcx, "usage-submit");
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            while !started.load(Ordering::SeqCst) {
+                vcx.run_until_parked();
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "form must reach the blocked authorization boundary"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if leave {
+                app.update_in(&mut vcx, |app, window, cx| app.close_settings(window, cx));
+            } else {
+                vcx.simulate_keystrokes("escape");
+                vcx.run_until_parked();
+            }
+            release.send(()).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            while page.read_with(&vcx, |page, _| page.submitting) {
+                vcx.run_until_parked();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                authorized.load(Ordering::SeqCst),
+                0,
+                "mode={mode}, leave={leave}: revoked form must not authorize"
+            );
+            assert_eq!(http.calls.load(Ordering::SeqCst), calls);
+            assert_eq!(vault.len(), slots);
+            assert_eq!(std::fs::read(&path).ok(), before);
+            if !leave {
+                app.update_in(&mut vcx, |app, window, cx| app.close_settings(window, cx));
+            }
+        }
+    }
+}

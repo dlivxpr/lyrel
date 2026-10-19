@@ -660,6 +660,39 @@ fn recheck_link(
     }
     Ok(())
 }
+// Only a successful operation on this exact directory can advance its proof.
+// Keep the full proof for every other parent, and keep checking raw link targets
+// and non-link ancestors independently in recheck_link.
+fn change_parent<T>(
+    host: &dyn Host,
+    parent: &Path,
+    parents: &mut HashMap<PathBuf, Meta>,
+    operation: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    if let Some(expected) = parents.get(parent) {
+        check_ancestors(host, parent)?;
+        if safe_meta(host, parent)? != Some(*expected) {
+            return Err(changed(
+                "confirmed link parent changed before directory mutation",
+            ));
+        }
+    }
+    let result = operation()?;
+    if let Some(expected) = parents.get_mut(parent) {
+        check_ancestors(host, parent)?;
+        let actual = safe_meta(host, parent)?.ok_or_else(|| changed("link parent disappeared"))?;
+        if actual.is_dir != expected.is_dir
+            || actual.is_symlink != expected.is_symlink
+            || actual.readonly != expected.readonly
+        {
+            return Err(changed(
+                "link parent identity changed during directory mutation",
+            ));
+        }
+        *expected = actual;
+    }
+    Ok(result)
+}
 fn uncertain(error: &io::Error, host: &dyn Host) -> bool {
     !host.is_connected()
         || matches!(
@@ -715,6 +748,13 @@ pub fn apply_remove(host: &dyn Host, preview: RemovePreview) -> RemoveReport {
             },
         )
         .collect();
+    let mut parents: HashMap<PathBuf, Meta> = approved
+        .iter()
+        .map(|index| {
+            let link = &preview.links[*index];
+            (link.parent.clone(), link.parent_meta)
+        })
+        .collect();
     let token = uuid::Uuid::new_v4();
     let tombstone = host.join(
         preview.target.shared_root(),
@@ -744,7 +784,9 @@ pub fn apply_remove(host: &dyn Host, preview: RemovePreview) -> RemoveReport {
     let mut publication_uncertain = false;
     let operation = (|| -> io::Result<()> {
         check_ancestors(host, &guard)?;
-        host.create_file_new(&guard)?;
+        change_parent(host, guard_parent, &mut parents, || {
+            host.create_file_new(&guard)
+        })?;
         guard_created = true;
         if let Some(key) = &preview.lock_key {
             let mut lock = preview.lock.clone();
@@ -764,12 +806,14 @@ pub fn apply_remove(host: &dyn Host, preview: RemovePreview) -> RemoveReport {
         // All user inputs are rechecked after staging and immediately before
         // publication; staging itself never changes a live installation.
         recheck(host, &preview, false)?;
-        rename_live(
-            host,
-            &preview.destination,
-            &tombstone,
-            &mut publication_uncertain,
-        )?;
+        change_parent(host, preview.target.shared_root(), &mut parents, || {
+            rename_live(
+                host,
+                &preview.destination,
+                &tombstone,
+                &mut publication_uncertain,
+            )
+        })?;
         content_moved = true;
         if preview.lock_key.is_some() {
             if read_lock(host, &preview.target)?.0 != preview.lock_bytes {
@@ -889,7 +933,9 @@ pub fn apply_remove(host: &dyn Host, preview: RemovePreview) -> RemoveReport {
             Ok((existing, fingerprint))
                 if existing == preview.existing && fingerprint == preview.fingerprint =>
             {
-                match host.remove(&tombstone, true) {
+                match change_parent(host, preview.target.shared_root(), &mut parents, || {
+                    host.remove(&tombstone, true)
+                }) {
                     Ok(()) => RemovalStatus::Removed,
                     Err(error) => {
                         let message = format!(
@@ -919,7 +965,6 @@ pub fn apply_remove(host: &dyn Host, preview: RemovePreview) -> RemoveReport {
         if lock_moved {
             cleanup(host, &backup, false, &mut report.warnings);
         }
-        let mut parents: HashMap<PathBuf, Meta> = HashMap::new();
         for index in approved {
             let mut link = preview.links[index].clone();
             link.parent_meta = *parents.get(&link.parent).unwrap_or(&link.parent_meta);

@@ -88,43 +88,52 @@ pub fn discover_omp(host: &dyn Host, launch: &HashMap<String, String>) -> io::Re
     }
     // Durable custom-file registry and terminal breadcrumbs include histories launched outside lyrel.
     for (directory, breadcrumb) in [("custom-session-files", false), ("terminal-sessions", true)] {
-        let directory = host.join(&category("XDG_STATE_HOME")?, directory);
-        let entries = match host.read_dir(&directory, None) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
-        };
-        if entries.len() > MAX_FILES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "OMP discovery marker limit reached",
-            ));
-        }
-        for entry in entries {
-            if entry.is_dir || entry.is_symlink {
-                continue;
-            }
-            let path = host.join(&directory, &entry.name);
-            let bytes = host.read_file(&path, 64 * 1024)?;
-            let text = std::str::from_utf8(&bytes).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid OMP history marker")
-            })?;
-            let file = if breadcrumb {
-                text.lines().nth(1)
-            } else {
-                Some(text.trim())
+        let failure_path = host.join(&root, directory);
+        let result = (|| -> io::Result<()> {
+            let directory = host.join(&category("XDG_STATE_HOME")?, directory);
+            let entries = match host.read_dir(&directory, None) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error),
             };
-            if let Some(file) = file.filter(|f| f.ends_with(".jsonl")) {
-                let file = PathBuf::from(file);
-                if host.is_absolute(&file) && host.stat(&file).is_ok() {
-                    let artifacts =
-                        PathBuf::from(file.to_string_lossy().trim_end_matches(".jsonl"));
-                    sources.push(Source::omp(file, scope.clone()));
-                    if host.stat(&artifacts).is_ok_and(|m| m.is_dir) {
-                        sources.push(Source::omp(artifacts, scope.clone()));
+            if entries.len() > MAX_FILES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "OMP discovery marker limit reached",
+                ));
+            }
+            for entry in entries {
+                if entry.is_dir || entry.is_symlink {
+                    continue;
+                }
+                let path = host.join(&directory, &entry.name);
+                let bytes = host.read_file(&path, 64 * 1024)?;
+                let text = std::str::from_utf8(&bytes).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid OMP history marker")
+                })?;
+                let file = if breadcrumb {
+                    text.lines().nth(1)
+                } else {
+                    Some(text.trim())
+                };
+                if let Some(file) = file.filter(|f| f.ends_with(".jsonl")) {
+                    let file = PathBuf::from(file);
+                    if host.is_absolute(&file) && host.stat(&file).is_ok() {
+                        let artifacts =
+                            PathBuf::from(file.to_string_lossy().trim_end_matches(".jsonl"));
+                        sources.push(Source::omp(file, scope.clone()));
+                        if host.stat(&artifacts).is_ok_and(|m| m.is_dir) {
+                            sources.push(Source::omp(artifacts, scope.clone()));
+                        }
                     }
                 }
             }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let mut failed = Source::omp(failure_path, scope.clone());
+            failed.discovery_issue = Some(error.to_string());
+            sources.push(failed);
         }
     }
     Ok(sources)

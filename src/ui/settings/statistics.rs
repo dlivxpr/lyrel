@@ -11,13 +11,10 @@ use super::shell::MenuEntry;
 use super::*;
 use crate::ui::host_ops::HostOps;
 use crate::ui::host_registry::HostRegistry;
+use gpui_kit::component::Disableable;
 use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-type Discover = fn(
-    &dyn lyrel_core::host::Host,
-    &HashMap<String, String>,
-) -> std::io::Result<Vec<statistics::Source>>;
 
 pub(crate) struct StatisticsState {
     pub(crate) host: HostId,
@@ -240,18 +237,14 @@ impl LyrelApp {
             host,
             cx,
             move |host| -> std::io::Result<Presentation> {
+                let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
                 let mut sources = Vec::new();
                 let mut discovery_errors = Vec::new();
-                for (name, discover) in [
-                    ("omp", statistics::discover_omp as Discover),
-                    ("pi", statistics::discover_pi as Discover),
-                    ("kimi", statistics::discover_kimi as Discover),
-                    ("hermes", statistics::discover_hermes as Discover),
-                ] {
+                for name in ["omp", "pi", "kimi", "hermes"] {
                     if agent.is_some_and(|selected| selected != name) {
                         continue;
                     }
-                    match discover(host, &launch) {
+                    match cache.discover(host, name, &launch) {
                         Ok(found) => sources.extend(found),
                         Err(error) => discovery_errors.push((name, error.to_string())),
                     }
@@ -259,7 +252,7 @@ impl LyrelApp {
                 if agent.is_none_or(|agent| agent == "opencode") {
                     // An explicitly bound client is never replaced by another default service.
                     if opencode_sources.is_empty() {
-                        match statistics::discover_opencode(host, &launch) {
+                        match cache.discover(host, "opencode", &launch) {
                             Ok(found) => sources.extend(found),
                             Err(error) => discovery_errors.push(("OpenCode", error.to_string())),
                         }
@@ -280,7 +273,6 @@ impl LyrelApp {
                         format!("{}: {}", failure.binding.selector, failure.reason),
                     ));
                 }
-                let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
                 let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
                 for (name, error) in discovery_errors {
                     snapshot = snapshot.with_issue(name.into(), error);
@@ -386,7 +378,7 @@ impl LyrelApp {
                 })
             })
             .collect();
-        let machine = self.settings_dropdown("statistics-machine", label, None, entries, cx);
+        let machine = self.analysis_menu("statistics-machine", label, entries, cx);
         let selected = state.agent;
         let agents = [
             (None, t(L10nKey::StatisticsAllAgents)),
@@ -403,7 +395,7 @@ impl LyrelApp {
             })
         })
         .collect();
-        let agent = self.settings_dropdown(
+        let agent = self.analysis_menu(
             "statistics-agent",
             selected.map_or(t(L10nKey::StatisticsAllAgents), |agent| match agent {
                 "kimi" => "Kimi Code",
@@ -411,7 +403,6 @@ impl LyrelApp {
                 "hermes" => "Hermes",
                 other => other,
             }),
-            None,
             agents,
             cx,
         );
@@ -430,13 +421,7 @@ impl LyrelApp {
             })
         })
         .collect();
-        let range = self.settings_dropdown(
-            "statistics-period",
-            t(period_key(period)),
-            None,
-            periods,
-            cx,
-        );
+        let range = self.analysis_menu("statistics-period", t(period_key(period)), periods, cx);
         let mut rows = vec![
             self.settings_row(
                 t(L10nKey::StatisticsTitle),
@@ -481,7 +466,7 @@ impl LyrelApp {
                     )
                     .child(Input::new(&start).w_full())
                     .child(Input::new(&end).w_full())
-                    .child(self.settings_button(
+                    .child(self.analysis_button(
                         "statistics-apply",
                         t(L10nKey::StatisticsApply),
                         cx,
@@ -491,7 +476,7 @@ impl LyrelApp {
             );
         }
         rows.push(
-            self.settings_button(
+            self.analysis_button(
                 "statistics-refresh",
                 t(L10nKey::StatisticsRefresh),
                 cx,

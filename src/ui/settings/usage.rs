@@ -930,7 +930,7 @@ impl UsagePage {
                             .import_cookies(
                                 &profile,
                                 browser::CookieProvider::CommandCode(&cookie_name),
-                                true,
+                                &browser::ImportPermission::for_form(gate.clone(), version),
                             )
                             .map_err(browser_error)?;
                         (
@@ -1095,7 +1095,14 @@ impl UsagePage {
                                     let profile = profile.ok_or(UsageError::BrowserMissing)?;
                                     let (selection, material) = shared
                                         .browser
-                                        .import_cookies(&profile, cookie_provider(provider)?, true)
+                                        .import_cookies(
+                                            &profile,
+                                            cookie_provider(provider)?,
+                                            &browser::ImportPermission::for_form(
+                                                gate.clone(),
+                                                version,
+                                            ),
+                                        )
                                         .map_err(browser_error)?;
                                     Material::Cookies(
                                         provider,

@@ -201,6 +201,7 @@ fn root(roots: &mut Vec<Root>, path: PathBuf, agent: HookAgent) {
         state: DiscoveryState::Unknown,
         recursive: agent == HookAgent::Pi,
         flat_markdown: agent == HookAgent::Pi,
+        project: None,
     });
 }
 fn manifest_entry(

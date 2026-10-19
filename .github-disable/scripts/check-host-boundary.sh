@@ -15,10 +15,8 @@
 # git, all of them modules whose paths are local by construction — and a guard
 # that always fails is a guard everyone learns to ignore. Two things fix it:
 #
-#   1. Test bodies are cut off properly. The contract's `grep -v '#\[cfg(test)\]'`
-#      only removes the attribute line itself, leaving the whole test module
-#      behind it in scope; here the scan stops at the `#[cfg(test)] mod …` that
-#      opens the trailing test region.
+#   1. Test-only modules (including external descendants) are excluded without
+#      truncating any production suffix in their declaring file.
 #   2. An explicit allowlist, keyed on (file, pattern) rather than whole files, so
 #      a module exempted for its `.is_absolute()` still trips on a new
 #      `std::fs::`. Every entry carries the reason its paths cannot be remote.
@@ -34,9 +32,6 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 ROOTS=(src/ui src/terminal)
-
-# The forbidden constructs, as extended-regex alternatives.
-PATTERN='std::fs::|Command::new\("git"\)|\.canonicalize\(\)|\.is_absolute\(\)'
 
 # Allowlist entries are `<path>|<literal pattern>`, one per line. `<path>|*`
 # exempts a file wholesale (used only for the boundary module itself). The
@@ -66,6 +61,14 @@ src/ui/settings.rs|std::fs::read
 # The host editor asking which of those keys is on this machine before it offers
 # a passphrase box for one — the same client-side key, never a workspace path.
 src/ui/settings.rs|std::fs::metadata
+
+# 统计设置只读取 config_path("statistics-settings.json")，不消费工作区路径。
+src/ui/settings/statistics/storage.rs|std::fs::read
+# 用量元数据只读取 config_path("usage-accounts.json")，不消费 Host 或项目路径。
+src/ui/settings/usage/accounts.rs|std::fs::read
+# BrowserReader::system 只构造桌面本机浏览器根；显式选择的私有 profile
+# 每次导入都会重新核对 canonical path / fingerprint，绝不读取远端工作区。
+src/ui/settings/usage/browser/chromium.rs|use std::fs::{self, File}
 
 # Shell history lives in the local user's home (`~/.zsh_history` &co.) and backs
 # this app's own history search. A remote pane's history is the remote shell's
@@ -122,47 +125,11 @@ src/ui/lsp/locations.rs|std::fs::read_to_string
 src/ui/lsp/mod.rs|std::fs::read_to_string
 src/ui/lsp/servers.rs|std::fs::metadata
 src/ui/lsp/servers.rs|std::fs::read_to_string
-# Its tests live in their own file (not a trailing `mod tests`), writing
-# fixtures into a local temp dir.
-src/ui/lsp/tests.rs|std::fs::write
-src/ui/lsp/tests.rs|.canonicalize()
+# LSP fixtures are excluded through their actual cfg(test) module declaration.
 EOF
 )
 
-# Where the trailing `#[cfg(test)] mod …` starts, if any. Line numbers are
-# preserved because only the tail is dropped.
-body_of() {
-    local file=$1 cut
-    # `attr` starts unset, which awk reads as 0 — so a file whose *first* line
-    # is `mod something` used to match `attr == NR - 1` and cut the body at
-    # line 0, leaving `head -n -1` to error out and the file to be scanned as
-    # empty. Two files opened that way, and the guard was blind to both.
-    cut=$(awk '
-        BEGIN                { attr = -1 }
-        /^#\[cfg\(test\)\]$/ { attr = NR }
-        /^mod [A-Za-z_]/     { if (attr == NR - 1) { print NR - 1; exit } }
-    ' "$file")
-    if [ -n "$cut" ]; then
-        head -n "$((cut - 1))" "$file"
-    else
-        cat "$file"
-    fi
-}
-
-allowed() {
-    local file=$1 line=$2 entry path pat
-    while IFS= read -r entry; do
-        case "$entry" in '' | '#'*) continue ;; esac
-        path=${entry%%|*}
-        pat=${entry#*|}
-        [ "$path" = "$file" ] || continue
-        if [ "$pat" = '*' ] || [ "${line#*"$pat"}" != "$line" ]; then
-            return 0
-        fi
-    done <<<"$ALLOW"
-    return 1
-}
-
+# Module traversal uses the existing Node.js prerequisite; no compiler/build.
 # A guard that scans nothing reports success, which is the one failure mode worse
 # than a noisy guard. Fail loudly if a root has moved out from under us.
 for root in "${ROOTS[@]}"; do
@@ -172,43 +139,6 @@ for root in "${ROOTS[@]}"; do
     fi
 done
 
-violations=0
-scanned=0
-while IFS= read -r file; do
-    scanned=$((scanned + 1))
-    while IFS= read -r hit; do
-        lineno=${hit%%:*}
-        text=${hit#*:}
-        # Prose, not code.
-        case "$(printf '%s' "$text" | sed 's/^[[:space:]]*//')" in '//'*) continue ;; esac
-        if allowed "$file" "$text"; then
-            continue
-        fi
-        printf '%s:%s:%s\n' "$file" "$lineno" "$text" >&2
-        violations=$((violations + 1))
-    done < <(body_of "$file" | grep -nE "$PATTERN" || true)
-done < <(find "${ROOTS[@]}" -name '*.rs' | sort)
+export HOST_BOUNDARY_ALLOW="$ALLOW"
+node .github-disable/scripts/host-boundary.cjs
 
-if [ "$scanned" -lt 10 ]; then
-    echo "check-host-boundary: only $scanned files scanned — the roots look wrong" >&2
-    exit 2
-fi
-
-if [ "$violations" -ne 0 ]; then
-    cat >&2 <<'EOF'
-
---------------------------------------------------------------------------------
-The GUI reached the filesystem/git directly.
-
-A path in `ui::` or `terminal::` may belong to a remote workspace, where these
-calls answer for the wrong machine. Route it through `ui::host_ops` / `Host`
-instead (`Host::read_dir`, `join`, `is_absolute`, `canonicalize`, …).
-
-If the path genuinely cannot be remote — app config, bundled assets, the local
-temp dir — add it to the allowlist in this script with the reason why.
---------------------------------------------------------------------------------
-EOF
-    exit 1
-fi
-
-echo "host boundary clean: $scanned files in ${ROOTS[*]}, no direct fs/git calls"

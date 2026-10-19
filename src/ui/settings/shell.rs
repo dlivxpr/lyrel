@@ -1450,7 +1450,7 @@ impl LyrelApp {
                     self.render_usage_search_row(cx);
                 }
                 SettingsSection::Statistics => {
-                    let control = self.settings_button(
+                    let control = self.analysis_button(
                         "statistics-search-open",
                         t(L10nKey::StatisticsOpen),
                         cx,

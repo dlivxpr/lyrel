@@ -21,7 +21,12 @@ pub(super) struct Crypt {
 impl Crypt {
     pub(super) fn new(profile: &Profile) -> Result<Self, BrowserError> {
         let root = profile.path.parent().ok_or(BrowserError::Unreadable)?;
-        let bytes = match read_file(root, &root.join("Local State"), 4 * 1024 * 1024) {
+        let bytes = match read_file(
+            root,
+            &root.join("Local State"),
+            4 * 1024 * 1024,
+            &super::ImportPermission::background(),
+        ) {
             Ok(bytes) => Some(bytes),
             Err(BrowserError::NoSession) => None,
             Err(error) => return Err(error),

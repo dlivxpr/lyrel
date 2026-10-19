@@ -635,6 +635,33 @@ fn removal_finds_alias_targets_and_keeps_real_copies_other_targets_and_same_name
     f.host.inner.remove(&other_link, false).unwrap();
 }
 
+#[test]
+fn shared_root_external_aliases_are_removed_after_our_own_tombstone_changes() {
+    let f = Fixture::new();
+    let root = f.destination.parent().unwrap();
+    let alias = root.join("hermes-alias");
+    let second = root.join("hermes-second-alias");
+    link(&f.destination, &alias);
+    link(&f.destination, &second);
+    let preview = preview_remove(&f.host, f.target(), &f.skill(), &[root.to_owned()]).unwrap();
+    let report = apply_remove(&f.host, preview);
+    assert_eq!(report.content, RemovalStatus::Removed);
+    for path in [&alias, &second] {
+        assert_eq!(
+            report
+                .links
+                .iter()
+                .find(|entry| &entry.path == path)
+                .unwrap()
+                .status,
+            RemovalStatus::Removed
+        );
+        assert!(fs::symlink_metadata(path).is_err());
+    }
+    assert!(!f.destination.exists());
+    assert!(f.lock()["skills"].get("Original Name").is_none());
+}
+
 #[cfg(unix)]
 #[test]
 fn relative_link_target_is_resolved_on_selected_host_and_unlinked_without_following() {
@@ -1076,4 +1103,104 @@ fn denied_link_cleanup_reports_its_exact_remaining_path_without_repeating_remova
     assert!(fs::symlink_metadata(&alias).is_ok());
     assert!(!f.destination.exists());
     f.host.inner.remove(&alias, false).unwrap();
+}
+
+#[test]
+fn ancestor_project_lock_is_bound_to_its_actual_installation_not_selected_child() {
+    let f = Fixture::new();
+    let child = f.project.join("crates/app");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(child.join("skills-lock.json"), br#"{"version":1,"skills":{"Original Name":{"source":"unrelated/project","sourceType":"github","skillPath":"wrong/SKILL.md"}}}"#).unwrap();
+    let snapshot = scan(
+        &f.host,
+        &ScanRequest::new(&f.host.home).with_project(&child),
+    )
+    .unwrap();
+    let skill = snapshot
+        .installations()
+        .iter()
+        .find(|skill| skill.path() == f.host.canonicalize(&f.destination).unwrap())
+        .unwrap();
+    let record = skill.source_record().unwrap();
+    assert_eq!(record.source(), "acme/tools");
+    assert_eq!(record.lock_path(), f.project.join("skills-lock.json"));
+    assert!(
+        skill
+            .sources()
+            .iter()
+            .any(|source| source.project() == Some(f.project.as_path()))
+    );
+    assert!(
+        preview_remove(
+            &f.host,
+            InstallTarget::project(&f.host, child.clone()).unwrap(),
+            skill,
+            &[]
+        )
+        .is_err()
+    );
+    let child_lock = fs::read(child.join("skills-lock.json")).unwrap();
+    let report = apply_remove(
+        &f.host,
+        preview_remove(&f.host, f.target(), skill, &[]).unwrap(),
+    );
+    assert_eq!(report.content, RemovalStatus::Removed);
+    assert_eq!(
+        fs::read(child.join("skills-lock.json")).unwrap(),
+        child_lock
+    );
+}
+
+#[test]
+fn hermes_external_shared_user_root_alias_cleanup_keeps_configuration_untouched() {
+    use lyrel_core::skills::maintenance::private_roots;
+    let f = Fixture::new();
+    let target =
+        InstallTarget::user(&f.host, f.host.home.clone(), None, f.project.clone()).unwrap();
+    let catalog = discover(
+        &Http::old(),
+        &GitHubSource::parse("acme/tools#release%2Fstable").unwrap(),
+    )
+    .unwrap();
+    let prepared = catalog.prepare(&Http::old(), 0).unwrap();
+    let report = apply_install(
+        &f.host,
+        preview_install(&f.host, target.clone(), vec![prepared]).unwrap(),
+        &[InstallDecision::Install],
+        NOW,
+    );
+    assert_eq!(report.items[0].status, InstallStatus::Installed);
+    let root = f.host.home.join(".agents/skills");
+    let real = root.join("original-name");
+    let alias = root.join("hermes-alias");
+    link(&real, &alias);
+    fs::create_dir_all(f.host.home.join(".hermes")).unwrap();
+    let config = f.host.home.join(".hermes/config.yaml");
+    let bytes = b"skills:\n  external_dirs:\n    - ~/.agents/skills\n";
+    fs::write(&config, bytes).unwrap();
+    let request = ScanRequest::new(&f.host.home);
+    let snapshot = scan(&f.host, &request).unwrap();
+    let skill = snapshot
+        .installations()
+        .iter()
+        .find(|skill| skill.path() == f.host.canonicalize(&real).unwrap())
+        .unwrap();
+    let roots = private_roots(&f.host, &request).unwrap();
+    assert!(roots.contains(&root));
+    let report = apply_remove(
+        &f.host,
+        preview_remove(&f.host, target, skill, &roots).unwrap(),
+    );
+    assert_eq!(report.content, RemovalStatus::Removed);
+    assert_eq!(
+        report
+            .links
+            .iter()
+            .find(|link| link.path == alias)
+            .unwrap()
+            .status,
+        RemovalStatus::Removed
+    );
+    assert!(fs::symlink_metadata(alias).is_err());
+    assert_eq!(fs::read(config).unwrap(), bytes);
 }

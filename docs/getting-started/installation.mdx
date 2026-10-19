@@ -131,6 +131,8 @@ GUI 与 CLI 的终端解析统一采用正式 `rio-vt =0.5.28`（不启用默认
 
 桌面用量的浏览器 LocalStorage 读取使用正式 registry 的 `rusty-leveldb 4.0.2` 与 `rusqlite 0.40.2`（`bundled`）。SQLite 随 crate 构建，无需另装系统 SQLite；仍需下述平台 C/C++ 编译工具链。Snappy、文件锁、SHA-256 与内存擦除也使用锁图中的正式依赖，不引入 Git／补丁包或浏览器注入工具。
 
+手动执行 `bash .github-disable/scripts/check-host-boundary.sh` 时，需使用 LF 工作树，并让同一 Bash 的 `PATH` 可找到 Node.js 22.19+（与 pi 桥测试运行时一致）。检查器只用 Node.js 标准库解析 Rust 测试模块归属，不运行 Cargo、编译器或原生桌面；WSL 需使用 Linux Node，不能误用 `node.exe`。
+
 <Tabs>
   <Tab title="macOS">
     ```bash

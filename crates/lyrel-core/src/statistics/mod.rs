@@ -539,6 +539,92 @@ pub struct StatisticsCache {
     files: HashMap<(u64, String, String, PathBuf), (Meta, FileFacts)>,
     opencode: HashMap<(u64, String), (Source, Vec<FileFacts>, i64)>,
     native: HashMap<(u64, String, String), Vec<FileFacts>>,
+    discovery: HashMap<(u64, String), DiscoveredSources>,
+}
+
+struct DiscoveredSources {
+    environment: Vec<(String, String)>,
+    launcher: Option<String>,
+    sources: Vec<Source>,
+}
+impl StatisticsCache {
+    /// Resolve defaults on this Host, retaining failed observations only while
+    /// both its environment and this agent's explicit launcher remain the same.
+    /// SourceBindings still applies removals after discovery, before scan.
+    pub fn discover(
+        &mut self,
+        host: &dyn Host,
+        agent: &str,
+        launch: &HashMap<String, String>,
+    ) -> io::Result<Vec<Source>> {
+        let mut environment: Vec<_> = host.agent_environment()?.into_iter().collect();
+        environment.sort();
+        let launcher = launch.get(agent).cloned();
+        let key = (host.id().0, agent.to_owned());
+        let previous = self
+            .discovery
+            .get(&key)
+            .filter(|old| old.environment == environment && old.launcher == launcher);
+        let discovered = match agent {
+            "omp" => discover_omp(host, launch),
+            "pi" => discover_pi(host, launch),
+            "kimi" => discover_kimi(host, launch),
+            "hermes" => discover_hermes(host, launch),
+            "opencode" => discover_opencode(host, launch),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unsupported statistics agent",
+                ));
+            }
+        };
+        let mut found = match discovered {
+            Ok(found) => found,
+            Err(error) => {
+                let Some(previous) = previous else {
+                    return Err(error);
+                };
+                return Ok(previous
+                    .sources
+                    .iter()
+                    .cloned()
+                    .map(|mut source| {
+                        source.discovery_issue =
+                            Some(format!("{agent} source discovery failed: {error}"));
+                        source
+                    })
+                    .collect());
+            }
+        };
+        if let Some(issue) = found
+            .iter()
+            .find_map(|source| source.discovery_issue.as_ref())
+            .cloned()
+        {
+            if let Some(previous) = previous {
+                for old in &previous.sources {
+                    if found.iter().any(|source| source.scope == old.scope)
+                        && !found
+                            .iter()
+                            .any(|source| source.root == old.root && source.scope == old.scope)
+                    {
+                        let mut failed = old.clone();
+                        failed.discovery_issue = Some(issue.clone());
+                        found.push(failed);
+                    }
+                }
+            }
+        }
+        self.discovery.insert(
+            key,
+            DiscoveredSources {
+                environment,
+                launcher,
+                sources: found.clone(),
+            },
+        );
+        Ok(found)
+    }
 }
 
 /// Blocking Host operation. GUI callers dispatch using HostOps. No network pricing.

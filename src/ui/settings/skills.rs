@@ -498,7 +498,7 @@ impl LyrelApp {
         let host_picker = if state.install.target_locked() || state.maintenance.target_locked() {
             div().child(machine).into_any_element()
         } else {
-            self.settings_dropdown("skills-machine", machine, None, entries, cx)
+            self.analysis_menu("skills-machine", machine, entries, cx)
         };
         let mut body = vec![
             div()
@@ -574,10 +574,9 @@ impl LyrelApp {
                             .id("skills-query")
                             .disabled(state.maintenance.target_locked()),
                     )
-                    .child(self.settings_dropdown(
+                    .child(self.analysis_menu(
                         "skills-source",
                         t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
-                        None,
                         filters,
                         cx,
                     ))

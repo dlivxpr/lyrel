@@ -540,10 +540,9 @@ impl LyrelApp {
                     })
                 })
                 .collect();
-            rows.push(self.settings_dropdown(
+            rows.push(self.analysis_menu(
                 "statistics-source-kind",
                 state.source_agent,
-                None,
                 entries,
                 cx,
             ));
