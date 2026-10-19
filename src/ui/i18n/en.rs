@@ -4,7 +4,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {
-            "statistics omp native history tokens cost sessions machine profile date range overview"
+            "statistics omp OpenCode native history tokens cost sessions machine profile date range overview"
         }
         L10nKey::StatisticsToday => "Today",
         L10nKey::StatisticsWeek => "This week",
@@ -13,8 +13,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsAll => "All time",
         L10nKey::StatisticsCustom => "Custom",
         L10nKey::StatisticsScope => {
-            "Read omp native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
+            "Read native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
         }
+        L10nKey::StatisticsSource => "Agent source",
+        L10nKey::StatisticsSourceHelp => "OpenCode uses the selected native client or configured service. Unavailable sources remain visible in diagnostics; no default-service fallback.",
+        L10nKey::StatisticsAllSources => "All sources",
+        L10nKey::StatisticsReasoning => "Reasoning tokens",
         L10nKey::StatisticsRange => "Date range",
         L10nKey::StatisticsCalendar => {
             "Calendar boundaries use the desktop timezone; weeks start on Monday. Comparisons use the preceding matching calendar period."
@@ -59,10 +63,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Previous period: {tokens} tokens · {cost} · {sessions} main sessions\nToken change: {change}"
         }
         L10nKey::StatisticsEmpty => {
-            "No native activity in this range. Check the selected machine and source paths, choose another range, or use omp and refresh."
+            "No native activity in this range. Check the selected machine and source, choose another range, or use the agent and refresh."
         }
         L10nKey::StatisticsPrivacy => {
-            "Read-only · omp 18.12.1 JSONL · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Arbitrary undiscoverable custom stores require an explicit source association. Skipped symlinks and unknown lineage limit coverage."
+            "Read-only · omp native JSONL / OpenCode 2.x public API · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Unknown lineage and pagination limits restrict coverage."
         }
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::IntegrationPiExtension => {

@@ -1,5 +1,7 @@
 //! 原生历史的结构化统计 seam；扫描只缓存计量元数据，不保留对话正文。
 mod omp;
+mod opencode;
+pub use opencode::discover_opencode;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
@@ -14,11 +16,18 @@ const MAX_DIRS: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SCAN_BYTES: u64 = 256 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
     root: PathBuf,
     scope: String,
     agent: String,
+    #[serde(skip)]
+    opencode_request: Option<Box<crate::host::session_operations::SessionOperation>>,
+}
+impl std::fmt::Debug for Source {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Source").field("root", &self.root).field("scope", &self.scope).field("agent", &self.agent).finish()
+    }
 }
 impl Source {
     pub fn omp(root: PathBuf, scope: impl Into<String>) -> Self {
@@ -26,6 +35,7 @@ impl Source {
             root,
             scope: scope.into(),
             agent: "omp".into(),
+            opencode_request: None,
         }
     }
     pub fn root(&self) -> &std::path::Path {
@@ -44,10 +54,15 @@ pub struct Tokens {
     input: Option<u64>,
     output: Option<u64>,
     cache_read: Option<u64>,
+    #[serde(default)]
+    reasoning: Option<u64>,
     cache_write: Option<u64>,
     total: Option<u64>,
 }
 impl Tokens {
+    pub fn reasoning(&self) -> Option<u64> {
+        self.reasoning
+    }
     pub fn input(&self) -> Option<u64> {
         self.input
     }
@@ -74,6 +89,7 @@ impl Tokens {
         self.input = sum(self.input, other.input, first);
         self.output = sum(self.output, other.output, first);
         self.cache_read = sum(self.cache_read, other.cache_read, first);
+        self.reasoning = sum(self.reasoning, other.reasoning, first);
         self.cache_write = sum(self.cache_write, other.cache_write, first);
         self.total = sum(self.total, other.total, first);
     }
@@ -111,6 +127,8 @@ pub struct NativeSession {
     timestamp: i64,
     project: Option<String>,
     records: Vec<UsageRecord>,
+    #[serde(default)]
+    activity: Vec<i64>,
 }
 impl NativeSession {
     pub fn id(&self) -> &str {
@@ -153,6 +171,9 @@ pub struct Snapshot {
     issues: Vec<ScanIssue>,
 }
 impl Snapshot {
+    pub fn report_issue(&mut self, path: PathBuf, reason: String) {
+        self.issues.push(ScanIssue { path, reason });
+    }
     pub fn host(&self) -> u64 {
         self.host
     }
@@ -208,11 +229,12 @@ impl Snapshot {
                     None => break,
                 }
             }
-            let active = window.contains(session.timestamp)
-                || session
+            let active = (file.source.agent != "opencode" && window.contains(session.timestamp))
+                || session.activity.iter().any(|time| window.contains(*time))
+                || (file.source.agent != "opencode" && session
                     .records
                     .iter()
-                    .any(|r| r.timestamp >= session.timestamp && window.contains(r.timestamp));
+                    .any(|r| r.timestamp >= session.timestamp && window.contains(r.timestamp)));
             if active && !file.child {
                 sessions.insert((scope, session.id.as_str()));
             }
@@ -294,6 +316,7 @@ impl Totals {
 #[derive(Default)]
 pub struct StatisticsCache {
     files: HashMap<(u64, String, PathBuf), (Meta, FileFacts)>,
+    opencode: HashMap<(u64, String), (Source, Vec<FileFacts>, i64)>,
 }
 
 /// Blocking Host operation. GUI callers dispatch using HostOps. No network pricing.
@@ -311,7 +334,7 @@ pub fn scan(
     }
     let mut snapshot = Snapshot {
         host: host.id().0,
-        sources: sources.to_vec(),
+        sources: sources.iter().cloned().map(|mut source| { source.opencode_request = None; source }).collect(),
         updated: chrono::Utc::now().timestamp(),
         files: Vec::new(),
         issues: Vec::new(),
@@ -321,6 +344,10 @@ pub fn scan(
     let mut files = 0;
     let mut bytes = 0;
     for source in sources {
+        if source.agent == "opencode" {
+            opencode::scan_source(host, source, &mut snapshot, cache);
+            continue;
+        }
         let exact_file = host.stat(&source.root).is_ok_and(|m| !m.is_dir);
         let initial = if exact_file {
             let value = source.root.to_string_lossy();

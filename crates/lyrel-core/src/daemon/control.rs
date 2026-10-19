@@ -63,7 +63,8 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// lists the coding-agent sessions of the machine the workspace is on.
 /// v13 adds scoped `SessionOperation` requests and removes Cursor-only history
 /// directory hints. Both belong to one unpublished cutover; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 13;
+/// v14 adds independently gated native statistics requests; pane framing stays v7.
+pub const CONTROL_VERSION: u32 = 14;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -171,6 +172,7 @@ pub mod feature {
     pub const SESSION_OPERATIONS: &str = "session-operations-v1";
     pub const AGENT_ENVIRONMENT: &str = "agent-environment";
     pub const HERMES_HISTORY: &str = "hermes-history-v1";
+    pub const OPENCODE_STATISTICS: &str = "opencode-statistics-v1";
 }
 
 pub use crate::host::{
@@ -260,6 +262,9 @@ pub enum ControlRequest {
         request: Box<crate::host::session_operations::SessionOperation>,
     },
     OpenCodeSessions {
+        request: Box<crate::host::session_operations::SessionOperation>,
+    },
+    OpenCodeStatistics {
         request: Box<crate::host::session_operations::SessionOperation>,
     },
     HermesSessions {
@@ -526,7 +531,7 @@ impl ControlRequest {
             // so a search that ran long still gets to say what it found.
             SearchContent { .. } => Duration::from_secs(30),
             Shells | AgentSessions => Duration::from_secs(20),
-            SessionOperation { .. } | OpenCodeSessions { .. } | HermesSessions { .. } => Duration::from_secs(120),
+            SessionOperation { .. } | OpenCodeSessions { .. } | OpenCodeStatistics { .. } | HermesSessions { .. } => Duration::from_secs(120),
             WorkspaceAttach { .. } | WorkspaceDetach { .. } => Duration::from_secs(10),
             GuiOpen { .. } => Duration::from_secs(5),
             MachineGet
@@ -615,6 +620,8 @@ pub enum ReplyOk {
             >,
         >,
     ),
+    OpenCodeStatistics(Box<Result<crate::host::session_operations::opencode::OpenCodeStatistics,
+        crate::host::session_operations::SessionOperationError>>),
     HermesSessions(
         Box<
             Result<

@@ -28,7 +28,7 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
     每台机器上的 AI 智能体钩子，以及 PATH 中的 lyrel 命令。
   </Card>
   <Card title="统计" icon="chart-simple">
-    明确选择本机或已连接远端，查看 omp 原生历史的 Token、记录费用与活跃主会话总览。
+    明确选择本机或已连接远端，查看 omp／OpenCode 原生历史的 Token、记录费用与活跃主会话总览。
   </Card>
   <Card title="关于" icon="circle-info" href="/reference/updates">
     版本与更新检查、更新偏好与代理、设置文件，以及 lyrel 服务端。
@@ -47,7 +47,7 @@ description: "各个分区包含的内容，以及设置文件的工作方式。
 录制已被其他操作使用的键盘快捷键时，会先询问是否接管：**替换**会将快捷键移交给当前操作，**取消**则让两个操作都保持原样。
 离开已编辑的表单时，会提示保存、放弃更改或继续编辑。
 
-## omp 原生历史统计
+## 原生历史统计
 
 从**设置 → 统计**进入，或搜索「统计」「Token」「omp」。先选择本机或已连接远端；
 选择不会随当前 SSH 工作区隐式改变，一次只展示一台机器。
@@ -62,6 +62,33 @@ macOS／Linux 的已存在 XDG 数据／状态目录按上游规则解析；自�
 `custom-session-files` 和 `terminal-sessions` 标记发现，不猜测任意项目路径。
 相对路径依赖原生 cwd 而无法核实时明确报错，不借用 GUI home。
 远端复用 Host 文件操作与非秘密环境元数据；旧 server 缺能力时要求升级，不回退本机。
+
+### OpenCode 2.x
+
+来源下拉可选全部、omp 或 OpenCode。OpenCode 适配依据正式 `2.0.32` 的公开
+`experimental.session.stats`、`session.list` 和 `session.message.list`，不扫描旧 SQLite。
+打开的原生 TUI 使用已认证、有界的只读客户端桥；没有绑定客户端时使用配置的
+`agent_launch.opencode` 和所选 Host 的 home／环境调用正式 `opencode api`。
+绑定来源断连、认证不足或服务身份变化只显示诊断，绝不借用另一默认服务。
+远端要求独立能力 `opencode-statistics-v1`；旧 server 必须升级，不能回退本机。
+
+分页遵循不透明 `cursor.next`，消息页上限 200，会话页 100；重复游标、分页字段缺失、
+5,000 个会话、50,000 条计量消息、约 4 MiB 计量投影或查询期限均标记不完整。
+服务端聚合作为独立覆盖检查，不与逐消息数据相加。日期筛选和日界使用桌面日历时区。
+Token 总量为 input + output + reasoning + cache.read + cache.write；推理单列，
+不重复加到 output。子代理用量计入总量，但 `parentID` 子会话不计主会话；
+原生分叉是独立主会话，复制的旧消息按 `fork` 与原生创建时间守卫排除。
+活动计数只采用 user／assistant 消息；不将无消息的创建事件伪装成活跃会话。
+Host、服务 pid／公开 URL、有效 home／存储选择器共同隔离来源；缓存不含客户端认证材料。
+压缩请求的公开 `compaction` 消息若携带 Token／费用，也纳入真实用量；但该响应只提供
+消息创建时间，不能核实原生 `usageRecorded` 事件的完成时间，因此明确标记日期归属受限。
+服务端聚合还交叉核对 Token 各分项、费用与 assistant steps；不一致不会显示完整成功。
+
+正式契约：[会话与统计](https://github.com/anomalyco/opencode/blob/v2.0.32/packages/protocol/src/groups/session.ts)、
+[消息分页](https://github.com/anomalyco/opencode/blob/v2.0.32/packages/protocol/src/groups/message.ts)、
+[统计与分叉守卫](https://github.com/anomalyco/opencode/blob/v2.0.32/packages/core/src/session/stats.ts)。
+
+### 统计口径与缓存
 
 主会话按范围内活动计数，独立分叉仍计主会话；原生 artifact 子会话不计主会话，
 但可核实新增 Token 与费用计入总量。重复副本与可解析 `parentSession` 链的继承记录去重；
