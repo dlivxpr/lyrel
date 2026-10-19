@@ -1,5 +1,10 @@
 use super::*;
 
+fn scroll_usage_to_bottom(vcx:&mut VisualTestContext){
+    vcx.update(|window,cx|{window.render_frame(cx);window.scroll("usage-refresh-all",gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.),gpui_kit::px(-4000.))),cx);});
+    vcx.run_until_parked();
+}
+
 const KIMI: &[u8] = br#"{"usages":{"limit_5h":{"used_ratio":0.25,"reset_time":"2026-10-20T00:00:00Z"},"limit_7d":{"used_ratio":"0.5","reset_time":"2026-10-25T00:00:00Z"},"limit_month_total":{"used_ratio":0.6,"reset_time":"2026-11-01T00:00:00Z"},"limit_month_code":{"used_ratio":0.1,"reset_time":"2026-11-01T00:00:00Z"}},"boosterWallet":{"balance":{"type":"BOOSTER","amount":"1000000000","amountLeft":"500000000"},"monthlyChargeLimitEnabled":true,"monthlyChargeLimit":{"priceInCents":"2000","currency":"USD"},"monthlyUsed":{"priceInCents":"1500","currency":"USD"}}}"#;
 const KIMI_ME: &[u8] = br#"{"user_id":"kimi-work","nickname":"Work"}"#;
 
@@ -172,6 +177,7 @@ fn kimi_browser_selection_reads_access_token_not_refresh_token_and_preserves_sou
         [b"different-kimi-user-token".as_slice()],
     )
     .unwrap();
+    scroll_usage_to_bottom(&mut vcx);
     click(&mut vcx, &format!("usage-refresh-{id}"));
     settle(&mut vcx, |d| {
         d.stored.accounts[0].error == Some(UsageError::BrowserChanged)
@@ -223,6 +229,7 @@ fn kimi_manual_session_keeps_counts_and_old_snapshot_on_rate_limit_or_missing_us
             .unwrap(),
         "manual-kimi-token"
     );
+    scroll_usage_to_bottom(&mut vcx);
     for (status, body, error) in [
         (429, b"{}".as_slice(), UsageError::RateLimited),
         (200, b"{}".as_slice(), UsageError::Response),
