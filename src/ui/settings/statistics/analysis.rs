@@ -425,16 +425,23 @@ impl LyrelApp {
                     .child(div().flex_1())
                     .child(metric),
             )
-            .child(
-                h_flex().min_w_0().flex_wrap().gap_2().child(agent)
-                    .when(p.analysis.as_ref().and_then(|a| a.agent_filter()) != state.agent.as_deref(), |row| {
-                        row.child(div().text_xs().text_color(tk.k5).child(t_fmt(
+            .child(h_flex().min_w_0().flex_wrap().gap_2().child(agent).when(
+                p.analysis.as_ref().and_then(|a| a.agent_filter()) != state.agent.as_deref(),
+                |row| {
+                    row.child(
+                        div().text_xs().text_color(tk.k5).child(t_fmt(
                             L10nKey::StatisticsAnalysisSnapshot,
-                            &[("agent", p.analysis.as_ref().and_then(|a| a.agent_filter())
-                                .unwrap_or(t(L10nKey::StatisticsAllAgents)))],
-                        )))
-                    }),
-            );
+                            &[(
+                                "agent",
+                                p.analysis
+                                    .as_ref()
+                                    .and_then(|a| a.agent_filter())
+                                    .unwrap_or(t(L10nKey::StatisticsAllAgents)),
+                            )],
+                        )),
+                    )
+                },
+            ));
         if let Some(error) = &p.analysis_error {
             activity = activity.child(
                 div()
@@ -593,72 +600,79 @@ impl LyrelApp {
             );
         let date = state.date;
         let selected = analysis.days().iter().find(|d| d.date() == date);
-        activity = activity
-            .child(grid)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .flex_wrap()
-                    .child(
-                        div()
-                            .id("statistics-date-anchor")
-                            .anchor_scroll(state.anchor.clone())
-                            .child(
-                                self.analysis_button(
-                                    "statistics-calendar-focus",
-                                    date.to_string(),
-                                    cx,
-                                    move |this, window, cx| {
-                                        this.select_analysis_date(date, window, cx)
-                                    },
-                                )
-                                .tooltip(format!(
-                                    "{}\n{}",
-                                    t(L10nKey::StatisticsCalendarKeys),
-                                    t(L10nKey::StatisticsMetricScope)
-                                )),
-                            ),
-                    )
-                    .child(div().text_xs().text_color(tk.k5).child(t_fmt(
-                        L10nKey::StatisticsActivityStreaks,
+        activity =
+            activity
+                .child(grid)
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            div()
+                                .id("statistics-date-anchor")
+                                .anchor_scroll(state.anchor.clone())
+                                .child(
+                                    self.analysis_button(
+                                        "statistics-calendar-focus",
+                                        date.to_string(),
+                                        cx,
+                                        move |this, window, cx| {
+                                            this.select_analysis_date(date, window, cx)
+                                        },
+                                    )
+                                    .tooltip(format!(
+                                        "{}\n{}",
+                                        t(L10nKey::StatisticsCalendarKeys),
+                                        t(L10nKey::StatisticsMetricScope)
+                                    )),
+                                ),
+                        )
+                        .child(div().text_xs().text_color(tk.k5).child(t_fmt(
+                            L10nKey::StatisticsActivityStreaks,
+                            &[
+                                (
+                                    "current",
+                                    &number(analysis.streaks().current().map(u64::from)),
+                                ),
+                                (
+                                    "longest",
+                                    &number(analysis.streaks().longest().map(u64::from)),
+                                ),
+                            ],
+                        )))
+                        .child(div().flex_1())
+                        .child(h_flex().gap_0p5().children([0., 0.25, 0.5, 0.75, 1.].map(
+                            |level| {
+                                div().size_2().rounded_sm().bg(if level == 0. {
+                                    tk.k06
+                                } else {
+                                    accent.opacity(level)
+                                })
+                            },
+                        ))),
+                )
+                .child(
+                    div().text_xs().text_color(tk.k5).child(t_fmt(
+                        L10nKey::StatisticsHeatmapLegend,
                         &[
+                            ("metric", t(metric_key(state.metric))),
                             (
-                                "current",
-                                &number(analysis.streaks().current().map(u64::from)),
-                            ),
-                            (
-                                "longest",
-                                &number(analysis.streaks().longest().map(u64::from)),
+                                "max",
+                                &if analysis
+                                    .days()
+                                    .iter()
+                                    .all(|day| day.value(state.metric).is_none())
+                                {
+                                    t(L10nKey::StatisticsUnknown).into()
+                                } else if state.metric == Metric::Cost {
+                                    format!("USD {maximum:.4}")
+                                } else {
+                                    format!("{maximum:.0}")
+                                },
                             ),
                         ],
-                    )))
-                    .child(div().flex_1())
-                    .child(h_flex().gap_0p5().children([0., 0.25, 0.5, 0.75, 1.].map(|level| {
-                        div().size_2().rounded_sm().bg(if level == 0. { tk.k06 } else { accent.opacity(level) })
-                    }))),
-            )
-            .child(
-                div().text_xs().text_color(tk.k5).child(t_fmt(
-                    L10nKey::StatisticsHeatmapLegend,
-                    &[
-                        ("metric", t(metric_key(state.metric))),
-                        (
-                            "max",
-                            &if analysis
-                                .days()
-                                .iter()
-                                .all(|day| day.value(state.metric).is_none())
-                            {
-                                t(L10nKey::StatisticsUnknown).into()
-                            } else if state.metric == Metric::Cost {
-                                format!("USD {maximum:.4}")
-                            } else {
-                                format!("{maximum:.0}")
-                            },
-                        ),
-                    ],
-                )),
-            );
+                    )),
+                );
         if state.detail {
             let text = selected
                 .map(|d| {
@@ -699,47 +713,81 @@ impl LyrelApp {
             GroupKind::Models => analysis.models(),
             GroupKind::Projects => analysis.projects(),
         };
-        let maximum = groups.iter().filter_map(|group| Metric::Tokens.value(group.totals())).fold(0., f64::max);
+        let maximum = groups
+            .iter()
+            .filter_map(|group| state.metric.value(group.totals()))
+            .fold(0., f64::max);
         let pages = groups.len().div_ceil(10).max(1);
         let page = state.page.min(pages - 1);
-        let common = v_flex()
-            .flex_grow(1.)
-            .flex_shrink(1.)
-            .flex_basis(rems(21.))
-            .min_w_0()
-            .gap_2()
-            .p_3()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_xl()
-            .child(h_flex().justify_between().gap_2()
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(t(L10nKey::StatisticsCommon)))
-                .child(groups_menu))
-            .children(
-                groups
-                    .iter()
-                    .skip(page * 10)
-                    .take(10)
-                    .map(|group| self.render_statistics_breakdown(group, false, analysis, maximum, cx)),
-            )
-            .when(groups.is_empty(), |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(tk.k5)
-                        .child(t(L10nKey::StatisticsEmpty)),
+        let common =
+            v_flex()
+                .flex_grow(1.)
+                .flex_shrink(1.)
+                .flex_basis(rems(21.))
+                .min_w_0()
+                .gap_2()
+                .p_3()
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded_xl()
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(t(L10nKey::StatisticsCommon)),
+                        )
+                        .child(groups_menu),
                 )
-            })
-            .when(pages > 1, |common| {
-                common.child(h_flex().gap_2()
-                    .child(self.analysis_button("statistics-group-previous", "‹", cx, move |this, _, cx| {
-                        this.change_analysis(|s| s.page = page.saturating_sub(1), false, cx)
-                    }).accessibility_label(t(L10nKey::StatisticsPreviousPage)).disabled(page == 0))
-                    .child(div().text_xs().child(format!("{} / {pages}", page + 1)))
-                    .child(self.analysis_button("statistics-group-next", "›", cx, move |this, _, cx| {
-                        this.change_analysis(|s| s.page = page + 1, false, cx)
-                    }).accessibility_label(t(L10nKey::StatisticsNextPage)).disabled(page + 1 >= pages)))
-            });
+                .children(groups.iter().skip(page * 10).take(10).map(|group| {
+                    self.render_statistics_breakdown(group, false, analysis, maximum, cx)
+                }))
+                .when(groups.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(tk.k5)
+                            .child(t(L10nKey::StatisticsEmpty)),
+                    )
+                })
+                .when(pages > 1, |common| {
+                    common.child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                self.analysis_button(
+                                    "statistics-group-previous",
+                                    "‹",
+                                    cx,
+                                    move |this, _, cx| {
+                                        this.change_analysis(
+                                            |s| s.page = page.saturating_sub(1),
+                                            false,
+                                            cx,
+                                        )
+                                    },
+                                )
+                                .accessibility_label(t(L10nKey::StatisticsPreviousPage))
+                                .disabled(page == 0),
+                            )
+                            .child(div().text_xs().child(format!("{} / {pages}", page + 1)))
+                            .child(
+                                self.analysis_button(
+                                    "statistics-group-next",
+                                    "›",
+                                    cx,
+                                    move |this, _, cx| {
+                                        this.change_analysis(|s| s.page = page + 1, false, cx)
+                                    },
+                                )
+                                .accessibility_label(t(L10nKey::StatisticsNextPage))
+                                .disabled(page + 1 >= pages),
+                            ),
+                    )
+                });
         let agent_pages = analysis.agents().len().div_ceil(10).max(1);
         let agent_page = state.agent_page.min(agent_pages - 1);
         let agents = v_flex()
@@ -758,13 +806,24 @@ impl LyrelApp {
                     .font_weight(FontWeight::MEDIUM)
                     .child(t(L10nKey::StatisticsAgents)),
             )
-            .child(h_flex().h_1p5().w_full().rounded_sm().overflow_hidden()
-                .bg(tk.k08).children(analysis.agents().iter().filter_map(|group| {
-                    let total = Metric::Tokens.value(analysis.totals()).filter(|v| *v > 0.)?;
-                    let value = Metric::Tokens.value(group.totals())?;
-                    Some(div().h_full().w(gpui_kit::relative((value / total) as f32))
-                        .bg(cx.theme().primary.opacity(agent_opacity(group.agent()))))
-                })))
+            .child(
+                h_flex()
+                    .h_1p5()
+                    .w_full()
+                    .rounded_sm()
+                    .overflow_hidden()
+                    .bg(tk.k08)
+                    .children(analysis.agents().iter().filter_map(|group| {
+                        let total = state.metric.value(analysis.totals()).filter(|v| *v > 0.)?;
+                        let value = state.metric.value(group.totals())?;
+                        Some(
+                            div()
+                                .h_full()
+                                .w(gpui_kit::relative((value / total) as f32))
+                                .bg(cx.theme().primary.opacity(agent_opacity(group.agent()))),
+                        )
+                    })),
+            )
             .child(
                 h_flex()
                     .gap_2()
@@ -875,56 +934,160 @@ impl LyrelApp {
     ) -> AnyElement {
         let tk = Tk::of(cx);
         let raw_label = group.label().unwrap_or(t(L10nKey::StatisticsUnattributed));
-        let label = if table { agent_label(group.agent()) } else { raw_label };
-        let context = format!("{} · {} · {}", group.agent(), group.scope(), group.provider().unwrap_or(""));
+        let label = if table {
+            agent_label(group.agent())
+        } else {
+            raw_label
+        };
+        let context = format!(
+            "{} · {} · {}",
+            group.agent(),
+            group.scope(),
+            group.provider().unwrap_or("")
+        );
         let totals = group.totals();
         let state = &self.active_settings().unwrap().statistics.analysis;
-        let key = format!("{table}:{}:{}:{}:{raw_label}", group.agent(), group.scope(), group.provider().unwrap_or(""));
+        let key = format!(
+            "{table}:{}:{}:{}:{raw_label}",
+            group.agent(),
+            group.scope(),
+            group.provider().unwrap_or("")
+        );
         let expanded = state.expanded.as_deref() == Some(&key);
-        let token_value = Metric::Tokens.value(totals);
-        let share = token_value.zip(Metric::Tokens.value(analysis.totals()))
+        let metric_value = state.metric.value(totals);
+        let share = metric_value
+            .zip(state.metric.value(analysis.totals()))
             .filter(|(_, total)| *total > 0.)
             .map(|(value, total)| format!("{:.0}%", value / total * 100.))
             .unwrap_or_else(|| "—".into());
-        let cost = totals.recorded_usd().map(|v| format!("${v:.2}"))
+        let cost = totals
+            .recorded_usd()
+            .map(|v| format!("${v:.2}"))
             .unwrap_or_else(|| "—".into());
-        let identity = h_flex().flex_1().min_w_0().gap_1p5()
-            .when(table, |row| row.child(div().size_1p5().rounded_sm()
-                .bg(cx.theme().primary.opacity(agent_opacity(group.agent())))))
+        let primary_value = match state.metric {
+            Metric::Tokens => dashboard::compact(totals.tokens().total()),
+            Metric::Cost => cost.clone(),
+            Metric::Sessions => session_count(totals),
+        };
+        let identity = h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_1p5()
+            .when(table, |row| {
+                row.child(
+                    div()
+                        .size_1p5()
+                        .rounded_sm()
+                        .bg(cx.theme().primary.opacity(agent_opacity(group.agent()))),
+                )
+            })
             .child(div().truncate().child(label.to_owned()));
         let row = if table {
-            h_flex().w_full().min_w_0().gap_2().text_xs()
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .text_xs()
                 .child(identity)
-                .child(div().w_12().text_right().child(dashboard::compact(totals.tokens().total())))
-                .child(div().w_16().text_right().text_color(tk.k5).child(cost.clone()))
-                .child(div().w_10().text_right().text_color(tk.k5).child(session_count(totals)))
+                .child(
+                    div()
+                        .w_12()
+                        .text_right()
+                        .child(dashboard::compact(totals.tokens().total())),
+                )
+                .child(
+                    div()
+                        .w_16()
+                        .text_right()
+                        .text_color(tk.k5)
+                        .child(cost.clone()),
+                )
+                .child(
+                    div()
+                        .w_10()
+                        .text_right()
+                        .text_color(tk.k5)
+                        .child(session_count(totals)),
+                )
                 .child(div().w_8().text_right().text_color(tk.k5).child(share))
                 .into_any_element()
         } else {
-            v_flex().w_full().min_w_0().gap_1()
-                .child(h_flex().min_w_0().gap_2().text_xs()
-                    .child(identity)
-                    .child(div().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsRankContext,
-                        &[("cost", &cost), ("sessions", &session_count(totals))])))
-                    .child(div().child(dashboard::compact(totals.tokens().total()))))
-                .child(h_flex().w_full().h_0p5().rounded_sm().overflow_hidden().bg(tk.k08)
-                    .when_some(token_value.filter(|_| maximum > 0.), |bar, value| {
-                        bar.child(div().h_full().w(gpui_kit::relative((value / maximum) as f32)).bg(tk.k5))
-                    }))
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_2()
+                        .text_xs()
+                        .child(identity)
+                        .child(div().text_color(tk.k5).child(t_fmt(
+                            L10nKey::StatisticsRankContext,
+                            &[("cost", &cost), ("sessions", &session_count(totals))],
+                        )))
+                        .child(div().child(primary_value.clone())),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .h_0p5()
+                        .rounded_sm()
+                        .overflow_hidden()
+                        .bg(tk.k08)
+                        .when_some(metric_value.filter(|_| maximum > 0.), |bar, value| {
+                            bar.child(
+                                div()
+                                    .h_full()
+                                    .w(gpui_kit::relative((value / maximum) as f32))
+                                    .bg(tk.k5),
+                            )
+                        }),
+                )
                 .into_any_element()
         };
         let description = detail(totals);
-        let content = v_flex().w_full().min_w_0().gap_2().whitespace_normal().text_left()
+        let content = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .whitespace_normal()
+            .text_left()
             .child(row)
-            .when(expanded, |el| el.child(div().id(SharedString::from(format!("statistics-breakdown-detail:{key}")))
-                .text_xs().text_color(tk.k5).child(format!("{context}\n{description}\n{}", t(L10nKey::StatisticsBreakdownScope)))));
+            .when(expanded, |el| {
+                el.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "statistics-breakdown-detail:{key}"
+                        )))
+                        .text_xs()
+                        .text_color(tk.k5)
+                        .child(format!(
+                            "{context}\n{description}\n{}",
+                            t(L10nKey::StatisticsBreakdownScope)
+                        )),
+                )
+            });
         Button::new(SharedString::from(format!("statistics-breakdown:{key}")))
-            .ghost().h_auto().w_full().min_w_0().py_1p5().px_0()
-            .border_b_1().border_color(cx.theme().border)
-            .accessibility_label(format!("{label} · {context}\n{description}"))
-            .tooltip(context).child(content)
+            .ghost()
+            .h_auto()
+            .w_full()
+            .min_w_0()
+            .py_1p5()
+            .px_0()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .accessibility_label(format!(
+                "{label} · {primary_value}\n{context}\n{description}"
+            ))
+            .tooltip(context)
+            .child(content)
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.change_analysis(|s| s.expanded = if expanded { None } else { Some(key.clone()) }, false, cx);
+                this.change_analysis(
+                    |s| s.expanded = if expanded { None } else { Some(key.clone()) },
+                    false,
+                    cx,
+                );
             }))
             .into_any_element()
     }

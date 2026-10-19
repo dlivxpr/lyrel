@@ -2,7 +2,7 @@
 use super::*;
 use gpui_kit::component::FocusTrapElement as _;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::{TestSupportExt as _, rems};
+use gpui_kit::rems;
 
 impl LyrelApp {
     pub(crate) fn render_settings_skills(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -267,7 +267,10 @@ impl LyrelApp {
         for skill in matches.iter().skip(page * 50).take(50) {
             let scope = skill_scope(skill);
             if previous_scope != Some(scope) {
-                let count = matches.iter().filter(|skill| skill_scope(skill) == scope).count();
+                let count = matches
+                    .iter()
+                    .filter(|skill| skill_scope(skill) == scope)
+                    .count();
                 rows = rows.child(
                     h_flex()
                         .gap_2()
@@ -276,7 +279,11 @@ impl LyrelApp {
                         .pb_1()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(div().font_weight(FontWeight::MEDIUM).child(t(source_key(scope))))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(t(source_key(scope))),
+                        )
                         .child(count.to_string()),
                 );
                 previous_scope = Some(scope);
@@ -325,21 +332,17 @@ impl LyrelApp {
                             .flex_1()
                             .gap_1()
                             .child(
-                                h_flex()
-                                    .gap_2()
-                                    .min_w_0()
-                                    .child(skill_icon(cx))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .truncate()
-                                            .font_weight(if selected {
-                                                FontWeight::MEDIUM
-                                            } else {
-                                                FontWeight::NORMAL
-                                            })
-                                            .child(skill.name().to_string()),
-                                    ),
+                                h_flex().gap_2().min_w_0().child(skill_icon(cx)).child(
+                                    div()
+                                        .text_sm()
+                                        .truncate()
+                                        .font_weight(if selected {
+                                            FontWeight::MEDIUM
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .child(skill.name().to_string()),
+                                ),
                             )
                             .child(
                                 div()
@@ -416,10 +419,7 @@ impl LyrelApp {
             .min_h_0()
             .min_w_0()
             .when(narrow, |pane| pane.flex_1())
-            .when(!narrow, |pane| {
-                pane.w(rems(236. / 16.))
-                    .flex_none()
-            })
+            .when(!narrow, |pane| pane.w(rems(236. / 16.)).flex_none())
             .child(
                 v_flex()
                     .flex_none()
@@ -443,13 +443,12 @@ impl LyrelApp {
                                     .min_w_0()
                                     .justify_between()
                                     .gap_2()
+                                    .child(div().truncate().child(t(
+                                        filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources),
+                                    )))
                                     .child(
-                                        div().truncate().child(t(
-                                            filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources),
-                                        )),
-                                    )
-                                    .child(
-                                        Icon::new(gpui_kit::component::IconName::ChevronDown).small(),
+                                        Icon::new(gpui_kit::component::IconName::ChevronDown)
+                                            .small(),
                                     ),
                             )
                             .accessibility_label(format!(
@@ -462,14 +461,22 @@ impl LyrelApp {
                                 let app = cx.entity().downgrade();
                                 move |mut menu, _, _| {
                                     for entry in &filters {
-                                        if let MenuEntry::Item { label, checked, on_pick, .. } = entry {
+                                        if let MenuEntry::Item {
+                                            label,
+                                            checked,
+                                            on_pick,
+                                            ..
+                                        } = entry
+                                        {
                                             let app = app.clone();
                                             let on_pick = on_pick.clone();
                                             menu = menu.item(
                                                 PopupMenuItem::new(label.clone())
                                                     .checked(*checked)
                                                     .on_click(move |_, window, cx| {
-                                                        let _ = app.update(cx, |app, cx| on_pick(app, window, cx));
+                                                        let _ = app.update(cx, |app, cx| {
+                                                            on_pick(app, window, cx)
+                                                        });
                                                     }),
                                             );
                                         }

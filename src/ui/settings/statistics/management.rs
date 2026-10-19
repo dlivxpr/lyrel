@@ -208,11 +208,33 @@ impl LyrelApp {
                     .border_1()
                     .border_color(cx.theme().border)
                     .accessibility_label(t(title))
-                    .child(h_flex().w_full().min_w_0().gap_2()
-                        .child(v_flex().flex_1().min_w_0().gap_0p5().text_left()
-                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(t(title)))
-                            .child(div().text_xs().text_color(tk.k5).whitespace_normal().child(status)))
-                        .child(div().text_color(tk.k5).child("›")))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_2()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_0p5()
+                                    .text_left()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(t(title)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(tk.k5)
+                                            .whitespace_normal()
+                                            .child(status),
+                                    ),
+                            )
+                            .child(div().text_color(tk.k5).child("›")),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_statistics_management(surface, window, cx)
                     })),
