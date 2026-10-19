@@ -76,13 +76,37 @@ macOS／Linux 的已存在 XDG 数据／状态目录按上游规则解析；自�
 缓存只在当前设置会话内保留，不写提示词、对话正文或凭据到磁盘。
 刷新失败时保留带时间的旧结果并明确标为过期；切换机器／范围或离开页面后，晚到结果不会覆盖新选择。
 当前扫描上限为 5,000 个文件、20,000 个目录、单文件 16 MiB、每轮变更读取 256 MiB。
-未实现的其他智能体与分析／来源／价格管理不提供成功占位。
+除已接入的 omp／Hermes 外，未实现的智能体与分析／来源／价格管理不提供成功占位。
 
 原生格式与目录依据：[会话契约](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/session.md)、
 [配置作用域](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/config-usage.md)、
 [目录实现](https://github.com/can1357/oh-my-pi/blob/v18.12.1/packages/utils/src/dirs.ts)。
 确定性文件／Host 测试不等于真实 SSH 或桌面视觉验收；Windows／macOS 实机、真实 SSH、
 窄窗口、主题、界面放大和键盘流程的实际验收证据须分别记录。
+
+## Hermes 原生历史统计
+
+「设置 → 统计」可筛选 Hermes 或全部来源，并固定选择本机或远端机器。有效 home/profile
+复用已配置的 Hermes 启动命令与 Host 环境，不读取另一机器的默认 profile，不猜测系统 Python。
+仅通过 Hermes 0.22.2 正式 launcher 的 `--print-runtime-command --module tui_gateway.entry`
+查询 `projects.tree`；远端需要独立的 `hermes-statistics-v1` 能力，旧 server 明确要求升级。
+
+仅纳入 `source=cli` 的原生持久会话。正式项目路径用于项目归属，无项目进入 Home 桶；
+可见 branch/reset 是独立主会话，compression 谱系已由上游合计，重叠谱系不会重复计费。
+输入、输出与总 Token 保留有效零，缺失项仍未知；实际 USD 和原生估算 USD 分别展示，
+估算不是账单，二者不能相加，也不以估算替代实际费用。
+
+接口只有会话累计用量，没有逐消息日期：仅当选择范围覆盖整个会话活动区间才纳入累计值。
+与范围相交却跨界的累计值不分摊、不归到最后一天，而是显示不完整；全部范围仍保留可得用量。
+调用数表示计量记录，Hermes 累计记录不等于模型请求次数。
+
+每次最多请求 501 个会话元数据，达到全局／项目预览边界会显式提示无 offset/cursor，
+不将有限窗口冒充全部历史。公开接口排除子代理用量、归档、零消息与自动任务，故总量始终受限。
+成功空响应不能区分空历史和 profile 数据库不可用，显示未知诊断而非完整零值。
+一个来源失败不会清除其他来源；读取失败保留对应来源带时间的缓存，不回退默认 profile。
+
+正式响应依据：[projects.tree](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/tui_gateway/methods_config.py)、
+[会话投影和可见性](https://github.com/NousResearch/hermes-agent/blob/v0.22.2/tui_gateway/methods_projects.py)。
 
 <a id="the-settings-file"></a>
 ## 设置文件

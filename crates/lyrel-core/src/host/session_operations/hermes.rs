@@ -96,6 +96,23 @@ pub(crate) fn sessions(
     Ok(sessions)
 }
 
+/// Statistics uses the public stored rows, never live session.usage/runtime IDs.
+pub(crate) fn statistics(request: &SessionOperation) -> Result<serde_json::Value, SessionOperationError> {
+    if request.agent != CLIAgent::Hermes {
+        return Err(failure(SessionErrorKind::Identity, "Hermes statistics requires a Hermes launch context"));
+    }
+    let (_, gateway, scope) = context(request)?;
+    let (result, shutdown_error) = rpc(&gateway, &scope, &request.cwd,
+        "projects.tree", serde_json::json!({"preview_limit":501,"session_limit":501}))?;
+    if let Some(error) = shutdown_error {
+        return Err(failure(SessionErrorKind::Command, error));
+    }
+    if !result["projects"].is_array() || !result["scoped_session_ids"].is_array() {
+        return Err(failure(SessionErrorKind::Command, "Hermes statistics returned invalid project metadata"));
+    }
+    Ok(result)
+}
+
 pub(super) fn prepare(
     request: &SessionOperation,
 ) -> Result<PreparedSession, SessionOperationError> {

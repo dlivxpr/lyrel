@@ -1,4 +1,6 @@
 //! 原生历史的结构化统计 seam；扫描只缓存计量元数据，不保留对话正文。
+mod hermes;
+pub use hermes::discover_hermes;
 mod omp;
 mod time_range;
 use crate::host::{Host, Meta};
@@ -19,6 +21,8 @@ pub struct Source {
     root: PathBuf,
     scope: String,
     agent: String,
+    #[serde(skip)]
+    hermes_request: Option<Box<crate::host::session_operations::SessionOperation>>,
 }
 impl Source {
     pub fn omp(root: PathBuf, scope: impl Into<String>) -> Self {
@@ -26,6 +30,7 @@ impl Source {
             root,
             scope: scope.into(),
             agent: "omp".into(),
+            hermes_request: None,
         }
     }
     pub fn root(&self) -> &std::path::Path {
@@ -86,8 +91,14 @@ pub struct UsageRecord {
     model: String,
     tokens: Tokens,
     recorded_usd: Option<f64>,
+    #[serde(default)]
+    coverage_start: Option<i64>,
+    #[serde(default)]
+    estimated_usd: Option<f64>,
 }
 impl UsageRecord {
+    pub fn coverage_start(&self) -> Option<i64> { self.coverage_start }
+    pub fn estimated_usd(&self) -> Option<f64> { self.estimated_usd }
     pub fn timestamp(&self) -> i64 {
         self.timestamp
     }
@@ -153,6 +164,7 @@ pub struct Snapshot {
     issues: Vec<ScanIssue>,
 }
 impl Snapshot {
+    pub fn record_issue(&mut self, path: PathBuf, reason: String) { self.issues.push(ScanIssue { path, reason }); }
     pub fn host(&self) -> u64 {
         self.host
     }
@@ -217,7 +229,14 @@ impl Snapshot {
                 sessions.insert((scope, session.id.as_str()));
             }
             for record in &session.records {
-                if !window.contains(record.timestamp) {
+                if let Some(start) = record.coverage_start {
+                    let overlaps = window.start().is_none_or(|s| record.timestamp >= s)
+                        && window.end().is_none_or(|e| start < e);
+                    if !window.contains(start) || !window.contains(record.timestamp) {
+                        if overlaps { out.ambiguous_records += 1; }
+                        continue;
+                    }
+                } else if !window.contains(record.timestamp) {
                     continue;
                 }
                 // IDs are short and only meaningful within the verified lineage and scope.
@@ -230,6 +249,9 @@ impl Snapshot {
                 }
                 out.tokens.add(&record.tokens, out.calls == 0);
                 out.calls += 1;
+                if let Some(estimate) = record.estimated_usd {
+                    out.estimated_usd = Some(out.estimated_usd.unwrap_or(0.) + estimate);
+                }
                 if let Some(cost) = record.recorded_usd {
                     out.recorded_usd = Some(out.recorded_usd.unwrap_or(0.) + cost);
                 } else {
@@ -246,6 +268,7 @@ impl Snapshot {
 pub struct Totals {
     tokens: Tokens,
     recorded_usd: Option<f64>,
+    estimated_usd: Option<f64>,
     unpriced_calls: u64,
     main_sessions: u64,
     calls: u64,
@@ -253,6 +276,7 @@ pub struct Totals {
     complete: bool,
 }
 impl Totals {
+    pub fn estimated_usd(&self) -> Option<f64> { self.estimated_usd }
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
@@ -294,6 +318,7 @@ impl Totals {
 #[derive(Default)]
 pub struct StatisticsCache {
     files: HashMap<(u64, String, PathBuf), (Meta, FileFacts)>,
+    native: HashMap<(u64, String, String), Vec<FileFacts>>,
 }
 
 /// Blocking Host operation. GUI callers dispatch using HostOps. No network pricing.
@@ -321,6 +346,10 @@ pub fn scan(
     let mut files = 0;
     let mut bytes = 0;
     for source in sources {
+        if source.agent == "hermes" {
+            hermes::scan_source(host, source, cache, &mut snapshot);
+            continue;
+        }
         let exact_file = host.stat(&source.root).is_ok_and(|m| !m.is_dir);
         let initial = if exact_file {
             let value = source.root.to_string_lossy();

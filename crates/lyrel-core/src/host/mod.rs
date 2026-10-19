@@ -533,6 +533,29 @@ pub trait Host: Send + Sync + 'static {
         session_operations::hermes::sessions(&request)
     }
 
+    /// Public Hermes stored usage on the data-owning Host, scoped by the launcher.
+    fn hermes_statistics(
+        &self,
+        request: &session_operations::SessionOperation,
+    ) -> Result<serde_json::Value, session_operations::SessionOperationError> {
+        guard_off_ui();
+        use session_operations::{SessionErrorKind, SessionOperationError};
+        let error = |kind, message: &str| SessionOperationError { kind, message: message.into(), retained: None };
+        if request.expected_host != self.id().0 {
+            return Err(error(SessionErrorKind::WrongHost, "Hermes statistics belongs to another Host"));
+        }
+        if !self.is_connected() {
+            return Err(error(SessionErrorKind::Connection, "Hermes statistics Host is disconnected"));
+        }
+        if !self.id().is_local() {
+            return Err(error(SessionErrorKind::Unsupported, "Hermes statistics requires its data-owning Host transport"));
+        }
+        if !self.is_absolute(&request.cwd) || !self.stat(&request.cwd).is_ok_and(|m| m.is_dir) {
+            return Err(error(SessionErrorKind::Directory, "Hermes statistics requires a valid Host directory"));
+        }
+        session_operations::hermes::statistics(request)
+    }
+
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub>;
 
     fn is_connected(&self) -> bool {

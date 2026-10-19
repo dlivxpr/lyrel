@@ -176,3 +176,46 @@ fn native_hermes_fork_retains_a_stored_identity_and_independent_source() {
         assert!(error.retained.is_none());
     }
 }
+
+#[test]
+fn hermes_statistics_rejects_wrong_host_and_profile_without_starting_runtime() {
+    let host = crate::host::local::LocalHost::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut request = SessionOperation {
+        expected_host: 999,
+        agent: CLIAgent::Hermes,
+        kind: SessionOperationKind::Resume,
+        source_id: String::new(),
+        cwd: dir.path().into(),
+        launch_argv: vec!["hermes".into()],
+        scope: SessionScope::default(),
+    };
+    assert_eq!(host.hermes_statistics(&request).unwrap_err().kind, SessionErrorKind::WrongHost);
+    request.expected_host = 0;
+    request.scope.profile = Some("work".into());
+    request.scope.environment.insert("HERMES_HOME".into(), dir.path().to_string_lossy().into_owned());
+    assert_eq!(host.hermes_statistics(&request).unwrap_err().kind, SessionErrorKind::Identity);
+}
+
+#[test]
+#[ignore = "requires isolated LYREL_TEST_HERMES and LYREL_TEST_HERMES_HOME"]
+fn native_hermes_statistics_reads_public_stored_usage() {
+    use crate::statistics::{self, DateWindow, Source, StatisticsCache};
+    let host = crate::host::local::LocalHost::new();
+    let home = PathBuf::from(std::env::var("LYREL_TEST_HERMES_HOME").unwrap());
+    let mut scope = SessionScope::default();
+    scope.environment.insert("HERMES_HOME".into(), home.to_string_lossy().into_owned());
+    let request = SessionOperation { expected_host: 0, agent: CLIAgent::Hermes,
+        kind: SessionOperationKind::Resume, source_id: String::new(), cwd: home.clone(),
+        launch_argv: vec![std::env::var("LYREL_TEST_HERMES").unwrap()], scope };
+    let source = Source::hermes(home, "native-isolated", request);
+    let snapshot = statistics::scan(&*host, &[source], &mut StatisticsCache::default()).unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(totals.main_sessions(), 2);
+    assert_eq!(totals.tokens().input(), Some(17));
+    assert_eq!(totals.tokens().output(), Some(8));
+    assert_eq!(totals.recorded_usd(), Some(0.0));
+    assert_eq!(totals.estimated_usd(), Some(1.0));
+    assert!(!snapshot.is_complete());
+    assert_eq!(snapshot.issues().len(), 1, "unexpected gateway/runtime failure: {:?}", snapshot.issues());
+}

@@ -4,7 +4,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {
-            "statistics omp native history tokens cost sessions machine profile date range overview"
+            "statistics omp Hermes native history tokens cost sessions machine profile date range overview"
         }
         L10nKey::StatisticsToday => "Today",
         L10nKey::StatisticsWeek => "This week",
@@ -13,7 +13,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsAll => "All time",
         L10nKey::StatisticsCustom => "Custom",
         L10nKey::StatisticsScope => {
-            "Read omp native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
+            "Read native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
         }
         L10nKey::StatisticsRange => "Date range",
         L10nKey::StatisticsCalendar => {
@@ -43,6 +43,16 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::StatisticsTokens => "Total tokens",
         L10nKey::StatisticsCost => "Recorded historical cost",
+        L10nKey::StatisticsEstimatedCost => "Native estimated cost (separate from actual)",
+        L10nKey::StatisticsAllSources => "All sources",
+        L10nKey::StatisticsSource => "Agent source",
+        L10nKey::StatisticsHermesLimits => "Hermes uses the selected launcher's home/profile. Public history excludes child usage and has no pagination. Cumulative usage is included only when the range covers the entire session; it is never spread across days. Actual and native estimated costs are separate, not additive.",
+        L10nKey::StatisticsHermesCoverage => "Hermes public history excludes child usage, archived and zero-message sessions. Totals cover visible native CLI history only.",
+        L10nKey::StatisticsHermesEmpty => "Hermes returned an empty result. The public interface cannot distinguish empty history from an unavailable profile database.",
+        L10nKey::StatisticsHermesWindow => "Hermes reached a global or project preview window. The public interface has no offset/cursor; this is not complete history.",
+        L10nKey::StatisticsHermesProfile => "Hermes returned a different profile. The row was omitted; no fallback profile was used.",
+        L10nKey::StatisticsHermesLineage => "Hermes returned overlapping native lineage. Duplicate cumulative usage was omitted.",
+        L10nKey::StatisticsHermesTime => "Hermes stored usage has no reliable activity interval. Cumulative usage cannot be assigned to this date range.",
         L10nKey::StatisticsSessions => "Active main sessions",
         L10nKey::StatisticsInput => "Input tokens",
         L10nKey::StatisticsOutput => "Output tokens",
@@ -52,17 +62,17 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsUnknown => "Unknown",
         L10nKey::StatisticsUnpriced => "Unpriced",
         L10nKey::StatisticsUnpricedCalls => {
-            "Calls without recorded cost: {count}. Known costs are a subtotal, not a bill or account quota. No prices are fetched or inferred."
+            "Records without actual cost: {count}. Known actual costs are a subtotal, not a bill or account quota. Native estimates are separate. No prices are fetched or inferred."
         }
         L10nKey::StatisticsNotComparable => "Not comparable",
         L10nKey::StatisticsComparison => {
             "Previous period: {tokens} tokens · {cost} · {sessions} main sessions\nToken change: {change}"
         }
         L10nKey::StatisticsEmpty => {
-            "No native activity in this range. Check the selected machine and source paths, choose another range, or use omp and refresh."
+            "No native activity in this range. Check the selected machine, source and date range, then refresh. Cumulative records crossing the range remain unassigned."
         }
         L10nKey::StatisticsPrivacy => {
-            "Read-only · omp 18.12.1 JSONL · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Arbitrary undiscoverable custom stores require an explicit source association. Skipped symlinks and unknown lineage limit coverage."
+            "Read-only native history · omp 18.12.1 JSONL / Hermes 0.22.2 public gateway · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Coverage limits and unknown lineage are reported below."
         }
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::IntegrationPiExtension => {

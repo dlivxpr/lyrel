@@ -389,6 +389,7 @@ fn handshake<R: Read>(
         feature::CONTENT_SEARCH.to_string(),
         feature::SESSION_OPERATIONS.to_string(),
         feature::HERMES_HISTORY.to_string(),
+        feature::HERMES_STATISTICS.to_string(),
     ];
     if host.agent_environment().is_ok() {
         features.push(feature::AGENT_ENVIRONMENT.to_string());
@@ -726,6 +727,10 @@ fn run_request(
         ),
         ControlRequest::HermesSessions { request } => (
             ReplyOk::HermesSessions(Box::new(h.hermes_sessions(&request))),
+            Vec::new(),
+        ),
+        ControlRequest::HermesStatistics { request } => (
+            ReplyOk::HermesStatistics(Box::new(h.hermes_statistics(&request))),
             Vec::new(),
         ),
 

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) struct StatisticsState {
     pub(crate) host: HostId,
+    agent: &'static str,
     period: Period,
     start: Entity<InputState>,
     end: Entity<InputState>,
@@ -17,7 +18,7 @@ pub(crate) struct StatisticsState {
     loading: bool,
     error: Option<String>,
     cache: Arc<Mutex<StatisticsCache>>,
-    results: HashMap<HostId, Presentation>,
+    results: HashMap<(HostId, &'static str), Presentation>,
 }
 struct Presentation {
     snapshot: Snapshot,
@@ -30,6 +31,7 @@ impl StatisticsState {
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         Self {
             host: HostId::LOCAL,
+            agent: "all",
             period: Period::Month,
             start: cx.new(|cx| InputState::new(window, cx).default_value(date.clone())),
             end: cx.new(|cx| InputState::new(window, cx).default_value(date)),
@@ -64,6 +66,16 @@ fn money(value: Option<f64>) -> String {
     value
         .map(|v| format!("USD {v:.4}"))
         .unwrap_or_else(|| t(L10nKey::StatisticsUnpriced).into())
+}
+fn issue_text(reason: &str) -> String {
+    let key = if reason.starts_with("Hermes public projects.tree excludes") { Some(L10nKey::StatisticsHermesCoverage) }
+    else if reason.starts_with("Hermes empty response") { Some(L10nKey::StatisticsHermesEmpty) }
+    else if reason.starts_with("Hermes global 501-session") || reason.starts_with("Hermes project preview window") { Some(L10nKey::StatisticsHermesWindow) }
+    else if reason.starts_with("Hermes response profile differs") { Some(L10nKey::StatisticsHermesProfile) }
+    else if reason.starts_with("Hermes overlapping native lineage") { Some(L10nKey::StatisticsHermesLineage) }
+    else if reason.starts_with("Hermes stored usage has no reliable") { Some(L10nKey::StatisticsHermesTime) }
+    else { None };
+    key.map(|key| t(key).to_string()).unwrap_or_else(|| reason.to_owned())
 }
 impl LyrelApp {
     pub(crate) fn load_statistics(&mut self, cx: &mut Context<Self>) {
@@ -108,6 +120,7 @@ impl LyrelApp {
             }
         };
         let host_id = state.host;
+        let agent = state.agent;
         let cache = state.cache.clone();
         let Some(host) = HostRegistry::lookup(cx, host_id) else {
             if let Some(s) = self.active_settings_mut() {
@@ -127,9 +140,21 @@ impl LyrelApp {
             host,
             cx,
             move |host| -> std::io::Result<Presentation> {
-                let sources = statistics::discover_omp(host, &launch)?;
+                let mut sources = Vec::new();
+                let mut discovery_errors = Vec::new();
+                for (slug, discover) in [
+                    ("omp", statistics::discover_omp as fn(_, _) -> _),
+                    ("hermes", statistics::discover_hermes as fn(_, _) -> _),
+                ] {
+                    if agent != "all" && agent != slug { continue; }
+                    match discover(host, &launch) {
+                        Ok(found) => sources.extend(found),
+                        Err(error) => discovery_errors.push((slug, error.to_string())),
+                    }
+                }
                 let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-                let snapshot = statistics::scan(host, &sources, &mut cache)?;
+                let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
+                for (slug, error) in discovery_errors { snapshot.record_issue(slug.into(), error); }
                 let totals = snapshot.aggregate(&window);
                 let previous = window.previous().map(|w| snapshot.aggregate(w));
                 Ok(Presentation {
@@ -147,13 +172,14 @@ impl LyrelApp {
                 if settings.section != SettingsSection::Statistics
                     || state.generation != generation
                     || state.host != host_id
+                    || state.agent != agent
                 {
                     return;
                 }
                 state.loading = false;
                 match result {
                     Ok(presentation) => {
-                        state.results.insert(host_id, presentation);
+                        state.results.insert((host_id, agent), presentation);
                         state.error = None;
                     }
                     Err(error) => {
@@ -178,6 +204,13 @@ impl LyrelApp {
     fn select_statistics_period(&mut self, period: Period, cx: &mut Context<Self>) {
         if let Some(s) = self.active_settings_mut() {
             s.statistics.period = period;
+            s.statistics.invalidate();
+        }
+        self.load_statistics(cx);
+    }
+    fn select_statistics_agent(&mut self, agent: &'static str, cx: &mut Context<Self>) {
+        if let Some(s) = self.active_settings_mut() {
+            s.statistics.agent = agent;
             s.statistics.invalidate();
         }
         self.load_statistics(cx);
@@ -231,6 +264,9 @@ impl LyrelApp {
             periods,
             cx,
         );
+        let agent_entries = [("all", t(L10nKey::StatisticsAllSources).to_string()), ("omp", "omp".into()), ("hermes", "Hermes".into())]
+            .into_iter().map(|(slug, label)| MenuEntry::item(label, state.agent == slug, move |this, _, cx| this.select_statistics_agent(slug, cx))).collect();
+        let agent_control = self.settings_dropdown("statistics-agent", if state.agent == "all" { t(L10nKey::StatisticsAllSources).to_string() } else { state.agent.to_string() }, None, agent_entries, cx);
         let mut rows = vec![
             self.settings_row(
                 t(L10nKey::StatisticsTitle),
@@ -247,6 +283,7 @@ impl LyrelApp {
             )
             .into_any_element(),
         ];
+        rows.push(self.settings_row(t(L10nKey::StatisticsSource), t(L10nKey::StatisticsHermesLimits), agent_control, cx).into_any_element());
         if period == Period::Custom {
             rows.push(
                 v_flex()
@@ -293,7 +330,7 @@ impl LyrelApp {
         }
         if let Some(p) = self
             .active_settings()
-            .and_then(|s| s.statistics.results.get(&host))
+            .and_then(|s| s.statistics.results.get(&(host, s.statistics.agent)))
         {
             let totals = &p.totals;
             let range_label = match (p.window.start(), p.window.end()) {
@@ -347,6 +384,7 @@ impl LyrelApp {
             let values = [
                 (L10nKey::StatisticsTokens, number(totals.tokens().total())),
                 (L10nKey::StatisticsCost, money(totals.recorded_usd())),
+                (L10nKey::StatisticsEstimatedCost, money(totals.estimated_usd())),
                 (
                     L10nKey::StatisticsSessions,
                     number(Some(totals.main_sessions())),
@@ -423,8 +461,8 @@ impl LyrelApp {
                         .text_size(fs(12.))
                         .text_color(tk.k5)
                         .child(format!(
-                            "omp · {}\n{}",
-                            source.scope(),
+                            "{} · {}\n{}",
+                            source.agent(), source.scope(),
                             source.root().display()
                         ))
                         .into_any_element(),
@@ -435,7 +473,7 @@ impl LyrelApp {
                     div()
                         .text_size(fs(12.))
                         .text_color(tk.warn_text)
-                        .child(format!("{}\n{}", issue.path().display(), issue.reason()))
+                        .child(format!("{}\n{}", issue.path().display(), issue_text(issue.reason())))
                         .into_any_element(),
                 );
             }
@@ -500,6 +538,7 @@ mod tests {
                 s.set_value(t(L10nKey::StatisticsTitle), window, cx)
             });
             app.autoselect_settings_search(cx);
+            app.select_statistics_agent("omp", cx);
         });
         vcx.run_until_parked();
         vcx.simulate_keystrokes("enter");
@@ -524,7 +563,7 @@ mod tests {
             let totals = &state
                 .statistics
                 .results
-                .get(&HostId::LOCAL)
+                .get(&(HostId::LOCAL, "omp"))
                 .expect("real native snapshot")
                 .totals;
             assert_eq!(totals.tokens().total(), Some(10));
@@ -534,7 +573,7 @@ mod tests {
             app.select_statistics_host(HostId(123456), cx);
             let state = &app.active_settings().unwrap().statistics;
             assert!(state.error.is_some());
-            assert!(!state.results.contains_key(&HostId(123456)));
+            assert!(!state.results.contains_key(&(HostId(123456), "omp")));
             app.select_statistics_host(HostId::LOCAL, cx);
             app.navigate_settings(SettingsSection::General, None, window, cx);
             assert!(!app.active_settings().unwrap().statistics.loading);

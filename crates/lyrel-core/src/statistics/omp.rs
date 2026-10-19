@@ -225,6 +225,8 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<NativeSession> {
                         total,
                     },
                     recorded_usd,
+                    coverage_start: None,
+                    estimated_usd: None,
                 });
             }
             _ => {}
