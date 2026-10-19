@@ -24,6 +24,7 @@ macro_rules! for_each_host_case {
             @cases
             read_dir_lists_and_sorts,
             statistics_native_overview,
+            statistics_kimi_native_overview,
             read_dir_includes_hidden,
             read_dir_missing_is_not_found,
             read_dir_on_a_file_errors,
@@ -125,6 +126,24 @@ pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
     assert_eq!(totals.recorded_usd(), Some(0.));
     assert_eq!(totals.main_sessions(), 1);
     assert!(totals.is_complete());
+    let analysis = snapshot
+        .analyze(
+            &DateWindow::all("UTC"),
+            chrono::Utc::now(),
+            Some("omp"),
+            2026,
+        )
+        .unwrap();
+    let day = analysis
+        .days()
+        .iter()
+        .find(|d| d.date().to_string() == "2026-03-08")
+        .unwrap();
+    assert_eq!(day.totals().tokens().total(), Some(15));
+    assert_eq!(day.totals().main_sessions(), 1);
+    assert_eq!(analysis.models()[0].label(), Some("test"));
+    assert_eq!(analysis.projects()[0].label(), Some("/work"));
+    assert_eq!(analysis.agents()[0].totals().recorded_usd(), Some(0.));
     // A failed refresh retains known values rather than turning history into zero.
     h.write_file(&h.join(&sessions, "native.jsonl"), b"{broken")
         .unwrap();
@@ -134,6 +153,92 @@ pub fn statistics_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
         stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
         Some(15)
     );
+    let analysis = stale
+        .analyze(&DateWindow::all("UTC"), chrono::Utc::now(), None, 2026)
+        .unwrap();
+    assert_eq!(analysis.totals().tokens().total(), Some(15));
+    assert_eq!(analysis.streaks().current(), None);
+    assert!(analysis.days().iter().all(|d| {
+        d.value(crate::statistics::analysis::Metric::Tokens)
+            .is_none()
+    }));
+}
+
+pub fn statistics_kimi_native_overview(h: &dyn Host, sandbox: &dyn Sandbox) {
+    use crate::statistics::{DateWindow, StatisticsCache, discover_kimi, scan};
+    let home = h.join(sandbox.path(), "kimi-home");
+    let session = h.join(&home, "sessions/wd_work_0123456789ab/session_native");
+    let main = h.join(&session, "agents/main");
+    let child = h.join(&session, "agents/agent-1");
+    h.create_dir(&main, true).unwrap();
+    h.create_dir(&child, true).unwrap();
+    h.write_file(
+        &h.join(&session, "state.json"),
+        br#"{"id":"session_native","cwd":"/work","createdAt":1792320000000}"#,
+    )
+    .unwrap();
+    let metadata =
+        "{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1792320000000}\n";
+    let turn = "{\"type\":\"usage.record\",\"agentId\":\"main\",\"model\":\"kimi-code/kimi-for-coding\",\"time\":1792320001000,\"usageScope\":\"turn\",\"usage\":{\"inputOther\":10,\"output\":2,\"inputCacheRead\":3,\"inputCacheCreation\":0}}\n";
+    let operation = turn.replace("\"turn\"", "\"session\"");
+    h.write_file(
+        &h.join(&main, "wire.jsonl"),
+        (metadata.to_owned() + turn + &operation).as_bytes(),
+    )
+    .unwrap();
+    h.write_file(
+        &h.join(&child, "wire.jsonl"),
+        (metadata.to_owned() + &turn.replace("\"main\"", "\"agent-1\"")).as_bytes(),
+    )
+    .unwrap();
+    let launch = std::collections::HashMap::from([(
+        "kimi".into(),
+        format!("KIMI_CODE_HOME='{}' kimi", home.display()),
+    )]);
+    let sources = discover_kimi(h, &launch).unwrap();
+    let mut cache = StatisticsCache::default();
+    let snapshot = scan(h, &sources, &mut cache).unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert!(totals.is_complete(), "{:?}", snapshot.issues());
+    assert_eq!(totals.tokens().total(), Some(45));
+    assert_eq!(totals.main_sessions(), 1);
+    assert_eq!(totals.unpriced_calls(), 3);
+    assert_eq!(totals.recorded_usd(), None);
+    h.write_file(&h.join(&child, "wire.jsonl"), b"truncated")
+        .unwrap();
+    let stale = scan(h, &sources, &mut cache).unwrap();
+    assert!(!stale.is_complete());
+    assert_eq!(
+        stale.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(45)
+    );
+    // pi's formal usage entries are not omp model_usage entries. The same Host transport
+    // must discover and read its isolated flat store without falling back to the GUI home.
+    let pi_sessions = h.join(home, "pi-private");
+    h.create_dir(&pi_sessions, true).unwrap();
+    h.write_file(&h.join(&pi_sessions, "pi.jsonl"), b"{\"type\":\"session\",\"version\":3,\"id\":\"stdio-native\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"cwd\":\"/work\"}\n{\"type\":\"usage\",\"id\":\"usage\",\"timestamp\":\"2026-03-08T09:00:00Z\",\"kind\":\"future\",\"provider\":\"anthropic\",\"model\":\"test\",\"usage\":{\"input\":12,\"output\":3,\"cacheRead\":2,\"cacheWrite\":4,\"totalTokens\":999,\"cost\":{\"total\":0}}}\n").unwrap();
+    let launch = std::collections::HashMap::from([(
+        "pi".into(),
+        format!(
+            "HOME='{}' USERPROFILE='{}' PI_CODING_AGENT_DIR='{}' pi --session-dir '{}'",
+            home.display(),
+            home.display(),
+            h.join(home, "pi-agent").display(),
+            pi_sessions.display()
+        ),
+    )]);
+    let sources = crate::statistics::discover_pi(h, &launch).unwrap();
+    let pi = scan(h, &sources, &mut cache).unwrap();
+    assert_eq!(
+        pi.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(21)
+    );
+    assert_eq!(
+        pi.aggregate(&DateWindow::all("UTC")).recorded_usd(),
+        Some(0.)
+    );
+    assert_eq!(pi.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
+    assert!(pi.is_complete());
 }
 
 #[doc(hidden)]

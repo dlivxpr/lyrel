@@ -63,7 +63,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsCopied => "已复制路径",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
-            "统计 omp 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+            "统计 omp pi kimi Kimi Code OpenCode 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
         }
         L10nKey::StatisticsToday => "今天",
         L10nKey::StatisticsWeek => "本周",
@@ -72,8 +72,13 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsAll => "全部",
         L10nKey::StatisticsCustom => "自定义",
         L10nKey::StatisticsScope => {
-            "读取所选机器的 omp 原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
+            "读取所选机器的原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
         }
+        L10nKey::StatisticsAgent => "智能体来源",
+        L10nKey::StatisticsAgentScope => {
+            "查看全部可用来源，或单个智能体的有效作用域。OpenCode 使用所选原生客户端或配置的服务，不回退另一默认服务。不可读来源保留诊断。"
+        }
+        L10nKey::StatisticsReasoning => "推理 Token",
         L10nKey::StatisticsRange => "日期范围",
         L10nKey::StatisticsCalendar => {
             "日历边界按桌面本机时区解释；每周从星期一开始。对比采用前一个对应日历期间。"
@@ -110,12 +115,53 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "上期：{tokens} Token · {cost} · {sessions} 个主会话\nToken 变化：{change}"
         }
         L10nKey::StatisticsEmpty => {
-            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用 omp 后刷新。"
+            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用所选智能体后刷新。"
         }
         L10nKey::StatisticsPrivacy => {
-            "只读 · omp 18.12.1 JSONL · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。任意不可发现的自定义存储需要显式来源关联。跳过链接与未知继承关系会限制覆盖范围。"
+            "只读 · omp 18.12.1／pi 1.3.0 JSONL／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 调用为增量，费用保持未知；pi 工具／摘要用量不推断模型。自定义存储必须可发现，跳过链接、未知继承与分页上限均显示诊断。"
         }
         L10nKey::StatisticsOpen => "打开统计",
+        L10nKey::StatisticsAnalysisTitle => "活动与明细",
+        L10nKey::StatisticsAllAgents => "全部已发现智能体",
+        L10nKey::StatisticsAgents => "智能体明细",
+        L10nKey::StatisticsModels => "常用模型",
+        L10nKey::StatisticsProjects => "常用项目",
+        L10nKey::StatisticsAnalysisValues => {
+            "{tokens} Token · 记录费用 {cost} · 估算费用 {estimated}\n{sessions} 个主会话 · {calls} 条用量记录（其中 {cumulative} 条累计）· {unpriced} 条未计价\n输入 {input} · 输出 {output} · 缓存读取 {read} · 缓存写入 {write}\n{status}"
+        }
+        L10nKey::StatisticsAnalysisAgent => "分析智能体",
+        L10nKey::StatisticsAnalysisScope => {
+            "仅筛选此分析，沿用上方机器、已发现来源与日期范围。刷新期间保留旧结果。"
+        }
+        L10nKey::StatisticsAnalysisMetric => "热力图指标",
+        L10nKey::StatisticsMetricScope => {
+            "仅改变日历深浅，详情始终显示全部指标。费用深浅仅使用完整记录费用，不使用估算或未计价调用。"
+        }
+        L10nKey::StatisticsAnalysisError => "无法构建桌面日历：{error}",
+        L10nKey::StatisticsPreviousYear => "上一年",
+        L10nKey::StatisticsNextYear => "下一年",
+        L10nKey::StatisticsStreaks => {
+            "当前连续 {current} 天 · 最长连续 {longest} 天。仅限可见年份与所选范围；今天无活动时从昨天起算。来源未知或跨日累计用量时无法可靠计算。"
+        }
+        L10nKey::StatisticsOutsideRange => "所选范围外：不计算此日活动，不表示零活动。",
+        L10nKey::StatisticsCalendarKeys => {
+            "选择日期查看详情。方向键：日／周；Page Up/Down：月；Home/End：年首／年尾；Enter：详情；Escape：隐藏详情，再按关闭设置。"
+        }
+        L10nKey::StatisticsHeatmapLegend => {
+            "{metric}：浅 → 深 = 0 → {max}（本年及所选范围内已知最大值）。? 表示未知／不完整；– 表示范围外。选择日期查看准确数值。跨日会话数不可相加，累计用量不会摊到每天。"
+        }
+        L10nKey::StatisticsWeekdays => "一　 二　 三　 四　 五　 六　 日",
+        L10nKey::StatisticsBreakdowns => "分解明细",
+        L10nKey::StatisticsBreakdownScope => {
+            "覆盖完整所选范围，不限于日历年份。已知 Token 总量降序排列，未知不参与排名。智能体、来源作用域与提供商分别保留。模型／项目会话数表示参与、不可相加；子代理用量不增加主会话数。"
+        }
+        L10nKey::StatisticsUnattributed => "无法归属",
+        L10nKey::StatisticsPreviousPage => "上一页",
+        L10nKey::StatisticsNextPage => "下一页",
+        L10nKey::StatisticsAnalysisSnapshot => "当前快照的分析智能体：{agent}",
+        L10nKey::StatisticsNoAnalysisSources => {
+            "所选机器中没有与此分析智能体匹配的已发现来源。请选择其他智能体或刷新；来源缺失不表示零活动。"
+        }
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 需要加载原生扩展。--no-extensions/-ne 会禁用发现；--no-session 会禁用历史、恢复与分叉。Print/JSON/RPC 模式不是原生 TUI。缺少事件不代表本轮结束，请检查启动诊断与项目信任，不要绕过授权。"
         }

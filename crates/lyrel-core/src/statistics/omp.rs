@@ -169,6 +169,7 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<NativeSession> {
                     timestamp: timestamp(&value).ok_or_else(error)?,
                     project: value.get("cwd").and_then(Value::as_str).map(str::to_owned),
                     records: Vec::new(),
+                    activity: Vec::new(),
                 });
             }
             Some("message" | "model_usage") => {
@@ -200,6 +201,7 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<NativeSession> {
                     .and_then(Value::as_f64)
                     .filter(|v| v.is_finite() && *v >= 0.);
                 records.push(UsageRecord {
+                    fingerprint: None,
                     id: value
                         .get("id")
                         .and_then(Value::as_str)
@@ -221,10 +223,14 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<NativeSession> {
                         input,
                         output,
                         cache_read,
+                        reasoning: None,
                         cache_write,
                         total,
                     },
                     recorded_usd,
+                    coverage_start: None,
+                    estimated_usd: None,
+                    time_unknown: false,
                 });
             }
             _ => {}

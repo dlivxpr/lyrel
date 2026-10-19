@@ -1,4 +1,5 @@
 //! 所选机器的原生历史总览；所有文件与聚合离开 GPUI 线程。
+mod analysis;
 use super::kit::{Tk, fs};
 use super::shell::MenuEntry;
 use super::*;
@@ -7,9 +8,14 @@ use crate::ui::host_registry::HostRegistry;
 use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+type Discover = fn(
+    &dyn lyrel_core::host::Host,
+    &HashMap<String, String>,
+) -> std::io::Result<Vec<statistics::Source>>;
 
 pub(crate) struct StatisticsState {
     pub(crate) host: HostId,
+    agent: Option<&'static str>,
     period: Period,
     start: Entity<InputState>,
     end: Entity<InputState>,
@@ -17,19 +23,23 @@ pub(crate) struct StatisticsState {
     loading: bool,
     error: Option<String>,
     cache: Arc<Mutex<StatisticsCache>>,
-    results: HashMap<HostId, Presentation>,
+    results: HashMap<(HostId, Option<&'static str>), Presentation>,
+    analysis: analysis::AnalysisState,
 }
 struct Presentation {
     snapshot: Snapshot,
     window: DateWindow,
     totals: Totals,
     previous: Option<Totals>,
+    analysis: Option<statistics::analysis::Analysis>,
+    analysis_error: Option<String>,
 }
 impl StatisticsState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         Self {
             host: HostId::LOCAL,
+            agent: None,
             period: Period::Month,
             start: cx.new(|cx| InputState::new(window, cx).default_value(date.clone())),
             end: cx.new(|cx| InputState::new(window, cx).default_value(date)),
@@ -38,6 +48,7 @@ impl StatisticsState {
             error: None,
             cache: Arc::new(Mutex::new(StatisticsCache::default())),
             results: HashMap::new(),
+            analysis: analysis::AnalysisState::new(cx),
         }
     }
     pub(crate) fn invalidate(&mut self) {
@@ -108,7 +119,61 @@ impl LyrelApp {
             }
         };
         let host_id = state.host;
+        let agent = state.agent;
+        let mut opencode_sources = Vec::new();
+        if agent.is_none_or(|agent| agent == "opencode") {
+            use lyrel_core::host::session_operations::{
+                SessionOperation, SessionOperationKind, launch_context,
+            };
+            let native = crate::core::cli_agent::CLIAgent::OpenCode;
+            for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
+                let pane = leaf.read(cx);
+                if pane.host_id() != host_id || pane.agent() != Some(native) {
+                    continue;
+                }
+                let Some(session) = pane.agent_session() else {
+                    continue;
+                };
+                let (Some(scope), Some(cwd), Some(launch_argv)) = (
+                    session.readout.session_scope.clone(),
+                    pane.host_cwd(),
+                    launch_context(native, &session),
+                ) else {
+                    continue;
+                };
+                let selector = format!(
+                    "opencode:client:{}",
+                    scope
+                        .opencode
+                        .as_ref()
+                        .and_then(|context| context.bridge.as_ref())
+                        .map_or("disconnected", |bridge| bridge.client_id.as_str())
+                );
+                if opencode_sources
+                    .iter()
+                    .any(|source: &statistics::Source| source.scope() == selector)
+                {
+                    continue;
+                }
+                opencode_sources.push(statistics::Source::opencode(
+                    cwd.clone(),
+                    selector,
+                    SessionOperation {
+                        expected_host: host_id.0,
+                        agent: native,
+                        kind: SessionOperationKind::Resume,
+                        source_id: String::new(),
+                        cwd,
+                        launch_argv,
+                        scope,
+                    },
+                ));
+            }
+        }
         let cache = state.cache.clone();
+        let analysis_agent = state.analysis.agent.clone();
+        let analysis_year = state.analysis.year;
+        let analysis_now = chrono::Local::now();
         let Some(host) = HostRegistry::lookup(cx, host_id) else {
             if let Some(s) = self.active_settings_mut() {
                 s.statistics.invalidate();
@@ -122,21 +187,65 @@ impl LyrelApp {
             s.statistics.generation = generation;
             s.statistics.loading = true;
             s.statistics.error = None;
+            if s.statistics.analysis.anchor.is_none() {
+                s.statistics.analysis.anchor =
+                    Some(gpui_kit::ScrollAnchor::for_handle(s.content_scroll.clone()));
+            }
         }
         HostOps::run(
             host,
             cx,
             move |host| -> std::io::Result<Presentation> {
-                let sources = statistics::discover_omp(host, &launch)?;
+                let mut sources = Vec::new();
+                let mut discovery_errors = Vec::new();
+                for (name, discover) in [
+                    ("omp", statistics::discover_omp as Discover),
+                    ("pi", statistics::discover_pi as Discover),
+                    ("kimi", statistics::discover_kimi as Discover),
+                ] {
+                    if agent.is_some_and(|selected| selected != name) {
+                        continue;
+                    }
+                    match discover(host, &launch) {
+                        Ok(found) => sources.extend(found),
+                        Err(error) => discovery_errors.push((name, error.to_string())),
+                    }
+                }
+                if agent.is_none_or(|agent| agent == "opencode") {
+                    // An explicitly bound client is never replaced by another default service.
+                    if opencode_sources.is_empty() {
+                        match statistics::discover_opencode(host, &launch) {
+                            Ok(found) => sources.extend(found),
+                            Err(error) => discovery_errors.push(("OpenCode", error.to_string())),
+                        }
+                    } else {
+                        sources.extend(opencode_sources);
+                    }
+                }
                 let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-                let snapshot = statistics::scan(host, &sources, &mut cache)?;
+                let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
+                for (name, error) in discovery_errors {
+                    snapshot = snapshot.with_issue(name.into(), error);
+                }
                 let totals = snapshot.aggregate(&window);
                 let previous = window.previous().map(|w| snapshot.aggregate(w));
+                let analysis = snapshot.analyze(
+                    &window,
+                    analysis_now,
+                    analysis_agent.as_deref(),
+                    analysis_year,
+                );
+                let (analysis, analysis_error) = match analysis {
+                    Ok(value) => (Some(value), None),
+                    Err(error) => (None, Some(error)),
+                };
                 Ok(Presentation {
                     snapshot,
                     window,
                     totals,
                     previous,
+                    analysis,
+                    analysis_error,
                 })
             },
             move |this, result, cx| {
@@ -147,13 +256,14 @@ impl LyrelApp {
                 if settings.section != SettingsSection::Statistics
                     || state.generation != generation
                     || state.host != host_id
+                    || state.agent != agent
                 {
                     return;
                 }
                 state.loading = false;
                 match result {
                     Ok(presentation) => {
-                        state.results.insert(host_id, presentation);
+                        state.results.insert((host_id, agent), presentation);
                         state.error = None;
                     }
                     Err(error) => {
@@ -179,6 +289,13 @@ impl LyrelApp {
         if let Some(s) = self.active_settings_mut() {
             s.statistics.period = period;
             s.statistics.invalidate();
+        }
+        self.load_statistics(cx);
+    }
+    fn select_statistics_agent(&mut self, agent: Option<&'static str>, cx: &mut Context<Self>) {
+        if let Some(settings) = self.active_settings_mut() {
+            settings.statistics.agent = agent;
+            settings.statistics.invalidate();
         }
         self.load_statistics(cx);
     }
@@ -209,6 +326,32 @@ impl LyrelApp {
             })
             .collect();
         let machine = self.settings_dropdown("statistics-machine", label, None, entries, cx);
+        let selected = state.agent;
+        let agents = [
+            (None, t(L10nKey::StatisticsAllAgents)),
+            (Some("omp"), "omp"),
+            (Some("pi"), "pi"),
+            (Some("kimi"), "Kimi Code"),
+            (Some("opencode"), "OpenCode"),
+        ]
+        .into_iter()
+        .map(|(agent, label)| {
+            MenuEntry::item(label, selected == agent, move |this, _, cx| {
+                this.select_statistics_agent(agent, cx)
+            })
+        })
+        .collect();
+        let agent = self.settings_dropdown(
+            "statistics-agent",
+            selected.map_or(t(L10nKey::StatisticsAllAgents), |agent| match agent {
+                "kimi" => "Kimi Code",
+                "opencode" => "OpenCode",
+                other => other,
+            }),
+            None,
+            agents,
+            cx,
+        );
         let periods = [
             Period::Today,
             Period::Week,
@@ -240,9 +383,23 @@ impl LyrelApp {
             )
             .into_any_element(),
             self.settings_row(
+                t(L10nKey::StatisticsAgent),
+                t(L10nKey::StatisticsAgentScope),
+                agent,
+                cx,
+            )
+            .into_any_element(),
+            self.settings_row(
                 t(L10nKey::StatisticsRange),
                 t(L10nKey::StatisticsCalendar),
                 range,
+                cx,
+            )
+            .into_any_element(),
+            self.settings_row(
+                t(L10nKey::StatisticsAgent),
+                t(L10nKey::StatisticsAgentScope),
+                agent,
                 cx,
             )
             .into_any_element(),
@@ -293,7 +450,7 @@ impl LyrelApp {
         }
         if let Some(p) = self
             .active_settings()
-            .and_then(|s| s.statistics.results.get(&host))
+            .and_then(|s| s.statistics.results.get(&(host, state.agent)))
         {
             let totals = &p.totals;
             let range_label = match (p.window.start(), p.window.end()) {
@@ -353,6 +510,10 @@ impl LyrelApp {
                 ),
                 (L10nKey::StatisticsInput, number(totals.tokens().input())),
                 (L10nKey::StatisticsOutput, number(totals.tokens().output())),
+                (
+                    L10nKey::StatisticsReasoning,
+                    number(totals.tokens().reasoning()),
+                ),
                 (
                     L10nKey::StatisticsCacheRead,
                     number(totals.tokens().cache_read()),
@@ -417,13 +578,15 @@ impl LyrelApp {
                         .into_any_element(),
                 );
             }
+            rows.push(self.render_statistics_analysis(p, cx));
             for source in p.snapshot.sources() {
                 rows.push(
                     div()
                         .text_size(fs(12.))
                         .text_color(tk.k5)
                         .child(format!(
-                            "omp · {}\n{}",
+                            "{} · {}\n{}",
+                            source.agent(),
                             source.scope(),
                             source.root().display()
                         ))
@@ -455,6 +618,8 @@ impl LyrelApp {
 mod tests {
     use super::*;
     use crate::core::session::Session;
+    use chrono::Datelike;
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
 
     #[gpui_kit::test]
@@ -468,6 +633,19 @@ mod tests {
             "{{\"type\":\"session\",\"version\":3,\"id\":\"gui-native\",\"timestamp\":\"{timestamp}\",\"cwd\":\"/work\"}}\n{{\"type\":\"model_usage\",\"id\":\"call\",\"timestamp\":\"{timestamp}\",\"provider\":\"test\",\"model\":\"fixture\",\"usage\":{{\"input\":8,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":10,\"cost\":{{\"total\":0}}}}}}\n"
         );
         std::fs::write(temp.path().join("sessions/native.jsonl"), sample).unwrap();
+        let kimi_home = temp.path().join("kimi");
+        let kimi_session = kimi_home.join("sessions/wd_test_0123456789ab/session_gui");
+        std::fs::create_dir_all(kimi_session.join("agents/main")).unwrap();
+        std::fs::write(kimi_session.join("state.json"), serde_json::json!({"id":"session_gui","cwd":"/work","createdAt":chrono::Utc::now().timestamp_millis()}).to_string()).unwrap();
+        let mut kimi_wire =
+            String::from("{\"type\":\"metadata\",\"protocol_version\":\"1.5\",\"created_at\":1}\n");
+        for scope in ["turn", "session"] {
+            kimi_wire.push_str(&format!("{}\n", serde_json::json!({"type":"usage.record","agentId":"main","model":"kimi-code/kimi-for-coding","usageScope":scope,"time":chrono::Utc::now().timestamp_millis(),"usage":{"inputOther":3,"output":2,"inputCacheRead":0,"inputCacheCreation":0}})));
+        }
+        std::fs::write(kimi_session.join("agents/main/wire.jsonl"), kimi_wire).unwrap();
+        let pi = temp.path().join("pi-sessions");
+        std::fs::create_dir(&pi).unwrap();
+        std::fs::write(pi.join("pi.jsonl"), format!("{{\"type\":\"session\",\"version\":3,\"id\":\"gui-native\",\"timestamp\":\"{timestamp}\"}}\n{{\"type\":\"usage\",\"id\":\"call\",\"timestamp\":\"{timestamp}\",\"kind\":\"future\",\"usage\":{{\"input\":5,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{{\"total\":0.25}}}}}}\n")).unwrap();
         cx.update(|cx| {
             gpui_kit::component::init(cx);
             let mut config = Config::default();
@@ -476,6 +654,22 @@ mod tests {
                 format!(
                     "OMP_PROFILE=default PI_CODING_AGENT_DIR='{}' omp",
                     temp.path().display()
+                ),
+            );
+            config.agent_launch.insert(
+                "kimi".into(),
+                format!("KIMI_CODE_HOME='{}' kimi", kimi_home.display()),
+            );
+            config.agent_launch.insert(
+                "opencode".into(),
+                format!("'{}/missing/opencode'", temp.path().display()),
+            );
+            config.agent_launch.insert(
+                "pi".into(),
+                format!(
+                    "PI_CODING_AGENT_DIR='{}' pi --session-dir '{}'",
+                    temp.path().join("pi-agent").display(),
+                    pi.display()
                 ),
             );
             cx.set_global(config);
@@ -518,23 +712,213 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             vcx.run_until_parked();
         }
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.select_statistics_agent(Some("opencode"), cx)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            if !vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "OpenCode source failure did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.update_in(&mut vcx, |app, _, cx| {
+            let state = &app.active_settings().unwrap().statistics;
+            let failed = state
+                .results
+                .get(&(HostId::LOCAL, Some("opencode")))
+                .expect("diagnostic snapshot");
+            assert!(!failed.snapshot.is_complete());
+            assert_eq!(failed.totals.tokens().total(), None);
+            assert_eq!(
+                state
+                    .results
+                    .get(&(HostId::LOCAL, None))
+                    .unwrap()
+                    .totals
+                    .tokens()
+                    .total(),
+                Some(27)
+            );
+            app.select_statistics_agent(None, cx);
+        });
+        app.update_in(&mut vcx, |app, window, cx| {
+            let state = &app.active_settings().unwrap().statistics;
+            window.focus(&state.analysis.focus, cx);
+            assert!(
+                state
+                    .results
+                    .get(&(HostId::LOCAL, None))
+                    .unwrap()
+                    .analysis
+                    .as_ref()
+                    .unwrap()
+                    .days()
+                    .iter()
+                    .any(|d| d.totals().tokens().total() == Some(27))
+            );
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("home right down enter");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let state = &app.read(cx).active_settings().unwrap().statistics.analysis;
+            assert_eq!(state.date.ordinal(), 9);
+            assert!(state.detail);
+        });
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let settings = app.read(cx).active_settings().unwrap();
+            assert!(!settings.statistics.analysis.detail);
+            assert!(settings.section == SettingsSection::Statistics);
+        });
+        for (locale, width, mode) in [
+            ("en", 1120., gpui_kit::component::ThemeMode::Light),
+            ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
+        ] {
+            crate::ui::i18n::set_locale(locale);
+            vcx.simulate_window_resize(window.into(), gpui_kit::size(px(width), px(800.)));
+            app.update_in(&mut vcx, |app, window, cx| {
+                gpui_kit::component::Theme::change(mode, Some(window), cx);
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(18.));
+                app.active_settings_mut()
+                    .unwrap()
+                    .statistics
+                    .analysis
+                    .metric = statistics::analysis::Metric::Tokens;
+                cx.notify();
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let top = window.find("statistics-analysis-metric").bounds().top();
+                let scroll = &app.read(cx).active_settings().unwrap().content_scroll;
+                let offset = scroll.offset();
+                scroll.set_offset(gpui_kit::point(offset.x, offset.y - top + px(180.)));
+                window.render_frame(cx);
+                let trigger = window.find("statistics-analysis-metric");
+                assert!(
+                    trigger.visible(),
+                    "{locale}: heatmap metric must remain reachable"
+                );
+                assert!(trigger.bounds().size.width <= px(width));
+                window.click("statistics-analysis-metric", cx);
+                window.press("escape", cx);
+            });
+            vcx.run_until_parked();
+            let mut found = false;
+            for _ in 0..450 {
+                let focused = vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    window.find("statistics-analysis-metric").focused() == Some(true)
+                });
+                if focused {
+                    found = true;
+                    break;
+                }
+                vcx.simulate_keystrokes("tab");
+            }
+            assert!(
+                found,
+                "{locale}: metric must be reachable in native Tab order"
+            );
+            vcx.simulate_keystrokes("enter down down enter");
+            vcx.run_until_parked();
+            vcx.update(|_, cx| {
+                let settings = app.read(cx).active_settings().unwrap();
+                assert_eq!(
+                    settings.statistics.analysis.metric,
+                    statistics::analysis::Metric::Cost,
+                    "{locale}: native dropdown must support keyboard selection"
+                );
+            });
+        }
+        crate::ui::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
             let state = app.active_settings().unwrap();
             assert!(state.section == SettingsSection::Statistics);
             let totals = &state
                 .statistics
                 .results
-                .get(&HostId::LOCAL)
+                .get(&(HostId::LOCAL, None))
                 .expect("real native snapshot")
                 .totals;
-            assert_eq!(totals.tokens().total(), Some(10));
-            assert_eq!(totals.recorded_usd(), Some(0.));
-            assert_eq!(totals.main_sessions(), 1);
+            assert_eq!(totals.tokens().total(), Some(27));
+            assert_eq!(totals.recorded_usd(), Some(0.25));
+            assert_eq!(totals.main_sessions(), 3);
+            assert_eq!(totals.unpriced_calls(), 2);
+            app.select_statistics_agent(Some("kimi"), cx);
+        });
+        vcx.run_until_parked();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Kimi filter did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            vcx.run_until_parked();
+        }
+        app.update_in(&mut vcx, |app, _window, cx| {
+            let presentation = app
+                .active_settings()
+                .unwrap()
+                .statistics
+                .results
+                .get(&(HostId::LOCAL, Some("kimi")))
+                .unwrap();
+            assert_eq!(presentation.totals.tokens().total(), Some(10));
+            assert_eq!(presentation.totals.recorded_usd(), None);
+            assert_eq!(presentation.totals.main_sessions(), 1);
+            assert_eq!(presentation.totals.unpriced_calls(), 2);
+            assert!(
+                presentation
+                    .snapshot
+                    .sources()
+                    .iter()
+                    .all(|source| source.agent() == "kimi")
+            );
+            app.select_statistics_agent(Some("pi"), cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            vcx.run_until_parked();
+        }
+        app.update_in(&mut vcx, |app, _, cx| {
+            let totals = &app.active_settings().unwrap().statistics.results
+                .get(&(HostId::LOCAL, Some("pi"))).unwrap().totals;
+            assert_eq!(totals.tokens().total(), Some(7));
+            assert_eq!(totals.recorded_usd(), Some(0.25));
+            cx.global_mut::<Config>().agent_launch.insert(
+                "pi".into(), "PI_CODING_AGENT_DIR=relative pi".into());
+            app.select_statistics_agent(None, cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while vcx.update(|_, cx| app.read(cx).active_settings().unwrap().statistics.loading) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            vcx.run_until_parked();
+        }
+        app.update_in(&mut vcx, |app, window, cx| {
+            let presentation = app.active_settings().unwrap().statistics.results
+                .get(&(HostId::LOCAL, None)).unwrap();
+            assert_eq!(presentation.totals.tokens().total(), Some(20));
+            assert!(!presentation.snapshot.is_complete());
+            assert!(presentation.snapshot.issues().iter().any(|issue| issue.path().to_string_lossy() == "pi"));
             // A disconnected machine must not borrow the local native snapshot.
             app.select_statistics_host(HostId(123456), cx);
             let state = &app.active_settings().unwrap().statistics;
             assert!(state.error.is_some());
-            assert!(!state.results.contains_key(&HostId(123456)));
+            assert!(!state.results.contains_key(&(HostId(123456), None)));
             app.select_statistics_host(HostId::LOCAL, cx);
             app.navigate_settings(SettingsSection::General, None, window, cx);
             assert!(!app.active_settings().unwrap().statistics.loading);
