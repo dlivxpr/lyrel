@@ -37,7 +37,8 @@ fn reveal(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str) {
             .find(SharedString::from(id.to_owned()))
             .bounds()
             .top();
-        let scroll = &app.read(cx).active_settings().unwrap().content_scroll;
+        let state = &app.read(cx).active_settings().unwrap().statistics;
+        let scroll = if state.management.surface.is_some() { &state.management.scroll } else { &state.content_scroll };
         let offset = scroll.offset();
         scroll.set_offset(gpui_kit::point(offset.x, offset.y - top + px(180.)));
         window.render_frame(cx);
@@ -55,6 +56,8 @@ fn click(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str) {
 fn type_into(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str, value: &str) {
     click(app, cx, id);
     cx.update(|window, cx| {
+        assert!(window.find(SharedString::from(id.to_owned())).label().is_some_and(|name| !name.is_empty()),
+            "{id} must expose a semantic input name");
         window.press("secondary-a", cx);
         window.input(value, cx);
     });
@@ -125,6 +128,18 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         app.navigate_settings(SettingsSection::Statistics, None, window, cx);
     });
     settle(&app, &mut vcx);
+    vcx.simulate_window_resize(window.into(), gpui_kit::size(px(955.), px(701.)));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        for id in ["statistics-tile-tokens", "statistics-tile-cost", "statistics-tile-sessions", "statistics-analysis-metric"] {
+            assert!(window.find(id).visible(), "{id} must be visible in the first viewport");
+        }
+    });
+    click(&app, &mut vcx, "statistics-tile-cost");
+    assert_eq!(app.read_with(&vcx, |app, _| app.active_settings().unwrap().statistics.analysis.metric), statistics::analysis::Metric::Cost);
+    click(&app, &mut vcx, "statistics-tile-tokens");
+    assert_eq!(app.read_with(&vcx, |app, _| app.active_settings().unwrap().statistics.analysis.metric), statistics::analysis::Metric::Tokens);
     app.update_in(&mut vcx, |app, window, cx| {
         window.focus(&app.active_settings().unwrap().focus_handle, cx)
     });
@@ -166,6 +181,7 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
     tab_to(&mut vcx, "statistics-period");
     vcx.simulate_keystrokes("enter down down down down down enter");
     settle(&app, &mut vcx);
+    click(&app, &mut vcx, "statistics-manage-sources");
     click(&app, &mut vcx, "statistics-add-source");
     reveal(&app, &mut vcx, "statistics-source-kind");
     vcx.simulate_keystrokes("shift-tab");
@@ -206,6 +222,24 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         &format!("statistics-check-source:{}", binding.key()),
     );
     settle(&app, &mut vcx);
+    click(&app, &mut vcx, &format!("statistics-edit-source:{}", binding.key()));
+    type_into(&app, &mut vcx, "statistics-source-selector", &temp.path().join("missing-history.jsonl").display().to_string());
+    click(&app, &mut vcx, "statistics-source-save");
+    settle(&app, &mut vcx);
+    vcx.update(|_, cx| {
+        let state = &app.read(cx).active_settings().unwrap().statistics;
+        assert!(state.management.error.is_some());
+        assert_eq!(state.results[&(HostId::LOCAL, Some("omp"))].totals.tokens().total(), Some(3_000_000));
+    });
+    click(&app, &mut vcx, "statistics-editor-cancel");
+    click(&app, &mut vcx, &format!("statistics-edit-source:{}", binding.key()));
+    click(&app, &mut vcx, "statistics-source-save");
+    settle(&app, &mut vcx);
+    vcx.update(|_, cx| {
+        let state = &app.read(cx).active_settings().unwrap().statistics;
+        assert_eq!(state.results[&(HostId::LOCAL, Some("omp"))].totals.tokens().total(), Some(3_000_000));
+        assert!(state.results[&(HostId::LOCAL, Some("omp"))].bindings.iter().any(|b| b.key() == binding.key()));
+    });
     click(&app, &mut vcx, "statistics-add-source");
     type_into(
         &app,
@@ -227,6 +261,12 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         );
     });
     click(&app, &mut vcx, "statistics-editor-cancel");
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.find("statistics-manage-sources").focused() == Some(true)
+    }));
     for (locale, width, mode) in [
         ("en", 1120., gpui_kit::component::ThemeMode::Light),
         ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
@@ -237,6 +277,7 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
             gpui_kit::component::Theme::update(cx, |t| t.font_size = px(18.));
         });
+        click(&app, &mut vcx, "statistics-manage-prices");
         click(&app, &mut vcx, "statistics-add-price");
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();
@@ -245,8 +286,15 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
             assert!(window.try_find("statistics-price-save").is_none());
             assert!(app.read(cx).active_settings().unwrap().section == SettingsSection::Statistics);
         });
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.find("statistics-manage-prices").focused() == Some(true)
+        }));
     }
     crate::ui::i18n::set_locale("en");
+    click(&app, &mut vcx, "statistics-manage-prices");
     click(&app, &mut vcx, "statistics-add-price");
     for (index, value) in [
         "fixture-provider",
@@ -367,6 +415,9 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
                 .is_empty()
         )
     });
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    click(&app, &mut vcx, "statistics-manage-sources");
     click(
         &app,
         &mut vcx,

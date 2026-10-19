@@ -292,7 +292,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsModels => "Frequently used models",
         L10nKey::StatisticsProjects => "Frequently used projects",
         L10nKey::StatisticsAnalysisValues => {
-            "{tokens} tokens · recorded {cost} · estimated {estimated}\n{sessions} main sessions · {calls} usage records ({cumulative} cumulative) · {unpriced} unpriced records\nInput {input} · output {output} · cache read {read} · cache write {write}\n{status}"
+            "{tokens} tokens · recorded {cost} · native estimate {estimated}\n{sessions} main sessions · {calls} usage records ({cumulative} cumulative) · {unpriced} unpriced records\nInput {input} · output {output} · reasoning {reasoning} · cache read {read} · cache write {write}\n{status}"
         }
         L10nKey::StatisticsAnalysisAgent => "Analysis agent",
         L10nKey::StatisticsAnalysisScope => {
@@ -315,7 +315,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Select a date for details. Arrow keys: day/week · Page Up/Down: month · Home/End: year bounds · Enter: details · Escape: hide details, again to close settings."
         }
         L10nKey::StatisticsHeatmapLegend => {
-            "{metric}: lighter → darker = 0 → {max} (maximum known value in this year and range). ? unknown/incomplete; – outside range. Select any date for exact values. Session counts across dates are not additive; cumulative usage is never spread across days."
+            "{metric} · peak {max} · ? unknown/incomplete · dimmed: outside range"
         }
         L10nKey::StatisticsWeekdays => "Mon  Tue  Wed  Thu  Fri  Sat  Sun",
         L10nKey::StatisticsBreakdowns => "Breakdown",
@@ -329,6 +329,31 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsNoAnalysisSources => {
             "No discovered source matches this analysis agent on the selected machine. Choose another agent or refresh; missing sources are not zero activity."
         }
+        L10nKey::StatisticsStartDate => "Start date (YYYY-MM-DD)",
+        L10nKey::StatisticsEndDate => "End date (YYYY-MM-DD)",
+        L10nKey::StatisticsCostCard => "Recorded cost",
+        L10nKey::StatisticsSessionColumn => "Sessions",
+        L10nKey::StatisticsTokenDelta => "Previous period: {change}",
+        L10nKey::StatisticsRecordedSubtotal => "Known subtotal · {count} records without actual cost",
+        L10nKey::StatisticsNativeEstimate => "Native estimate, separate: {value}",
+        L10nKey::StatisticsCurrencyEstimate => "{currency} estimates · custom {custom} · catalog {catalog} · {partial} partial",
+        L10nKey::StatisticsPreviousValue => "Previous period: {value}",
+        L10nKey::StatisticsSessionAverage => "{value} tokens / main session, including child usage",
+        L10nKey::StatisticsRecordCount => "{calls} usage records · {cumulative} cumulative",
+        L10nKey::StatisticsActivity => "Activity",
+        L10nKey::StatisticsActivityStreaks => "Current streak {current} days · longest {longest}",
+        L10nKey::StatisticsSourceSummary => "{count} locations · {issues} diagnostics",
+        L10nKey::StatisticsPriceSummary => "{count} custom prices · public catalog {catalog}",
+        L10nKey::StatisticsCatalogEnabled => "enabled",
+        L10nKey::StatisticsCatalogDisabled => "off",
+        L10nKey::StatisticsManageSources => "Sources…",
+        L10nKey::StatisticsManagePrices => "Token prices…",
+        L10nKey::StatisticsEditSource => "Edit source…",
+        L10nKey::StatisticsSaveSource => "Save source",
+        L10nKey::StatisticsPriceRow => "Input {input} · output {output} · reasoning {reasoning} · cache read {read} · cache write {write}",
+        L10nKey::StatisticsSourceLocation => "History path or native service URL",
+        L10nKey::StatisticsAddPrice => "Add price…",
+        L10nKey::StatisticsSourceTarget => "Target machine: {machine}",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 requires its native extension. --no-extensions/-ne disables discovery; --no-session disables history, resume and fork. Print/JSON/RPC modes are not the native TUI. Missing events never mean Done. Check startup diagnostics and project trust without bypassing consent."
         }
