@@ -174,14 +174,20 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "原生历史只读 · 缓存仅保留结构化计量，不保留提示词、对话正文或凭据。来源关联与价格保存在桌面本地；仅在明确启用 models.dev 并手动检查后下载公共价表。估算不是账单、余额或账户对账。覆盖、谱系与分页上限持续显示。"
         }
         L10nKey::StatisticsSourcesTitle => "来源",
-        L10nKey::StatisticsSourcesHelp => "来源绑定当前机器、智能体和有效作用域。移除只取消关联，绝不删除原生历史。检查会验证可读性与覆盖范围；失败时保留旧数据并标为不完整。",
+        L10nKey::StatisticsSourcesHelp => {
+            "来源绑定当前机器、智能体和有效作用域。移除只取消关联，绝不删除原生历史。检查会验证可读性与覆盖范围；失败时保留旧数据并标为不完整。"
+        }
         L10nKey::StatisticsAddSource => "添加来源…",
         L10nKey::StatisticsCheckSource => "检查来源",
         L10nKey::StatisticsRemoveSource => "移除关联",
         L10nKey::StatisticsSourceChecked => "来源检查完成，原生历史可读。",
-        L10nKey::StatisticsSourceSelector => "omp／pi：绝对历史目录或 JSONL 文件；Kimi：绝对 sessions 目录；OpenCode：不含凭据或查询参数的原生服务 HTTP(S) URL；Hermes：已解析的 profile home 目录，不是数据库。",
+        L10nKey::StatisticsSourceSelector => {
+            "omp／pi：绝对历史目录或 JSONL 文件；Kimi：绝对 sessions 目录；OpenCode：不含凭据或查询参数的原生服务 HTTP(S) URL；Hermes：已解析的 profile home 目录，不是数据库。"
+        }
         L10nKey::StatisticsPricesTitle => "Token 单价",
-        L10nKey::StatisticsPricesHelp => "单位为每百万 Token。服务商、模型与币种必须精确匹配；未知类别留空，不填零。原生记录费用（包括零）始终优先；自定义价优先于已启用的目录价。部分缺价仍明确显示未计价，不混加币种。",
+        L10nKey::StatisticsPricesHelp => {
+            "单位为每百万 Token。服务商、模型与币种必须精确匹配；未知类别留空，不填零。原生记录费用（包括零）始终优先；自定义价优先于已启用的目录价。部分缺价仍明确显示未计价，不混加币种。"
+        }
         L10nKey::StatisticsEditPrice => "编辑单价…",
         L10nKey::StatisticsDeletePrice => "删除单价",
         L10nKey::StatisticsSavePrice => "保存单价",
@@ -189,12 +195,18 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsPriceModel => "精确模型 ID",
         L10nKey::StatisticsPriceCurrency => "币种代码（例如 USD）",
         L10nKey::StatisticsPublicCatalog => "models.dev 公共价表",
-        L10nKey::StatisticsPublicConsent => "默认禁用。启用后可手动检查 https://models.dev/api.json，仅下载公共目录，不发送历史、路径、提示词或凭据；不会自动检查。",
+        L10nKey::StatisticsPublicConsent => {
+            "默认禁用。启用后可手动检查 https://models.dev/api.json，仅下载公共目录，不发送历史、路径、提示词或凭据；不会自动检查。"
+        }
         L10nKey::StatisticsCatalogEnable => "启用公共价表",
         L10nKey::StatisticsCatalogDisable => "禁用公共价表",
         L10nKey::StatisticsCatalogCheck => "检查公共价表",
-        L10nKey::StatisticsCatalogStatus => "最近检查：{checked}\n缓存时间：{fetched} · {count} 个模型单价。检查失败继续保留此缓存。",
-        L10nKey::StatisticsPriceEstimate => "{currency} · 自定义估算 {custom} · models.dev 估算 {catalog}\n已计价 {priced} Token · 未计价 {unpriced} Token · {partial} 条部分计价记录",
+        L10nKey::StatisticsCatalogStatus => {
+            "最近检查：{checked}\n缓存时间：{fetched} · {count} 个模型单价。检查失败继续保留此缓存。"
+        }
+        L10nKey::StatisticsPriceEstimate => {
+            "{currency} · 自定义估算 {custom} · models.dev 估算 {catalog}\n已计价 {priced} Token · 未计价 {unpriced} Token · {partial} 条部分计价记录"
+        }
         L10nKey::StatisticsPricedCost => "费用（记录＋明确估算）",
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::StatisticsAnalysisTitle => "活动与明细",

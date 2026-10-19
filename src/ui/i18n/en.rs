@@ -192,14 +192,20 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Read-only native history · structured usage cache only; no prompts, conversation bodies or credentials. Source associations and prices are saved locally. Public prices are downloaded only after you enable models.dev and choose Check. Estimates are not bills, balances or account reconciliation. Coverage, lineage and pagination limits remain visible."
         }
         L10nKey::StatisticsSourcesTitle => "Sources",
-        L10nKey::StatisticsSourcesHelp => "Sources belong to the selected machine and agent scope. Removing an association never deletes native history. Check validates readability and coverage; failures keep previous data marked incomplete.",
+        L10nKey::StatisticsSourcesHelp => {
+            "Sources belong to the selected machine and agent scope. Removing an association never deletes native history. Check validates readability and coverage; failures keep previous data marked incomplete."
+        }
         L10nKey::StatisticsAddSource => "Add source…",
         L10nKey::StatisticsCheckSource => "Check source",
         L10nKey::StatisticsRemoveSource => "Remove association",
         L10nKey::StatisticsSourceChecked => "Source checked; native history is readable.",
-        L10nKey::StatisticsSourceSelector => "omp / pi: absolute history directory or JSONL file. Kimi: absolute sessions directory. OpenCode: native service HTTP(S) URL without credentials or query. Hermes: resolved profile home directory, not a database.",
+        L10nKey::StatisticsSourceSelector => {
+            "omp / pi: absolute history directory or JSONL file. Kimi: absolute sessions directory. OpenCode: native service HTTP(S) URL without credentials or query. Hermes: resolved profile home directory, not a database."
+        }
         L10nKey::StatisticsPricesTitle => "Token prices",
-        L10nKey::StatisticsPricesHelp => "Prices are per million tokens. Match provider, model and currency exactly. Leave unknown categories blank, not zero. Recorded costs, including zero, always win; custom prices precede enabled catalog prices. Partial coverage remains unpriced, and currencies are never combined.",
+        L10nKey::StatisticsPricesHelp => {
+            "Prices are per million tokens. Match provider, model and currency exactly. Leave unknown categories blank, not zero. Recorded costs, including zero, always win; custom prices precede enabled catalog prices. Partial coverage remains unpriced, and currencies are never combined."
+        }
         L10nKey::StatisticsEditPrice => "Edit price…",
         L10nKey::StatisticsDeletePrice => "Delete price",
         L10nKey::StatisticsSavePrice => "Save price",
@@ -207,12 +213,18 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsPriceModel => "Exact model ID",
         L10nKey::StatisticsPriceCurrency => "Currency code (for example USD)",
         L10nKey::StatisticsPublicCatalog => "models.dev public prices",
-        L10nKey::StatisticsPublicConsent => "Disabled by default. Enabling permits manual checks of https://models.dev/api.json. Only the public catalog is requested; no history, paths, prompts or credentials are sent. No automatic checks run.",
+        L10nKey::StatisticsPublicConsent => {
+            "Disabled by default. Enabling permits manual checks of https://models.dev/api.json. Only the public catalog is requested; no history, paths, prompts or credentials are sent. No automatic checks run."
+        }
         L10nKey::StatisticsCatalogEnable => "Enable public prices",
         L10nKey::StatisticsCatalogDisable => "Disable public prices",
         L10nKey::StatisticsCatalogCheck => "Check public prices",
-        L10nKey::StatisticsCatalogStatus => "Last check: {checked}\nCached at: {fetched} · {count} model prices. Failed checks keep this cache.",
-        L10nKey::StatisticsPriceEstimate => "{currency} · custom estimate {custom} · models.dev estimate {catalog}\n{priced} priced tokens · {unpriced} unpriced tokens · {partial} partially priced records",
+        L10nKey::StatisticsCatalogStatus => {
+            "Last check: {checked}\nCached at: {fetched} · {count} model prices. Failed checks keep this cache."
+        }
+        L10nKey::StatisticsPriceEstimate => {
+            "{currency} · custom estimate {custom} · models.dev estimate {catalog}\n{priced} priced tokens · {unpriced} unpriced tokens · {partial} partially priced records"
+        }
         L10nKey::StatisticsPricedCost => "Cost (recorded + explicit estimates)",
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::StatisticsAnalysisTitle => "Activity and breakdowns",
