@@ -1,8 +1,10 @@
 //! Real local filesystem with an explicit non-secret Host environment for tests.
 use super::*;
+use lyrel_core::core::agent_history::PastSession;
 use lyrel_core::host::{
     ContentLimits, ContentQuery, ContentResults, Host, Meta, Output, SearchHit, SharedHost,
     WatchSub,
+    session_operations::{SessionOperation, SessionOperationError},
 };
 struct IsolatedHost {
     inner: SharedHost,
@@ -10,7 +12,7 @@ struct IsolatedHost {
     id: HostId,
     relative_state: bool,
 }
-pub(super) fn install(home: &Path, cx: &mut Context<LyrelApp>) {
+pub(crate) fn install(home: &Path, cx: &mut Context<LyrelApp>) {
     install_on(home, HostId::LOCAL, false, cx);
 }
 pub(super) fn install_on(
@@ -102,6 +104,18 @@ impl Host for IsolatedHost {
     }
     fn watch(&self, p: &[PathBuf]) -> io::Result<WatchSub> {
         self.inner.watch(p)
+    }
+    fn opencode_sessions(
+        &self,
+        _: &SessionOperation,
+    ) -> Result<Vec<PastSession>, SessionOperationError> {
+        Ok(Vec::new())
+    }
+    fn hermes_sessions(
+        &self,
+        _: &SessionOperation,
+    ) -> Result<Vec<PastSession>, SessionOperationError> {
+        Ok(Vec::new())
     }
     fn agent_environment(&self) -> io::Result<std::collections::BTreeMap<String, String>> {
         let h = self.home.to_string_lossy();

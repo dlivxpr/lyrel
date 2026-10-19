@@ -125,7 +125,9 @@ lyrel 独立初版为 `0.1.0`，目前尚无实际发布资产；缺少匹配包
 
 Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列排除根桌面包的命令，直接构建根包会明确拒绝。
 
-GUI 统一通过正式 `gpui-kit 0.7.3` 使用 `gpui-pre 0.3.9` 配套链，GUI HTTP 使用 `gpui-pre-reqwest-client 0.3.9`；不启用 `gpui-fast`。具体传递包身份以 `Cargo.lock` 为准，registry 包内部的上游快照不等于应用仍维护旧 fork。
+GUI 统一通过正式 `gpui-kit 0.8.0` 使用 `gpui-pre 0.3.9` 配套链，GUI HTTP 使用 `gpui-pre-reqwest-client 0.3.9`；保留 `tree-sitter-languages` 和测试专用 `test-support`，不启用 `gpui-fast`。具体传递包身份以 `Cargo.lock` 为准，registry 包内部的上游快照不等于应用仍维护旧 fork。
+
+`Cargo.lock` 会收录可选后端及其他平台的依赖，这不表示当前构建启用了它们。用 `cargo tree --locked -p lyrel -i gpui-pre` 检查实际后端链；未启用 `gpui-fast` 时，`cargo tree --locked -p lyrel -i gpui-fast` 没有依赖路径。
 
 GUI 与 CLI 的终端解析统一采用正式 `rio-vt =0.5.28`（不启用默认 features），保留 lyrel 自有 daemon、PTY 和渲染。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。依赖包内部的上游快照和多版本副本仍以正式解析结果为准。
 

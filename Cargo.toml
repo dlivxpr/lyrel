@@ -286,7 +286,7 @@ version = "0.1.0"
 
 [workspace.dependencies]
 # The public facade supplies component, base, assets and platform layers.
-gpui-kit = "=0.7.3"
+gpui-kit = "=0.8.0"
 
 # The published Rio VT parser + grid (`Crosswords`/`ansi::Processor`). Two
 # packages read it and they must agree, hence this being a workspace pin rather
