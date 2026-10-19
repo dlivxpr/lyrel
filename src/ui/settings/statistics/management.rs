@@ -179,7 +179,7 @@ impl LyrelApp {
                 ),
             ],
         );
-        let mut rows = v_flex().gap_2().min_w_0();
+        let mut cards = h_flex().items_stretch().flex_wrap().gap_3().min_w_0();
         for (id, title, status, surface) in [
             (
                 "statistics-manage-sources",
@@ -194,26 +194,31 @@ impl LyrelApp {
                 Editor::Price,
             ),
         ] {
-            rows = rows.child(
-                self.statistics_management_button(id, t(title), cx, move |this, window, cx| {
-                    this.open_statistics_management(surface, window, cx)
-                })
-                .ghost()
-                .h_auto()
-                .w_full()
-                .min_w_0()
-                .p_3()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_xs()
-                        .text_color(tk.k5)
-                        .child(status),
-                ),
+            cards = cards.child(
+                Button::new(id)
+                    .ghost()
+                    .small()
+                    .h_auto()
+                    .flex_grow(1.)
+                    .flex_shrink(1.)
+                    .flex_basis(gpui_kit::rems(18.))
+                    .min_w_0()
+                    .p_3()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .accessibility_label(t(title))
+                    .child(h_flex().w_full().min_w_0().gap_2()
+                        .child(v_flex().flex_1().min_w_0().gap_0p5().text_left()
+                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(t(title)))
+                            .child(div().text_xs().text_color(tk.k5).whitespace_normal().child(status)))
+                        .child(div().text_color(tk.k5).child("›")))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_statistics_management(surface, window, cx)
+                    })),
             );
         }
+        let mut rows = v_flex().gap_2().min_w_0().child(cards);
         if let Some(error) = &state.management.error {
             rows = rows.child(
                 div()

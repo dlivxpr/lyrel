@@ -288,6 +288,20 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.find("statistics-manage-sources").focused() == Some(true)
     }));
+    reveal(&app, &mut vcx, "statistics-summary-details");
+    tab_to(&mut vcx, "statistics-summary-details");
+    vcx.update(|window, cx| window.press("enter", cx));
+    vcx.run_until_parked();
+    reveal(&app, &mut vcx, "statistics-summary-values");
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("statistics-summary-values").label().unwrap().contains("3,000,000"));
+        assert_eq!(window.find("statistics-token-composition").label(),
+            Some(format!("{}: 3,000,000", t(L10nKey::StatisticsTokens)).as_str()));
+        assert!(app.read(cx).active_settings().unwrap().statistics.analysis.summary_detail);
+    });
+    click(&app, &mut vcx, "statistics-summary-details");
+    assert!(!app.read_with(&vcx, |app, _| app.active_settings().unwrap().statistics.analysis.summary_detail));
     for (locale, width, mode) in [
         ("en", 1120., gpui_kit::component::ThemeMode::Light),
         ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
@@ -498,6 +512,14 @@ fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
         assert_eq!(visible.totals.tokens().total(), Some(42));
         visible.snapshot.updated()
     });
+    reveal(&app, &mut vcx, "statistics-cost-trend");
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_ne!(window.find("statistics-cost-trend").label(), Some(t(L10nKey::StatisticsTrendUnavailable)),
+            "complete native zero costs are real known data, not an unavailable trend");
+        assert_eq!(window.find("statistics-token-composition").label(),
+            Some(format!("{}: 42", t(L10nKey::StatisticsTokens)).as_str()));
+    });
     std::fs::write(agent.join("settings.json"), "unreadable native settings").unwrap();
     click(&app, &mut vcx, "statistics-refresh");
     settle(&app, &mut vcx);
@@ -512,5 +534,13 @@ fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
             visible.analysis.as_ref().unwrap().totals().tokens().total(),
             Some(42)
         );
+    });
+    reveal(&app, &mut vcx, "statistics-cost-trend");
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("statistics-cost-trend").label(), Some(t(L10nKey::StatisticsTrendUnavailable)),
+            "retained partial values must not produce a complete-looking daily curve");
+        assert_eq!(window.find("statistics-session-trend").label(), Some(t(L10nKey::StatisticsTrendUnavailable)));
+        assert_eq!(window.find("statistics-token-composition").label(), Some(t(L10nKey::StatisticsCompositionUnavailable)));
     });
 }
