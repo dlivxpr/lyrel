@@ -377,6 +377,9 @@ impl SkillCatalog {
     pub fn tree_sha(&self) -> &str {
         &self.tree_sha
     }
+    pub(super) fn contains_skill_path(&self, path: &str) -> bool {
+        self.entries.iter().any(|entry| entry.path == path && entry.kind == "blob")
+    }
     /// Applies the same bounded download budget to the whole user selection.
     pub fn prepare_many(
         &self,
@@ -742,6 +745,9 @@ fn slug(value: &str) -> String {
 /// skills CLI 1.7.2 computes SHA-256(path + bytes), ordered with ICU collation
 /// (`localeCompare`), not Rust's byte ordering. No filesystem is read here.
 pub fn computed_hash(files: &[SkillFile]) -> Result<String, CatalogError> {
+    hash_files(files.iter())
+}
+pub(super) fn hash_files<'a>(files: impl Iterator<Item = &'a SkillFile>) -> Result<String, CatalogError> {
     static COLLATOR: std::sync::LazyLock<Result<icu_collator::CollatorBorrowed<'static>, String>> =
         std::sync::LazyLock::new(|| {
             icu_collator::Collator::try_new(Default::default(), Default::default())
@@ -750,7 +756,7 @@ pub fn computed_hash(files: &[SkillFile]) -> Result<String, CatalogError> {
     let collator = COLLATOR
         .as_ref()
         .map_err(|e| CatalogError::Invalid(e.clone()))?;
-    let mut ordered = Vec::with_capacity(files.len());
+    let mut ordered = Vec::with_capacity(files.size_hint().0);
     for file in files {
         let path = file
             .path
