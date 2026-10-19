@@ -64,7 +64,7 @@ lyrel 只调用智能体自己的操作，不复制内部会话文件。原生�
 - `SessionScope` 保存 profile、session-dir、精确 session-file、目标 shell 和非凭据作用域环境选择器。默认选择器由执行 Host 的环境解析；不能把 GUI 本机 home 当成远端 home。`AgentFacts.session_scope`、`SessionPane.agent_session_scope` 和待连接窗格保留同一作用域。统一 `durable_scope` 规则保存所有适配的稳定选择器，剔除瞬态 OpenCode 客户端桥、服务 PID／动态 URL 和重复启动参数；认证 nonce 从不进入 scope、argv 或持久化数据。
 - `PreparedSession` 返回来源与真实目标、实际会话文件、有效作用域、启动 argv、可选启动命令及 `created`。成功结果必须有已校核的真实目标 ID 和可执行启动命令；不能把身份留给新窗格再创建。错误的保留结果可能只有已创建的身份与上下文，重试只恢复该目标。
 - `SessionOperationError` 区分主机、目录、身份、能力、命令、连接和窗格启动错误。`retained` 是部分成功结果；重新打开必须改用 `Resume` 并绑定其目标 ID／文件，不重发 `Fork`。
-- control 协议通过 `session-operations-v1` 能力协商 `SessionOperation` 请求与结构化结果；不发送旧 peer 无法解码的请求。本机 GUI 开窗另协商 pane 的 `spawn-claim` 能力，control／pane 编号仍分别为 13／7。
+- control 协议通过 `session-operations-v1` 能力协商 `SessionOperation` 请求与结构化结果；不发送旧 peer 无法解码的请求。本机 GUI 开窗另协商 pane 的 `spawn-claim` 能力；新增统计请求后 control／pane 编号分别为 14／7。
 
 本机 GUI 在后台创建 shell，用待连接窗格保留启动上下文，不将等待两秒视为创建失败。`Spawn.await_claim` 默认为 false；启用时，daemon 在同一连接收到匹配新 ID 的 `Attach` 后才将 pane 纳入持久 registry／handoff。此前取消、断连或目标窗口关闭只回收这次创建的 pane，不能向原 pane 投递启动命令。旧 daemon 缺能力时明确要求重启更新，不回退不安全路径。远端晚到结果沿准确 Host／pane ID 回收新建 pane；恢复的持久 pane 只断开连接。
 
@@ -163,6 +163,9 @@ lyrel 只列出 `source=cli` 的普通 CLI 来源。观察到的 home/profile �
 远端通过独立 `hermes-history-v1` 能力协商，不支持的 daemon 明确拒绝，不回查 GUI 本地文件。
 为避免把窗口当完整列表，查询 501 条元数据以检测 500 条窗口溢出；正式接口没有 offset/cursor，
 达到上限会明确报告无法取得完整列表，不静默显示截断历史。此限制尚未关闭。
+统计使用独立 `hermes_statistics(&SessionOperation)`／`HermesStatistics` 和 `hermes-statistics-v1`，
+与 `hermes-history-v1` 及 OpenCode 能力隔离，旧 peer 不接收未知请求。
+统计保留正式响应中的 Token 与实际／原生估算费用，限制和日期语义见[设置 → 统计](/customization/settings#hermes-原生历史统计)。
 
 非空首条任务使用正式 TTY 保活入口 `hermes chat <有效参数> --query=<完整任务>`。
 内联值使以连字符开头的任务不是选项；显式 `chat` 防止子命令形状被分流，中文、多行、
