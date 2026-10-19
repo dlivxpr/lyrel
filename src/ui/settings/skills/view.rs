@@ -1,6 +1,7 @@
 //! Master–detail presentation; Host operations remain owned by the settings session.
 use super::*;
 use gpui_kit::component::FocusTrapElement as _;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::{TestSupportExt as _, rems};
 
 impl LyrelApp {
@@ -38,7 +39,7 @@ impl LyrelApp {
                 .find(|skill| Some(skill.path()) == state.selected.as_deref())
         });
         let detail = selected
-            .map(|skill| self.render_skill_detail(skill, cx))
+            .map(|skill| self.render_skill_detail(skill, narrow, cx))
             .unwrap_or_else(|| {
                 v_flex()
                     .size_full()
@@ -188,17 +189,25 @@ impl LyrelApp {
                 },
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
         let query = state.query.read(cx).value();
         let total = state
             .snapshot
             .as_ref()
             .map_or(0, |snapshot| snapshot.installations().len());
-        let matches = state
+        let mut matches = state
             .snapshot
             .as_ref()
             .map(|snapshot| snapshot.filtered(&query, filter).collect::<Vec<_>>())
             .unwrap_or_default();
+        matches.sort_unstable_by_key(|skill| {
+            let scope = match skill_scope(skill) {
+                SourceKind::UserShared => 0,
+                SourceKind::ProjectShared => 1,
+                SourceKind::AgentPrivate => 2,
+            };
+            (scope, skill.name(), skill.path())
+        });
         let page = state.page.min(matches.len().saturating_sub(1) / 50);
         let mut rows = v_flex().gap_1().p_2().min_w_0();
         if state.loading {
@@ -254,7 +263,24 @@ impl LyrelApp {
                     .child(t(L10nKey::SkillsEmpty)),
             );
         }
+        let mut previous_scope = None;
         for skill in matches.iter().skip(page * 50).take(50) {
+            let scope = skill_scope(skill);
+            if previous_scope != Some(scope) {
+                let count = matches.iter().filter(|skill| skill_scope(skill) == scope).count();
+                rows = rows.child(
+                    h_flex()
+                        .gap_2()
+                        .px_2()
+                        .pt_2()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(div().font_weight(FontWeight::MEDIUM).child(t(source_key(scope))))
+                        .child(count.to_string()),
+                );
+                previous_scope = Some(scope);
+            }
             let path = skill.path().to_path_buf();
             let selected = state.selected.as_deref() == Some(path.as_path());
             let scopes = skill
@@ -299,15 +325,21 @@ impl LyrelApp {
                             .flex_1()
                             .gap_1()
                             .child(
-                                div()
-                                    .text_sm()
-                                    .truncate()
-                                    .font_weight(if selected {
-                                        FontWeight::MEDIUM
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .child(skill.name().to_string()),
+                                h_flex()
+                                    .gap_2()
+                                    .min_w_0()
+                                    .child(skill_icon(cx))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .truncate()
+                                            .font_weight(if selected {
+                                                FontWeight::MEDIUM
+                                            } else {
+                                                FontWeight::NORMAL
+                                            })
+                                            .child(skill.name().to_string()),
+                                    ),
                             )
                             .child(
                                 div()
@@ -320,13 +352,6 @@ impl LyrelApp {
                                             .unwrap_or(t(L10nKey::SkillsUnknown))
                                             .to_string(),
                                     ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .truncate()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(scopes),
                             ),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -392,10 +417,8 @@ impl LyrelApp {
             .min_w_0()
             .when(narrow, |pane| pane.flex_1())
             .when(!narrow, |pane| {
-                pane.w_64()
+                pane.w(rems(236. / 16.))
                     .flex_none()
-                    .border_r_1()
-                    .border_color(cx.theme().border)
             })
             .child(
                 v_flex()
@@ -406,15 +429,55 @@ impl LyrelApp {
                         Input::new(&state.query)
                             .id("skills-query")
                             .small()
+                            .w_full()
                             .aria_label(t(L10nKey::SkillsSearch))
                             .disabled(state.maintenance.target_locked()),
                     )
-                    .child(self.analysis_menu(
-                        "skills-source",
-                        t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources)),
-                        filters,
-                        cx,
-                    )),
+                    .child(
+                        Button::new("skills-source")
+                            .small()
+                            .w_full()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div().truncate().child(t(
+                                            filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources),
+                                        )),
+                                    )
+                                    .child(
+                                        Icon::new(gpui_kit::component::IconName::ChevronDown).small(),
+                                    ),
+                            )
+                            .accessibility_label(format!(
+                                "{} · {}",
+                                t(L10nKey::SkillsSource),
+                                t(filter.map(source_key).unwrap_or(L10nKey::SkillsAllSources))
+                            ))
+                            .disabled(state.maintenance.target_locked())
+                            .dropdown_menu_with_anchor(gpui_kit::Anchor::TopLeft, {
+                                let app = cx.entity().downgrade();
+                                move |mut menu, _, _| {
+                                    for entry in &filters {
+                                        if let MenuEntry::Item { label, checked, on_pick, .. } = entry {
+                                            let app = app.clone();
+                                            let on_pick = on_pick.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(label.clone())
+                                                    .checked(*checked)
+                                                    .on_click(move |_, window, cx| {
+                                                        let _ = app.update(cx, |app, cx| on_pick(app, window, cx));
+                                                    }),
+                                            );
+                                        }
+                                    }
+                                    menu
+                                }
+                            }),
+                    ),
             )
             .child(crate::ui::scrollbar::with_vertical_scrollbar(
                 "skills-list-scrollbar",
@@ -432,8 +495,6 @@ impl LyrelApp {
                     .flex_none()
                     .p_2()
                     .gap_1()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
                     .child(
                         div()
                             .flex_1()
@@ -454,7 +515,9 @@ impl LyrelApp {
                         Button::new("skills-refresh")
                             .small()
                             .ghost()
-                            .label(t(L10nKey::SkillsRefresh))
+                            .icon(gpui_kit::component::IconName::RefreshCw)
+                            .accessibility_label(t(L10nKey::SkillsRefresh))
+                            .tooltip(t(L10nKey::SkillsRefresh))
                             .disabled(
                                 state.loading
                                     || state.install.target_locked()
