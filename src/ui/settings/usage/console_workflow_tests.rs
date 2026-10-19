@@ -521,6 +521,8 @@ fn mimo_manual_workflow_uses_real_get_cookie_and_expired_plan_keeps_known_balanc
                     Err(error) => panic!("controlled MiMo server: {error}"),
                 }
             };
+            // Windows may inherit the listener's nonblocking mode on the accepted socket.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
