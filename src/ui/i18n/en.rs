@@ -355,7 +355,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsCatalogDisabled => "off",
         L10nKey::StatisticsManageSources => "Sources…",
         L10nKey::StatisticsManagePrices => "Token prices…",
-        L10nKey::StatisticsEditSource => "Edit source…",
         L10nKey::StatisticsSaveSource => "Save source",
         L10nKey::StatisticsPriceRow => "Input {input} · output {output} · reasoning {reasoning} · cache read {read} · cache write {write}",
         L10nKey::StatisticsSourceLocation => "History path or native service URL",
