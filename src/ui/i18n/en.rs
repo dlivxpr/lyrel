@@ -332,13 +332,52 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsNavAbout => "About",
         L10nKey::SettingsNavUsage => "Usage",
         L10nKey::UsageSearchKeywords => {
-            "DeepSeek balance API key accounts rename refresh credentials usage"
+            "DeepSeek balance API key accounts rename refresh credentials usage private platform session browser profile LocalStorage userToken"
         }
         L10nKey::UsageScope => {
             "Desktop-wide query accounts, independent of SSH machines. No agent keys are read."
         }
         L10nKey::UsageOfficial => {
             "Official API: GET https://api.deepseek.com/user/balance · Bearer API key. The API does not return a user identity or reset period; the name and ID below identify the local query account."
+        }
+        L10nKey::UsageSource => "DeepSeek authentication source",
+        L10nKey::UsageApiSource => "Official API key",
+        L10nKey::UsageSessionSource => "Private platform · manual session",
+        L10nKey::UsageBrowserSource => "Private platform · browser LocalStorage",
+        L10nKey::UsageApiKey => "DeepSeek API key",
+        L10nKey::UsageSessionInput => "Platform userToken or Harness grant",
+        L10nKey::UsageSessionHelp => {
+            "Copy userToken from platform.deepseek.com LocalStorage (raw value or userToken JSON), or paste Harness grant JSON with version, token and issuer. Cookies and official API keys are rejected. Only the required token enters the system credential store after validation."
+        }
+        L10nKey::UsagePrivateDisclosure => {
+            "Private endpoint: platform.deepseek.com/api/v0/users/get_user_summary only. Web userToken uses Bearer (not yet verified against first-party code or a real account); Harness grant uses x-dsh-auth-token and must have the matching issuer. Neither is an official API key. This private interface may change."
+        }
+        L10nKey::UsageBrowser => "Browser",
+        L10nKey::UsageProfile => "Browser profile",
+        L10nKey::UsageChooseBrowser => "Choose a supported browser",
+        L10nKey::UsageChooseProfile => "Choose a profile to verify and import",
+        L10nKey::UsageBrowserHelp => {
+            "Reads only userToken for https://platform.deepseek.com in the selected profile. Supports Chromium LevelDB and Firefox LocalStorage; Safari and the new Chromium SQLite format are unsupported. Material stays in memory, never in the vault, configuration, logs or temporary files. Refresh never requests system permission or switches profiles. Re-import after a source or token change."
+        }
+        L10nKey::UsageNormalWallet => "Platform topped-up wallet",
+        L10nKey::UsageBonusWallet => "Platform bonus wallet",
+        L10nKey::UsageBrowserLocked => {
+            "The selected browser source is locked. Close that browser yourself and retry; no other source will be read."
+        }
+        L10nKey::UsageBrowserDenied => {
+            "Access to the selected source was denied. Background refresh never requests permission. Check access or enter the session manually."
+        }
+        L10nKey::UsageBrowserMissing => {
+            "The selected profile or platform userToken is missing. Sign in with that profile and import again."
+        }
+        L10nKey::UsageBrowserUnsupported => {
+            "This platform or browser storage format is unsupported. Enter the session manually."
+        }
+        L10nKey::UsageBrowserChanged => {
+            "The selected source or session changed; the account cannot be confirmed. Import again explicitly. No source was switched."
+        }
+        L10nKey::UsageBrowserUnreadable => {
+            "Could not read the selected browser storage. No other profile was used. Check file access and browser version."
         }
         L10nKey::UsageAdd => "Add account…",
         L10nKey::UsageRefreshAll => "Refresh all",
@@ -348,7 +387,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageMinute => "Every minute",
         L10nKey::UsageFiveMinutes => "Every 5 minutes",
         L10nKey::UsageRename => "Rename…",
-        L10nKey::UsageReplace => "Replace key…",
+        L10nKey::UsageReplace => "Replace source…",
         L10nKey::UsageRemove => "Remove from lyrel…",
         L10nKey::UsageRemoveWarning => {
             "Only this local query account, its snapshots and its own credential slots are removed. Your DeepSeek account and API key are not revoked."
@@ -359,7 +398,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageConfirm => "Confirm",
         L10nKey::UsageLoading => "Query in progress",
         L10nKey::UsageEmpty => {
-            "No query accounts. Add a DeepSeek API key to verify its real balance and save it in the system credential store."
+            "No query accounts. Add an official DeepSeek API key, a manual platform session, or an explicitly selected browser source, then verify and save."
         }
         L10nKey::UsageRemoving => "Local removal incomplete — retry removal",
         L10nKey::UsageDisabled => "Refresh paused",
@@ -375,7 +414,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageDisable => "Pause refresh",
         L10nKey::UsageEnable => "Enable refresh",
         L10nKey::UsageOpen => "Open usage",
-        L10nKey::UsageAuthError => "Authentication failed. Replace the API key.",
+        L10nKey::UsageAuthError => {
+            "Authentication failed. Replace the credentials or explicitly re-import the selected source."
+        }
         L10nKey::UsageRateError => "DeepSeek rate limit reached. Refresh later.",
         L10nKey::UsageNetworkError => {
             "Network request failed or timed out. Check the connection and proxy."

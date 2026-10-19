@@ -15,6 +15,12 @@ pub(super) enum UsageError {
     Response,
     Service,
     Stale,
+    BrowserLocked,
+    BrowserDenied,
+    BrowserMissing,
+    BrowserUnsupported,
+    BrowserChanged,
+    BrowserUnreadable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,9 +31,32 @@ pub(super) struct BalanceLine {
     pub topped_up_balance: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct Balance {
+pub(super) struct OfficialBalance {
     pub is_available: bool,
     pub balance_infos: Vec<BalanceLine>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(super) enum Balance {
+    Official(OfficialBalance),
+    Platform(super::platform::PlatformBalance),
+}
+impl Balance {
+    #[cfg(test)]
+    pub fn official(&self) -> Option<&OfficialBalance> {
+        match self {
+            Self::Official(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+pub(super) enum VerifiedSource<'a> {
+    ApiKey(&'a str),
+    Session {
+        kind: super::platform::SessionKind,
+        secret: &'a str,
+    },
+    Browser(super::browser::BrowserSelection),
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Snapshot {
@@ -37,12 +66,22 @@ pub(super) struct Snapshot {
 /// Authentication source belongs to the account, not its display name or Host.
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) enum Authentication {
-    ManualApiKey { slot: Uuid },
+    ManualApiKey {
+        slot: Uuid,
+    },
+    ManualSession {
+        slot: Uuid,
+        kind: super::platform::SessionKind,
+    },
+    BrowserLocalStorage {
+        selection: super::browser::BrowserSelection,
+    },
 }
 impl Authentication {
-    fn slot(&self) -> Uuid {
+    fn slot(&self) -> Option<Uuid> {
         match self {
-            Self::ManualApiKey { slot } => *slot,
+            Self::ManualApiKey { slot } | Self::ManualSession { slot, .. } => Some(*slot),
+            Self::BrowserLocalStorage { .. } => None,
         }
     }
 }
@@ -91,7 +130,9 @@ impl Accounts {
         let mut ids = std::collections::HashSet::new();
         let mut slots = std::collections::HashSet::new();
         for account in &stored.accounts {
-            if !ids.insert(account.id) || !slots.insert(account.auth.slot()) {
+            if !ids.insert(account.id)
+                || account.auth.slot().is_some_and(|slot| !slots.insert(slot))
+            {
                 return Err(UsageError::Persistence);
             }
         }
@@ -118,7 +159,14 @@ impl Accounts {
             return Err(UsageError::Stale);
         }
         self.vault
-            .get(SERVICE, &account.auth.slot().to_string())
+            .get(
+                SERVICE,
+                &account
+                    .auth
+                    .slot()
+                    .ok_or(UsageError::BrowserMissing)?
+                    .to_string(),
+            )
             .map_err(|_| UsageError::Credentials)?
             .ok_or(UsageError::Credentials)
     }
@@ -181,7 +229,7 @@ impl Accounts {
         &mut self,
         replace: Option<Query>,
         name: &str,
-        secret: &str,
+        source: VerifiedSource<'_>,
         balance: Balance,
         now: u64,
     ) -> Result<Uuid, UsageError> {
@@ -194,17 +242,34 @@ impl Accounts {
             }
         }
         let id = replace.map_or_else(Uuid::new_v4, |q| q.id);
-        let slot = Uuid::new_v4();
-        if self.vault.set(SERVICE, &slot.to_string(), secret).is_err() {
-            if let Some(query) = replace {
-                self.fail_replace(query, UsageError::Credentials);
+        let (secret, kind) = match &source {
+            VerifiedSource::ApiKey(secret) => (Some(*secret), None),
+            VerifiedSource::Session { kind, secret } => (Some(*secret), Some(*kind)),
+            VerifiedSource::Browser(_) => (None, None),
+        };
+        let slot = secret.map(|_| Uuid::new_v4());
+        if let (Some(secret), Some(slot)) = (secret, slot) {
+            if secret.len() > 2560 || self.vault.set(SERVICE, &slot.to_string(), secret).is_err() {
+                if let Some(query) = replace {
+                    self.fail_replace(query, UsageError::Credentials);
+                }
+                return Err(UsageError::Credentials);
             }
-            return Err(UsageError::Credentials);
         }
+        let auth = match source {
+            VerifiedSource::ApiKey(_) => Authentication::ManualApiKey {
+                slot: slot.unwrap(),
+            },
+            VerifiedSource::Session { .. } => Authentication::ManualSession {
+                slot: slot.unwrap(),
+                kind: kind.unwrap(),
+            },
+            VerifiedSource::Browser(selection) => Authentication::BrowserLocalStorage { selection },
+        };
         let mut next = self.stored.clone();
         if let Some(account) = next.accounts.iter_mut().find(|a| a.id == id) {
-            account.retired_slots.push(account.auth.slot());
-            account.auth = Authentication::ManualApiKey { slot };
+            account.retired_slots.extend(account.auth.slot());
+            account.auth = auth;
             account.snapshot = Some(Snapshot {
                 balance,
                 updated_at: now,
@@ -215,7 +280,7 @@ impl Accounts {
             next.accounts.push(Account {
                 id,
                 name: name.to_owned(),
-                auth: Authentication::ManualApiKey { slot },
+                auth,
                 enabled: true,
                 snapshot: Some(Snapshot {
                     balance,
@@ -229,7 +294,9 @@ impl Accounts {
             });
         }
         if let Err(error) = self.persist(&next) {
-            let _ = self.vault.delete(SERVICE, &slot.to_string());
+            if let Some(slot) = slot {
+                let _ = self.vault.delete(SERVICE, &slot.to_string());
+            }
             if let Some(query) = replace {
                 self.fail_replace(query, error);
             }
@@ -299,7 +366,10 @@ impl Accounts {
         self.persist(&next)?;
         self.stored = next;
         let a = self.account(id).unwrap();
-        let slots = std::iter::once(a.auth.slot())
+        let slots = a
+            .auth
+            .slot()
+            .into_iter()
             .chain(a.retired_slots.iter().copied())
             .collect::<Vec<_>>();
         for slot in slots {
@@ -323,7 +393,8 @@ pub(super) fn decode(status: u16, body: &[u8]) -> Result<Balance, UsageError> {
         200 => {}
         _ => return Err(UsageError::Service),
     }
-    let balance: Balance = serde_json::from_slice(body).map_err(|_| UsageError::Response)?;
+    let balance: OfficialBalance =
+        serde_json::from_slice(body).map_err(|_| UsageError::Response)?;
     let decimal = |s: &str| {
         let s = s.strip_prefix('-').unwrap_or(s);
         let mut split = s.split('.');
@@ -345,7 +416,7 @@ pub(super) fn decode(status: u16, body: &[u8]) -> Result<Balance, UsageError> {
     {
         return Err(UsageError::Response);
     }
-    Ok(balance)
+    Ok(Balance::Official(balance))
 }
 
 #[cfg(test)]

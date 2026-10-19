@@ -296,10 +296,49 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsNavKeybindings => "快捷键",
         L10nKey::SettingsNavAbout => "关于",
         L10nKey::SettingsNavUsage => "用量",
-        L10nKey::UsageSearchKeywords => "DeepSeek 余额 API key 账户 重命名 刷新 凭据 用量",
+        L10nKey::UsageSearchKeywords => {
+            "DeepSeek 余额 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 浏览器 profile LocalStorage userToken"
+        }
         L10nKey::UsageScope => "桌面全局查询账户，独立于 SSH 机器，不读取智能体密钥。",
         L10nKey::UsageOfficial => {
             "官方 API：GET https://api.deepseek.com/user/balance · Bearer API key。接口不返回用户身份或重置周期；下方名称和 ID 标识本地查询账户。"
+        }
+        L10nKey::UsageSource => "DeepSeek 认证来源",
+        L10nKey::UsageApiSource => "官方 API key",
+        L10nKey::UsageSessionSource => "私有平台 · 手工会话",
+        L10nKey::UsageBrowserSource => "私有平台 · 浏览器 LocalStorage",
+        L10nKey::UsageApiKey => "DeepSeek API 密钥",
+        L10nKey::UsageSessionInput => "平台 userToken 或 Harness grant",
+        L10nKey::UsageSessionHelp => {
+            "从 platform.deepseek.com 的 LocalStorage 复制 userToken（裸值或 userToken JSON）；也可粘贴带 version、token、issuer 的 Harness grant JSON。拒绝 Cookie 和官方 API key。验证后仅将必要 token 存入系统凭据库。"
+        }
+        L10nKey::UsagePrivateDisclosure => {
+            "私有接口：仅请求 platform.deepseek.com/api/v0/users/get_user_summary。网页 userToken 使用 Bearer（尚未获第一方或真实账户验证）；Harness grant 使用 x-dsh-auth-token，issuer 必须匹配平台。它们不等同于官方 API key，接口可能变更。"
+        }
+        L10nKey::UsageBrowser => "浏览器",
+        L10nKey::UsageProfile => "浏览器 profile",
+        L10nKey::UsageChooseBrowser => "选择受支持的浏览器",
+        L10nKey::UsageChooseProfile => "选择 profile 后主动验证导入",
+        L10nKey::UsageBrowserHelp => {
+            "仅读取所选 profile 中 https://platform.deepseek.com 的 userToken。支持 Chromium 系 LevelDB 与 Firefox LocalStorage；Safari 和 Chromium 新 SQLite 格式不支持。材料仅驻留内存，不保存到凭据库、配置、日志或临时文件；刷新不申请系统授权，来源或 token 改变需重新导入，不改用其他 profile。"
+        }
+        L10nKey::UsageNormalWallet => "平台充值钱包",
+        L10nKey::UsageBonusWallet => "平台赠送钱包",
+        L10nKey::UsageBrowserLocked => {
+            "所选浏览器来源已锁定。请自行关闭该浏览器后重试；不会改读其他来源。"
+        }
+        L10nKey::UsageBrowserDenied => {
+            "系统拒绝读取所选来源。后台不会申请权限；请检查访问权限或手工输入会话。"
+        }
+        L10nKey::UsageBrowserMissing => {
+            "所选 profile 或平台 userToken 不存在。请在该 profile 登录后重新导入。"
+        }
+        L10nKey::UsageBrowserUnsupported => "当前平台或浏览器存储格式不支持导入，请手工输入会话。",
+        L10nKey::UsageBrowserChanged => {
+            "所选来源或会话已改变，无法确认仍是同一账户。请主动重新导入；不会切换来源。"
+        }
+        L10nKey::UsageBrowserUnreadable => {
+            "无法读取所选浏览器存储。未使用其他 profile；请检查文件权限与浏览器版本。"
         }
         L10nKey::UsageAdd => "添加账户…",
         L10nKey::UsageRefreshAll => "全部刷新",
@@ -309,7 +348,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageMinute => "每分钟",
         L10nKey::UsageFiveMinutes => "每 5 分钟",
         L10nKey::UsageRename => "重命名…",
-        L10nKey::UsageReplace => "替换密钥…",
+        L10nKey::UsageReplace => "替换来源…",
         L10nKey::UsageRemove => "从 lyrel 移除…",
         L10nKey::UsageRemoveWarning => {
             "仅移除此本地查询账户、快照及其凭据槽，不注销 DeepSeek 账户或撤销 API key。"
@@ -320,7 +359,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageConfirm => "确认",
         L10nKey::UsageLoading => "正在查询",
         L10nKey::UsageEmpty => {
-            "尚无查询账户。添加 DeepSeek API key，验证真实余额后存入系统凭据库。"
+            "尚无查询账户。添加 DeepSeek 官方 API key、手工平台会话或主动选择浏览器来源，验证后保存。"
         }
         L10nKey::UsageRemoving => "本地移除未完成，请重试移除",
         L10nKey::UsageDisabled => "刷新已停用",
@@ -336,7 +375,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageDisable => "停用刷新",
         L10nKey::UsageEnable => "启用刷新",
         L10nKey::UsageOpen => "打开用量",
-        L10nKey::UsageAuthError => "认证失效，请替换 API key。",
+        L10nKey::UsageAuthError => "认证失效，请替换凭据或主动重新导入所选来源。",
         L10nKey::UsageRateError => "DeepSeek 请求已限流，请稍后刷新。",
         L10nKey::UsageNetworkError => "网络失败或超时，请检查连接与代理。",
         L10nKey::UsageCredentialError => "系统凭据库操作失败。保留已有可用凭据，请重试。",
