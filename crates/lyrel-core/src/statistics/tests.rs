@@ -218,7 +218,9 @@ fn statistics_pi_counts_official_full_session_usage_without_omp_fields() {
         ("future", "usage", "", Some(0.0)),
     ] {
         let mut u = json!({"input":10,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":1,"cacheWrite1h":2,"totalTokens":999});
-        if let Some(cost) = cost { u["cost"] = json!({"total":cost}); }
+        if let Some(cost) = cost {
+            u["cost"] = json!({"total":cost});
+        }
         let mut entry = json!({"type":kind,"id":id,"timestamp":"2026-03-08T08:00:00Z","usage":u,"kind":"future-operation"});
         if kind == "message" {
             entry["message"] = json!({"role":role,"provider":"provider","model":"logical","responseModel":"physical","stopReason":"error","usage":entry["usage"].clone()});
@@ -227,7 +229,12 @@ fn statistics_pi_counts_official_full_session_usage_without_omp_fields() {
     }
     std::fs::write(temp.path().join("native.jsonl"), data).unwrap();
     let host = LocalHost::new();
-    let snapshot = scan(&*host, &[Source::pi(temp.path().into(), "pi-scope")], &mut StatisticsCache::default()).unwrap();
+    let snapshot = scan(
+        &*host,
+        &[Source::pi(temp.path().into(), "pi-scope")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
     let totals = snapshot.aggregate(&DateWindow::all("UTC"));
     assert_eq!(totals.calls(), 6);
     assert_eq!(totals.tokens().total(), Some(50_095));
@@ -245,18 +252,30 @@ fn statistics_pi_forks_preserve_new_usage_and_missing_parents_are_restricted() {
     let parent = root.join("parent.jsonl");
     let inherited = usage("same", 10, Some(0.0));
     std::fs::write(&parent, header("parent", None) + &inherited).unwrap();
-    std::fs::write(root.join("fork.jsonl"), header("fork", Some(&parent.to_string_lossy())) + &inherited + &usage("new", 20, Some(1.0))).unwrap();
+    std::fs::write(
+        root.join("fork.jsonl"),
+        header("fork", Some(&parent.to_string_lossy())) + &inherited + &usage("new", 20, Some(1.0)),
+    )
+    .unwrap();
     let host = LocalHost::new();
     let source = Source::pi(root.into(), "pi-scope");
     let mut cache = StatisticsCache::default();
     let snapshot = scan(&*host, &[source.clone()], &mut cache).unwrap();
     assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).calls(), 2);
-    assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).recorded_usd(), Some(1.0));
+    assert_eq!(
+        snapshot.aggregate(&DateWindow::all("UTC")).recorded_usd(),
+        Some(1.0)
+    );
     std::fs::remove_file(parent).unwrap();
     let missing = scan(&*host, &[source], &mut cache).unwrap();
     assert!(!missing.is_complete());
     assert_eq!(missing.aggregate(&DateWindow::all("UTC")).calls(), 0);
-    assert!(missing.issues().iter().any(|i| i.reason().contains("2 usage records excluded")));
+    assert!(
+        missing
+            .issues()
+            .iter()
+            .any(|i| i.reason().contains("2 usage records excluded"))
+    );
 }
 
 #[test]
@@ -266,17 +285,52 @@ fn statistics_pi_custom_store_precedence_and_scope_isolation() {
     let global = temp.path().join("global");
     let environment = temp.path().join("environment");
     let explicit = temp.path().join("explicit");
-    for dir in [&agent, &global, &environment, &explicit] { std::fs::create_dir_all(dir).unwrap(); }
-    std::fs::write(agent.join("settings.json"), json!({"sessionDir":global}).to_string()).unwrap();
+    for dir in [&agent, &global, &environment, &explicit] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(
+        agent.join("settings.json"),
+        json!({"sessionDir":global}).to_string(),
+    )
+    .unwrap();
     for dir in [&global, &environment, &explicit] {
-        std::fs::write(dir.join("a.jsonl"), header("same", None) + &usage("u", 10, Some(0.0))).unwrap();
+        std::fs::write(
+            dir.join("a.jsonl"),
+            header("same", None) + &usage("u", 10, Some(0.0)),
+        )
+        .unwrap();
     }
     let host = LocalHost::new();
-    let launch = HashMap::from([("pi".into(), format!("PI_CODING_AGENT_DIR='{}' PI_CODING_AGENT_SESSION_DIR='{}' pi --session-dir '{}'", agent.display(), environment.display(), explicit.display()))]);
+    let launch = HashMap::from([(
+        "pi".into(),
+        format!(
+            "PI_CODING_AGENT_DIR='{}' PI_CODING_AGENT_SESSION_DIR='{}' pi --session-dir '{}'",
+            agent.display(),
+            environment.display(),
+            explicit.display()
+        ),
+    )]);
     let sources = discover_pi(&*host, &launch).unwrap();
-    assert!(sources.iter().any(|s| s.root() == host.canonicalize(&explicit).unwrap()));
-    assert!(!sources.iter().any(|s| s.root() == global || s.root() == environment));
-    let snapshot = scan(&*host, &[Source::pi(global, "same"), Source::pi(environment, "other"), Source::omp(explicit, "same")], &mut StatisticsCache::default()).unwrap();
+    assert!(
+        sources
+            .iter()
+            .any(|s| s.root() == host.canonicalize(&explicit).unwrap())
+    );
+    assert!(
+        !sources
+            .iter()
+            .any(|s| s.root() == global || s.root() == environment)
+    );
+    let snapshot = scan(
+        &*host,
+        &[
+            Source::pi(global, "same"),
+            Source::pi(environment, "other"),
+            Source::omp(explicit, "same"),
+        ],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
     assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).calls(), 3);
 }
 
@@ -288,7 +342,12 @@ fn statistics_pi_legacy_and_missing_fields_remain_unknown_not_free() {
 {"type":"message","timestamp":"2025-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"api":"test","provider":"test","model":"test","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"stop","timestamp":2}}
 "#).unwrap();
     let host = LocalHost::new();
-    let snapshot = scan(&*host, &[Source::pi(temp.path().into(), "legacy")], &mut StatisticsCache::default()).unwrap();
+    let snapshot = scan(
+        &*host,
+        &[Source::pi(temp.path().into(), "legacy")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
     let totals = snapshot.aggregate(&DateWindow::all("UTC"));
     assert_eq!(totals.tokens().total(), Some(2));
     assert_eq!(totals.recorded_usd(), None);
@@ -299,7 +358,8 @@ fn statistics_pi_legacy_and_missing_fields_remain_unknown_not_free() {
 #[ignore = "requires official pi 1.3.0 package dist/core in LYREL_PI_NATIVE_CORE and Node 22.19+"]
 fn statistics_pi_official_sdk_fork_clone_and_usage_oracle() {
     let temp = tempfile::tempdir().unwrap();
-    let core = std::env::var("LYREL_PI_NATIVE_CORE").expect("isolated official pi core directory required");
+    let core = std::env::var("LYREL_PI_NATIVE_CORE")
+        .expect("isolated official pi core directory required");
     let script = r#"
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
@@ -331,18 +391,35 @@ clone.appendUsage('new-clone','test','clone',usage(19));
 const cloneAfter = total(clone);
 console.log(JSON.stringify({tokens:baseline.tokens+forkAfter.tokens-forkBefore.tokens+cloneAfter.tokens-cloneBefore.tokens,cost:baseline.cost+forkAfter.cost-forkBefore.cost+cloneAfter.cost-cloneBefore.cost}));
 "#;
-    let output = std::process::Command::new("node").args(["--input-type=module", "--eval", script, &core]).arg(temp.path())
-        .env("PI_CODING_AGENT_DIR", temp.path().join("config")).output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let output = std::process::Command::new("node")
+        .args(["--input-type=module", "--eval", script, &core])
+        .arg(temp.path())
+        .env("PI_CODING_AGENT_DIR", temp.path().join("config"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let oracle: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let host = LocalHost::new();
-    let snapshot = scan(&*host, &[Source::pi(temp.path().into(), "native-official")], &mut StatisticsCache::default()).unwrap();
+    let snapshot = scan(
+        &*host,
+        &[Source::pi(temp.path().into(), "native-official")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
     assert!(snapshot.is_complete(), "{:?}", snapshot.issues());
     let totals = snapshot.aggregate(&DateWindow::all("UTC"));
     assert_eq!(totals.tokens().total(), oracle["tokens"].as_u64());
     assert!((totals.recorded_usd().unwrap() - oracle["cost"].as_f64().unwrap()).abs() < 1e-9);
     assert_eq!(totals.main_sessions(), 3);
-    assert!(!serde_json::to_string(&snapshot).unwrap().contains("not retained"));
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("not retained")
+    );
 }
 
 #[test]
@@ -355,19 +432,47 @@ fn statistics_pi_real_ssh_host_reads_official_persisted_history() {
     struct Process(Mutex<Option<std::process::Child>>);
     impl LinkShutdown for Process {
         fn shutdown_link(&self) -> io::Result<()> {
-            if let Some(mut child) = self.0.lock().unwrap().take() { let _ = child.kill(); let _ = child.wait(); }
+            if let Some(mut child) = self.0.lock().unwrap().take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
             Ok(())
         }
     }
-    let argv: Vec<String> = serde_json::from_str(&std::env::var("LYREL_PI_SSH_ARGV").expect("isolated SSH argv required")).unwrap();
+    let argv: Vec<String> = serde_json::from_str(
+        &std::env::var("LYREL_PI_SSH_ARGV").expect("isolated SSH argv required"),
+    )
+    .unwrap();
     let store = std::env::var("LYREL_PI_SSH_STORE").expect("isolated native pi store required");
-    let oracle: serde_json::Value = serde_json::from_str(&std::env::var("LYREL_PI_SSH_EXPECTED").expect("official usage-totals oracle required")).unwrap();
-    let mut child = Command::new(&argv[0]).args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let oracle: serde_json::Value = serde_json::from_str(
+        &std::env::var("LYREL_PI_SSH_EXPECTED").expect("official usage-totals oracle required"),
+    )
+    .unwrap();
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
     let stdout = child.stdout.take().unwrap();
     let stdin = child.stdin.take().unwrap();
     let closer: Arc<dyn LinkShutdown> = Arc::new(Process(Mutex::new(Some(child))));
-    let host = RemoteHost::connect_with(stdout, stdin, Some(closer), "pi-isolated-ssh", &ControlHello::host_rpc("pi-statistics-smoke", "isolated-ssh")).unwrap().into_shared();
-    let launch = HashMap::from([("pi".into(), format!("HOME='{store}' USERPROFILE='{store}' PI_CODING_AGENT_DIR='{store}/config' pi --session-dir '{store}'"))]);
+    let host = RemoteHost::connect_with(
+        stdout,
+        stdin,
+        Some(closer),
+        "pi-isolated-ssh",
+        &ControlHello::host_rpc("pi-statistics-smoke", "isolated-ssh"),
+    )
+    .unwrap()
+    .into_shared();
+    let launch = HashMap::from([(
+        "pi".into(),
+        format!(
+            "HOME='{store}' USERPROFILE='{store}' PI_CODING_AGENT_DIR='{store}/config' pi --session-dir '{store}'"
+        ),
+    )]);
     let sources = discover_pi(&*host, &launch).unwrap();
     let snapshot = scan(&*host, &sources, &mut StatisticsCache::default()).unwrap();
     assert!(snapshot.is_complete(), "{:?}", snapshot.issues());
@@ -383,28 +488,98 @@ fn statistics_pi_default_project_layout_is_not_an_omp_child_layout() {
     let agent = temp.path().join("agent");
     let project = agent.join("sessions/--work--");
     std::fs::create_dir_all(project.join("artifact")).unwrap();
-    std::fs::write(project.join("session.jsonl"), header("main", None) + &usage("entry", 10, Some(0.0))).unwrap();
+    std::fs::write(
+        project.join("session.jsonl"),
+        header("main", None) + &usage("entry", 10, Some(0.0)),
+    )
+    .unwrap();
     // Arbitrary extension/artifact output is not a native pi project store or a child identity.
     std::fs::write(project.join("artifact/not-a-session.jsonl"), "unrelated").unwrap();
-    let launch = HashMap::from([("pi".into(), format!("PI_CODING_AGENT_DIR='{}' PI_CODING_AGENT_SESSION_DIR='' pi", agent.display()))]);
+    let launch = HashMap::from([(
+        "pi".into(),
+        format!(
+            "PI_CODING_AGENT_DIR='{}' PI_CODING_AGENT_SESSION_DIR='' pi",
+            agent.display()
+        ),
+    )]);
     let host = LocalHost::new();
     let sources = discover_pi(&*host, &launch).unwrap();
     let snapshot = scan(&*host, &sources, &mut StatisticsCache::default()).unwrap();
     assert!(snapshot.is_complete(), "{:?}", snapshot.issues());
     assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).calls(), 1);
-    assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
+    assert_eq!(
+        snapshot.aggregate(&DateWindow::all("UTC")).main_sessions(),
+        1
+    );
 }
 
 #[test]
 fn statistics_pi_identity_collision_does_not_drop_new_fork_usage() {
     let temp = tempfile::tempdir().unwrap();
     let parent = temp.path().join("parent.jsonl");
-    std::fs::write(&parent, header("parent", None) + &usage("short-id", 10, Some(1.0))).unwrap();
-    std::fs::write(temp.path().join("fork.jsonl"), header("fork", Some(&parent.to_string_lossy())) + &usage("short-id", 20, Some(2.0))).unwrap();
+    std::fs::write(
+        &parent,
+        header("parent", None) + &usage("short-id", 10, Some(1.0)),
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("fork.jsonl"),
+        header("fork", Some(&parent.to_string_lossy())) + &usage("short-id", 20, Some(2.0)),
+    )
+    .unwrap();
     let host = LocalHost::new();
-    let snapshot = scan(&*host, &[Source::pi(temp.path().into(), "pi")], &mut StatisticsCache::default()).unwrap();
+    let snapshot = scan(
+        &*host,
+        &[Source::pi(temp.path().into(), "pi")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
     assert!(!snapshot.is_complete());
     assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).calls(), 2);
-    assert_eq!(snapshot.aggregate(&DateWindow::all("UTC")).recorded_usd(), Some(3.0));
-    assert!(snapshot.issues().iter().any(|i| i.reason().contains("identity conflict")));
+    assert_eq!(
+        snapshot.aggregate(&DateWindow::all("UTC")).recorded_usd(),
+        Some(3.0)
+    );
+    assert!(
+        snapshot
+            .issues()
+            .iter()
+            .any(|i| i.reason().contains("identity conflict"))
+    );
+}
+
+#[test]
+fn statistics_pi_duplicate_identity_variants_are_counted_once_each() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = header("same-session", None) + &usage("same-entry", 10, Some(0.0));
+    let second = first.replace("PRIVATE BODY", "DIFFERENT PRIVATE BODY");
+    for (name, bytes) in [
+        ("a.jsonl", &first),
+        ("b.jsonl", &second),
+        ("c.jsonl", &first),
+    ] {
+        std::fs::write(temp.path().join(name), bytes).unwrap();
+    }
+    let host = LocalHost::new();
+    let snapshot = scan(
+        &*host,
+        &[Source::pi(temp.path().into(), "pi")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(totals.calls(), 2);
+    assert_eq!(totals.main_sessions(), 1);
+    assert!(!totals.is_complete());
+    assert!(
+        snapshot
+            .issues()
+            .iter()
+            .any(|i| i.reason().contains("identity conflict"))
+    );
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("PRIVATE BODY")
+    );
 }

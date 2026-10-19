@@ -37,7 +37,13 @@ impl Source {
         }
     }
     pub fn pi(root: PathBuf, scope: impl Into<String>) -> Self {
-        Self { root, scope: scope.into(), agent: "pi".into(), max_depth: Some(0), discovery_issue: None }
+        Self {
+            root,
+            scope: scope.into(),
+            agent: "pi".into(),
+            max_depth: Some(0),
+            discovery_issue: None,
+        }
     }
     pub fn root(&self) -> &std::path::Path {
         &self.root
@@ -192,23 +198,32 @@ impl Snapshot {
         let mut identities = HashMap::new();
         for file in &self.files {
             identities.insert(
-                ((file.source.agent.as_str(), file.source.scope.as_str()), file.session.id.as_str()),
+                (
+                    (file.source.agent.as_str(), file.source.scope.as_str()),
+                    file.session.id.as_str(),
+                ),
                 file.session.id.as_str(),
             );
             if let Some(path) = file.path.to_str() {
-                identities.insert(((file.source.agent.as_str(), file.source.scope.as_str()), path), file.session.id.as_str());
+                identities.insert(
+                    (
+                        (file.source.agent.as_str(), file.source.scope.as_str()),
+                        path,
+                    ),
+                    file.session.id.as_str(),
+                );
             }
         }
         let mut parents = HashMap::new();
         for file in &self.files {
-            if let Some(parent) = file
-                .session
-                .parent
-                .as_deref()
-                .and_then(|p| identities.get(&((file.source.agent.as_str(), file.source.scope.as_str()), p)))
-            {
+            if let Some(parent) = file.session.parent.as_deref().and_then(|p| {
+                identities.get(&((file.source.agent.as_str(), file.source.scope.as_str()), p))
+            }) {
                 parents.insert(
-                    ((file.source.agent.as_str(), file.source.scope.as_str()), file.session.id.as_str()),
+                    (
+                        (file.source.agent.as_str(), file.source.scope.as_str()),
+                        file.session.id.as_str(),
+                    ),
                     *parent,
                 );
             }
@@ -239,8 +254,12 @@ impl Snapshot {
                 // IDs are short and only meaningful within the verified lineage and scope.
                 let key = (scope, lineage, record.id.as_str());
                 let variants = records.entry(key).or_insert_with(Vec::new);
-                if variants.contains(&record) { continue; }
-                if !variants.is_empty() { out.ambiguous_records += 1; }
+                if variants.contains(&record) {
+                    continue;
+                }
+                if !variants.is_empty() {
+                    out.ambiguous_records += 1;
+                }
                 variants.push(record);
                 out.tokens.add(&record.tokens, out.calls == 0);
                 out.calls += 1;
@@ -353,12 +372,13 @@ pub fn scan(
             source.root.clone()
         };
         let child_root = if exact_file { &initial } else { &source.root };
-        let root_is_child = source.agent == "omp" && host
-            .stat(&PathBuf::from(format!(
-                "{}.jsonl",
-                child_root.to_string_lossy()
-            )))
-            .is_ok_and(|m| !m.is_dir);
+        let root_is_child = source.agent == "omp"
+            && host
+                .stat(&PathBuf::from(format!(
+                    "{}.jsonl",
+                    child_root.to_string_lossy()
+                )))
+                .is_ok_and(|m| !m.is_dir);
         let mut pending = vec![(initial, root_is_child, 0u8)];
         while let Some((path, child, depth)) = pending.pop() {
             dirs += 1;
@@ -374,10 +394,9 @@ pub fn scan(
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound
                         && path == source.root
-                        && !cache
-                            .files
-                            .keys()
-                            .any(|(id, agent, scope, _)| *id == host.id().0 && *agent == source.agent && *scope == source.scope) =>
+                        && !cache.files.keys().any(|(id, agent, scope, _)| {
+                            *id == host.id().0 && *agent == source.agent && *scope == source.scope
+                        }) =>
                 {
                     continue;
                 }
@@ -402,9 +421,12 @@ pub fn scan(
                     continue;
                 }
                 if entry.is_dir {
-                    if source.max_depth.is_some_and(|limit| depth >= limit) { continue; }
+                    if source.max_depth.is_some_and(|limit| depth >= limit) {
+                        continue;
+                    }
                     let sibling = PathBuf::from(format!("{}.jsonl", path.to_string_lossy()));
-                    let nested = source.agent == "omp" && (child || host.stat(&sibling).is_ok_and(|m| !m.is_dir));
+                    let nested = source.agent == "omp"
+                        && (child || host.stat(&sibling).is_ok_and(|m| !m.is_dir));
                     pending.push((path, nested, depth.saturating_add(1)));
                     continue;
                 }
@@ -433,7 +455,12 @@ pub fn scan(
                     pending.clear();
                     break;
                 }
-                let key = (host.id().0, source.agent.clone(), source.scope.clone(), path.clone());
+                let key = (
+                    host.id().0,
+                    source.agent.clone(),
+                    source.scope.clone(),
+                    path.clone(),
+                );
                 let result = (|| {
                     let meta = host.stat(&path)?;
                     if let Some((old, facts)) = cache.files.get(&key) {
@@ -452,7 +479,12 @@ pub fn scan(
                     let session = match source.agent.as_str() {
                         "omp" => omp::parse(&data)?,
                         "pi" => pi::parse(&data)?,
-                        _ => return Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported native statistics agent")),
+                        _ => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                "unsupported native statistics agent",
+                            ));
+                        }
                     };
                     Ok((
                         meta,
@@ -486,11 +518,12 @@ pub fn scan(
     if !snapshot.issues.is_empty() {
         for ((host_id, agent, scope, path), (_, facts)) in &cache.files {
             if *host_id == host.id().0
-                && sources.iter().any(|s| s.agent == *agent && s.scope == *scope)
-                && !snapshot
-                    .files
+                && sources
                     .iter()
-                    .any(|f| f.path == *path && f.source.agent == *agent && f.source.scope == *scope)
+                    .any(|s| s.agent == *agent && s.scope == *scope)
+                && !snapshot.files.iter().any(|f| {
+                    f.path == *path && f.source.agent == *agent && f.source.scope == *scope
+                })
             {
                 snapshot.files.push(facts.clone());
             }
@@ -501,7 +534,8 @@ pub fn scan(
     for file in &snapshot.files {
         if let Some(parent) = &file.session.parent {
             if !snapshot.files.iter().any(|f| {
-                f.source.agent == file.source.agent && f.source.scope == file.source.scope
+                f.source.agent == file.source.agent
+                    && f.source.scope == file.source.scope
                     && (f.session.id == *parent || f.path.to_string_lossy() == parent.as_str())
             }) {
                 snapshot.issues.push(ScanIssue {
@@ -521,7 +555,9 @@ pub fn scan(
     if snapshot.issues.is_empty() {
         cache.files.retain(|(id, agent, scope, path), _| {
             *id != host.id().0
-                || !sources.iter().any(|s| s.agent == *agent && s.scope == *scope)
+                || !sources
+                    .iter()
+                    .any(|s| s.agent == *agent && s.scope == *scope)
                 || seen.contains(&(agent.clone(), scope.clone(), path.clone()))
         });
     }

@@ -16,7 +16,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Read native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
         }
         L10nKey::StatisticsAgent => "Agent source",
-        L10nKey::StatisticsAgentScope => "All implemented sources, or one independent agent. A failed source does not hide other readable history.",
+        L10nKey::StatisticsAgentScope => {
+            "All implemented sources, or one independent agent. A failed source does not hide other readable history."
+        }
         L10nKey::StatisticsAllAgents => "All agents",
         L10nKey::StatisticsRange => "Date range",
         L10nKey::StatisticsCalendar => {
