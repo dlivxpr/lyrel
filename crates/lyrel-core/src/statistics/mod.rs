@@ -199,29 +199,38 @@ impl Snapshot {
         let mut identities = HashMap::new();
         for file in &self.files {
             identities.insert(
-                (file.source.scope.as_str(), file.session.id.as_str()),
+                (
+                    (file.source.agent.as_str(), file.source.scope.as_str()),
+                    file.session.id.as_str(),
+                ),
                 file.session.id.as_str(),
             );
             if let Some(path) = file.path.to_str() {
-                identities.insert((file.source.scope.as_str(), path), file.session.id.as_str());
+                identities.insert(
+                    (
+                        (file.source.agent.as_str(), file.source.scope.as_str()),
+                        path,
+                    ),
+                    file.session.id.as_str(),
+                );
             }
         }
         let mut parents = HashMap::new();
         for file in &self.files {
-            if let Some(parent) = file
-                .session
-                .parent
-                .as_deref()
-                .and_then(|p| identities.get(&(file.source.scope.as_str(), p)))
-            {
+            if let Some(parent) = file.session.parent.as_deref().and_then(|p| {
+                identities.get(&((file.source.agent.as_str(), file.source.scope.as_str()), p))
+            }) {
                 parents.insert(
-                    (file.source.scope.as_str(), file.session.id.as_str()),
+                    (
+                        (file.source.agent.as_str(), file.source.scope.as_str()),
+                        file.session.id.as_str(),
+                    ),
                     *parent,
                 );
             }
         }
         for file in &self.files {
-            let scope = file.source.scope.as_str();
+            let scope = (file.source.agent.as_str(), file.source.scope.as_str());
             let session = &file.session;
             let mut lineage = session.id.as_str();
             let mut visited = HashSet::new();
@@ -526,6 +535,7 @@ pub fn scan(
         if let Some(parent) = &file.session.parent {
             if !snapshot.files.iter().any(|f| {
                 f.source.scope == file.source.scope
+                    && f.source.agent == file.source.agent
                     && (f.session.id == *parent || f.path.to_string_lossy() == parent.as_str())
             }) {
                 snapshot.issues.push(ScanIssue {

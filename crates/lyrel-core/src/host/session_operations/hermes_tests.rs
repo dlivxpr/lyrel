@@ -234,4 +234,22 @@ fn native_hermes_statistics_reads_public_stored_usage() {
         "unexpected gateway/runtime failure: {:?}",
         snapshot.issues()
     );
+    let omp = tempfile::tempdir().unwrap();
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    std::fs::write(omp.path().join("native.jsonl"), format!(
+        "{{\"type\":\"session\",\"id\":\"main\",\"timestamp\":\"{timestamp}\"}}\n{{\"type\":\"model_usage\",\"id\":\"stored:main\",\"timestamp\":\"{timestamp}\",\"usage\":{{\"input\":1,\"output\":1,\"totalTokens\":2,\"cost\":{{\"total\":0}}}}}}\n"
+    )).unwrap();
+    let mut mixed = sources;
+    mixed.push(statistics::Source::omp(
+        omp.path().into(),
+        mixed[0].scope().to_owned(),
+    ));
+    let snapshot = statistics::scan(&*host, &mixed, &mut StatisticsCache::default()).unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(
+        totals.main_sessions(),
+        3,
+        "same IDs and scope strings from different agents remain independent"
+    );
+    assert_eq!(totals.tokens().total(), Some(27));
 }
