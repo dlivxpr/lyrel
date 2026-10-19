@@ -37,6 +37,7 @@ pub(crate) mod kit;
 mod pages;
 mod shell;
 mod shortcuts;
+pub(crate) mod statistics;
 mod theme_picker;
 
 /// The settings nav, and the page's padding either side of its column.
@@ -199,18 +200,20 @@ pub(crate) enum SettingsSection {
     KeyboardMouse,
     Ssh,
     Agents,
+    Statistics,
     Keybindings,
     About,
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 7] = [
+    pub(crate) const ALL: [SettingsSection; 8] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Terminal,
         SettingsSection::KeyboardMouse,
         SettingsSection::Ssh,
         SettingsSection::Agents,
+        SettingsSection::Statistics,
         SettingsSection::About,
     ];
 
@@ -229,6 +232,7 @@ impl SettingsSection {
             Self::KeyboardMouse => L10nKey::SettingsNavInput,
             Self::Ssh => L10nKey::SettingsNavSsh,
             Self::Agents => L10nKey::SettingsNavAgents,
+            Self::Statistics => L10nKey::StatisticsTitle,
             Self::Keybindings => L10nKey::SettingsNavKeybindings,
             Self::About => L10nKey::SettingsNavAbout,
         }
@@ -242,6 +246,7 @@ impl SettingsSection {
             Self::KeyboardMouse | Self::Keybindings => "icons/settings/keyboard.svg",
             Self::Ssh => "icons/settings/ssh.svg",
             Self::Agents => "icons/settings/integrations.svg",
+            Self::Statistics => "icons/settings/integrations.svg",
             Self::About => "icons/settings/about.svg",
         }
     }
@@ -254,6 +259,7 @@ impl SettingsSection {
             SettingsSection::KeyboardMouse => "settings:keyboard-mouse",
             SettingsSection::Ssh => "settings:ssh",
             SettingsSection::Agents => "settings:agents",
+            SettingsSection::Statistics => "settings:statistics",
             SettingsSection::Keybindings => "settings:keybindings",
             SettingsSection::About => "settings:about",
         }
@@ -272,6 +278,11 @@ fn settings_search_entries() -> &'static [SearchEntry] {
     use L10nKey::*;
     use SettingsSection::*;
     &[
+        SearchEntry {
+            section: Statistics,
+            title: StatisticsTitle,
+            keywords: StatisticsKeywords,
+        },
         SearchEntry {
             section: Appearance,
             title: SettingsUiFontSize,
@@ -1171,6 +1182,7 @@ pub(crate) struct SettingsState {
     pub(crate) agent_touched: std::collections::HashSet<crate::core::agent_hooks::HookAgent>,
     /// Agents with an install or removal in flight.
     pub(crate) agent_busy: std::collections::HashSet<crate::core::agent_hooks::HookAgent>,
+    pub(crate) statistics: statistics::StatisticsState,
     pub(crate) _subs: Vec<Subscription>,
 }
 
