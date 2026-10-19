@@ -61,7 +61,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SkillsFileLimit => "（不完整；链接或扫描上限）",
         L10nKey::SkillsCopied => "已复制路径",
-        L10nKey::SkillsInstallTitle => "发现并安装公开技能",
+        L10nKey::SkillsInstallTitle => "发现并安装技能",
         L10nKey::SkillsGithubSource => "GitHub 仓库",
         L10nKey::SkillsGithubHint => "owner/repo 或 https://github.com/owner/repo/tree/ref/path",
         L10nKey::SkillsRef => "分支、标签或 commit（可选）",
@@ -75,7 +75,20 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "使用 skills CLI 同款公开搜索接口，只显示 GitHub 来源。选择结果后仍需发现仓库、选择技能并审查安装，不会直接安装。"
         }
         L10nKey::SkillsInstallScope => "共享安装作用域",
-        L10nKey::SkillsInstallLocalOnly => "公开技能安装当前仅支持本机；仍可浏览远端技能。",
+        L10nKey::SkillsGithubAuthorization => {
+            "GitHub 发现与下载在桌面本机完成，复用已有 GH_TOKEN / GITHUB_TOKEN 或 gh 授权，凭据不会下发到所选 Host。审查后固定机器、home／项目及来源快照；更换目标前请先取消。"
+        }
+        L10nKey::SkillsGithubUnauthorized => {
+            "GitHub 拒绝了桌面本机授权（401）。请更新已有环境变量或 gh 授权后重新发现。"
+        }
+        L10nKey::SkillsGithubForbidden => {
+            "GitHub 拒绝访问（403）。请检查桌面本机账号的仓库权限与组织 SSO 授权。"
+        }
+        L10nKey::SkillsGithubInvisible => {
+            "仓库或 ref 不存在，或桌面本机授权不可见（404）。请检查来源与已有 gh 账号权限。"
+        }
+        L10nKey::SkillsGithubRateLimited => "GitHub 请求已限流。请等待额度恢复后重试。",
+        L10nKey::SkillsGithubNetwork => "无法连接 GitHub。请检查桌面本机网络和代理后重试。",
         L10nKey::SkillsInstallReview => "审查安装…",
         L10nKey::SkillsInstallConfirm => "安装所选技能",
         L10nKey::SkillsInstallReplace => "替换此现有目录",
@@ -92,7 +105,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsInstallSelect => "选择要安装的技能",
         L10nKey::SkillsInstallCandidates => "候选：{count}",
         L10nKey::SkillsInstallBrowse => "浏览已安装技能",
-        L10nKey::SkillsInstallError => "无法安装 {name}：{error}",
+        L10nKey::SkillsInstallError => "无法安装 {name} — {path}：{error}",
         L10nKey::SkillsInstallRefResolved => "已解析来源：{source}",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
