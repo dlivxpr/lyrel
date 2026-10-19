@@ -8,6 +8,7 @@ use crate::core::cli_agent::{CLIAgent, parse_command_argv};
 pub(super) struct ConfiguredScope {
     environment: BTreeMap<String, String>,
     hermes_profile: Option<String>,
+    omp_session_dir: Option<String>,
 }
 
 impl HookTarget<'_> {
@@ -40,6 +41,19 @@ impl HookTarget<'_> {
             .get(&HookAgent::Hermes)
             .and_then(|scope| scope.as_ref().ok())
             .and_then(|scope| scope.hermes_profile.as_deref())
+    }
+
+    pub(crate) fn omp_session_dir(&self) -> io::Result<Option<&str>> {
+        self.launch_scopes
+            .get(&HookAgent::OhMyPi)
+            .map(|scope| {
+                scope
+                    .as_ref()
+                    .map(|scope| scope.omp_session_dir.as_deref())
+                    .map_err(|message| io::Error::new(io::ErrorKind::Unsupported, message.clone()))
+            })
+            .transpose()
+            .map(Option::flatten)
     }
 
     pub(crate) fn agent_environment(
@@ -106,6 +120,7 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
         .ok_or_else(error)?;
     let mut environment = BTreeMap::new();
     let mut hermes_profile = None;
+    let mut omp_session_dir = None;
     for assignment in &args[..named] {
         let (key, value) = assignment.split_once('=').ok_or_else(error)?;
         if !crate::host::AGENT_ENVIRONMENT_KEYS.contains(&key) || value.contains(['$', '`']) {
@@ -234,6 +249,9 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
             if agent == HookAgent::Pi && key == "--session-dir" {
                 environment.insert("PI_CODING_AGENT_SESSION_DIR".into(), value.into());
             }
+            if agent == HookAgent::OhMyPi && key == "--session-dir" {
+                omp_session_dir = Some(value.to_owned());
+            }
             if key == "--profile" || (agent == HookAgent::Hermes && key == "-p") {
                 match agent {
                     HookAgent::OhMyPi => {
@@ -273,5 +291,6 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
     Ok(ConfiguredScope {
         environment,
         hermes_profile,
+        omp_session_dir,
     })
 }

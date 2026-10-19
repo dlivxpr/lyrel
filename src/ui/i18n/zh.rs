@@ -2,6 +2,61 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::StatisticsTitle => "统计",
+        L10nKey::StatisticsKeywords => {
+            "统计 omp 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+        }
+        L10nKey::StatisticsToday => "今天",
+        L10nKey::StatisticsWeek => "本周",
+        L10nKey::StatisticsMonth => "本月",
+        L10nKey::StatisticsYear => "本年",
+        L10nKey::StatisticsAll => "全部",
+        L10nKey::StatisticsCustom => "自定义",
+        L10nKey::StatisticsScope => {
+            "读取所选机器的 omp 原生历史，包含其他终端产生的会话。所选机器不随工作区切换。"
+        }
+        L10nKey::StatisticsRange => "日期范围",
+        L10nKey::StatisticsCalendar => {
+            "日历边界按桌面本机时区解释；每周从星期一开始。对比采用前一个对应日历期间。"
+        }
+        L10nKey::StatisticsCustomDates => "开始／结束日期（YYYY-MM-DD，包含两端）",
+        L10nKey::StatisticsApply => "应用日期",
+        L10nKey::StatisticsRefresh => "刷新历史",
+        L10nKey::StatisticsLoading => "正在读取原生历史…下方保留的旧结果带有快照时间。",
+        L10nKey::StatisticsInvalidDate => {
+            "请输入 YYYY-MM-DD 格式的有效日期，开始日期不能晚于结束日期。"
+        }
+        L10nKey::StatisticsOffline => "机器离线，请重新连接后刷新。缓存结果不是最新数据。",
+        L10nKey::StatisticsReadError => {
+            "无法刷新原生历史，已有结果已过期。远端缺少智能体环境元数据时请升级 lyrel-server。{error}"
+        }
+        L10nKey::StatisticsUpdated => "快照：{time} · 桌面时区：{zone}\n结果范围：{range}",
+        L10nKey::StatisticsComplete => "可发现来源与扫描上限范围内完整",
+        L10nKey::StatisticsPartial => "结果不完整，保留值可能过期或受限；请查看下方来源诊断",
+        L10nKey::StatisticsTokens => "总 Token",
+        L10nKey::StatisticsCost => "历史记录费用",
+        L10nKey::StatisticsSessions => "活跃主会话",
+        L10nKey::StatisticsInput => "输入 Token",
+        L10nKey::StatisticsOutput => "输出 Token",
+        L10nKey::StatisticsCacheRead => "缓存读取 Token",
+        L10nKey::StatisticsCacheWrite => "缓存写入 Token",
+        L10nKey::StatisticsAverage => "每主会话平均 Token（含子代理用量）",
+        L10nKey::StatisticsUnknown => "未知",
+        L10nKey::StatisticsUnpriced => "未计价",
+        L10nKey::StatisticsUnpricedCalls => {
+            "没有记录费用的调用：{count}。已知费用仅为小计，不是账单或账户额度；不联网取价或推算单价。"
+        }
+        L10nKey::StatisticsNotComparable => "不可比较",
+        L10nKey::StatisticsComparison => {
+            "上期：{tokens} Token · {cost} · {sessions} 个主会话\nToken 变化：{change}"
+        }
+        L10nKey::StatisticsEmpty => {
+            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用 omp 后刷新。"
+        }
+        L10nKey::StatisticsPrivacy => {
+            "只读 · omp 18.12.1 JSONL · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。任意不可发现的自定义存储需要显式来源关联。跳过链接与未知继承关系会限制覆盖范围。"
+        }
+        L10nKey::StatisticsOpen => "打开统计",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 需要加载原生扩展。--no-extensions/-ne 会禁用发现；--no-session 会禁用历史、恢复与分叉。Print/JSON/RPC 模式不是原生 TUI。缺少事件不代表本轮结束，请检查启动诊断与项目信任，不要绕过授权。"
         }

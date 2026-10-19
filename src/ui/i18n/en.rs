@@ -2,6 +2,69 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
+        L10nKey::StatisticsTitle => "Statistics",
+        L10nKey::StatisticsKeywords => {
+            "statistics omp native history tokens cost sessions machine profile date range overview"
+        }
+        L10nKey::StatisticsToday => "Today",
+        L10nKey::StatisticsWeek => "This week",
+        L10nKey::StatisticsMonth => "This month",
+        L10nKey::StatisticsYear => "This year",
+        L10nKey::StatisticsAll => "All time",
+        L10nKey::StatisticsCustom => "Custom",
+        L10nKey::StatisticsScope => {
+            "Read omp native history on this machine, including sessions from other terminals. The selected machine does not follow the workspace."
+        }
+        L10nKey::StatisticsRange => "Date range",
+        L10nKey::StatisticsCalendar => {
+            "Calendar boundaries use the desktop timezone; weeks start on Monday. Comparisons use the preceding matching calendar period."
+        }
+        L10nKey::StatisticsCustomDates => "Start / end date (YYYY-MM-DD, inclusive)",
+        L10nKey::StatisticsApply => "Apply dates",
+        L10nKey::StatisticsRefresh => "Refresh history",
+        L10nKey::StatisticsLoading => {
+            "Reading native history… Previous results remain dated below."
+        }
+        L10nKey::StatisticsInvalidDate => {
+            "Enter valid dates in YYYY-MM-DD format, with the start no later than the end."
+        }
+        L10nKey::StatisticsOffline => {
+            "Machine offline — reconnect and refresh. Cached results are not current."
+        }
+        L10nKey::StatisticsReadError => {
+            "Could not refresh native history. Previous results are stale. If the remote lacks agent environment metadata, upgrade lyrel-server. {error}"
+        }
+        L10nKey::StatisticsUpdated => {
+            "Snapshot: {time} · desktop timezone: {zone}\nResult range: {range}"
+        }
+        L10nKey::StatisticsComplete => "Complete within discovered sources and scan limits",
+        L10nKey::StatisticsPartial => {
+            "Incomplete — retained values may be stale or restricted; inspect source diagnostics below"
+        }
+        L10nKey::StatisticsTokens => "Total tokens",
+        L10nKey::StatisticsCost => "Recorded historical cost",
+        L10nKey::StatisticsSessions => "Active main sessions",
+        L10nKey::StatisticsInput => "Input tokens",
+        L10nKey::StatisticsOutput => "Output tokens",
+        L10nKey::StatisticsCacheRead => "Cache-read tokens",
+        L10nKey::StatisticsCacheWrite => "Cache-write tokens",
+        L10nKey::StatisticsAverage => "Tokens per main session (including child usage)",
+        L10nKey::StatisticsUnknown => "Unknown",
+        L10nKey::StatisticsUnpriced => "Unpriced",
+        L10nKey::StatisticsUnpricedCalls => {
+            "Calls without recorded cost: {count}. Known costs are a subtotal, not a bill or account quota. No prices are fetched or inferred."
+        }
+        L10nKey::StatisticsNotComparable => "Not comparable",
+        L10nKey::StatisticsComparison => {
+            "Previous period: {tokens} tokens · {cost} · {sessions} main sessions\nToken change: {change}"
+        }
+        L10nKey::StatisticsEmpty => {
+            "No native activity in this range. Check the selected machine and source paths, choose another range, or use omp and refresh."
+        }
+        L10nKey::StatisticsPrivacy => {
+            "Read-only · omp 18.12.1 JSONL · structured in-memory cache only; no prompts, conversation bodies, credentials or online price requests. Arbitrary undiscoverable custom stores require an explicit source association. Skipped symlinks and unknown lineage limit coverage."
+        }
+        L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 requires its native extension. --no-extensions/-ne disables discovery; --no-session disables history, resume and fork. Print/JSON/RPC modes are not the native TUI. Missing events never mean Done. Check startup diagnostics and project trust without bypassing consent."
         }
