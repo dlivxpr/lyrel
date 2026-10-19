@@ -38,6 +38,7 @@ mod pages;
 mod shell;
 mod shortcuts;
 mod theme_picker;
+pub(crate) mod usage;
 
 /// The settings nav, and the page's padding either side of its column.
 const NAV_W: f32 = 220.;
@@ -200,17 +201,19 @@ pub(crate) enum SettingsSection {
     Ssh,
     Agents,
     Keybindings,
+    Usage,
     About,
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 7] = [
+    pub(crate) const ALL: [SettingsSection; 8] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Terminal,
         SettingsSection::KeyboardMouse,
         SettingsSection::Ssh,
         SettingsSection::Agents,
+        SettingsSection::Usage,
         SettingsSection::About,
     ];
 
@@ -229,6 +232,7 @@ impl SettingsSection {
             Self::KeyboardMouse => L10nKey::SettingsNavInput,
             Self::Ssh => L10nKey::SettingsNavSsh,
             Self::Agents => L10nKey::SettingsNavAgents,
+            Self::Usage => L10nKey::SettingsNavUsage,
             Self::Keybindings => L10nKey::SettingsNavKeybindings,
             Self::About => L10nKey::SettingsNavAbout,
         }
@@ -242,6 +246,7 @@ impl SettingsSection {
             Self::KeyboardMouse | Self::Keybindings => "icons/settings/keyboard.svg",
             Self::Ssh => "icons/settings/ssh.svg",
             Self::Agents => "icons/settings/integrations.svg",
+            Self::Usage => "icons/settings/integrations.svg",
             Self::About => "icons/settings/about.svg",
         }
     }
@@ -254,6 +259,7 @@ impl SettingsSection {
             SettingsSection::KeyboardMouse => "settings:keyboard-mouse",
             SettingsSection::Ssh => "settings:ssh",
             SettingsSection::Agents => "settings:agents",
+            SettingsSection::Usage => "settings:usage",
             SettingsSection::Keybindings => "settings:keybindings",
             SettingsSection::About => "settings:about",
         }
@@ -272,6 +278,11 @@ fn settings_search_entries() -> &'static [SearchEntry] {
     use L10nKey::*;
     use SettingsSection::*;
     &[
+        SearchEntry {
+            section: Usage,
+            title: SettingsNavUsage,
+            keywords: UsageSearchKeywords,
+        },
         SearchEntry {
             section: Appearance,
             title: SettingsUiFontSize,
@@ -1102,6 +1113,7 @@ pub(crate) struct ThemeEditor {
 pub(crate) struct SettingsState {
     pub(crate) focus_handle: gpui_kit::FocusHandle,
     pub(crate) section: SettingsSection,
+    pub(crate) usage: Entity<usage::UsagePage>,
     pub(crate) search: Entity<InputState>,
     pub(crate) shortcut_search: Entity<InputState>,
     pub(crate) modified_only: bool,

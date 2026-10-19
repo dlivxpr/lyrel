@@ -828,6 +828,7 @@ impl LyrelApp {
                 SettingsSection::KeyboardMouse => self.render_settings_input(cx),
                 SettingsSection::Ssh => self.render_settings_ssh(cx),
                 SettingsSection::Agents => self.render_settings_agents(cx),
+                SettingsSection::Usage => self.render_settings_usage(cx),
                 SettingsSection::Keybindings => self.render_settings_keybindings(cx),
                 SettingsSection::About => self.render_settings_about(cx),
             };
@@ -1426,6 +1427,9 @@ impl LyrelApp {
                 }
                 SettingsSection::Agents => {
                     self.render_command_line_rows(cx);
+                }
+                SettingsSection::Usage => {
+                    self.render_usage_search_row(cx);
                 }
                 SettingsSection::About => {
                     self.render_settings_about(cx);

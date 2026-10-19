@@ -5602,6 +5602,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async_zip",
+ "chrono",
  "core-foundation 0.10.1",
  "encoding_rs",
  "futures-channel",
@@ -5642,6 +5643,7 @@ dependencies = [
  "tree-sitter",
  "unicode-segmentation",
  "url",
+ "ureq",
  "uuid",
  "windows 0.62.2",
  "windows-sys 0.61.2",
