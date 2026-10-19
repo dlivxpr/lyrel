@@ -1,12 +1,13 @@
 //! 所选机器的原生历史总览；所有文件与聚合离开 GPUI 线程。
 mod analysis;
+mod dashboard;
 mod management;
 #[cfg(test)]
 mod management_tests;
 mod storage;
 #[cfg(test)]
 mod workflow_tests;
-use super::kit::{Tk, fs};
+use super::kit::Tk;
 use super::shell::MenuEntry;
 use super::*;
 use crate::ui::host_ops::HostOps;
@@ -18,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) struct StatisticsState {
     pub(crate) host: HostId,
+    content_scroll: gpui_kit::ScrollHandle,
     agent: Option<&'static str>,
     period: Period,
     start: Entity<InputState>,
@@ -45,6 +47,7 @@ impl StatisticsState {
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         Self {
             host: HostId::LOCAL,
+            content_scroll: gpui_kit::ScrollHandle::new(),
             agent: None,
             period: Period::Month,
             start: cx.new(|cx| InputState::new(window, cx).default_value(date.clone())),
@@ -230,7 +233,7 @@ impl LyrelApp {
             s.statistics.error = None;
             if s.statistics.analysis.anchor.is_none() {
                 s.statistics.analysis.anchor =
-                    Some(gpui_kit::ScrollAnchor::for_handle(s.content_scroll.clone()));
+                    Some(gpui_kit::ScrollAnchor::for_handle(s.statistics.content_scroll.clone()));
             }
         }
         HostOps::run(
@@ -422,282 +425,64 @@ impl LyrelApp {
         })
         .collect();
         let range = self.analysis_menu("statistics-period", t(period_key(period)), periods, cx);
-        let mut rows = vec![
-            self.settings_row(
-                t(L10nKey::StatisticsTitle),
-                t(L10nKey::StatisticsScope),
-                machine,
-                cx,
-            )
-            .into_any_element(),
-            self.settings_row(
-                t(L10nKey::StatisticsAgent),
-                t(L10nKey::StatisticsAgentScope),
-                agent,
-                cx,
-            )
-            .into_any_element(),
-            self.settings_row(
-                t(L10nKey::StatisticsRange),
-                t(L10nKey::StatisticsCalendar),
-                range,
-                cx,
-            )
-            .into_any_element(),
-        ];
-        rows.push(self.render_statistics_management(cx));
-        if state.agent.is_none_or(|agent| agent == "hermes") {
-            rows.push(
-                div()
-                    .text_size(fs(12.))
-                    .text_color(tk.k5)
-                    .child(t(L10nKey::StatisticsHermesLimits))
-                    .into_any_element(),
-            );
-        }
-        if period == Period::Custom {
-            rows.push(
-                v_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(fs(12.))
-                            .child(t(L10nKey::StatisticsCustomDates)),
-                    )
-                    .child(Input::new(&start).w_full())
-                    .child(Input::new(&end).w_full())
-                    .child(self.analysis_button(
-                        "statistics-apply",
-                        t(L10nKey::StatisticsApply),
-                        cx,
-                        |this, _, cx| this.load_statistics(cx),
-                    ))
-                    .into_any_element(),
-            );
-        }
-        rows.push(
-            self.analysis_button(
+        let toolbar = h_flex()
+            .id("statistics-toolbar")
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
+            .gap_2()
+            .child(machine)
+            .child(agent)
+            .child(div().flex_1())
+            .child(range)
+            .child(self.analysis_button(
                 "statistics-refresh",
                 t(L10nKey::StatisticsRefresh),
                 cx,
                 |this, _, cx| this.load_statistics(cx),
-            )
-            .disabled(loading)
-            .into_any_element(),
-        );
+            ).ghost().disabled(loading || state.management.busy));
+        let mut rows = vec![toolbar.into_any_element()];
+        if period == Period::Custom {
+            rows.push(h_flex().gap_2().min_w_0()
+                .child(Input::new(&start).id("statistics-start-date")
+                    .aria_label(t(L10nKey::StatisticsStartDate)).small().flex_1().min_w_0())
+                .child(Input::new(&end).id("statistics-end-date")
+                    .aria_label(t(L10nKey::StatisticsEndDate)).small().flex_1().min_w_0())
+                .child(self.analysis_button("statistics-apply", t(L10nKey::StatisticsApply), cx,
+                    |this, _, cx| this.load_statistics(cx)))
+                .into_any_element());
+        }
         if loading {
-            rows.push(
-                div()
-                    .text_color(tk.k5)
-                    .child(t(L10nKey::StatisticsLoading))
-                    .into_any_element(),
-            );
+            rows.push(div().text_xs().text_color(tk.k5)
+                .child(t(L10nKey::StatisticsLoading)).into_any_element());
         }
-        if let Some(error) = self
-            .active_settings()
-            .and_then(|s| s.statistics.error.clone())
-        {
-            rows.push(div().text_color(tk.danger).child(error).into_any_element());
+        if let Some(error) = &state.error {
+            rows.push(div().text_sm().text_color(tk.danger).child(error.clone()).into_any_element());
         }
-        if let Some(p) = self
-            .active_settings()
-            .and_then(|s| s.statistics.results.get(&(host, state.agent)))
-        {
-            let totals = &p.totals;
-            let range_label = match (p.window.start(), p.window.end()) {
-                (Some(start), Some(end)) => format!(
-                    "{} — {}",
-                    chrono::DateTime::from_timestamp(start, 0)
-                        .unwrap()
-                        .with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d"),
-                    chrono::DateTime::from_timestamp(end - 1, 0)
-                        .unwrap()
-                        .with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d")
-                ),
-                _ => t(L10nKey::StatisticsAll).into(),
-            };
-            rows.push(
-                div()
-                    .text_color(tk.k5)
-                    .child(t_fmt(
-                        L10nKey::StatisticsUpdated,
-                        &[
-                            (
-                                "time",
-                                &chrono::DateTime::from_timestamp(p.snapshot.updated(), 0)
-                                    .unwrap()
-                                    .with_timezone(&chrono::Local)
-                                    .format("%Y-%m-%d %H:%M:%S %:z")
-                                    .to_string(),
-                            ),
-                            ("zone", p.window.timezone()),
-                            ("range", &range_label),
-                        ],
-                    ))
-                    .into_any_element(),
-            );
-            rows.push(
-                div()
-                    .text_color(if totals.is_complete() {
-                        tk.k5
-                    } else {
-                        tk.warn_text
-                    })
-                    .child(t(if totals.is_complete() {
-                        L10nKey::StatisticsComplete
-                    } else {
-                        L10nKey::StatisticsPartial
-                    }))
-                    .into_any_element(),
-            );
-            let values = [
-                (L10nKey::StatisticsTokens, number(totals.tokens().total())),
-                (L10nKey::StatisticsCost, money(totals.recorded_usd())),
-                (
-                    L10nKey::StatisticsEstimatedCost,
-                    money(totals.estimated_usd()),
-                ),
-                (L10nKey::StatisticsSessions, session_count(totals)),
-                (L10nKey::StatisticsInput, number(totals.tokens().input())),
-                (L10nKey::StatisticsOutput, number(totals.tokens().output())),
-                (
-                    L10nKey::StatisticsReasoning,
-                    number(totals.tokens().reasoning()),
-                ),
-                (
-                    L10nKey::StatisticsCacheRead,
-                    number(totals.tokens().cache_read()),
-                ),
-                (
-                    L10nKey::StatisticsCacheWrite,
-                    number(totals.tokens().cache_write()),
-                ),
-                (
-                    L10nKey::StatisticsAverage,
-                    totals
-                        .average_tokens()
-                        .map(|v| format!("{v:.1}"))
-                        .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
-                ),
-            ];
-            for (key, value) in values {
-                rows.push(
-                    h_flex()
-                        .flex_wrap()
-                        .gap_3()
-                        .justify_between()
-                        .child(t(key))
-                        .child(div().font_weight(FontWeight::MEDIUM).child(value))
-                        .into_any_element(),
-                );
-            }
-            rows.push(
-                div()
-                    .text_color(tk.k5)
-                    .child(t_fmt(
-                        L10nKey::StatisticsUnpricedCalls,
-                        &[("count", &totals.unpriced_calls().to_string())],
-                    ))
-                    .into_any_element(),
-            );
-            for (currency, estimate) in totals.estimated_costs() {
-                rows.push(
-                    div()
-                        .text_sm()
-                        .text_color(tk.k5)
-                        .child(t_fmt(
-                            L10nKey::StatisticsPriceEstimate,
-                            &[
-                                ("currency", currency),
-                                (
-                                    "custom",
-                                    &estimate
-                                        .custom
-                                        .map(|v| format!("{v:.6}"))
-                                        .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
-                                ),
-                                (
-                                    "catalog",
-                                    &estimate
-                                        .catalog
-                                        .map(|v| format!("{v:.6}"))
-                                        .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
-                                ),
-                                ("priced", &estimate.priced_tokens.to_string()),
-                                ("unpriced", &estimate.unpriced_tokens.to_string()),
-                                ("partial", &estimate.partial_calls.to_string()),
-                            ],
-                        ))
-                        .into_any_element(),
-                );
-            }
-            if let Some(previous) = &p.previous {
-                let change = totals
-                    .token_change(previous)
-                    .map(|v| format!("{v:+.1}%"))
-                    .unwrap_or_else(|| t(L10nKey::StatisticsNotComparable).into());
-                rows.push(
-                    div()
-                        .text_color(tk.k5)
-                        .child(t_fmt(
-                            L10nKey::StatisticsComparison,
-                            &[
-                                ("tokens", &number(previous.tokens().total())),
-                                ("cost", &money(previous.recorded_usd())),
-                                ("sessions", &session_count(previous)),
-                                ("change", &change),
-                            ],
-                        ))
-                        .into_any_element(),
-                );
-            }
-            if totals.calls() == 0 {
-                rows.push(
-                    div()
-                        .text_color(tk.k5)
-                        .child(t(L10nKey::StatisticsEmpty))
-                        .into_any_element(),
-                );
-            }
+        let presentation = state.results.get(&(host, state.agent));
+        rows.push(self.render_statistics_tiles(presentation, cx));
+        if let Some(p) = presentation {
             rows.push(self.render_statistics_analysis(p, cx));
-            for source in p.snapshot.sources() {
-                rows.push(
-                    div()
-                        .text_size(fs(12.))
-                        .text_color(tk.k5)
-                        .child(format!(
-                            "{} · {}\n{}",
-                            source.agent(),
-                            source.scope(),
-                            source.root().display()
-                        ))
-                        .into_any_element(),
-                );
-            }
-            for issue in p.snapshot.issues() {
-                rows.push(
-                    div()
-                        .text_size(fs(12.))
-                        .text_color(tk.warn_text)
-                        .child(format!(
-                            "{}\n{}",
-                            issue.path().display(),
-                            issue_text(issue.reason())
-                        ))
-                        .into_any_element(),
-                );
-            }
+            rows.push(div().text_xs().text_color(if p.totals.is_complete() { tk.k5 } else { tk.warn_text })
+                .child(t(if p.totals.is_complete() { L10nKey::StatisticsComplete } else { L10nKey::StatisticsPartial }))
+                .into_any_element());
+            rows.push(div().text_xs().text_color(tk.k5)
+                .child(t_fmt(L10nKey::StatisticsUpdated, &[
+                    ("time", &management::format_time(Some(p.snapshot.updated()))),
+                    ("zone", p.window.timezone()),
+                    ("range", &self.statistics_range_label(p)),
+                ])).into_any_element());
         }
-        rows.push(
-            div()
-                .text_size(fs(12.))
-                .text_color(tk.k5)
-                .child(t(L10nKey::StatisticsPrivacy))
-                .into_any_element(),
-        );
-        Self::settings_page([v_flex().gap_4().children(rows).into_any_element()])
+        rows.push(self.render_statistics_management_entry(cx));
+        rows.push(div().text_xs().text_color(tk.k5).child(t(L10nKey::StatisticsPrivacy)).into_any_element());
+        let body = div().id("statistics-content")
+            .size_full().min_w_0().min_h_0().overflow_y_scroll()
+            .track_scroll(&state.content_scroll)
+            .child(v_flex().min_w_0().gap_4().px_4().pt_2().pb_4().children(rows));
+        v_flex().id("statistics-page").size_full().flex_1().min_h_0().min_w_0()
+            .child(crate::ui::scrollbar::with_vertical_scrollbar(
+                "statistics-content-scrollbar", body, &state.content_scroll,
+            )).into_any_element()
     }
 }
 
@@ -870,6 +655,19 @@ mod tests {
             assert!(!settings.statistics.analysis.detail);
             assert!(settings.section == SettingsSection::Statistics);
         });
+        vcx.simulate_keystrokes("tab");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("statistics-calendar-focus").focused(), Some(true),
+                "one Tab must leave the annual grid instead of visiting every date");
+        });
+        vcx.simulate_keystrokes("shift-tab");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            assert!(app.read(cx).active_settings().unwrap().statistics.analysis.focus.is_focused(window),
+                "Shift-Tab must return to the single keyboard calendar focus");
+        });
         for (locale, width, mode) in [
             ("en", 1120., gpui_kit::component::ThemeMode::Light),
             ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
@@ -890,7 +688,7 @@ mod tests {
             vcx.update(|window, cx| {
                 window.render_frame(cx);
                 let top = window.find("statistics-analysis-metric").bounds().top();
-                let scroll = &app.read(cx).active_settings().unwrap().content_scroll;
+                let scroll = &app.read(cx).active_settings().unwrap().statistics.content_scroll;
                 let offset = scroll.offset();
                 scroll.set_offset(gpui_kit::point(offset.x, offset.y - top + px(180.)));
                 window.render_frame(cx);
