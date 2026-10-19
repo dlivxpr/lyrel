@@ -1,4 +1,5 @@
 //! Desktop-only usage accounts. No Host, remote credentials or agent configuration.
+use super::providers::{Provider, ProviderReport};
 use crate::core::keychain::CredentialStore;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
@@ -20,6 +21,7 @@ pub(super) enum UsageError {
     BrowserMissing,
     BrowserUnsupported,
     BrowserChanged,
+    IdentityMismatch,
     BrowserUnreadable,
     BrowserProtected,
 }
@@ -41,7 +43,7 @@ pub(super) struct OfficialBalance {
 pub(super) enum Balance {
     Official(OfficialBalance),
     Platform(super::platform::PlatformBalance),
-    Provider(super::providers::ProviderReport),
+    Provider(ProviderReport),
 }
 impl Balance {
     #[cfg(test)]
@@ -54,15 +56,15 @@ impl Balance {
 }
 pub(super) enum VerifiedSource<'a> {
     ApiKey(&'a str),
+    ProviderSession {
+        provider: Provider,
+        secret: &'a str,
+    },
     Session {
         kind: super::platform::SessionKind,
         secret: &'a str,
     },
     Browser(super::browser::BrowserSelection),
-    ProviderSession {
-        provider: super::providers::Provider,
-        secret: &'a str,
-    },
     BrowserCookies {
         selection: super::browser::BrowserSelection,
         provider: super::providers::Provider,
@@ -83,12 +85,12 @@ pub(super) enum Authentication {
         slot: Uuid,
         kind: super::platform::SessionKind,
     },
-    BrowserLocalStorage {
-        selection: super::browser::BrowserSelection,
-    },
     ProviderSession {
         slot: Uuid,
-        provider: super::providers::Provider,
+        provider: Provider,
+    },
+    BrowserLocalStorage {
+        selection: super::browser::BrowserSelection,
     },
     BrowserCookies {
         selection: super::browser::BrowserSelection,
@@ -109,12 +111,14 @@ impl Authentication {
 pub(super) struct Account {
     pub id: Uuid,
     pub name: String,
-    pub auth: Authentication,
     #[serde(default)]
-    pub provider: super::providers::Provider,
+    pub provider: Provider,
+    pub auth: Authentication,
     pub enabled: bool,
     pub snapshot: Option<Snapshot>,
     pub error: Option<UsageError>,
+    #[serde(default)]
+    pub enhancement_slot: Option<Uuid>,
     #[serde(default)]
     retired_slots: Vec<Uuid>,
     #[serde(default)]
@@ -154,6 +158,30 @@ impl Accounts {
         for account in &stored.accounts {
             if !ids.insert(account.id)
                 || account.auth.slot().is_some_and(|slot| !slots.insert(slot))
+                || account.enhancement_slot.is_some_and(|slot| {
+                    !slots.insert(slot) || account.provider != Provider::CommandCode
+                })
+                || match &account.auth {
+                    Authentication::ManualSession { .. } => account.provider != Provider::DeepSeek,
+                    Authentication::ProviderSession { provider, .. } => {
+                        *provider != account.provider
+                            || !matches!(
+                                provider,
+                                Provider::Kimi | Provider::StepFun | Provider::MiMo
+                            )
+                    }
+                    Authentication::BrowserLocalStorage { .. } => {
+                        !matches!(account.provider, Provider::DeepSeek | Provider::Kimi)
+                    }
+                    Authentication::BrowserCookies { provider, .. } => {
+                        *provider != account.provider
+                            || !matches!(provider, Provider::StepFun | Provider::MiMo)
+                    }
+                    Authentication::ManualApiKey { .. } => !matches!(
+                        account.provider,
+                        Provider::DeepSeek | Provider::Kimi | Provider::CommandCode
+                    ),
+                }
             {
                 return Err(UsageError::Persistence);
             }
@@ -287,8 +315,8 @@ impl Accounts {
         let (secret, kind) = match &source {
             VerifiedSource::ApiKey(secret) => (Some(*secret), None),
             VerifiedSource::Session { kind, secret } => (Some(*secret), Some(*kind)),
-            VerifiedSource::Browser(_) => (None, None),
             VerifiedSource::ProviderSession { secret, .. } => (Some(*secret), None),
+            VerifiedSource::Browser(_) => (None, None),
             VerifiedSource::BrowserCookies { .. } => (None, None),
         };
         let slot = secret.map(|_| Uuid::new_v4());
@@ -304,15 +332,15 @@ impl Accounts {
             VerifiedSource::ApiKey(_) => Authentication::ManualApiKey {
                 slot: slot.unwrap(),
             },
+            VerifiedSource::ProviderSession { provider, .. } => Authentication::ProviderSession {
+                slot: slot.unwrap(),
+                provider,
+            },
             VerifiedSource::Session { .. } => Authentication::ManualSession {
                 slot: slot.unwrap(),
                 kind: kind.unwrap(),
             },
             VerifiedSource::Browser(selection) => Authentication::BrowserLocalStorage { selection },
-            VerifiedSource::ProviderSession { provider, .. } => Authentication::ProviderSession {
-                slot: slot.unwrap(),
-                provider,
-            },
             VerifiedSource::BrowserCookies {
                 selection,
                 provider,
@@ -321,15 +349,18 @@ impl Accounts {
                 provider,
             },
         };
+        let mut next = self.stored.clone();
         let provider = match &balance {
             Balance::Provider(report) => report.provider,
-            _ => super::providers::Provider::DeepSeek,
+            _ => Provider::DeepSeek,
         };
-        let mut next = self.stored.clone();
         if let Some(account) = next.accounts.iter_mut().find(|a| a.id == id) {
             account.retired_slots.extend(account.auth.slot());
             account.auth = auth;
             account.provider = provider;
+            account
+                .retired_slots
+                .extend(account.enhancement_slot.take());
             account.snapshot = Some(Snapshot {
                 balance,
                 updated_at: now,
@@ -340,14 +371,15 @@ impl Accounts {
             next.accounts.push(Account {
                 id,
                 name: name.to_owned(),
-                auth,
                 provider,
+                auth,
                 enabled: true,
                 snapshot: Some(Snapshot {
                     balance,
                     updated_at: now,
                 }),
                 error: None,
+                enhancement_slot: None,
                 retired_slots: Vec::new(),
                 removing: false,
                 revision: 0,
@@ -380,6 +412,86 @@ impl Accounts {
             self.account_mut(id).unwrap().error = Some(UsageError::Persistence);
         }
         Ok(id)
+    }
+    pub fn enhancement_secret(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<zeroize::Zeroizing<String>>, UsageError> {
+        let account = self.account(id).ok_or(UsageError::Stale)?;
+        account
+            .enhancement_slot
+            .map(|slot| {
+                self.vault
+                    .get(SERVICE, &slot.to_string())
+                    .map_err(|_| UsageError::Credentials)?
+                    .map(zeroize::Zeroizing::new)
+                    .ok_or(UsageError::Credentials)
+            })
+            .transpose()
+    }
+    pub fn fail_enhancement(&mut self, query: Query, error: UsageError) {
+        if let Some(account) = self
+            .account_mut(query.id)
+            .filter(|a| a.revision == query.revision && !a.removing)
+        {
+            account.busy = false;
+            if let Some(Snapshot {
+                balance: Balance::Provider(report),
+                ..
+            }) = &mut account.snapshot
+            {
+                report.enhancement = Some(error);
+            }
+        }
+        if self.persist(&self.stored).is_err() {
+            if let Some(account) = self.account_mut(query.id) {
+                account.error = Some(UsageError::Persistence);
+            }
+        }
+    }
+    pub fn save_enhancement(
+        &mut self,
+        query: Query,
+        secret: &str,
+        report: ProviderReport,
+        now: u64,
+    ) -> Result<(), UsageError> {
+        let old = self
+            .account(query.id)
+            .filter(|a| {
+                a.revision == query.revision && !a.removing && a.provider == Provider::CommandCode
+            })
+            .ok_or(UsageError::Stale)?
+            .enhancement_slot;
+        let slot = Uuid::new_v4();
+        if secret.len() > 2560 || self.vault.set(SERVICE, &slot.to_string(), secret).is_err() {
+            return Err(UsageError::Credentials);
+        }
+        let mut next = self.stored.clone();
+        let account = next.accounts.iter_mut().find(|a| a.id == query.id).unwrap();
+        account.enhancement_slot = Some(slot);
+        account.retired_slots.extend(old);
+        account.snapshot = Some(Snapshot {
+            balance: Balance::Provider(report),
+            updated_at: now,
+        });
+        account.busy = false;
+        if let Err(error) = self.persist(&next) {
+            let _ = self.vault.delete(SERVICE, &slot.to_string());
+            return Err(error);
+        }
+        self.stored = next;
+        if let Some(old) = old {
+            if self.vault.delete(SERVICE, &old.to_string()).is_ok() {
+                self.account_mut(query.id)
+                    .unwrap()
+                    .retired_slots
+                    .retain(|s| *s != old);
+            } else {
+                self.account_mut(query.id).unwrap().error = Some(UsageError::Credentials);
+            }
+        }
+        self.persist(&self.stored)
     }
     pub fn rename(&mut self, id: Uuid, name: &str) -> Result<(), UsageError> {
         let mut next = self.stored.clone();
@@ -432,6 +544,7 @@ impl Accounts {
             .slot()
             .into_iter()
             .chain(a.retired_slots.iter().copied())
+            .chain(a.enhancement_slot)
             .collect::<Vec<_>>();
         for slot in slots {
             if self.vault.delete(SERVICE, &slot.to_string()).is_err() {

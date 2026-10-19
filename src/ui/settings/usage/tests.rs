@@ -288,6 +288,7 @@ fn provider_identity_change_and_failed_vault_replacement_keep_original_account_s
             plan_expires: None,
             pools: Vec::new(),
             enhancement: None,
+            overdrawn: None,
         })
     };
     let id = accounts
