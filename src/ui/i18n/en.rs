@@ -29,7 +29,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsOwnerProjectRequired => {
             "Switch the selected project to {project} before maintaining this installation"
         }
-        L10nKey::SkillsSearch => "Search skill names, descriptions and sources",
+        L10nKey::SkillsSearch => "Search skills…",
         L10nKey::SkillsSource => "Source",
         L10nKey::SkillsAllSources => "All sources",
         L10nKey::SkillsUserShared => "User shared",
@@ -40,7 +40,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsEmpty => {
             "No matching skills. Check the selected machine, project, native profile and source filter, then refresh. No configuration is changed."
         }
-        L10nKey::SkillsScannedAt => "Snapshot: {time} (UTC Unix seconds)",
+        L10nKey::SkillsScannedAt => "Scanned: {time}",
         L10nKey::SkillsIncomplete => "Incomplete or stale results",
         L10nKey::SkillsUnknown => "Unknown",
         L10nKey::SkillsDiscovered => "Discovered on disk",
@@ -52,8 +52,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsCopyPath => "Copy path",
         L10nKey::SkillsBrowseFiles => "Browse files…",
         L10nKey::SkillsOrigin => "Reported source",
-        L10nKey::SkillsUpdated => "Updated (UTC seconds)",
-        L10nKey::SkillsCompanions => "Companion files: {files}; bytes: {bytes}{limited}",
+        L10nKey::SkillsUpdated => "Updated",
+        L10nKey::SkillsCompanions => "{files} companion files · {bytes}{limited}",
+        L10nKey::SkillsContents => "Contents",
+        L10nKey::SkillsNoDescription => "No description",
+        L10nKey::SkillsMixedState => "Mixed native states",
         L10nKey::SkillsInvocation => "Argument hint",
         L10nKey::SkillsNoSource => "No verifiable source recorded",
         L10nKey::SkillsNativeGuide => "Native documentation",

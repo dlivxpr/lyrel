@@ -25,7 +25,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsProjectHint => "所选机器上的绝对路径；留空只查看用户作用域",
         L10nKey::SkillsApplyProject => "应用项目",
         L10nKey::SkillsOwnerProjectRequired => "维护此安装项前，请先将所选项目切换为 {project}",
-        L10nKey::SkillsSearch => "搜索技能名称、描述与来源",
+        L10nKey::SkillsSearch => "搜索技能…",
         L10nKey::SkillsSource => "来源",
         L10nKey::SkillsAllSources => "全部来源",
         L10nKey::SkillsUserShared => "用户共享",
@@ -36,7 +36,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsEmpty => {
             "没有匹配的技能。请检查所选机器、项目、原生 profile 和来源筛选后刷新。不会修改配置。"
         }
-        L10nKey::SkillsScannedAt => "快照：{time}（UTC Unix 秒）",
+        L10nKey::SkillsScannedAt => "扫描于：{time}",
         L10nKey::SkillsIncomplete => "结果不完整或已过期",
         L10nKey::SkillsUnknown => "未知",
         L10nKey::SkillsDiscovered => "磁盘已发现",
@@ -48,8 +48,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsCopyPath => "复制路径",
         L10nKey::SkillsBrowseFiles => "浏览文件…",
         L10nKey::SkillsOrigin => "声明的来源",
-        L10nKey::SkillsUpdated => "更新时间（UTC Unix 秒）",
-        L10nKey::SkillsCompanions => "伴随文件：{files}；字节：{bytes}{limited}",
+        L10nKey::SkillsUpdated => "更新于",
+        L10nKey::SkillsCompanions => "{files} 个伴随文件 · {bytes}{limited}",
+        L10nKey::SkillsContents => "内容",
+        L10nKey::SkillsNoDescription => "没有描述",
+        L10nKey::SkillsMixedState => "原生状态不一",
         L10nKey::SkillsInvocation => "参数提示",
         L10nKey::SkillsNoSource => "无可核实的来源记录",
         L10nKey::SkillsNativeGuide => "原生文档",
