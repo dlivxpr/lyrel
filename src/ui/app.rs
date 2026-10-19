@@ -7782,10 +7782,15 @@ impl LyrelApp {
         let content_scroll = gpui_kit::ScrollHandle::new();
         content_scroll.set_offset(self.last_settings_location.1);
         let search_anchor = gpui_kit::ScrollAnchor::for_handle(content_scroll.clone());
+        let usage = cx.new(|cx| crate::ui::settings::usage::UsagePage::new(window, cx));
+        if self.last_settings_location.0 == SettingsSection::Usage {
+            usage.update(cx, |page, cx| page.set_visible(true, cx));
+        }
 
         self.settings = Some(SettingsState {
             focus_handle: focus_handle.clone(),
             section: self.last_settings_location.0,
+            usage,
             search: settings_search,
             skills,
             shortcut_search,
@@ -8081,6 +8086,7 @@ impl LyrelApp {
 
     pub(crate) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(s) = self.settings.take() {
+            s.usage.update(cx, |page, cx| page.set_visible(false, cx));
             self.last_settings_location = (
                 s.section,
                 if s.search_active {
@@ -8118,6 +8124,9 @@ impl LyrelApp {
     /// `close_settings`. Drop the state without trying to hand focus back.
     pub(crate) fn forget_settings_window(&mut self, cx: &mut Context<Self>) {
         if self.settings_window.take().is_some() {
+            if let Some(s) = self.settings.as_ref() {
+                s.usage.update(cx, |page, cx| page.set_visible(false, cx));
+            }
             self.settings = None;
             cx.notify();
         }
@@ -8765,6 +8774,9 @@ impl LyrelApp {
             if target == SettingsSection::Agents {
                 s.agent_hooks_states = crate::ui::settings::AgentHooksView::Loading;
             }
+            s.usage.update(cx, |page, cx| {
+                page.set_visible(target == SettingsSection::Usage, cx)
+            });
         }
         self.ensure_agent_hooks_loaded(cx);
         self.skills_section_changed(target, cx);
@@ -9031,6 +9043,9 @@ impl LyrelApp {
                 s.content_scroll.set_offset(s.search_return_offset);
             }
             s.search_active = active;
+            s.usage.update(cx, |page, cx| {
+                page.set_visible(s.section == SettingsSection::Usage && !active, cx)
+            });
             s.search_selection = 0;
             if active {
                 s.focused_setting = None;

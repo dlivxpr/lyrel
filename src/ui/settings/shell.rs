@@ -830,6 +830,7 @@ impl LyrelApp {
                 SettingsSection::Agents => self.render_settings_agents(cx),
                 SettingsSection::Skills => self.render_settings_skills(cx),
                 SettingsSection::Statistics => self.render_settings_statistics(cx),
+                SettingsSection::Usage => self.render_settings_usage(cx),
                 SettingsSection::Keybindings => self.render_settings_keybindings(cx),
                 SettingsSection::About => self.render_settings_about(cx),
             };
@@ -1428,6 +1429,9 @@ impl LyrelApp {
                 }
                 SettingsSection::Agents => {
                     self.render_command_line_rows(cx);
+                }
+                SettingsSection::Usage => {
+                    self.render_usage_search_row(cx);
                 }
                 SettingsSection::Statistics => {
                     let control = self.settings_button(
