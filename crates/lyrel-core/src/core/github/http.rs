@@ -64,6 +64,9 @@ impl HttpTransport {
         let mut builder = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
             .timeout_connect(Some(CONNECT_TIMEOUT))
+            // Never replay credentials after a redirect, including repository
+            // moves. This is ureq's default, kept explicit for token safety.
+            .redirect_auth_headers(ureq::config::RedirectAuthHeaders::Never)
             // 4xx/5xx come back as responses, so their headers (the rate
             // limit's reset time) can be read.
             .http_status_as_error(false)
@@ -95,6 +98,16 @@ impl Transport for HttpTransport {
 
 impl HttpTransport {
     fn request(&self, path: &str, accept: &str) -> Result<Reply, ApiError> {
+        // The caller supplies an API path, never another authority or a URL.
+        // Without this check, `@host/path` would replace api.github.com's
+        // authority after concatenation and receive the Authorization header.
+        if !path.starts_with('/')
+            || path.starts_with("//")
+            || path.contains(['\\', '#'])
+            || path.chars().any(char::is_control)
+        {
+            return Err(ApiError::Decode("Expected a GitHub API path".into()));
+        }
         let mut request = self
             .agent
             .get(format!("{API}{path}"))
@@ -149,6 +162,80 @@ impl HttpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_paths_cannot_redirect_a_token_to_another_authority() {
+        let http = HttpTransport::new(Token::new("synthetic-http-secret"), None);
+        for path in [
+            "@example.invalid/private",
+            ".example.invalid/private",
+            "https://example.invalid/private",
+            "//example.invalid/private",
+            "/repos/acme/tools#fragment",
+            "/repos/acme/\\tools",
+            "/repos/acme/tools\r\nAuthorization: injected",
+        ] {
+            for result in [http.get(path), http.get_full(path)] {
+                assert!(matches!(result, Err(ApiError::Decode(_))));
+            }
+        }
+    }
+
+    #[test]
+    fn redirects_never_forward_authorization_even_to_the_same_host() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Instant;
+
+        fn receive(listener: &TcpListener) -> (TcpStream, String) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "loopback request timed out");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("loopback accept failed: {error}"),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                bytes.push(byte[0]);
+                assert!(bytes.len() < 16 * 1024, "oversized request headers");
+            }
+            (stream, String::from_utf8(bytes).unwrap())
+        }
+
+        for redirect_host in ["127.0.0.1", "localhost"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut first, initial) = receive(&listener);
+                write!(first, "HTTP/1.1 302 Found\r\nLocation: http://{redirect_host}:{}/destination\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", address.port()).unwrap();
+                drop(first);
+                let (mut second, redirected) = receive(&listener);
+                second.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+                (initial, redirected)
+            });
+            let http = HttpTransport::new(Token::new("synthetic-http-secret"), None);
+            // Exercise the production Agent's redirect policy against a local
+            // HTTP endpoint; only proxy discovery is disabled for isolation.
+            let response = http.agent.get(format!("http://{address}/initial"))
+                .header("Authorization", format!("Bearer {}", http.token.as_ref().unwrap().expose()))
+                .config().proxy(None).build().call();
+            let (initial, redirected) = server.join().unwrap();
+            assert_eq!(response.unwrap().status().as_u16(), 200);
+            assert!(initial.to_ascii_lowercase().contains("authorization:"));
+            assert!(initial.contains(http.token.as_ref().unwrap().expose()));
+            assert!(!redirected.to_ascii_lowercase().contains("authorization:"));
+            assert!(!redirected.contains("synthetic-http-secret"));
+        }
+    }
 
     fn reply(body: &str) -> Reply {
         Reply {
