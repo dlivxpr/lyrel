@@ -15,7 +15,11 @@ pub struct SourceBinding {
     pub scope: String,
     #[serde(default)]
     pub discovered: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "serialize_native_scope")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_native_scope"
+    )]
     native_scope: Option<SessionScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwd: Option<PathBuf>,
@@ -79,19 +83,28 @@ impl SourceBindings {
         binding = binding_for(host, &source, false)?;
         for existing in &self.added {
             if overlaps(host, existing, &binding) {
-                return Err(invalid("statistics source overlaps an existing association"));
+                return Err(invalid(
+                    "statistics source overlaps an existing association",
+                ));
             }
-            if existing.agent == "opencode" && binding.agent == "opencode"
+            if existing.agent == "opencode"
+                && binding.agent == "opencode"
                 && existing.host == binding.host
                 && let Ok(verified) = self.check(host, existing, launch)
                 && overlaps(host, &binding_for(host, &verified, false)?, &binding)
             {
-                return Err(invalid("statistics source overlaps an existing native service association"));
+                return Err(invalid(
+                    "statistics source overlaps an existing native service association",
+                ));
             }
         }
         for discovered in discover_agent(host, agent, launch)? {
             let mut existing = binding_for(host, &discovered, true)?;
-            if self.excluded.iter().any(|entry| same_binding(entry, &existing)) {
+            if self
+                .excluded
+                .iter()
+                .any(|entry| same_binding(entry, &existing))
+            {
                 continue;
             }
             if existing.agent == "opencode"
@@ -100,7 +113,9 @@ impl SourceBindings {
                 existing = binding_for(host, &verified, true)?;
             }
             if overlaps(host, &existing, &binding) {
-                return Err(invalid("statistics source overlaps an automatically discovered source"));
+                return Err(invalid(
+                    "statistics source overlaps an automatically discovered source",
+                ));
             }
         }
         self.added.push(binding.clone());
@@ -110,7 +125,12 @@ impl SourceBindings {
     /// Only association metadata changes; native files and databases are never written.
     pub fn remove(&mut self, binding: &SourceBinding) {
         self.added.retain(|entry| !same_binding(entry, binding));
-        if binding.discovered && !self.excluded.iter().any(|entry| same_binding(entry, binding)) {
+        if binding.discovered
+            && !self
+                .excluded
+                .iter()
+                .any(|entry| same_binding(entry, binding))
+        {
             self.excluded.push(binding.clone());
         }
     }
@@ -125,7 +145,8 @@ impl SourceBindings {
             return Err(invalid("statistics source belongs to another Host"));
         }
         let mut source = if let Some(source) = &binding.live {
-            if source.agent != binding.agent || source.scope != binding.scope
+            if source.agent != binding.agent
+                || source.scope != binding.scope
                 || binding_for(host, source, binding.discovered)?.selector != binding.selector
             {
                 return Err(invalid("statistics live source does not match its binding"));
@@ -135,7 +156,9 @@ impl SourceBindings {
             rebuild(host, binding, launch)?
         };
         if let Some(request) = source.opencode_request.as_deref() {
-            let payload = host.opencode_statistics(request).map_err(io::Error::other)?;
+            let payload = host
+                .opencode_statistics(request)
+                .map_err(io::Error::other)?;
             if payload.sessions.is_empty()
                 && let Some(reason) = payload.issues.iter().find(|reason| !coverage_only(reason))
             {
@@ -153,9 +176,18 @@ impl SourceBindings {
                 service_url(url)?;
             }
             super::opencode::parse(&source, payload, chrono::Utc::now().timestamp())?;
-            let request = source.opencode_request.as_mut().expect("checked native request");
-            let captured = binding.native_scope.as_ref().and_then(|scope| scope.opencode.clone());
-            let context = request.scope.opencode.get_or_insert_with(|| captured.unwrap_or_default());
+            let request = source
+                .opencode_request
+                .as_mut()
+                .expect("checked native request");
+            let captured = binding
+                .native_scope
+                .as_ref()
+                .and_then(|scope| scope.opencode.clone());
+            let context = request
+                .scope
+                .opencode
+                .get_or_insert_with(|| captured.unwrap_or_default());
             // Keep the live bridge/standalone selector intact; public URLs describe
             // service identity for overlap checks, not permission to replace transport.
             context.server = Some(server);
@@ -173,17 +205,28 @@ impl SourceBindings {
         let meta = host.stat(&source.root)?;
         if !meta.is_dir {
             if binding.agent == "kimi" {
-                return Err(invalid("Kimi statistics requires its native sessions directory"));
+                return Err(invalid(
+                    "Kimi statistics requires its native sessions directory",
+                ));
             }
             if !source.root.to_string_lossy().ends_with(".jsonl") {
-                return Err(invalid("omp/pi statistics files must be native .jsonl histories"));
+                return Err(invalid(
+                    "omp/pi statistics files must be native .jsonl histories",
+                ));
             }
         }
-        let snapshot = super::scan(host, std::slice::from_ref(&source), &mut super::StatisticsCache::default())?;
+        let snapshot = super::scan(
+            host,
+            std::slice::from_ref(&source),
+            &mut super::StatisticsCache::default(),
+        )?;
         if snapshot.files.is_empty()
             && let Some(issue) = snapshot.issues().first()
         {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{}: {}", issue.path().display(), issue.reason())));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: {}", issue.path().display(), issue.reason()),
+            ));
         }
         Ok(source)
     }
@@ -202,7 +245,11 @@ impl SourceBindings {
                 Ok(binding) => binding,
                 Err(error) => {
                     let binding = display_binding(host, &source, true);
-                    if self.excluded.iter().any(|entry| same_binding(entry, &binding)) {
+                    if self
+                        .excluded
+                        .iter()
+                        .any(|entry| same_binding(entry, &binding))
+                    {
                         continue;
                     }
                     result.bindings.push(binding.clone());
@@ -214,7 +261,11 @@ impl SourceBindings {
                     continue;
                 }
             };
-            if self.excluded.iter().any(|entry| same_binding(entry, &binding)) {
+            if self
+                .excluded
+                .iter()
+                .any(|entry| same_binding(entry, &binding))
+            {
                 continue;
             }
             result.bindings.push(binding.clone());
@@ -234,7 +285,11 @@ impl SourceBindings {
             }
         }
         for binding in self.added.iter().filter(|entry| entry.host == host.id().0) {
-            if result.bindings.iter().any(|existing| overlaps(host, existing, binding)) {
+            if result
+                .bindings
+                .iter()
+                .any(|existing| overlaps(host, existing, binding))
+            {
                 result.bindings.push(binding.clone());
                 result.issues.push(SourceFailure {
                     binding: binding.clone(),
@@ -247,8 +302,13 @@ impl SourceBindings {
                 Ok(source) => result.sources.push(source),
                 Err(error) => {
                     let reason = error.to_string();
-                    result.sources.push(failed_binding_source(binding, reason.clone()));
-                    result.issues.push(SourceFailure { binding: binding.clone(), reason });
+                    result
+                        .sources
+                        .push(failed_binding_source(binding, reason.clone()));
+                    result.issues.push(SourceFailure {
+                        binding: binding.clone(),
+                        reason,
+                    });
                 }
             }
         }
@@ -267,7 +327,10 @@ fn failed_binding_source(binding: &SourceBinding, reason: String) -> Source {
     let root = if binding.agent == "opencode" {
         // Formal OpenCode discovery uses the Host cwd as its root. A damaged legacy
         // binding without cwd retains only a diagnostic selector, never a default home.
-        binding.cwd.clone().unwrap_or_else(|| PathBuf::from(&binding.selector))
+        binding
+            .cwd
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(&binding.selector))
     } else {
         PathBuf::from(&binding.selector)
     };
@@ -309,16 +372,32 @@ fn binding_for(host: &dyn Host, source: &Source, discovered: bool) -> io::Result
         }
         "opencode" => {
             if let Some(request) = source.opencode_request.as_deref() {
-                if let Some(server) = request.scope.opencode.as_ref().and_then(|context| context.server.as_ref()) {
-                    binding.service_urls = server.urls.iter().map(|url| service_url(url)).collect::<io::Result<_>>()?;
+                if let Some(server) = request
+                    .scope
+                    .opencode
+                    .as_ref()
+                    .and_then(|context| context.server.as_ref())
+                {
+                    binding.service_urls = server
+                        .urls
+                        .iter()
+                        .map(|url| service_url(url))
+                        .collect::<io::Result<_>>()?;
                 }
                 let mut scope = safe_scope(&request.scope)?;
                 for arg in &request.launch_argv {
-                    let Some((key, value)) = arg.split_once('=') else { break; };
+                    let Some((key, value)) = arg.split_once('=') else {
+                        break;
+                    };
                     if !native_environment_key(key) {
-                        return Err(invalid("statistics native source contains an unsupported launch environment selector"));
+                        return Err(invalid(
+                            "statistics native source contains an unsupported launch environment selector",
+                        ));
                     }
-                    scope.environment.entry(key.into()).or_insert_with(|| value.into());
+                    scope
+                        .environment
+                        .entry(key.into())
+                        .or_insert_with(|| value.into());
                 }
                 // discovery initially encodes --server in the current launcher only.
                 let context = scope.opencode.get_or_insert_with(Default::default);
@@ -326,7 +405,9 @@ fn binding_for(host: &dyn Host, source: &Source, discovered: bool) -> io::Result
                     let mut args = request.launch_argv.iter();
                     while let Some(arg) = args.next() {
                         if arg == "--server" {
-                            let url = args.next().ok_or_else(|| invalid("OpenCode service URL is missing"))?;
+                            let url = args
+                                .next()
+                                .ok_or_else(|| invalid("OpenCode service URL is missing"))?;
                             context.connection_argv = vec!["--server".into(), service_url(url)?];
                         } else if let Some(url) = arg.strip_prefix("--server=") {
                             context.connection_argv = vec!["--server".into(), service_url(url)?];
@@ -347,8 +428,10 @@ fn binding_for(host: &dyn Host, source: &Source, discovered: bool) -> io::Result
                 // Verified snapshots contain public service identity but no live request.
                 let identity: serde_json::Value = serde_json::from_str(&source.scope)
                     .map_err(|_| invalid("OpenCode source has no durable service selector; rediscover on the selected Host"))?;
-                let url = identity["server"]["urls"].as_array()
-                    .and_then(|urls| urls.first()).and_then(serde_json::Value::as_str)
+                let url = identity["server"]["urls"]
+                    .as_array()
+                    .and_then(|urls| urls.first())
+                    .and_then(serde_json::Value::as_str)
                     .ok_or_else(|| invalid("OpenCode source has no durable service URL"))?;
                 binding.selector = service_url(url)?;
             }
@@ -358,7 +441,11 @@ fn binding_for(host: &dyn Host, source: &Source, discovered: bool) -> io::Result
     Ok(binding)
 }
 
-fn rebuild(host: &dyn Host, binding: &SourceBinding, launch: &HashMap<String, String>) -> io::Result<Source> {
+fn rebuild(
+    host: &dyn Host,
+    binding: &SourceBinding,
+    launch: &HashMap<String, String>,
+) -> io::Result<Source> {
     if binding.host != host.id().0 {
         return Err(invalid("statistics source belongs to another Host"));
     }
@@ -379,10 +466,20 @@ fn rebuild(host: &dyn Host, binding: &SourceBinding, launch: &HashMap<String, St
         }
         "opencode" => {
             let selector = service_url(&binding.selector)?;
-            let mut source = discover_opencode(host, launch)?.into_iter().next()
+            let mut source = discover_opencode(host, launch)?
+                .into_iter()
+                .next()
                 .ok_or_else(|| invalid("OpenCode Host discovery returned no launcher"))?;
-            let request = source.opencode_request.as_mut().ok_or_else(|| invalid("OpenCode Host launcher is unavailable"))?;
-            let mut native = binding.native_scope.as_ref().map(safe_scope).transpose()?.unwrap_or_default();
+            let request = source
+                .opencode_request
+                .as_mut()
+                .ok_or_else(|| invalid("OpenCode Host launcher is unavailable"))?;
+            let mut native = binding
+                .native_scope
+                .as_ref()
+                .map(safe_scope)
+                .transpose()?
+                .unwrap_or_default();
             let context = native.opencode.get_or_insert_with(Default::default);
             context.connection_argv = vec!["--server".into(), selector];
             apply_native_scope(host, request, native, binding.cwd.as_deref())?;
@@ -392,23 +489,42 @@ fn rebuild(host: &dyn Host, binding: &SourceBinding, launch: &HashMap<String, St
         "hermes" => {
             let root = checked_path(host, &binding.selector)?;
             if !host.stat(&root)?.is_dir {
-                return Err(invalid("Hermes statistics requires its resolved native profile home, not a database file"));
+                return Err(invalid(
+                    "Hermes statistics requires its resolved native profile home, not a database file",
+                ));
             }
             host.read_dir(&root, None)?;
-            let mut source = discover_hermes(host, launch)?.into_iter().next()
+            let mut source = discover_hermes(host, launch)?
+                .into_iter()
+                .next()
                 .ok_or_else(|| invalid("Hermes Host discovery returned no launcher"))?;
-            let request = std::sync::Arc::make_mut(source.hermes_request.as_mut()
-                .ok_or_else(|| invalid("Hermes Host launcher is unavailable"))?);
-            let mut native = binding.native_scope.as_ref().map(safe_scope).transpose()?
+            let request = std::sync::Arc::make_mut(
+                source
+                    .hermes_request
+                    .as_mut()
+                    .ok_or_else(|| invalid("Hermes Host launcher is unavailable"))?,
+            );
+            let mut native = binding
+                .native_scope
+                .as_ref()
+                .map(safe_scope)
+                .transpose()?
                 .unwrap_or_else(|| request.scope.clone());
             let profile = profile_for(&root)?;
-            if native.profile.as_deref().is_some_and(|selected| selected != profile)
+            if native
+                .profile
+                .as_deref()
+                .is_some_and(|selected| selected != profile)
                 && binding.native_scope.is_some()
             {
-                return Err(invalid("Hermes profile does not match its selected native home"));
+                return Err(invalid(
+                    "Hermes profile does not match its selected native home",
+                ));
             }
             native.profile = Some(profile.into());
-            native.environment.insert("HERMES_HOME".into(), root.to_string_lossy().into_owned());
+            native
+                .environment
+                .insert("HERMES_HOME".into(), root.to_string_lossy().into_owned());
             apply_native_scope(host, request, native, binding.cwd.as_deref())?;
             source.root = root;
             source.scope = scope;
@@ -418,7 +534,12 @@ fn rebuild(host: &dyn Host, binding: &SourceBinding, launch: &HashMap<String, St
     }
 }
 
-fn apply_native_scope(host: &dyn Host, request: &mut SessionOperation, scope: SessionScope, cwd: Option<&Path>) -> io::Result<()> {
+fn apply_native_scope(
+    host: &dyn Host,
+    request: &mut SessionOperation,
+    scope: SessionScope,
+    cwd: Option<&Path>,
+) -> io::Result<()> {
     if let Some(cwd) = cwd {
         absolute_path(host, &cwd.to_string_lossy())?;
         request.cwd = cwd.into();
@@ -428,8 +549,15 @@ fn apply_native_scope(host: &dyn Host, request: &mut SessionOperation, scope: Se
     Ok(())
 }
 
-fn serialize_native_scope<S: serde::Serializer>(scope: &Option<SessionScope>, serializer: S) -> Result<S::Ok, S::Error> {
-    let scope = scope.as_ref().map(safe_scope).transpose().map_err(<S::Error as serde::ser::Error>::custom)?;
+fn serialize_native_scope<S: serde::Serializer>(
+    scope: &Option<SessionScope>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let scope = scope
+        .as_ref()
+        .map(safe_scope)
+        .transpose()
+        .map_err(<S::Error as serde::ser::Error>::custom)?;
     let value = scope.map(|scope| serde_json::json!({
         "profile": scope.profile,
         "environment": scope.environment,
@@ -441,8 +569,14 @@ fn serialize_native_scope<S: serde::Serializer>(scope: &Option<SessionScope>, se
 fn safe_scope(scope: &SessionScope) -> io::Result<SessionScope> {
     // Validate before durable_scope can remove unknown fields: malformed persisted
     // selectors must fail rather than silently inherit an unrelated Host default.
-    if scope.environment.keys().any(|key| !native_environment_key(key)) {
-        return Err(invalid("statistics native source contains an unsupported environment selector"));
+    if scope
+        .environment
+        .keys()
+        .any(|key| !native_environment_key(key))
+    {
+        return Err(invalid(
+            "statistics native source contains an unsupported environment selector",
+        ));
     }
     let mut safe = durable_scope(scope);
     safe.session_dir = None;
@@ -451,9 +585,11 @@ fn safe_scope(scope: &SessionScope) -> io::Result<SessionScope> {
     if let Some(context) = safe.opencode.as_mut() {
         context.session = None;
         match context.connection_argv.as_slice() {
-            [] => {},
-            [standalone] if standalone == "--standalone" => {},
-            [flag, url] if flag == "--server" => { service_url(url)?; },
+            [] => {}
+            [standalone] if standalone == "--standalone" => {}
+            [flag, url] if flag == "--server" => {
+                service_url(url)?;
+            }
             _ => return Err(invalid("invalid OpenCode service selector")),
         }
     }
@@ -461,11 +597,26 @@ fn safe_scope(scope: &SessionScope) -> io::Result<SessionScope> {
 }
 
 fn native_environment_key(key: &str) -> bool {
-    ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "OPENCODE_DB", "HERMES_HOME", "HERMES_RUNTIME_DIR"].contains(&key)
+    [
+        "HOME",
+        "USERPROFILE",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "OPENCODE_DB",
+        "HERMES_HOME",
+        "HERMES_RUNTIME_DIR",
+    ]
+    .contains(&key)
 }
 
 fn connection_selector(scope: &SessionScope) -> io::Result<String> {
-    match scope.opencode.as_ref().map(|context| context.connection_argv.as_slice()) {
+    match scope
+        .opencode
+        .as_ref()
+        .map(|context| context.connection_argv.as_slice())
+    {
         Some([flag, url]) if flag == "--server" => service_url(url),
         Some([flag]) if flag == "--standalone" => Ok("standalone".into()),
         Some([]) => Ok("configured".into()),
@@ -473,7 +624,11 @@ fn connection_selector(scope: &SessionScope) -> io::Result<String> {
     }
 }
 
-fn discover_agent(host: &dyn Host, agent: &str, launch: &HashMap<String, String>) -> io::Result<Vec<Source>> {
+fn discover_agent(
+    host: &dyn Host,
+    agent: &str,
+    launch: &HashMap<String, String>,
+) -> io::Result<Vec<Source>> {
     match agent {
         "omp" => discover_omp(host, launch),
         "pi" => discover_pi(host, launch),
@@ -497,46 +652,84 @@ fn overlaps(host: &dyn Host, a: &SourceBinding, b: &SourceBinding) -> bool {
         let b_selector = service_url(&b.selector).ok();
         return a.selector == b.selector
             || matches!((&a_selector, &b_selector), (Some(a), Some(b)) if a == b)
-            || a.service_urls.iter().any(|url| Some(url) == b_selector.as_ref() || b.service_urls.contains(url))
-            || b.service_urls.iter().any(|url| Some(url) == a_selector.as_ref());
+            || a.service_urls
+                .iter()
+                .any(|url| Some(url) == b_selector.as_ref() || b.service_urls.contains(url))
+            || b.service_urls
+                .iter()
+                .any(|url| Some(url) == a_selector.as_ref());
     }
     let normalize = |value: &str| {
-        let canonical = host.canonicalize(Path::new(value)).unwrap_or_else(|_| PathBuf::from(value));
+        let canonical = host
+            .canonicalize(Path::new(value))
+            .unwrap_or_else(|_| PathBuf::from(value));
         let text = canonical.to_string_lossy().replace('\\', "/");
         let text = text.trim_end_matches('/');
-        if host.separator() == '\\' { text.to_lowercase() } else { text.into() }
+        if host.separator() == '\\' {
+            text.to_lowercase()
+        } else {
+            text.into()
+        }
     };
     let a = normalize(&a.selector);
     let b = normalize(&b.selector);
-    a == b || a.strip_prefix(&b).is_some_and(|suffix| suffix.starts_with('/'))
-        || b.strip_prefix(&a).is_some_and(|suffix| suffix.starts_with('/'))
+    a == b
+        || a.strip_prefix(&b)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+        || b.strip_prefix(&a)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn service_url(value: &str) -> io::Result<String> {
-    let url: http::Uri = value.parse().map_err(|_| invalid("OpenCode statistics requires a native http(s) service URL, not a database path"))?;
+    let url: http::Uri = value.parse().map_err(|_| {
+        invalid("OpenCode statistics requires a native http(s) service URL, not a database path")
+    })?;
     if !matches!(url.scheme_str(), Some("http" | "https"))
-        || url.authority().is_none_or(|authority| authority.as_str().contains('@'))
-        || url.query().is_some() || value.contains(['#', '\0', '\n', '\r'])
+        || url
+            .authority()
+            .is_none_or(|authority| authority.as_str().contains('@'))
+        || url.query().is_some()
+        || value.contains(['#', '\0', '\n', '\r'])
     {
-        return Err(invalid("OpenCode service URL must not contain credentials or private parameters"));
+        return Err(invalid(
+            "OpenCode service URL must not contain credentials or private parameters",
+        ));
     }
     let scheme = url.scheme_str().expect("checked scheme");
-    let authority = url.authority().expect("checked authority").as_str().to_lowercase();
+    let authority = url
+        .authority()
+        .expect("checked authority")
+        .as_str()
+        .to_lowercase();
     let default_port = if scheme == "http" { ":80" } else { ":443" };
     let authority = authority.strip_suffix(default_port).unwrap_or(&authority);
-    Ok(format!("{scheme}://{authority}{}", if url.path().is_empty() { "/" } else { url.path() }))
+    Ok(format!(
+        "{scheme}://{authority}{}",
+        if url.path().is_empty() {
+            "/"
+        } else {
+            url.path()
+        }
+    ))
 }
 
 fn profile_for(path: &Path) -> io::Result<&str> {
-    let value = path.to_str().ok_or_else(|| invalid("Hermes profile home is not valid UTF-8"))?;
+    let value = path
+        .to_str()
+        .ok_or_else(|| invalid("Hermes profile home is not valid UTF-8"))?;
     let mut parts = value.trim_end_matches(['/', '\\']).rsplit(['/', '\\']);
     let name = parts.next().unwrap_or("");
     if parts.next() != Some("profiles") {
         return Ok("default");
     }
     if name.len() > 64
-        || !name.bytes().next().is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
+        || !name
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
     {
         return Err(invalid("Hermes native profile name is invalid"));
     }
@@ -553,8 +746,11 @@ fn coverage_only(reason: &str) -> bool {
 }
 
 fn absolute_path(host: &dyn Host, value: &str) -> io::Result<()> {
-    if value.is_empty() || value.contains(['\0', '\n', '\r']) || !host.is_absolute(Path::new(value)) {
-        return Err(invalid("statistics source requires an absolute Host-native path"));
+    if value.is_empty() || value.contains(['\0', '\n', '\r']) || !host.is_absolute(Path::new(value))
+    {
+        return Err(invalid(
+            "statistics source requires an absolute Host-native path",
+        ));
     }
     Ok(())
 }

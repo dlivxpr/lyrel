@@ -25,7 +25,11 @@ impl Metric {
                 }
             }
             Self::Cost => {
-                if totals.estimated_costs().keys().any(|currency| currency != "USD") {
+                if totals
+                    .estimated_costs()
+                    .keys()
+                    .any(|currency| currency != "USD")
+                {
                     None
                 } else {
                     totals.cost_in("USD")

@@ -442,22 +442,36 @@ impl Totals {
         }
         pricing::add_estimates(&mut self.estimated_costs, cost);
     }
-    pub fn estimated_costs(&self) -> &std::collections::BTreeMap<String, pricing::CurrencyEstimate> {
+    pub fn estimated_costs(
+        &self,
+    ) -> &std::collections::BTreeMap<String, pricing::CurrencyEstimate> {
         &self.estimated_costs
     }
     /// Returns a complete comparable amount in one explicit currency only.
     /// Native estimated_usd remains a separate informational estimate.
     pub fn cost_in(&self, currency: &str) -> Option<f64> {
-        if !self.complete || self.unpriced_calls > 0 || (currency != "USD" && self.recorded_calls > 0) {
+        if !self.complete
+            || self.unpriced_calls > 0
+            || (currency != "USD" && self.recorded_calls > 0)
+        {
             return None;
         }
         let estimated_calls = self.calls - self.recorded_calls;
         let estimate = self.estimated_costs.get(currency);
-        if estimated_calls > 0 && !estimate.is_some_and(|value| value.is_complete() && value.calls == estimated_calls) {
+        if estimated_calls > 0
+            && !estimate.is_some_and(|value| value.is_complete() && value.calls == estimated_calls)
+        {
             return None;
         }
-        Some(if currency == "USD" { self.recorded_usd.unwrap_or(0.0) } else { 0.0 }
-            + estimate.and_then(pricing::CurrencyEstimate::total).unwrap_or(0.0))
+        Some(
+            if currency == "USD" {
+                self.recorded_usd.unwrap_or(0.0)
+            } else {
+                0.0
+            } + estimate
+                .and_then(pricing::CurrencyEstimate::total)
+                .unwrap_or(0.0),
+        )
     }
     pub fn estimated_usd(&self) -> Option<f64> {
         self.estimated_usd
@@ -562,12 +576,25 @@ pub fn scan(
     for source in sources {
         if let Some(reason) = &source.discovery_issue {
             snapshot = snapshot.with_issue(source.root.clone(), reason.clone());
-            if let Some(facts) = cache.native.get(&(host.id().0, source.agent.clone(), source.scope.clone())) {
-                snapshot.files.extend(facts.iter().filter(|fact| fact.source.root == source.root).cloned());
+            if let Some(facts) =
+                cache
+                    .native
+                    .get(&(host.id().0, source.agent.clone(), source.scope.clone()))
+            {
+                snapshot.files.extend(
+                    facts
+                        .iter()
+                        .filter(|fact| fact.source.root == source.root)
+                        .cloned(),
+                );
             }
             if source.agent == "opencode" {
-                if let Some((old, facts, _)) = cache.opencode.get(&(host.id().0, source.scope.clone())) {
-                    if old.root == source.root { snapshot.files.extend(facts.iter().cloned()); }
+                if let Some((old, facts, _)) =
+                    cache.opencode.get(&(host.id().0, source.scope.clone()))
+                {
+                    if old.root == source.root {
+                        snapshot.files.extend(facts.iter().cloned());
+                    }
                 }
             }
             continue;
@@ -601,15 +628,23 @@ pub fn scan(
             continue;
         }
         let metadata = host.stat(&source.root);
-        if metadata.as_ref().is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
-            && cache.files.iter().any(|((id, agent, scope, _), (_, facts))| {
-                *id == host.id().0 && *agent == source.agent && *scope == source.scope
-                    && facts.source.root == source.root
-            })
+        if metadata
+            .as_ref()
+            .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+            && cache
+                .files
+                .iter()
+                .any(|((id, agent, scope, _), (_, facts))| {
+                    *id == host.id().0
+                        && *agent == source.agent
+                        && *scope == source.scope
+                        && facts.source.root == source.root
+                })
         {
             snapshot.issues.push(ScanIssue {
                 path: source.root.clone(),
-                reason: "previously readable statistics source is missing; retaining stale facts".into(),
+                reason: "previously readable statistics source is missing; retaining stale facts"
+                    .into(),
             });
             continue;
         }
@@ -649,10 +684,15 @@ pub fn scan(
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound
                         && path == source.root
-                        && !cache.files.iter().any(|((id, agent, scope, _), (_, facts))| {
-                            *id == host.id().0 && *agent == source.agent && *scope == source.scope
-                                && facts.source.root == source.root
-                        }) =>
+                        && !cache
+                            .files
+                            .iter()
+                            .any(|((id, agent, scope, _), (_, facts))| {
+                                *id == host.id().0
+                                    && *agent == source.agent
+                                    && *scope == source.scope
+                                    && facts.source.root == source.root
+                            }) =>
                 {
                     continue;
                 }
@@ -778,9 +818,10 @@ pub fn scan(
                 && sources
                     .iter()
                     .any(|s| s.agent == *agent && s.scope == *scope && s.root == facts.source.root)
-                && snapshot.issues.iter().any(|issue| {
-                    path.starts_with(&issue.path) || issue.path == facts.source.root
-                })
+                && snapshot
+                    .issues
+                    .iter()
+                    .any(|issue| path.starts_with(&issue.path) || issue.path == facts.source.root)
                 && !snapshot.files.iter().any(|f| {
                     f.path == *path && f.source.agent == *agent && f.source.scope == *scope
                 })

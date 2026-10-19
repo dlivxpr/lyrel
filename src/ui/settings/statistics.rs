@@ -1,9 +1,9 @@
 //! 所选机器的原生历史总览；所有文件与聚合离开 GPUI 线程。
 mod analysis;
 mod management;
-mod storage;
 #[cfg(test)]
 mod management_tests;
+mod storage;
 #[cfg(test)]
 mod workflow_tests;
 use super::kit::{Tk, fs};
@@ -115,7 +115,9 @@ fn issue_text(reason: &str) -> String {
 }
 impl LyrelApp {
     pub(crate) fn load_statistics(&mut self, cx: &mut Context<Self>) {
-        if !self.ensure_statistics_settings(cx) { return; }
+        if !self.ensure_statistics_settings(cx) {
+            return;
+        }
         let launch = cx.global::<Config>().agent_launch.clone();
         let Some(settings) = self.active_settings() else {
             return;
@@ -124,7 +126,9 @@ impl LyrelApp {
             return;
         }
         let state = &settings.statistics;
-        if state.management.busy { return; }
+        if state.management.busy {
+            return;
+        }
         let custom = if state.period == Period::Custom {
             let start = chrono::NaiveDate::parse_from_str(
                 state.start.read(cx).value().as_str(),
@@ -264,10 +268,17 @@ impl LyrelApp {
                     }
                 }
                 let resolved = stored.sources.resolve_for_host(host, sources, &launch);
-                let sources: Vec<_> = resolved.sources.into_iter().filter(|source| agent.is_none_or(|a| a == source.agent())).collect();
+                let sources: Vec<_> = resolved
+                    .sources
+                    .into_iter()
+                    .filter(|source| agent.is_none_or(|a| a == source.agent()))
+                    .collect();
                 let bindings = resolved.bindings;
                 for failure in resolved.issues {
-                    discovery_errors.push(("source", format!("{}: {}", failure.binding.selector, failure.reason)));
+                    discovery_errors.push((
+                        "source",
+                        format!("{}: {}", failure.binding.selector, failure.reason),
+                    ));
                 }
                 let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
                 let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
@@ -607,14 +618,35 @@ impl LyrelApp {
                     .into_any_element(),
             );
             for (currency, estimate) in totals.estimated_costs() {
-                rows.push(div().text_sm().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsPriceEstimate, &[
-                    ("currency", currency),
-                    ("custom", &estimate.custom.map(|v|format!("{v:.6}")).unwrap_or_else(||t(L10nKey::StatisticsUnknown).into())),
-                    ("catalog", &estimate.catalog.map(|v|format!("{v:.6}")).unwrap_or_else(||t(L10nKey::StatisticsUnknown).into())),
-                    ("priced", &estimate.priced_tokens.to_string()),
-                    ("unpriced", &estimate.unpriced_tokens.to_string()),
-                    ("partial", &estimate.partial_calls.to_string()),
-                ])).into_any_element());
+                rows.push(
+                    div()
+                        .text_sm()
+                        .text_color(tk.k5)
+                        .child(t_fmt(
+                            L10nKey::StatisticsPriceEstimate,
+                            &[
+                                ("currency", currency),
+                                (
+                                    "custom",
+                                    &estimate
+                                        .custom
+                                        .map(|v| format!("{v:.6}"))
+                                        .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
+                                ),
+                                (
+                                    "catalog",
+                                    &estimate
+                                        .catalog
+                                        .map(|v| format!("{v:.6}"))
+                                        .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
+                                ),
+                                ("priced", &estimate.priced_tokens.to_string()),
+                                ("unpriced", &estimate.unpriced_tokens.to_string()),
+                                ("partial", &estimate.partial_calls.to_string()),
+                            ],
+                        ))
+                        .into_any_element(),
+                );
             }
             if let Some(previous) = &p.previous {
                 let change = totals

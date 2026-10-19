@@ -21,24 +21,39 @@ pub struct UnitPrice {
 }
 impl UnitPrice {
     pub fn validate(&self) -> Result<(), String> {
-        if self.provider.trim().is_empty() || self.provider.trim() != self.provider
-            || self.model.trim().is_empty() || self.model.trim() != self.model
+        if self.provider.trim().is_empty()
+            || self.provider.trim() != self.provider
+            || self.model.trim().is_empty()
+            || self.model.trim() != self.model
         {
             return Err("provider and model must be nonempty exact identifiers".into());
         }
         if self.currency.len() != 3 || !self.currency.bytes().all(|b| b.is_ascii_uppercase()) {
             return Err("currency must be a three-letter uppercase code".into());
         }
-        if self.rates().into_iter().flatten().any(|v| !v.is_finite() || v < 0.0) {
+        if self
+            .rates()
+            .into_iter()
+            .flatten()
+            .any(|v| !v.is_finite() || v < 0.0)
+        {
             return Err("unit prices must be finite and nonnegative".into());
         }
         Ok(())
     }
     fn rates(&self) -> [Option<f64>; 5] {
-        [self.input, self.output, self.reasoning, self.cache_read, self.cache_write]
+        [
+            self.input,
+            self.output,
+            self.reasoning,
+            self.cache_read,
+            self.cache_write,
+        ]
     }
     fn same_key(&self, other: &Self) -> bool {
-        self.provider == other.provider && self.model == other.model && self.currency == other.currency
+        self.provider == other.provider
+            && self.model == other.model
+            && self.currency == other.currency
     }
 }
 
@@ -79,7 +94,9 @@ impl Pricing {
     }
     pub fn remove_custom(&mut self, provider: &str, model: &str, currency: &str) -> bool {
         let before = self.custom.len();
-        self.custom.retain(|row| !(row.provider == provider && row.model == model && row.currency == currency));
+        self.custom.retain(|row| {
+            !(row.provider == provider && row.model == model && row.currency == currency)
+        });
         before != self.custom.len()
     }
     /// Applies a downloaded provider-specific api.json only after explicit opt-in.
@@ -197,7 +214,9 @@ pub(super) struct PriceIndex<'a> {
 }
 impl<'a> PriceIndex<'a> {
     pub fn new(pricing: &'a Pricing) -> Self {
-        let mut index = Self { rows: std::collections::HashMap::new() };
+        let mut index = Self {
+            rows: std::collections::HashMap::new(),
+        };
         for (rows, catalog) in [(&pricing.custom, false), (&pricing.catalog, true)] {
             if catalog && !pricing.public_enabled {
                 continue;
@@ -207,7 +226,9 @@ impl<'a> PriceIndex<'a> {
                     continue;
                 }
                 let currencies = index.rows.entry((&row.provider, &row.model)).or_default();
-                let position = currencies.iter().position(|(currency, _, _)| *currency == row.currency);
+                let position = currencies
+                    .iter()
+                    .position(|(currency, _, _)| *currency == row.currency);
                 let position = position.unwrap_or_else(|| {
                     currencies.push((&row.currency, None, None));
                     currencies.len() - 1
@@ -220,11 +241,17 @@ impl<'a> PriceIndex<'a> {
         index
     }
     pub fn resolve(&self, record: &UsageRecord) -> RecordCost<'a> {
-        let mut result = RecordCost { currencies: smallvec::SmallVec::new(), unpriced: record.recorded_usd.is_none() };
+        let mut result = RecordCost {
+            currencies: smallvec::SmallVec::new(),
+            unpriced: record.recorded_usd.is_none(),
+        };
         if record.recorded_usd.is_some() {
             return result;
         }
-        if let Some(rows) = self.rows.get(&(record.provider.as_str(), record.model.as_str())) {
+        if let Some(rows) = self
+            .rows
+            .get(&(record.provider.as_str(), record.model.as_str()))
+        {
             for &(currency, custom, catalog) in rows {
                 let estimate = estimate(&record.tokens, custom, catalog);
                 if estimate.is_complete() {
@@ -236,20 +263,50 @@ impl<'a> PriceIndex<'a> {
         result
     }
 }
-fn estimate(tokens: &Tokens, custom: Option<&UnitPrice>, catalog: Option<&UnitPrice>) -> CurrencyEstimate {
-    let mut result = CurrencyEstimate { calls: 1, ..CurrencyEstimate::default() };
-    let counts = [tokens.input, tokens.output, tokens.reasoning, tokens.cache_read, tokens.cache_write];
+fn estimate(
+    tokens: &Tokens,
+    custom: Option<&UnitPrice>,
+    catalog: Option<&UnitPrice>,
+) -> CurrencyEstimate {
+    let mut result = CurrencyEstimate {
+        calls: 1,
+        ..CurrencyEstimate::default()
+    };
+    let counts = [
+        tokens.input,
+        tokens.output,
+        tokens.reasoning,
+        tokens.cache_read,
+        tokens.cache_write,
+    ];
     let custom = custom.map(UnitPrice::rates).unwrap_or([None; 5]);
     let catalog = catalog.map(UnitPrice::rates).unwrap_or([None; 5]);
-    let known = counts.into_iter().flatten().try_fold(0u64, u64::checked_add);
-    result.unknown_categories = tokens.total.zip(known).is_none_or(|(total, known)| total != known);
-    result.unpriced_tokens = tokens.total.zip(known)
-        .map(|(total, known)| total.saturating_sub(known)).unwrap_or(0);
+    let known = counts
+        .into_iter()
+        .flatten()
+        .try_fold(0u64, u64::checked_add);
+    result.unknown_categories = tokens
+        .total
+        .zip(known)
+        .is_none_or(|(total, known)| total != known);
+    result.unpriced_tokens = tokens
+        .total
+        .zip(known)
+        .map(|(total, known)| total.saturating_sub(known))
+        .unwrap_or(0);
     for ((count, custom), catalog) in counts.into_iter().zip(custom).zip(catalog) {
-        let Some(count) = count.filter(|count| *count > 0) else { continue };
-        let amount = custom.or(catalog).map(|rate| count as f64 * (rate / 1_000_000.0));
+        let Some(count) = count.filter(|count| *count > 0) else {
+            continue;
+        };
+        let amount = custom
+            .or(catalog)
+            .map(|rate| count as f64 * (rate / 1_000_000.0));
         if let Some(amount) = amount.filter(|amount| amount.is_finite()) {
-            let target = if custom.is_some() { &mut result.custom } else { &mut result.catalog };
+            let target = if custom.is_some() {
+                &mut result.custom
+            } else {
+                &mut result.catalog
+            };
             *target = Some(target.unwrap_or(0.0) + amount);
             result.priced_tokens = result.priced_tokens.saturating_add(count);
         } else {
@@ -260,7 +317,10 @@ fn estimate(tokens: &Tokens, custom: Option<&UnitPrice>, catalog: Option<&UnitPr
     result
 }
 
-pub(super) fn add_estimates(target: &mut BTreeMap<String, CurrencyEstimate>, cost: &RecordCost<'_>) {
+pub(super) fn add_estimates(
+    target: &mut BTreeMap<String, CurrencyEstimate>,
+    cost: &RecordCost<'_>,
+) {
     for row in &cost.currencies {
         let total = if target.contains_key(row.currency) {
             target.get_mut(row.currency).unwrap()
@@ -268,7 +328,10 @@ pub(super) fn add_estimates(target: &mut BTreeMap<String, CurrencyEstimate>, cos
             target.entry(row.currency.to_owned()).or_default()
         };
         let value = &row.estimate;
-        for (target, value) in [(&mut total.custom, value.custom), (&mut total.catalog, value.catalog)] {
+        for (target, value) in [
+            (&mut total.custom, value.custom),
+            (&mut total.catalog, value.catalog),
+        ] {
             if let Some(value) = value {
                 *target = Some(target.unwrap_or(0.0) + value);
             }

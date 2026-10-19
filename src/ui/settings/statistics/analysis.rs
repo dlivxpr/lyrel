@@ -92,15 +92,41 @@ fn detail(totals: &Totals) -> String {
             ),
         ],
     );
-    let estimates = totals.estimated_costs().iter().map(|(currency, estimate)| t_fmt(L10nKey::StatisticsPriceEstimate, &[
-        ("currency", currency),
-        ("custom", &estimate.custom.map(|v|format!("{v:.6}")).unwrap_or_else(||t(L10nKey::StatisticsUnknown).into())),
-        ("catalog", &estimate.catalog.map(|v|format!("{v:.6}")).unwrap_or_else(||t(L10nKey::StatisticsUnknown).into())),
-        ("priced", &estimate.priced_tokens.to_string()),
-        ("unpriced", &estimate.unpriced_tokens.to_string()),
-        ("partial", &estimate.partial_calls.to_string()),
-    ])).collect::<Vec<_>>().join("\n");
-    if estimates.is_empty() { native } else { format!("{native}\n{estimates}") }
+    let estimates = totals
+        .estimated_costs()
+        .iter()
+        .map(|(currency, estimate)| {
+            t_fmt(
+                L10nKey::StatisticsPriceEstimate,
+                &[
+                    ("currency", currency),
+                    (
+                        "custom",
+                        &estimate
+                            .custom
+                            .map(|v| format!("{v:.6}"))
+                            .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
+                    ),
+                    (
+                        "catalog",
+                        &estimate
+                            .catalog
+                            .map(|v| format!("{v:.6}"))
+                            .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into()),
+                    ),
+                    ("priced", &estimate.priced_tokens.to_string()),
+                    ("unpriced", &estimate.unpriced_tokens.to_string()),
+                    ("partial", &estimate.partial_calls.to_string()),
+                ],
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if estimates.is_empty() {
+        native
+    } else {
+        format!("{native}\n{estimates}")
+    }
 }
 impl LyrelApp {
     fn analysis_button(

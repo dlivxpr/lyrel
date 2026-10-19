@@ -43,20 +43,38 @@ impl CatalogHttp for PublicCatalogHttp {
             builder = builder.proxy(Some(proxy));
         }
         let agent: ureq::Agent = builder.build().into();
-        let mut response = agent.get(CATALOG_URL).header("Accept", "application/json")
-            .call().map_err(|_| "Public catalog network request failed".to_string())?;
+        let mut response = agent
+            .get(CATALOG_URL)
+            .header("Accept", "application/json")
+            .call()
+            .map_err(|_| "Public catalog network request failed".to_string())?;
         if response.status().as_u16() != 200 {
-            return Err(format!("Public catalog HTTP {}", response.status().as_u16()));
+            return Err(format!(
+                "Public catalog HTTP {}",
+                response.status().as_u16()
+            ));
         }
-        response.body_mut().with_config().limit(32 * 1024 * 1024)
-            .read_to_vec().map_err(|_| "Public catalog response is unreadable or exceeds 32 MiB".into())
+        response
+            .body_mut()
+            .with_config()
+            .limit(32 * 1024 * 1024)
+            .read_to_vec()
+            .map_err(|_| "Public catalog response is unreadable or exceeds 32 MiB".into())
     }
 }
-pub(super) fn check_catalog(pricing: &mut Pricing, http: &dyn CatalogHttp, proxy: Option<&str>, now: i64) -> Result<(), String> {
+pub(super) fn check_catalog(
+    pricing: &mut Pricing,
+    http: &dyn CatalogHttp,
+    proxy: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
     if !pricing.public_enabled {
         return Err("Public catalog is disabled".into());
     }
-    match http.get(proxy).and_then(|bytes| pricing.update_catalog(&bytes, now)) {
+    match http
+        .get(proxy)
+        .and_then(|bytes| pricing.update_catalog(&bytes, now))
+    {
         Ok(()) => Ok(()),
         Err(error) => {
             pricing.catalog_failed(now, error.clone());

@@ -8,7 +8,12 @@ fn statistics_settings_round_trip_and_corrupt_store_is_not_overwritten() {
     let mut stored = StoredStatistics::load(&path).unwrap();
     stored.pricing.public_enabled = true;
     stored.save(&path).unwrap();
-    assert!(StoredStatistics::load(&path).unwrap().pricing.public_enabled);
+    assert!(
+        StoredStatistics::load(&path)
+            .unwrap()
+            .pricing
+            .public_enabled
+    );
     std::fs::write(&path, b"not-json").unwrap();
     assert!(StoredStatistics::load(&path).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"not-json");
@@ -48,11 +53,21 @@ fn statistics_public_catalog_explicit_opt_in_smoke() {
     let mut stored = StoredStatistics::default();
     stored.pricing.public_enabled = true;
     let now = chrono::Utc::now().timestamp();
-    check_catalog(&mut stored.pricing, &PublicCatalogHttp, None, now).expect("fixed public HTTPS catalog download");
+    check_catalog(&mut stored.pricing, &PublicCatalogHttp, None, now)
+        .expect("fixed public HTTPS catalog download");
     stored.save(&path).unwrap();
     let restored = StoredStatistics::load(&path).unwrap();
     assert_eq!(restored.pricing.fetched_at, Some(now));
     assert_eq!(restored.pricing.checked_at, Some(now));
-    assert!(restored.pricing.catalog.iter().any(|p| p.currency == "USD" && p.input.is_some_and(|v| v.is_finite() && v >= 0.)));
-    println!("models.dev public catalog: {} exact provider/model prices; fetched_at={now}; no history/paths/prompts/credentials sent", restored.pricing.catalog.len());
+    assert!(
+        restored
+            .pricing
+            .catalog
+            .iter()
+            .any(|p| p.currency == "USD" && p.input.is_some_and(|v| v.is_finite() && v >= 0.))
+    );
+    println!(
+        "models.dev public catalog: {} exact provider/model prices; fetched_at={now}; no history/paths/prompts/credentials sent",
+        restored.pricing.catalog.len()
+    );
 }
