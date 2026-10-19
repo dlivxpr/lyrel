@@ -19,7 +19,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
-            "在明确选择的机器和项目中只读浏览 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能，搜索名称与描述，查看共享及私有来源。"
+            "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 仓库、ref、子路径或 skills.sh 搜索发现候选，审查后安装到本机共享目录。"
         }
         L10nKey::SkillsProject => "项目",
         L10nKey::SkillsProjectHint => "所选机器上的绝对路径；留空只查看用户作用域",
@@ -61,6 +61,39 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SkillsFileLimit => "（不完整；链接或扫描上限）",
         L10nKey::SkillsCopied => "已复制路径",
+        L10nKey::SkillsInstallTitle => "发现并安装公开技能",
+        L10nKey::SkillsGithubSource => "GitHub 仓库",
+        L10nKey::SkillsGithubHint => "owner/repo 或 https://github.com/owner/repo/tree/ref/path",
+        L10nKey::SkillsRef => "分支、标签或 commit（可选）",
+        L10nKey::SkillsRefHint => "默认使用仓库默认分支；填写后覆盖 URL 中的 ref",
+        L10nKey::SkillsSubpath => "仓库子路径（可选）",
+        L10nKey::SkillsSubpathHint => "只发现此相对目录下的技能",
+        L10nKey::SkillsDiscover => "发现技能",
+        L10nKey::SkillsRegistryQuery => "搜索 skills.sh",
+        L10nKey::SkillsRegistrySearch => "搜索目录",
+        L10nKey::SkillsRegistryNote => {
+            "使用 skills CLI 同款公开搜索接口，只显示 GitHub 来源。选择结果后仍需发现仓库、选择技能并审查安装，不会直接安装。"
+        }
+        L10nKey::SkillsInstallScope => "共享安装作用域",
+        L10nKey::SkillsInstallLocalOnly => "公开技能安装当前仅支持本机；仍可浏览远端技能。",
+        L10nKey::SkillsInstallReview => "审查安装…",
+        L10nKey::SkillsInstallConfirm => "安装所选技能",
+        L10nKey::SkillsInstallReplace => "替换此现有目录",
+        L10nKey::SkillsInstallKeep => "保留现有内容（默认）",
+        L10nKey::SkillsInstallCancel => "取消安装",
+        L10nKey::SkillsInstallWorking => "正在获取或写入所选技能…",
+        L10nKey::SkillsInstallEmpty => "没有发现候选。请尝试其他仓库、ref、子路径或搜索词。",
+        L10nKey::SkillsInstallSafety => {
+            "只写共享技能与 skills CLI 来源锁，不新建私有链接、不改原生配置、不向终端发送命令。同名目录默认保留，只有逐项确认后才替换。"
+        }
+        L10nKey::SkillsInstallDone => "已安装：{name} — {path}",
+        L10nKey::SkillsInstallRetained => "保持不变：{name} — {path}",
+        L10nKey::SkillsInstallDestination => "审查固定目标与来源锁",
+        L10nKey::SkillsInstallSelect => "选择要安装的技能",
+        L10nKey::SkillsInstallCandidates => "候选：{count}",
+        L10nKey::SkillsInstallBrowse => "浏览已安装技能",
+        L10nKey::SkillsInstallError => "无法安装 {name}：{error}",
+        L10nKey::SkillsInstallRefResolved => "已解析来源：{source}",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
             "统计 omp pi kimi Kimi Code OpenCode 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
