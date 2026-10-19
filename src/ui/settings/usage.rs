@@ -555,6 +555,7 @@ impl Render for UsagePage {
             v_flex().gap_2().child(t(L10nKey::UsageCadence)).child(
                 Select::new(&self.cadence)
                     .id("usage-cadence")
+                    .disabled(self.submitting)
                     .small()
                     .w_full()
                     .accessibility_label(t(L10nKey::UsageCadence)),
@@ -718,7 +719,7 @@ impl Render for UsagePage {
                             }),
                             BtnKind::Secondary,
                         )
-                        .disabled(account.removing)
+                        .disabled(account.removing || self.submitting)
                         .on_click(cx.listener(move |p, _, _, cx| {
                             p.work(cx, move |a| a.set_enabled(id, !enabled))
                         })),

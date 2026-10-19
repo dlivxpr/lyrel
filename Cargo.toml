@@ -128,7 +128,6 @@ image = "0.25"
 # Its library name is `reqwest_client`; it owns its Tokio runtime.
 gpui-pre-reqwest-client = "=0.3.9"
 ureq = { version = "3", default-features = false, features = ["rustls", "win-system-proxy", "socks-proxy"] }
-chrono = "0.4.45"
 
 # See `[workspace.dependencies]`: the pin is shared with lyrel-cli, which parses
 # `capture` output through the same grid.
