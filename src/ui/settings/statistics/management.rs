@@ -1,12 +1,12 @@
 //! 来源关联和单价编辑属于统计页，不引入另一条扫描或聚合管线。
 use super::*;
 use gpui_kit::FocusHandle;
-use gpui_kit::component::{Disableable as _, button::Button};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, button::Button};
 use lyrel_core::statistics::{pricing::UnitPrice, sources::SourceBinding};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Editor {
+pub(super) enum Editor {
     Source,
     Price,
 }
@@ -17,6 +17,8 @@ pub(super) struct Management {
     pub error: Option<String>,
     status: Option<String>,
     pub(super) path: Option<PathBuf>,
+    pub(super) surface: Option<Editor>,
+    pub(super) scroll: gpui_kit::ScrollHandle,
     editor: Option<Editor>,
     source_agent: &'static str,
     selector: Entity<InputState>,
@@ -25,6 +27,7 @@ pub(super) struct Management {
     revision: Uuid,
     pub(super) http: Arc<dyn storage::CatalogHttp>,
     editing_price: Option<(String, String, String)>,
+    editing_source: Option<SourceBinding>,
     editor_host: HostId,
     editor_window: Option<gpui_kit::AnyWindowHandle>,
 }
@@ -41,6 +44,8 @@ impl Management {
             error: None,
             status: None,
             path: crate::core::config::config_path("statistics-settings.json"),
+            surface: None,
+            scroll: gpui_kit::ScrollHandle::new(),
             editor: None,
             source_agent: "omp",
             selector: cx.new(|cx| InputState::new(window, cx)),
@@ -51,12 +56,112 @@ impl Management {
             revision: Uuid::new_v4(),
             http: Arc::new(storage::PublicCatalogHttp),
             editing_price: None,
+            editing_source: None,
             editor_host: HostId::LOCAL,
             editor_window: None,
         }
     }
 }
+
+struct ManagementDialog {
+    app: gpui_kit::WeakEntity<LyrelApp>,
+    _subscription: gpui_kit::Subscription,
+}
+impl Render for ManagementDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.app.update(cx, |app, cx| app.render_statistics_management(cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
 impl LyrelApp {
+    fn open_statistics_management(&mut self, surface: Editor, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(settings) = self.active_settings_mut() else { return; };
+        settings.statistics.management.surface = Some(surface);
+        settings.statistics.management.editor = None;
+        settings.statistics.management.scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+        let app = cx.entity();
+        let body = cx.new(|cx| ManagementDialog {
+            app: app.downgrade(),
+            _subscription: cx.observe(&app, |_, _, cx| cx.notify()),
+        });
+        let owner = app.downgrade();
+        let cancel_owner = owner.clone();
+        window.open_dialog(cx, move |dialog, window, _| {
+            let body_height = (window.viewport_size().height - window.rem_size() * 12.).max(window.rem_size() * 8.);
+            dialog.title(t(match surface {
+                Editor::Source => L10nKey::StatisticsSourcesTitle,
+                Editor::Price => L10nKey::StatisticsPricesTitle,
+            }))
+            .w(window.rem_size() * 42.)
+            .child(div().h(body_height).min_h_0().child(body.clone()))
+            .on_ok({
+                let owner = owner.clone();
+                move |_, _, cx| {
+                    let _ = owner.update(cx, |app, cx| {
+                        match app.active_settings().and_then(|s| s.statistics.management.editor) {
+                            Some(Editor::Source) => app.save_statistics_source(cx),
+                            Some(Editor::Price) => app.save_statistics_price(cx),
+                            None => {},
+                        }
+                    });
+                    false
+                }
+            })
+            .on_cancel({
+                let owner = cancel_owner.clone();
+                move |_, window, cx| {
+                    !owner.update(cx, |app, cx| app.cancel_statistics_editor(window, cx)).unwrap_or(false)
+                }
+            })
+            .on_close({
+                let owner = owner.clone();
+                move |_, _, cx| {
+                    let _ = owner.update(cx, |app, cx| {
+                        if let Some(settings) = app.active_settings_mut() {
+                            settings.statistics.management.surface = None;
+                            settings.statistics.management.editor = None;
+                            settings.statistics.management.return_focus = None;
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+        });
+        cx.notify();
+    }
+
+    pub(super) fn render_statistics_management_entry(&self, cx: &mut Context<Self>) -> AnyElement {
+        let state = &self.active_settings().unwrap().statistics;
+        let tk = Tk::of(cx);
+        let sources = state.results.get(&(state.host, state.agent));
+        let source_status = sources.map(|p| t_fmt(L10nKey::StatisticsSourceSummary, &[
+            ("count", &p.snapshot.sources().len().to_string()),
+            ("issues", &p.snapshot.issues().len().to_string()),
+        ])).unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into());
+        let price_status = t_fmt(L10nKey::StatisticsPriceSummary, &[
+            ("count", &state.management.stored.pricing.custom.len().to_string()),
+            ("catalog", t(if state.management.stored.pricing.public_enabled {
+                L10nKey::StatisticsCatalogEnabled
+            } else { L10nKey::StatisticsCatalogDisabled })),
+        ]);
+        let mut rows = v_flex().gap_2().min_w_0();
+        for (id, title, status, surface) in [
+            ("statistics-manage-sources", L10nKey::StatisticsManageSources, source_status, Editor::Source),
+            ("statistics-manage-prices", L10nKey::StatisticsManagePrices, price_status, Editor::Price),
+        ] {
+            rows = rows.child(self.statistics_management_button(id, t(title), cx,
+                move |this, window, cx| this.open_statistics_management(surface, window, cx))
+                .ghost().h_auto().w_full().min_w_0().p_3()
+                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(tk.k5).child(status)));
+        }
+        if let Some(error) = &state.management.error {
+            rows = rows.child(div().text_xs().text_color(tk.warn_text).child(error.clone()));
+        }
+        if let Some(error) = &state.management.stored.pricing.last_error {
+            rows = rows.child(div().text_xs().text_color(tk.warn_text).child(error.clone()));
+        }
+        rows.into_any_element()
+    }
     fn statistics_management_button(
         &self,
         id: impl Into<ElementId>,
@@ -133,6 +238,10 @@ impl LyrelApp {
         state.return_focus = window.focused(cx);
         state.editor_window = Some(window.window_handle());
         state.error = None;
+        if editor == Editor::Source {
+            state.editing_source = None;
+            state.selector.update(cx, |input, cx| input.set_value("", window, cx));
+        }
         if editor == Editor::Price {
             state.editing_price = None;
             for (index, input) in state.price.iter().enumerate() {
@@ -291,10 +400,14 @@ impl LyrelApp {
         let agent = state.source_agent;
         let launch = cx.global::<Config>().agent_launch.clone();
         let host = state.editor_host;
+        let previous = state.editing_source.clone();
         self.change_statistics_settings_on(
             host,
             Some(host),
             move |stored, host| {
+                if let Some(previous) = &previous {
+                    stored.sources.remove(previous);
+                }
                 stored
                     .sources
                     .add(host, agent, &selector, &launch)
@@ -433,32 +546,36 @@ impl LyrelApp {
         let state = &settings.statistics.management;
         let tk = Tk::of(cx);
         let disabled = !state.loaded || state.busy;
-        let mut rows = vec![
-            div()
-                .text_color(tk.k5)
-                .child(t(L10nKey::StatisticsSourcesTitle))
-                .into_any_element(),
-            div()
-                .text_sm()
-                .text_color(tk.k5)
-                .child(t(L10nKey::StatisticsSourcesHelp))
-                .into_any_element(),
-            self.statistics_management_button(
-                "statistics-add-source",
-                t(L10nKey::StatisticsAddSource),
-                cx,
-                |this, window, cx| this.edit_statistics(Editor::Source, window, cx),
-            )
-            .disabled(disabled)
-            .into_any_element(),
-        ];
+        let sources = state.surface == Some(Editor::Source);
+        let mut rows = Vec::new();
+        if sources {
+        rows.push(div().text_xs().text_color(tk.k5).child(t(L10nKey::StatisticsSourcesHelp)).into_any_element());
+        rows.push(self.statistics_management_button(
+            "statistics-add-source", t(L10nKey::StatisticsAddSource), cx,
+            |this, window, cx| this.edit_statistics(Editor::Source, window, cx),
+        ).disabled(disabled).into_any_element());
         if let Some(presentation) = settings
             .statistics
             .results
             .get(&(settings.statistics.host, settings.statistics.agent))
         {
+            for source in presentation.snapshot.sources() {
+                rows.push(div().text_xs().text_color(tk.k5)
+                    .child(format!("{} · {}\n{}", source.agent(), source.scope(), source.root().display()))
+                    .into_any_element());
+            }
+            for issue in presentation.snapshot.issues() {
+                rows.push(div().text_xs().text_color(tk.warn_text)
+                    .child(format!("{}\n{}", issue.path().display(), issue_text(issue.reason())))
+                    .into_any_element());
+            }
+            if settings.statistics.agent.is_none_or(|agent| agent == "hermes") {
+                rows.push(div().text_xs().text_color(tk.k5)
+                    .child(t(L10nKey::StatisticsHermesLimits)).into_any_element());
+            }
             for binding in &presentation.bindings {
                 let remove = binding.clone();
+                let edit = binding.clone();
                 let check = binding.clone();
                 let id = binding.key();
                 rows.push(
@@ -484,6 +601,24 @@ impl LyrelApp {
                                     )
                                     .disabled(disabled),
                                 )
+                                .child(self.statistics_management_button(
+                                    SharedString::from(format!("statistics-edit-source:{id}")),
+                                    t(L10nKey::StatisticsEditSource), cx,
+                                    move |this, window, cx| {
+                                        let agent = match edit.agent.as_str() {
+                                            "omp" => "omp", "pi" => "pi", "kimi" => "kimi", "opencode" => "opencode",
+                                            "hermes" => "hermes", _ => return,
+                                        };
+                                        this.edit_statistics(Editor::Source, window, cx);
+                                        if let Some(settings) = this.active_settings_mut() {
+                                            let state = &mut settings.statistics.management;
+                                            state.editing_source = Some(edit.clone());
+                                            state.editor_host = HostId(edit.host);
+                                            state.source_agent = agent;
+                                            state.selector.update(cx, |input, cx| input.set_value(edit.selector.clone(), window, cx));
+                                        }
+                                    },
+                                ).disabled(disabled))
                                 .child(
                                     self.statistics_management_button(
                                         SharedString::from(format!(
@@ -549,24 +684,26 @@ impl LyrelApp {
             rows.push(
                 div()
                     .text_sm()
-                    .child(t(L10nKey::StatisticsSourceSelector))
+                    .child(t(L10nKey::StatisticsSourceLocation))
                     .into_any_element(),
             );
+            rows.push(div().text_xs().text_color(tk.k5)
+                .child(t(L10nKey::StatisticsSourceSelector)).into_any_element());
             rows.push(
                 div()
                     .text_sm()
                     .text_color(tk.k5)
-                    .child(format!(
-                        "{}: {}",
-                        t(L10nKey::StatisticsTitle),
-                        state.editor_host.0
-                    ))
+                    .child(t_fmt(L10nKey::StatisticsSourceTarget, &[("machine", &self.agent_hooks_machines(cx)
+                        .into_iter().find(|machine| machine.host == state.editor_host)
+                        .map(|machine| machine.label).unwrap_or_else(|| t(L10nKey::StatisticsOffline).into()))]))
                     .into_any_element(),
             );
             rows.push(
                 Input::new(&state.selector)
                     .id("statistics-source-selector")
+                    .aria_label(t(L10nKey::StatisticsSourceLocation))
                     .w_full()
+                    .small().disabled(disabled)
                     .into_any_element(),
             );
             rows.push(
@@ -576,10 +713,11 @@ impl LyrelApp {
                     .child(
                         self.statistics_management_button(
                             "statistics-source-save",
-                            t(L10nKey::StatisticsAddSource),
+                            t(L10nKey::StatisticsSaveSource),
                             cx,
                             |this, _, cx| this.save_statistics_source(cx),
                         )
+                        .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
                         .disabled(disabled),
                     )
                     .child(self.statistics_management_button(
@@ -593,12 +731,8 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        rows.push(
-            div()
-                .text_color(tk.k5)
-                .child(t(L10nKey::StatisticsPricesTitle))
-                .into_any_element(),
-        );
+        }
+        if !sources {
         rows.push(
             div()
                 .text_sm()
@@ -609,7 +743,7 @@ impl LyrelApp {
         rows.push(
             self.statistics_management_button(
                 "statistics-add-price",
-                t(L10nKey::StatisticsEditPrice),
+                t(L10nKey::StatisticsAddPrice),
                 cx,
                 |this, window, cx| this.edit_statistics(Editor::Price, window, cx),
             )
@@ -628,6 +762,13 @@ impl LyrelApp {
                         "{} / {} · {}",
                         price.provider, price.model, price.currency
                     ))
+                    .child(div().text_xs().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsPriceRow, &[
+                        ("input", &price.input.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
+                        ("output", &price.output.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
+                        ("reasoning", &price.reasoning.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
+                        ("read", &price.cache_read.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
+                        ("write", &price.cache_write.map(|v| v.to_string()).unwrap_or_else(|| "—".into())),
+                    ])))
                     .child(
                         h_flex()
                             .flex_wrap()
@@ -704,7 +845,7 @@ impl LyrelApp {
             );
         }
         if state.editor == Some(Editor::Price) {
-            for (index, key) in [
+            let fields = [
                 L10nKey::StatisticsPriceProvider,
                 L10nKey::StatisticsPriceModel,
                 L10nKey::StatisticsPriceCurrency,
@@ -713,24 +854,15 @@ impl LyrelApp {
                 L10nKey::StatisticsReasoning,
                 L10nKey::StatisticsCacheRead,
                 L10nKey::StatisticsCacheWrite,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                rows.push(
-                    v_flex()
-                        .gap_1()
-                        .child(t(key))
-                        .child(
-                            Input::new(&state.price[index])
-                                .id(SharedString::from(format!(
-                                    "statistics-price-field-{index}"
-                                )))
-                                .w_full(),
-                        )
-                        .into_any_element(),
-                );
-            }
+            ].into_iter().enumerate().map(|(index, key)| {
+                v_flex().min_w_0().gap_1()
+                    .child(div().text_xs().text_color(tk.k5).child(t(key)))
+                    .child(Input::new(&state.price[index])
+                        .id(SharedString::from(format!("statistics-price-field-{index}")))
+                        .aria_label(t(key)).small().disabled(disabled).w_full())
+                    .into_any_element()
+            });
+            rows.push(div().grid().grid_cols(2).gap_3().min_w_0().children(fields).into_any_element());
             rows.push(
                 h_flex()
                     .flex_wrap()
@@ -742,6 +874,7 @@ impl LyrelApp {
                             cx,
                             |this, _, cx| this.save_statistics_price(cx),
                         )
+                        .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
                         .disabled(disabled),
                     )
                     .child(self.statistics_management_button(
@@ -808,6 +941,7 @@ impl LyrelApp {
                 ))
                 .into_any_element(),
         );
+        }
         if state.busy {
             rows.push(
                 div()
@@ -834,10 +968,15 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        v_flex().gap_3().min_w_0().children(rows).into_any_element()
+        let body = div().id("statistics-management-content").size_full().min_h_0().min_w_0()
+            .overflow_y_scroll().track_scroll(&state.scroll)
+            .child(v_flex().min_w_0().gap_3().p_2().children(rows));
+        v_flex().size_full().min_h_0().min_w_0()
+            .child(crate::ui::scrollbar::with_vertical_scrollbar("statistics-management-scrollbar", body, &state.scroll))
+            .into_any_element()
     }
 }
-fn format_time(timestamp: Option<i64>) -> String {
+pub(super) fn format_time(timestamp: Option<i64>) -> String {
     timestamp
         .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
         .map(|t| {

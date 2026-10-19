@@ -1,7 +1,7 @@
 //! 统计页内分析交互；不拥有第二份来源、缓存或聚合算法。
 use super::*;
 use chrono::{Datelike, Days, Months, NaiveDate};
-use gpui_kit::FocusHandle;
+use gpui_kit::{FocusHandle, rems};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _,
     button::Button,
@@ -19,10 +19,11 @@ pub(super) struct AnalysisState {
     pub(super) metric: Metric,
     group: GroupKind,
     page: usize,
+    expanded: Option<String>,
+    agent_page: usize,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GroupKind {
-    Agents,
     Models,
     Projects,
 }
@@ -33,12 +34,14 @@ impl AnalysisState {
             agent: None,
             year: date.year(),
             date,
-            detail: true,
+            detail: false,
             focus: cx.focus_handle().tab_stop(true),
             anchor: None,
             metric: Metric::Tokens,
-            group: GroupKind::Agents,
+            group: GroupKind::Models,
             page: 0,
+            expanded: None,
+            agent_page: 0,
         }
     }
 }
@@ -51,7 +54,6 @@ fn metric_key(metric: Metric) -> L10nKey {
 }
 fn group_key(group: GroupKind) -> L10nKey {
     match group {
-        GroupKind::Agents => L10nKey::StatisticsAgents,
         GroupKind::Models => L10nKey::StatisticsModels,
         GroupKind::Projects => L10nKey::StatisticsProjects,
     }
@@ -74,10 +76,11 @@ fn detail(totals: &Totals) -> String {
                     .map(|v| format!("USD {v:.4}"))
                     .unwrap_or_else(|| "—".into()),
             ),
-            ("sessions", &totals.main_sessions().to_string()),
+            ("sessions", &session_count(totals)),
             ("calls", &totals.calls().to_string()),
             ("cumulative", &totals.cumulative_records().to_string()),
             ("unpriced", &totals.unpriced_calls().to_string()),
+            ("reasoning", &tokens(totals.tokens().reasoning())),
             ("input", &tokens(totals.tokens().input())),
             ("output", &tokens(totals.tokens().output())),
             ("read", &tokens(totals.tokens().cache_read())),
@@ -139,6 +142,7 @@ impl LyrelApp {
         Button::new(id)
             .label(label)
             .small()
+            .ghost()
             .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
     }
     pub(in crate::ui::settings) fn analysis_menu(
@@ -152,6 +156,7 @@ impl LyrelApp {
         Button::new(id)
             .label(label)
             .small()
+            .ghost()
             .dropdown_menu_with_anchor(gpui_kit::Anchor::TopRight, move |mut menu, _, _| {
                 for entry in &entries {
                     menu = match entry {
@@ -181,7 +186,7 @@ impl LyrelApp {
             })
             .into_any_element()
     }
-    fn change_analysis(
+    pub(super) fn change_analysis(
         &mut self,
         change: impl FnOnce(&mut AnalysisState),
         reload: bool,
@@ -267,407 +272,217 @@ impl LyrelApp {
     ) -> AnyElement {
         let state = &self.active_settings().unwrap().statistics.analysis;
         let tk = Tk::of(cx);
-        let border = cx.theme().border;
         let accent = cx.theme().primary;
-        let mut agents: Vec<_> = p
-            .snapshot
-            .sources()
-            .iter()
-            .map(|s| s.agent().to_owned())
-            .collect();
+        let mut agents: Vec<_> = p.snapshot.sources().iter().map(|s| s.agent().to_owned()).collect();
         agents.sort();
         agents.dedup();
-        let mut entries = vec![MenuEntry::item(
-            t(L10nKey::StatisticsAllAgents),
-            state.agent.is_none(),
-            |this, _, cx| {
-                this.change_analysis(
-                    |s| {
-                        s.agent = None;
-                        s.page = 0;
-                    },
-                    true,
-                    cx,
-                )
-            },
-        )];
+        let mut entries = vec![MenuEntry::item(t(L10nKey::StatisticsAllAgents), state.agent.is_none(),
+            |this, _, cx| this.change_analysis(|s| { s.agent = None; s.page = 0; }, true, cx))];
         entries.extend(agents.into_iter().map(|agent| {
-            let selected = state.agent.as_deref() == Some(&agent);
-            MenuEntry::item(agent.clone(), selected, move |this, _, cx| {
-                this.change_analysis(
-                    |s| {
-                        s.agent = Some(agent.clone());
-                        s.page = 0;
-                    },
-                    true,
-                    cx,
-                )
+            MenuEntry::item(agent.clone(), state.agent.as_deref() == Some(&agent), move |this, _, cx| {
+                this.change_analysis(|s| { s.agent = Some(agent.clone()); s.page = 0; }, true, cx)
             })
         }));
-        let agent = self.analysis_menu(
-            "statistics-analysis-agent",
-            state
-                .agent
-                .clone()
-                .unwrap_or_else(|| t(L10nKey::StatisticsAllAgents).into()),
-            entries,
-            cx,
-        );
-        let metric = self.analysis_menu(
-            "statistics-analysis-metric",
-            t(metric_key(state.metric)),
-            [Metric::Tokens, Metric::Cost, Metric::Sessions]
-                .into_iter()
-                .map(|metric| {
-                    MenuEntry::item(
-                        t(metric_key(metric)),
-                        state.metric == metric,
-                        move |this, _, cx| this.change_analysis(|s| s.metric = metric, false, cx),
-                    )
+        let agent = self.analysis_menu("statistics-analysis-agent",
+            state.agent.clone().unwrap_or_else(|| t(L10nKey::StatisticsAllAgents).into()), entries, cx);
+        let metric = self.analysis_menu("statistics-analysis-metric", t(metric_key(state.metric)),
+            [Metric::Tokens, Metric::Cost, Metric::Sessions].into_iter().map(|metric| {
+                MenuEntry::item(t(metric_key(metric)), state.metric == metric, move |this, _, cx| {
+                    this.change_analysis(|s| s.metric = metric, false, cx)
                 })
-                .collect(),
-            cx,
-        );
-        let mut rows = vec![
-            div()
-                .text_size(fs(12.))
-                .text_color(tk.k5)
-                .child(t(L10nKey::StatisticsAnalysisTitle))
-                .into_any_element(),
-            self.settings_row(
-                t(L10nKey::StatisticsAnalysisAgent),
-                t(L10nKey::StatisticsAnalysisScope),
-                agent,
-                cx,
-            )
-            .into_any_element(),
-            self.settings_row(
-                t(L10nKey::StatisticsAnalysisMetric),
-                t(L10nKey::StatisticsMetricScope),
-                metric,
-                cx,
-            )
-            .into_any_element(),
-        ];
-        if let Some(error) = &p.analysis_error {
-            rows.push(
-                div()
-                    .text_color(tk.danger)
-                    .child(t_fmt(L10nKey::StatisticsAnalysisError, &[("error", error)]))
-                    .into_any_element(),
-            );
-        }
-        let Some(analysis) = &p.analysis else {
-            return v_flex().gap_3().children(rows).into_any_element();
-        };
-        rows.push(
-            div()
-                .text_color(tk.k5)
-                .child(t_fmt(
-                    L10nKey::StatisticsAnalysisSnapshot,
-                    &[(
-                        "agent",
-                        analysis
-                            .agent_filter()
-                            .unwrap_or(t(L10nKey::StatisticsAllAgents)),
-                    )],
-                ))
-                .into_any_element(),
-        );
-        if !analysis.has_sources() {
-            rows.push(
-                div()
-                    .text_color(tk.warn_text)
-                    .child(t(L10nKey::StatisticsNoAnalysisSources))
-                    .into_any_element(),
-            );
-        }
-        rows.push(div().child(detail(analysis.totals())).into_any_element());
+            }).collect(), cx);
         let year = state.year;
-        rows.push(
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .child(
-                    self.analysis_button(
-                        "statistics-year-previous",
-                        t(L10nKey::StatisticsPreviousYear),
-                        cx,
-                        move |this, _, cx| {
-                            this.change_analysis(
-                                |s| {
-                                    s.year = year - 1;
-                                    s.date = NaiveDate::from_ymd_opt(s.year, 1, 1).unwrap();
-                                },
-                                true,
-                                cx,
-                            )
-                        },
-                    )
-                    .disabled(year <= 1),
-                )
-                .child(analysis.year().to_string())
-                .child(
-                    self.analysis_button(
-                        "statistics-year-next",
-                        t(L10nKey::StatisticsNextYear),
-                        cx,
-                        move |this, _, cx| {
-                            this.change_analysis(
-                                |s| {
-                                    s.year = year + 1;
-                                    s.date = NaiveDate::from_ymd_opt(s.year, 1, 1).unwrap();
-                                },
-                                true,
-                                cx,
-                            )
-                        },
-                    )
-                    .disabled(year >= 9998),
-                )
-                .into_any_element(),
-        );
-        rows.push(
-            div()
-                .text_color(tk.k5)
-                .child(t_fmt(
-                    L10nKey::StatisticsStreaks,
-                    &[
-                        (
-                            "current",
-                            &number(analysis.streaks().current().map(u64::from)),
-                        ),
-                        (
-                            "longest",
-                            &number(analysis.streaks().longest().map(u64::from)),
-                        ),
-                    ],
-                ))
-                .into_any_element(),
-        );
-        let selected = analysis.days().iter().find(|d| d.date() == state.date);
-        let date = state.date;
-        let selected_text = selected
-            .map(|d| {
-                if !d.is_in_range() {
-                    t(L10nKey::StatisticsOutsideRange).to_owned()
-                } else {
-                    detail(d.totals())
-                }
-            })
-            .unwrap_or_else(|| t(L10nKey::StatisticsLoading).into());
+        let year_controls = h_flex().gap_1()
+            .child(self.analysis_button("statistics-year-previous", "‹", cx, move |this, _, cx| {
+                this.change_analysis(|s| {
+                    s.year = year - 1;
+                    s.date = NaiveDate::from_ymd_opt(s.year, 1, 1).unwrap();
+                }, true, cx)
+            }).accessibility_label(t(L10nKey::StatisticsPreviousYear)).disabled(year <= 1))
+            .child(div().text_sm().child(year.to_string()))
+            .child(self.analysis_button("statistics-year-next", "›", cx, move |this, _, cx| {
+                this.change_analysis(|s| {
+                    s.year = year + 1;
+                    s.date = NaiveDate::from_ymd_opt(s.year, 1, 1).unwrap();
+                }, true, cx)
+            }).accessibility_label(t(L10nKey::StatisticsNextYear)).disabled(year >= 9998));
+        let mut activity = v_flex().id("statistics-activity").min_w_0().w_full().gap_2()
+            .p_3().border_1().border_color(cx.theme().border).rounded_lg()
+            .child(h_flex().min_w_0().flex_wrap().gap_2()
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(t(L10nKey::StatisticsActivity)))
+                .child(year_controls).child(div().flex_1()).child(metric))
+            .child(h_flex().min_w_0().flex_wrap().gap_2().child(agent)
+                .child(div().text_xs().text_color(tk.k5).child(t_fmt(
+                    L10nKey::StatisticsAnalysisSnapshot,
+                    &[("agent", p.analysis.as_ref().and_then(|a| a.agent_filter()).unwrap_or(t(L10nKey::StatisticsAllAgents)))],
+                ))));
+        if let Some(error) = &p.analysis_error {
+            activity = activity.child(div().text_sm().text_color(tk.danger)
+                .child(t_fmt(L10nKey::StatisticsAnalysisError, &[("error", error)])));
+        }
+        let Some(analysis) = &p.analysis else { return activity.into_any_element(); };
+        if !analysis.has_sources() {
+            activity = activity.child(div().text_xs().text_color(tk.warn_text)
+                .child(t(L10nKey::StatisticsNoAnalysisSources)));
+        }
         let maximum = analysis.maximum(state.metric);
-        let scale = if state.metric == Metric::Cost {
-            format!("USD {maximum:.4}")
-        } else {
-            format!("{maximum:.0}")
-        };
-        // The focused date inspector is before the year grid, so keyboard navigation always
-        // exposes the full date and values without relying on hover or a clipped grid cell.
-        rows.push(
-            v_flex()
-                .id("statistics-calendar")
-                .track_focus(&state.focus)
-                .min_w_0()
-                .border_1()
-                .border_color(border)
-                .rounded_md()
-                .p_2()
-                .gap_2()
-                .focus_visible(|s| s.border_color(accent))
-                .on_key_down(cx.listener(Self::analysis_calendar_key))
-                .child(
-                    div()
-                        .id("statistics-date-anchor")
-                        .anchor_scroll(state.anchor.clone())
-                        .child(self.analysis_button(
-                            "statistics-calendar-focus",
-                            date.format("%Y-%m-%d").to_string(),
-                            cx,
-                            move |this, window, cx| this.select_analysis_date(date, window, cx),
-                        )),
-                )
-                .child(
-                    div()
-                        .text_color(tk.k5)
-                        .child(t(L10nKey::StatisticsCalendarKeys)),
-                )
-                .when(state.detail, |el| el.child(div().child(selected_text)))
-                .child(div().text_color(tk.k5).child(t_fmt(
-                    L10nKey::StatisticsHeatmapLegend,
-                    &[("metric", t(metric_key(state.metric))), ("max", &scale)],
-                )))
-                .child(
-                    h_flex()
-                        .id("statistics-year-months")
-                        .min_w_0()
-                        .w_full()
-                        .overflow_x_scroll()
-                        .items_start()
-                        .flex_wrap()
-                        .gap_4()
-                        .children((1..=12).map(|month| {
-                            let month_days: Vec<_> = analysis
-                                .days()
-                                .iter()
-                                .filter(|d| d.date().month() == month)
-                                .collect();
-                            let offset =
-                                month_days[0].date().weekday().num_days_from_monday() as usize;
-                            let mut cells: Vec<AnyElement> = (0..offset)
-                                .map(|_| div().w_8().h_8().into_any_element())
-                                .collect();
-                            cells.extend(month_days.into_iter().map(|day| {
-                                let date = day.date();
-                                let value = day.value(state.metric);
-                                let background = match value {
-                                    Some(v) if v > 0. && maximum > 0. => {
-                                        accent.opacity(0.12 + 0.24 * (v / maximum) as f32)
-                                    }
-                                    _ => tk.k06,
-                                };
-                                let suffix = if !day.is_in_range() {
-                                    "–"
-                                } else if value.is_none() {
-                                    "?"
-                                } else {
-                                    ""
-                                };
-                                Button::new(SharedString::from(format!("statistics-day-{date}")))
-                                    .label(format!("{}{suffix}", date.day()))
-                                    .small()
-                                    .w_8()
-                                    .h_8()
-                                    .px_0()
-                                    .bg(background)
-                                    .border_1()
-                                    .border_color(if date == state.date { accent } else { border })
-                                    .when(!day.is_in_range(), |b| b.text_color(tk.k5))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.select_analysis_date(date, window, cx)
-                                    }))
-                                    .into_any_element()
-                            }));
-                            v_flex()
-                                .w_64()
-                                .flex_shrink_0()
-                                .gap_2()
-                                .child(format!("{}-{month:02}", analysis.year()))
-                                .child(
-                                    h_flex()
-                                        .gap_1()
-                                        .text_color(tk.k5)
-                                        .text_size(fs(12.))
-                                        .children(
-                                            t(L10nKey::StatisticsWeekdays).split_whitespace().map(
-                                                |label| div().w_8().text_center().child(label),
-                                            ),
-                                        ),
-                                )
-                                .child(h_flex().items_start().flex_wrap().gap_1().children(cells))
-                                .into_any_element()
-                        })),
-                )
-                .into_any_element(),
-        );
-        let groups = self.analysis_menu(
-            "statistics-analysis-group",
-            t(group_key(state.group)),
-            [GroupKind::Agents, GroupKind::Models, GroupKind::Projects]
-                .into_iter()
-                .map(|group| {
-                    MenuEntry::item(
-                        t(group_key(group)),
-                        state.group == group,
-                        move |this, _, cx| {
-                            this.change_analysis(
-                                |s| {
-                                    s.group = group;
-                                    s.page = 0;
-                                },
-                                false,
-                                cx,
-                            )
-                        },
-                    )
+        let offset = analysis.days().first().map_or(0, |d| d.date().weekday().num_days_from_monday() as usize);
+        let weeks = (offset + analysis.days().len()).div_ceil(7);
+        let columns = (0..weeks).map(|week| {
+            let first = (week * 7).saturating_sub(offset);
+            let month = analysis.days().get(first).filter(|day| week == 0 || day.date().day() <= 7)
+                .map(|day| day.date().format("%m").to_string()).unwrap_or_default();
+            v_flex().flex_1().min_w_0().gap_1()
+                .child(div().h_4().text_xs().text_color(tk.k5).child(month))
+                .children((0..7).map(|weekday| {
+                    let day = (week * 7 + weekday).checked_sub(offset).and_then(|ix| analysis.days().get(ix));
+                    let Some(day) = day else { return div().h_3().w_full().into_any_element(); };
+                    let date = day.date();
+                    let value = day.value(state.metric);
+                    let background = match value {
+                        Some(v) if v > 0. && maximum > 0. => cx.theme().primary.opacity(0.2 + 0.8 * (v / maximum) as f32),
+                        _ => tk.k06,
+                    };
+                    let description = if !day.is_in_range() {
+                        t(L10nKey::StatisticsOutsideRange).to_owned()
+                    } else if value.is_none() {
+                        t(L10nKey::StatisticsUnknown).to_owned()
+                    } else {
+                        match state.metric {
+                            Metric::Tokens => number(day.totals().tokens().total().or_else(||
+                                (day.totals().calls() == 0 && day.totals().is_complete()).then_some(0))),
+                            Metric::Cost => format!("USD {:.4}", value.unwrap()),
+                            Metric::Sessions => session_count(day.totals()),
+                        }
+                    };
+                    let name = format!("{date}\n{description}");
+                    Button::new(SharedString::from(format!("statistics-day-{date}")))
+                        .ghost().xsmall().tab_stop(false).h_3().w_full().min_w_0().p_0()
+                        .rounded_sm().bg(background).border_1()
+                        .border_color(if date == state.date { cx.theme().primary } else { background })
+                        .when(!day.is_in_range(), |b| b.opacity(0.35))
+                        .when(day.is_in_range() && value.is_none(), |b| b.label("?"))
+                        .accessibility_label(name.clone()).tooltip(name)
+                        .on_click(cx.listener(move |this, _, window, cx| this.select_analysis_date(date, window, cx)))
+                        .into_any_element()
+                })).into_any_element()
+        }).collect::<Vec<_>>();
+        let grid = v_flex().id("statistics-calendar").track_focus(&state.focus)
+            .role(gpui_kit::Role::Group).aria_label(t(L10nKey::StatisticsCalendarKeys))
+            .min_w_0().gap_2().rounded_md().border_1().border_color(cx.theme().border).p_1()
+            .focus_visible(move |s| s.border_color(accent))
+            .on_key_down(cx.listener(Self::analysis_calendar_key))
+            .child(h_flex().id("statistics-year-weeks").w_full().min_w_0().items_start().gap_1()
+                .child(v_flex().w_4().flex_shrink_0().gap_1().child(div().h_4())
+                    .children(t(L10nKey::StatisticsWeekdays).split_whitespace()
+                        .map(|label| div().h_3().text_xs().text_color(tk.k5).child(label.to_owned()))))
+                .children(columns));
+        let date = state.date;
+        let selected = analysis.days().iter().find(|d| d.date() == date);
+        activity = activity.child(grid)
+            .child(h_flex().gap_2().flex_wrap()
+                .child(div().id("statistics-date-anchor").anchor_scroll(state.anchor.clone())
+                    .child(self.analysis_button("statistics-calendar-focus", date.to_string(), cx,
+                        move |this, window, cx| this.select_analysis_date(date, window, cx))
+                        .tooltip(format!("{}\n{}", t(L10nKey::StatisticsCalendarKeys), t(L10nKey::StatisticsMetricScope)))))
+                .child(div().text_xs().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsActivityStreaks, &[
+                    ("current", &number(analysis.streaks().current().map(u64::from))),
+                    ("longest", &number(analysis.streaks().longest().map(u64::from))),
+                ]))))
+            .child(div().text_xs().text_color(tk.k5).child(t_fmt(L10nKey::StatisticsHeatmapLegend, &[
+                ("metric", t(metric_key(state.metric))),
+                ("max", &if analysis.days().iter().all(|day| day.value(state.metric).is_none()) {
+                    t(L10nKey::StatisticsUnknown).into()
+                } else if state.metric == Metric::Cost { format!("USD {maximum:.4}") } else { format!("{maximum:.0}") }),
+            ])));
+        if state.detail {
+            let text = selected.map(|d| if d.is_in_range() { detail(d.totals()) } else { t(L10nKey::StatisticsOutsideRange).into() })
+                .unwrap_or_else(|| t(L10nKey::StatisticsLoading).into());
+            activity = activity.child(div().text_xs().child(text));
+        }
+        let groups_menu = self.analysis_menu("statistics-analysis-group", t(group_key(state.group)),
+            [GroupKind::Models, GroupKind::Projects].into_iter().map(|group| {
+                MenuEntry::item(t(group_key(group)), state.group == group, move |this, _, cx| {
+                    this.change_analysis(|s| { s.group = group; s.page = 0; }, false, cx)
                 })
-                .collect(),
-            cx,
-        );
-        rows.push(
-            self.settings_row(
-                t(L10nKey::StatisticsBreakdowns),
-                t(L10nKey::StatisticsBreakdownScope),
-                groups,
-                cx,
-            )
-            .into_any_element(),
-        );
-        let groups: &[Breakdown] = match state.group {
-            GroupKind::Agents => analysis.agents(),
-            GroupKind::Models => analysis.models(),
-            GroupKind::Projects => analysis.projects(),
-        };
+            }).collect(), cx);
+        let groups = match state.group { GroupKind::Models => analysis.models(), GroupKind::Projects => analysis.projects() };
         let pages = groups.len().div_ceil(10).max(1);
         let page = state.page.min(pages - 1);
-        for group in groups.iter().skip(page * 10).take(10) {
-            rows.push(
-                v_flex()
-                    .gap_1()
-                    .min_w_0()
-                    .child(
-                        div().font_weight(FontWeight::MEDIUM).child(
-                            group
-                                .label()
-                                .unwrap_or(t(L10nKey::StatisticsUnattributed))
-                                .to_owned(),
-                        ),
-                    )
-                    .child(div().text_color(tk.k5).child(format!(
-                        "{} · {}\n{}",
-                        group.agent(),
-                        group.scope(),
-                        group.provider().unwrap_or("")
-                    )))
-                    .child(detail(group.totals()))
-                    .into_any_element(),
-            );
-        }
-        if groups.is_empty() {
-            rows.push(
-                div()
-                    .text_color(tk.k5)
-                    .child(t(L10nKey::StatisticsEmpty))
-                    .into_any_element(),
-            );
-        }
-        rows.push(
-            h_flex()
-                .flex_wrap()
-                .gap_2()
-                .child(
-                    self.analysis_button(
-                        "statistics-group-previous",
-                        t(L10nKey::StatisticsPreviousPage),
-                        cx,
-                        move |this, _, cx| {
-                            this.change_analysis(|s| s.page = page.saturating_sub(1), false, cx)
-                        },
-                    )
-                    .disabled(page == 0),
-                )
-                .child(format!("{} / {pages}", page + 1))
-                .child(
-                    self.analysis_button(
-                        "statistics-group-next",
-                        t(L10nKey::StatisticsNextPage),
-                        cx,
-                        move |this, _, cx| this.change_analysis(|s| s.page = page + 1, false, cx),
-                    )
-                    .disabled(page + 1 >= pages),
-                )
-                .into_any_element(),
-        );
-        v_flex().gap_3().min_w_0().children(rows).into_any_element()
+        let common = v_flex().flex_grow(1.).flex_shrink(1.).flex_basis(rems(16.)).min_w_0().gap_2().p_3()
+            .border_1().border_color(cx.theme().border).rounded_lg()
+            .child(groups_menu)
+            .children(groups.iter().skip(page * 10).take(10).map(|group| self.render_statistics_breakdown(group, false, cx)))
+            .when(groups.is_empty(), |el| el.child(div().text_xs().text_color(tk.k5).child(t(L10nKey::StatisticsEmpty))))
+            .child(h_flex().gap_2()
+                .child(self.analysis_button("statistics-group-previous", "‹", cx, move |this, _, cx| {
+                    this.change_analysis(|s| s.page = page.saturating_sub(1), false, cx)
+                }).accessibility_label(t(L10nKey::StatisticsPreviousPage)).disabled(page == 0))
+                .child(div().text_xs().child(format!("{} / {pages}", page + 1)))
+                .child(self.analysis_button("statistics-group-next", "›", cx, move |this, _, cx| {
+                    this.change_analysis(|s| s.page = page + 1, false, cx)
+                }).accessibility_label(t(L10nKey::StatisticsNextPage)).disabled(page + 1 >= pages)));
+        let agent_pages = analysis.agents().len().div_ceil(10).max(1);
+        let agent_page = state.agent_page.min(agent_pages - 1);
+        let agents = v_flex().flex_grow(1.).flex_shrink(1.).flex_basis(rems(22.)).min_w_0().gap_2().p_3()
+            .border_1().border_color(cx.theme().border).rounded_lg()
+            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(t(L10nKey::StatisticsAgents)))
+            .child(h_flex().gap_2().text_xs().text_color(tk.k5)
+                .child(div().flex_1().child(t(L10nKey::StatisticsAgent)))
+                .child(div().w_20().text_right().child(t(L10nKey::StatisticsTokens)))
+                .child(div().w_20().text_right().child(t(L10nKey::StatisticsCostCard)))
+                .child(div().w_12().text_right().child(t(L10nKey::StatisticsSessionColumn))))
+            .children(analysis.agents().iter().skip(agent_page * 10).take(10).map(|group| self.render_statistics_breakdown(group, true, cx)))
+            .when(analysis.agents().is_empty(), |el| el.child(div().text_xs().text_color(tk.k5).child(t(L10nKey::StatisticsEmpty))))
+            .when(agent_pages > 1, |el| el.child(h_flex().gap_2()
+                .child(self.analysis_button("statistics-agents-previous", "‹", cx, move |this, _, cx| {
+                    this.change_analysis(|s| s.agent_page = agent_page.saturating_sub(1), false, cx)
+                }).accessibility_label(t(L10nKey::StatisticsPreviousPage)).disabled(agent_page == 0))
+                .child(div().text_xs().child(format!("{} / {agent_pages}", agent_page + 1)))
+                .child(self.analysis_button("statistics-agents-next", "›", cx, move |this, _, cx| {
+                    this.change_analysis(|s| s.agent_page = agent_page + 1, false, cx)
+                }).accessibility_label(t(L10nKey::StatisticsNextPage)).disabled(agent_page + 1 >= agent_pages))));
+        v_flex().min_w_0().gap_4().child(activity)
+            .child(h_flex().items_start().flex_wrap().gap_3().child(agents).child(common))
+            .child(div().text_xs().text_color(tk.k5).child(t(L10nKey::StatisticsBreakdownScope)))
+            .into_any_element()
+    }
+
+    fn render_statistics_breakdown(&self, group: &Breakdown, table: bool, cx: &mut Context<Self>) -> AnyElement {
+        let tk = Tk::of(cx);
+        let label = group.label().unwrap_or(t(L10nKey::StatisticsUnattributed));
+        let context = format!("{} · {} · {}", group.agent(), group.scope(), group.provider().unwrap_or(""));
+        let totals = group.totals();
+        let state = &self.active_settings().unwrap().statistics.analysis;
+        let key = format!("{table}:{}:{}:{}:{label}", group.agent(), group.scope(), group.provider().unwrap_or(""));
+        let expanded = state.expanded.as_deref() == Some(&key);
+        let metric_value = match state.metric {
+            Metric::Tokens => number(totals.tokens().total()),
+            Metric::Cost => money(totals.recorded_usd()),
+            Metric::Sessions => session_count(totals),
+        };
+        let identity = v_flex().flex_1().min_w_0().gap_1()
+            .child(div().truncate().child(label.to_owned()))
+            .child(div().truncate().text_xs().text_color(tk.k5).child(context.clone()));
+        let values = h_flex().gap_2()
+            .child(div().w_20().text_right().child(number(totals.tokens().total())))
+            .child(div().w_20().text_right().child(money(totals.recorded_usd())))
+            .child(div().w_12().text_right().child(session_count(totals)));
+        let row = if table {
+            h_flex().w_full().min_w_0().gap_2().child(identity).child(values).into_any_element()
+        } else {
+            h_flex().w_full().min_w_0().gap_2().child(identity)
+                .child(div().text_sm().child(metric_value)).into_any_element()
+        };
+        let description = detail(totals);
+        let content = v_flex().w_full().min_w_0().gap_2().whitespace_normal().text_left().child(row)
+            .when(expanded, |el| el.child(div().text_xs().text_color(tk.k5).child(format!("{context}\n{description}"))));
+        Button::new(SharedString::from(format!("statistics-breakdown:{key}")))
+            .ghost().h_auto().w_full().min_w_0().py_2().px_0()
+            .accessibility_label(format!("{label} · {context}\n{description}"))
+            .tooltip(context).child(content)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.change_analysis(|s| s.expanded = if expanded { None } else { Some(key.clone()) }, false, cx);
+            })).into_any_element()
     }
 }

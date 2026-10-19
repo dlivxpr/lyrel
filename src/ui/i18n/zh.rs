@@ -260,7 +260,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsModels => "常用模型",
         L10nKey::StatisticsProjects => "常用项目",
         L10nKey::StatisticsAnalysisValues => {
-            "{tokens} Token · 记录费用 {cost} · 估算费用 {estimated}\n{sessions} 个主会话 · {calls} 条用量记录（其中 {cumulative} 条累计）· {unpriced} 条未计价\n输入 {input} · 输出 {output} · 缓存读取 {read} · 缓存写入 {write}\n{status}"
+            "{tokens} Token · 记录费用 {cost} · 原生估算 {estimated}\n{sessions} 个主会话 · {calls} 条用量记录（其中 {cumulative} 条累计）· {unpriced} 条未计价\n输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {read} · 缓存写入 {write}\n{status}"
         }
         L10nKey::StatisticsAnalysisAgent => "分析智能体",
         L10nKey::StatisticsAnalysisScope => {
@@ -281,7 +281,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "选择日期查看详情。方向键：日／周；Page Up/Down：月；Home/End：年首／年尾；Enter：详情；Escape：隐藏详情，再按关闭设置。"
         }
         L10nKey::StatisticsHeatmapLegend => {
-            "{metric}：浅 → 深 = 0 → {max}（本年及所选范围内已知最大值）。? 表示未知／不完整；– 表示范围外。选择日期查看准确数值。跨日会话数不可相加，累计用量不会摊到每天。"
+            "{metric} · 深浅上限 {max} · ? 未知／不完整 · 淡色：范围外"
         }
         L10nKey::StatisticsWeekdays => "一　 二　 三　 四　 五　 六　 日",
         L10nKey::StatisticsBreakdowns => "分解明细",
@@ -295,6 +295,31 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsNoAnalysisSources => {
             "所选机器中没有与此分析智能体匹配的已发现来源。请选择其他智能体或刷新；来源缺失不表示零活动。"
         }
+        L10nKey::StatisticsStartDate => "开始日期（YYYY-MM-DD）",
+        L10nKey::StatisticsEndDate => "结束日期（YYYY-MM-DD）",
+        L10nKey::StatisticsCostCard => "记录费用",
+        L10nKey::StatisticsSessionColumn => "会话",
+        L10nKey::StatisticsTokenDelta => "与上期相比：{change}",
+        L10nKey::StatisticsRecordedSubtotal => "已知小计 · {count} 条记录缺少实际费用",
+        L10nKey::StatisticsNativeEstimate => "原生估算（独立）：{value}",
+        L10nKey::StatisticsCurrencyEstimate => "{currency} 估算 · 自定义 {custom} · 目录 {catalog} · {partial} 条部分计价",
+        L10nKey::StatisticsPreviousValue => "上期：{value}",
+        L10nKey::StatisticsSessionAverage => "每主会话 {value} Token（含子代理用量）",
+        L10nKey::StatisticsRecordCount => "{calls} 条计量记录 · {cumulative} 条累计",
+        L10nKey::StatisticsActivity => "活动",
+        L10nKey::StatisticsActivityStreaks => "当前连续 {current} 天 · 最长 {longest} 天",
+        L10nKey::StatisticsSourceSummary => "{count} 处来源 · {issues} 条诊断",
+        L10nKey::StatisticsPriceSummary => "{count} 项自定义价 · 公共目录{catalog}",
+        L10nKey::StatisticsCatalogEnabled => "已启用",
+        L10nKey::StatisticsCatalogDisabled => "未启用",
+        L10nKey::StatisticsManageSources => "来源…",
+        L10nKey::StatisticsManagePrices => "Token 单价…",
+        L10nKey::StatisticsEditSource => "编辑来源…",
+        L10nKey::StatisticsSaveSource => "保存来源",
+        L10nKey::StatisticsPriceRow => "输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {read} · 缓存写入 {write}",
+        L10nKey::StatisticsSourceLocation => "历史路径或原生服务 URL",
+        L10nKey::StatisticsAddPrice => "添加单价…",
+        L10nKey::StatisticsSourceTarget => "目标机器：{machine}",
         L10nKey::IntegrationPiExtension => {
             "Pi 1.3.0 需要加载原生扩展。--no-extensions/-ne 会禁用发现；--no-session 会禁用历史、恢复与分叉。Print/JSON/RPC 模式不是原生 TUI。缺少事件不代表本轮结束，请检查启动诊断与项目信任，不要绕过授权。"
         }
