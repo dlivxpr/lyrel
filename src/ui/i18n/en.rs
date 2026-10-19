@@ -341,9 +341,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsCostCard => "Recorded cost",
         L10nKey::StatisticsSessionColumn => "Sessions",
         L10nKey::StatisticsTokenDelta => "Previous period: {change}",
-        L10nKey::StatisticsRecordedSubtotal => "Known subtotal · {count} records without actual cost",
+        L10nKey::StatisticsRecordedSubtotal => {
+            "Known subtotal · {count} records without actual cost"
+        }
         L10nKey::StatisticsNativeEstimate => "Native estimate, separate: {value}",
-        L10nKey::StatisticsCurrencyEstimate => "{currency} estimates · custom {custom} · catalog {catalog} · {partial} partial",
+        L10nKey::StatisticsCurrencyEstimate => {
+            "{currency} estimates · custom {custom} · catalog {catalog} · {partial} partial"
+        }
         L10nKey::StatisticsPreviousValue => "Previous period: {value}",
         L10nKey::StatisticsSessionAverage => "{value} tokens / main session, including child usage",
         L10nKey::StatisticsRecordCount => "{calls} usage records · {cumulative} cumulative",
@@ -356,7 +360,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsManageSources => "Sources…",
         L10nKey::StatisticsManagePrices => "Token prices…",
         L10nKey::StatisticsSaveSource => "Save source",
-        L10nKey::StatisticsPriceRow => "Input {input} · output {output} · reasoning {reasoning} · cache read {read} · cache write {write}",
+        L10nKey::StatisticsPriceRow => {
+            "Input {input} · output {output} · reasoning {reasoning} · cache read {read} · cache write {write}"
+        }
         L10nKey::StatisticsSourceLocation => "History path or native service URL",
         L10nKey::StatisticsAddPrice => "Add price…",
         L10nKey::StatisticsSourceTarget => "Target machine: {machine}",

@@ -40,7 +40,12 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        super::super::super::tests::reveal(window, cx, SharedString::from(row_id(&selected)), "skills-list-scroll");
+        super::super::super::tests::reveal(
+            window,
+            cx,
+            SharedString::from(row_id(&selected)),
+            "skills-list-scroll",
+        );
         window.click(SharedString::from(row_id(&selected)), cx);
     });
     for (locale, width, mode) in [
@@ -89,7 +94,12 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
         });
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            super::super::super::tests::reveal(window, cx, "skills-remove-review", "skills-detail-scroll");
+            super::super::super::tests::reveal(
+                window,
+                cx,
+                "skills-remove-review",
+                "skills-detail-scroll",
+            );
             let trigger = window.find("skills-remove-review");
             assert!(trigger.visible());
             assert!(trigger.bounds().size.width < px(width));
@@ -99,6 +109,16 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
         vcx.update(|window, cx| {
             window.render_frame(cx);
             assert!(window.find("skills-remove-confirm").visible());
+            window.press("secondary-f", cx);
+            assert!(
+                !app.read(cx)
+                    .active_settings()
+                    .unwrap()
+                    .search
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
             window.press("escape", cx);
         });
         assert_eq!(

@@ -38,7 +38,11 @@ fn reveal(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str) {
             .bounds()
             .top();
         let state = &app.read(cx).active_settings().unwrap().statistics;
-        let scroll = if state.management.surface.is_some() { &state.management.scroll } else { &state.content_scroll };
+        let scroll = if state.management.surface.is_some() {
+            &state.management.scroll
+        } else {
+            &state.content_scroll
+        };
         let offset = scroll.offset();
         scroll.set_offset(gpui_kit::point(offset.x, offset.y - top + px(180.)));
         window.render_frame(cx);
@@ -56,8 +60,13 @@ fn click(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str) {
 fn type_into(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str, value: &str) {
     click(app, cx, id);
     cx.update(|window, cx| {
-        assert!(window.find(SharedString::from(id.to_owned())).label().is_some_and(|name| !name.is_empty()),
-            "{id} must expose a semantic input name");
+        assert!(
+            window
+                .find(SharedString::from(id.to_owned()))
+                .label()
+                .is_some_and(|name| !name.is_empty()),
+            "{id} must expose a semantic input name"
+        );
         window.press("secondary-a", cx);
         window.input(value, cx);
     });
@@ -88,6 +97,8 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
     std::fs::write(&extra, format!("{{\"type\":\"session\",\"version\":3,\"id\":\"managed-source\",\"timestamp\":\"{timestamp}\",\"cwd\":\"/isolated\"}}\n{{\"type\":\"model_usage\",\"id\":\"missing-cost\",\"timestamp\":\"{timestamp}\",\"provider\":\"fixture-provider\",\"model\":\"fixture-model\",\"usage\":{{\"input\":1000000,\"output\":2000000,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":3000000}}}}\n")).unwrap();
     cx.update(|cx| {
         gpui_kit::component::init(cx);
+        // Exercise form interactions at rest, not the native dialog's entrance transition.
+        cx.set_reduce_motion(true);
         let mut config = Config::default();
         config.agent_launch.insert(
             "omp".into(),
@@ -132,14 +143,38 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        for id in ["statistics-tile-tokens", "statistics-tile-cost", "statistics-tile-sessions", "statistics-analysis-metric"] {
-            assert!(window.find(id).visible(), "{id} must be visible in the first viewport");
+        for id in [
+            "statistics-tile-tokens",
+            "statistics-tile-cost",
+            "statistics-tile-sessions",
+            "statistics-analysis-metric",
+        ] {
+            assert!(
+                window.find(id).visible(),
+                "{id} must be visible in the first viewport"
+            );
         }
     });
     click(&app, &mut vcx, "statistics-tile-cost");
-    assert_eq!(app.read_with(&vcx, |app, _| app.active_settings().unwrap().statistics.analysis.metric), statistics::analysis::Metric::Cost);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| app
+            .active_settings()
+            .unwrap()
+            .statistics
+            .analysis
+            .metric),
+        statistics::analysis::Metric::Cost
+    );
     click(&app, &mut vcx, "statistics-tile-tokens");
-    assert_eq!(app.read_with(&vcx, |app, _| app.active_settings().unwrap().statistics.analysis.metric), statistics::analysis::Metric::Tokens);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| app
+            .active_settings()
+            .unwrap()
+            .statistics
+            .analysis
+            .metric),
+        statistics::analysis::Metric::Tokens
+    );
     app.update_in(&mut vcx, |app, window, cx| {
         window.focus(&app.active_settings().unwrap().focus_handle, cx)
     });
@@ -169,10 +204,10 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         |app, _| app.active_settings().unwrap().statistics.period == Period::Custom
     ));
     tab_to(&mut vcx, "statistics-apply");
-    vcx.simulate_keystrokes("enter");
+    vcx.update(|window, cx| window.press("enter", cx));
     settle(&app, &mut vcx);
     tab_to(&mut vcx, "statistics-refresh");
-    vcx.simulate_keystrokes("enter");
+    vcx.update(|window, cx| window.press("enter", cx));
     settle(&app, &mut vcx);
     reveal(&app, &mut vcx, "statistics-period");
     app.update_in(&mut vcx, |app, window, cx| {
@@ -181,7 +216,11 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
     tab_to(&mut vcx, "statistics-period");
     vcx.simulate_keystrokes("enter down down down down down enter");
     settle(&app, &mut vcx);
-    click(&app, &mut vcx, "statistics-manage-sources");
+    reveal(&app, &mut vcx, "statistics-manage-sources");
+    tab_to(&mut vcx, "statistics-manage-sources");
+    reveal(&app, &mut vcx, "statistics-manage-sources");
+    vcx.update(|window, cx| window.press("enter", cx));
+    vcx.run_until_parked();
     click(&app, &mut vcx, "statistics-add-source");
     reveal(&app, &mut vcx, "statistics-source-kind");
     vcx.simulate_keystrokes("shift-tab");
@@ -259,7 +298,11 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
             gpui_kit::component::Theme::update(cx, |t| t.font_size = px(18.));
         });
-        click(&app, &mut vcx, "statistics-manage-prices");
+        reveal(&app, &mut vcx, "statistics-manage-prices");
+        tab_to(&mut vcx, "statistics-manage-prices");
+        reveal(&app, &mut vcx, "statistics-manage-prices");
+        vcx.update(|window, cx| window.press("enter", cx));
+        vcx.run_until_parked();
         click(&app, &mut vcx, "statistics-add-price");
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();

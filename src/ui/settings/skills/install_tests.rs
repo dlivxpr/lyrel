@@ -77,7 +77,12 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     });
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        for id in ["skills-install-source", "skills-install-ref", "skills-install-subpath", "skills-registry-query"] {
+        for id in [
+            "skills-install-source",
+            "skills-install-ref",
+            "skills-install-subpath",
+            "skills-registry-query",
+        ] {
             assert!(window.find(id).label().is_some_and(|name| !name.is_empty()));
         }
         click_form(window, cx, "skills-install-scope");
@@ -301,7 +306,14 @@ fn installer_escape_returns_to_browsing_without_writes_in_a_narrow_window(cx: &m
         window.press("enter", cx);
         for _ in 0..24 {
             window.press("tab", cx);
-            assert!(app.read(cx).active_settings().unwrap().skills.modal_focus.contains_focused(window, cx));
+            assert!(
+                app.read(cx)
+                    .active_settings()
+                    .unwrap()
+                    .skills
+                    .modal_focus
+                    .contains_focused(window, cx)
+            );
         }
         window.press("escape", cx);
         assert_eq!(window.find("skills-install-open").focused(), Some(true));

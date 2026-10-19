@@ -596,12 +596,14 @@ impl UsagePage {
             page.restart_poll(cx);
             cx.notify();
         })];
-        subs.push(cx.subscribe_in(&cadence, window, |page, _, event, window, cx| {
-            if let SelectEvent::Confirm(Some(secs)) = event {
-                let secs = *secs;
-                page.work(window, cx, move |a| a.set_interval(secs));
-            }
-        }));
+        subs.push(
+            cx.subscribe_in(&cadence, window, |page, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(secs)) = event {
+                    let secs = *secs;
+                    page.work(window, cx, move |a| a.set_interval(secs));
+                }
+            }),
+        );
         subs.push(
             cx.subscribe_in(&provider, window, |page, _, event, window, cx| {
                 if let SelectEvent::Confirm(Some(provider)) = event {
@@ -1473,6 +1475,12 @@ fn button(
         .when(kind == BtnKind::Primary, |b| b.primary())
 }
 impl LyrelApp {
+    pub(super) fn usage_form_open(&self, cx: &gpui_kit::App) -> bool {
+        self.active_settings().is_some_and(|s| {
+            s.section == super::SettingsSection::Usage && s.usage.read(cx).edit.is_some()
+        })
+    }
+
     pub(super) fn cancel_usage_form(
         &mut self,
         window: &mut Window,
@@ -1498,6 +1506,13 @@ impl LyrelApp {
             .usage
             .clone()
             .into_any_element()
+    }
+    pub(super) fn render_usage_overlay(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui_kit::AnyElement> {
+        let page = self.active_settings()?.usage.clone();
+        page.update(cx, |page, cx| page.render_overlay(cx))
     }
     pub(super) fn render_usage_search_row(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         self.settings_row(

@@ -24,9 +24,9 @@ use std::{
 };
 mod install;
 mod maintenance;
-mod view;
 #[cfg(test)]
 mod test_host;
+mod view;
 
 #[cfg(test)]
 mod tests {
@@ -49,7 +49,12 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
-    pub(super) fn reveal(window: &mut Window, cx: &mut App, target: impl Into<SharedString>, region: &'static str) {
+    pub(super) fn reveal(
+        window: &mut Window,
+        cx: &mut App,
+        target: impl Into<SharedString>,
+        region: &'static str,
+    ) {
         let target = target.into();
         for _ in 0..50 {
             window.render_frame(cx);
@@ -60,7 +65,11 @@ mod tests {
                 return;
             }
             let delta = if center.y < bounds.top() { 160. } else { -160. };
-            window.scroll(region, gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(delta))), cx);
+            window.scroll(
+                region,
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(delta))),
+                cx,
+            );
         }
         panic!("{target} is not reachable through {region}");
     }
@@ -129,7 +138,10 @@ mod tests {
             window.render_frame(cx);
             assert!(window.find(SharedString::from(row_id(&path))).visible());
             window.click("skills-copy-path", cx);
-            assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some(path.to_string_lossy().as_ref()));
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().as_deref(),
+                Some(path.to_string_lossy().as_ref())
+            );
         });
         vcx.simulate_resize(gpui_kit::size(px(680.), px(560.)));
         vcx.update(|window, cx| {
@@ -296,7 +308,9 @@ impl LyrelApp {
             if matches!(event, InputEvent::Change) {
                 if let Some(s) = this.active_settings_mut() {
                     s.skills.page = 0;
-                    s.skills.list_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                    s.skills
+                        .list_scroll
+                        .set_offset(gpui_kit::point(px(0.), px(0.)));
                 }
                 cx.notify();
             }
@@ -563,7 +577,20 @@ impl LyrelApp {
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(skill.sources().iter().map(|source| t(source_key(source.kind()))).collect::<Vec<_>>().join(" · "))
+                .child(
+                    skill
+                        .sources()
+                        .iter()
+                        .map(|source| {
+                            format!(
+                                "{} · {}",
+                                source.agent().display_name(),
+                                t(source_key(source.kind()))
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                )
                 .into_any_element(),
             div()
                 .child(
@@ -573,13 +600,18 @@ impl LyrelApp {
                         .to_string(),
                 )
                 .into_any_element(),
-            skill_metadata_row(L10nKey::SkillsLocation, path.to_string_lossy().into_owned(), cx),
+            skill_metadata_row(
+                L10nKey::SkillsLocation,
+                path.to_string_lossy().into_owned(),
+                cx,
+            ),
             h_flex()
                 .flex_wrap()
                 .gap_2()
                 .child(
                     Button::new("skills-open-file")
-                        .small().ghost()
+                        .small()
+                        .ghost()
                         .label(t(L10nKey::SkillsOpenFile))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.skills_open_file(host_id, markdown_path.clone(), window, cx)
@@ -587,7 +619,8 @@ impl LyrelApp {
                 )
                 .child(
                     Button::new("skills-copy-path")
-                        .small().ghost()
+                        .small()
+                        .ghost()
                         .label(t(L10nKey::SkillsCopyPath))
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
@@ -597,7 +630,8 @@ impl LyrelApp {
                 )
                 .child(
                     Button::new("skills-browse-files")
-                        .small().ghost()
+                        .small()
+                        .ghost()
                         .label(t(L10nKey::SkillsBrowseFiles))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if host_id.is_local() {
@@ -656,12 +690,37 @@ impl LyrelApp {
                 ))
                 .into_any_element(),
         );
-        if !skill.sources().iter().any(|source| matches!(source.kind(), SourceKind::UserShared | SourceKind::ProjectShared)) {
-            content.push(div().text_sm().text_color(cx.theme().muted_foreground).child(t(L10nKey::SkillsReadonly)).into_any_element());
+        if !skill.sources().iter().any(|source| {
+            matches!(
+                source.kind(),
+                SourceKind::UserShared | SourceKind::ProjectShared
+            )
+        }) {
+            content.push(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(L10nKey::SkillsReadonly))
+                    .into_any_element(),
+            );
         }
-        if let Some(snapshot) = self.active_settings().and_then(|s| s.skills.snapshot.as_ref()) {
-            let time = snapshot.scanned_at().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs().to_string();
-            content.push(div().text_xs().text_color(cx.theme().muted_foreground).child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)])).into_any_element());
+        if let Some(snapshot) = self
+            .active_settings()
+            .and_then(|s| s.skills.snapshot.as_ref())
+        {
+            let time = snapshot
+                .scanned_at()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .to_string();
+            content.push(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)]))
+                    .into_any_element(),
+            );
         }
         if let Some(markdown) = skill.markdown() {
             let safe =
@@ -672,6 +731,11 @@ impl LyrelApp {
                     safe,
                 )
                 .selectable(true)
+                .markdown_extensions(
+                    gpui_kit::component::text::MarkdownExtensions::default()
+                        .frontmatter()
+                        .plugin(gpui_kit::component::text::FrontmatterPlugin::new()),
+                )
                 .markdown_block_parser(|node, parse| {
                     (!safe_node(node)).then(|| {
                         let source = parse.node_source(node).unwrap_or_default().to_string();
@@ -685,7 +749,16 @@ impl LyrelApp {
                 .into_any_element(),
             );
         }
-        content.push(div().pt_3().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground).child(t(L10nKey::SkillsScope)).into_any_element());
+        content.push(
+            div()
+                .pt_3()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(t(L10nKey::SkillsScope))
+                .into_any_element(),
+        );
         for source in skill.sources() {
             content.push(
                 div()
@@ -789,8 +862,18 @@ impl LyrelApp {
     }
 }
 fn skill_metadata_row(key: L10nKey, value: String, cx: &App) -> AnyElement {
-    h_flex().items_start().gap_3().min_w_0()
-        .child(div().w_24().flex_none().text_xs().text_color(cx.theme().muted_foreground).child(t(key)))
+    h_flex()
+        .items_start()
+        .gap_3()
+        .min_w_0()
+        .child(
+            div()
+                .w_24()
+                .flex_none()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(t(key)),
+        )
         .child(div().flex_1().min_w_0().text_sm().truncate().child(value))
         .into_any_element()
 }

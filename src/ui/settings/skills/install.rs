@@ -208,9 +208,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(s) = self.active_settings_mut().filter(|s| {
-            s.section == SettingsSection::Skills
-                && s.menu.is_none()
-                && s.skills.install.open
+            s.section == SettingsSection::Skills && s.menu.is_none() && s.skills.install.open
         }) else {
             return false;
         };
@@ -218,12 +216,18 @@ impl LyrelApp {
             return true;
         }
         if s.skills.install.cancel_review() {
-            s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+            s.skills
+                .modal_scroll
+                .set_offset(gpui_kit::point(px(0.), px(0.)));
             window.focus(&s.skills.install.source.read(cx).focus_handle(cx), cx);
         } else {
             s.skills.install.open = false;
             s.skills.install.invalidate();
-            let focus = s.skills.return_focus.take().unwrap_or_else(|| s.skills.focus.clone());
+            let focus = s
+                .skills
+                .return_focus
+                .take()
+                .unwrap_or_else(|| s.skills.focus.clone());
             window.focus(&focus, cx);
         }
         cx.notify();
@@ -515,8 +519,12 @@ impl LyrelApp {
         cx.notify();
     }
     pub(super) fn render_skills_install_trigger(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(s) = self.active_settings() else { return div().into_any_element(); };
-        Button::new("skills-install-open").small().ghost()
+        let Some(s) = self.active_settings() else {
+            return div().into_any_element();
+        };
+        Button::new("skills-install-open")
+            .small()
+            .ghost()
             .icon(gpui_kit::component::IconName::Plus)
             .accessibility_label(format!("{}…", t(L10nKey::SkillsInstallTitle)))
             .tooltip(format!("{}…", t(L10nKey::SkillsInstallTitle)))
@@ -524,19 +532,27 @@ impl LyrelApp {
             .on_click(cx.listener(|app, _, window, cx| {
                 if let Some(s) = app.active_settings_mut() {
                     s.skills.return_focus = window.focused(cx);
-                    s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                    s.skills
+                        .modal_scroll
+                        .set_offset(gpui_kit::point(px(0.), px(0.)));
                     s.skills.install.open = true;
                     window.focus(&s.skills.install.source.read(cx).focus_handle(cx), cx);
                 }
                 cx.notify();
-            })).into_any_element()
+            }))
+            .into_any_element()
     }
     pub(super) fn render_skills_install(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(s) = self.active_settings() else { return div().into_any_element(); };
+        let Some(s) = self.active_settings() else {
+            return div().into_any_element();
+        };
         let state = &s.skills.install;
         let mut footer = h_flex().gap_2().child(
-            Button::new("skills-install-browse").small().ghost()
-                .label(t(L10nKey::SkillsInstallBrowse)).disabled(state.committing)
+            Button::new("skills-install-browse")
+                .small()
+                .ghost()
+                .label(t(L10nKey::SkillsInstallBrowse))
+                .disabled(state.committing)
                 .on_click(cx.listener(|app, _, window, cx| {
                     if let Some(s) = app.active_settings_mut() {
                         s.skills.install.open = false;
@@ -659,29 +675,41 @@ impl LyrelApp {
                 }
                 body.push(row.into_any_element());
             }
-            footer = footer.child(
-                Button::new("skills-install-cancel").small().ghost()
-                    .label(t(L10nKey::SkillsInstallCancel)).disabled(state.busy)
-                    .on_click(cx.listener(|app, _, window, cx| {
-                        if let Some(s) = app.active_settings_mut() {
-                            s.skills.install.cancel_review();
-                            s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
-                            window.focus(&s.skills.install.source.read(cx).focus_handle(cx), cx);
-                        }
-                        cx.notify();
-                    })),
-            ).child(
-                Button::new("skills-install-confirm").small()
-                    .label(t(L10nKey::SkillsInstallConfirm)).disabled(state.busy)
-                    .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
-                    .on_click(cx.listener(|app, _, window, cx| {
-                        if let Some(s) = app.active_settings() {
-                            s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
-                            window.focus(&s.skills.modal_focus, cx);
-                        }
-                        app.confirm_public_install(cx);
-                    })),
-            );
+            footer = footer
+                .child(
+                    Button::new("skills-install-cancel")
+                        .small()
+                        .ghost()
+                        .label(t(L10nKey::SkillsInstallCancel))
+                        .disabled(state.busy)
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            if let Some(s) = app.active_settings_mut() {
+                                s.skills.install.cancel_review();
+                                s.skills
+                                    .modal_scroll
+                                    .set_offset(gpui_kit::point(px(0.), px(0.)));
+                                window
+                                    .focus(&s.skills.install.source.read(cx).focus_handle(cx), cx);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("skills-install-confirm")
+                        .small()
+                        .label(t(L10nKey::SkillsInstallConfirm))
+                        .disabled(state.busy)
+                        .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            if let Some(s) = app.active_settings() {
+                                s.skills
+                                    .modal_scroll
+                                    .set_offset(gpui_kit::point(px(0.), px(0.)));
+                                window.focus(&s.skills.modal_focus, cx);
+                            }
+                            app.confirm_public_install(cx);
+                        })),
+                );
         } else {
             for (label, input, id) in [
                 (
@@ -700,7 +728,13 @@ impl LyrelApp {
                     v_flex()
                         .gap_1()
                         .child(t(label))
-                        .child(Input::new(input).id(id).small().aria_label(t(label)).disabled(state.busy))
+                        .child(
+                            Input::new(input)
+                                .id(id)
+                                .small()
+                                .aria_label(t(label))
+                                .disabled(state.busy),
+                        )
                         .into_any_element(),
                 );
             }
@@ -799,14 +833,21 @@ impl LyrelApp {
                     );
                 }
                 footer = footer.child(
-                    Button::new("skills-install-review").small()
+                    Button::new("skills-install-review")
+                        .small()
                         .label(t(L10nKey::SkillsInstallReview))
-                        .disabled(state.busy || state.selected.is_empty() || (state.project_scope && s.skills.project.is_none()))
+                        .disabled(
+                            state.busy
+                                || state.selected.is_empty()
+                                || (state.project_scope && s.skills.project.is_none()),
+                        )
                         .custom(crate::ui::theme::inverted_button(cx.theme().popover, cx))
                         .on_click(cx.listener(|app, _, window, cx| {
                             app.review_public_install(cx);
                             if let Some(s) = app.active_settings() {
-                                s.skills.modal_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
+                                s.skills
+                                    .modal_scroll
+                                    .set_offset(gpui_kit::point(px(0.), px(0.)));
                                 window.focus(&s.skills.modal_focus, cx);
                             }
                         })),
@@ -880,9 +921,24 @@ impl LyrelApp {
                 );
             }
         }
-        for key in [L10nKey::SkillsInstallSafety, L10nKey::SkillsGithubAuthorization] {
-            body.push(div().text_sm().text_color(cx.theme().muted_foreground).child(t(key)).into_any_element());
+        for key in [
+            L10nKey::SkillsInstallSafety,
+            L10nKey::SkillsGithubAuthorization,
+        ] {
+            body.push(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(key))
+                    .into_any_element(),
+            );
         }
-        self.render_skills_modal("skills-install-dialog", t(L10nKey::SkillsInstallTitle).into(), v_flex().gap_3().min_w_0().children(body).into_any_element(), footer.into_any_element(), cx)
+        self.render_skills_modal(
+            "skills-install-dialog",
+            t(L10nKey::SkillsInstallTitle).into(),
+            v_flex().gap_3().min_w_0().children(body).into_any_element(),
+            footer.into_any_element(),
+            cx,
+        )
     }
 }

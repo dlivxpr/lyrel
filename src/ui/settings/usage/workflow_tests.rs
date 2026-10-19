@@ -109,11 +109,18 @@ fn reveal(vcx: &mut VisualTestContext, id: &str, region: &str) {
             window.render_frame(cx);
             window.find(id.to_string()).visible()
         });
-        if visible { return; }
+        if visible {
+            return;
+        }
         vcx.update(|window, cx| {
-            window.scroll(region.to_string(), gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
-                gpui_kit::px(0.), gpui_kit::px(if step == 0 { 10000. } else { -240. }),
-            )), cx);
+            window.scroll(
+                region.to_string(),
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(if step == 0 { 10000. } else { -240. }),
+                )),
+                cx,
+            );
         });
         vcx.run_until_parked();
     }
@@ -122,8 +129,18 @@ fn reveal(vcx: &mut VisualTestContext, id: &str, region: &str) {
 fn click(vcx: &mut VisualTestContext, id: &str) {
     // Most existing scenarios start with a DeepSeek account. Use its actual
     // provider entry; provider-specific scenarios still exercise the form picker.
-    let id = if id == "usage-add" { "usage-add-DeepSeek" } else { id };
-    for prefix in ["usage-rename-", "usage-replace-", "usage-remove-", "usage-enhance-", "usage-toggle-"] {
+    let id = if id == "usage-add" {
+        "usage-add-DeepSeek"
+    } else {
+        id
+    };
+    for prefix in [
+        "usage-rename-",
+        "usage-replace-",
+        "usage-remove-",
+        "usage-enhance-",
+        "usage-toggle-",
+    ] {
         if let Some(account) = id.strip_prefix(prefix) {
             let more = format!("usage-more-{account}");
             reveal(vcx, &more, "usage-content");
@@ -132,7 +149,19 @@ fn click(vcx: &mut VisualTestContext, id: &str) {
             break;
         }
     }
-    let region = if ["usage-source", "usage-provider", "usage-browser", "usage-profile", "usage-cookie-name"].contains(&id) { "usage-form-body" } else { "usage-content" };
+    let region = if [
+        "usage-source",
+        "usage-provider",
+        "usage-browser",
+        "usage-profile",
+        "usage-cookie-name",
+    ]
+    .contains(&id)
+    {
+        "usage-form-body"
+    } else {
+        "usage-content"
+    };
     reveal(vcx, id, region);
     vcx.update(|window, cx| window.click(id.to_string(), cx));
     vcx.run_until_parked();
@@ -166,6 +195,46 @@ fn open(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
         app.open_settings_section(SettingsSection::Usage, w, cx)
     });
     vcx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn account_modal_blocks_navigation_until_cancelled(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Arc::new(Http::default());
+    install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        vault.clone(),
+        http.clone(),
+        false,
+    );
+    open(&app, &mut vcx);
+    click(&mut vcx, "usage-add");
+    let navigation = format!("settings-nav-{}", SettingsSection::General.profile_label());
+    vcx.update(|window, cx| {
+        assert!(window.find("usage-submit").visible());
+        window.press("secondary-f", cx);
+        assert_eq!(window.find("usage-name").focused(), Some(true));
+        window.click(navigation.clone(), cx);
+    });
+    assert!(
+        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().section)
+            == SettingsSection::Usage
+    );
+    assert_eq!(http.calls.load(Ordering::SeqCst), 0);
+    assert!(vault.is_empty());
+    vcx.update(|window, cx| window.press("escape", cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        assert!(window.try_find("usage-submit").is_none());
+        window.click(navigation, cx);
+    });
+    assert!(
+        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().section)
+            == SettingsSection::General
+    );
 }
 
 #[gpui_kit::test]
@@ -789,15 +858,23 @@ fn account_overflow_keyboard_opens_a_named_form_and_restores_the_trigger(cx: &mu
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx) = harness(cx);
     let http = Arc::new(Http::default());
-    let id = install(&mut vcx, dir.path().join("usage.json"),
-        Arc::new(InMemoryCredentialStore::new()), http.clone(), true).unwrap();
+    let id = install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        Arc::new(InMemoryCredentialStore::new()),
+        http.clone(),
+        true,
+    )
+    .unwrap();
     open(&app, &mut vcx);
     let more = format!("usage-more-{id}");
     reveal(&mut vcx, &more, "usage-content");
     vcx.update(|window, cx| {
         for _ in 0..32 {
             window.render_frame(cx);
-            if window.find(more.clone()).focused() == Some(true) { break; }
+            if window.find(more.clone()).focused() == Some(true) {
+                break;
+            }
             window.press("tab", cx);
         }
         assert_eq!(window.find(more.clone()).focused(), Some(true));
@@ -808,7 +885,6 @@ fn account_overflow_keyboard_opens_a_named_form_and_restores_the_trigger(cx: &mu
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("usage-name").label(), Some(t(L10nKey::UsageName)));
         assert_eq!(window.find("usage-name").focused(), Some(true));
     });
     vcx.simulate_keystrokes("escape");

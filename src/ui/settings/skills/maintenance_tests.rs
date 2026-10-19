@@ -79,7 +79,12 @@ pub(crate) fn lifecycle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, proj
     });
     cx.update(|window, cx| {
         window.render_frame(cx);
-        super::super::tests::reveal(window, cx, SharedString::from(row_id(&selected)), "skills-list-scroll");
+        super::super::tests::reveal(
+            window,
+            cx,
+            SharedString::from(row_id(&selected)),
+            "skills-list-scroll",
+        );
         window.click(SharedString::from(row_id(&selected)), cx);
     });
     cx.update(|window, cx| {
