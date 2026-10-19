@@ -54,6 +54,13 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsNoSource => "无可核实的来源记录",
         L10nKey::SkillsNativeGuide => "原生文档",
         L10nKey::SkillsBack => "返回",
+        L10nKey::SkillsCount => "{shown} / {total} 项技能",
+        L10nKey::SkillsSelectSkill => "选择技能以查看详情",
+        L10nKey::SkillsLocation => "安装位置",
+        L10nKey::SkillsReadonly => "智能体私有安装 · 只读",
+        L10nKey::SkillsNextPage => "下一页",
+        L10nKey::SkillsMachine => "机器",
+        L10nKey::SkillsMaintenanceTitle => "审查技能变更",
         L10nKey::SkillsNoMachine => "所选机器已断开。请重新连接后刷新，目标不会随工作区改变。",
         L10nKey::SkillsReadError => "无法读取所选作用域：{error}",
         L10nKey::SkillsScope => "发现位置与原生状态",
@@ -62,7 +69,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SkillsFileLimit => "（不完整；链接或扫描上限）",
         L10nKey::SkillsCopied => "已复制路径",
-        L10nKey::SkillsInstallTitle => "发现并安装技能",
+        L10nKey::SkillsInstallTitle => "安装技能",
         L10nKey::SkillsGithubSource => "GitHub 仓库",
         L10nKey::SkillsGithubHint => "owner/repo 或 https://github.com/owner/repo/tree/ref/path",
         L10nKey::SkillsRef => "分支、标签或 commit（可选）",
@@ -90,11 +97,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SkillsGithubRateLimited => "GitHub 请求已限流。请等待额度恢复后重试。",
         L10nKey::SkillsGithubNetwork => "无法连接 GitHub。请检查桌面本机网络和代理后重试。",
-        L10nKey::SkillsInstallReview => "审查安装…",
-        L10nKey::SkillsInstallConfirm => "安装所选技能",
+        L10nKey::SkillsInstallReview => "审查…",
+        L10nKey::SkillsInstallConfirm => "安装",
         L10nKey::SkillsInstallReplace => "替换此现有目录",
         L10nKey::SkillsInstallKeep => "保留现有内容（默认）",
-        L10nKey::SkillsInstallCancel => "取消安装",
+        L10nKey::SkillsInstallCancel => "返回编辑",
         L10nKey::SkillsInstallWorking => "正在获取或写入所选技能…",
         L10nKey::SkillsInstallEmpty => "没有发现候选。请尝试其他仓库、ref、子路径或搜索词。",
         L10nKey::SkillsInstallSafety => {
@@ -105,7 +112,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsInstallDestination => "审查固定目标与来源锁",
         L10nKey::SkillsInstallSelect => "选择要安装的技能",
         L10nKey::SkillsInstallCandidates => "候选：{count}",
-        L10nKey::SkillsInstallBrowse => "浏览已安装技能",
+        L10nKey::SkillsInstallBrowse => "关闭",
         L10nKey::SkillsInstallError => "无法安装 {name} — {path}：{error}",
         L10nKey::SkillsInstallRefResolved => "已解析来源：{source}",
         L10nKey::SkillsCheckUpdate => "检查更新",
@@ -122,7 +129,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "无法核实本地基线，默认保留现有内容。替换不会合并你的改动。"
         }
         L10nKey::SkillsUpdateReplace => "替换此安装并丢弃其当前内容",
-        L10nKey::SkillsUpdateConfirm => "替换安装",
+        L10nKey::SkillsUpdateConfirm => "替换",
         L10nKey::SkillsUpdateApplied => "已更新安装：{path}",
         L10nKey::SkillsRemoveReview => "移除安装…",
         L10nKey::SkillsRemoveImpact => {
@@ -130,10 +137,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SkillsRemoveLinks => "精确关联的 symbolic link／junction",
         L10nKey::SkillsRemoveNoLinks => "在所选原生目录中没有找到可证明关联的链接。",
-        L10nKey::SkillsRemoveConfirm => "移除共享安装",
+        L10nKey::SkillsRemoveConfirm => "移除",
         L10nKey::SkillsRemoved => "已移除",
         L10nKey::SkillsMaintenanceWorking => "正在检查固定安装或执行已确认的变更…",
-        L10nKey::SkillsMaintenanceCancel => "取消，保留文件、来源记录与链接",
+        L10nKey::SkillsMaintenanceCancel => "关闭",
         L10nKey::SkillsMaintenanceRetained => "已保留：{reason}",
         L10nKey::SkillsMaintenanceFailed => "失败：{error}",
         L10nKey::SkillsMaintenanceUnknownOutcome => {
