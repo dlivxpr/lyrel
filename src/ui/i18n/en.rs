@@ -52,12 +52,19 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsCopyPath => "Copy path",
         L10nKey::SkillsBrowseFiles => "Browse files…",
         L10nKey::SkillsOrigin => "Reported source",
-        L10nKey::SkillsUpdated => "Updated (UTC Unix seconds)",
+        L10nKey::SkillsUpdated => "Updated (UTC seconds)",
         L10nKey::SkillsCompanions => "Companion files: {files}; bytes: {bytes}{limited}",
         L10nKey::SkillsInvocation => "Argument hint",
         L10nKey::SkillsNoSource => "No verifiable source recorded",
         L10nKey::SkillsNativeGuide => "Native documentation",
         L10nKey::SkillsBack => "Back",
+        L10nKey::SkillsCount => "{shown} of {total} skills",
+        L10nKey::SkillsSelectSkill => "Select a skill to view its details",
+        L10nKey::SkillsLocation => "Location",
+        L10nKey::SkillsReadonly => "Agent-private installation · readonly",
+        L10nKey::SkillsNextPage => "Next page",
+        L10nKey::SkillsMachine => "Machine",
+        L10nKey::SkillsMaintenanceTitle => "Review skill changes",
         L10nKey::SkillsNoMachine => {
             "Selected machine is disconnected. Reconnect it and refresh. The target has not changed."
         }
@@ -68,7 +75,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SkillsFileLimit => " (incomplete; links or scan limits)",
         L10nKey::SkillsCopied => "Path copied",
-        L10nKey::SkillsInstallTitle => "Discover and install skills",
+        L10nKey::SkillsInstallTitle => "Install skills",
         L10nKey::SkillsGithubSource => "GitHub repository",
         L10nKey::SkillsGithubHint => "owner/repo or https://github.com/owner/repo/tree/ref/path",
         L10nKey::SkillsRef => "Branch, tag or commit (optional)",
@@ -100,11 +107,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsGithubNetwork => {
             "Could not reach GitHub. Check this desktop’s network and proxy, then retry."
         }
-        L10nKey::SkillsInstallReview => "Review installation…",
-        L10nKey::SkillsInstallConfirm => "Install selected skills",
+        L10nKey::SkillsInstallReview => "Review…",
+        L10nKey::SkillsInstallConfirm => "Install",
         L10nKey::SkillsInstallReplace => "Replace this existing directory",
         L10nKey::SkillsInstallKeep => "Keep existing content (default)",
-        L10nKey::SkillsInstallCancel => "Cancel installation",
+        L10nKey::SkillsInstallCancel => "Back to editing",
         L10nKey::SkillsInstallWorking => "Fetching or writing selected skills…",
         L10nKey::SkillsInstallEmpty => {
             "No candidates found. Try another repository, ref, subpath or search query."
@@ -117,7 +124,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsInstallDestination => "Review the fixed destination and source lock",
         L10nKey::SkillsInstallSelect => "Select skills to install",
         L10nKey::SkillsInstallCandidates => "Candidates: {count}",
-        L10nKey::SkillsInstallBrowse => "Browse installed skills",
+        L10nKey::SkillsInstallBrowse => "Close",
         L10nKey::SkillsInstallError => "Could not install {name} — {path}: {error}",
         L10nKey::SkillsInstallRefResolved => "Resolved source: {source}",
         L10nKey::SkillsCheckUpdate => "Check for updates",
@@ -140,7 +147,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "The local baseline cannot be verified. Keep existing content by default; replacement does not merge your changes."
         }
         L10nKey::SkillsUpdateReplace => "Replace this installation and discard its current content",
-        L10nKey::SkillsUpdateConfirm => "Replace installation",
+        L10nKey::SkillsUpdateConfirm => "Replace",
         L10nKey::SkillsUpdateApplied => "Updated installation: {path}",
         L10nKey::SkillsRemoveReview => "Remove installation…",
         L10nKey::SkillsRemoveImpact => {
@@ -150,12 +157,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsRemoveNoLinks => {
             "No proven associated links were found in the selected native roots."
         }
-        L10nKey::SkillsRemoveConfirm => "Remove shared installation",
+        L10nKey::SkillsRemoveConfirm => "Remove",
         L10nKey::SkillsRemoved => "Removed",
         L10nKey::SkillsMaintenanceWorking => {
             "Checking the fixed installation or applying the confirmed change…"
         }
-        L10nKey::SkillsMaintenanceCancel => "Cancel — keep files, source record and links",
+        L10nKey::SkillsMaintenanceCancel => "Close",
         L10nKey::SkillsMaintenanceRetained => "Kept: {reason}",
         L10nKey::SkillsMaintenanceFailed => "Failed: {error}",
         L10nKey::SkillsMaintenanceUnknownOutcome => {
