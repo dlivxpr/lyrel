@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     io,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 const MAX_FILES: usize = 1_000;
@@ -25,40 +25,52 @@ pub enum InstallScope {
 #[derive(Clone, Debug)]
 pub struct InstallTarget {
     scope: InstallScope,
+    host: HostId,
     anchor: PathBuf,
     shared_root: PathBuf,
     lock_path: PathBuf,
 }
 impl InstallTarget {
-    /// Selectors are supplied by the caller, never read from process environment.
-    /// A nonempty relative XDG_STATE_HOME is resolved against the selected cwd,
-    /// matching the CLI, not against home.
-    pub fn user(home: PathBuf, xdg_state_home: Option<PathBuf>, cwd: PathBuf) -> io::Result<Self> {
-        validate_selector(&home)?;
+    /// Selectors belong to this Host, never to the desktop process environment.
+    /// Relative XDG_STATE_HOME requires an explicit absolute cwd on this Host.
+    pub fn user(
+        host: &dyn Host,
+        home: PathBuf,
+        xdg_state_home: Option<PathBuf>,
+        cwd: PathBuf,
+    ) -> io::Result<Self> {
+        let home = normalize_selector(host, &home, false)?;
         let lock_path = if let Some(state) = xdg_state_home.filter(|p| !p.as_os_str().is_empty()) {
-            let state = if state.is_absolute() {
+            let state = if host.is_absolute(&state) {
                 state
             } else {
-                validate_selector(&cwd)?;
-                cwd.join(state)
+                let cwd = normalize_selector(host, &cwd, false)?;
+                let state = path_text(&state)?;
+                if host.separator() == '\\' && (state.contains(':') || state.starts_with(['/', '\\'])) {
+                    return Err(invalid("state selector must be fully qualified or relative to the selected Host cwd"));
+                }
+                host.join(&cwd, state)
             };
-            normalize_selector(&state)?.join("skills/.skill-lock.json")
+            let state = normalize_selector(host, &state, true)?;
+            host.join(&host.join(&state, "skills"), ".skill-lock.json")
         } else {
-            home.join(".agents/.skill-lock.json")
+            host.join(&host.join(&home, ".agents"), ".skill-lock.json")
         };
         Ok(Self {
             scope: InstallScope::User,
-            shared_root: home.join(".agents/skills"),
+            host: host.id(),
+            shared_root: host.join(&host.join(&home, ".agents"), "skills"),
             anchor: home,
             lock_path,
         })
     }
-    pub fn project(project: PathBuf) -> io::Result<Self> {
-        validate_selector(&project)?;
+    pub fn project(host: &dyn Host, project: PathBuf) -> io::Result<Self> {
+        let project = normalize_selector(host, &project, false)?;
         Ok(Self {
             scope: InstallScope::Project,
-            shared_root: project.join(".agents/skills"),
-            lock_path: project.join("skills-lock.json"),
+            host: host.id(),
+            shared_root: host.join(&host.join(&project, ".agents"), "skills"),
+            lock_path: host.join(&project, "skills-lock.json"),
             anchor: project,
         })
     }
@@ -164,6 +176,9 @@ pub fn preview_install(
 ) -> io::Result<InstallPreview> {
     crate::host::guard_off_ui();
     check_host(host)?;
+    if host.id() != target.host {
+        return Err(invalid("installation target belongs to another Host"));
+    }
     if !host.is_absolute(&target.anchor)
         || !host.is_absolute(&target.shared_root)
         || !host.is_absolute(&target.lock_path)
@@ -224,8 +239,8 @@ pub fn preview_install(
     })
 }
 
-/// A missing decision means Keep, never implicit overwrite. Each successful item
-/// commits its content and source record together; failed items are rolled back.
+/// A missing decision keeps the item. Content and source records are staged;
+/// incomplete rollback explicitly identifies retained content and recovery paths.
 pub fn apply_install(
     host: &dyn Host,
     preview: InstallPreview,
@@ -352,42 +367,98 @@ fn invalid(message: impl Into<String>) -> io::Error {
 fn changed(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, message)
 }
-fn validate_selector(path: &Path) -> io::Result<()> {
-    if path.as_os_str().is_empty()
-        || path
-            .components()
-            .any(|p| matches!(p, Component::ParentDir | Component::CurDir))
-    {
-        return Err(invalid(
-            "home/project selectors must be explicit paths without dot segments",
-        ));
+fn path_text(path: &Path) -> io::Result<&str> {
+    let text = path.to_str().ok_or_else(|| invalid("Host path must be UTF-8"))?;
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return Err(invalid("Host path must be nonempty and contain no control characters"));
     }
-    Ok(())
+    Ok(text)
 }
-fn normalize_selector(path: &Path) -> io::Result<PathBuf> {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => (),
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err(invalid("state selector escapes its filesystem root"));
+fn is_separator(host: &dyn Host, character: char) -> bool {
+    character == '/' || (host.separator() == '\\' && character == '\\')
+}
+/// Locate a fully qualified Host root without asking the client's Path parser.
+/// Drive-relative and Windows current-drive roots are deliberately not selectors.
+fn root_len(host: &dyn Host, text: &str) -> io::Result<usize> {
+    if !host.is_absolute(Path::new(text)) {
+        return Err(invalid("installation selectors must be absolute on the selected Host"));
+    }
+    if host.separator() != '\\' {
+        return text.starts_with('/').then_some(1).ok_or_else(|| invalid("invalid Host root"));
+    }
+    let bytes = text.as_bytes();
+    let separator = |byte: u8| matches!(byte, b'/' | b'\\');
+    let drive = |offset: usize| {
+        bytes.get(offset).is_some_and(u8::is_ascii_alphabetic)
+            && bytes.get(offset + 1) == Some(&b':')
+            && bytes.get(offset + 2).is_some_and(|byte| separator(*byte))
+    };
+    if drive(0) {
+        return Ok(3);
+    }
+    if bytes.len() < 2 || !separator(bytes[0]) || !separator(bytes[1]) {
+        return Err(invalid("Windows selectors require a drive or UNC share root"));
+    }
+    let start = if text.starts_with(r"\\?\") {
+        if drive(4) { return Ok(7); }
+        if text.get(4..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC\\")) { 8 }
+        else { return Err(invalid("unsupported Windows device path")); }
+    } else { 2 };
+    let mut parts = text[start..].splitn(3, |c| is_separator(host, c));
+    let server = parts.next().unwrap_or("");
+    let share = parts.next().unwrap_or("");
+    if server.is_empty() || share.is_empty() || [server, share].iter().any(|part| matches!(*part, "." | "..") || part.contains(':')) {
+        return Err(invalid("Windows selectors require an explicit UNC server and share"));
+    }
+    let end = start + server.len() + 1 + share.len();
+    Ok(end + usize::from(bytes.get(end).is_some_and(|byte| separator(*byte))))
+}
+fn normalize_selector(host: &dyn Host, path: &Path, allow_dot: bool) -> io::Result<PathBuf> {
+    let text = path_text(path)?;
+    let root = root_len(host, text)?;
+    let mut parts = Vec::new();
+    for part in text[root..].split(|c| is_separator(host, c)).filter(|part| !part.is_empty()) {
+        match part {
+            "." if allow_dot => (),
+            ".." if allow_dot && !parts.is_empty() => { parts.pop(); }
+            "." | ".." => return Err(invalid("selector contains dot segments or escapes its filesystem root")),
+            part => {
+                if host.separator() == '\\' && (part.contains(':') || part.ends_with(['.', ' '])) {
+                    return Err(invalid("unsafe Windows selector segment"));
                 }
+                parts.push(part);
             }
-            part => normalized.push(part.as_os_str()),
         }
     }
-    Ok(normalized)
+    Ok(parts.into_iter().fold(PathBuf::from(&text[..root]), |base, part| host.join(&base, part)))
+}
+fn parent_and_name<'a>(host: &dyn Host, path: &'a Path) -> io::Result<Option<(PathBuf, &'a str)>> {
+    let text = path_text(path)?;
+    let root = root_len(host, text)?;
+    let text = text.trim_end_matches(|c| is_separator(host, c));
+    if text.len() <= root { return Ok(None); }
+    let index = text.rfind(|c| is_separator(host, c)).ok_or_else(|| invalid("Host path has no parent"))?;
+    Ok(Some((PathBuf::from(&text[..index.max(root)]), &text[index + 1..])))
+}
+fn ancestors(host: &dyn Host, path: &Path) -> io::Result<Vec<PathBuf>> {
+    let text = path_text(path)?;
+    let root = root_len(host, text)?;
+    let mut chain = vec![PathBuf::from(&text[..root])];
+    for part in text[root..].split(|c| is_separator(host, c)).filter(|part| !part.is_empty()) {
+        if matches!(part, "." | "..") { return Err(invalid("unexpected Host dot segment")); }
+        chain.push(host.join(chain.last().unwrap(), part));
+    }
+    Ok(chain)
 }
 /// Host::stat follows broken links on some peers. Read the parent entry as well,
 /// so a dangling link is never confused with an absent destination.
 fn safe_meta(host: &dyn Host, path: &Path) -> io::Result<Option<Meta>> {
-    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
-        match host.read_dir(parent, None) {
+    if let Some((parent, name)) = parent_and_name(host, path)? {
+        match host.read_dir(&parent, None) {
             Ok(entries) => {
                 if entries
                     .iter()
-                    .any(|e| e.name == name.to_string_lossy() && e.is_symlink)
+                    .any(|e| (e.name == name || (host.separator() == '\\' && e.name.eq_ignore_ascii_case(name))) && e.is_symlink)
                 {
                     return Err(invalid(format!("refusing linked path: {}", path.display())));
                 }
@@ -406,12 +477,8 @@ fn safe_meta(host: &dyn Host, path: &Path) -> io::Result<Option<Meta>> {
     }
 }
 fn check_ancestors(host: &dyn Host, path: &Path) -> io::Result<()> {
-    let chain: Vec<_> = path.ancestors().collect();
-    for ancestor in chain.into_iter().rev() {
-        if ancestor.as_os_str().is_empty() {
-            continue;
-        }
-        if let Some(meta) = safe_meta(host, ancestor)? {
+    for ancestor in ancestors(host, path)? {
+        if let Some(meta) = safe_meta(host, &ancestor)? {
             if ancestor != path && !meta.is_dir {
                 return Err(invalid(format!(
                     "ancestor is not a directory: {}",
@@ -426,7 +493,7 @@ fn validate_relative(path: &Path) -> io::Result<String> {
     let value = path
         .to_str()
         .ok_or_else(|| invalid("skill file path must be UTF-8"))?;
-    if value.is_empty() || value.contains('\\') || path.is_absolute() {
+    if value.is_empty() || value.contains('\\') || value.starts_with('/') {
         return Err(invalid("skill file path must be a relative portable path"));
     }
     for part in value.split('/') {
@@ -668,8 +735,8 @@ fn ensure_directory(
 ) -> io::Result<()> {
     check_ancestors(host, directory)?;
     let mut missing = Vec::new();
-    for ancestor in directory.ancestors() {
-        if let Some(meta) = safe_meta(host, ancestor)? {
+    for ancestor in ancestors(host, directory)?.into_iter().rev() {
+        if let Some(meta) = safe_meta(host, &ancestor)? {
             if !meta.is_dir {
                 return Err(invalid("installation parent is not a directory"));
             }
@@ -743,8 +810,9 @@ fn merge_lock(
     Ok(bytes)
 }
 fn excluded(path: &Path) -> bool {
-    path.components().any(|component| matches!(component, Component::Normal(name) if name == ".git" || name == "__pycache__" || name == "__pypackages__"))
-        || path.file_name().is_some_and(|name| name == "metadata.json")
+    let value = path.to_str().unwrap_or("");
+    value.split('/').any(|name| matches!(name, ".git" | "__pycache__" | "__pypackages__"))
+        || value.rsplit('/').next() == Some("metadata.json")
 }
 fn install_one(
     host: &dyn Host,
@@ -754,6 +822,7 @@ fn install_one(
     now: &str,
     warnings: &mut Vec<String>,
 ) -> io::Result<Vec<u8>> {
+    check_host(host)?;
     recheck_item(host, item)?;
     let (bytes, lock) = read_lock(host, target)?;
     if &bytes != expected_lock {
@@ -763,13 +832,11 @@ fn install_one(
     let token = uuid::Uuid::new_v4().to_string();
     let stage = host.join(&target.shared_root, &format!(".lyrel-stage-{token}"));
     let backup = host.join(&target.shared_root, &format!(".lyrel-backup-{token}"));
-    let lock_parent = target
-        .lock_path
-        .parent()
+    let (lock_parent, _) = parent_and_name(host, &target.lock_path)?
         .ok_or_else(|| invalid("lock has no parent"))?;
-    let lock_stage = host.join(lock_parent, &format!(".lyrel-lock-{token}.stage"));
-    let lock_backup = host.join(lock_parent, &format!(".lyrel-lock-{token}.backup"));
-    let write_guard = host.join(lock_parent, ".lyrel-skills-write.lock");
+    let lock_stage = host.join(&lock_parent, &format!(".lyrel-lock-{token}.stage"));
+    let lock_backup = host.join(&lock_parent, &format!(".lyrel-lock-{token}.backup"));
+    let write_guard = host.join(&lock_parent, ".lyrel-skills-write.lock");
     let mut created = Vec::new();
     let mut stage_created = false;
     let mut lock_stage_created = false;
@@ -779,9 +846,10 @@ fn install_one(
     let mut new_content_fingerprint = None;
     let mut old_lock_moved = false;
     let mut committed = false;
+    let mut publication_uncertain = false;
     let operation = (|| {
         ensure_directory(host, &target.shared_root, &mut created)?;
-        ensure_directory(host, lock_parent, &mut created)?;
+        ensure_directory(host, &lock_parent, &mut created)?;
         check_ancestors(host, &write_guard)?;
         host.create_file_new(&write_guard)?;
         guard_created = true;
@@ -804,7 +872,9 @@ fn install_one(
                 .ok_or_else(|| invalid("non UTF-8 prepared path"))?
                 .split('/')
                 .fold(stage.clone(), |base, name| host.join(&base, name));
-            ensure_directory(host, path.parent().unwrap(), &mut Vec::new())?;
+            let (parent, _) = parent_and_name(host, &path)?
+                .ok_or_else(|| invalid("staged file has no Host parent"))?;
+            ensure_directory(host, &parent, &mut Vec::new())?;
             check_ancestors(host, &path)?;
             host.create_file_new(&path)?;
             host.write_file(&path, &file.contents)?;
@@ -821,10 +891,10 @@ fn install_one(
         }
         check_ancestors(host, &target.shared_root)?;
         if !matches!(item.existing, ExistingContent::Absent) {
-            host.rename(&item.destination, &backup)?;
+            rename_live(host, &item.destination, &backup, &mut publication_uncertain)?;
             old_content_moved = true;
         }
-        host.rename(&stage, &item.destination)?;
+        rename_live(host, &stage, &item.destination, &mut publication_uncertain)?;
         stage_created = false;
         new_content_moved = true;
         new_content_fingerprint = inspect_directory(host, &item.destination)?.1;
@@ -833,14 +903,24 @@ fn install_one(
             return Err(changed("source lock changed before commit; review again"));
         }
         if expected_lock.is_some() {
-            host.rename(&target.lock_path, &lock_backup)?;
+            rename_live(host, &target.lock_path, &lock_backup, &mut publication_uncertain)?;
             old_lock_moved = true;
         }
-        host.rename(&lock_stage, &target.lock_path)?;
+        rename_live(host, &lock_stage, &target.lock_path, &mut publication_uncertain)?;
         lock_stage_created = false;
         committed = true;
         Ok(())
     })();
+    if publication_uncertain {
+        // A lost reply cannot establish whether a live rename took effect. Do not
+        // undo a possibly committed lock or delete content based on that guess.
+        let error = operation.unwrap_err();
+        return Err(io::Error::other(format!(
+            "{error}; publication outcome unknown at content {} and source lock {}; Reconnect to the selected Host and inspect those targets before retrying. Retained recovery candidates: content stage {}, content backup {}, lock stage {}, lock backup {}, write guard {}. Restore backups only after reviewing the actual targets; do not blindly repeat installation",
+            item.destination.display(), target.lock_path.display(), stage.display(),
+            backup.display(), lock_stage.display(), lock_backup.display(), write_guard.display()
+        )));
+    }
     let mut rollback_errors = Vec::new();
     if !committed {
         if old_lock_moved {
@@ -864,8 +944,12 @@ fn install_one(
                         ));
                     }
                 }
-                _ => rollback_errors.push(format!(
+                Ok(_) => rollback_errors.push(format!(
                     "unrecorded content at {} changed after staging; not removed",
+                    item.destination.display()
+                )),
+                Err(error) => rollback_errors.push(format!(
+                    "cannot verify unrecorded content at {}; not removed: {error}",
                     item.destination.display()
                 )),
             }
@@ -904,10 +988,20 @@ fn install_one(
         Ok(()) => Ok(merged),
         Err(error) if rollback_errors.is_empty() => Err(error),
         Err(error) => Err(io::Error::other(format!(
-            "{error}; rollback incomplete: {}",
-            rollback_errors.join("; ")
+            "{error}; rollback incomplete: {}; Reconnect to the selected Host, inspect content at {} and source lock at {}, then restore retained backups or review the unrecorded installation before retrying; do not blindly repeat installation",
+            rollback_errors.join("; "),
+            item.destination.display(),
+            target.lock_path.display()
         ))),
     }
+}
+fn rename_live(host: &dyn Host, from: &Path, to: &Path, uncertain: &mut bool) -> io::Result<()> {
+    host.rename(from, to).inspect_err(|error| {
+        *uncertain = !host.is_connected() || matches!(error.kind(),
+            io::ErrorKind::NotConnected | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::TimedOut | io::ErrorKind::UnexpectedEof);
+    })
 }
 fn cleanup(host: &dyn Host, path: &Path, recursive: bool, warnings: &mut Vec<String>) {
     if let Err(error) = host.remove(path, recursive) {
