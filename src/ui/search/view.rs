@@ -1524,12 +1524,14 @@ mod tests {
     #[gpui_kit::test]
     fn a_past_session_opens_its_actions_and_can_be_removed(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        let home = tempfile::tempdir().unwrap();
         crate::ui::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, window, cx| {
+            crate::ui::settings::skills::test_host::install(home.path(), cx);
             app.open_search(SearchTab::Sessions, "", window, cx)
         });
-        // This machine's own scan runs on a real thread. Let it land before
-        // replacing what it found, or it lands afterwards and replaces ours.
+        // The isolated Host scan still lands asynchronously. Let it finish
+        // before installing the sessions used by the menu interaction.
         let view = open(&app, &mut vcx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while view.read_with(&vcx, |view, _| view.sessions_landed) == 0 {

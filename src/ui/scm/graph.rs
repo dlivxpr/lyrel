@@ -2405,20 +2405,33 @@ mod render_idle_gpui_tests {
         render_probe::draws()
     }
 
-    /// Drive frames until the graph has a page, because the query only goes out
-    /// from `render`.
+    /// Wait for the initial Git status and its current history page before
+    /// measuring idleness; the status probe can invalidate an earlier page.
     fn settle_graph(
         app: &Entity<LyrelApp>,
         vcx: &mut VisualTestContext,
+        root: &Path,
     ) -> Option<Arc<CommitPage>> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        test_window::quiesce(vcx, Some(root));
         loop {
             app.update_in(vcx, |_, _, cx| cx.notify());
             vcx.background_executor.run_until_parked();
-            let page = app.update_in(vcx, |app, _, _| app.scm.graph.page.clone());
+            let page = app.update_in(vcx, |app, _, cx| {
+                let graph = &app.scm.graph;
+                if graph.loading {
+                    return None;
+                }
+                let (repo, epoch, _) = graph.page_key.as_ref()?;
+                let current_epoch = cx
+                    .try_global::<crate::terminal::git_data::ScmData>()
+                    .map_or(0, |data| data.epoch(repo.host, &repo.root));
+                if *epoch != current_epoch {
+                    return None;
+                }
+                graph.page.clone()
+            });
             if page.is_some() {
-                vcx.background_executor.run_until_parked();
-                test_window::quiesce(vcx, None);
                 return page;
             }
             if std::time::Instant::now() >= deadline {
@@ -2463,12 +2476,8 @@ mod render_idle_gpui_tests {
             cx.notify();
         });
 
-        let Some(page) = settle_graph(&app, &mut vcx) else {
-            // A machine where the pane never reported its cwd has nothing to
-            // say about idling; failing here would only be flaky.
-            let _ = std::fs::remove_dir_all(&root);
-            return;
-        };
+        let page = settle_graph(&app, &mut vcx, &root)
+            .expect("the graph did not finish loading its current history");
         assert!(page.commits.len() >= 6, "the graph loaded no history");
         assert_eq!(page.rows.len(), page.commits.len());
 

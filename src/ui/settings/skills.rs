@@ -24,7 +24,7 @@ use std::{
 mod install;
 mod maintenance;
 #[cfg(test)]
-mod test_host;
+pub(crate) mod test_host;
 mod view;
 
 #[cfg(test)]
