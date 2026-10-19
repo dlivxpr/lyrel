@@ -21,31 +21,79 @@ use std::{
     time::Duration,
 };
 mod accounts;
+mod browser;
+mod platform;
 use accounts::*;
 use uuid::Uuid;
 
 const ENDPOINT: &str = "https://api.deepseek.com/user/balance";
-/// The only varying external request boundary. Parsing and account transitions remain real.
+#[derive(Clone, Copy)]
+enum HttpSource {
+    Official,
+    Platform(platform::SessionKind),
+}
+struct UsageRequest<'a> {
+    source: HttpSource,
+    secret: &'a str,
+}
+impl UsageRequest<'_> {
+    fn endpoint(&self) -> &'static str {
+        match self.source {
+            HttpSource::Official => ENDPOINT,
+            HttpSource::Platform(_) => platform::ENDPOINT,
+        }
+    }
+    fn header_name(&self) -> &'static str {
+        match self.source {
+            HttpSource::Official => "Authorization",
+            HttpSource::Platform(kind) => kind.header_name(),
+        }
+    }
+    fn authorization_value(&self) -> String {
+        match self.source {
+            HttpSource::Official => format!("Bearer {}", self.secret),
+            HttpSource::Platform(kind) => kind.authorization_value(self.secret),
+        }
+    }
+}
+/// The varying external HTTP boundary; source selection, parsing and transitions remain real.
 trait BalanceHttp: Send + Sync {
-    fn get(&self, key: &str, proxy: Option<&str>) -> Result<(u16, Vec<u8>), UsageError>;
+    fn get(
+        &self,
+        request: &UsageRequest<'_>,
+        proxy: Option<&str>,
+    ) -> Result<(u16, Vec<u8>), UsageError>;
 }
 struct DeepSeekHttp;
 impl BalanceHttp for DeepSeekHttp {
-    fn get(&self, key: &str, proxy: Option<&str>) -> Result<(u16, Vec<u8>), UsageError> {
+    fn get(
+        &self,
+        request: &UsageRequest<'_>,
+        proxy: Option<&str>,
+    ) -> Result<(u16, Vec<u8>), UsageError> {
+        Self::send(request, proxy, request.endpoint())
+    }
+}
+impl DeepSeekHttp {
+    fn send(
+        request: &UsageRequest<'_>,
+        proxy: Option<&str>,
+        endpoint: &str,
+    ) -> Result<(u16, Vec<u8>), UsageError> {
         let mut builder = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
             .timeout_connect(Some(Duration::from_secs(10)))
             .http_status_as_error(false)
             .max_redirects(0)
             .user_agent(concat!("lyrel/", env!("CARGO_PKG_VERSION")));
-        if let Some(proxy) = lyrel_core::daemon::install::proxy::resolve(ENDPOINT, proxy) {
+        if let Some(proxy) = lyrel_core::daemon::install::proxy::resolve(endpoint, proxy) {
             builder = builder.proxy(Some(proxy));
         }
         let agent: ureq::Agent = builder.build().into();
         let mut response = agent
-            .get(ENDPOINT)
+            .get(endpoint)
             .header("Accept", "application/json")
-            .header("Authorization", format!("Bearer {key}"))
+            .header(request.header_name(), request.authorization_value())
             .call()
             .map_err(|_| UsageError::Network)?;
         let status = response.status().as_u16();
@@ -58,12 +106,20 @@ impl BalanceHttp for DeepSeekHttp {
         Ok((status, body))
     }
 }
-fn query(http: &dyn BalanceHttp, secret: &str, proxy: Option<&str>) -> Result<Balance, UsageError> {
+fn query(
+    http: &dyn BalanceHttp,
+    source: HttpSource,
+    secret: &str,
+    proxy: Option<&str>,
+) -> Result<Balance, UsageError> {
     if secret.is_empty() || secret.contains(char::is_whitespace) {
         return Err(UsageError::Authentication);
     }
-    let (status, body) = http.get(secret, proxy)?;
-    accounts::decode(status, &body)
+    let (status, body) = http.get(&UsageRequest { source, secret }, proxy)?;
+    match source {
+        HttpSource::Official => accounts::decode(status, &body),
+        HttpSource::Platform(_) => platform::decode(status, &body).map(Balance::Platform),
+    }
 }
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -81,6 +137,7 @@ async fn worker<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T 
 struct Shared {
     accounts: Mutex<Result<Accounts, UsageError>>,
     http: Arc<dyn BalanceHttp>,
+    browser: Arc<browser::BrowserReader>,
     presentation: AtomicU64,
 }
 struct UsageData {
@@ -116,12 +173,94 @@ impl SelectItem for Cadence {
         &self.0
     }
 }
+enum Material {
+    ApiKey(zeroize::Zeroizing<String>),
+    Session(platform::SessionMaterial),
+    Browser(browser::BrowserSelection, platform::SessionMaterial),
+}
+impl Material {
+    fn secret(&self) -> &str {
+        match self {
+            Self::ApiKey(v) => v,
+            Self::Session(v) => v.secret(),
+            Self::Browser(_, v) => v.secret(),
+        }
+    }
+    fn http_source(&self) -> HttpSource {
+        match self {
+            Self::ApiKey(_) => HttpSource::Official,
+            Self::Session(v) => HttpSource::Platform(v.kind()),
+            Self::Browser(..) => HttpSource::Platform(platform::SessionKind::WebToken),
+        }
+    }
+    fn verified(&self) -> VerifiedSource<'_> {
+        match self {
+            Self::ApiKey(v) => VerifiedSource::ApiKey(v),
+            Self::Session(v) => VerifiedSource::Session {
+                kind: v.kind(),
+                secret: v.secret(),
+            },
+            Self::Browser(selection, _) => VerifiedSource::Browser(selection.clone()),
+        }
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    ApiKey,
+    Session,
+    Browser,
+}
+impl SelectItem for Source {
+    type Value = Self;
+    fn title(&self) -> gpui_kit::SharedString {
+        t(match self {
+            Self::ApiKey => L10nKey::UsageApiSource,
+            Self::Session => L10nKey::UsageSessionSource,
+            Self::Browser => L10nKey::UsageBrowserSource,
+        })
+        .into()
+    }
+    fn value(&self) -> &Self {
+        self
+    }
+}
+#[derive(Clone)]
+struct BrowserChoice(browser::Browser);
+impl SelectItem for BrowserChoice {
+    type Value = browser::Browser;
+    fn title(&self) -> gpui_kit::SharedString {
+        self.0.label().into()
+    }
+    fn value(&self) -> &Self::Value {
+        &self.0
+    }
+}
+#[derive(Clone)]
+struct ProfileChoice {
+    profile: browser::Profile,
+    id: String,
+}
+impl SelectItem for ProfileChoice {
+    type Value = String;
+    fn title(&self) -> gpui_kit::SharedString {
+        self.profile.label().to_string().into()
+    }
+    fn value(&self) -> &String {
+        &self.id
+    }
+}
 pub(crate) struct UsagePage {
     data: Entity<UsageData>,
     name: Entity<InputState>,
     key: Entity<InputState>,
     edit: Option<Edit>,
     cadence: Entity<SelectState<Vec<Cadence>>>,
+    source: Entity<SelectState<Vec<Source>>>,
+    browsers: Entity<SelectState<Vec<BrowserChoice>>>,
+    profiles: Entity<SelectState<Vec<ProfileChoice>>>,
+    profile_items: Vec<ProfileChoice>,
+    discovering: bool,
+    discovery_version: u64,
     return_focus: Option<gpui_kit::FocusHandle>,
     error: Option<UsageError>,
     submitting: bool,
@@ -142,6 +281,7 @@ impl UsagePage {
                 accounts: Mutex::new(Err(UsageError::Persistence)),
                 http: Arc::new(DeepSeekHttp),
                 presentation: AtomicU64::new(1),
+                browser: Arc::new(browser::BrowserReader::system()),
             });
             let data = cx.new(|_| UsageData {
                 shared: shared.clone(),
@@ -184,6 +324,30 @@ impl UsagePage {
                 cx,
             )
         });
+        let source = cx.new(|cx| {
+            SelectState::new(
+                vec![Source::ApiKey, Source::Session, Source::Browser],
+                None,
+                window,
+                cx,
+            )
+        });
+        source.update(cx, |s, cx| {
+            s.set_selected_value(&Source::ApiKey, window, cx)
+        });
+        let browsers = cx.new(|cx| {
+            SelectState::new(
+                browser::Browser::all()
+                    .iter()
+                    .copied()
+                    .map(BrowserChoice)
+                    .collect::<Vec<_>>(),
+                None,
+                window,
+                cx,
+            )
+        });
+        let profiles = cx.new(|cx| SelectState::new(Vec::<ProfileChoice>::new(), None, window, cx));
         let secs = data.read(cx).stored.interval_secs;
         cadence.update(cx, |state, cx| state.set_selected_value(&secs, window, cx));
         let mut subs = vec![cx.observe_in(&data, window, |page, _, window, cx| {
@@ -199,6 +363,23 @@ impl UsagePage {
                 page.work(cx, move |a| a.set_interval(secs));
             }
         }));
+        subs.push(cx.subscribe_in(
+            &source,
+            window,
+            |page, _, _: &SelectEvent<Vec<Source>>, window, cx| {
+                page.form_version.fetch_add(1, Ordering::SeqCst);
+                page.error = None;
+                page.key.update(cx, |s, cx| s.set_value("", window, cx));
+                cx.notify();
+            },
+        ));
+        subs.push(
+            cx.subscribe_in(&browsers, window, |page, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(browser)) = event {
+                    page.discover_profiles(*browser, window, cx);
+                }
+            }),
+        );
         for input in [&name, &key] {
             subs.push(
                 cx.subscribe_in(input, window, |page, _, event, window, cx| {
@@ -214,6 +395,12 @@ impl UsagePage {
             name,
             key,
             cadence,
+            source,
+            browsers,
+            profiles,
+            profile_items: Vec::new(),
+            discovering: false,
+            discovery_version: 0,
             return_focus: None,
             edit: None,
             error: None,
@@ -266,6 +453,51 @@ impl UsagePage {
             }
         }));
     }
+    fn discover_profiles(
+        &mut self,
+        browser: browser::Browser,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.discovery_version += 1;
+        let version = self.discovery_version;
+        self.profile_items.clear();
+        self.profiles
+            .update(cx, |s, cx| s.set_items(Vec::new(), window, cx));
+        self.discovering = true;
+        self.error = None;
+        let reader = self.data.read(cx).shared.browser.clone();
+        cx.spawn_in(window, async move |page, cx| {
+            let result = worker(move || reader.profiles(browser)).await;
+            let _ = page.update_in(cx, |page, window, cx| {
+                if page.discovery_version != version {
+                    return;
+                }
+                page.discovering = false;
+                match result {
+                    Ok(profiles) => {
+                        page.profile_items = profiles
+                            .into_iter()
+                            .map(|profile| ProfileChoice {
+                                id: profile.id().to_owned(),
+                                profile,
+                            })
+                            .collect();
+                        page.profiles.update(cx, |s, cx| {
+                            s.set_items(page.profile_items.clone(), window, cx)
+                        });
+                        if page.profile_items.is_empty() {
+                            page.error = Some(UsageError::BrowserMissing);
+                        }
+                    }
+                    Err(error) => page.error = Some(browser_error(error)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
     fn open_edit(&mut self, edit: Edit, window: &mut Window, cx: &mut Context<Self>) {
         self.form_version.fetch_add(1, Ordering::SeqCst);
         self.return_focus = window.focused(cx);
@@ -281,6 +513,29 @@ impl UsagePage {
                 .map(|a| a.name.clone())
                 .unwrap_or_default(),
         };
+        let source = match edit {
+            Edit::Replace(id) => self
+                .data
+                .read(cx)
+                .stored
+                .accounts
+                .iter()
+                .find(|a| a.id == id)
+                .map(|a| match a.auth {
+                    Authentication::ManualApiKey { .. } => Source::ApiKey,
+                    Authentication::ManualSession { .. } => Source::Session,
+                    Authentication::BrowserLocalStorage { .. } => Source::Browser,
+                })
+                .unwrap_or(Source::ApiKey),
+            _ => Source::ApiKey,
+        };
+        self.source
+            .update(cx, |s, cx| s.set_selected_value(&source, window, cx));
+        self.discovery_version += 1;
+        self.discovering = false;
+        self.profile_items.clear();
+        self.profiles
+            .update(cx, |s, cx| s.set_items(Vec::new(), window, cx));
         self.name
             .update(cx, |input, cx| input.set_value(name, window, cx));
         self.key
@@ -292,6 +547,7 @@ impl UsagePage {
     }
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.form_version.fetch_add(1, Ordering::SeqCst);
+        self.discovery_version += 1;
         self.edit = None;
         self.key
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -348,7 +604,19 @@ impl UsagePage {
             Edit::Rename(id) => self.work(cx, move |a| a.rename(id, &name)),
             Edit::Remove(id) => self.work(cx, move |a| a.remove(id)),
             Edit::Add | Edit::Replace(_) => {
-                let secret = self.key.read(cx).value().trim().to_string();
+                let secret = zeroize::Zeroizing::new(self.key.read(cx).value().trim().to_string());
+                let source = self
+                    .source
+                    .read(cx)
+                    .selected_value()
+                    .copied()
+                    .unwrap_or(Source::ApiKey);
+                let profile = self
+                    .profiles
+                    .read(cx)
+                    .selected_value()
+                    .and_then(|id| self.profile_items.iter().find(|p| &p.id == id))
+                    .map(|p| p.profile.clone());
                 self.key
                     .update(cx, |input, cx| input.set_value("", window, cx));
                 let data = self.data.clone();
@@ -371,7 +639,30 @@ impl UsagePage {
                                 _ => None,
                             }
                         };
-                        let balance = query(&*shared.http, &secret, proxy.as_deref());
+                        let verified = (|| {
+                            let material = match source {
+                                Source::ApiKey => Material::ApiKey(secret),
+                                Source::Session => {
+                                    Material::Session(platform::parse_manual(&secret)?)
+                                }
+                                Source::Browser => {
+                                    let profile = profile.ok_or(UsageError::BrowserMissing)?;
+                                    let (selection, material) =
+                                        shared.browser.import(&profile).map_err(browser_error)?;
+                                    Material::Browser(
+                                        selection,
+                                        platform::parse_browser(material.secret())?,
+                                    )
+                                }
+                            };
+                            let balance = query(
+                                &*shared.http,
+                                material.http_source(),
+                                material.secret(),
+                                proxy.as_deref(),
+                            )?;
+                            Ok((material, balance))
+                        })();
                         let mut guard = shared.accounts.lock().unwrap();
                         let accounts = guard.as_mut().map_err(|e| *e)?;
                         if gate.load(Ordering::SeqCst) != version {
@@ -380,9 +671,15 @@ impl UsagePage {
                             }
                             return Err(UsageError::Stale);
                         }
-                        match balance {
-                            Ok(balance) => accounts
-                                .save_verified(replacement, &name, &secret, balance, now())
+                        match verified {
+                            Ok((material, balance)) => accounts
+                                .save_verified(
+                                    replacement,
+                                    &name,
+                                    material.verified(),
+                                    balance,
+                                    now(),
+                                )
                                 .map(|_| ()),
                             Err(error) => {
                                 if let Some(q) = replacement {
@@ -442,15 +739,45 @@ impl UsagePage {
                     let Ok(accounts) = guard.as_mut() else {
                         return;
                     };
-                    accounts
-                        .begin_refresh(id)
-                        .map(|ticket| (ticket, accounts.secret(id)))
+                    accounts.begin_refresh(id).map(|ticket| {
+                        let auth = accounts.account(id).unwrap().auth.clone();
+                        let secret = if matches!(auth, Authentication::BrowserLocalStorage { .. }) {
+                            Ok(None)
+                        } else {
+                            accounts
+                                .secret(id)
+                                .map(|s| Some(zeroize::Zeroizing::new(s)))
+                        };
+                        (ticket, auth, secret)
+                    })
                 };
-                let Some((ticket, secret)) = start else {
+                let Some((ticket, auth, secret)) = start else {
                     return;
                 };
-                let result =
-                    secret.and_then(|secret| query(&*shared.http, &secret, proxy.as_deref()));
+                let result = secret.and_then(|secret| match auth {
+                    Authentication::ManualApiKey { .. } => query(
+                        &*shared.http,
+                        HttpSource::Official,
+                        secret.as_deref().map(|s| s.as_str()).unwrap_or(""),
+                        proxy.as_deref(),
+                    ),
+                    Authentication::ManualSession { kind, .. } => query(
+                        &*shared.http,
+                        HttpSource::Platform(kind),
+                        secret.as_deref().map(|s| s.as_str()).unwrap_or(""),
+                        proxy.as_deref(),
+                    ),
+                    Authentication::BrowserLocalStorage { selection } => {
+                        let material = shared.browser.resolve(&selection).map_err(browser_error)?;
+                        let material = platform::parse_browser(material.secret())?;
+                        query(
+                            &*shared.http,
+                            HttpSource::Platform(platform::SessionKind::WebToken),
+                            material.secret(),
+                            proxy.as_deref(),
+                        )
+                    }
+                });
                 if let Ok(accounts) = shared.accounts.lock().unwrap().as_mut() {
                     accounts.finish_refresh(ticket, result, now());
                 }
@@ -486,6 +813,18 @@ async fn publish(data: &Entity<UsageData>, cx: &mut gpui_kit::AsyncApp) {
         }
     });
 }
+fn browser_error(error: browser::BrowserError) -> UsageError {
+    match error {
+        browser::BrowserError::Locked => UsageError::BrowserLocked,
+        browser::BrowserError::Denied => UsageError::BrowserDenied,
+        browser::BrowserError::NoSession | browser::BrowserError::ProfileGone => {
+            UsageError::BrowserMissing
+        }
+        browser::BrowserError::Unsupported => UsageError::BrowserUnsupported,
+        browser::BrowserError::SourceChanged => UsageError::BrowserChanged,
+        browser::BrowserError::Unreadable => UsageError::BrowserUnreadable,
+    }
+}
 fn error_text(error: UsageError) -> &'static str {
     t(match error {
         UsageError::Authentication => L10nKey::UsageAuthError,
@@ -496,6 +835,12 @@ fn error_text(error: UsageError) -> &'static str {
         UsageError::Response => L10nKey::UsageResponseError,
         UsageError::Service => L10nKey::UsageServiceError,
         UsageError::Stale => L10nKey::UsageStaleError,
+        UsageError::BrowserLocked => L10nKey::UsageBrowserLocked,
+        UsageError::BrowserDenied => L10nKey::UsageBrowserDenied,
+        UsageError::BrowserMissing => L10nKey::UsageBrowserMissing,
+        UsageError::BrowserUnsupported => L10nKey::UsageBrowserUnsupported,
+        UsageError::BrowserChanged => L10nKey::UsageBrowserChanged,
+        UsageError::BrowserUnreadable => L10nKey::UsageBrowserUnreadable,
     })
 }
 fn button(
@@ -586,9 +931,63 @@ impl Render for UsagePage {
                     .child(Input::new(&self.name).id("usage-name").small().w_full());
             }
             if matches!(edit, Edit::Add | Edit::Replace(_)) {
-                form = form
-                    .child("DeepSeek API key")
-                    .child(Input::new(&self.key).id("usage-key").small().w_full());
+                let source = self
+                    .source
+                    .read(cx)
+                    .selected_value()
+                    .copied()
+                    .unwrap_or(Source::ApiKey);
+                form = form.child(t(L10nKey::UsageSource)).child(
+                    Select::new(&self.source)
+                        .id("usage-source")
+                        .small()
+                        .w_full()
+                        .disabled(self.submitting)
+                        .accessibility_label(t(L10nKey::UsageSource)),
+                );
+                if source == Source::ApiKey {
+                    form = form
+                        .child(t(L10nKey::UsageApiKey))
+                        .child(Input::new(&self.key).id("usage-key").small().w_full());
+                } else {
+                    form = form.child(
+                        div()
+                            .text_color(muted)
+                            .child(t(L10nKey::UsagePrivateDisclosure)),
+                    );
+                    if source == Source::Session {
+                        form = form
+                            .child(t(L10nKey::UsageSessionInput))
+                            .child(Input::new(&self.key).id("usage-key").small().w_full())
+                            .child(div().text_color(muted).child(t(L10nKey::UsageSessionHelp)));
+                    } else {
+                        form = form
+                            .child(t(L10nKey::UsageBrowser))
+                            .child(
+                                Select::new(&self.browsers)
+                                    .id("usage-browser")
+                                    .small()
+                                    .w_full()
+                                    .disabled(self.submitting || self.discovering)
+                                    .placeholder(t(L10nKey::UsageChooseBrowser))
+                                    .accessibility_label(t(L10nKey::UsageBrowser)),
+                            )
+                            .child(t(L10nKey::UsageProfile))
+                            .child(
+                                Select::new(&self.profiles)
+                                    .id("usage-profile")
+                                    .small()
+                                    .w_full()
+                                    .disabled(self.submitting || self.discovering)
+                                    .placeholder(t(L10nKey::UsageChooseProfile))
+                                    .accessibility_label(t(L10nKey::UsageProfile)),
+                            )
+                            .child(div().text_color(muted).child(t(L10nKey::UsageBrowserHelp)));
+                        if self.discovering {
+                            form = form.child(t(L10nKey::UsageLoading));
+                        }
+                    }
+                }
             }
             form = form.child(
                 h_flex()
@@ -620,7 +1019,14 @@ impl Render for UsagePage {
                             self.submitting
                                 || self.name.read(cx).value().trim().is_empty()
                                 || (matches!(edit, Edit::Add | Edit::Replace(_))
-                                    && self.key.read(cx).value().trim().is_empty()),
+                                    && if self.source.read(cx).selected_value()
+                                        == Some(&Source::Browser)
+                                    {
+                                        self.discovering
+                                            || self.profiles.read(cx).selected_value().is_none()
+                                    } else {
+                                        self.key.read(cx).value().trim().is_empty()
+                                    }),
                         )
                         .on_click(cx.listener(|p, _, w, cx| p.submit(w, cx))),
                     ),
@@ -640,6 +1046,23 @@ impl Render for UsagePage {
                 .border_color(cx.theme().border)
                 .child(account.name)
                 .child(div().text_color(muted).child(format!("DeepSeek · {id}")));
+            row = row.child(div().text_color(muted).child(match &account.auth {
+                Authentication::ManualApiKey { .. } => t(L10nKey::UsageApiSource).to_owned(),
+                Authentication::ManualSession { kind, .. } => format!(
+                    "{} · {}",
+                    t(L10nKey::UsageSessionSource),
+                    match kind {
+                        platform::SessionKind::WebToken => "userToken · Bearer",
+                        platform::SessionKind::HarnessGrant => "Harness grant · x-dsh-auth-token",
+                    }
+                ),
+                Authentication::BrowserLocalStorage { selection } => format!(
+                    "{} · {} · {}",
+                    t(L10nKey::UsageBrowserSource),
+                    selection.browser().label(),
+                    selection.label()
+                ),
+            }));
             row = row.child(t(if account.removing {
                 L10nKey::UsageRemoving
             } else if self.pending.contains(&id) || account.busy {
@@ -650,23 +1073,47 @@ impl Render for UsagePage {
                 L10nKey::UsageEnabled
             }));
             if let Some(snapshot) = account.snapshot {
-                for line in snapshot.balance.balance_infos {
-                    row = row
-                        .child(format!(
-                            "{} {} {}",
-                            t(L10nKey::UsageBalance),
-                            line.total_balance,
-                            line.currency
-                        ))
-                        .child(format!(
-                            "{} {} {} · {} {} {}",
-                            t(L10nKey::UsageGranted),
-                            line.granted_balance,
-                            line.currency,
-                            t(L10nKey::UsageToppedUp),
-                            line.topped_up_balance,
-                            line.currency
-                        ));
+                match &snapshot.balance {
+                    Balance::Official(balance) => {
+                        for line in &balance.balance_infos {
+                            row = row
+                                .child(format!(
+                                    "{} {} {}",
+                                    t(L10nKey::UsageBalance),
+                                    line.total_balance,
+                                    line.currency
+                                ))
+                                .child(format!(
+                                    "{} {} {} · {} {} {}",
+                                    t(L10nKey::UsageGranted),
+                                    line.granted_balance,
+                                    line.currency,
+                                    t(L10nKey::UsageToppedUp),
+                                    line.topped_up_balance,
+                                    line.currency
+                                ));
+                        }
+                        row = row.child(t(if balance.is_available {
+                            L10nKey::UsageAvailable
+                        } else {
+                            L10nKey::UsageUnavailable
+                        }));
+                    }
+                    Balance::Platform(balance) => {
+                        for (label, wallets) in [
+                            (L10nKey::UsageNormalWallet, &balance.normal_wallets),
+                            (L10nKey::UsageBonusWallet, &balance.bonus_wallets),
+                        ] {
+                            for wallet in wallets {
+                                row = row.child(format!(
+                                    "{} {} {}",
+                                    t(label),
+                                    wallet.balance,
+                                    wallet.currency
+                                ));
+                            }
+                        }
+                    }
                 }
                 let time = chrono::DateTime::from_timestamp(snapshot.updated_at as i64, 0)
                     .map(|time| {
@@ -675,17 +1122,11 @@ impl Render for UsagePage {
                             .to_string()
                     })
                     .unwrap_or_else(|| snapshot.updated_at.to_string());
-                row = row
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(format!("{} {time}", t(L10nKey::UsageUpdated))),
-                    )
-                    .child(t(if snapshot.balance.is_available {
-                        L10nKey::UsageAvailable
-                    } else {
-                        L10nKey::UsageUnavailable
-                    }));
+                row = row.child(
+                    div()
+                        .text_color(muted)
+                        .child(format!("{} {time}", t(L10nKey::UsageUpdated))),
+                );
                 if account.error.is_some() {
                     row = row.child(t(L10nKey::UsageOldSnapshot));
                 }

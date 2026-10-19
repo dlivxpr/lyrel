@@ -74,6 +74,13 @@ smallvec.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 tempfile = "3"
+# Browser session import stays desktop-local; database recovery runs in memory.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusty-leveldb = "4.0.2"
+snap = "1"
+fs2 = "0.4"
+zeroize = "1"
+sha2 = "0.11.1"
 # LaunchServices sends files and custom URL schemes through gpui's unified
 # open-URL callback. `url` keeps the decoding and SSH authority parsing here
 # standards-compliant rather than treating percent escapes as literal paths,
@@ -192,11 +199,6 @@ jieba-rs = "0.11.0"
 # reader already present in Cargo.lock and enable only the Deflate codec emitted
 # by PowerShell's Compress-Archive.
 async_zip = { version = "0.0.19", default-features = false, features = ["deflate"], optional = true }
-# The standalone updater also verifies the staged portable package's bundled
-# ConPTY pair against the pinned manifest before any installed file moves,
-# reusing `crates/lyrel-core/conpty_files.rs` as an included module — that
-# shared source names sha2, already locked at 0.11 via lyrel-core.
-sha2 = { version = "0.11.1", optional = true }
 
 # COM for toast branding (`core::aumid`): IShellLinkW + IPropertyStore stamp
 # System.AppUserModel.ID onto the Start Menu shortcut, which Windows requires
@@ -225,11 +227,13 @@ windows = { version = "0.62.2", features = [
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1.34"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 # gpui only *reads* the macOS window appearance; it never sets it. We force the
 # app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
 # so the native traffic-light buttons render in the right light/dark style.
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2.191"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.
@@ -262,7 +266,7 @@ workspace = true
 
 [features]
 default = []
-updater = ["dep:async_zip", "dep:sha2"]
+updater = ["dep:async_zip"]
 
 # Shared pins keep the GUI and its consumers on one published framework chain.
 [workspace]

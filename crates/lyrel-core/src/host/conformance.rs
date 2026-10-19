@@ -38,6 +38,7 @@ macro_rules! for_each_host_case {
             read_file_roundtrips_bytes,
             read_file_over_max_bytes_errors,
             read_file_on_a_dir_errors,
+            skills_browse_is_readonly_and_host_bound,
             write_file_creates_and_overwrites,
             write_file_reports_its_own_metadata,
             write_file_to_missing_parent_errors,
@@ -1443,4 +1444,58 @@ mod tests {
             defined.len()
         );
     }
+}
+
+/// The same actual-file workflow runs locally and through the real stdio server.
+pub fn skills_browse_is_readonly_and_host_bound(h: &dyn Host, sb: &dyn Sandbox) {
+    use crate::skills::{ScanRequest, SourceKind, scan};
+    let home = h.join(sb.path(), "skills-home");
+    let project = h.join(sb.path(), "skills-project");
+    mkdir(h, &h.join(&project, ".git"));
+    let user = h.join(&h.join(&h.join(&home, ".agents"), "skills"), "review");
+    let project_skill = h.join(&h.join(&h.join(&project, ".agents"), "skills"), "review");
+    mkdir(h, &user);
+    mkdir(h, &project_skill);
+    let document = h.join(&user, "SKILL.md");
+    write(
+        h,
+        &document,
+        "---\nname: review\ndescription: Host user review\n---\n# Actual host instructions\n",
+    );
+    write(
+        h,
+        &h.join(&project_skill, "SKILL.md"),
+        "---\nname: review\ndescription: Host project review\n---\n# Different installation\n",
+    );
+    let untouched = h.join(&home, "untouched.txt");
+    write(h, &untouched, "unchanged");
+    let before = h.read_file(&document, 4096).unwrap();
+    let before_meta = h.stat(&document).unwrap();
+    let spelling = home.to_string_lossy();
+    let launches=["omp","pi","kimi","opencode","hermes"].into_iter().map(|agent|{
+        let agent_dir=if agent=="omp"{h.join(&h.join(&home,".omp"),"agent")}else{h.join(&h.join(&home,".pi"),"agent")};
+        (agent.to_owned(),format!("HOME='{spelling}' USERPROFILE='{spelling}' PROGRAMDATA='{spelling}/programdata' CLAUDE_CONFIG_DIR='{spelling}/.claude' XDG_DATA_HOME='{spelling}/.data' XDG_STATE_HOME='{spelling}/.state' PI_CONFIG_DIR=.omp OMP_PROFILE=default PI_PROFILE=default PI_CODING_AGENT_DIR='{}' KIMI_CODE_HOME='{spelling}/.kimi-code' HERMES_HOME='{spelling}/.hermes' XDG_CONFIG_HOME='{spelling}/.config' OPENCODE_CONFIG_DIR='{spelling}/.config/opencode' {agent}",agent_dir.display()))
+    }).collect();
+    let result = scan(
+        h,
+        &ScanRequest::new(&home)
+            .with_project(&project)
+            .with_launch_commands(launches),
+    )
+    .unwrap();
+    assert_eq!(result.host(), h.id());
+    assert_eq!(result.filtered("review", None).count(), 2);
+    let user = result
+        .filtered("Host user review", Some(SourceKind::UserShared))
+        .next()
+        .unwrap();
+    assert_eq!(user.document(), h.canonicalize(&document).unwrap());
+    assert!(
+        user.markdown()
+            .unwrap()
+            .contains("# Actual host instructions")
+    );
+    assert_eq!(h.read_file(&document, 4096).unwrap(), before);
+    assert_eq!(h.stat(&document).unwrap(), before_meta);
+    assert_eq!(h.read_file(&untouched, 1024).unwrap(), b"unchanged");
 }
