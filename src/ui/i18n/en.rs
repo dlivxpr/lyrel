@@ -2,6 +2,69 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
+        L10nKey::SkillsHelpOmp => {
+            "omp 18.12.2: /skill:name. skills.enabled, provider switches and name filters can prevent loading. Native roots are one level deep and discovered at startup. Restart the native agent to discover changed sources; lyrel does not execute it."
+        }
+        L10nKey::SkillsHelpPi => {
+            "pi 1.3.0: /skill:name [args]; /reload refreshes resources. Project resources require native project trust. --no-skills disables automatic sources, but explicit --skill can still load a file."
+        }
+        L10nKey::SkillsHelpKimi => {
+            "Kimi Code 2.2.0: /skill:name or /name; new skills are available in a new session. --skills-dir replaces automatic directories; extra_skill_dirs appends sources."
+        }
+        L10nKey::SkillsHelpOpenCode => {
+            "OpenCode 2.0.32: @skill-id or the model skill tool. Permissions and autoinvoke policy affect availability. Skill lists refresh at model steps; no documented skill-specific reload command is assumed."
+        }
+        L10nKey::SkillsHelpHermes => {
+            "Hermes 0.22.2: /name or /skill name; /reload-skills rescans. User shared directories need skills.external_dirs. Project discovery requires native trust; lyrel never grants it."
+        }
+        L10nKey::SettingsNavSkills => "Skills",
+        L10nKey::SkillsPageDescription => {
+            "Browse readonly skills on an explicitly selected machine and project: omp, Kimi Code, pi, OpenCode 2.x, Hermes. Search names and descriptions; inspect shared and private sources."
+        }
+        L10nKey::SkillsProject => "Project",
+        L10nKey::SkillsProjectHint => {
+            "Absolute path on the selected machine; blank means user scope only"
+        }
+        L10nKey::SkillsApplyProject => "Apply project",
+        L10nKey::SkillsSearch => "Search skill names and descriptions",
+        L10nKey::SkillsSource => "Source",
+        L10nKey::SkillsAllSources => "All sources",
+        L10nKey::SkillsUserShared => "User shared",
+        L10nKey::SkillsProjectShared => "Project shared",
+        L10nKey::SkillsPrivate => "Agent private",
+        L10nKey::SkillsRefresh => "Refresh",
+        L10nKey::SkillsLoading => "Scanning the selected machine…",
+        L10nKey::SkillsEmpty => {
+            "No matching skills. Check the selected machine, project, native profile and source filter, then refresh. No configuration is changed."
+        }
+        L10nKey::SkillsScannedAt => "Snapshot: {time} (UTC Unix seconds)",
+        L10nKey::SkillsIncomplete => "Incomplete or stale results",
+        L10nKey::SkillsUnknown => "Unknown",
+        L10nKey::SkillsDiscovered => "Discovered on disk",
+        L10nKey::SkillsDisabled => "Not enabled by native source selection",
+        L10nKey::SkillsRuntimeNote => {
+            "Discovery does not prove a running agent loaded the skill. lyrel never changes native configuration or sends enable/reload commands to a terminal."
+        }
+        L10nKey::SkillsOpenFile => "Open SKILL.md",
+        L10nKey::SkillsCopyPath => "Copy path",
+        L10nKey::SkillsBrowseFiles => "Browse files…",
+        L10nKey::SkillsOrigin => "Reported source",
+        L10nKey::SkillsUpdated => "Updated (UTC Unix seconds)",
+        L10nKey::SkillsCompanions => "Companion files: {files}; bytes: {bytes}{limited}",
+        L10nKey::SkillsInvocation => "Argument hint",
+        L10nKey::SkillsNoSource => "No verifiable source recorded",
+        L10nKey::SkillsNativeGuide => "Native documentation",
+        L10nKey::SkillsBack => "Back",
+        L10nKey::SkillsNoMachine => {
+            "Selected machine is disconnected. Reconnect it and refresh. The target has not changed."
+        }
+        L10nKey::SkillsReadError => "Could not read selected scope: {error}",
+        L10nKey::SkillsScope => "Discovery locations and native state",
+        L10nKey::SkillsProfileNote => {
+            "Uses the selected Host environment and configured agent launch profile. Project paths never follow workspace changes automatically."
+        }
+        L10nKey::SkillsFileLimit => " (incomplete; links or scan limits)",
+        L10nKey::SkillsCopied => "Path copied",
         L10nKey::StatisticsTitle => "Statistics",
         L10nKey::StatisticsKeywords => {
             "statistics omp native history tokens cost sessions machine profile date range overview"
@@ -375,13 +438,52 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsNavAbout => "About",
         L10nKey::SettingsNavUsage => "Usage",
         L10nKey::UsageSearchKeywords => {
-            "DeepSeek balance API key accounts rename refresh credentials usage"
+            "DeepSeek balance API key accounts rename refresh credentials usage private platform session browser profile LocalStorage userToken"
         }
         L10nKey::UsageScope => {
             "Desktop-wide query accounts, independent of SSH machines. No agent keys are read."
         }
         L10nKey::UsageOfficial => {
             "Official API: GET https://api.deepseek.com/user/balance · Bearer API key. The API does not return a user identity or reset period; the name and ID below identify the local query account."
+        }
+        L10nKey::UsageSource => "DeepSeek authentication source",
+        L10nKey::UsageApiSource => "Official API key",
+        L10nKey::UsageSessionSource => "Private platform · manual session",
+        L10nKey::UsageBrowserSource => "Private platform · browser LocalStorage",
+        L10nKey::UsageApiKey => "DeepSeek API key",
+        L10nKey::UsageSessionInput => "Platform userToken or Harness grant",
+        L10nKey::UsageSessionHelp => {
+            "Copy userToken from platform.deepseek.com LocalStorage (raw value or userToken JSON), or paste Harness grant JSON with version, token and issuer. Cookies and official API keys are rejected. Only the required token enters the system credential store after validation."
+        }
+        L10nKey::UsagePrivateDisclosure => {
+            "Private endpoint: platform.deepseek.com/api/v0/users/get_user_summary only. Web userToken uses Bearer (not yet verified against first-party code or a real account); Harness grant uses x-dsh-auth-token and must have the matching issuer. Neither is an official API key. This private interface may change."
+        }
+        L10nKey::UsageBrowser => "Browser",
+        L10nKey::UsageProfile => "Browser profile",
+        L10nKey::UsageChooseBrowser => "Choose a supported browser",
+        L10nKey::UsageChooseProfile => "Choose a profile to verify and import",
+        L10nKey::UsageBrowserHelp => {
+            "Reads only userToken for https://platform.deepseek.com in the selected profile. Supports Chromium LevelDB and Firefox LocalStorage; Safari and the new Chromium SQLite format are unsupported. Material stays in memory, never in the vault, configuration, logs or temporary files. Refresh never requests system permission or switches profiles. Re-import after a source or token change."
+        }
+        L10nKey::UsageNormalWallet => "Platform topped-up wallet",
+        L10nKey::UsageBonusWallet => "Platform bonus wallet",
+        L10nKey::UsageBrowserLocked => {
+            "The selected browser source is locked. Close that browser yourself and retry; no other source will be read."
+        }
+        L10nKey::UsageBrowserDenied => {
+            "Access to the selected source was denied. Background refresh never requests permission. Check access or enter the session manually."
+        }
+        L10nKey::UsageBrowserMissing => {
+            "The selected profile or platform userToken is missing. Sign in with that profile and import again."
+        }
+        L10nKey::UsageBrowserUnsupported => {
+            "This platform or browser storage format is unsupported. Enter the session manually."
+        }
+        L10nKey::UsageBrowserChanged => {
+            "The selected source or session changed; the account cannot be confirmed. Import again explicitly. No source was switched."
+        }
+        L10nKey::UsageBrowserUnreadable => {
+            "Could not read the selected browser storage. No other profile was used. Check file access and browser version."
         }
         L10nKey::UsageAdd => "Add account…",
         L10nKey::UsageRefreshAll => "Refresh all",
@@ -391,7 +493,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageMinute => "Every minute",
         L10nKey::UsageFiveMinutes => "Every 5 minutes",
         L10nKey::UsageRename => "Rename…",
-        L10nKey::UsageReplace => "Replace key…",
+        L10nKey::UsageReplace => "Replace source…",
         L10nKey::UsageRemove => "Remove from lyrel…",
         L10nKey::UsageRemoveWarning => {
             "Only this local query account, its snapshots and its own credential slots are removed. Your DeepSeek account and API key are not revoked."
@@ -402,7 +504,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageConfirm => "Confirm",
         L10nKey::UsageLoading => "Query in progress",
         L10nKey::UsageEmpty => {
-            "No query accounts. Add a DeepSeek API key to verify its real balance and save it in the system credential store."
+            "No query accounts. Add an official DeepSeek API key, a manual platform session, or an explicitly selected browser source, then verify and save."
         }
         L10nKey::UsageRemoving => "Local removal incomplete — retry removal",
         L10nKey::UsageDisabled => "Refresh paused",
@@ -418,7 +520,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageDisable => "Pause refresh",
         L10nKey::UsageEnable => "Enable refresh",
         L10nKey::UsageOpen => "Open usage",
-        L10nKey::UsageAuthError => "Authentication failed. Replace the API key.",
+        L10nKey::UsageAuthError => {
+            "Authentication failed. Replace the credentials or explicitly re-import the selected source."
+        }
         L10nKey::UsageRateError => "DeepSeek rate limit reached. Refresh later.",
         L10nKey::UsageNetworkError => {
             "Network request failed or timed out. Check the connection and proxy."
