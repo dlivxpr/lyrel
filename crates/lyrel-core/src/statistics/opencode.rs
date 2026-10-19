@@ -118,7 +118,7 @@ pub(super) fn scan_source(
     }
 }
 
-fn parse(
+pub(super) fn parse(
     source: &Source,
     payload: crate::host::session_operations::opencode::OpenCodeStatistics,
     observed: i64,
