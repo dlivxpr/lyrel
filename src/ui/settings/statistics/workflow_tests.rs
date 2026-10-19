@@ -222,24 +222,6 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         &format!("statistics-check-source:{}", binding.key()),
     );
     settle(&app, &mut vcx);
-    click(&app, &mut vcx, &format!("statistics-edit-source:{}", binding.key()));
-    type_into(&app, &mut vcx, "statistics-source-selector", &temp.path().join("missing-history.jsonl").display().to_string());
-    click(&app, &mut vcx, "statistics-source-save");
-    settle(&app, &mut vcx);
-    vcx.update(|_, cx| {
-        let state = &app.read(cx).active_settings().unwrap().statistics;
-        assert!(state.management.error.is_some());
-        assert_eq!(state.results[&(HostId::LOCAL, Some("omp"))].totals.tokens().total(), Some(3_000_000));
-    });
-    click(&app, &mut vcx, "statistics-editor-cancel");
-    click(&app, &mut vcx, &format!("statistics-edit-source:{}", binding.key()));
-    click(&app, &mut vcx, "statistics-source-save");
-    settle(&app, &mut vcx);
-    vcx.update(|_, cx| {
-        let state = &app.read(cx).active_settings().unwrap().statistics;
-        assert_eq!(state.results[&(HostId::LOCAL, Some("omp"))].totals.tokens().total(), Some(3_000_000));
-        assert!(state.results[&(HostId::LOCAL, Some("omp"))].bindings.iter().any(|b| b.key() == binding.key()));
-    });
     click(&app, &mut vcx, "statistics-add-source");
     type_into(
         &app,

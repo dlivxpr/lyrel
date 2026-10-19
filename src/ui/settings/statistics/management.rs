@@ -27,7 +27,6 @@ pub(super) struct Management {
     revision: Uuid,
     pub(super) http: Arc<dyn storage::CatalogHttp>,
     editing_price: Option<(String, String, String)>,
-    editing_source: Option<SourceBinding>,
     editor_host: HostId,
     editor_window: Option<gpui_kit::AnyWindowHandle>,
 }
@@ -56,7 +55,6 @@ impl Management {
             revision: Uuid::new_v4(),
             http: Arc::new(storage::PublicCatalogHttp),
             editing_price: None,
-            editing_source: None,
             editor_host: HostId::LOCAL,
             editor_window: None,
         }
@@ -239,7 +237,6 @@ impl LyrelApp {
         state.editor_window = Some(window.window_handle());
         state.error = None;
         if editor == Editor::Source {
-            state.editing_source = None;
             state.selector.update(cx, |input, cx| input.set_value("", window, cx));
         }
         if editor == Editor::Price {
@@ -400,14 +397,10 @@ impl LyrelApp {
         let agent = state.source_agent;
         let launch = cx.global::<Config>().agent_launch.clone();
         let host = state.editor_host;
-        let previous = state.editing_source.clone();
         self.change_statistics_settings_on(
             host,
             Some(host),
             move |stored, host| {
-                if let Some(previous) = &previous {
-                    stored.sources.remove(previous);
-                }
                 stored
                     .sources
                     .add(host, agent, &selector, &launch)
@@ -575,7 +568,6 @@ impl LyrelApp {
             }
             for binding in &presentation.bindings {
                 let remove = binding.clone();
-                let edit = binding.clone();
                 let check = binding.clone();
                 let id = binding.key();
                 rows.push(
@@ -601,24 +593,6 @@ impl LyrelApp {
                                     )
                                     .disabled(disabled),
                                 )
-                                .child(self.statistics_management_button(
-                                    SharedString::from(format!("statistics-edit-source:{id}")),
-                                    t(L10nKey::StatisticsEditSource), cx,
-                                    move |this, window, cx| {
-                                        let agent = match edit.agent.as_str() {
-                                            "omp" => "omp", "pi" => "pi", "kimi" => "kimi", "opencode" => "opencode",
-                                            "hermes" => "hermes", _ => return,
-                                        };
-                                        this.edit_statistics(Editor::Source, window, cx);
-                                        if let Some(settings) = this.active_settings_mut() {
-                                            let state = &mut settings.statistics.management;
-                                            state.editing_source = Some(edit.clone());
-                                            state.editor_host = HostId(edit.host);
-                                            state.source_agent = agent;
-                                            state.selector.update(cx, |input, cx| input.set_value(edit.selector.clone(), window, cx));
-                                        }
-                                    },
-                                ).disabled(disabled))
                                 .child(
                                     self.statistics_management_button(
                                         SharedString::from(format!(

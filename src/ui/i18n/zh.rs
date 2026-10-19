@@ -321,7 +321,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsCatalogDisabled => "未启用",
         L10nKey::StatisticsManageSources => "来源…",
         L10nKey::StatisticsManagePrices => "Token 单价…",
-        L10nKey::StatisticsEditSource => "编辑来源…",
         L10nKey::StatisticsSaveSource => "保存来源",
         L10nKey::StatisticsPriceRow => "输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {read} · 缓存写入 {write}",
         L10nKey::StatisticsSourceLocation => "历史路径或原生服务 URL",
