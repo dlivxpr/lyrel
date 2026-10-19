@@ -116,6 +116,9 @@ pub(super) fn fetch(
         },
         proxy,
     )?;
+    if provider == Provider::MiMo && status == 302 {
+        return Err(UsageError::Authentication);
+    }
     if provider == Provider::StepFun {
         stepfun::response(status, &body)
     } else {
@@ -366,6 +369,19 @@ mod tests {
                 None
             ),
             Err(UsageError::RateLimited)
+        );
+        let http = Http {
+            replies: Mutex::new([(302, b"{}".to_vec())].into()),
+            seen: Mutex::new(Vec::new()),
+        };
+        assert_eq!(
+            query(
+                &http,
+                Provider::MiMo,
+                "serviceToken=session; userId=1024",
+                None
+            ),
+            Err(UsageError::Authentication)
         );
     }
 

@@ -479,3 +479,119 @@ fn private_session_redirect_does_not_forward_cookie_or_oasis_headers() {
         "redirect destination must receive no connection or credential headers"
     );
 }
+
+struct MiMoLoopback(String);
+impl BalanceHttp for MiMoLoopback {
+    fn get(
+        &self,
+        request: &UsageRequest<'_>,
+        _: Option<&str>,
+    ) -> Result<(u16, Vec<u8>), UsageError> {
+        let path = request
+            .endpoint()
+            .strip_prefix("https://platform.xiaomimimo.com")
+            .expect("MiMo target only");
+        DeepSeekHttp::send(request, None, &format!("{}{path}", self.0))
+    }
+}
+
+#[gpui_kit::test]
+fn mimo_manual_workflow_uses_real_get_cookie_and_expired_plan_keeps_known_balance(
+    cx: &mut TestAppContext,
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for body in [
+            r#"{"code":0,"data":{"balance":"12.50","giftBalance":"2.50","currency":"CNY"}}"#,
+            r#"{"code":0,"data":{"userId":"7012","idc":310}}"#,
+            r#"{"code":0,"data":{"planName":"Expired plan","expired":true,"currentPeriodEnd":"2026-10-01 00:00:00"}}"#,
+        ] {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(std::time::Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("controlled MiMo server: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                assert_eq!(stream.read(&mut byte).unwrap(), 1);
+                request.push(byte[0]);
+            }
+            requests.push(String::from_utf8(request).unwrap());
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        }
+        requests
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let (app, mut vcx) = harness(cx);
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    install(
+        &mut vcx,
+        dir.path().join("usage.json"),
+        vault.clone(),
+        Arc::new(MiMoLoopback(format!("http://{address}"))),
+        false,
+    );
+    open(&app, &mut vcx);
+    click(&mut vcx, "usage-add");
+    click(&mut vcx, "usage-provider");
+    vcx.simulate_keystrokes("down down enter");
+    vcx.run_until_parked();
+    type_into(&mut vcx, "usage-name", "MiMo loopback");
+    type_into(
+        &mut vcx,
+        "usage-key",
+        "api-platform_serviceToken=fixture; userId=7012; other=must-not-store",
+    );
+    click(&mut vcx, "usage-submit");
+    settle(&mut vcx, |d| d.stored.accounts.len() == 1);
+    let account =
+        vcx.update(|_, cx| cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0].clone());
+    let Balance::Provider(report) = account.snapshot.unwrap().balance else {
+        panic!("provider report")
+    };
+    assert_eq!(report.identity.as_deref(), Some("7012"));
+    assert_eq!(report.expired, Some(true));
+    assert_eq!(
+        report.plan_expires.as_deref(),
+        Some("2026-10-01 00:00:00 UTC")
+    );
+    assert_eq!(report.pools[0].remaining.as_deref(), Some("12.50"));
+    assert!(report.pools[4].remaining.is_none());
+    assert_eq!(
+        Accounts::load(dir.path().join("usage.json"), vault)
+            .unwrap()
+            .secret(account.id)
+            .unwrap(),
+        "api-platform_serviceToken=fixture; userId=7012"
+    );
+    for (request, path) in
+        server
+            .join()
+            .unwrap()
+            .iter()
+            .zip(["balance", "userProfile", "tokenPlan/detail"])
+    {
+        let lower = request.to_ascii_lowercase();
+        assert!(request.starts_with(&format!("GET /api/v1/{path} HTTP/1.1\r\n")));
+        assert!(lower.contains("\r\ncookie: api-platform_servicetoken=fixture; userid=7012\r\n"));
+        assert!(
+            !lower.contains("authorization:")
+                && !lower.contains("oasis-")
+                && !lower.contains("must-not-store")
+        );
+    }
+}

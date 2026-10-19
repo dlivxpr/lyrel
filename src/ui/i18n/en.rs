@@ -479,7 +479,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Access to the selected source was denied. Background refresh never requests permission. Check access or enter the session manually."
         }
         L10nKey::UsageBrowserMissing => {
-            "The selected profile or platform userToken is missing. Sign in with that profile and import again."
+            "The selected profile or required provider session fields are missing. Sign in with that profile and import again."
         }
         L10nKey::UsageBrowserUnsupported => {
             "This platform or browser storage format is unsupported. Enter the session manually."

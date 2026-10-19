@@ -475,6 +475,11 @@ impl UsagePage {
                     page.form_version.fetch_add(1, Ordering::SeqCst);
                     page.key.update(cx, |s, cx| s.set_value("", window, cx));
                     page.error = None;
+                    page.discovery_version += 1;
+                    page.discovering = false;
+                    page.profile_items.clear();
+                    page.profiles
+                        .update(cx, |s, cx| s.set_items(Vec::new(), window, cx));
                     page.source.update(cx, |s, cx| {
                         s.set_items(
                             if *provider == Provider::DeepSeek {

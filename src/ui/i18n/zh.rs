@@ -436,7 +436,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "系统拒绝读取所选来源。后台不会申请权限；请检查访问权限或手工输入会话。"
         }
         L10nKey::UsageBrowserMissing => {
-            "所选 profile 或平台 userToken 不存在。请在该 profile 登录后重新导入。"
+            "所选 profile 或服务商必需的会话字段不存在。请在该 profile 登录后重新导入。"
         }
         L10nKey::UsageBrowserUnsupported => "当前平台或浏览器存储格式不支持导入，请手工输入会话。",
         L10nKey::UsageBrowserChanged => {
