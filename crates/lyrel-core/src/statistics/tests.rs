@@ -328,7 +328,7 @@ fn statistics_analysis_never_spreads_cumulative_or_estimated_cost_across_days() 
     assert_eq!(analysis.models()[0].label(), None);
     assert_eq!(analysis.models()[0].totals().tokens().total(), Some(12));
     assert_eq!(analysis.totals().recorded_usd(), None);
-    assert_eq!(analysis.totals().unpriced_calls(), 0);
+    assert_eq!(analysis.totals().unpriced_calls(), 1);
     assert_eq!(analysis.streaks().longest(), None);
     assert!(analysis.days().iter().filter(|d| d.date().to_string() == "2026-03-07" || d.date().to_string() == "2026-03-08").all(|d| d.value(analysis::Metric::Tokens).is_none()));
     let today = DateWindow::calendar(Period::Today, now, None).unwrap();
@@ -769,5 +769,41 @@ fn statistics_pi_duplicate_identity_variants_are_counted_once_each() {
         !serde_json::to_string(&snapshot)
             .unwrap()
             .contains("PRIVATE BODY")
+    );
+}
+
+#[test]
+fn statistics_analysis_actual_zero_survives_parallel_native_estimate() {
+    use chrono::TimeZone;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("native.jsonl"),
+        header("paired", None) + &usage("u", 10, Some(0.0)),
+    )
+    .unwrap();
+    let mut snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(temp.path().into(), "paired")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let record = &mut snapshot.files[0].session.records[0];
+    record.coverage_start = Some(record.timestamp - 60);
+    record.estimated_usd = Some(0.8);
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let window = DateWindow::calendar(Period::Today, now, None).unwrap();
+    let analysis = snapshot.analyze(&window, now, None, 2026).unwrap();
+    assert_eq!(analysis.totals().recorded_usd(), Some(0.0));
+    assert_eq!(analysis.totals().estimated_usd(), Some(0.8));
+    assert_eq!(analysis.totals().unpriced_calls(), 0);
+    assert_eq!(analysis::Metric::Cost.value(analysis.totals()), Some(0.0));
+    assert_eq!(
+        analysis
+            .days()
+            .iter()
+            .find(|d| d.date() == now.date_naive())
+            .unwrap()
+            .value(analysis::Metric::Cost),
+        Some(0.0)
     );
 }

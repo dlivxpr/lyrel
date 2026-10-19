@@ -96,7 +96,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsInstallRefResolved => "已解析来源：{source}",
         L10nKey::StatisticsTitle => "统计",
         L10nKey::StatisticsKeywords => {
-            "统计 omp pi kimi Kimi Code OpenCode 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
+            "统计 omp pi kimi Kimi Code OpenCode Hermes 原生历史 Token 费用 会话 机器 profile 日期 范围 总览"
         }
         L10nKey::StatisticsToday => "今天",
         L10nKey::StatisticsWeek => "本周",
@@ -132,6 +132,26 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsPartial => "结果不完整，保留值可能过期或受限；请查看下方来源诊断",
         L10nKey::StatisticsTokens => "总 Token",
         L10nKey::StatisticsCost => "历史记录费用",
+        L10nKey::StatisticsEstimatedCost => "原生估算费用（独立于实际费用）",
+        L10nKey::StatisticsHermesLimits => {
+            "Hermes 使用正式 launcher 的有效 home/profile。公开历史不含子代理用量，也不支持分页。累计用量仅在日期范围覆盖整个会话时纳入，绝不摊日。实际与原生估算费用分别展示，不相加。"
+        }
+        L10nKey::StatisticsHermesCoverage => {
+            "Hermes 公开历史不含子代理用量、归档和零消息会话。总量仅覆盖可见的原生 CLI 历史。"
+        }
+        L10nKey::StatisticsHermesEmpty => {
+            "Hermes 返回空结果。公开接口无法区分空历史和 profile 数据库不可用。"
+        }
+        L10nKey::StatisticsHermesWindow => {
+            "Hermes 已达到全局或项目预览窗口。公开接口没有 offset/cursor，此结果不是全部历史。"
+        }
+        L10nKey::StatisticsHermesProfile => {
+            "Hermes 返回了不同的 profile，已忽略该行，未回退到其他 profile。"
+        }
+        L10nKey::StatisticsHermesLineage => "Hermes 返回的原生谱系重叠，已忽略重复的累计用量。",
+        L10nKey::StatisticsHermesTime => {
+            "Hermes 累计用量缺少可靠的活动区间，无法归入所选日期范围。"
+        }
         L10nKey::StatisticsSessions => "活跃主会话",
         L10nKey::StatisticsInput => "输入 Token",
         L10nKey::StatisticsOutput => "输出 Token",
@@ -141,17 +161,17 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsUnknown => "未知",
         L10nKey::StatisticsUnpriced => "未计价",
         L10nKey::StatisticsUnpricedCalls => {
-            "没有记录费用的调用：{count}。已知费用仅为小计，不是账单或账户额度；不联网取价或推算单价。"
+            "缺少实际费用的计量记录：{count}。已知实际费用仅为小计，不是账单或账户额度；原生估算费用独立展示，不联网取价或推算单价。"
         }
         L10nKey::StatisticsNotComparable => "不可比较",
         L10nKey::StatisticsComparison => {
             "上期：{tokens} Token · {cost} · {sessions} 个主会话\nToken 变化：{change}"
         }
         L10nKey::StatisticsEmpty => {
-            "此范围没有原生活动。请检查所选机器与来源路径、切换日期范围，或使用所选智能体后刷新。"
+            "此范围没有可计入的原生活动。请检查所选机器、来源和日期范围后刷新。跨越范围边界的累计记录仍不归入单日。"
         }
         L10nKey::StatisticsPrivacy => {
-            "只读 · omp 18.12.1／pi 1.3.0 JSONL／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 调用为增量，费用保持未知；pi 工具／摘要用量不推断模型。自定义存储必须可发现，跳过链接、未知继承与分页上限均显示诊断。"
+            "只读 · omp 18.12.1／pi 1.3.0 JSONL／Kimi Code 2.2.0 durable 1.5／OpenCode 2.x 公开 API／Hermes 0.22.2 公开网关 · 仅在内存缓存结构化计量，不保留提示词、对话正文或凭据，不请求在线价表。Kimi 调用为增量，费用保持未知；pi 工具／摘要用量不推断模型。自定义存储必须可发现，覆盖、谱系与分页上限均显示诊断。"
         }
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::StatisticsAnalysisTitle => "活动与明细",

@@ -1,4 +1,6 @@
 //! 原生历史的结构化统计 seam；扫描只缓存计量元数据，不保留对话正文。
+mod hermes;
+pub use hermes::discover_hermes;
 pub mod analysis;
 mod kimi;
 #[cfg(test)]
@@ -30,6 +32,8 @@ pub struct Source {
     agent: String,
     #[serde(skip)]
     opencode_request: Option<Box<crate::host::session_operations::SessionOperation>>,
+    #[serde(skip)]
+    hermes_request: Option<std::sync::Arc<crate::host::session_operations::SessionOperation>>,
     #[serde(default)]
     max_depth: Option<u8>,
     #[serde(default)]
@@ -52,6 +56,7 @@ impl Source {
             scope: scope.into(),
             agent: "omp".into(),
             opencode_request: None,
+            hermes_request: None,
             max_depth: None,
             discovery_issue: None,
         }
@@ -62,6 +67,7 @@ impl Source {
             scope: scope.into(),
             agent: "kimi".into(),
             opencode_request: None,
+            hermes_request: None,
             max_depth: None,
             discovery_issue: None,
         }
@@ -72,6 +78,7 @@ impl Source {
             scope: scope.into(),
             agent: "pi".into(),
             opencode_request: None,
+            hermes_request: None,
             max_depth: Some(0),
             discovery_issue: None,
         }
@@ -150,6 +157,15 @@ pub struct UsageRecord {
     time_unknown: bool,
 }
 impl UsageRecord {
+    pub fn time_unknown(&self) -> bool {
+        self.time_unknown
+    }
+    pub fn coverage_start(&self) -> Option<i64> {
+        self.coverage_start
+    }
+    pub fn estimated_usd(&self) -> Option<f64> {
+        self.estimated_usd
+    }
     pub fn timestamp(&self) -> i64 {
         self.timestamp
     }
@@ -164,12 +180,6 @@ impl UsageRecord {
     }
     pub fn recorded_usd(&self) -> Option<f64> {
         self.recorded_usd
-    }
-    pub fn coverage_start(&self) -> Option<i64> {
-        self.coverage_start
-    }
-    pub fn estimated_usd(&self) -> Option<f64> {
-        self.estimated_usd
     }
     fn overlaps(&self, window: &DateWindow) -> bool {
         if self.time_unknown {
@@ -241,9 +251,6 @@ pub struct Snapshot {
     issues: Vec<ScanIssue>,
 }
 impl Snapshot {
-    pub fn report_issue(&mut self, path: PathBuf, reason: String) {
-        self.issues.push(ScanIssue { path, reason });
-    }
     pub fn host(&self) -> u64 {
         self.host
     }
@@ -385,7 +392,10 @@ impl FileFacts {
             )
     }
     fn active_in(&self, window: &DateWindow) -> bool {
-        self.activity_timestamps().any(|t| window.contains(t))
+        (window.start().is_none()
+            && window.end().is_none()
+            && self.session.records.iter().any(|r| r.time_unknown))
+            || self.activity_timestamps().any(|t| window.contains(t))
     }
 }
 #[derive(Clone, Debug)]
@@ -406,10 +416,11 @@ impl Totals {
         self.calls += 1;
         self.cumulative_records +=
             u64::from(record.coverage_start.is_some() || record.time_unknown);
+        if let Some(cost) = record.estimated_usd {
+            self.estimated_usd = Some(self.estimated_usd.unwrap_or(0.) + cost);
+        }
         if let Some(cost) = record.recorded_usd {
             self.recorded_usd = Some(self.recorded_usd.unwrap_or(0.) + cost);
-        } else if let Some(cost) = record.estimated_usd {
-            self.estimated_usd = Some(self.estimated_usd.unwrap_or(0.) + cost);
         } else {
             self.unpriced_calls += 1;
         }
@@ -477,6 +488,7 @@ impl Default for Totals {
 pub struct StatisticsCache {
     files: HashMap<(u64, String, String, PathBuf), (Meta, FileFacts)>,
     opencode: HashMap<(u64, String), (Source, Vec<FileFacts>, i64)>,
+    native: HashMap<(u64, String, String), Vec<FileFacts>>,
 }
 
 /// Blocking Host operation. GUI callers dispatch using HostOps. No network pricing.
@@ -512,7 +524,11 @@ pub fn scan(
     let mut bytes = 0;
     for source in sources {
         if let Some(reason) = &source.discovery_issue {
-            snapshot.report_issue(source.root.clone(), reason.clone());
+            snapshot = snapshot.with_issue(source.root.clone(), reason.clone());
+            continue;
+        }
+        if source.agent == "hermes" {
+            hermes::scan_source(host, source, cache, &mut snapshot);
             continue;
         }
         if source.agent == "opencode" {
