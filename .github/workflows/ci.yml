@@ -40,29 +40,23 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
-  # `ui::` and `terminal::` must not reach the filesystem or git
-  # directly, because once a workspace can be remote those calls answer for the
-  # wrong machine. The allowlist of genuinely-local paths lives in the
-  # script, next to the reason each one is exempt.
-  #
-  # A standalone job on purpose, and one that must stay *non-required*: main's
-  # required checks are `rustfmt` and the three `build & test (<target>)` names,
-  # and folding this into either would make it required the moment it lands —
-  # wedging every open PR on a check they have never seen. Same reasoning as
-  # `server-musl` below. Cheap enough (a checkout and a grep) that it does not
-  # need caching or a toolchain.
+  # Host 边界检查独立运行；检查器使用 Node.js 标准库解析 Rust 测试模块。
   host-boundary:
     name: host boundary
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - run: bash .github-disable/scripts/check-host-boundary.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: bash .github/scripts/check-host-boundary.sh
 
-  # Docs-only PRs skip the Rust jobs: no markdown or docs/ file is compiled in.
-  # Workflow-level `paths-ignore` would leave the required checks pending
-  # forever, and a matrix job skipped by a job-level `if` reports under an
-  # unexpanded name, so `build` runs and skips its steps instead.
+  # 仅跳过明确不编入程序的文档路径；不能按任意目录的 Markdown 后缀跳过，
+  # 因为 include_str!/include_bytes! 可以将资源或技能文档编入二进制。
+  # 当前源码没有嵌入 docs/ 或根目录 Markdown；新增这类输入时需同步此过滤器。
+  # 保留矩阵 job，仅跳过步骤，确保每个目标的检查名称稳定。
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -80,7 +74,7 @@ jobs:
         run: |
           files=$(git diff --name-only --no-renames HEAD^1 HEAD)
           if [ "${{ github.event_name }}" != pull_request ] \
-              || grep -qvE '^docs/|\.mdx?$' <<<"$files"; then
+              || grep -qvE '^docs/.*\.mdx?$|^[^/]+\.md$' <<<"$files"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
@@ -93,7 +87,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
@@ -112,6 +106,14 @@ jobs:
       - name: Checkout lyrel
         if: needs.changes.outputs.code == 'true'
         uses: actions/checkout@v4
+
+      # Host 检查和 Pi 桥契约测试要求 Node.js 22.19+；setup-node 提供当前
+      # runner 平台的原生 Node，Linux 不通过 Windows 的 node.exe 执行测试。
+      - uses: actions/setup-node@v7
+        if: needs.changes.outputs.code == 'true'
+        with:
+          node-version: '22'
+          package-manager-cache: false
 
       # GUI 使用 registry 的 gpui-kit；Windows SDK 由 runner 提供。
       # Linux headless 保留 GSSAPI 的 MIT Kerberos 构建依赖，不安装 GUI 库。
@@ -180,7 +182,7 @@ jobs:
         if: needs.changes.outputs.code == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          & ./.github-disable/scripts/assert-no-vcruntime.ps1 `
+          & ./.github/scripts/assert-no-vcruntime.ps1 `
             "target/${{ matrix.target }}/debug/lyrel-app.exe" `
             "target/${{ matrix.target }}/debug/lyrel.exe" `
             "target/${{ matrix.target }}/debug/lyrel-server.exe"
@@ -236,11 +238,6 @@ jobs:
   # version, so it is linked fully static against musl rather than built per
   # distro. Compile-only — this job publishes nothing; release.yml carries the
   # same job with an upload step.
-  #
-  # Deliberately a *separate* job rather than two more rows in the `build` matrix
-  # above: those three `build & test (<target>)` names are main's required
-  # checks, and reshaping that matrix would wedge branch protection on every open
-  # PR. Keep this job non-required until it has a few weeks of green.
   server-musl:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -293,54 +290,26 @@ jobs:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
 
-      # The crate split lands separately; until `lyrel-server` exists as a
-      # workspace member this job has nothing to build. Skip cleanly rather than
-      # fail, so the workflow can land before the split and simply start working
-      # once it arrives. `--no-deps` keeps this to a manifest parse — no
-      # resolution, no network.
-      - name: Look for the lyrel-server package
-        id: probe
-        run: |
-          set -euo pipefail
-          if cargo metadata --no-deps --format-version 1 \
-              | jq -e '[.packages[].name] | index("lyrel-server")' >/dev/null; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::lyrel-server is not a workspace member yet (crate split, M1) — nothing to build"
-          fi
-
-      # `-p lyrel-server` addresses the package by name, so this survives whatever
-      # directory layout the split settles on. It also keeps feature unification
-      # scoped to the server's own dependency graph: the GUI crate is the one
-      # that turns on lyrel-core's `gssapi` feature, and that feature cannot build
-      # under musl (libgssapi-sys wants a system MIT/Heimdal krb5). Building the
-      # whole workspace here would drag it in and fail.
+      # 单独构建 server，避免 GUI 的 feature 统一启用 GSSAPI；musl 无法
+      # 链接依赖系统 MIT/Heimdal Kerberos 的 libgssapi。
       - name: Build static lyrel-server
-        if: steps.probe.outputs.present == 'true'
         run: cargo zigbuild --release --locked -p lyrel-server --target ${{ matrix.target }}
 
       - name: Assert the binary is static
-        if: steps.probe.outputs.present == 'true'
-        run: bash .github-disable/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"
+        run: bash .github/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"
 
   # The same headless server for remote Macs. A second job rather than more rows
   # in `server-musl`: that one exists to cross-compile from Linux with zig, and
   # neither half of it applies here — an Apple target needs an Apple runner for
   # the SDK, and there is no musl to link.
   #
-  # Both slices come off one arm64 runner. Cross-compiling to x86_64 needs
-  # nothing but the rustup target: the Xcode SDK carries both architectures, and
-  # the linker is the same one.
-  #
-  # Compile-only, like `server-musl` — release.yml carries the same job with an
-  # upload step. Non-required until it has a few weeks of green, for the
-  # branch-protection reason spelled out above.
+  # 仅构建 Apple Silicon；独立 server 不依赖桌面 GUI 或系统 Kerberos。
+  # 与 server-musl 一样仅编译、签名并检查；release.yml 负责上传资产。
   server-macos:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     name: lyrel-server macOS (${{ matrix.target }})
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -362,40 +331,17 @@ jobs:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
 
-      - name: Look for the lyrel-server package
-        id: probe
-        run: |
-          set -euo pipefail
-          if cargo metadata --no-deps --format-version 1 \
-              | jq -e '[.packages[].name] | index("lyrel-server")' >/dev/null; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::lyrel-server is not a workspace member yet (crate split, M1) — nothing to build"
-          fi
-
-      # `-p lyrel-server` for the same two reasons as the musl job: it addresses
-      # the package by name whatever the layout, and it keeps the GUI's `gssapi`
-      # feature out of the unified feature set. That feature does resolve on
-      # macOS, unlike under musl, but linking Heimdal into a binary that gets
-      # pushed to someone else's Mac is exactly the kind of dependency
-      # assert-macho.sh is there to refuse.
+      # 独立 server 不统一 GUI 的 GSSAPI feature；assert-macho.sh 会拒绝
+      # 需要目标 Mac 额外安装 Homebrew/Kerberos 库的二进制。
       - name: Build lyrel-server
-        if: steps.probe.outputs.present == 'true'
         run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
 
-      # Ad-hoc, so it needs no identity and no secrets — this is not the code
-      # signing the GUI bundles get, and it buys nothing with Gatekeeper. It is
-      # the signature the arm64 kernel requires before it will execute anything
-      # at all. The linker already applies one to the arm64 slice; x86_64 comes
-      # out bare, and that is the slice a Rosetta shell on an Apple Silicon Mac
-      # asks for. `--force` makes this idempotent across both.
+      # Apple Silicon 内核要求可执行文件带签名；ad-hoc 不需要凭据，
+      # 也不等于 Developer ID 签名或 Gatekeeper 公证。
       - name: Ad-hoc sign the binary
-        if: steps.probe.outputs.present == 'true'
         run: codesign --force --sign - "target/${{ matrix.target }}/release/lyrel-server"
 
       - name: Assert the binary is self-contained
-        if: steps.probe.outputs.present == 'true'
         run: |
-          bash .github-disable/scripts/assert-macho.sh \
+          bash .github/scripts/assert-macho.sh \
             "target/${{ matrix.target }}/release/lyrel-server" "${{ matrix.arch }}"

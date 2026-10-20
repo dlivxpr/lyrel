@@ -13,7 +13,7 @@
 #   lyrel-updater `windows::extract_portable_archive` — ZIP entry rules
 #   lyrel-updater `windows::verify_file_version`      — setup.exe PE version
 #
-# 在仓库根目录运行：& ./.github-disable/scripts/verify-windows-package.ps1 <arch> [version]
+# 在仓库根目录运行：& ./.github/scripts/verify-windows-package.ps1 <arch> [version]
 # version 默认使用根 Cargo.toml，与打包脚本相同。
 $ErrorActionPreference = 'Stop'
 

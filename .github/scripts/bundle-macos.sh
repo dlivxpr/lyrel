@@ -1,5 +1,5 @@
 #!/bin/bash
-# 在仓库根目录运行：bash .github-disable/scripts/bundle-macos.sh <target-triple> <arch-label>
+# 在仓库根目录运行：bash .github/scripts/bundle-macos.sh <target-triple> <arch-label>
 # Package the release binary into dist/lyrel.app, then publish both:
 #   dist/lyrel-<version>-macos-<arch>.zip  (in-app updater)
 #   dist/lyrel-<version>-macos-<arch>.dmg  (drag-to-Applications install)

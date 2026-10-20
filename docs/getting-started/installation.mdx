@@ -3,8 +3,8 @@ title: "安装"
 description: "macOS、Windows 桌面构建，以及保留的 Linux server／CLI 和源码构建方法。"
 ---
 
-lyrel 的独立初版版本为 `0.1.0`，目前尚无实际发布资产。发布资产可在
-[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 查看；以下介绍预期的原生安装包形式与使用方式，不表示这些安装包已发布或已完成签名、公证。安装包尚未提供时，请从源码构建，不要回退下载上游安装包。
+lyrel 的独立初版版本为 `0.1.0`。安装包及校验和以
+[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 中对应版本的正式资产为准。macOS 包采用 ad-hoc 签名，未经过 Developer ID 签名或 Apple 公证；Windows 包未签名。缺少所需安装包时，请从源码构建，不要回退下载上游安装包。
 
 桌面端仅支持 macOS、Windows，字体内嵌于二进制文件中，无需预先安装运行时。
 Linux 不再提供 GUI、AppImage 或桌面 updater；共享核心、server、CLI、SSH 远程开发与 Windows WSL 仍受支持。
@@ -118,7 +118,7 @@ About → Check now** 手动检查，然后选择 **Update and relaunch**。发�
 
 筛选、校验及各平台安装限制见[更新说明](/reference/updates)。
 
-lyrel 独立初版为 `0.1.0`，目前尚无实际发布资产；缺少匹配包时不会回退下载上游安装包。
+lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装包。
 
 <a id="building-from-source"></a>
 ## 从源码构建
@@ -133,7 +133,7 @@ GUI 与 CLI 的终端解析统一采用正式 `rio-vt =0.5.28`（不启用默认
 
 桌面用量的浏览器 LocalStorage 读取使用正式 registry 的 `rusty-leveldb 4.0.2` 与 `rusqlite 0.40.2`（`bundled`）。SQLite 随 crate 构建，无需另装系统 SQLite；仍需下述平台 C/C++ 编译工具链。Snappy、文件锁、SHA-256 与内存擦除也使用锁图中的正式依赖，不引入 Git／补丁包或浏览器注入工具。
 
-手动执行 `bash .github-disable/scripts/check-host-boundary.sh` 时，需使用 LF 工作树，并让同一 Bash 的 `PATH` 可找到 Node.js 22.19+（与 pi 桥测试运行时一致）。检查器只用 Node.js 标准库解析 Rust 测试模块归属，不运行 Cargo、编译器或原生桌面；WSL 需使用 Linux Node，不能误用 `node.exe`。
+手动执行 `bash .github/scripts/check-host-boundary.sh` 时，需使用 LF 工作树，并让同一 Bash 的 `PATH` 可找到 Node.js 22.19+（与 pi 桥测试运行时一致）。检查器只用 Node.js 标准库解析 Rust 测试模块归属，不运行 Cargo、编译器或原生桌面；WSL 需使用 Linux Node，不能误用 `node.exe`。
 
 <Tabs>
   <Tab title="macOS">
@@ -184,14 +184,14 @@ GUI 与 CLI 的终端解析统一采用正式 `rio-vt =0.5.28`（不启用默认
 
 ## 在专用工作树中手动打包
 
-`.github-disable/` 中的脚本可手动执行，但工作流仍保持禁用。这些脚本会删除当前
+`.github/scripts/` 中的脚本同时用于 GitHub Actions 和手动打包。这些脚本会删除当前
 工作目录的 `dist/`，因此仅可在专用、可丢弃的打包工作树根目录运行，不能在含用户产物的
-工作树运行。以下命令是验证入口，不表示
-已经在各系统执行；不得为打包验收自行安装、注册应用或配置签名凭据。
+工作树运行。以下命令是验证入口，不表示已经在各系统执行；不得为打包验收自行安装、
+注册应用或配置签名凭据。
 
 所有桌面包都使用同版本 GUI、CLI 和 updater。`--target` 不可省略，因为脚本读取
 `target/<target>/release/`。脚本直接读取根 `Cargo.toml` 的 stable 版本，首次为 `0.1.0`；
-禁用的 release workflow 还要求标签精确等于 `v<version>`。完整分发不要设置跳过 updater 的
+release workflow 还要求标签精确等于 `v<version>`。完整分发不要设置跳过 updater 的
 `LYREL_PACKAGE_*` 开关，不以旧版本或历史发布元数据推断新版本。
 
 ### Windows
@@ -203,8 +203,8 @@ x86_64 的 Linux musl server 放在 `bundled-server/` 中；不要用占位文�
 ```powershell
 pwsh scripts/prepare-conpty.ps1
 cargo build --locked --release --target x86_64-pc-windows-msvc --package lyrel --package lyrel-cli --features updater
-& ./.github-disable/scripts/bundle-windows.ps1 x86_64-pc-windows-msvc x86_64
-& ./.github-disable/scripts/verify-windows-package.ps1 x86_64
+& ./.github/scripts/bundle-windows.ps1 x86_64-pc-windows-msvc x86_64
+& ./.github/scripts/verify-windows-package.ps1 x86_64
 ```
 
 脚本输出安装器和 ZIP；ZIP 根目录直接
@@ -222,7 +222,7 @@ ConPTY 配对文件与许可，及必须存在的 `server/`；Inno 使用相同 
 
 ```bash
 cargo build --locked --release --target aarch64-apple-darwin --package lyrel --package lyrel-cli --features updater
-bash .github-disable/scripts/bundle-macos.sh aarch64-apple-darwin arm64
+bash .github/scripts/bundle-macos.sh aarch64-apple-darwin arm64
 ```
 
 DMG 和更新 ZIP 都承载 `lyrel.app`。`Contents/MacOS/` 内包含 `lyrel-app`、`lyrel`、
@@ -245,28 +245,38 @@ Windows 桌面与 server 均只发布 x86-64。
 | Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
 
 macOS／Windows server 在对应工具链中使用 `cargo build --release --locked -p lyrel-server --target <target>`；
-Linux musl server 按保留的 release 材料使用 Zig 与 cargo-zigbuild：
+Linux musl server 按 release workflow 使用 Zig 与 cargo-zigbuild：
 
 ```bash
 cargo zigbuild --release --locked -p lyrel-server --target x86_64-unknown-linux-musl
-bash .github-disable/scripts/assert-static.sh target/x86_64-unknown-linux-musl/release/lyrel-server
+bash .github/scripts/assert-static.sh target/x86_64-unknown-linux-musl/release/lyrel-server
 ```
 Windows 包内 WSL server 固定为 x86_64：构建 `x86_64-unknown-linux-musl` 后，将实际二进制复制并命名为
 `bundled-server/lyrel-server-linux-x86_64-musl`，再打 Windows 包；不能放占位文件，也不能重命名其他架构的产物。
 macOS server 沿用 ad-hoc 签名和 `assert-macho.sh` 检查，Windows server 使用
-`assert-no-vcruntime.ps1` 检查；目标和参数以 `.github-disable/workflows/release.yml` 为准。
+`assert-no-vcruntime.ps1` 检查；目标和参数以 `.github/workflows/release.yml` 为准。
 
-Windows server 资产不是裸 exe：先准备 x64 的官方 ConPTY，再把构建的 `lyrel-server.exe`、x64 `conpty.dll`／`OpenConsole.exe`、`LICENSE-ConPTY.txt` 和项目 `LICENSE.txt` 以扁平布局打入上述 ZIP。禁用的 `server-windows` workflow 与开发构建共用 `scripts/prepare-conpty.ps1`，打包前重新核对固定 SHA-256；整个 ZIP 纳入同一份 `checksums.txt`。不要仅重命名 exe 为 ZIP，也不要省略配套文件。
+Windows server 资产不是裸 exe：先准备 x64 的官方 ConPTY，再把构建的 `lyrel-server.exe`、x64 `conpty.dll`／`OpenConsole.exe`、`LICENSE-ConPTY.txt` 和项目 `LICENSE.txt` 以扁平布局打入上述 ZIP。`server-windows` job 与开发构建共用 `scripts/prepare-conpty.ps1`，打包前重新核对固定 SHA-256；整个 ZIP 纳入同一份 `checksums.txt`。不要仅重命名 exe 为 ZIP，也不要省略配套文件。
 
-将各平台的正式桌面及 server 资产汇总到同一目录后，使用与禁用 workflow 相同的入口：
+将各平台的正式桌面及 server 资产汇总到同一目录后，使用与 workflow 相同的入口：
 
 ```bash
-bash .github-disable/scripts/generate-checksums.sh <asset-dir>
+bash .github/scripts/generate-checksums.sh <asset-dir>
 ```
 
 该入口需要 Bash 与 GNU coreutils，生成并复核按裸文件名排序的 SHA-256 `checksums.txt`，
 排除打包暂存目录。校验和必须与实际发布字节一致，不能用 fixture 清单代替。
 上述命令仅构建、打包和本地验证，不启用 Actions，不创建 tag／release，也不执行安装。
+
+### GitHub CI 与发布
+
+`.github/workflows/ci.yml` 在 `main` push、pull request 和手动触发时验证格式、Host 边界、
+Windows x86-64／macOS Apple Silicon 桌面及 headless、Linux GNU 完整 features 和静态 musl server。
+Node.js 22 显式安装，用于 Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。
+
+发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
+及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
+手动触发 release workflow 仅构建，不发布；重跑不能覆盖已发布版本。
 
 ### 品牌切换后的维护与验收
 

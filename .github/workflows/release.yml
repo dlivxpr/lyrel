@@ -1,6 +1,4 @@
 name: Release
-# 禁用材料：保持在 .github-disable/，不得移入 .github/workflows/。
-# 手动打包和验证直接运行本文件引用的 .github-disable/scripts/ 入口。
 
 on:
   push:
@@ -8,23 +6,49 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check stable workspace version and tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "::error::workspace.package.version must be stable"; exit 1;
+          }
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::release tag must match workspace.package.version: v$VERSION"; exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch && "$GITHUB_REF" != "refs/tags/v$VERSION" ]]; then
+            echo "::error::only an exact stable version tag can assemble a release"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   build:
-    # The Windows installer embeds the Linux musl `lyrel-server` so a WSL distro
-    # can be served the binary the client already shipped with, instead of
-    # downloading one (WSL installs nothing over the network). That
-    # binary comes from `server-musl`, so the two jobs can no longer run in
-    # parallel. Serialising all four platforms behind it costs a few minutes on
-    # a release — cheap next to splitting the Windows entry into its own job and
-    # duplicating the whole toolchain/caching preamble.
-    needs: server-musl
+    # Windows 包必须嵌入真实 Linux musl WSL server；缺失时停止打包。
+    needs: [version, server-musl]
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             os: macos
             arch: arm64
             target: aarch64-apple-darwin
@@ -39,21 +63,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: lyrel
+          persist-credentials: false
 
-      # GUI 依赖通过 registry 的 gpui-kit 解析，不需要额外源码 checkout。
-
-      - name: Check stable version and tag
-        working-directory: lyrel
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
-            echo "::error::Cargo.toml must declare a stable version"; exit 1;
-          }
-          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
-            echo "::error::release tag must match Cargo.toml: v$VERSION"; exit 1
-          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -62,8 +73,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: lyrel
-          # Two Windows legs share a runner OS; without the target in the key
-          # they would overwrite each other's cache.
+          # 每个目标独立缓存，避免平台产物相互覆盖。
           key: ${{ matrix.target }}
 
       # Windows build.rs fails without the prepared ConPTY pair: fetch and
@@ -89,7 +99,7 @@ jobs:
             --bin lyrel-updater --target "${{ matrix.target }}"
 
       # ---- Packaging: one step per OS ----------------------------------------
-      # macOS 提供签名、公证的 DMG；Windows 提供 Inno Setup 与便携 ZIP。
+      # 无 Apple secrets 时使用 ad-hoc 签名，不声称 Developer ID 或公证。
       - name: Bundle macOS DMG
         if: matrix.os == 'macos'
         working-directory: lyrel
@@ -103,7 +113,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bash .github-disable/scripts/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
+        run: bash .github/scripts/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
 
       # 完整 stable Windows 包必须带同架构 WSL server；缺失时停止打包。
       - name: Fetch the bundled Linux server
@@ -117,7 +127,7 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: lyrel
         shell: pwsh
-        run: '& ./.github-disable/scripts/bundle-windows.ps1 "${{ matrix.target }}" "${{ matrix.arch }}"'
+        run: '& ./.github/scripts/bundle-windows.ps1 "${{ matrix.target }}" "${{ matrix.arch }}"'
 
       # The in-app updater refuses a package whose marker, helper or stamped
       # version is wrong — on the user's machine, after the download. Check the
@@ -126,16 +136,9 @@ jobs:
         if: matrix.os == 'windows'
         working-directory: lyrel
         shell: pwsh
-        run: '& ./.github-disable/scripts/verify-windows-package.ps1 "${{ matrix.arch }}"'
+        run: '& ./.github/scripts/verify-windows-package.ps1 "${{ matrix.arch }}"'
 
-      # Hand the artifacts to the assemble job rather than uploading them to the
-      # release here. Four parallel jobs each publishing their own slice would
-      # make the release "latest" the moment the *first* platform finished — the
-      # in-app update check (src/core/update.rs) reads /releases/latest, so users
-      # would be prompted to download a release that was still missing most of
-      # its assets. Same glob list as before: the bundle scripts leave
-      # intermediates in dist/ (lyrel.app, entitlements.plist, the Windows staging
-      # dir) that must not reach the release assets.
+      # 只上传正式包；应用目录、entitlements 和 Windows 暂存目录不得进入 Release。
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.os }}-${{ matrix.arch }}
@@ -155,6 +158,8 @@ jobs:
   # Separate from the `build` matrix above because it shares nothing with it: no
   # GUI toolchain, no bundling, no code signing, two targets off one runner.
   server-musl:
+    needs: version
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       # `target` is the build triple; `asset` is the published filename. They
@@ -175,6 +180,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: lyrel
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -208,7 +214,7 @@ jobs:
 
       - name: Assert the binary is static
         working-directory: lyrel
-        run: bash .github-disable/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"
+        run: bash .github/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"
 
       # Flat, version-free asset name — the tag in the download URL carries the
       # version. See `install::asset` for the contract the client
@@ -235,12 +241,10 @@ jobs:
   # rest of the reasoning; keep the workflow matrices and `install::asset` in
   # sync.
   #
-  # Not code-signed or notarized, and deliberately: this binary is never
-  # downloaded by the destination Mac. The client fetches it, verifies it against
-  # checksums.txt and writes it over SFTP, which sets no quarantine attribute, so
-  # Gatekeeper is not in the path at all. The ad-hoc signature the linker applies
-  # is all arm64 asks for, and `assert-macho.sh` checks it is there.
+  # macOS server 只做 ad-hoc 签名和 Mach-O 自包含检查，不提供公证声明。
   server-macos:
+    needs: version
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -248,7 +252,7 @@ jobs:
           - target: aarch64-apple-darwin
             arch: arm64
             asset: lyrel-server-macos-aarch64
-    runs-on: macos-latest
+    runs-on: macos-15
     env:
       RUSTFLAGS: -C strip=symbols
     steps:
@@ -256,6 +260,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: lyrel
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -271,11 +276,7 @@ jobs:
         working-directory: lyrel
         run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
 
-      # Ad-hoc — no identity, no secrets, and nothing to do with the notarized
-      # signing the GUI bundles get. It is what the arm64 kernel requires before
-      # it will execute a binary at all: the linker signs the arm64 slice
-      # itself, x86_64 comes out bare, and x86_64 is what a Rosetta shell on an
-      # Apple Silicon Mac asks for. `--force` makes it idempotent across both.
+      # 明确保留 ad-hoc 签名；不依赖 Apple secrets。
       - name: Ad-hoc sign the binary
         working-directory: lyrel
         run: codesign --force --sign - "target/${{ matrix.target }}/release/lyrel-server"
@@ -283,7 +284,7 @@ jobs:
       - name: Assert the binary is self-contained
         working-directory: lyrel
         run: |
-          bash .github-disable/scripts/assert-macho.sh \
+          bash .github/scripts/assert-macho.sh \
             "target/${{ matrix.target }}/release/lyrel-server" "${{ matrix.arch }}"
 
       - name: Stage the asset
@@ -317,6 +318,8 @@ jobs:
   # Symbols are stripped through the profile instead.
   #
   server-windows:
+    needs: version
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -331,6 +334,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: lyrel
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -358,7 +362,7 @@ jobs:
       - name: Assert the binary needs no VC++ redistributable
         working-directory: lyrel
         shell: pwsh
-        run: '& ./.github-disable/scripts/assert-no-vcruntime.ps1 "target/${{ matrix.target }}/release/lyrel-server.exe"'
+        run: '& ./.github/scripts/assert-no-vcruntime.ps1 "target/${{ matrix.target }}/release/lyrel-server.exe"'
 
       # Zip the server with the ConPTY set build.rs staged beside it. The
       # trio is re-hashed against the pinned manifest here so a staging
@@ -399,56 +403,110 @@ jobs:
           path: lyrel/dist/${{ matrix.asset }}
           if-no-files-found: error
 
-  # Single assembly step, after every GUI platform and every server slice
-  # succeeds. The release object is
-  # created as a **draft** and left that way: a draft is invisible to both
-  # /releases/latest and the releases page, so nothing can prompt a user to
-  # download a version whose asset set is incomplete or whose notes are still
-  # empty. Publishing is the release skill's job — it verifies the platform assets and
-  # writes the body first, then flips the draft. See .claude/skills/release/SKILL.md.
+  # 仅 tag push 汇总 draft；手动 dispatch 只构建与保存 artifacts。
+  # 发布前必须等待 CI、复核全部资产和中文说明，再由发行负责人 publish。
   draft-release:
-    needs: [build, server-musl, server-macos, server-windows]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [version, build, server-musl, server-macos, server-windows]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           path: lyrel
+          persist-credentials: false
 
       - uses: actions/download-artifact@v8
         with:
+          pattern: release-*
           path: dist
           merge-multiple: true
 
-      # 使用与手动发行相同的入口；只散列正式资产，排除各平台打包暂存目录。
-      - name: Generate checksums.txt
-        working-directory: lyrel
-        run: bash .github-disable/scripts/generate-checksums.sh "$GITHUB_WORKSPACE/dist"
-
-      # Reuse an existing release rather than failing: re-triggering a tag
-      # (force-push after a fixed platform) must top up the same draft. If the
-      # release was already published, --clobber just replaces its assets and it
-      # stays published.
-      #
-      # Existence is probed with `release list`, not `release view`: GitHub's
-      # get-release-by-tag endpoint does not return drafts, so a view-based check
-      # could miss the very draft a previous run left behind and create a second
-      # one (GitHub happily allows duplicate drafts on one tag).
-      - name: Assemble the draft release
+      - name: Require all eight platform assets
+        shell: bash
         run: |
           set -euo pipefail
-          # Captured into a variable, not piped into `grep -q`: -q exits on the
-          # first match, and the resulting SIGPIPE would make `pipefail` report
-          # the pipeline as failed — i.e. "found" would read as "not found".
-          # `release list` includes drafts (cf. its --exclude-drafts flag).
-          EXISTING=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-            --json tagName -q '.[].tagName')
-          if grep -Fxq "$GITHUB_REF_NAME" <<<"$EXISTING"; then
-            echo "release $GITHUB_REF_NAME already exists; reusing it"
-          else
+          EXPECTED=(
+            "lyrel-$VERSION-macos-arm64.dmg"
+            "lyrel-$VERSION-macos-arm64.zip"
+            "lyrel-$VERSION-windows-x86_64-setup.exe"
+            "lyrel-$VERSION-windows-x86_64.zip"
+            lyrel-server-linux-aarch64-musl
+            lyrel-server-linux-x86_64-musl
+            lyrel-server-macos-aarch64
+            lyrel-server-windows-x86_64.zip
+          )
+          printf '%s\n' "${EXPECTED[@]}" | LC_ALL=C sort > "$RUNNER_TEMP/expected-assets.txt"
+          find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort > "$RUNNER_TEMP/actual-assets.txt"
+          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
+          for ASSET in "${EXPECTED[@]}"; do
+            [[ -f "dist/$ASSET" && ! -L "dist/$ASSET" && -s "dist/$ASSET" ]] || {
+              echo "::error::missing or empty regular release asset: $ASSET"; exit 1;
+            }
+          done
+
+      - name: Generate and verify checksums.txt
+        working-directory: lyrel
+        run: bash .github/scripts/generate-checksums.sh "$GITHUB_WORKSPACE/dist"
+
+      - name: Assemble the draft release without overwriting published assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 分页读取 draft，拒绝重复 tag、prerelease 与已发布版本；API 错误不视为不存在。
+          release_for_tag() {
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              | jq -c '[.[][] | select(.tag_name == env.GITHUB_REF_NAME)]'
+          }
+          MATCHES="$(release_for_tag)"
+          if [[ "$(jq length <<<"$MATCHES")" == 0 ]]; then
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --draft --title "$GITHUB_REF_NAME" --notes ""
+              --verify-tag --draft --title "$GITHUB_REF_NAME" --notes ""
+            MATCHES="$(release_for_tag)"
           fi
-          gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          jq -e 'length == 1 and .[0].draft == true and .[0].prerelease == false' <<<"$MATCHES" >/dev/null || {
+            echo "::error::expected exactly one stable draft; published releases must never be changed"; exit 1;
+          }
+          RELEASE_ID="$(jq -r '.[0].id' <<<"$MATCHES")"
+          RELEASE_API="repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          # 固定 release ID，每次上传前重查 draft；永不使用 --clobber、PATCH 或 DELETE。
+          # 相同字节的既有资产可复用；内容不同则停止，让负责人显式处理 draft。
+          for FILE in dist/*; do
+            NAME="${FILE##*/}"
+            RELEASE="$(gh api "$RELEASE_API")"
+            jq -e '.draft == true and .prerelease == false and .tag_name == env.GITHUB_REF_NAME' <<<"$RELEASE" >/dev/null || {
+              echo "::error::release is no longer the expected stable draft"; exit 1;
+            }
+            ASSETS="$(gh api --paginate --slurp "$RELEASE_API/assets?per_page=100" | jq 'add')"
+            EXISTING="$(jq -c --arg name "$NAME" '[.[] | select(.name == $name)]' <<<"$ASSETS")"
+            COUNT="$(jq length <<<"$EXISTING")"
+            if [[ "$COUNT" != 0 ]]; then
+              DIGEST="sha256:$(sha256sum "$FILE" | cut -d ' ' -f1)"
+              jq -e --arg digest "$DIGEST" 'length == 1 and .[0].state == "uploaded" and .[0].digest == $digest' <<<"$EXISTING" >/dev/null || {
+                echo "::error::existing draft asset differs or has no verifiable digest: $NAME"; exit 1;
+              }
+              echo "Reusing identical draft asset: $NAME"
+              continue
+            fi
+            gh api --method POST \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$NAME" \
+              -H 'Content-Type: application/octet-stream' --input "$FILE" >/dev/null
+          done
+          # 确认远端恰好九件资产，且逐件 SHA-256 与本次产物一致。
+          gh api "$RELEASE_API" --jq '.draft and (.prerelease | not)' | grep -Fx true
+          ASSETS="$(gh api --paginate --slurp "$RELEASE_API/assets?per_page=100" | jq 'add')"
+          jq -r '.[].name' <<<"$ASSETS" | LC_ALL=C sort > "$RUNNER_TEMP/uploaded-assets.txt"
+          printf '%s\n' checksums.txt >> "$RUNNER_TEMP/expected-assets.txt"
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/expected-assets.txt"
+          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/uploaded-assets.txt"
+          for FILE in dist/*; do
+            DIGEST="sha256:$(sha256sum "$FILE" | cut -d ' ' -f1)"
+            jq -e --arg name "${FILE##*/}" --arg digest "$DIGEST" \
+              'any(.[]; .name == $name and .state == "uploaded" and .digest == $digest)' <<<"$ASSETS" >/dev/null
+          done
+          echo "Draft assembled; CI, asset review and Chinese release notes are required before publication."

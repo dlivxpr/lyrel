@@ -31,7 +31,7 @@ Shell 和窗格由后台服务器管理，而不是窗口。以下所有特性�
 <a id="install"></a>
 ## 安装
 
-lyrel 的独立初版版本为 **0.1.0**，目前尚无实际发布资产，也不表示已完成发行或签名。[**Releases**](https://github.com/dlivxpr/lyrel/releases) 是未来 stable 发行的入口。桌面端仅支持 macOS、Windows；下表不表示安装包已经可用。缺少 lyrel 安装包时，不应回退到上游下载安装包。Linux 保留 `lyrel-core`、`lyrel-server` 和 CLI，Windows／macOS 桌面连接 Linux 的远程开发与 WSL 不受此调整影响。
+lyrel 的独立初版版本为 **0.1.0**。从 [**Releases**](https://github.com/dlivxpr/lyrel/releases) 获取 stable 安装包及 `checksums.txt`，可用资产以对应版本页面为准。macOS 包采用 ad-hoc 签名，未经 Developer ID 签名或 Apple 公证；Windows 包未签名。桌面端仅支持 macOS、Windows；缺少 lyrel 安装包时，不应回退到上游下载安装包。Linux 保留 `lyrel-core`、`lyrel-server` 和 CLI，Windows／macOS 桌面连接 Linux 的远程开发与 WSL 不受此调整影响。
 
 | | | |
 |---|---|---|

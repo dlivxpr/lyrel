@@ -9,7 +9,7 @@ Microsoft 的可再分发伪控制台，与 `lyrel-app.exe` 一起安装，避�
 | 许可证 | MIT，见 `LICENSE.txt`；打包时以 `LICENSE-ConPTY.txt` 名称暂存 |
 | 完整性 | `manifest.json` 固定 nupkg 的 SHA-512（取自 NuGet catalog 的 `packageHash`）与每个文件的 SHA-256 |
 
-**本目录不再保存二进制副本。** `conpty.dll` 与 `OpenConsole.exe` 由显式准备步骤取得：`crates/lyrel-core/build.rs` 为 GUI、server、CLI 及测试程序暂存同一输入，`.github-disable/scripts/bundle-windows.ps1` 使用同一准备目录。构建与打包校验固定摘要；daemon 首次创建 pane 前也核验程序旁的文件对与 MIT 通知，缺失、损坏、架构或版本不匹配均明确报错，不静默退回系统 conhost。
+**本目录不再保存二进制副本。** `conpty.dll` 与 `OpenConsole.exe` 由显式准备步骤取得：`crates/lyrel-core/build.rs` 为 GUI、server、CLI 及测试程序暂存同一输入，`.github/scripts/bundle-windows.ps1` 使用同一准备目录。构建与打包校验固定摘要；daemon 首次创建 pane 前也核验程序旁的文件对与 MIT 通知，缺失、损坏、架构或版本不匹配均明确报错，不静默退回系统 conhost。
 
 ## 准备
 

@@ -26,7 +26,7 @@ dev = "run -- --config-dir .lyrel-dev"
 #     consistent across the whole link.
 #   * It only holds while nothing sets the RUSTFLAGS environment variable for
 #     a Windows build — that variable replaces these flags wholesale rather
-#     than adding to them. `.github-disable/scripts/assert-no-vcruntime.ps1` is the
+#     than adding to them. `.github/scripts/assert-no-vcruntime.ps1` is the
 #     backstop: it fails the build if VCRUNTIME140/MSVCP140 reappear.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
