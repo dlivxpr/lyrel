@@ -7829,6 +7829,9 @@ mod spawn_reply_consumer_tests {
     #[test]
     fn closing_a_pending_slot_cancels_a_silent_spawn_reader() {
         let (mut client, mut daemon) = socket_pair();
+        daemon
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
         let cancellation = SpawnCancellation::default();
         let worker_cancellation = cancellation.clone();
         let (started, ready) = std::sync::mpsc::channel();
@@ -7848,9 +7851,6 @@ mod spawn_reply_consumer_tests {
             !daemon_disconnected_before_spawn_reply(&error),
             "cancellation must not retry Spawn"
         );
-        daemon
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-            .unwrap();
         let mut byte = [0];
         assert_eq!(
             daemon.read(&mut byte).unwrap(),
