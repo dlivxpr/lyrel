@@ -278,9 +278,28 @@ bash .github/scripts/generate-checksums.sh <asset-dir>
 Windows x86-64／macOS Apple Silicon 桌面及 headless、Linux GNU 完整 features 和静态 musl server。
 Node.js 22 显式安装，用于 Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。Linux runner 固定为 `ubuntu-24.04`；checkout 使用 Node.js 24 runtime 的 `actions/checkout@v7`。
 
+CI 的桌面 build 与 test 统一启用 `--features updater`，同一次默认 workspace 测试覆盖 GUI、core、CLI、server 和 updater；不另起一轮不同 feature 图的 updater 编译。Linux 仍验证完整 headless features，所有平台断言保持不变。
+
 发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
 及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
-手动触发 release workflow 仅构建，不发布；重跑不能覆盖已发布版本。
+桌面与 server 并行编译，只有打包阶段等待真实 WSL server；桌面一次编译 GUI、CLI 和 updater。编译与打包间使用 tar 保留可执行权限，已压缩包不再做外层压缩；Thin LTO 和单 codegen unit 的发行配置不变。
+
+CI 与 Release 使用独立的稳定缓存键，保留 toolchain、target、flags 和依赖哈希隔离。仅 `main` 保存缓存，标签和 PR 只读取；不同标签不能读取彼此保存的缓存，但可以读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖：
+
+```bash
+gh workflow run release.yml --repo dlivxpr/lyrel --ref main
+```
+
+无 `tag` 的手动运行仅构建、打包和预热，不创建草稿或发布。汇总失败时，可通过 `main` 的新版 workflow 复用已有完整产物，不移动原标签、不重新编译：
+
+```bash
+gh workflow run release.yml --repo dlivxpr/lyrel --ref main \
+  -f tag="v<version>" -f reuse_run_id="<run-id>" -f draft_release_id="<draft-id>"
+```
+
+已有草稿时显式传入 `draft_release_id`；没有草稿时省略。复用必须来自当前仓库、当前 Release workflow、与标签完全相同的源提交；生产构建须全部成功，六件正式 artifacts 须完整且未过期，允许仅原草稿汇总失败。条件不符即停止；产物过期或缺失时应省略 `reuse_run_id` 正常重建，不得跳过来源或完整性校验。
+
+汇总入口为 `.github/scripts/assemble-release.sh`，直接使用创建响应中的 release ID，不依赖列表立即可见；恢复时只复用 SHA-256 相同的已有草稿资产。每次上传前复核精确标签及 draft 状态，拒绝不同字节、预发布或已发布版本，不覆盖资产，也不自动 publish。
 
 ### 品牌切换后的维护与验收
 
