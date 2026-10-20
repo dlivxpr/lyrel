@@ -4,14 +4,17 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(temp.path()).unwrap(),
+    );
+    let project = root.join("project");
     let installation = project.join(".agents/skills/unknown");
     std::fs::create_dir_all(&installation).unwrap();
     let content = "---\nname: unknown\ndescription: No inferred update URL\n---\n# Keep\n";
     std::fs::write(installation.join("SKILL.md"), content).unwrap();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
-        super::super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
+        super::super::super::tests::isolate_native_roots(&root.join("home"), cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);
         app.active_settings()
             .unwrap()

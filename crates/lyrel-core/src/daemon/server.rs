@@ -1292,8 +1292,8 @@ fn publish_spawn(
         registry: registry.clone(),
         claimed: false,
     };
-    DaemonMsg::Spawned { pane_id: id }.encode(&mut write_stream)?;
     if await_claim {
+        DaemonMsg::Spawned { pane_id: id }.encode(&mut write_stream)?;
         match ClientMsg::read(&mut read_stream)? {
             ClientMsg::Attach { pane_id, size, .. } if pane_id == id => pane.resize(size),
             _ => return Ok(()),
@@ -1307,6 +1307,11 @@ fn publish_spawn(
     let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
     if pane.alive() {
         registry.insert(pane.clone());
+    }
+    // Without a claim round-trip, Spawned is the caller's readiness barrier:
+    // another connection may address this pane as soon as it receives the id.
+    if !await_claim {
+        DaemonMsg::Spawned { pane_id: id }.encode(&mut write_stream)?;
     }
     claim.claimed = true;
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)

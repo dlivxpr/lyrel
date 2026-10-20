@@ -52,12 +52,15 @@ fn click_form(window: &mut Window, cx: &mut App, id: &'static str) {
 #[gpui_kit::test]
 fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(temp.path()).unwrap(),
+    );
+    let project = root.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
-        super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
+        super::super::tests::isolate_native_roots(&root.join("home"), cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);
         let state = &mut app.active_settings_mut().unwrap().skills.install;
         state.github = Some(Arc::new(PublicRepository));
@@ -414,8 +417,11 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
     cx: &mut TestAppContext,
 ) {
     let temp = tempfile::tempdir().unwrap();
-    let local = temp.path().join("local/home");
-    let remote = temp.path().join("remote/home");
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(temp.path()).unwrap(),
+    );
+    let local = root.join("local/home");
+    let remote = root.join("remote/home");
     std::fs::create_dir_all(&remote).unwrap();
     let remote_id = HostId(404);
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
