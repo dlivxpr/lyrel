@@ -1,84 +1,70 @@
 ---
-title: "Mouse, scrolling, and the bell"
-description: "How the pointer, the wheel, and ^G behave — and how to change each."
+title: "鼠标、滚动与响铃"
+description: "指针、滚轮和 ^G 各有何行为——以及如何分别调整。"
 ---
 
-## Scrolling
+## 滚动
 
-The wheel and trackpad scroll the pane's scrollback. All of it lives under
-**Settings → Terminal → Scrolling**:
+滚轮和触控板用于滚动窗格的回滚缓冲区。相关设置都在**设置 → 终端 → 滚动**下：
 
-| Setting | Default | What it does |
+| 设置 | 默认值 | 作用 |
 |---|---|---|
-| **Scrollback** | 10,000 lines | How much history each pane keeps, up to 100,000. Applies to new panes. |
-| **Scroll speed** | 1.0 | A multiplier on wheel scrolling (0.1–10). |
-| **Smooth scrolling** | On | Eases each wheel notch into place over a few frames instead of jumping the whole way. Trackpads scroll continuously already and are unaffected. |
+| **回滚缓冲区** | 10,000 行 | 每个窗格保留多少历史记录，最多 100,000 行。仅对新窗格生效。 |
+| **滚动速度** | 1.0 | 滚轮滚动的倍数（0.1–10）。 |
+| **平滑滚动** | 开启 | 将每一格滚轮滚动在几帧内平滑到位，而不是一次跳到终点。触控板本身就会连续滚动，不受影响。 |
 
-The wheel only ever scrolls. To zoom the font with it too, pick a modifier
-under **Settings → Terminal** (or set
-`mouse_zoom_modifier`); <kbd>⌘ +</kbd> / <kbd>⌘ −</kbd> zoom either way.
+滚轮只负责滚动。如果想同时用它缩放字体，请在**设置 → 终端**下选择一个修饰键（或设置 `mouse_zoom_modifier`）；<kbd>⌘ +</kbd> / <kbd>⌘ −</kbd> 无论哪种方式都能缩放。
 
-A scrollbar appears down the right edge of the pane as soon as the view moves,
-and fades out once it stops — the same bar the sidebar and every list in the app
-use. Drag its thumb to travel the whole scrollback at once, or click the track
-to jump. A pane sitting at the live edge stays bare, however much output is
-running through it.
+视图一开始移动，窗格右边缘就会出现滚动条，停止移动后它会淡出——与侧边栏以及应用中所有列表使用的是同一款滚动条。拖动滑块可一次跨越整个回滚缓冲区，点击轨道则可跳转。处于实时输出边缘的窗格始终不显示滚动条，无论其中有多少输出在流动。
 
 ### 真彩色样式与历史容量
 
 当前终端内核为正式 `rio-vt 0.5.28`。每个 grid 的同时保留样式容量约为 65k，屏幕和历史共同占用名额；超限时新样式可能回退默认前景色，字符仍会保留。这是已知的限定容量差异，不表示普通真彩色输出必然触发。
 
-内核的 mark-and-sweep 会回收不再被引用的样式，但主屏连续滚动时，逻辑历史之外的 raw 缓存行也可能保留样式引用。因此，调小 Scrollback 不能保证避免颜色回退；不能把已有 GC 描述为样式容量无限，也不能通过丢弃输出或擅自缩短历史掩盖该限制。
+内核的 mark-and-sweep 会回收不再被引用的样式，但主屏连续滚动时，逻辑历史之外的 raw 缓存行也可能保留样式引用。因此，调小回滚缓冲区不能保证避免颜色回退；不能把已有 GC 描述为样式容量无限，也不能通过丢弃输出或擅自缩短历史掩盖该限制。
 
 
-## The pointer
+## 指针
 
-Under **Settings → Keyboard & Mouse → Mouse**:
+在**设置 → 键盘与鼠标 → 鼠标**下：
 
-| Setting | Default | What it does |
+| 设置 | 默认值 | 作用 |
 |---|---|---|
-| **Focus follows mouse** | Off | Hovering a pane focuses it without a click. |
-| **Hide mouse while typing** | On | The pointer disappears as you type and returns on the next move. |
-| **Report mouse to apps** | On | Full-screen programs — vim, tmux, `htop` — get clicks and scroll events themselves. Hold <kbd>⇧</kbd> to keep a gesture local and select text instead. |
+| **焦点跟随鼠标** | 关闭 | 悬停在窗格上即可聚焦，无需点击。 |
+| **输入时隐藏鼠标** | 开启 | 打字时指针消失，下一次移动时重新出现。 |
+| **向应用报告鼠标事件** | 开启 | 全屏程序——vim、tmux、`htop`——会自行接收点击和滚动事件。按住 <kbd>⇧</kbd> 可让手势保持在本地，改为选择文本。 |
 
 <Tip>
-  If selecting text inside `vim` or `less` grabs the app's own selection instead
-  of yours, hold <kbd>⇧</kbd> while you drag.
+  如果在 `vim` 或 `less` 中选择文本时抓到的是应用自己的选择而不是你的选择，请在拖动时按住 <kbd>⇧</kbd>。
 </Tip>
 
-## Font size
+## 字号
 
 | | |
 |---|---|
-| <kbd>⌘ +</kbd> · <kbd>⌘ −</kbd> | Bigger · smaller |
-| <kbd>⌘ 0</kbd> | Back to the configured size |
-| <kbd>⌘</kbd> + wheel | Zoom by scrolling over a terminal |
+| <kbd>⌘ +</kbd> · <kbd>⌘ −</kbd> | 放大 · 缩小 |
+| <kbd>⌘ 0</kbd> | 恢复为配置的字号 |
+| <kbd>⌘</kbd> + 滚轮 | 在终端上滚动以缩放 |
 
-The base size is **Settings → Appearance → Terminal text → Terminal font size**, 15 px by
-default. The rest of the interface has its own size — **Interface font size**,
-16 px, adjustable from 12 to 24 — so you can scale the chrome without touching
-the terminal grid, or the other way round.
+基础字号由**设置 → 外观 → 终端文本 → 终端字号**决定，默认为 15 px。界面的其余部分有各自的字号——**界面字号**，默认为 16 px，可在 12 到 24 之间调整——因此你可以单独缩放界面外观而不影响终端网格，反之亦然。
 
-## The bell
+## 响铃
 
-**Settings → Terminal → Bell → Terminal bell** decides what `^G` does:
+**设置 → 终端 → 响铃 → 终端响铃**决定 `^G` 的行为：
 
-| Mode | Behaviour |
+| 模式 | 行为 |
 |---|---|
-| **Off** | Nothing |
-| **Visual** *(default)* | A brief flash |
-| **Audible** | The system sound |
-| **Both** | Flash and sound |
+| **关闭** | 无任何效果 |
+| **视觉** *(默认)* | 短暂闪烁 |
+| **声音** | 系统声音 |
+| **两者** | 闪烁并发出声音 |
 
-## Command-finished notifications
+## 命令完成通知
 
-**Settings → General → Notifications** posts a desktop notification when a
-foreground command finishes:
+**设置 → 常规 → 通知**会在前台命令完成时弹出桌面通知：
 
-- **Notify on command finish** — *Never*, *When unfocused* (default), or
-  *Always*
-- **Notify threshold** — how long a command has to run to qualify, 10 seconds by
-  default
+- **命令完成时通知** — *从不*、*未聚焦时*（默认）或 *始终*
+- **通知阈值** — 命令需运行多久才触发，默认为 10 秒
 
-Coding agents use the same policy for their own notifications.
-[Agent status →](/agents/status)
+编程智能体也采用相同的策略来处理自己的通知。
+[智能体状态 →](/agents/status)
