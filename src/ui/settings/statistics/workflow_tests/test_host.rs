@@ -7,22 +7,37 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub(super) struct ScanGate {
+    pub(super) entered: smol::channel::Receiver<()>,
+    pub(super) release: smol::channel::Sender<()>,
+}
+
 pub(super) struct CountingHost {
     inner: SharedHost,
     root: PathBuf,
+    canonical_root: PathBuf,
     reads: AtomicUsize,
     listings: AtomicUsize,
-    pub(super) gate: Mutex<Option<smol::channel::Receiver<()>>>,
+    gate: Mutex<Option<(smol::channel::Sender<()>, smol::channel::Receiver<()>)>>,
 }
 impl CountingHost {
     pub(super) fn new(root: &Path) -> Arc<Self> {
+        let inner = lyrel_core::host::local::LocalHost::new();
+        let canonical_root = inner.canonicalize(root).unwrap();
         Arc::new(Self {
-            inner: lyrel_core::host::local::LocalHost::new(),
+            inner,
             root: root.into(),
+            canonical_root,
             reads: AtomicUsize::new(0),
             listings: AtomicUsize::new(0),
             gate: Mutex::new(None),
         })
+    }
+    pub(super) fn block_scan(&self) -> ScanGate {
+        let (entered_tx, entered) = smol::channel::bounded(1);
+        let (release, release_rx) = smol::channel::bounded(1);
+        *self.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        ScanGate { entered, release }
     }
     pub(super) fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
@@ -30,8 +45,12 @@ impl CountingHost {
     pub(super) fn listings(&self) -> usize {
         self.listings.load(Ordering::SeqCst)
     }
+    fn contains(&self, path: &Path) -> bool {
+        // 发现前使用 launcher 的原始路径；扫描使用 Host 规范化后的路径。
+        path.starts_with(&self.root) || path.starts_with(&self.canonical_root)
+    }
     fn record(&self, path: &Path) {
-        if path.starts_with(&self.root) {
+        if self.contains(path) {
             self.reads.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -48,7 +67,7 @@ impl Host for CountingHost {
     }
     fn read_dir(&self, path: &Path, root: Option<&Path>) -> std::io::Result<Vec<Entry>> {
         self.record(path);
-        if path.starts_with(&self.root) {
+        if self.contains(path) {
             self.listings.fetch_add(1, Ordering::SeqCst);
         }
         self.inner.read_dir(path, root)
@@ -59,13 +78,15 @@ impl Host for CountingHost {
     }
     fn read_file(&self, path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
         self.record(path);
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "jsonl")
+        if self.contains(path)
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "jsonl")
         {
             let gate = self.gate.lock().unwrap().take();
-            if let Some(gate) = gate {
-                gate.recv_blocking().unwrap();
+            if let Some((entered, release)) = gate {
+                entered.send_blocking(()).unwrap();
+                release.recv_blocking().unwrap();
             }
         }
         self.inner.read_file(path, max)

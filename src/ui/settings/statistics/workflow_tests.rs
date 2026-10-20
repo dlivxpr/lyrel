@@ -631,7 +631,7 @@ fn cached_filter_fixture(
 ) -> (
     tempfile::TempDir,
     Arc<test_host::CountingHost>,
-    Option<smol::channel::Sender<()>>,
+    Option<test_host::ScanGate>,
     Entity<LyrelApp>,
     VisualTestContext,
 ) {
@@ -641,11 +641,7 @@ fn cached_filter_fixture(
     std::fs::create_dir_all(&history).unwrap();
     std::fs::write(history.join("visible.jsonl"), "{\"type\":\"session\",\"version\":3,\"id\":\"cached-filter\",\"timestamp\":\"2026-10-18T12:00:00Z\"}\n{\"type\":\"message\",\"id\":\"earlier\",\"timestamp\":\"2026-10-18T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":40,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n{\"type\":\"message\",\"id\":\"later\",\"timestamp\":\"2026-10-19T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":60,\"output\":10,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n").unwrap();
     let host = test_host::CountingHost::new(temp.path());
-    let release = block_scan.then(|| {
-        let (sender, receiver) = smol::channel::bounded(1);
-        *host.gate.lock().unwrap() = Some(receiver);
-        sender
-    });
+    let gate = block_scan.then(|| host.block_scan());
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         HostRegistry::insert(cx, host.clone());
@@ -660,7 +656,7 @@ fn cached_filter_fixture(
         state.period = Period::All;
         app.navigate_settings(SettingsSection::Statistics, None, window, cx);
     });
-    (temp, host, release, app, vcx)
+    (temp, host, gate, app, vcx)
 }
 
 #[gpui_kit::test]
@@ -751,11 +747,12 @@ fn statistics_cached_filters_recompute_without_host_reads_and_refresh_reads_chan
 
 #[gpui_kit::test]
 fn statistics_filter_changes_during_scan_do_not_queue_another_scan(cx: &mut TestAppContext) {
-    let (_temp, host, release, app, mut vcx) = cached_filter_fixture(cx, true);
+    let (_temp, host, gate, app, mut vcx) = cached_filter_fixture(cx, true);
+    let gate = gate.unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         vcx.run_until_parked();
-        if host.gate.lock().unwrap().is_none() {
+        if gate.entered.try_recv().is_ok() {
             break;
         }
         assert!(
@@ -766,7 +763,7 @@ fn statistics_filter_changes_during_scan_do_not_queue_another_scan(cx: &mut Test
     }
     let reads = host.reads();
     let listings = host.listings();
-    assert!(listings > 0);
+    assert_eq!(listings, 1, "the fixture has one native session directory");
     app.update_in(&mut vcx, |app, window, cx| {
         app.select_statistics_period(Period::Year, cx);
         app.select_statistics_period(Period::Month, cx);
@@ -788,7 +785,7 @@ fn statistics_filter_changes_during_scan_do_not_queue_another_scan(cx: &mut Test
         reads,
         "changing a date must not queue discovery behind the scan"
     );
-    release.unwrap().send_blocking(()).unwrap();
+    gate.release.send_blocking(()).unwrap();
     settle(&app, &mut vcx);
     assert_eq!(
         host.listings(),

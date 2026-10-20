@@ -472,6 +472,11 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
         &std::fs::read(remote.join("cwd/.state/skills/.skill-lock.json")).unwrap(),
     )
     .unwrap();
+    // 此 fixture 由 LocalHost 承载；安装身份使用它规范化后的真实路径，
+    // 不能与临时目录的 Windows 短路径或 macOS 符号链接拼写直接比较。
+    let installed_path = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(remote.join(".agents/skills/needle")).unwrap(),
+    );
     app.update_in(&mut vcx, |app, _, _| {
         let snapshot = app
             .active_settings()
@@ -480,11 +485,13 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
             .snapshot
             .as_ref()
             .unwrap();
+        assert_eq!(snapshot.host(), remote_id);
         let installed = snapshot
             .installations()
             .iter()
-            .find(|skill| skill.path() == remote.join(".agents/skills/needle"))
-            .unwrap();
+            .find(|skill| skill.path() == installed_path)
+            .expect("the remote snapshot must contain the canonical shared installation");
+        assert_eq!(installed.host(), remote_id);
         assert_eq!(
             installed.source_record().unwrap().source(),
             "example/skills"
