@@ -10,6 +10,7 @@
 
 - 启用 `.github/workflows/` 中的 CI 与 stable 发布管线，同步迁移打包、平台断言、Dependabot 和 issue 模板；显式准备 Node.js 测试运行时与官方 ConPTY，移除旧的 server 缺失跳过。发行汇总全部八件平台资产与 SHA-256 清单，先创建草稿再审核发布，重跑不得覆盖已发布资产；macOS ad-hoc／未公证和 Windows 未签名限制保持明确。
 - CI 与发行改用 Node.js 24 的 `actions/checkout@v7`，移除仍依赖 Node.js 20 的 Zig setup action，改用固定 `ziglang 0.16.0` 的官方 PyPI 分发；Linux runner 固定为 Ubuntu 24.04，避免 `ubuntu-latest` 迁移时改变构建环境。修正平台专属测试 helper 的条件编译和 GPUI 测试绘制后的 arena 清理；拖动测试验证真实手势状态与原生移动请求次数，不再依赖 headless 平台的 `unimplemented!` panic。
+- CI 与 Release 的桌面构建统一 updater feature 图，避免重复编译；发行桌面与 server 并行，仅打包等待 WSL server，并保留 Thin LTO、完整测试、ConPTY 和平台校验。缓存按 CI／发行分区，仅 main 保存供标签复用，已压缩包不再做外层压缩。草稿汇总直接使用创建响应的 release ID，支持严格核对仓库、源提交、成功构建与未过期完整 artifacts 后恢复；相同 SHA-256 的草稿资产可复用，不重编译、不覆盖已发布版本。
 - 统计扫描按所属 Host 解析已选文件来源根，使用同作用域的已确认根别名匹配 Pi 父会话，而非仅处理 Windows 扩展前缀；历史记录中的父路径不触发 I/O。渐进扫描保留已解析的来源描述，不再被原始路径覆盖。原入口消失时只保留受限旧事实，不继续跟随旧目标读取新文件，保持分叉去重、身份冲突、缺父与可读智能体日计量口径。真实 Bash PTY 测试改为正常退出并完整释放 console、writer 与 reader 后删除临时目录；macOS 恢复默认 unwind 链接选项，移除禁用展开元数据的覆盖。
 - 修复无显式认领的 pane 创建竞态：发送 `Spawned` 成功回复前完成注册，确保调用方能立即通过另一连接发送输入；显式认领仍等待同连接的 `Attach`，失败或断连的临时 pane 仍按原规则回收，不新增重试或 IPC 消息。
 - 技能安装、移除及其 UI 测试统一使用规范化的真实临时目录，避免 macOS 的 `/var` 符号链接触发本应保留的路径防护；生产链接拒绝规则、安装确认和祖先项目权限断言保持不变。
