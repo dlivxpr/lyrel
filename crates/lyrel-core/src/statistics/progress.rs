@@ -56,13 +56,19 @@ pub fn scan_with_progress(
         let mut result = scan(host, &local, cache);
         let observed = chrono::Utc::now().timestamp();
         if let Ok(snapshot) = &mut result {
+            let mut verified_local = std::mem::take(&mut snapshot.sources).into_iter();
             snapshot.sources = sources
                 .iter()
-                .cloned()
-                .map(|mut s| {
-                    s.opencode_request = None;
-                    s.hermes_request = None;
-                    s
+                .map(|source| {
+                    if source.agent != "hermes" && source.agent != "opencode" {
+                        return verified_local
+                            .next()
+                            .expect("local scan preserves source order");
+                    }
+                    let mut source = source.clone();
+                    source.opencode_request = None;
+                    source.hermes_request = None;
+                    source
                 })
                 .collect();
             publish(snapshot, &pending, observed, &mut progress);

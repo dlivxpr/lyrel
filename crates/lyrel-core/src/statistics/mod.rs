@@ -558,6 +558,7 @@ pub struct StatisticsCache {
     opencode: HashMap<(u64, String), (Source, Vec<FileFacts>, i64)>,
     native: HashMap<(u64, String, String), Vec<FileFacts>>,
     discovery: HashMap<(u64, String), DiscoveredSources>,
+    source_roots: HashMap<(u64, String, String, PathBuf), PathBuf>,
 }
 
 struct DiscoveredSources {
@@ -658,8 +659,78 @@ pub fn scan(
             "statistics Host is disconnected",
         ));
     }
+    // Resolve selected filesystem roots, never paths supplied by history records.
+    // Retain only identities observed for this same Host, scope and input root.
+    let original_sources = sources;
+    let host_id = host.id().0;
+    cache.source_roots.retain(|(id, agent, scope, root), _| {
+        *id != host_id
+            || !sources
+                .iter()
+                .any(|source| source.agent == *agent && source.scope == *scope)
+            || sources.iter().any(|source| {
+                source.agent == *agent && source.scope == *scope && source.root == *root
+            })
+    });
+    let mut normalized_sources: Option<Vec<Source>> = None;
+    for (ix, source) in sources.iter().enumerate() {
+        if !matches!(source.agent.as_str(), "omp" | "pi" | "kimi") {
+            continue;
+        }
+        let (root, issue) = match host.canonicalize(&source.root) {
+            Ok(root) if root.as_os_str() == source.root.as_os_str() => {
+                cache.source_roots.retain(|(id, agent, scope, input), _| {
+                    *id != host_id
+                        || *agent != source.agent
+                        || *scope != source.scope
+                        || *input != source.root
+                });
+                continue;
+            }
+            Ok(root) => {
+                cache.source_roots.insert(
+                    (
+                        host_id,
+                        source.agent.clone(),
+                        source.scope.clone(),
+                        source.root.clone(),
+                    ),
+                    root.clone(),
+                );
+                (root, None)
+            }
+            Err(error) => {
+                let Some(root) =
+                    cache
+                        .source_roots
+                        .iter()
+                        .find_map(|((id, agent, scope, input), root)| {
+                            (*id == host_id
+                                && *agent == source.agent
+                                && *scope == source.scope
+                                && *input == source.root)
+                                .then(|| root.clone())
+                        })
+                else {
+                    continue;
+                };
+                (
+                    root,
+                    Some(format!(
+                        "previously readable statistics source is unavailable: {error}; retaining stale facts"
+                    )),
+                )
+            }
+        };
+        let normalized = normalized_sources.get_or_insert_with(|| sources.to_vec());
+        normalized[ix].root = root;
+        if let Some(issue) = issue {
+            normalized[ix].discovery_issue.get_or_insert(issue);
+        }
+    }
+    let sources = normalized_sources.as_deref().unwrap_or(sources);
     let mut snapshot = Snapshot {
-        host: host.id().0,
+        host: host_id,
         sources: sources
             .iter()
             .cloned()
@@ -938,7 +1009,7 @@ pub fn scan(
             }
         }
     }
-    pi::resolve_inheritance(&mut snapshot);
+    pi::resolve_inheritance(&mut snapshot, host, original_sources);
     // Restrict lineage claims rather than silently treating an unresolved parent as reliable.
     for file in &snapshot.files {
         if let Some(parent) = &file.session.parent {

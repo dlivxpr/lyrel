@@ -857,6 +857,107 @@ fn statistics_pi_forks_preserve_new_usage_and_missing_parents_are_restricted() {
 }
 
 #[test]
+fn statistics_source_aliases_preserve_forks_agent_days_and_missing_source_cache() {
+    use chrono::{NaiveDate, TimeZone};
+
+    let temp = tempfile::tempdir().unwrap();
+    let host = LocalHost::new();
+    let base = host.canonicalize(temp.path()).unwrap();
+    let physical = base.join("physical");
+    let alias = base.join("alias");
+    std::fs::create_dir_all(physical.join("omp")).unwrap();
+    std::fs::create_dir_all(physical.join("pi")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&physical, &alias).unwrap();
+    #[cfg(windows)]
+    {
+        let mut command = std::process::Command::new("cmd.exe");
+        command
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&physical);
+        crate::core::proc::hide_console(&mut command);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let omp = alias.join("omp");
+    let pi = alias.join("pi");
+    let parent = pi.join("parent.jsonl");
+    let inherited = usage("same", 10, Some(0.0));
+    std::fs::write(
+        omp.join("native.jsonl"),
+        header("known", None) + &usage("request", 10, Some(0.0)),
+    )
+    .unwrap();
+    std::fs::write(&parent, header("parent", None) + &inherited).unwrap();
+    std::fs::write(
+        pi.join("fork.jsonl"),
+        header("fork", Some(&parent.to_string_lossy())) + &inherited + &usage("new", 20, Some(1.0)),
+    )
+    .unwrap();
+    let sources = [
+        Source::omp(omp, "readable"),
+        Source::pi(pi.clone(), "forks"),
+    ];
+    let mut cache = StatisticsCache::default();
+    for pass in ["cold", "warm"] {
+        let snapshot = scan(&*host, &sources, &mut cache).unwrap();
+        assert!(snapshot.is_complete(), "{pass}: {:?}", snapshot.issues());
+        let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+        assert_eq!(
+            totals.calls(),
+            3,
+            "{pass}: inherited usage must be counted once"
+        );
+        assert_eq!(totals.recorded_usd(), Some(1.0));
+    }
+    std::fs::write(pi.join("broken.jsonl"), "not a native session\n").unwrap();
+    let mut progressive_sources = sources.to_vec();
+    let mut unavailable = Source::omp(physical.join("offline-service"), "unavailable-service");
+    unavailable.agent = "opencode".into();
+    unavailable.discovery_issue = Some("selected native service is unavailable".into());
+    progressive_sources.push(unavailable);
+    let partial = scan_with_progress(&*host, &progressive_sources, &mut cache, |_| {}).unwrap();
+    assert!(!partial.is_complete());
+    let partial: Snapshot = serde_json::from_slice(&serde_json::to_vec(&partial).unwrap()).unwrap();
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let analysis = partial
+        .analyze(&DateWindow::all("UTC"), now, Some("omp"), 2026)
+        .unwrap();
+    let day = analysis
+        .days()
+        .iter()
+        .find(|day| day.date() == NaiveDate::from_ymd_opt(2026, 3, 8).unwrap())
+        .unwrap();
+    assert_eq!(day.value(analysis::Metric::Tokens), Some(12.0));
+    assert_eq!(day.value(analysis::Metric::Sessions), Some(1.0));
+
+    #[cfg(unix)]
+    std::fs::remove_file(&alias).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(&alias).unwrap();
+    std::fs::write(
+        physical.join("omp/native.jsonl"),
+        header("known", None) + &usage("changed", 99, Some(2.0)),
+    )
+    .unwrap();
+    let missing = scan(&*host, &sources, &mut cache).unwrap();
+    assert!(
+        !missing.is_complete(),
+        "a removed alias is not a readable source"
+    );
+    assert_eq!(
+        missing.aggregate(&DateWindow::all("UTC")).recorded_usd(),
+        Some(1.0),
+        "retain verified cached facts; do not follow the removed alias to read its former target"
+    );
+}
+
+#[test]
 fn statistics_pi_custom_store_precedence_and_scope_isolation() {
     let temp = tempfile::tempdir().unwrap();
     let agent = temp.path().join("agent");
