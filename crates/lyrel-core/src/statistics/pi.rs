@@ -352,8 +352,12 @@ fn fingerprint(payload: &Value, timestamp: &Value, kind: &str) -> io::Result<Str
 }
 
 /// Resolve only native path-linked inheritance. Unrelated short entry IDs never establish lineage.
-/// 本机路径先统一原生拼写；远端路径保留所选 Host 的原始语义。
-pub(super) fn resolve_inheritance(snapshot: &mut Snapshot) {
+/// 仅重写同作用域、已由 Host 解析的来源根；不对历史中的父路径执行 I/O。
+pub(super) fn resolve_inheritance(
+    snapshot: &mut Snapshot,
+    host: &dyn crate::host::Host,
+    original_sources: &[Source],
+) {
     let mut removals: HashMap<usize, HashSet<String>> = HashMap::new();
     let mut excluded = HashSet::new();
     let mut identities = HashMap::new();
@@ -385,13 +389,42 @@ pub(super) fn resolve_inheritance(snapshot: &mut Snapshot) {
         let mut inherited: HashMap<&str, &UsageRecord> = HashMap::new();
         let mut problem = None;
         while let Some(path) = parent {
-            // Native headers may retain the Windows extended-length spelling that
-            // LocalHost::canonicalize removes from scanned file paths.
             let parent_path = spelling_on(
                 crate::host::HostId(snapshot.host),
                 std::path::Path::new(path),
             );
-            let path = parent_path.to_string_lossy();
+            let parent_text = parent_path.to_string_lossy();
+            let mapped =
+                snapshot
+                    .sources
+                    .iter()
+                    .zip(original_sources)
+                    .find_map(|(resolved, original)| {
+                        if original.agent != "pi"
+                            || original.scope != file.source.scope
+                            || original.root.as_os_str() == resolved.root.as_os_str()
+                        {
+                            return None;
+                        }
+                        let original_root = spelling_on(host.id(), &original.root);
+                        let original_root = original_root.to_string_lossy();
+                        let suffix = parent_text
+                            .strip_prefix(original_root.trim_end_matches(host.separator()))?;
+                        let suffix = if suffix.is_empty() {
+                            suffix
+                        } else {
+                            suffix.strip_prefix(host.separator())?
+                        };
+                        Some(if suffix.is_empty() {
+                            resolved.root.clone()
+                        } else {
+                            host.join(&resolved.root, suffix)
+                        })
+                    });
+            let path = mapped
+                .as_deref()
+                .unwrap_or(parent_path.as_ref())
+                .to_string_lossy();
             let ancestor = snapshot.files.iter().find(|candidate| {
                 candidate.source.agent == "pi"
                     && candidate.source.scope == file.source.scope

@@ -1868,6 +1868,9 @@ mod tests {
                         }
                         Err(_) => break,
                     };
+                    // Accepted sockets may inherit the listener's nonblocking mode.
+                    // The authenticated fixture uses blocking, deadline-bounded frames.
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .unwrap();
