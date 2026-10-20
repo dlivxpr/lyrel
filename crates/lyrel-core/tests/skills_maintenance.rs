@@ -247,7 +247,10 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            fs::canonicalize(std::env::temp_dir()).unwrap(),
+        );
+        let temp = tempfile::tempdir_in(root).unwrap();
         let project = temp.path().join("project");
         let home = temp.path().join("home");
         fs::create_dir_all(project.join(".git")).unwrap();

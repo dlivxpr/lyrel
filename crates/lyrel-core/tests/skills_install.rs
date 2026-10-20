@@ -13,6 +13,12 @@ use lyrel_core::{
 use std::{fs, path::Path};
 
 const NOW: &str = "2026-10-19T08:00:00.000Z";
+fn tempdir() -> tempfile::TempDir {
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        fs::canonicalize(std::env::temp_dir()).unwrap(),
+    );
+    tempfile::tempdir_in(root).unwrap()
+}
 fn prepared(name: &str) -> PreparedSkill {
     PreparedSkill::new(
         SkillCandidate::new(
@@ -36,7 +42,7 @@ fn project(root: &Path) -> InstallTarget {
 
 #[test]
 fn reviewing_and_cancelling_installation_creates_no_files() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let host = LocalHost::new();
     let preview = preview_install(&*host, project(&root), vec![prepared("Review")]).unwrap();
@@ -52,7 +58,7 @@ fn reviewing_and_cancelling_installation_creates_no_files() {
 
 #[test]
 fn confirmed_project_install_writes_shared_content_and_cli_v1_lock() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let host = LocalHost::new();
     let preview = preview_install(&*host, project(&root), vec![prepared("review")]).unwrap();
@@ -76,7 +82,7 @@ fn confirmed_project_install_writes_shared_content_and_cli_v1_lock() {
 
 #[test]
 fn existing_content_is_kept_by_default_and_only_explicit_replace_overwrites() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let destination = root.join(".agents/skills/review");
@@ -118,7 +124,7 @@ fn damaged_or_unknown_locks_are_never_rewritten() {
         "{\"version\":1,\"skills\":[]}",
         "{\"version\":1,\"skills\":{\"old\":null}}",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir();
         let root = temp.path().join("project");
         let target = project(&root);
         fs::write(root.join("skills-lock.json"), bytes).unwrap();
@@ -134,7 +140,7 @@ fn damaged_or_unknown_locks_are_never_rewritten() {
 
 #[test]
 fn project_lock_preserves_top_level_extensions_changed_entry_extensions_and_unrelated_entries() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let original = serde_json::json!({"version":1,"extension":{"policy":true},"skills":{
@@ -170,7 +176,7 @@ fn project_lock_preserves_top_level_extensions_changed_entry_extensions_and_unre
 
 #[test]
 fn user_lock_uses_cli_v3_xdg_location_and_preserves_install_time() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let home = temp.path().join("home");
     let cwd = temp.path().join("workspace");
     fs::create_dir_all(&home).unwrap();
@@ -207,7 +213,7 @@ fn user_lock_uses_cli_v3_xdg_location_and_preserves_install_time() {
 
 #[test]
 fn confirming_one_item_does_not_install_another_and_empty_xdg_uses_home_lock() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let home = temp.path().join("home");
     fs::create_dir_all(&home).unwrap();
     let host = LocalHost::new();
@@ -224,7 +230,7 @@ fn confirming_one_item_does_not_install_another_and_empty_xdg_uses_home_lock() {
 #[test]
 fn confirmation_does_not_authorize_changed_content_or_changed_lock() {
     for change_lock in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir();
         let root = temp.path().join("project");
         let target = project(&root);
         let destination = root.join(".agents/skills/review");
@@ -268,7 +274,7 @@ fn prepared_path_escape_and_same_target_collisions_fail_before_writing() {
         "NUL",
         "nested/CON.txt",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir();
         let root = temp.path().join("project");
         let target = project(&root);
         let mut skill = prepared("review");
@@ -282,7 +288,7 @@ fn prepared_path_escape_and_same_target_collisions_fail_before_writing() {
         );
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let host = LocalHost::new();
     assert!(
@@ -298,7 +304,7 @@ fn prepared_path_escape_and_same_target_collisions_fail_before_writing() {
 
 #[test]
 fn user_added_empty_nested_directory_invalidates_replace_confirmation() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let directory = root.join(".agents/skills/review");
@@ -335,7 +341,7 @@ fn directory_link(target: &Path, path: &Path) {
 #[test]
 fn linked_ancestor_linked_installation_and_post_confirmation_redirect_are_rejected() {
     for link_ancestor in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir();
         let root = temp.path().join("project");
         let target = project(&root);
         let outside = temp.path().join("outside");
@@ -356,7 +362,7 @@ fn linked_ancestor_linked_installation_and_post_confirmation_redirect_are_reject
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
         assert!(!root.join("skills-lock.json").exists());
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let host = LocalHost::new();
@@ -373,7 +379,7 @@ fn linked_ancestor_linked_installation_and_post_confirmation_redirect_are_reject
 #[test]
 fn dangling_lock_and_destination_links_are_not_mistaken_for_missing_paths() {
     for lock_link in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir();
         let root = temp.path().join("project");
         let target = project(&root);
         fs::create_dir_all(root.join(".agents/skills")).unwrap();
@@ -509,7 +515,7 @@ impl Host for WriteFailure {
 
 #[test]
 fn stage_write_failure_is_not_success_and_other_confirmed_items_can_succeed() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let host = WriteFailure {
@@ -548,7 +554,7 @@ fn stage_write_failure_is_not_success_and_other_confirmed_items_can_succeed() {
 
 #[test]
 fn source_lock_commit_failure_restores_original_directory_and_exact_lock_bytes() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     fs::create_dir_all(root.join(".agents/skills/review")).unwrap();
@@ -583,7 +589,7 @@ fn source_lock_commit_failure_restores_original_directory_and_exact_lock_bytes()
 #[test]
 fn newly_installed_content_and_cli_origin_are_immediately_browsable() {
     use lyrel_core::skills::{ScanRequest, scan};
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let home = temp.path().join("home");
     let root = temp.path().join("project");
     fs::create_dir(&home).unwrap();
@@ -618,7 +624,7 @@ fn newly_installed_content_and_cli_origin_are_immediately_browsable() {
 
 #[test]
 fn edit_during_staging_aborts_replace_and_keeps_new_user_content() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let directory = root.join(".agents/skills/review");
@@ -650,7 +656,7 @@ fn edit_during_staging_aborts_replace_and_keeps_new_user_content() {
 
 #[test]
 fn rollback_failure_names_retained_recovery_file_and_never_claims_success() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let original = b"{\"version\":1,\"skills\":{},\"keep\":true}";
@@ -685,7 +691,7 @@ fn rollback_failure_names_retained_recovery_file_and_never_claims_success() {
 #[test]
 fn relative_xdg_source_record_is_found_only_with_the_same_explicit_working_directory() {
     use lyrel_core::skills::{ScanRequest, scan};
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let home = temp.path().join("home");
     let cwd = temp.path().join("workspace");
     fs::create_dir(&home).unwrap();
@@ -741,7 +747,7 @@ fn relative_xdg_source_record_is_found_only_with_the_same_explicit_working_direc
 
 #[test]
 fn rollback_does_not_delete_content_that_changed_after_the_live_rename() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let target = project(&root);
     let document = root.join(".agents/skills/review/SKILL.md");
@@ -766,7 +772,7 @@ fn rollback_does_not_delete_content_that_changed_after_the_live_rename() {
 
 #[test]
 fn project_lock_sorts_skill_keys_independent_of_install_selection_order() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let root = temp.path().join("project");
     let host = LocalHost::new();
     let preview = preview_install(
@@ -790,7 +796,7 @@ fn project_lock_sorts_skill_keys_independent_of_install_selection_order() {
 #[test]
 fn user_shared_install_remains_browsable_when_all_native_profiles_use_another_home() {
     use lyrel_core::skills::{ScanRequest, scan};
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let home = temp.path().join("selected-home");
     let native = temp.path().join("native-home");
     fs::create_dir(&home).unwrap();
@@ -838,7 +844,7 @@ fn user_shared_install_remains_browsable_when_all_native_profiles_use_another_ho
 
 #[test]
 fn multi_skill_selection_has_one_bounded_file_budget_before_any_write() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let target = project(temp.path());
     let host = LocalHost::new();
     let mut selected = vec![prepared("first"), prepared("second")];
@@ -872,7 +878,7 @@ fn kernel_permission_denial_never_reports_installation_or_writes_a_lock() {
             .stdout,
         b"0\n"
     );
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempdir();
     let shared_parent = temp.path().join(".agents");
     fs::create_dir(&shared_parent).unwrap();
     let host = LocalHost::new();
@@ -905,7 +911,7 @@ impl PathHost {
     fn new(separator: char, id: u64) -> Self {
         Self {
             inner: LocalHost::new(),
-            sandbox: tempfile::tempdir().unwrap(),
+            sandbox: tempdir(),
             id: lyrel_core::host::HostId(id),
             separator,
             disconnected: false.into(),
@@ -1276,7 +1282,7 @@ fn foreign_host_ancestors_and_dangling_entries_cannot_redirect_shared_writes() {
     ] {
         let host = PathHost::new(separator, 91);
         host.directory(project_path);
-        let outside = tempfile::tempdir().unwrap();
+        let outside = tempdir();
         fs::write(outside.path().join("keep.txt"), "unrelated").unwrap();
         let target = InstallTarget::project(&host, project_path.into()).unwrap();
         let preview = preview_install(&host, target.clone(), vec![prepared("review")]).unwrap();
