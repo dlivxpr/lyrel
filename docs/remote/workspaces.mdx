@@ -22,7 +22,7 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
 
     > lyrel 将把服务器二进制文件写入 *devbox*，以便本机可以在该机器上托管工作区。不会改动 *devbox* 上的其他任何内容，也不会使用 sudo。
 
-    在你同意之前，会显示确切的路径、版本、大小、来源和 SHA-256。之后在该机器上的升级会静默安装。lyrel 独立初版版本为 0.1.0，目前尚无实际发布资产；如果缺少所需服务器包，安装无法继续，也不会回退下载上游资产。
+    在你同意之前，会显示确切的路径、版本、大小、来源和 SHA-256。之后在该机器上的升级会静默安装。lyrel 独立初版版本为 0.1.0；如果缺少所需服务器包，安装无法继续，也不会回退下载上游资产。
   </Step>
   <Step title="打开工作区">
     此后，该机器的工作区会与本地工作区一起出现在切换器的扁平列表中，每一行都带有机器名称和连接状态；打开新工作区的方式与本地工作区相同。
@@ -48,7 +48,7 @@ SSH 优先查找客户端旁的包内程序：`server/`、客户端目录本身�
 
 Windows ZIP 的扁平内容固定为 `lyrel-server.exe`、`conpty.dll`、`OpenConsole.exe`、`LICENSE-ConPTY.txt` 与 `LICENSE.txt`。客户端拒绝缺件、额外文件、不安全路径、链接、重复项或解压完整性错误；先上传完整临时内容并核对程序协议，再将配套文件和 server 依次放入同一 `bin/` 目录。旧的单 exe 安装或配套缺失会触发修复；运行中的 daemon 需要重启后才能使用新配套。daemon 创建 pane 前再次校验官方固定摘要，不回退系统终端宿主。
 
-在 Windows 上，WSL 仅使用随客户端提供的 Linux 服务器，不会因缺包转向网络下载。可通过 `LYREL_BUNDLED_SERVER_DIR` 指定本机服务器资产目录，文件名必须与上述平台资产完全一致；WSL 缺少匹配文件会报告 `MissingBundled` 及搜索位置，其他产品的 server 文件不能替代。当前 lyrel 尚无实际发布资产，不能将此视为安装包已经可用。
+在 Windows 上，WSL 仅使用随客户端提供的 Linux 服务器，不会因缺包转向网络下载。可通过 `LYREL_BUNDLED_SERVER_DIR` 指定本机服务器资产目录，文件名必须与上述平台资产完全一致；WSL 缺少匹配文件会报告 `MissingBundled` 及搜索位置，其他产品的 server 文件不能替代。
 
 Windows OpenSSH 的探测、上传和启动使用 Windows 路径及 PowerShell 适配，不要求 POSIX 工具；SFTP 与登录 shell 必须看见同一个文件系统。若 OpenSSH 的 `DefaultShell` 运行 WSL 而 SFTP 指向 Windows，安装会拒绝这种混合布局并说明原因。
 

@@ -1,12 +1,14 @@
 # 更新日志
 
-本文件仅记录 lyrel 的当前变更，不继承衍生来源的发行版本。lyrel 从 `0.1.0` 独立编号，目前尚无实际发布资产。
+本文件仅记录 lyrel 的当前变更，不继承衍生来源的发行版本。lyrel 从 `0.1.0` 独立编号。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-## [Unreleased]
+## [0.1.0] - 2026-10-20
 
 ### lyrel 当前变更
+
+- 启用 `.github/workflows/` 中的 CI 与 stable 发布管线，同步迁移打包、平台断言、Dependabot 和 issue 模板；显式准备 Node.js 测试运行时与官方 ConPTY，移除旧的 server 缺失跳过。发行汇总全部八件平台资产与 SHA-256 清单，先创建草稿再审核发布，重跑不得覆盖已发布资产；macOS ad-hoc／未公证和 Windows 未签名限制保持明确。
 
 - 统计活动悬浮提示收敛为 Token 总量、等价 USD、会话数，删除图下日期、连续天数、峰值与日详情长文案；已知正 USD 费用在其他来源失败或部分未计价时仍按 `≥` 下界着色，不换算其他币种、不分摊未知日期或身份冲突记录。统计快照与解析缓存改为进程内共享，支持 60 秒复用、过期先显示旧值、跨窗口／重开单飞和主窗口打开后延迟 5 秒的本机后台预热；手动刷新仍重扫，日期筛选不因缓存过期触发扫描，来源／单价／配置文件变化与 Host 重连隔离失效，不新增远端预扫、账户请求或公共价表下载。
 - 继续精简技能与统计设置：技能元数据统一左对齐，删除调用、来源引用与来源记录；统计仅保留日期范围菜单，删除重复的今天／本周快捷按钮。本地历史先展示，Hermes／OpenCode 并行补充并保留未完成标记；日期与分析筛选复用只读快照后台重算，扫描中切换不重复排队。JSONL 热命中减少一次计量事实深复制及缓存写回，仍检查实际文件变化、删除和父子目录关系。
@@ -64,7 +66,7 @@
 - 远端 SSH、Windows OpenSSH 与 WSL server 采用独立 lyrel 路径、程序和资产；远端下载仅使用 `dlivxpr/lyrel` 并执行校验和验证，WSL 缺少随包 server 时明确失败，不回退上游或网络下载。
 - 修复共享 agent 配置仅按 `agent-hook` 子命令误认归属的问题：刷新、安装和卸载精确识别 lyrel 程序入口，保留其他产品与用户条目及混合 matcher 中的其他 hook；Windows 远端 hook 识别按协议命名的 server。
 - 平台安装与启动契约使用独立 AppId、AUMID 和 bundle identity；macOS 包内图标、便携／Inno 标记、CLI 和 WSL 随包 server 保持配套布局。Linux 不提供桌面安装或通知注册入口。
-- 禁用的打包与校验材料改用 `.github-disable/scripts/` 真实路径，支持受控工作树手动打包；保持 Actions 禁用，不执行真实安装、系统注册或发布。安装文档补全各平台布局、卸载边界和签名／公证前提。
+- 打包与校验入口统一为 `.github/scripts/`，既可由 Actions 调用，也支持受控工作树手动打包；安装文档补全各平台布局、卸载边界和签名／公证前提。
 - stable 更新只读取 `dlivxpr/lyrel`，按严格 SemVer 从分页 feed 选择最高桌面稳定版，支持 `0.1.0`／`v0.1.0`，拒绝同旧版本、预发布、错误版本或平台包及缺失校验和。复用锁定的 `semver 1.0.28`，第三方 Rust 依赖统一采用正式 registry 发布包。
 - 完整 Windows 包必须携带精确架构的 WSL server；macOS ZIP、Windows Setup／ZIP 的更新形态及独立安装标记保持一致。保留其他产品资源共存下的替换／恢复隔离回归及 SHA-256 清单入口。在线更新仍以本项目真实 release 和平台资产为前提，未擅自发布或安装。
 - 整合验收修正 CLI capture tail 回归：使用无外部提示符的真实 PTY 输出，观察尾部行、前部裁剪、原始 byte 计数及退出清理，避免用户两行 prompt 令正确实现被误判。移除仅重复 GUI 程序名常量的测试，保留真实 GUI 启动与 CLI／daemon 行为验证。
@@ -79,7 +81,7 @@
 - Windows 便携 updater 在替换安装前核验固定 ConPTY 配对文件与 MIT 通知的 SHA-256；缺失、损坏、架构或版本不匹配时拒绝包并保留原安装，不再将系统宿主当作缺文件回退。受影响 updater 回归和只校验冒烟已运行；未执行真实安装或在线更新。
 - 修复同批输出内连续同名命令的标题退休顺序，按流内切点清理 Rio 标题去重状态，并保留同步输出结束后的 shell 标题；Windows 终端 1030 项回归通过。CLI resize E2E 使用真实有限 PTY 输出，验证内容而非把含模式恢复前导的 raw capture 错当作整段字节后缀。
 - 自有编辑命令的空白修剪保持非空活动选区的行作用域，保留选区之外内容与 CRLF；LSP 补全不再用客户端子串过滤丢弃服务器返回的 fuzzy 匹配。
-- Windows 远端 server 使用 `lyrel-server-windows-x86_64.zip`，携带同架构固定官方 ConPTY 和必要许可；完整暂存、协议核对与配套先行落位，旧裸 exe 安装或缺件会修复，禁止裸 exe 回退。未启用 Actions 或执行外部发布。
+- Windows 远端 server 使用 `lyrel-server-windows-x86_64.zip`，携带同架构固定官方 ConPTY 和必要许可；完整暂存、协议核对与配套先行落位，旧裸 exe 安装或缺件会修复，禁止裸 exe 回退。
 - 普通双击选词、反向拖选与自动滚动沿用用户配置的 `word_separators`，包括双列分隔符；保留智能精确范围、括号、软换行和宽字符完整选择。GUI 输入栏与 CLI 表格共用 Rio 公开 grapheme／presentation 占列规则，避免 ZWJ emoji 与 VS16 导致光标及列对齐偏移；副屏期间修改的历史容量在返回主屏时应用最新值。
 - Windows 便携 updater 在校验整个下载包之后，读取包内 `ConPTY-manifest.json` 核验目标版本的文件摘要、PE 架构、配对版本与许可；旧 helper 不再把自身编译时的 ConPTY 固定版本误当成后续发行包的唯一合法版本，不执行目标程序来完成校验。缺件、损坏、混版与错误架构仍明确拒绝，尚未执行用户安装替换或在线更新。
 - 取消 Linux 桌面 GUI、AppImage、桌面 updater 与专属构建／打包接线；桌面端保留 Windows／macOS。Linux 的共享核心、server、CLI、SSH／SFTP、Host／PTY、GNU／musl server 资产及 Windows 随包 WSL server 保留。Linux 根桌面构建明确拒绝，CI 材料改为验证 headless crate；历史 Wayland IME 失败不记作已修复，Windows／macOS 的未验收项不因退役而自动通过。

@@ -24,7 +24,7 @@
 # Adding an entry is a deliberate act: if the path could ever be a workspace
 # path, the answer is `Host`, not an allowlist line.
 #
-# Usage: bash .github-disable/scripts/check-host-boundary.sh
+# Usage: bash .github/scripts/check-host-boundary.sh
 # Exit 0 = clean, 1 = violations (printed to stderr).
 
 set -euo pipefail
@@ -141,5 +141,5 @@ for root in "${ROOTS[@]}"; do
 done
 
 export HOST_BOUNDARY_ALLOW="$ALLOW"
-node .github-disable/scripts/host-boundary.cjs
+node .github/scripts/host-boundary.cjs
 

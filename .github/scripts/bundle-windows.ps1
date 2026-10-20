@@ -1,4 +1,4 @@
-# 在仓库根目录运行：& ./.github-disable/scripts/bundle-windows.ps1 <target-triple> <arch-label>
+# 在仓库根目录运行：& ./.github/scripts/bundle-windows.ps1 <target-triple> <arch-label>
 # Package the release binary twice from one staged payload:
 #   dist/lyrel-<version>-windows-<arch>.zip        portable (unzip anywhere)
 #   dist/lyrel-<version>-windows-<arch>-setup.exe  Inno Setup installer

@@ -34,7 +34,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// The toast/taskbar identity. Keep in sync with the `AppUserModelID` on the
-/// installer shortcuts in `.github-disable/scripts/windows-installer.iss` — a
+/// installer shortcuts in `.github/scripts/windows-installer.iss` — a
 /// mismatch silently splits the identity in two.
 pub(crate) const AUMID: &str = "io.github.dlivxpr.lyrel";
 

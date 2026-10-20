@@ -1,5 +1,5 @@
 #!/bin/bash
-# 在仓库根目录运行：bash .github-disable/scripts/generate-checksums.sh [asset-dir]
+# 在仓库根目录运行：bash .github/scripts/generate-checksums.sh [asset-dir]
 # 需要 Bash 和 GNU coreutils；asset-dir 默认 dist，只散列正式资产，不包含打包暂存目录。
 # 汇总各平台产物后再运行。输出沿用客户端解析的 <hex>  <裸文件名> 格式。
 set -euo pipefail
