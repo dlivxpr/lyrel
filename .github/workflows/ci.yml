@@ -31,10 +31,10 @@ concurrency:
 jobs:
   fmt:
     name: rustfmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -43,10 +43,10 @@ jobs:
   # Host 边界检查独立运行；检查器使用 Node.js 标准库解析 Rust 测试模块。
   host-boundary:
     name: host boundary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -59,12 +59,12 @@ jobs:
   # 保留矩阵 job，仅跳过步骤，确保每个目标的检查名称稳定。
   changes:
     name: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
       # A PR checkout is the merge commit, so its first parent is the base.
@@ -91,7 +91,7 @@ jobs:
             target: aarch64-apple-darwin
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
     needs: changes
     runs-on: ${{ matrix.runner }}
@@ -106,7 +106,7 @@ jobs:
     steps:
       - name: Checkout lyrel
         if: needs.changes.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Host 检查和 Pi 桥契约测试要求 Node.js 22.19+；setup-node 提供当前
       # runner 平台的原生 Node，Linux 不通过 Windows 的 node.exe 执行测试。
@@ -244,7 +244,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     name: lyrel-server musl (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -259,7 +259,7 @@ jobs:
     env:
       RUSTFLAGS: -C strip=symbols
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -274,14 +274,13 @@ jobs:
       # and nothing at all for aarch64. Verified locally: both targets link
       # statically and the resulting binaries run under Alpine.
       #
-      # If setup-zig ever becomes a problem (its GitHub repo is a mirror of a
-      # Codeberg original), cargo-zigbuild also accepts zig from PyPI —
-      # `pip3 install ziglang`, which it finds via CARGO_ZIGBUILD_PYTHON_PATH —
-      # so this can drop to zero third-party actions without changing anything
-      # else.
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      # cargo-zigbuild 正式支持 Zig 的 PyPI 分发；不再运行依赖 Node.js 20 的 setup-zig。
+      - name: Install Zig
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: ziglang==0.16.0
+          "$RUNNER_TEMP/zig/bin/python" -m ziglang version
+          echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/zig/bin/python" >> "$GITHUB_ENV"
 
       - uses: taiki-e/install-action@v2
         with:
@@ -322,7 +321,7 @@ jobs:
     env:
       RUSTFLAGS: -C strip=symbols
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:

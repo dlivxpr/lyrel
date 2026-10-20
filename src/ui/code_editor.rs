@@ -4135,6 +4135,7 @@ mod tests {
 
 #[cfg(test)]
 mod close_gpui_tests {
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
     use super::nav::gpui_tests::open_rs;
@@ -4153,7 +4154,7 @@ mod close_gpui_tests {
     /// holds the focus as it is drawn.
     fn settle(vcx: &mut VisualTestContext) {
         vcx.run_until_parked();
-        vcx.update(|window, cx| window.draw(cx));
+        vcx.update(|window, cx| window.render_frame(cx));
         vcx.run_until_parked();
     }
 

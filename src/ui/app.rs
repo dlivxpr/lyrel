@@ -15096,7 +15096,7 @@ fn remember_sessions(
 mod spawn_consumer_tests {
     use super::*;
     use crate::ui::pending_pane::{PendingPane, PendingSpawn};
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::TestAppContext;
 
     fn pending(
         app: &mut LyrelApp,

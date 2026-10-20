@@ -245,12 +245,16 @@ Windows 桌面与 server 均只发布 x86-64。
 | Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
 
 macOS／Windows server 在对应工具链中使用 `cargo build --release --locked -p lyrel-server --target <target>`；
-Linux musl server 按 release workflow 使用 Zig 与 cargo-zigbuild：
+Linux musl server 按 release workflow 使用 Zig `0.16.0` 与 cargo-zigbuild。Actions 在临时 Python venv 中安装官方 PyPI 的 `ziglang==0.16.0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向该解释器，不依赖旧 Node.js runtime 的 Zig setup action：
 
 ```bash
 cargo zigbuild --release --locked -p lyrel-server --target x86_64-unknown-linux-musl
 bash .github/scripts/assert-static.sh target/x86_64-unknown-linux-musl/release/lyrel-server
 ```
+
+Rust 与 Zig 的组合仍可能输出 `ignoring deprecated linker optimization setting '1'`，见
+[Rust 上游记录](https://github.com/rust-lang/rust/issues/158192)。这是 rustc 自动传入已被 Zig 忽略的链接优化参数所致；保留这条已知误报，不关闭其他 linker diagnostics，静态链接断言仍必须通过。
+
 Windows 包内 WSL server 固定为 x86_64：构建 `x86_64-unknown-linux-musl` 后，将实际二进制复制并命名为
 `bundled-server/lyrel-server-linux-x86_64-musl`，再打 Windows 包；不能放占位文件，也不能重命名其他架构的产物。
 macOS server 沿用 ad-hoc 签名和 `assert-macho.sh` 检查，Windows server 使用
@@ -272,7 +276,7 @@ bash .github/scripts/generate-checksums.sh <asset-dir>
 
 `.github/workflows/ci.yml` 在 `main` push、pull request 和手动触发时验证格式、Host 边界、
 Windows x86-64／macOS Apple Silicon 桌面及 headless、Linux GNU 完整 features 和静态 musl server。
-Node.js 22 显式安装，用于 Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。
+Node.js 22 显式安装，用于 Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。Linux runner 固定为 `ubuntu-24.04`；checkout 使用 Node.js 24 runtime 的 `actions/checkout@v7`。
 
 发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
 及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
