@@ -1,2 +1,10 @@
 # include_str! fixtures are compared byte-for-byte; autocrlf would add \r on Windows.
 src/terminal/view/fixtures/*.txt -text
+
+# Pinned third-party asset verified by SHA-256 in scripts/prepare-conpty.ps1;
+# must be checked out byte-for-byte.
+assets/windows/conpty/LICENSE.txt -text
+
+# Bash scripts break with CRLF ($'\r': command not found / invalid option name);
+# CI boundary checks also rely on LF sources.
+*.sh text eol=lf
