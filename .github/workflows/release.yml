@@ -14,12 +14,12 @@ concurrency:
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -60,7 +60,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -172,12 +172,12 @@ jobs:
             asset: lyrel-server-linux-x86_64-musl
           - target: aarch64-unknown-linux-musl
             asset: lyrel-server-linux-aarch64-musl
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RUSTFLAGS: -C strip=symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -189,9 +189,12 @@ jobs:
       # zig provides the musl sysroot and the C cross-compiler for both targets
       # from one x86_64 runner — see the same job in ci.yml for why the
       # alternatives (cross, musl-tools) do not cope with aws-lc-rs' cmake build.
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      - name: Install Zig
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: ziglang==0.16.0
+          "$RUNNER_TEMP/zig/bin/python" -m ziglang version
+          echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/zig/bin/python" >> "$GITHUB_ENV"
 
       - uses: taiki-e/install-action@v2
         with:
@@ -257,7 +260,7 @@ jobs:
       RUSTFLAGS: -C strip=symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -331,7 +334,7 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -408,7 +411,7 @@ jobs:
   draft-release:
     needs: [version, build, server-musl, server-macos, server-windows]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write
@@ -416,7 +419,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false

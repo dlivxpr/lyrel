@@ -332,6 +332,7 @@ impl LyrelApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::test::TestWindowExt as _;
     use lsp_types::{Diagnostic, Position, Range};
 
     fn d(line: u32, character: u32, severity: Option<DiagnosticSeverity>, msg: &str) -> Diagnostic {
@@ -405,7 +406,7 @@ mod tests {
             app.toggle_editor_problems(cx);
         });
         vcx.run_until_parked();
-        vcx.update(|window, cx| window.draw(cx));
+        vcx.update(|window, cx| window.render_frame(cx));
         app.update_in(&mut vcx, |app, window, cx| {
             assert!(app.editor.problems.open);
             assert!(app.render_editor_problems(window, cx).is_some());

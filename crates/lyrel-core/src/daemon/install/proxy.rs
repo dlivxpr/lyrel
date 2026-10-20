@@ -127,6 +127,7 @@ fn parse_userinfo(authority: &str) -> (&str, Option<&str>) {
     (username, password)
 }
 
+#[cfg(any(windows, target_os = "macos", test))]
 fn target_scheme(target_url: &str) -> &str {
     target_url
         .split_once("://")

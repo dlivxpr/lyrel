@@ -31,15 +31,3 @@ dev = "run -- --config-dir .lyrel-dev"
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 
-# Skip the compact-unwind table on macOS. ld warns "__eh_frame section too
-# large (max 16MB) to encode dwarf unwind offsets in compact unwind table" on
-# every debug link of this workspace — the FDE set of the full workspace
-# exceeds what compact unwind can encode, so the linker falls back to
-# eh_frame for those functions anyway and the warning is pure noise.
-# Rust panic unwinding uses eh_frame directly, so dropping the compact table
-# costs nothing here.
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-args=-Wl,-no_compact_unwind"]
-
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-args=-Wl,-no_compact_unwind"]

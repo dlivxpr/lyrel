@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::agent_hooks::{HookAgent, HookTarget};
+use crate::core::path_spelling::spelling_on;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -351,6 +352,7 @@ fn fingerprint(payload: &Value, timestamp: &Value, kind: &str) -> io::Result<Str
 }
 
 /// Resolve only native path-linked inheritance. Unrelated short entry IDs never establish lineage.
+/// 本机路径先统一原生拼写；远端路径保留所选 Host 的原始语义。
 pub(super) fn resolve_inheritance(snapshot: &mut Snapshot) {
     let mut removals: HashMap<usize, HashSet<String>> = HashMap::new();
     let mut excluded = HashSet::new();
@@ -383,6 +385,13 @@ pub(super) fn resolve_inheritance(snapshot: &mut Snapshot) {
         let mut inherited: HashMap<&str, &UsageRecord> = HashMap::new();
         let mut problem = None;
         while let Some(path) = parent {
+            // Native headers may retain the Windows extended-length spelling that
+            // LocalHost::canonicalize removes from scanned file paths.
+            let parent_path = spelling_on(
+                crate::host::HostId(snapshot.host),
+                std::path::Path::new(path),
+            );
+            let path = parent_path.to_string_lossy();
             let ancestor = snapshot.files.iter().find(|candidate| {
                 candidate.source.agent == "pi"
                     && candidate.source.scope == file.source.scope

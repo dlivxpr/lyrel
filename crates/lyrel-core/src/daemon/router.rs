@@ -1018,6 +1018,7 @@ mod tests {
         assert!(routed.join().unwrap().is_err());
     }
 
+    #[cfg(unix)]
     fn responder_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())

@@ -4447,12 +4447,11 @@ mod gpui_tests {
         });
     }
 
-    /// One of the three places on the card a test wants to put the pointer.
+    /// One of the two places on the card a test wants to put the pointer.
     #[derive(Clone, Copy)]
     enum Spot {
         Workspaces,
         Tabs,
-        Search,
     }
 
     /// Where that part of the card lands on screen. The card is centred and
@@ -4472,9 +4471,6 @@ mod gpui_tests {
         let left_w = super::LEFT_W.min(card_w * 0.5);
         let card_left = (viewport.width.as_f32() - card_w) / 2.;
         let (dx, dy) = match spot {
-            // The search row is the first thing in the card; both columns
-            // start below it.
-            Spot::Search => (100., 20.),
             Spot::Workspaces => (20., super::SEARCH_H + super::COLUMN_PAD + 16.),
             // Past the tab column's own header row, onto its first tab.
             Spot::Tabs => (

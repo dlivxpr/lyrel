@@ -15,13 +15,15 @@
 #[cfg(any(windows, test))]
 use std::ffi::OsString;
 #[cfg(any(windows, test))]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 use anyhow::Context as _;
 use anyhow::Result;
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 use crate::ui::i18n::{L10nKey, t};
 
 #[cfg(any(windows, test))]
@@ -53,6 +55,7 @@ impl Location {
     /// honest: `register` sets the locale from the config before building the
     /// entries, and [`refresh_labels`] restates them whenever the language
     /// changes — from the picker in Settings or from a hand-edited config.
+    #[cfg(windows)]
     fn label(self) -> &'static str {
         t(match self {
             Self::Directory => L10nKey::ExplorerMenuOpenIn,
@@ -146,7 +149,7 @@ fn quoted_open_command(executable: &Path, placeholder: &str) -> OsString {
     command
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn application_path() -> Result<PathBuf> {
     let app = std::env::current_exe().context("locating the running lyrel application")?;
     app.parent()

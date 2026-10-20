@@ -172,7 +172,7 @@ fn redirect_to_null(fd: libc::c_int) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::io::{Read as _, Write as _};

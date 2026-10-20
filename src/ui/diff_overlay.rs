@@ -1182,7 +1182,7 @@ impl LyrelApp {
             selecting: overlay.selecting,
         };
         let body = gpui_kit::list(list.clone(), move |ix, _window, cx| {
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             row_probe::record();
             match rows.get(ix) {
                 Some(row) => diff_row_element(row, ix, &drag, &font, &snap, &app, cx),
@@ -1213,7 +1213,7 @@ impl LyrelApp {
 
 /// Counts the rows the list actually built, so a test can tell that a patch of
 /// any size costs the handful of rows on screen rather than all of them.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod row_probe {
     use std::cell::Cell;
 
@@ -2974,6 +2974,7 @@ mod overlay_gpui_tests {
     use super::*;
     use crate::ui::app::test_window;
     use crate::ui::host_ops::HostId;
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
     fn overlay_source_and_load(
@@ -3129,7 +3130,7 @@ mod overlay_gpui_tests {
             snapshot.clone()
         });
         vcx.update(|window, cx| {
-            let _ = window.draw(cx);
+            window.render_frame(cx);
         });
         let button = vcx
             .debug_bounds("document-back-to-terminal")
@@ -3156,7 +3157,7 @@ mod overlay_gpui_tests {
             );
         });
         vcx.update(|window, cx| {
-            let _ = window.draw(cx);
+            window.render_frame(cx);
         });
         assert!(
             vcx.debug_bounds("document-back-to-terminal").is_none(),

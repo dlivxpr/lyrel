@@ -31,7 +31,7 @@ impl Transport for PublicRepository {
 fn settle_install(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
-        cx.background_executor.run_until_parked();
+        cx.run_until_parked();
         if app.update_in(cx, |app, _, _| {
             app.active_settings()
                 .is_some_and(|s| !s.skills.install.busy && !s.skills.loading)
@@ -99,6 +99,9 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     vcx.update(|window, cx| {
         window.render_frame(cx);
         click_form(window, cx, "skills-candidate-skills/needle/SKILL.md");
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
         window.click("skills-install-review", cx);
     });
     settle_install(&app, &mut vcx);
@@ -106,6 +109,7 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
         window.render_frame(cx);
         window.click("skills-install-cancel", cx);
     });
+    vcx.run_until_parked();
     assert!(!project.join(".agents").exists());
     assert!(!project.join("skills-lock.json").exists());
     vcx.update(|window, cx| {
@@ -436,12 +440,24 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
     vcx.update(|window, cx| {
         window.render_frame(cx);
         click_form(window, cx, "skills-candidate-skills/needle/SKILL.md");
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
         window.click("skills-install-review", cx);
     });
     settle_install(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.press("escape", cx);
+    });
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, _| {
+        let state = &app.active_settings().unwrap().skills.install;
+        assert!(
+            state.open,
+            "Escape from review must keep the installer open"
+        );
+        assert!(state.preview.is_none(), "Escape must cancel the review");
     });
     assert!(!remote.join(".agents").exists());
     assert!(!local.join(".agents").exists());

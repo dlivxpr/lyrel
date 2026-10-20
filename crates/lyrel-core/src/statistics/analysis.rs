@@ -1,5 +1,7 @@
 //! 与总览共用唯一去重流的日历及来源分解；时间边界由桌面调用方提供。
+//! 来源故障的路径归属使用所选 Host 的路径拼写，避免 Windows 扩展路径前缀污染筛选口径。
 use super::*;
+use crate::core::path_spelling::spelling_on;
 use chrono::{DateTime, Days, NaiveDate, TimeZone};
 use std::collections::BTreeMap;
 
@@ -355,8 +357,12 @@ impl Snapshot {
                 return false;
             };
             let mut unrelated = false;
+            // Scope matching uses the scanned Host's spelling, including native
+            // Windows roots supplied with an extended-length prefix.
+            let path = spelling_on(crate::host::HostId(self.host), &issue.path);
             for source in &self.sources {
-                if issue.path.starts_with(&source.root) || source.root.starts_with(&issue.path) {
+                let root = spelling_on(crate::host::HostId(self.host), &source.root);
+                if path.starts_with(&root) || root.starts_with(&path) {
                     if source.agent == selected {
                         return false;
                     }

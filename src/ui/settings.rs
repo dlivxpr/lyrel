@@ -3291,7 +3291,7 @@ mod tests {
     #[test]
     fn previously_unsearchable_settings_are_findable() {
         use SettingsSection::*;
-        let mut cases: Vec<(&str, SettingsSection)> = vec![
+        let cases = [
             ("opacity", Appearance),
             ("blur", Appearance),
             ("completion", Terminal),
@@ -3318,13 +3318,13 @@ mod tests {
             ("background image", Appearance),
             ("wallpaper", Appearance),
             ("image opacity", Appearance),
-        ];
-        #[cfg(target_os = "windows")]
-        cases.extend([
+            #[cfg(target_os = "windows")]
             ("material", Appearance),
+            #[cfg(target_os = "windows")]
             ("mica", Appearance),
+            #[cfg(target_os = "windows")]
             ("acrylic", Appearance),
-        ]);
+        ];
         for (query, expected) in cases {
             assert_eq!(
                 best_matching_section(query).map(|s| s.profile_label()),
