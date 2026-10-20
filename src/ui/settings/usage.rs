@@ -1518,7 +1518,7 @@ impl LyrelApp {
     pub(super) fn render_usage_search_row(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         self.settings_row(
             t(L10nKey::SettingsNavUsage),
-            t(L10nKey::UsageScope),
+            t(L10nKey::UsageSubtitle),
             button(
                 "usage-search-open",
                 t(L10nKey::UsageOpen),

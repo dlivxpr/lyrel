@@ -2,21 +2,6 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
-        L10nKey::SkillsHelpOmp => {
-            "omp 18.12.2：使用 /skill:name。skills.enabled、来源开关和名称筛选可能阻止加载；原生来源仅在启动时发现一层目录。修改来源后可重新启动原生智能体，lyrel 不代为执行。"
-        }
-        L10nKey::SkillsHelpPi => {
-            "pi 1.3.0：使用 /skill:name [args]；/reload 刷新资源。项目资源受原生项目信任控制。--no-skills 禁止自动来源，但显式 --skill 仍可加载文件。"
-        }
-        L10nKey::SkillsHelpKimi => {
-            "Kimi Code 2.2.0：使用 /skill:name 或 /name；新增技能在新会话可用。--skills-dir 替换自动目录；extra_skill_dirs 追加来源。"
-        }
-        L10nKey::SkillsHelpOpenCode => {
-            "OpenCode 2.0.32：使用 @skill-id 或模型的 skill 工具。权限和 autoinvoke 策略影响可用性；技能列表在模型步骤刷新，不假定存在未被正式文档说明的技能专用重载命令。"
-        }
-        L10nKey::SkillsHelpHermes => {
-            "Hermes 0.22.2：使用 /name 或 /skill name；/reload-skills 重新扫描。用户共享目录须列入 skills.external_dirs；项目发现受原生信任控制，lyrel 不授予信任。"
-        }
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
             "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 或 skills.sh 发现候选，审查共享安装、检查更新、保留本地改动并安全移除精确关联链接。"
@@ -29,9 +14,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsSource => "来源",
         L10nKey::SkillsAllSources => "全部来源",
         L10nKey::SkillsBrowserDescription => "浏览所选机器和项目中的技能",
-        L10nKey::SkillsInvoke => "调用",
-        L10nKey::SkillsSourceReference => "来源引用",
-        L10nKey::SkillsSourceRecord => "来源记录",
         L10nKey::SkillsUserShared => "用户共享",
         L10nKey::SkillsProjectShared => "项目共享",
         L10nKey::SkillsPrivate => "智能体私有",
@@ -40,7 +22,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsEmpty => {
             "没有匹配的技能。请检查所选机器、项目、原生 profile 和来源筛选后刷新。不会修改配置。"
         }
-        L10nKey::SkillsScannedAt => "扫描于：{time}",
         L10nKey::SkillsIncomplete => "结果不完整或已过期",
         L10nKey::SkillsUnknown => "未知",
         L10nKey::SkillsDiscovered => "磁盘已发现",
@@ -59,7 +40,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsMixedState => "原生状态不一",
         L10nKey::SkillsInvocation => "参数提示",
         L10nKey::SkillsNoSource => "无可核实的来源记录",
-        L10nKey::SkillsNativeGuide => "原生文档",
         L10nKey::SkillsBack => "返回",
         L10nKey::SkillsCount => "{shown} / {total} 项技能",
         L10nKey::SkillsSelectSkill => "选择技能以查看详情",
@@ -70,7 +50,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SkillsMaintenanceTitle => "审查技能变更",
         L10nKey::SkillsNoMachine => "所选机器已断开。请重新连接后刷新，目标不会随工作区改变。",
         L10nKey::SkillsReadError => "无法读取所选作用域：{error}",
-        L10nKey::SkillsScope => "发现位置与原生状态",
         L10nKey::SkillsProfileNote => {
             "使用所选 Host 的环境和智能体启动配置中的有效 profile。项目路径不会随工作区自动改变。"
         }
@@ -178,7 +157,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsCustomDates => "开始／结束日期（YYYY-MM-DD，包含两端）",
         L10nKey::StatisticsApply => "应用日期",
         L10nKey::StatisticsRefresh => "刷新历史",
-        L10nKey::StatisticsLoading => "正在读取原生历史…下方保留的旧结果带有快照时间。",
+        L10nKey::StatisticsLoading => "正在扫描历史…",
         L10nKey::StatisticsInvalidDate => {
             "请输入 YYYY-MM-DD 格式的有效日期，开始日期不能晚于结束日期。"
         }
@@ -187,10 +166,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "无法刷新原生历史，已有结果已过期。远端缺少智能体环境元数据时请升级 lyrel-server。{error}"
         }
         L10nKey::StatisticsUpdated => "快照：{time} · 桌面时区：{zone}\n结果范围：{range}",
-        L10nKey::StatisticsSnapshotTime => "观察于 {time}",
-        L10nKey::StatisticsStaleSnapshot => "观察于 {time} · 结果不完整，缓存可能过期",
-        L10nKey::StatisticsComplete => "可发现来源与扫描上限范围内完整",
-        L10nKey::StatisticsPartial => "结果不完整，保留值可能过期或受限；请查看下方来源诊断",
+        L10nKey::StatisticsSnapshotTime => "更新于 {time}",
+        L10nKey::StatisticsStaleSnapshot => "更新于 {time} · 数据不完整",
+        L10nKey::StatisticsComplete => "完整",
+        L10nKey::StatisticsPartial => "数据不完整 · 见「数据来源」",
         L10nKey::StatisticsTokens => "Token",
         L10nKey::StatisticsCost => "历史记录费用",
         L10nKey::StatisticsEstimatedCost => "原生估算费用（独立于实际费用）",
@@ -223,27 +202,19 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsLastSevenDays => "最近7天",
         L10nKey::StatisticsDailyTrendCompact => "每日 · {start} – {end}",
         L10nKey::StatisticsActivityCaption => "每日{metric} · 范围外日期淡化",
-        L10nKey::StatisticsKnownPeak => "已知峰值 {date} · {value}",
-        L10nKey::StatisticsPeak => "峰值 {date} · {value}",
+        L10nKey::StatisticsActivityValues => {
+            "Token 总量：{tokens}\n等价 USD：{cost}\n会话数：{sessions}"
+        }
         L10nKey::StatisticsLess => "少",
         L10nKey::StatisticsMore => "多",
-        L10nKey::StatisticsHeatmapCoverage => "描边日期为未知或受限 · 覆盖情况见「数据来源」",
-        L10nKey::StatisticsHeatmapLowerBound => {
-            "描边活动为已知小计，空白描边日期仍未知 · 覆盖情况见「数据来源」"
-        }
-        L10nKey::StatisticsKnownActivity => "至少 {value} {metric} · 已知小计",
         L10nKey::StatisticsRankUsage => "{tokens} Token · {sessions} 会话",
         L10nKey::StatisticsRankSpend => "{cost} · {tokens} Token",
-        L10nKey::StatisticsObservedValues => "已知小计 · 来源覆盖可能不完整",
+        L10nKey::StatisticsObservedValues => "已知小计",
         L10nKey::StatisticsObservedTokens => "已知 Token 组成：{value}",
         L10nKey::UsageSubtitle => "查看 Coding 套餐额度与 API 账户余额",
         L10nKey::UsageCodingPlansCaption => "周期额度与 Credits",
         L10nKey::UsageApiAccountsCaption => "服务商余额与账户额度",
-        L10nKey::UsageEmptyHint => "选择下方服务商，添加账户后查看用量",
         L10nKey::UsageAccountsUnavailable => "无法加载账户",
-        L10nKey::UsageSupportsApiKey => "支持 API 密钥",
-        L10nKey::UsageSupportsSessionBrowser => "支持手工会话与浏览器导入",
-        L10nKey::UsageSupportsAllSources => "支持 API 密钥、手工会话与浏览器导入",
         L10nKey::UsageAddHint => "选择认证来源，验证用量后再保存账户。",
         L10nKey::UsageCurrentSource => "当前账户与来源",
         L10nKey::UsageReplaceHint => "选择新来源，验证后替换此账户的认证来源。",
@@ -300,7 +271,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsPricedCost => "费用（记录＋明确估算）",
         L10nKey::StatisticsOpen => "打开统计",
         L10nKey::StatisticsAnalysisTitle => "活动与明细",
-        L10nKey::StatisticsAllAgents => "全部已发现智能体",
+        L10nKey::StatisticsAllAgents => "全部智能体",
         L10nKey::StatisticsAgents => "智能体明细",
         L10nKey::StatisticsModels => "模型",
         L10nKey::StatisticsProjects => "项目",
@@ -312,21 +283,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "仅筛选此分析，沿用上方机器、已发现来源与日期范围。刷新期间保留旧结果。"
         }
         L10nKey::StatisticsAnalysisMetric => "热力图指标",
-        L10nKey::StatisticsMetricScope => {
-            "仅改变日历深浅，详情保留全部指标与价格来源。费用深浅要求记录费用或明确自定义／目录估算完整覆盖且币种唯一为 USD；原生估算仍独立。部分计价与多币种保持未知。"
-        }
         L10nKey::StatisticsAnalysisError => "无法构建桌面日历：{error}",
         L10nKey::StatisticsPreviousYear => "上一年",
         L10nKey::StatisticsNextYear => "下一年",
-        L10nKey::StatisticsStreaks => {
-            "当前连续 {current} 天 · 最长连续 {longest} 天。仅限可见年份与所选范围；今天无活动时从昨天起算。来源未知或跨日累计用量时无法可靠计算。"
-        }
-        L10nKey::StatisticsOutsideRange => "所选范围外：不计算此日活动，不表示零活动。",
         L10nKey::StatisticsCalendarKeys => {
-            "选择日期查看详情。方向键：日／周；Page Up/Down：月；Home/End：年首／年尾；Enter：详情；Escape：隐藏详情，再按关闭设置。"
-        }
-        L10nKey::StatisticsHeatmapLegend => {
-            "{metric} · 深浅上限 {max} · ? 未知／不完整 · 淡色：范围外"
+            "选择日期。方向键：日／周；Page Up/Down：月；Home/End：年首／年尾"
         }
         L10nKey::StatisticsWeekdays => "一　 二　 三　 四　 五　 六　 日",
         L10nKey::StatisticsBreakdowns => "分解明细",
@@ -345,11 +306,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsCostCard => "记录费用",
         L10nKey::StatisticsSessionColumn => "会话",
         L10nKey::StatisticsTokenDelta => "与上期相比：{change}",
-        L10nKey::StatisticsRecordedSubtotal => "记录费用小计 · {count} 条未计价",
-        L10nKey::StatisticsSessionAverage => "平均每主会话 {value} Token",
-        L10nKey::StatisticsRecordCount => "{calls} 条计量记录 · {cumulative} 条累计",
+        L10nKey::StatisticsRecordedSubtotal => "{count} 条未计价",
+        L10nKey::StatisticsSessionAverage => "平均 {value} Token / 主会话",
+        L10nKey::StatisticsRecordCount => "{calls} 条记录 · {cumulative} 条累计",
         L10nKey::StatisticsActivity => "活动",
-        L10nKey::StatisticsActivityStreaks => "当前连续 {current} 天 · 最长 {longest} 天",
         L10nKey::StatisticsSourceSummary => "{count} 处来源 · {issues} 条诊断",
         L10nKey::StatisticsPriceSummary => "{count} 项自定义价 · 公共目录{catalog}",
         L10nKey::StatisticsCatalogEnabled => "已启用",
@@ -613,19 +573,17 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "Kimi Code Command Code DeepSeek StepFun Xiaomi MiMo 余额 套餐 Credit 配额 重置 API key 账户 重命名 刷新 凭据 用量 私有平台 会话 Cookie 浏览器 profile LocalStorage userToken access_token 增强 Firefox Safari Keychain 全盘访问 DPAPI App-Bound Encryption"
         }
         L10nKey::UsageScope => "桌面全局查询账户，独立于 SSH 机器，不读取智能体密钥。",
-        L10nKey::UsageOfficial => {
-            "官方 API：GET https://api.deepseek.com/user/balance · Bearer API key。接口不返回用户身份或重置周期；下方名称和 ID 标识本地查询账户。"
-        }
+        L10nKey::UsageOfficial => "通过 api.deepseek.com 官方 API 查询余额，不返回身份或重置周期。",
         L10nKey::UsageSource => "认证来源",
         L10nKey::UsageProvider => "服务商",
         L10nKey::UsageKimiDisclosure => {
-            "私有用量接口：API key 仅请求 api.kimi.com/coding/v1/usages 与 /me；网页会话仅请求 www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats。接口可能变更，不将网页登录态回退到 API-key 端点。"
+            "私有接口，可能变更。API 密钥仅用于 api.kimi.com，网页会话仅用于 www.kimi.com，两者不相互回退。"
         }
         L10nKey::UsageKimiHelp => {
             "从所选 profile 的 https://www.kimi.com LocalStorage 复制 access_token 裸值或 access_token JSON。仅读取 access_token 与可选 msh_user_id，不读取 refresh_token 或 Cookie。浏览器材料仅在请求期驻留内存；手工 token 验证后保存。"
         }
         L10nKey::UsageCommandDisclosure => {
-            "私有接口：API key 仅发送至 api.commandcode.ai 的 /alpha/whoami、/alpha/billing/credits、/alpha/billing/subscriptions 与 /alpha/usage/summary。会话增强仅请求 /auth/get-session 核对身份及 /internal/billing/subscriptions；增强失败不影响主要来源。"
+            "私有接口，仅请求 api.commandcode.ai。会话增强需核对同一账户，失败不影响 API-key 主要用量。"
         }
         L10nKey::UsageEnhance => "设置会话增强…",
         L10nKey::UsageEnhancementFailed => "会话增强未生效；API-key 主要用量仍可用",
@@ -682,7 +640,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "从 platform.deepseek.com 的 LocalStorage 复制 userToken（裸值或 userToken JSON）；也可粘贴带 version、token、issuer 的 Harness grant JSON。拒绝 Cookie 和官方 API key。验证后仅将必要 token 存入系统凭据库。"
         }
         L10nKey::UsagePrivateDisclosure => {
-            "私有接口：仅请求 platform.deepseek.com/api/v0/users/get_user_summary。网页 userToken 使用 Bearer（尚未获第一方或真实账户验证）；Harness grant 使用 x-dsh-auth-token，issuer 必须匹配平台。它们不等同于官方 API key，接口可能变更。"
+            "私有接口可能变更，仅用于 platform.deepseek.com。网页 userToken 尚未经第一方或真实账户验证；Harness grant 的 issuer 必须匹配平台，两者都不是官方 API key。"
         }
         L10nKey::UsageBrowser => "浏览器",
         L10nKey::UsageProfile => "浏览器 profile",
@@ -710,10 +668,10 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "无法读取所选浏览器存储。未使用其他 profile；请检查文件权限与浏览器版本。"
         }
         L10nKey::UsageStepFunHelp => {
-            "StepFun 私有控制台：仅请求 platform.stepfun.com 的 Dashboard QueryStepPlanRateLimit、UserInfo、GetStepPlanStatus。从本人的 Network 请求头复制已解码 Oasis-Token，从同站 LocalStorage 复制 web_id，粘贴为 Oasis-Token=…; Oasis-Webid=…。Oasis-Webid 是请求头，不从 JWT 推导。不提供 API key 查询；请求窗口与 Credit 套餐保留不同口径。"
+            "从 platform.stepfun.com 的请求头复制已解码 Oasis-Token，从 LocalStorage 复制 web_id，按 Oasis-Token=…; Oasis-Webid=… 粘贴。仅支持网页登录会话。"
         }
         L10nKey::UsageMiMoHelp => {
-            "MiMo 私有控制台：仅请求 platform.xiaomimimo.com/api/v1/balance、userProfile、tokenPlan/detail 与 tokenPlan/usage。粘贴本人会话的 api-platform_serviceToken（或 serviceToken）及 userId，不提供 API key 查询。账户余额与套餐 Credits 分开，缺失字段保留未知。"
+            "粘贴 platform.xiaomimimo.com 的本人会话：api-platform_serviceToken=…; userId=…（也接受 serviceToken）。仅支持网页登录会话，余额与套餐 Credits 分开显示。"
         }
         L10nKey::UsageCookieInput => "必需的会话字段",
         L10nKey::UsageCookieBrowserHelp => {
@@ -733,8 +691,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageAdd => "添加账户…",
         L10nKey::UsageCodingPlans => "Coding 套餐",
         L10nKey::UsageApiAccounts => "API 账户",
-        L10nKey::UsagePageVisible => "桌面账户 · 仅此页面可见时刷新",
-        L10nKey::UsageProviderEmpty => "暂无账户 · 添加后查看服务商用量",
+        L10nKey::UsageProviderEmpty => "暂无账户",
         L10nKey::UsageOfficialApi => "官方 API",
         L10nKey::UsagePrivateApi => "私有接口",
         L10nKey::UsageMore => "更多账户操作",

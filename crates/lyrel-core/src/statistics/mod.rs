@@ -11,7 +11,9 @@ mod opencode;
 pub use opencode::discover_opencode;
 mod pi;
 pub mod pricing;
+mod progress;
 pub mod sources;
+pub use progress::scan_with_progress;
 mod time_range;
 use crate::host::{Host, Meta};
 pub use omp::discover_omp;
@@ -414,6 +416,8 @@ impl FileFacts {
 #[derive(Clone, Debug)]
 pub struct Totals {
     tokens: Tokens,
+    known_tokens: Option<u64>,
+    has_known_tokens: bool,
     recorded_usd: Option<f64>,
     estimated_usd: Option<f64>,
     estimated_costs: std::collections::BTreeMap<String, pricing::CurrencyEstimate>,
@@ -428,6 +432,12 @@ pub struct Totals {
 impl Totals {
     fn add_record(&mut self, record: &UsageRecord, cost: &pricing::RecordCost<'_>) {
         self.tokens.add(&record.tokens, self.calls == 0);
+        if let Some(tokens) = record.tokens.total {
+            self.known_tokens = self
+                .known_tokens
+                .and_then(|total| total.checked_add(tokens));
+            self.has_known_tokens = true;
+        }
         self.calls += 1;
         self.cumulative_records +=
             u64::from(record.coverage_start.is_some() || record.time_unknown);
@@ -479,6 +489,12 @@ impl Totals {
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
+    /// Known per-record token subtotal; never a replacement for the complete total.
+    pub fn known_tokens(&self) -> Option<u64> {
+        (self.has_known_tokens && self.ambiguous_records == 0)
+            .then_some(self.known_tokens)
+            .flatten()
+    }
     pub fn recorded_usd(&self) -> Option<f64> {
         self.recorded_usd
     }
@@ -521,6 +537,8 @@ impl Default for Totals {
     fn default() -> Self {
         Self {
             tokens: Tokens::default(),
+            known_tokens: Some(0),
+            has_known_tokens: false,
             recorded_usd: None,
             estimated_usd: None,
             estimated_costs: std::collections::BTreeMap::new(),
@@ -845,9 +863,12 @@ pub fn scan(
                 );
                 let result = (|| {
                     let meta = host.stat(&path)?;
-                    if let Some((old, facts)) = cache.files.get(&key) {
-                        if old == &meta {
-                            return Ok((meta, facts.clone()));
+                    if let Some((old, facts)) = cache.files.get_mut(&key) {
+                        if *old == meta {
+                            // Directory lineage can change without touching this history file.
+                            facts.child = child;
+                            snapshot.files.push(facts.clone());
+                            return Ok(None);
                         }
                     }
                     if meta.len > MAX_FILE_BYTES || bytes + meta.len > MAX_SCAN_BYTES {
@@ -868,7 +889,7 @@ pub fn scan(
                             ));
                         }
                     };
-                    Ok((
+                    Ok(Some((
                         meta,
                         FileFacts {
                             source: source.clone(),
@@ -878,13 +899,14 @@ pub fn scan(
                             session,
                             metadata_stamp: None,
                         },
-                    ))
+                    )))
                 })();
                 match result {
-                    Ok((meta, facts)) => {
+                    Ok(Some((meta, facts))) => {
                         cache.files.insert(key, (meta, facts.clone()));
                         snapshot.files.push(facts);
                     }
+                    Ok(None) => {}
                     Err(error) => {
                         snapshot.issues.push(ScanIssue {
                             path,

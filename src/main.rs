@@ -807,6 +807,9 @@ fn main() {
 
         let reopen = crate::ui::windows::restore_target(cx, open_path.as_deref());
         crate::ui::windows::open_at(cx, reopen.map(|(id, _)| id), open_path);
+        if crate::ui::windows::WindowRegistry::count(cx) > 0 {
+            crate::ui::settings::statistics::schedule_local_warmup(cx);
+        }
         crate::ui::windows::announce_detached_at_launch(cx, reopen);
         if config_outcome.failed() {
             notify_config_load_failed(cx, config_outcome, true);

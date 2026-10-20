@@ -58,19 +58,30 @@ impl Day {
     pub fn value(&self, metric: Metric) -> Option<f64> {
         self.in_range.then(|| metric.value(&self.totals)).flatten()
     }
-    /// Positive token/session activity may expose a subtotal when source coverage is partial.
-    /// Partial cost and unobserved zero days remain unknown.
+    /// Positive observed activity remains visible when coverage or pricing is partial.
+    /// Unknown zero days and identity conflicts never become activity.
     pub fn activity_value(&self, metric: Metric) -> Option<f64> {
         if let Some(value) = self.value(metric) {
             return Some(value);
         }
-        if !self.in_range || self.totals.is_complete() || self.totals.ambiguous_records > 0 {
+        if !self.in_range || self.totals.ambiguous_records > 0 {
             return None;
         }
         let value = match metric {
             Metric::Tokens => self.totals.tokens().total().map(|value| value as f64),
             Metric::Sessions => Some(self.totals.main_sessions() as f64),
-            Metric::Cost => None,
+            Metric::Cost => {
+                let recorded = self.totals.recorded_usd();
+                let estimated = self
+                    .totals
+                    .estimated_costs()
+                    .get("USD")
+                    .and_then(pricing::CurrencyEstimate::total);
+                match (recorded, estimated) {
+                    (None, None) => None,
+                    (recorded, estimated) => Some(recorded.unwrap_or(0.) + estimated.unwrap_or(0.)),
+                }
+            }
         };
         value.filter(|value| *value > 0.)
     }

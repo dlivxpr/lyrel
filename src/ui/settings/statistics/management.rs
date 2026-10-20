@@ -11,7 +11,7 @@ pub(super) enum Editor {
     Price,
 }
 pub(super) struct Management {
-    pub stored: storage::StoredStatistics,
+    pub stored: Arc<storage::StoredStatistics>,
     pub loaded: bool,
     pub busy: bool,
     pub error: Option<String>,
@@ -293,7 +293,7 @@ impl LyrelApp {
             host,
             cx,
             move |_| {
-                storage::StoredStatistics::load(&path.ok_or_else(|| {
+                cache::shared().load_settings(&path.ok_or_else(|| {
                     std::io::Error::other("Statistics configuration directory unavailable")
                 })?)
             },
@@ -407,13 +407,11 @@ impl LyrelApp {
         if state.busy || !state.loaded {
             return;
         }
-        let mut stored = state.stored.clone();
         let path = state.path.clone();
         let revision = Uuid::new_v4();
         state.revision = revision;
         state.busy = true;
         state.error = None;
-        let mut results = settings.statistics.results.clone();
         let analysis_agent = settings.statistics.analysis.agent.clone();
         let year = settings.statistics.analysis.year;
         settings.statistics.invalidate();
@@ -425,19 +423,23 @@ impl LyrelApp {
             cx.notify();
             return;
         };
+        let mut results = self
+            .active_settings_mut()
+            .map(|settings| std::mem::take(&mut settings.statistics.results))
+            .unwrap_or_default();
         HostOps::run(
             host,
             cx,
             move |host| -> Result<_, String> {
-                mutation(&mut stored, host)?;
-                stored
-                    .save(&path.ok_or("Statistics configuration directory unavailable")?)
-                    .map_err(|e| e.to_string())?;
+                let path = path.ok_or("Statistics configuration directory unavailable")?;
+                let stored =
+                    cache::shared().change_settings(&path, |stored| mutation(stored, host))?;
                 if let Some(host) = source_host {
                     results.retain(|(id, _), _| *id != host);
                 } else {
                     for presentation in results.values_mut() {
-                        presentation.snapshot.apply_pricing(stored.pricing.clone());
+                        Arc::make_mut(&mut presentation.snapshot)
+                            .apply_pricing(stored.pricing.clone());
                         presentation.totals = presentation.snapshot.aggregate(&presentation.window);
                         presentation.previous = presentation
                             .window
@@ -605,7 +607,7 @@ impl LyrelApp {
                         }
                     }
                 }
-                this.load_statistics(cx);
+                this.refresh_statistics(cx);
                 cx.notify();
             },
         );
@@ -705,7 +707,7 @@ impl LyrelApp {
                             .into_any_element(),
                     );
                 }
-                for binding in &presentation.bindings {
+                for binding in presentation.bindings.iter() {
                     let remove = binding.clone();
                     let check = binding.clone();
                     let id = binding.key();

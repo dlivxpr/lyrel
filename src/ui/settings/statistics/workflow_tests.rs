@@ -2,6 +2,7 @@
 use super::*;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
+mod test_host;
 
 struct ControlledCatalog(std::sync::atomic::AtomicUsize);
 impl storage::CatalogHttp for ControlledCatalog {
@@ -620,6 +621,197 @@ fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
         assert_eq!(
             window.find("statistics-session-trend").label(),
             Some(t(L10nKey::StatisticsTrendUnavailable))
+        );
+    });
+}
+
+fn cached_filter_fixture(
+    cx: &mut TestAppContext,
+    block_scan: bool,
+) -> (
+    tempfile::TempDir,
+    Arc<test_host::CountingHost>,
+    Option<smol::channel::Sender<()>>,
+    Entity<LyrelApp>,
+    VisualTestContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("pi");
+    let history = home.join("sessions");
+    std::fs::create_dir_all(&history).unwrap();
+    std::fs::write(history.join("visible.jsonl"), "{\"type\":\"session\",\"version\":3,\"id\":\"cached-filter\",\"timestamp\":\"2026-10-18T12:00:00Z\"}\n{\"type\":\"message\",\"id\":\"earlier\",\"timestamp\":\"2026-10-18T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":40,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n{\"type\":\"message\",\"id\":\"later\",\"timestamp\":\"2026-10-19T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":60,\"output\":10,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n").unwrap();
+    let host = test_host::CountingHost::new(temp.path());
+    let release = block_scan.then(|| {
+        let (sender, receiver) = smol::channel::bounded(1);
+        *host.gate.lock().unwrap() = Some(receiver);
+        sender
+    });
+    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        HostRegistry::insert(cx, host.clone());
+        cx.global_mut::<Config>().agent_launch.insert(
+            "pi".into(),
+            format!("PI_CODING_AGENT_DIR='{}' pi", home.display()),
+        );
+        app.open_settings_section(SettingsSection::General, window, cx);
+        let state = &mut app.active_settings_mut().unwrap().statistics;
+        state.management.path = Some(temp.path().join("statistics-settings.json"));
+        state.agent = Some("pi");
+        state.period = Period::All;
+        app.navigate_settings(SettingsSection::Statistics, None, window, cx);
+    });
+    (temp, host, release, app, vcx)
+}
+
+#[gpui_kit::test]
+fn statistics_cached_filters_recompute_without_host_reads_and_refresh_reads_changes(
+    cx: &mut TestAppContext,
+) {
+    let (temp, host, _, app, mut vcx) = cached_filter_fixture(cx, false);
+    settle(&app, &mut vcx);
+    let reads = host.reads();
+    assert!(reads > 0);
+    let updated = app.read_with(&vcx, |app, _| {
+        let presentation =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(presentation.totals.tokens().total(), Some(112));
+        presentation.snapshot.updated()
+    });
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.select_statistics_period(Period::Custom, cx)
+    });
+    settle(&app, &mut vcx);
+    type_into(&app, &mut vcx, "statistics-start-date", "2026-10-19");
+    type_into(&app, &mut vcx, "statistics-end-date", "2026-10-19");
+    click(&app, &mut vcx, "statistics-apply");
+    settle(&app, &mut vcx);
+    app.read_with(&vcx, |app, _| {
+        let presentation =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(presentation.totals.tokens().total(), Some(70));
+        assert_eq!(
+            presentation.previous.as_ref().unwrap().tokens().total(),
+            Some(42)
+        );
+        assert_eq!(
+            presentation
+                .analysis
+                .as_ref()
+                .unwrap()
+                .totals()
+                .tokens()
+                .total(),
+            Some(70)
+        );
+        assert_eq!(presentation.snapshot.updated(), updated);
+    });
+    let year = chrono::Datelike::year(&chrono::Local::now());
+    click(&app, &mut vcx, "statistics-year-previous");
+    settle(&app, &mut vcx);
+    app.read_with(&vcx, |app, _| {
+        let presentation =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(presentation.analysis.as_ref().unwrap().year(), year - 1);
+        assert_eq!(presentation.totals.tokens().total(), Some(70));
+    });
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.change_analysis(|analysis| analysis.agent = Some("omp".into()), true, cx)
+    });
+    settle(&app, &mut vcx);
+    app.read_with(&vcx, |app, _| {
+        let presentation =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(presentation.totals.tokens().total(), Some(70));
+        assert_eq!(presentation.analysis.as_ref().unwrap().totals().calls(), 0);
+    });
+    assert_eq!(
+        host.reads(),
+        reads,
+        "view filters must not rediscover or reread the Host"
+    );
+    let file = temp.path().join("pi/sessions/visible.jsonl");
+    use std::io::Write as _;
+    writeln!(std::fs::OpenOptions::new().append(true).open(file).unwrap(), "{{\"type\":\"message\",\"id\":\"new-usage\",\"timestamp\":\"2026-10-19T12:00:02Z\",\"message\":{{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{{\"input\":100,\"output\":1,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{{\"total\":0}}}}}}}}").unwrap();
+    click(&app, &mut vcx, "statistics-refresh");
+    settle(&app, &mut vcx);
+    assert!(
+        host.reads() > reads,
+        "manual refresh must read the current Host"
+    );
+    app.read_with(&vcx, |app, _| {
+        let presentation =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(presentation.totals.tokens().total(), Some(171));
+        assert_eq!(
+            presentation.previous.as_ref().unwrap().tokens().total(),
+            Some(42)
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn statistics_filter_changes_during_scan_do_not_queue_another_scan(cx: &mut TestAppContext) {
+    let (_temp, host, release, app, mut vcx) = cached_filter_fixture(cx, true);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        vcx.run_until_parked();
+        if host.gate.lock().unwrap().is_none() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native scan did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let reads = host.reads();
+    let listings = host.listings();
+    assert!(listings > 0);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.select_statistics_period(Period::Year, cx);
+        app.select_statistics_period(Period::Month, cx);
+        app.select_statistics_period(Period::Custom, cx);
+        let state = &app.active_settings().unwrap().statistics;
+        state
+            .start
+            .clone()
+            .update(cx, |input, cx| input.set_value("2026-10-19", window, cx));
+        state
+            .end
+            .clone()
+            .update(cx, |input, cx| input.set_value("2026-10-19", window, cx));
+    });
+    click(&app, &mut vcx, "statistics-apply");
+    vcx.run_until_parked();
+    assert_eq!(
+        host.reads(),
+        reads,
+        "changing a date must not queue discovery behind the scan"
+    );
+    release.unwrap().send_blocking(()).unwrap();
+    settle(&app, &mut vcx);
+    assert_eq!(
+        host.listings(),
+        listings,
+        "the pending scan must be the only native discovery pass"
+    );
+    app.read_with(&vcx, |app, _| {
+        let presentation =
+            &app.active_settings().unwrap().statistics.results[&(HostId::LOCAL, Some("pi"))];
+        assert_eq!(presentation.totals.tokens().total(), Some(70));
+        assert_eq!(
+            presentation.previous.as_ref().unwrap().tokens().total(),
+            Some(42)
+        );
+        assert_eq!(
+            presentation
+                .analysis
+                .as_ref()
+                .unwrap()
+                .totals()
+                .tokens()
+                .total(),
+            Some(70)
         );
     });
 }
