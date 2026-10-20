@@ -19,7 +19,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -60,7 +60,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -177,7 +177,7 @@ jobs:
       RUSTFLAGS: -C strip=symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -257,7 +257,7 @@ jobs:
       RUSTFLAGS: -C strip=symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -331,7 +331,7 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false
@@ -416,7 +416,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: lyrel
           persist-credentials: false

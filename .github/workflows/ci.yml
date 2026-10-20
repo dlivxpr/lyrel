@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -64,7 +64,7 @@ jobs:
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
       # A PR checkout is the merge commit, so its first parent is the base.
@@ -105,7 +105,7 @@ jobs:
     steps:
       - name: Checkout lyrel
         if: needs.changes.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Host 检查和 Pi 桥契约测试要求 Node.js 22.19+；setup-node 提供当前
       # runner 平台的原生 Node，Linux 不通过 Windows 的 node.exe 执行测试。
@@ -257,7 +257,7 @@ jobs:
     env:
       RUSTFLAGS: -C strip=symbols
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -320,7 +320,7 @@ jobs:
     env:
       RUSTFLAGS: -C strip=symbols
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
