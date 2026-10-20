@@ -282,7 +282,7 @@ CI 的桌面 build 与 test 统一启用 `--features updater`，同一次默认 
 
 发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
 及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
-桌面与 server 并行编译，只有打包阶段等待真实 WSL server；桌面一次编译 GUI、CLI 和 updater。编译与打包间使用 tar 保留可执行权限，已压缩包不再做外层压缩；Thin LTO 和单 codegen unit 的发行配置不变。
+桌面与 server 并行编译，桌面一次编译 GUI、CLI 和 updater。Windows 打包只等待本平台编译和真实 WSL musl server，macOS 打包只等待本平台编译，不跨平台互相阻塞。编译与打包间使用 tar 保留可执行权限，归档及恢复均使用相对路径，避免 GNU tar 把 Windows 的 `drive:` 绝对路径当作远程主机；已压缩包不再做外层压缩。Thin LTO 和单 codegen unit 的发行配置不变。
 
 CI 与 Release 使用独立的稳定缓存键，保留 toolchain、target、flags 和依赖哈希隔离。仅 `main` 保存缓存，标签和 PR 只读取；不同标签不能读取彼此保存的缓存，但可以读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖：
 
