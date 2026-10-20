@@ -98,6 +98,7 @@ jobs:
     # Line tables keep file:line in backtraces but shrink the cached target dir.
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      RUST_BACKTRACE: 1
     # Backstop under the per-step timeouts below. Without any timeout at all a
     # hung test runs to GitHub's six-hour job limit, which is how a 90-second
     # step turned into a six-hour one three times in a day.
@@ -203,7 +204,8 @@ jobs:
       - name: Test desktop and headless
         if: needs.changes.outputs.code == 'true' && runner.os != 'Linux'
         timeout-minutes: 20
-        run: cargo test --locked --target ${{ matrix.target }}
+        # SIGABRT 会丢失 libtest 捕获缓冲；直接保留原始 panic 和回溯。
+        run: cargo test --locked --target ${{ matrix.target }} -- --nocapture
 
       - name: Test Linux headless
         if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
