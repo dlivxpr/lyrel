@@ -4,7 +4,6 @@ use gpui_kit::component::FocusTrapElement as _;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::text::TextView;
 use gpui_kit::rems;
-use std::time::UNIX_EPOCH;
 
 impl LyrelApp {
     pub(crate) fn render_settings_skills(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -335,31 +334,6 @@ impl LyrelApp {
             .id("skills-detail-metadata")
             .test_support()
             .min_w_0();
-        let mut agents = std::collections::HashSet::new();
-        let invocation = skill
-            .sources()
-            .iter()
-            .filter(|source| agents.insert(source.agent()))
-            .map(|source| {
-                use crate::core::agent_hooks::HookAgent;
-                let name = skill.name();
-                let command = match source.agent() {
-                    HookAgent::OhMyPi | HookAgent::Pi => format!("/skill:{name}"),
-                    HookAgent::Kimi => format!("/skill:{name} · /{name}"),
-                    HookAgent::OpenCode => format!("@{name}"),
-                    HookAgent::Hermes => format!("/{name} · /skill {name}"),
-                };
-                format!("{} · {command}", source.agent().display_name())
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        metadata = metadata.child(skill_detail_row(
-            "skills-invoke".into(),
-            t(L10nKey::SkillsInvoke).into(),
-            invocation,
-            false,
-            cx,
-        ));
         if let Some(hint) = skill.invocation() {
             metadata = metadata.child(skill_detail_row(
                 "skills-argument-hint".into(),
@@ -376,33 +350,6 @@ impl LyrelApp {
             true,
             cx,
         ));
-        let mut locations = std::collections::HashSet::new();
-        for source in skill.sources() {
-            if !locations.insert(source.entry()) {
-                continue;
-            }
-            let label = skill
-                .sources()
-                .iter()
-                .filter(|other| other.entry() == source.entry())
-                .map(|source| {
-                    format!(
-                        "{} · {} · {}",
-                        source.agent().display_name(),
-                        t(source_key(source.kind())),
-                        t(state_key(source.state())),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-            metadata = metadata.child(skill_detail_row(
-                format!("skill-source-{}", row_id(source.entry())).into(),
-                label.into(),
-                source.entry().to_string_lossy().into_owned(),
-                true,
-                cx,
-            ));
-        }
         for (id, key, value) in [
             (
                 "skills-contents",
@@ -441,28 +388,6 @@ impl LyrelApp {
             ),
         ] {
             metadata = metadata.child(skill_detail_row(id.into(), t(key).into(), value, false, cx));
-        }
-        if let Some(record) = skill.source_record() {
-            metadata = metadata
-                .child(skill_detail_row(
-                    "skills-source-reference".into(),
-                    t(L10nKey::SkillsSourceReference).into(),
-                    format!(
-                        "{} · {} · {}",
-                        record.source_type(),
-                        record.reference().unwrap_or(t(L10nKey::SkillsUnknown)),
-                        record.skill_path().unwrap_or(t(L10nKey::SkillsUnknown)),
-                    ),
-                    false,
-                    cx,
-                ))
-                .child(skill_detail_row(
-                    "skills-source-record".into(),
-                    t(L10nKey::SkillsSourceRecord).into(),
-                    record.lock_path().to_string_lossy().into_owned(),
-                    true,
-                    cx,
-                ));
         }
         content.push(metadata.into_any_element());
         for problem in skill.problems() {
@@ -593,63 +518,6 @@ impl LyrelApp {
                     div().child(node.data::<String>().cloned().unwrap_or_default())
                 })
                 .into_any_element(),
-            );
-        }
-        content.push(
-            div()
-                .pt_3()
-                .border_t_1()
-                .border_color(cx.theme().border)
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(t(L10nKey::SkillsScope))
-                .into_any_element(),
-        );
-        let mut agents = std::collections::HashSet::new();
-        for source in skill
-            .sources()
-            .iter()
-            .filter(|source| agents.insert(source.agent()))
-        {
-            content.push(
-                Link::new(SharedString::from(format!(
-                    "skill-guide-{}-{}",
-                    source.agent().slug(),
-                    row_id(source.entry())
-                )))
-                .child(format!(
-                    "{} · {}",
-                    source.agent().display_name(),
-                    t(L10nKey::SkillsNativeGuide)
-                ))
-                .href(native_guide(source.agent()))
-                .into_any_element(),
-            );
-            content.push(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(native_help(source.agent())))
-                    .into_any_element(),
-            );
-        }
-        if let Some(snapshot) = self
-            .active_settings()
-            .and_then(|s| s.skills.snapshot.as_ref())
-        {
-            let time = snapshot
-                .scanned_at()
-                .duration_since(UNIX_EPOCH)
-                .ok()
-                .and_then(|time| i64::try_from(time.as_secs()).ok())
-                .map(skill_timestamp)
-                .unwrap_or_else(|| t(L10nKey::SkillsUnknown).to_string());
-            content.push(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t_fmt(L10nKey::SkillsScannedAt, &[("time", &time)]))
-                    .into_any_element(),
             );
         }
         v_flex()
@@ -1171,11 +1039,10 @@ fn skill_detail_row(
             .ghost()
             .w_full()
             .min_w_0()
-            .px_1()
-            .justify_start()
+            .px_0()
             .accessibility_label(format!("{} · {label}", t(L10nKey::SkillsCopyPath)))
             .tooltip(value.clone())
-            .child(div().min_w_0().truncate().text_xs().child(value))
+            .child(div().w_full().min_w_0().truncate().text_xs().child(value))
             .on_click(move |_, _, cx| {
                 cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copied.clone()));
             })
@@ -1197,6 +1064,7 @@ fn skill_detail_row(
     let full_label = label.clone();
     h_flex()
         .id(id)
+        .text_left()
         .min_w_0()
         .gap_3()
         .border_b_1()

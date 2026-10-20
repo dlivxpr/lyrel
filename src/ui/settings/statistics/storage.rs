@@ -10,6 +10,16 @@ pub(super) struct StoredStatistics {
     pub pricing: Pricing,
     pub sources: SourceBindings,
 }
+
+pub(super) type SettingsStamp = Option<(u64, std::time::SystemTime)>;
+
+pub(super) fn settings_stamp(path: &Path) -> io::Result<SettingsStamp> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some((metadata.len(), metadata.modified()?))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
 impl StoredStatistics {
     pub fn load(path: &Path) -> io::Result<Self> {
         let value: Self = match std::fs::read(path) {

@@ -2,21 +2,6 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
-        L10nKey::SkillsHelpOmp => {
-            "omp 18.12.2: /skill:name. skills.enabled, provider switches and name filters can prevent loading. Native roots are one level deep and discovered at startup. Restart the native agent to discover changed sources; lyrel does not execute it."
-        }
-        L10nKey::SkillsHelpPi => {
-            "pi 1.3.0: /skill:name [args]; /reload refreshes resources. Project resources require native project trust. --no-skills disables automatic sources, but explicit --skill can still load a file."
-        }
-        L10nKey::SkillsHelpKimi => {
-            "Kimi Code 2.2.0: /skill:name or /name; new skills are available in a new session. --skills-dir replaces automatic directories; extra_skill_dirs appends sources."
-        }
-        L10nKey::SkillsHelpOpenCode => {
-            "OpenCode 2.0.32: @skill-id or the model skill tool. Permissions and autoinvoke policy affect availability. Skill lists refresh at model steps; no documented skill-specific reload command is assumed."
-        }
-        L10nKey::SkillsHelpHermes => {
-            "Hermes 0.22.2: /name or /skill name; /reload-skills rescans. User shared directories need skills.external_dirs. Project discovery requires native trust; lyrel never grants it."
-        }
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
             "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."
@@ -33,9 +18,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsSource => "Source",
         L10nKey::SkillsAllSources => "All sources",
         L10nKey::SkillsBrowserDescription => "Browse skills on the selected machine and project",
-        L10nKey::SkillsInvoke => "Invoke",
-        L10nKey::SkillsSourceReference => "Source reference",
-        L10nKey::SkillsSourceRecord => "Source record",
         L10nKey::SkillsUserShared => "User shared",
         L10nKey::SkillsProjectShared => "Project shared",
         L10nKey::SkillsPrivate => "Agent private",
@@ -44,7 +26,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsEmpty => {
             "No matching skills. Check the selected machine, project, native profile and source filter, then refresh. No configuration is changed."
         }
-        L10nKey::SkillsScannedAt => "Scanned: {time}",
         L10nKey::SkillsIncomplete => "Incomplete or stale results",
         L10nKey::SkillsUnknown => "Unknown",
         L10nKey::SkillsDiscovered => "Discovered on disk",
@@ -63,7 +44,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SkillsMixedState => "Mixed native states",
         L10nKey::SkillsInvocation => "Argument hint",
         L10nKey::SkillsNoSource => "No verifiable source recorded",
-        L10nKey::SkillsNativeGuide => "Native documentation",
         L10nKey::SkillsBack => "Back",
         L10nKey::SkillsCount => "{shown} of {total} skills",
         L10nKey::SkillsSelectSkill => "Select a skill to view its details",
@@ -76,7 +56,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Selected machine is disconnected. Reconnect it and refresh. The target has not changed."
         }
         L10nKey::SkillsReadError => "Could not read selected scope: {error}",
-        L10nKey::SkillsScope => "Discovery locations and native state",
         L10nKey::SkillsProfileNote => {
             "Uses the selected Host environment and configured agent launch profile. Project paths never follow workspace changes automatically."
         }
@@ -200,9 +179,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsCustomDates => "Start / end date (YYYY-MM-DD, inclusive)",
         L10nKey::StatisticsApply => "Apply dates",
         L10nKey::StatisticsRefresh => "Refresh history",
-        L10nKey::StatisticsLoading => {
-            "Reading native history… Previous results remain dated below."
-        }
+        L10nKey::StatisticsLoading => "Scanning history…",
         L10nKey::StatisticsInvalidDate => {
             "Enter valid dates in YYYY-MM-DD format, with the start no later than the end."
         }
@@ -215,14 +192,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsUpdated => {
             "Snapshot: {time} · desktop timezone: {zone}\nResult range: {range}"
         }
-        L10nKey::StatisticsSnapshotTime => "Observed {time}",
-        L10nKey::StatisticsStaleSnapshot => {
-            "Observed {time} · incomplete; cached data may be stale"
-        }
-        L10nKey::StatisticsComplete => "Complete within discovered sources and scan limits",
-        L10nKey::StatisticsPartial => {
-            "Incomplete — retained values may be stale or restricted; inspect source diagnostics below"
-        }
+        L10nKey::StatisticsSnapshotTime => "Updated {time}",
+        L10nKey::StatisticsStaleSnapshot => "Updated {time} · partial data",
+        L10nKey::StatisticsComplete => "Complete",
+        L10nKey::StatisticsPartial => "Partial data · see Data sources",
         L10nKey::StatisticsTokens => "Tokens",
         L10nKey::StatisticsCost => "Recorded historical cost",
         L10nKey::StatisticsEstimatedCost => "Native estimated cost (separate from actual)",
@@ -259,29 +232,19 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsActivityCaption => {
             "{metric} per day · dates outside the range are dimmed"
         }
-        L10nKey::StatisticsKnownPeak => "Known peak {date} · {value}",
-        L10nKey::StatisticsPeak => "Peak {date} · {value}",
+        L10nKey::StatisticsActivityValues => {
+            "Total tokens: {tokens}\nEquivalent USD: {cost}\nSessions: {sessions}"
+        }
         L10nKey::StatisticsLess => "Less",
         L10nKey::StatisticsMore => "More",
-        L10nKey::StatisticsHeatmapCoverage => {
-            "Outlined days: unknown or restricted · see Data sources"
-        }
-        L10nKey::StatisticsHeatmapLowerBound => {
-            "Outlined activity shows known subtotals; blank outlined days stay unknown · see Data sources"
-        }
-        L10nKey::StatisticsKnownActivity => "At least {value} {metric} · known subtotal",
         L10nKey::StatisticsRankUsage => "{tokens} tokens · {sessions} sessions",
         L10nKey::StatisticsRankSpend => "{cost} · {tokens} tokens",
-        L10nKey::StatisticsObservedValues => "Known subtotals · source coverage may be incomplete",
+        L10nKey::StatisticsObservedValues => "Known subtotal",
         L10nKey::StatisticsObservedTokens => "Known token composition: {value}",
         L10nKey::UsageSubtitle => "Coding plan quota and API account balances",
         L10nKey::UsageCodingPlansCaption => "Periodic quota and Credits",
         L10nKey::UsageApiAccountsCaption => "Provider balances and account quota",
-        L10nKey::UsageEmptyHint => "Choose a provider below to add an account",
         L10nKey::UsageAccountsUnavailable => "Accounts could not be loaded",
-        L10nKey::UsageSupportsApiKey => "Supports API keys",
-        L10nKey::UsageSupportsSessionBrowser => "Supports manual sessions and browser import",
-        L10nKey::UsageSupportsAllSources => "Supports API keys, manual sessions and browser import",
         L10nKey::UsageAddHint => "Choose a source. Usage is verified before the account is saved.",
         L10nKey::UsageCurrentSource => "Current account and source",
         L10nKey::UsageReplaceHint => {
@@ -340,7 +303,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsPricedCost => "Cost (recorded + explicit estimates)",
         L10nKey::StatisticsOpen => "Open statistics",
         L10nKey::StatisticsAnalysisTitle => "Activity and breakdowns",
-        L10nKey::StatisticsAllAgents => "All discovered agents",
+        L10nKey::StatisticsAllAgents => "All agents",
         L10nKey::StatisticsAgents => "Agents",
         L10nKey::StatisticsModels => "Models",
         L10nKey::StatisticsProjects => "Projects",
@@ -352,23 +315,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Applies to this analysis only, within the machine, discovered sources and date range above. Older results remain visible while refreshing."
         }
         L10nKey::StatisticsAnalysisMetric => "Heatmap metric",
-        L10nKey::StatisticsMetricScope => {
-            "Changes calendar intensity only. Details show every metric and price source. Cost intensity requires complete USD coverage from recorded costs or explicit custom/catalog estimates; native estimates remain separate. Partial pricing and mixed currencies stay unknown."
-        }
         L10nKey::StatisticsAnalysisError => "Could not build the desktop calendar: {error}",
         L10nKey::StatisticsPreviousYear => "Previous year",
         L10nKey::StatisticsNextYear => "Next year",
-        L10nKey::StatisticsStreaks => {
-            "Current streak: {current} days · longest: {longest} days. Within the visible year and selected range; current includes yesterday when today has no activity. Unknown sources or cumulative cross-day usage prevent a reliable streak."
-        }
-        L10nKey::StatisticsOutsideRange => {
-            "Outside the selected range — activity is not evaluated here, not reported as zero."
-        }
         L10nKey::StatisticsCalendarKeys => {
-            "Select a date for details. Arrow keys: day/week · Page Up/Down: month · Home/End: year bounds · Enter: details · Escape: hide details, again to close settings."
-        }
-        L10nKey::StatisticsHeatmapLegend => {
-            "{metric} · peak {max} · ? unknown/incomplete · dimmed: outside range"
+            "Select a date. Arrow keys: day/week · Page Up/Down: month · Home/End: year bounds"
         }
         L10nKey::StatisticsWeekdays => "Mon  Tue  Wed  Thu  Fri  Sat  Sun",
         L10nKey::StatisticsBreakdowns => "Breakdown",
@@ -387,11 +338,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatisticsCostCard => "Recorded cost",
         L10nKey::StatisticsSessionColumn => "Sessions",
         L10nKey::StatisticsTokenDelta => "Previous period: {change}",
-        L10nKey::StatisticsRecordedSubtotal => "Recorded subtotal · {count} unpriced records",
+        L10nKey::StatisticsRecordedSubtotal => "{count} unpriced",
         L10nKey::StatisticsSessionAverage => "{value} tokens / main session",
-        L10nKey::StatisticsRecordCount => "{calls} usage records · {cumulative} cumulative",
+        L10nKey::StatisticsRecordCount => "{calls} records · {cumulative} cumulative",
         L10nKey::StatisticsActivity => "Activity",
-        L10nKey::StatisticsActivityStreaks => "Current streak {current} days · longest {longest}",
         L10nKey::StatisticsSourceSummary => "{count} locations · {issues} diagnostics",
         L10nKey::StatisticsPriceSummary => "{count} custom prices · public catalog {catalog}",
         L10nKey::StatisticsCatalogEnabled => "enabled",
@@ -685,18 +635,18 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Desktop-wide query accounts, independent of SSH machines. No agent keys are read."
         }
         L10nKey::UsageOfficial => {
-            "Official API: GET https://api.deepseek.com/user/balance · Bearer API key. The API does not return a user identity or reset period; the name and ID below identify the local query account."
+            "Query balances through the official api.deepseek.com API. Identity and reset periods are not provided."
         }
         L10nKey::UsageSource => "Authentication source",
         L10nKey::UsageProvider => "Provider",
         L10nKey::UsageKimiDisclosure => {
-            "Private usage interfaces: API keys only target api.kimi.com/coding/v1/usages and /me; web sessions only target www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats. These interfaces may change. Web sessions never fall back to the API-key endpoint."
+            "Private interfaces may change. API keys only go to api.kimi.com; web sessions only go to www.kimi.com. Sources are never switched automatically."
         }
         L10nKey::UsageKimiHelp => {
             "Copy access_token (raw or access_token JSON) from https://www.kimi.com LocalStorage in the selected profile. Only access_token and optional msh_user_id are read, never refresh_token or cookies. Browser material stays in request memory; manual tokens are saved only after validation."
         }
         L10nKey::UsageCommandDisclosure => {
-            "Private interfaces: API keys only target api.commandcode.ai /alpha/whoami, /alpha/billing/credits, /alpha/billing/subscriptions and /alpha/usage/summary. Session enhancement only targets /auth/get-session for identity and /internal/billing/subscriptions. Enhancement failure does not invalidate the primary source."
+            "Private interfaces on api.commandcode.ai only. Session enhancement must match the same account; failure leaves primary API-key usage intact."
         }
         L10nKey::UsageEnhance => "Configure session enhancement…",
         L10nKey::UsageEnhancementFailed => {
@@ -755,7 +705,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Copy userToken from platform.deepseek.com LocalStorage (raw value or userToken JSON), or paste Harness grant JSON with version, token and issuer. Cookies and official API keys are rejected. Only the required token enters the system credential store after validation."
         }
         L10nKey::UsagePrivateDisclosure => {
-            "Private endpoint: platform.deepseek.com/api/v0/users/get_user_summary only. Web userToken uses Bearer (not yet verified against first-party code or a real account); Harness grant uses x-dsh-auth-token and must have the matching issuer. Neither is an official API key. This private interface may change."
+            "Private interfaces on platform.deepseek.com may change. Web userToken is not yet verified against first-party code or a real account. Harness grants require the matching issuer. Neither is an official API key."
         }
         L10nKey::UsageBrowser => "Browser",
         L10nKey::UsageProfile => "Browser profile",
@@ -785,10 +735,10 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Could not read the selected browser storage. No other profile was used. Check file access and browser version."
         }
         L10nKey::UsageStepFunHelp => {
-            "Private StepFun console interface: platform.stepfun.com Dashboard QueryStepPlanRateLimit, UserInfo and GetStepPlanStatus only. Copy the decoded Oasis-Token from your own Network request headers and web_id from that site's LocalStorage; paste Oasis-Token=…; Oasis-Webid=…. Oasis-Webid is a request header, never derived from a JWT. No API-key query is supported. Request windows and Credit plans remain separate."
+            "From platform.stepfun.com, copy the decoded Oasis-Token request header and LocalStorage web_id. Paste Oasis-Token=…; Oasis-Webid=…. Web sessions only."
         }
         L10nKey::UsageMiMoHelp => {
-            "Private MiMo console interface: platform.xiaomimimo.com/api/v1/balance, userProfile, tokenPlan/detail and tokenPlan/usage only. Paste api-platform_serviceToken (or serviceToken) with userId from your own session. No API-key query is supported. Balances and plan Credits remain separate; missing fields stay unknown."
+            "Paste your platform.xiaomimimo.com session as api-platform_serviceToken=…; userId=… (serviceToken is also accepted). Web sessions only; balances and plan Credits stay separate."
         }
         L10nKey::UsageCookieInput => "Required session fields",
         L10nKey::UsageCookieBrowserHelp => {
@@ -808,8 +758,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageAdd => "Add account…",
         L10nKey::UsageCodingPlans => "Coding Plans",
         L10nKey::UsageApiAccounts => "API accounts",
-        L10nKey::UsagePageVisible => "Desktop accounts · refresh only while this page is open",
-        L10nKey::UsageProviderEmpty => "No accounts · add an account to see provider usage",
+        L10nKey::UsageProviderEmpty => "No accounts",
         L10nKey::UsageOfficialApi => "Official API",
         L10nKey::UsagePrivateApi => "Private API",
         L10nKey::UsageMore => "More account actions",

@@ -1,5 +1,6 @@
 //! 所选机器的原生历史总览；所有文件与聚合离开 GPUI 线程。
 mod analysis;
+mod cache;
 mod dashboard;
 mod management;
 #[cfg(test)]
@@ -13,10 +14,59 @@ use super::*;
 use crate::ui::host_ops::HostOps;
 use crate::ui::host_registry::HostRegistry;
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::{Disableable, button::ButtonVariants};
+use gpui_kit::component::{Disableable, button::ButtonVariants, spinner::Spinner};
 use lyrel_core::statistics::{self, DateWindow, Period, Snapshot, StatisticsCache, Totals};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+static INTERACTIVE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatisticsRequest {
+    Load,
+    Refresh,
+    Recompute,
+}
+
+pub(crate) fn schedule_local_warmup(cx: &mut App) {
+    static SCHEDULED: AtomicBool = AtomicBool::new(false);
+    if SCHEDULED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_secs(5))
+            .await;
+        let request = cx.update(|cx| {
+            if INTERACTIVE_REQUESTED.load(Ordering::Relaxed)
+                || crate::ui::windows::WindowRegistry::count(cx) == 0
+            {
+                return None;
+            }
+            Some(cache::Request {
+                host: HostRegistry::local(cx),
+                agent: None,
+                launch: cx.global::<Config>().agent_launch.clone(),
+                stored: Arc::default(),
+                path: Some(crate::core::config::config_path(
+                    "statistics-settings.json",
+                )?),
+                opencode_sources: Vec::new(),
+                reuse_snapshot: false,
+            })
+        });
+        if let Some(request) = request {
+            cx.background_spawn(async move {
+                // Dropping this subscriber does not cancel the shared publication.
+                // No catalog HTTP, account request, or agent mutation occurs here.
+                let _ = cache::shared().subscribe(request, false);
+            })
+            .await;
+        }
+    })
+    .detach();
+}
 
 pub(crate) struct StatisticsState {
     pub(crate) host: HostId,
@@ -27,22 +77,50 @@ pub(crate) struct StatisticsState {
     start: Entity<InputState>,
     end: Entity<InputState>,
     generation: Uuid,
+    scan_generation: Option<Uuid>,
+    shared_revision: Option<Uuid>,
+    aggregate_version: Arc<AtomicU64>,
     loading: bool,
     error: Option<String>,
-    cache: Arc<Mutex<StatisticsCache>>,
+    pending_refresh: bool,
     results: HashMap<(HostId, Option<&'static str>), Presentation>,
     analysis: analysis::AnalysisState,
     management: management::Management,
 }
-#[derive(Clone)]
 struct Presentation {
-    snapshot: Snapshot,
+    snapshot: Arc<Snapshot>,
     window: DateWindow,
     totals: Totals,
     previous: Option<Totals>,
     analysis: Option<statistics::analysis::Analysis>,
     analysis_error: Option<String>,
-    bindings: Vec<statistics::sources::SourceBinding>,
+    bindings: Arc<[statistics::sources::SourceBinding]>,
+}
+impl Presentation {
+    fn from_snapshot(
+        snapshot: Arc<Snapshot>,
+        bindings: impl Into<Arc<[statistics::sources::SourceBinding]>>,
+        window: DateWindow,
+        analysis_agent: Option<&str>,
+        year: i32,
+    ) -> Self {
+        let totals = snapshot.aggregate(&window);
+        let previous = window.previous().map(|window| snapshot.aggregate(window));
+        let (analysis, analysis_error) =
+            match snapshot.analyze(&window, chrono::Local::now(), analysis_agent, year) {
+                Ok(value) => (Some(value), None),
+                Err(error) => (None, Some(error)),
+            };
+        Self {
+            snapshot,
+            bindings: bindings.into(),
+            window,
+            totals,
+            previous,
+            analysis,
+            analysis_error,
+        }
+    }
 }
 impl StatisticsState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
@@ -56,16 +134,28 @@ impl StatisticsState {
             start: cx.new(|cx| InputState::new(window, cx).default_value(date.clone())),
             end: cx.new(|cx| InputState::new(window, cx).default_value(date)),
             generation: Uuid::new_v4(),
+            scan_generation: None,
+            shared_revision: None,
+            aggregate_version: Arc::new(AtomicU64::new(0)),
             loading: false,
             error: None,
-            cache: Arc::new(Mutex::new(StatisticsCache::default())),
+            pending_refresh: false,
             results: HashMap::new(),
             analysis: analysis::AnalysisState::new(cx),
             management: management::Management::new(window, cx),
         }
     }
+    fn invalidate_view(&mut self) {
+        self.generation = Uuid::new_v4();
+        self.aggregate_version.fetch_add(1, Ordering::Relaxed);
+        self.loading = self.scan_generation.is_some();
+        self.requested_window = None;
+    }
     pub(crate) fn invalidate(&mut self) {
         self.generation = Uuid::new_v4();
+        self.aggregate_version.fetch_add(1, Ordering::Relaxed);
+        self.scan_generation = None;
+        self.shared_revision = None;
         self.loading = false;
         self.requested_window = None;
     }
@@ -98,7 +188,9 @@ fn money(value: Option<f64>) -> String {
         .unwrap_or_else(|| t(L10nKey::StatisticsUnpriced).into())
 }
 fn issue_text(reason: &str) -> String {
-    let key = if reason.starts_with("Hermes public projects.tree excludes") {
+    let key = if reason.ends_with(" source is still scanning") {
+        Some(L10nKey::StatisticsLoading)
+    } else if reason.starts_with("Hermes public projects.tree excludes") {
         Some(L10nKey::StatisticsHermesCoverage)
     } else if reason.starts_with("Hermes empty response") {
         Some(L10nKey::StatisticsHermesEmpty)
@@ -120,10 +212,31 @@ fn issue_text(reason: &str) -> String {
 }
 impl LyrelApp {
     pub(crate) fn load_statistics(&mut self, cx: &mut Context<Self>) {
+        self.request_statistics(StatisticsRequest::Load, cx);
+    }
+    fn refresh_statistics(&mut self, cx: &mut Context<Self>) {
+        self.request_statistics(StatisticsRequest::Refresh, cx);
+    }
+    fn recompute_statistics(&mut self, cx: &mut Context<Self>) {
+        self.request_statistics(StatisticsRequest::Recompute, cx);
+    }
+    fn request_statistics(&mut self, kind: StatisticsRequest, cx: &mut Context<Self>) {
+        let refresh = kind == StatisticsRequest::Refresh;
+        if !self
+            .active_settings()
+            .is_some_and(|settings| settings.section == SettingsSection::Statistics)
+        {
+            return;
+        }
+        INTERACTIVE_REQUESTED.store(true, Ordering::Relaxed);
+        if refresh {
+            if let Some(settings) = self.active_settings_mut() {
+                settings.statistics.pending_refresh = true;
+            }
+        }
         if !self.ensure_statistics_settings(cx) {
             return;
         }
-        let launch = cx.global::<Config>().agent_launch.clone();
         let Some(settings) = self.active_settings() else {
             return;
         };
@@ -145,7 +258,7 @@ impl LyrelApp {
                 (Ok(start), Ok(end)) => Some((start, end)),
                 _ => {
                     if let Some(s) = self.active_settings_mut() {
-                        s.statistics.invalidate();
+                        s.statistics.invalidate_view();
                         s.statistics.error = Some(t(L10nKey::StatisticsInvalidDate).into());
                     }
                     cx.notify();
@@ -159,7 +272,7 @@ impl LyrelApp {
             Ok(window) => window,
             Err(_) => {
                 if let Some(s) = self.active_settings_mut() {
-                    s.statistics.invalidate();
+                    s.statistics.invalidate_view();
                     s.statistics.error = Some(t(L10nKey::StatisticsInvalidDate).into());
                 }
                 cx.notify();
@@ -168,6 +281,8 @@ impl LyrelApp {
         };
         let host_id = state.host;
         let agent = state.agent;
+        let refresh = refresh || state.pending_refresh;
+        let launch = cx.global::<Config>().agent_launch.clone();
         let stored = state.management.stored.clone();
         let mut opencode_sources = Vec::new();
         if agent.is_none_or(|agent| agent == "opencode") {
@@ -200,12 +315,11 @@ impl LyrelApp {
                 );
                 if opencode_sources
                     .iter()
-                    .any(|source: &statistics::Source| source.scope() == selector)
+                    .any(|(scope, _): &(String, SessionOperation)| *scope == selector)
                 {
                     continue;
                 }
-                opencode_sources.push(statistics::Source::opencode(
-                    cwd.clone(),
+                opencode_sources.push((
                     selector,
                     SessionOperation {
                         expected_host: host_id.0,
@@ -219,11 +333,8 @@ impl LyrelApp {
                 ));
             }
         }
-        let cache = state.cache.clone();
-        let analysis_agent = state.analysis.agent.clone();
-        let analysis_year = state.analysis.year;
-        let analysis_now = chrono::Local::now();
-        let Some(host) = HostRegistry::lookup(cx, host_id) else {
+        let path = state.management.path.clone();
+        let Some(host) = HostRegistry::get(cx, host_id) else {
             if let Some(s) = self.active_settings_mut() {
                 s.statistics.invalidate();
                 s.statistics.error = Some(t(L10nKey::StatisticsOffline).into());
@@ -234,6 +345,11 @@ impl LyrelApp {
         let generation = Uuid::new_v4();
         if let Some(s) = self.active_settings_mut() {
             s.statistics.generation = generation;
+            s.statistics
+                .aggregate_version
+                .fetch_add(1, Ordering::Relaxed);
+            s.statistics.scan_generation = Some(generation);
+            s.statistics.pending_refresh = false;
             s.statistics.loading = true;
             s.statistics.requested_window = Some(window.clone());
             s.statistics.error = None;
@@ -243,102 +359,236 @@ impl LyrelApp {
                 ));
             }
         }
-        HostOps::run(
+        let expected_host = host.clone();
+        let expected_launch = launch.clone();
+        let request = cache::Request {
             host,
-            cx,
-            move |host| -> std::io::Result<Presentation> {
-                let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-                let mut sources = Vec::new();
-                let mut discovery_errors = Vec::new();
-                for name in ["omp", "pi", "kimi", "hermes"] {
-                    if agent.is_some_and(|selected| selected != name) {
-                        continue;
-                    }
-                    match cache.discover(host, name, &launch) {
-                        Ok(found) => sources.extend(found),
-                        Err(error) => discovery_errors.push((name, error.to_string())),
-                    }
+            agent,
+            launch,
+            stored,
+            path,
+            opencode_sources,
+            reuse_snapshot: kind == StatisticsRequest::Recompute,
+        };
+        cx.spawn(async move |this, cx| {
+            let subscription = cx
+                .background_spawn(async move { cache::shared().subscribe(request, refresh) })
+                .await;
+            let receiver = match subscription {
+                Ok(receiver) => receiver,
+                Err(error) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.publish_statistics_error(host_id, agent, generation, error, cx);
+                    });
+                    return;
                 }
-                if agent.is_none_or(|agent| agent == "opencode") {
-                    // An explicitly bound client is never replaced by another default service.
-                    if opencode_sources.is_empty() {
-                        match cache.discover(host, "opencode", &launch) {
-                            Ok(found) => sources.extend(found),
-                            Err(error) => discovery_errors.push(("OpenCode", error.to_string())),
+            };
+            while let Ok(update) = receiver.recv().await {
+                let finished = update.finished;
+                let active = this
+                    .update(cx, |this, cx| {
+                        if !this.active_settings().is_some_and(|settings| {
+                            settings.section == SettingsSection::Statistics
+                                && settings.statistics.scan_generation == Some(generation)
+                        }) {
+                            return false;
                         }
-                    } else {
-                        sources.extend(opencode_sources);
-                    }
+                        let current_host = HostRegistry::lookup(cx, host_id);
+                        let valid = current_host
+                            .as_ref()
+                            .is_some_and(|host| Arc::ptr_eq(host, &expected_host))
+                            && cx.global::<Config>().agent_launch == expected_launch
+                            && cache::shared().accepts(host_id, agent, update.revision);
+                        if !valid {
+                            if let Some(settings) = this.active_settings_mut() {
+                                if settings.statistics.scan_generation == Some(generation) {
+                                    settings.statistics.invalidate();
+                                }
+                            }
+                            this.load_statistics(cx);
+                            return false;
+                        }
+                        this.publish_statistics_update(host_id, agent, generation, update, cx)
+                    })
+                    .unwrap_or(false);
+                if !active || finished {
+                    return;
                 }
-                let resolved = stored.sources.resolve_for_host(host, sources, &launch);
-                let sources: Vec<_> = resolved
-                    .sources
-                    .into_iter()
-                    .filter(|source| agent.is_none_or(|a| a == source.agent()))
-                    .collect();
-                let bindings = resolved.bindings;
-                for failure in resolved.issues {
-                    discovery_errors.push((
-                        "source",
-                        format!("{}: {}", failure.binding.selector, failure.reason),
-                    ));
+            }
+            // Configuration invalidation drops old senders. Reattach only if this is
+            // still the active request, so a closed/replaced page cannot start work.
+            let _ = this.update(cx, |this, cx| {
+                if this.active_settings().is_some_and(|settings| {
+                    settings.section == SettingsSection::Statistics
+                        && settings.statistics.scan_generation == Some(generation)
+                }) {
+                    this.load_statistics(cx);
                 }
-                let mut snapshot = statistics::scan(host, &sources, &mut cache)?;
-                for (name, error) in discovery_errors {
-                    snapshot = snapshot.with_issue(name.into(), error);
-                }
-                let snapshot = snapshot.with_pricing(stored.pricing);
-                let totals = snapshot.aggregate(&window);
-                let previous = window.previous().map(|w| snapshot.aggregate(w));
-                let analysis = snapshot.analyze(
-                    &window,
-                    analysis_now,
-                    analysis_agent.as_deref(),
-                    analysis_year,
-                );
-                let (analysis, analysis_error) = match analysis {
-                    Ok(value) => (Some(value), None),
-                    Err(error) => (None, Some(error)),
-                };
-                Ok(Presentation {
-                    snapshot,
-                    window,
-                    totals,
-                    previous,
-                    analysis,
-                    analysis_error,
-                    bindings,
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+    fn aggregate_statistics_snapshot(
+        &mut self,
+        snapshot: Arc<Snapshot>,
+        bindings: Arc<[statistics::sources::SourceBinding]>,
+        window: DateWindow,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.active_settings_mut() else {
+            return;
+        };
+        let state = &mut settings.statistics;
+        let host = state.host;
+        let agent = state.agent;
+        let analysis_agent = state.analysis.agent.clone();
+        let year = state.analysis.year;
+        let shared_revision = state.shared_revision;
+        let aggregate_version = state.aggregate_version.clone();
+        let version = aggregate_version.fetch_add(1, Ordering::Relaxed) + 1;
+        let generation = Uuid::new_v4();
+        state.generation = generation;
+        state.loading = true;
+        state.requested_window = Some(window.clone());
+        state.error = None;
+        let expected_launch = cx.global::<Config>().agent_launch.clone();
+        let expected_host = HostRegistry::lookup(cx, host);
+        cx.spawn(async move |this, cx| {
+            let presentation = cx
+                .background_spawn(async move {
+                    cache::compute(move || {
+                        if aggregate_version.load(Ordering::Relaxed) != version {
+                            return None;
+                        }
+                        Some(Presentation::from_snapshot(
+                            snapshot,
+                            bindings,
+                            window,
+                            analysis_agent.as_deref(),
+                            year,
+                        ))
+                    })
+                    .await
                 })
-            },
-            move |this, result, cx| {
+                .await;
+            let _ = this.update(cx, |this, cx| {
                 let Some(settings) = this.active_settings_mut() else {
                     return;
                 };
                 let state = &mut settings.statistics;
                 if settings.section != SettingsSection::Statistics
                     || state.generation != generation
-                    || state.host != host_id
+                    || state.host != host
                     || state.agent != agent
                 {
                     return;
                 }
-                state.loading = false;
-                match result {
-                    Ok(presentation) => {
-                        state.results.insert((host_id, agent), presentation);
-                        state.error = None;
-                    }
-                    Err(error) => {
-                        state.error = Some(t_fmt(
-                            L10nKey::StatisticsReadError,
-                            &[("error", &error.to_string())],
-                        ));
-                    }
+                let current_host = HostRegistry::lookup(cx, host);
+                let same_host = expected_host
+                    .as_ref()
+                    .zip(current_host.as_ref())
+                    .is_some_and(|(expected, current)| Arc::ptr_eq(expected, current));
+                if !same_host
+                    || cx.global::<Config>().agent_launch != expected_launch
+                    || shared_revision
+                        .is_some_and(|revision| !cache::shared().accepts(host, agent, revision))
+                {
+                    this.load_statistics(cx);
+                    return;
                 }
+                let presentation = match presentation {
+                    Ok(Some(presentation)) => presentation,
+                    Ok(None) => return,
+                    Err(error) => {
+                        state.loading = false;
+                        state.error =
+                            Some(t_fmt(L10nKey::StatisticsReadError, &[("error", &error)]));
+                        cx.notify();
+                        return;
+                    }
+                };
+                let previous = state.results.insert((host, agent), presentation);
+                cx.background_executor()
+                    .spawn(async move {
+                        drop(previous);
+                    })
+                    .detach();
+                state.loading = state.scan_generation.is_some();
+                state.error = None;
                 cx.notify();
-            },
-        );
+            });
+        })
+        .detach();
         cx.notify();
+    }
+    fn publish_statistics_error(
+        &mut self,
+        host: HostId,
+        agent: Option<&'static str>,
+        generation: Uuid,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) = self.active_settings_mut() else {
+            return;
+        };
+        let state = &mut settings.statistics;
+        if state.host != host || state.agent != agent || state.scan_generation != Some(generation) {
+            return;
+        }
+        state.scan_generation = None;
+        state.loading = false;
+        state.error = Some(t_fmt(L10nKey::StatisticsReadError, &[("error", &error)]));
+        cx.notify();
+    }
+    fn publish_statistics_update(
+        &mut self,
+        host: HostId,
+        agent: Option<&'static str>,
+        generation: Uuid,
+        update: cache::Update,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(settings) = self.active_settings_mut() else {
+            return false;
+        };
+        let state = &mut settings.statistics;
+        if settings.section != SettingsSection::Statistics
+            || state.host != host
+            || state.agent != agent
+            || state.scan_generation != Some(generation)
+        {
+            return false;
+        }
+        state.management.stored = update.stored;
+        state.shared_revision = Some(update.revision);
+        if update.finished {
+            state.scan_generation = None;
+        }
+        if let Some(value) = update.value {
+            if let Some(window) = state.requested_window.clone() {
+                self.aggregate_statistics_snapshot(
+                    value.snapshot.clone(),
+                    value.bindings.clone(),
+                    window,
+                    cx,
+                );
+            }
+        } else {
+            state.loading = !update.finished;
+        }
+        if let Some(error) = update.error {
+            // Aggregation of an older partial must not erase a terminal error.
+            if let Some(settings) = self.active_settings_mut() {
+                settings.statistics.generation = Uuid::new_v4();
+                settings.statistics.loading = false;
+                settings.statistics.error =
+                    Some(t_fmt(L10nKey::StatisticsReadError, &[("error", &error)]));
+            }
+            cx.notify();
+        }
+        true
     }
     fn select_statistics_host(&mut self, host: HostId, cx: &mut Context<Self>) {
         if let Some(s) = self.active_settings_mut() {
@@ -351,9 +601,8 @@ impl LyrelApp {
     fn select_statistics_period(&mut self, period: Period, cx: &mut Context<Self>) {
         if let Some(s) = self.active_settings_mut() {
             s.statistics.period = period;
-            s.statistics.invalidate();
         }
-        self.load_statistics(cx);
+        self.recompute_statistics(cx);
     }
     fn select_statistics_agent(&mut self, agent: Option<&'static str>, cx: &mut Context<Self>) {
         if let Some(settings) = self.active_settings_mut() {
@@ -437,13 +686,7 @@ impl LyrelApp {
         let date_range = presentation
             .map(|p| &p.window)
             .or(state.requested_window.as_ref())
-            .map(|window| {
-                format!(
-                    "{} · {}",
-                    self.statistics_range_label(window),
-                    window.timezone()
-                )
-            })
+            .map(|window| self.statistics_range_label(window))
             .unwrap_or_else(|| "—".into());
         let toolbar = h_flex()
             .id("statistics-toolbar")
@@ -466,30 +709,13 @@ impl LyrelApp {
                     )
                     .child(h_flex().flex_wrap().gap_1().child(machine).child(agent)),
             )
-            .child(
-                self.analysis_button(
-                    "statistics-today",
-                    t(L10nKey::StatisticsToday),
-                    cx,
-                    |this, _, cx| this.select_statistics_period(Period::Today, cx),
-                )
-                .ghost(),
-            )
-            .child(
-                self.analysis_button(
-                    "statistics-week",
-                    t(L10nKey::StatisticsWeek),
-                    cx,
-                    |this, _, cx| this.select_statistics_period(Period::Week, cx),
-                )
-                .ghost(),
-            )
             .child(range)
             .child(
-                self.analysis_button("statistics-refresh", "↻", cx, |this, _, cx| {
-                    this.load_statistics(cx)
+                self.analysis_button("statistics-refresh", "", cx, |this, _, cx| {
+                    this.refresh_statistics(cx)
                 })
                 .ghost()
+                .icon(gpui_kit::component::IconName::RefreshCw)
                 .accessibility_label(t(L10nKey::StatisticsRefresh))
                 .disabled(loading || state.management.busy),
             );
@@ -519,16 +745,22 @@ impl LyrelApp {
                         "statistics-apply",
                         t(L10nKey::StatisticsApply),
                         cx,
-                        |this, _, cx| this.load_statistics(cx),
+                        |this, _, cx| this.recompute_statistics(cx),
                     ))
                     .into_any_element(),
             );
         }
         if loading {
             rows.push(
-                div()
+                h_flex()
+                    .id("statistics-loading")
+                    .test_support()
+                    .role(gpui_kit::Role::Status)
+                    .aria_label(t(L10nKey::StatisticsLoading))
+                    .gap_2()
                     .text_xs()
                     .text_color(tk.k5)
+                    .child(Spinner::new().small().color(tk.k5))
                     .child(t(L10nKey::StatisticsLoading))
                     .into_any_element(),
             );
@@ -543,7 +775,13 @@ impl LyrelApp {
             );
         }
         if let Some(p) = presentation {
-            let time = management::format_time(Some(p.snapshot.updated()));
+            let time = chrono::DateTime::from_timestamp(p.snapshot.updated(), 0)
+                .map(|time| {
+                    time.with_timezone(&chrono::Local)
+                        .format("%m-%d %H:%M")
+                        .to_string()
+                })
+                .unwrap_or_else(|| t(L10nKey::StatisticsUnknown).into());
             let observed = t_fmt(
                 if p.totals.is_complete() {
                     L10nKey::StatisticsSnapshotTime
@@ -555,7 +793,7 @@ impl LyrelApp {
             let details = t_fmt(
                 L10nKey::StatisticsUpdated,
                 &[
-                    ("time", &time),
+                    ("time", &management::format_time(Some(p.snapshot.updated()))),
                     ("zone", p.window.timezone()),
                     ("range", &self.statistics_range_label(&p.window)),
                 ],
@@ -777,27 +1015,24 @@ mod tests {
                 8
             );
         });
-        vcx.simulate_keystrokes("down enter");
+        vcx.simulate_keystrokes("down");
         vcx.run_until_parked();
         vcx.update(|_, cx| {
             let state = &app.read(cx).active_settings().unwrap().statistics.analysis;
             assert_eq!(state.date.ordinal(), 9);
-            assert!(state.detail);
-        });
-        vcx.simulate_keystrokes("escape");
-        vcx.run_until_parked();
-        vcx.update(|_, cx| {
-            let settings = app.read(cx).active_settings().unwrap();
-            assert!(!settings.statistics.analysis.detail);
-            assert!(settings.section == SettingsSection::Statistics);
         });
         vcx.simulate_keystrokes("tab");
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             window.render_frame(cx);
-            assert_eq!(
-                window.find("statistics-calendar-focus").focused(),
-                Some(true),
+            assert!(
+                !app.read(cx)
+                    .active_settings()
+                    .unwrap()
+                    .statistics
+                    .analysis
+                    .focus
+                    .contains_focused(window, cx),
                 "one Tab must leave the annual grid instead of visiting every date"
             );
         });

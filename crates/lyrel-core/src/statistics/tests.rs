@@ -92,6 +92,116 @@ fn statistics_native_copies_forks_and_children_count_only_new_usage() {
 }
 
 #[test]
+fn statistics_warm_cache_tracks_usage_changes_and_deletions_without_mutating_old_snapshots() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("active.jsonl");
+    let initial = header("active", None) + &usage("first", 10, Some(0.0));
+    std::fs::write(&path, &initial).unwrap();
+    let host = LocalHost::new();
+    let sources = [Source::omp(temp.path().into(), "live")];
+    let mut cache = StatisticsCache::default();
+    let first = scan(&*host, &sources, &mut cache).unwrap();
+    for _ in 0..3 {
+        let warm = scan(&*host, &sources, &mut cache).unwrap();
+        assert!(warm.is_complete(), "{:?}", warm.issues());
+        assert_eq!(warm.aggregate(&DateWindow::all("UTC")).calls(), 1);
+        assert_eq!(
+            warm.aggregate(&DateWindow::all("UTC")).tokens().total(),
+            Some(12)
+        );
+    }
+    std::fs::write(&path, initial + &usage("second", 20, Some(1.0))).unwrap();
+    let changed = scan(&*host, &sources, &mut cache).unwrap();
+    assert!(changed.is_complete(), "{:?}", changed.issues());
+    assert_eq!(
+        changed.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(34)
+    );
+    assert_eq!(
+        first.aggregate(&DateWindow::all("UTC")).tokens().total(),
+        Some(12)
+    );
+    std::fs::remove_file(path).unwrap();
+    let deleted = scan(&*host, &sources, &mut cache).unwrap();
+    assert!(deleted.is_complete(), "{:?}", deleted.issues());
+    assert_eq!(deleted.aggregate(&DateWindow::all("UTC")).calls(), 0);
+    assert_eq!(changed.aggregate(&DateWindow::all("UTC")).calls(), 2);
+}
+
+#[test]
+fn statistics_warm_cache_reclassifies_children_when_parent_files_appear_or_disappear() {
+    let temp = tempfile::tempdir().unwrap();
+    let worker = temp.path().join("parent/worker.jsonl");
+    std::fs::create_dir(worker.parent().unwrap()).unwrap();
+    std::fs::write(
+        &worker,
+        header("worker", None) + &usage("work", 10, Some(0.0)),
+    )
+    .unwrap();
+    let host = LocalHost::new();
+    let sources = [Source::omp(temp.path().into(), "lineage")];
+    let mut cache = StatisticsCache::default();
+    let first = scan(&*host, &sources, &mut cache).unwrap();
+    assert_eq!(first.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
+    let parent = temp.path().join("parent.jsonl");
+    std::fs::write(
+        &parent,
+        header("parent", None) + &usage("main", 20, Some(0.0)),
+    )
+    .unwrap();
+    let nested = scan(&*host, &sources, &mut cache).unwrap();
+    assert!(nested.is_complete(), "{:?}", nested.issues());
+    assert_eq!(nested.aggregate(&DateWindow::all("UTC")).main_sessions(), 1);
+    assert_eq!(nested.aggregate(&DateWindow::all("UTC")).calls(), 2);
+    std::fs::remove_file(parent).unwrap();
+    let independent = scan(&*host, &sources, &mut cache).unwrap();
+    assert!(independent.is_complete(), "{:?}", independent.issues());
+    assert_eq!(
+        independent
+            .aggregate(&DateWindow::all("UTC"))
+            .main_sessions(),
+        1
+    );
+    assert_eq!(nested.aggregate(&DateWindow::all("UTC")).calls(), 2);
+}
+
+#[test]
+fn statistics_unknown_record_preserves_known_usage_without_claiming_a_complete_total() {
+    let root = tempfile::tempdir().unwrap();
+    let unknown = "{\"type\":\"message\",\"id\":\"unknown\",\"timestamp\":\"2026-03-08T08:00:00Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"native\",\"model\":\"unknown\",\"usage\":{}}}\n";
+    std::fs::write(
+        root.path().join("mixed.jsonl"),
+        header("mixed", None) + &usage("known", 10, Some(0.0)) + unknown,
+    )
+    .unwrap();
+    let snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(root.path().into(), "native")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let totals = snapshot.aggregate(&DateWindow::all("UTC"));
+    assert_eq!(totals.calls(), 2);
+    assert_eq!(totals.tokens().total(), None);
+    assert_eq!(totals.known_tokens(), Some(12));
+    std::fs::write(
+        root.path().join("mixed.jsonl"),
+        header("mixed", None) + unknown,
+    )
+    .unwrap();
+    let snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(root.path().into(), "native")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot.aggregate(&DateWindow::all("UTC")).known_tokens(),
+        None
+    );
+}
+
+#[test]
 fn statistics_same_native_ids_in_different_profiles_are_not_merged() {
     let tmp = tempfile::tempdir().unwrap();
     for scope in ["a", "b"] {
@@ -567,6 +677,102 @@ fn statistics_analysis_isolates_agents_and_preserves_conflicting_native_records(
 }
 
 #[test]
+fn statistics_cost_activity_preserves_recorded_usd_when_another_source_is_unavailable() {
+    use chrono::TimeZone;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("paid.jsonl"),
+        header("paid", None) + &usage("paid", 10, Some(0.75)),
+    )
+    .unwrap();
+    let mut snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(temp.path().into(), "paid")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap()
+    .with_issue(temp.path().join("offline"), "another source unavailable");
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let analysis = snapshot
+        .analyze(&DateWindow::all("UTC"), now, None, 2026)
+        .unwrap();
+    let day = &analysis.days()[66];
+    assert_eq!(day.totals().recorded_usd(), Some(0.75));
+    assert_eq!(day.value(analysis::Metric::Cost), None);
+    assert_eq!(day.activity_value(analysis::Metric::Cost), Some(0.75));
+    assert_eq!(
+        analysis.days()[65].activity_value(analysis::Metric::Cost),
+        None
+    );
+    assert_eq!(
+        analysis.days()[67].activity_value(analysis::Metric::Cost),
+        None
+    );
+    let mut collision = snapshot.files[0].clone();
+    collision.path = temp.path().join("collision.jsonl");
+    collision.session.records[0].recorded_usd = Some(1.25);
+    snapshot.files.push(collision);
+    let ambiguous = snapshot
+        .analyze(&DateWindow::all("UTC"), now, None, 2026)
+        .unwrap();
+    assert_eq!(
+        ambiguous.days()[66].activity_value(analysis::Metric::Cost),
+        None
+    );
+}
+
+#[test]
+fn statistics_cost_activity_counts_only_explicit_usd_without_hiding_unpriced_records() {
+    use chrono::TimeZone;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("mixed.jsonl"),
+        header("mixed", None) + &usage("paid", 10, Some(0.75)) + &usage("estimated", 10, None),
+    )
+    .unwrap();
+    let mut snapshot = scan(
+        &*LocalHost::new(),
+        &[Source::omp(temp.path().into(), "mixed")],
+        &mut StatisticsCache::default(),
+    )
+    .unwrap();
+    let now = chrono::Utc.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap();
+    let all = DateWindow::all("UTC");
+    let unpriced = snapshot.analyze(&all, now, None, 2026).unwrap();
+    assert!(unpriced.days()[66].totals().is_complete());
+    assert_eq!(unpriced.days()[66].totals().unpriced_calls(), 1);
+    assert_eq!(
+        unpriced.days()[66].activity_value(analysis::Metric::Cost),
+        Some(0.75)
+    );
+    let mut pricing = pricing::Pricing::default();
+    pricing.custom.push(pricing::UnitPrice {
+        provider: "anthropic".into(),
+        model: "test".into(),
+        currency: "USD".into(),
+        input: Some(100_000.),
+        ..Default::default()
+    });
+    snapshot.apply_pricing(pricing.clone());
+    let estimated = snapshot.analyze(&all, now, None, 2026).unwrap();
+    assert_eq!(estimated.days()[66].value(analysis::Metric::Cost), None);
+    assert_eq!(
+        estimated.days()[66].activity_value(analysis::Metric::Cost),
+        Some(1.75)
+    );
+    pricing.custom[0].currency = "EUR".into();
+    snapshot.apply_pricing(pricing);
+    let foreign = snapshot.analyze(&all, now, None, 2026).unwrap();
+    assert_eq!(
+        foreign.days()[66].activity_value(analysis::Metric::Cost),
+        Some(0.75)
+    );
+    snapshot.files[0].session.records[0].recorded_usd = Some(0.);
+    let zero = snapshot.analyze(&all, now, None, 2026).unwrap();
+    assert_eq!(zero.days()[66].activity_value(analysis::Metric::Cost), None);
+}
+
+#[test]
 fn statistics_pi_counts_official_full_session_usage_without_omp_fields() {
     let temp = tempfile::tempdir().unwrap();
     let mut data = header("pi-native", None);
@@ -629,6 +835,15 @@ fn statistics_pi_forks_preserve_new_usage_and_missing_parents_are_restricted() {
         snapshot.aggregate(&DateWindow::all("UTC")).recorded_usd(),
         Some(1.0)
     );
+    for _ in 0..2 {
+        let warm = scan(&*host, &[source.clone()], &mut cache).unwrap();
+        assert!(warm.is_complete(), "{:?}", warm.issues());
+        assert_eq!(warm.aggregate(&DateWindow::all("UTC")).calls(), 2);
+        assert_eq!(
+            warm.aggregate(&DateWindow::all("UTC")).recorded_usd(),
+            Some(1.0)
+        );
+    }
     std::fs::remove_file(parent).unwrap();
     let missing = scan(&*host, &[source], &mut cache).unwrap();
     assert!(!missing.is_complete());

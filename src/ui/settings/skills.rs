@@ -607,26 +607,6 @@ fn skill_size(bytes: u64) -> String {
 fn machines_connected(cx: &App, id: HostId) -> bool {
     HostRegistry::lookup(cx, id).is_some_and(|host| host.is_connected())
 }
-fn native_guide(agent: crate::core::agent_hooks::HookAgent) -> &'static str {
-    use crate::core::agent_hooks::HookAgent::*;
-    match agent {
-        OhMyPi => {
-            "https://github.com/can1357/oh-my-pi/blob/9d5d4ac5b50ac2bb5866e4202efc0cf785dfc57a/docs/skills.md"
-        }
-        Pi => {
-            "https://github.com/earendil-works/pi/blob/1402973a9dbe8c627341e04c9744c54953e285ca/packages/coding-agent/docs/skills.md"
-        }
-        Kimi => {
-            "https://github.com/MoonshotAI/kimi-code/blob/472192c34c1efad89a369870eff0da0b708ce9bb/docs/en/customization/skills.md"
-        }
-        OpenCode => {
-            "https://github.com/anomalyco/opencode/blob/v2.0.32/services/www/src/docs/content/skills.mdx"
-        }
-        Hermes => {
-            "https://github.com/NousResearch/hermes-agent/blob/v0.22.2/website/docs/user-guide/features/skills.md"
-        }
-    }
-}
 fn safe_node(node: &gpui_kit::component::text::markdown_ast::Node) -> bool {
     use gpui_kit::component::text::markdown_ast::Node;
     let here = match node {
@@ -638,15 +618,4 @@ fn safe_node(node: &gpui_kit::component::text::markdown_ast::Node) -> bool {
     here && node
         .children()
         .is_none_or(|children| children.iter().all(safe_node))
-}
-
-fn native_help(agent: crate::core::agent_hooks::HookAgent) -> L10nKey {
-    use crate::core::agent_hooks::HookAgent::*;
-    match agent {
-        OhMyPi => L10nKey::SkillsHelpOmp,
-        Pi => L10nKey::SkillsHelpPi,
-        Kimi => L10nKey::SkillsHelpKimi,
-        OpenCode => L10nKey::SkillsHelpOpenCode,
-        Hermes => L10nKey::SkillsHelpHermes,
-    }
 }

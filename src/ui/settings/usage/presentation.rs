@@ -176,22 +176,12 @@ impl UsagePage {
                     .flex_wrap()
                     .gap_3()
                     .child(
-                        v_flex()
+                        div()
                             .flex_1()
                             .min_w(gpui_kit::rems(14.))
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(t(L10nKey::UsageSubtitle)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(t(L10nKey::UsageScope)),
-                            ),
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(L10nKey::UsageSubtitle)),
                     )
                     .child(
                         h_flex()
@@ -227,16 +217,6 @@ impl UsagePage {
                                 .on_click(cx.listener(|page, _, _, cx| page.refresh_all(cx))),
                             ),
                     ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(if data.loading || refreshing {
-                        L10nKey::UsageLoading
-                    } else {
-                        L10nKey::UsagePageVisible
-                    })),
             )
     }
     fn render_provider(
@@ -332,11 +312,6 @@ impl UsagePage {
                         L10nKey::UsageAccountsUnavailable
                     } else {
                         L10nKey::UsageProviderEmpty
-                    }))
-                    .child(t(match provider {
-                        Provider::CommandCode => L10nKey::UsageSupportsApiKey,
-                        Provider::StepFun | Provider::MiMo => L10nKey::UsageSupportsSessionBrowser,
-                        Provider::DeepSeek | Provider::Kimi => L10nKey::UsageSupportsAllSources,
                     })),
             );
         } else {
@@ -722,12 +697,19 @@ impl UsagePage {
         };
         match edit {
             Edit::Add => {
-                form = form.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(t(L10nKey::UsageAddHint)),
-                );
+                form = form
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t(L10nKey::UsageScope)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t(L10nKey::UsageAddHint)),
+                    );
             }
             Edit::Replace(id) => {
                 if let Some(account) = self
@@ -1045,13 +1027,6 @@ impl Render for UsagePage {
                     .id("usage-page-error")
                     .text_color(cx.theme().danger)
                     .child(error_text(error)),
-            );
-        } else if !data.loading && data.stored.accounts.is_empty() {
-            sections = sections.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(L10nKey::UsageEmptyHint)),
             );
         }
         for (title, caption, providers) in [

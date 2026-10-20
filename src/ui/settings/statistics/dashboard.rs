@@ -314,7 +314,15 @@ impl LyrelApp {
                 .into_iter()
                 .map(|(id, selected_metric, key)| {
                     let value = match selected_metric {
-                        Metric::Tokens => compact(totals.and_then(|t| t.tokens().total())),
+                        Metric::Tokens => totals
+                            .map(|totals| match totals.tokens().total() {
+                                Some(value) if totals.is_complete() => compact(Some(value)),
+                                _ => totals
+                                    .known_tokens()
+                                    .map(|value| format!("≥ {}", compact(Some(value))))
+                                    .unwrap_or_else(|| "—".into()),
+                            })
+                            .unwrap_or_else(|| "—".into()),
                         Metric::Cost => totals
                             .and_then(Totals::recorded_usd)
                             .map(|v| format!("USD {v:.2}"))
@@ -334,6 +342,14 @@ impl LyrelApp {
                         )],
                     );
                     let subtitle = match selected_metric {
+                        Metric::Tokens
+                            if totals.is_some_and(|totals| {
+                                totals.known_tokens().is_some()
+                                    && (!totals.is_complete() || totals.tokens().total().is_none())
+                            }) =>
+                        {
+                            t(L10nKey::StatisticsObservedValues).to_owned()
+                        }
                         Metric::Tokens => t_fmt(
                             L10nKey::StatisticsSessionAverage,
                             &[(
@@ -400,8 +416,11 @@ impl LyrelApp {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(value),
                         )
-                        .child(div().text_xs().text_color(tk.k5).child(subtitle))
-                        .child(div().mt_auto().pt_2().child(visualization));
+                        .when(totals.is_some(), |content| {
+                            content
+                                .child(div().text_xs().text_color(tk.k5).child(subtitle))
+                                .child(div().mt_auto().pt_2().child(visualization))
+                        });
                     Button::new(id)
                         .ghost()
                         .h_auto()

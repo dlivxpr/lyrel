@@ -64,6 +64,7 @@ src/ui/settings.rs|std::fs::metadata
 
 # 统计设置只读取 config_path("statistics-settings.json")，不消费工作区路径。
 src/ui/settings/statistics/storage.rs|std::fs::read
+src/ui/settings/statistics/storage.rs|std::fs::metadata
 # 用量元数据只读取 config_path("usage-accounts.json")，不消费 Host 或项目路径。
 src/ui/settings/usage/accounts.rs|std::fs::read
 # BrowserReader::system 只构造桌面本机浏览器根；显式选择的私有 profile
