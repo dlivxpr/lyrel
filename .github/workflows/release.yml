@@ -145,24 +145,13 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-  # 桌面编译与全部 server 并行；仅打包阶段等待 WSL musl server。
-  build:
+  # 平台独立 DAG：macOS runner 缺货不阻塞 Windows 编译、WSL 打包和校验。
+  build-windows:
+    name: build (x86_64-pc-windows-msvc)
     needs: version
     if: needs.version.result == 'success' && inputs.reuse_run_id == ''
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            os: macos
-            arch: arm64
-            target: aarch64-apple-darwin
-          - runner: windows-latest
-            os: windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.runner }}
+    runs-on: windows-latest
     steps:
       - name: Checkout lyrel
         uses: actions/checkout@v7
@@ -173,17 +162,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: lyrel
-          shared-key: release-v2-${{ matrix.target }}-desktop
+          shared-key: release-v2-x86_64-pc-windows-msvc-desktop
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
       - name: Prepare ConPTY
-        if: matrix.os == 'windows'
         working-directory: lyrel
         shell: pwsh
         run: '& ./scripts/prepare-conpty.ps1'
@@ -192,56 +180,86 @@ jobs:
       - name: Build all default binaries with updater
         working-directory: lyrel
         shell: bash
-        run: cargo build --release --locked --features updater --target "${{ matrix.target }}"
+        run: cargo build --release --locked --features updater --target x86_64-pc-windows-msvc
+
+      - name: Archive desktop packaging inputs
+        working-directory: lyrel
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GNU tar 会把 Windows drive: 绝对路径误认成远程主机；归档始终使用相对路径。
+          tar -czf desktop-x86_64-pc-windows-msvc.tar.gz \
+            target/x86_64-pc-windows-msvc/release/lyrel-app.exe \
+            target/x86_64-pc-windows-msvc/release/lyrel.exe \
+            target/x86_64-pc-windows-msvc/release/lyrel-updater.exe \
+            Cargo.toml LICENSE README.md assets/completions \
+            assets/windows/conpty/manifest.json .conpty/x64/conpty.dll \
+            .conpty/x64/OpenConsole.exe .conpty/LICENSE-ConPTY.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-inputs-x86_64-pc-windows-msvc
+          path: lyrel/desktop-x86_64-pc-windows-msvc.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+
+  build-macos:
+    name: build (aarch64-apple-darwin)
+    needs: version
+    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
+    timeout-minutes: 120
+    runs-on: macos-15
+    steps:
+      - name: Checkout lyrel
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+          path: lyrel
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lyrel
+          shared-key: release-v2-aarch64-apple-darwin-desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
+      - name: Build all default binaries with updater
+        working-directory: lyrel
+        shell: bash
+        run: cargo build --release --locked --features updater --target aarch64-apple-darwin
 
       # tar 保留 macOS 可执行权限；只带打包输入，不传 target 缓存或整个源码树。
       - name: Archive desktop packaging inputs
         working-directory: lyrel
         shell: bash
-        env:
-          DESKTOP_OS: ${{ matrix.os }}
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          SUFFIX=""
-          EXTRA=(assets/lyrel.icns)
-          if [[ "$DESKTOP_OS" == windows ]]; then
-            SUFFIX=.exe
-            EXTRA=(assets/windows/conpty/manifest.json .conpty/x64/conpty.dll .conpty/x64/OpenConsole.exe .conpty/LICENSE-ConPTY.txt)
-          fi
-          tar -czf "$RUNNER_TEMP/desktop-$TARGET.tar.gz" \
-            "target/$TARGET/release/lyrel-app$SUFFIX" \
-            "target/$TARGET/release/lyrel$SUFFIX" \
-            "target/$TARGET/release/lyrel-updater$SUFFIX" \
-            Cargo.toml LICENSE README.md assets/completions "${EXTRA[@]}"
+          tar -czf desktop-aarch64-apple-darwin.tar.gz \
+            target/aarch64-apple-darwin/release/lyrel-app \
+            target/aarch64-apple-darwin/release/lyrel \
+            target/aarch64-apple-darwin/release/lyrel-updater \
+            Cargo.toml LICENSE README.md assets/completions assets/lyrel.icns
 
       - uses: actions/upload-artifact@v7
         with:
-          name: desktop-inputs-${{ matrix.target }}
-          path: ${{ runner.temp }}/desktop-${{ matrix.target }}.tar.gz
+          name: desktop-inputs-aarch64-apple-darwin
+          path: lyrel/desktop-aarch64-apple-darwin.tar.gz
           compression-level: 0
           if-no-files-found: error
 
-  pack:
-    needs: [version, build, server-musl]
+  pack-windows:
+    name: pack (x86_64-pc-windows-msvc)
+    needs: [version, build-windows, server-musl]
     if: >-
       always() && needs.version.result == 'success' && inputs.reuse_run_id == '' &&
-      needs.build.result == 'success' && needs.server-musl.result == 'success'
+      needs.build-windows.result == 'success' && needs.server-musl.result == 'success'
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            os: macos
-            arch: arm64
-            target: aarch64-apple-darwin
-          - runner: windows-latest
-            os: windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-            wsl-server: lyrel-server-linux-x86_64-musl
-    runs-on: ${{ matrix.runner }}
+    runs-on: windows-latest
     steps:
       - name: Checkout tagged packaging scripts
         uses: actions/checkout@v7
@@ -252,17 +270,67 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: desktop-inputs-${{ matrix.target }}
-          path: ${{ runner.temp }}/desktop-inputs
+          name: desktop-inputs-x86_64-pc-windows-msvc
+          path: lyrel/desktop-inputs
+
+      - name: Restore desktop packaging inputs
+        working-directory: lyrel
+        shell: bash
+        run: tar -xzf desktop-inputs/desktop-x86_64-pc-windows-msvc.tar.gz
+
+      - name: Fetch the bundled Linux server
+        uses: actions/download-artifact@v8
+        with:
+          name: release-lyrel-server-linux-x86_64-musl
+          path: lyrel/bundled-server
+
+      - name: Package Windows installer + zip
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./.github/scripts/bundle-windows.ps1 "x86_64-pc-windows-msvc" "x86_64"'
+
+      - name: Verify Windows update package
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./.github/scripts/verify-windows-package.ps1 "x86_64"'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows-x86_64
+          path: |
+            lyrel/dist/*.zip
+            lyrel/dist/*-setup.exe
+          compression-level: 0
+          if-no-files-found: error
+
+  pack-macos:
+    name: pack (aarch64-apple-darwin)
+    needs: [version, build-macos]
+    if: >-
+      always() && needs.version.result == 'success' && inputs.reuse_run_id == '' &&
+      needs.build-macos.result == 'success'
+    timeout-minutes: 30
+    runs-on: macos-15
+    steps:
+      - name: Checkout tagged packaging scripts
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+          path: lyrel
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-inputs-aarch64-apple-darwin
+          path: lyrel/desktop-inputs
 
       - name: Restore desktop packaging inputs and executable permissions
         working-directory: lyrel
         shell: bash
-        run: tar -xzf "$RUNNER_TEMP/desktop-inputs/desktop-${{ matrix.target }}.tar.gz"
+        run: tar -xzf desktop-inputs/desktop-aarch64-apple-darwin.tar.gz
 
       # 无 Apple secrets 时仍由原脚本做 ad-hoc 签名与 Mach-O 校验。
       - name: Bundle macOS DMG
-        if: matrix.os == 'macos'
         working-directory: lyrel
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -272,34 +340,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bash .github/scripts/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
-
-      - name: Fetch the bundled Linux server
-        if: matrix.os == 'windows'
-        uses: actions/download-artifact@v8
-        with:
-          name: release-${{ matrix.wsl-server }}
-          path: lyrel/bundled-server
-
-      - name: Package Windows installer + zip
-        if: matrix.os == 'windows'
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./.github/scripts/bundle-windows.ps1 "${{ matrix.target }}" "${{ matrix.arch }}"'
-
-      - name: Verify Windows update package
-        if: matrix.os == 'windows'
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./.github/scripts/verify-windows-package.ps1 "${{ matrix.arch }}"'
+        run: bash .github/scripts/bundle-macos.sh "aarch64-apple-darwin" "arm64"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          name: release-macos-arm64
           path: |
             lyrel/dist/*.dmg
             lyrel/dist/*.zip
-            lyrel/dist/*-setup.exe
           compression-level: 0
           if-no-files-found: error
 
@@ -310,8 +358,7 @@ jobs:
   # against checksums.txt. The asset names are a contract with the installer:
   # `lyrel_core::daemon::install::asset` derives them from `uname -sm`.
   #
-  # Separate from the `build` matrix above because it shares nothing with it: no
-  # GUI toolchain, no bundling, no code signing, two targets off one runner.
+  # 与桌面编译独立：无 GUI toolchain、打包或代码签名，两个目标使用同类 runner。
   server-musl:
     needs: version
     if: needs.version.result == 'success' && inputs.reuse_run_id == ''
@@ -577,11 +624,12 @@ jobs:
   # main 无显式 tag 的手动运行仅预热；有效复用可越过全部 skipped 生产 jobs。
   # 仅汇总 stable draft，不 publish；最终发布仍需 CI、资产与中文说明审核。
   draft-release:
-    needs: [version, build, pack, server-musl, server-macos, server-windows]
+    needs: [version, build-windows, build-macos, pack-windows, pack-macos, server-musl, server-macos, server-windows]
     if: >-
       always() && needs.version.result == 'success' && needs.version.outputs.tag != '' &&
       ((inputs.reuse_run_id != '' && needs.version.outputs.artifact_run_id == inputs.reuse_run_id) ||
-       (inputs.reuse_run_id == '' && needs.build.result == 'success' && needs.pack.result == 'success' &&
+       (inputs.reuse_run_id == '' && needs.build-windows.result == 'success' && needs.build-macos.result == 'success' &&
+        needs.pack-windows.result == 'success' && needs.pack-macos.result == 'success' &&
         needs.server-musl.result == 'success' && needs.server-macos.result == 'success' &&
         needs.server-windows.result == 'success'))
     runs-on: ubuntu-24.04
