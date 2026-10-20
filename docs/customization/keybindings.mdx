@@ -1,42 +1,42 @@
 ---
-title: "Keybindings"
-description: "Rebinding anything, chord sequences, and the tmux preset."
+title: "按键绑定"
+description: "重新绑定任意操作、组合键序列，以及 tmux 预设。"
 ---
 
-**Settings → Keyboard & Mouse → Keyboard shortcuts** (<kbd>⌘ ,</kbd>) lists every shortcut in the app,
-grouped the same way Search Everywhere is. The search box at the top of
-Settings reaches this page too: type what a feature is called — `split`,
-`commit`, `sftp` — and the page narrows to the shortcuts for it. Action names
-work as well as labels, so a binding you read about in `keybindings.json` is
-one search away from the row that sets it.
+**设置 → 键盘与鼠标 → 键盘快捷键**（<kbd>⌘ ,</kbd>）会列出应用中的每一个快捷键，
+分组方式与全局搜索相同。设置顶部的搜索框
+也能搜到这一页：输入功能的名称——`split`、
+`commit`、`sftp`——页面就会缩小到与之相关的快捷键。操作名称
+和标签一样可用于搜索，因此你在 `keybindings.json` 中看到的绑定，
+搜索一次就能找到设置它的那一行。
 
-## Rebinding
+## 重新绑定
 
-Click a shortcut and press the new keys. It saves after a brief pause.
+点击一个快捷键，然后按下新的按键。稍作停顿后即会保存。
 
 | | |
 |---|---|
-| Press keys | Set the binding |
-| Press more keys | Chain a sequence — <kbd>⌃ B</kbd> then <kbd>X</kbd> |
-| <kbd>Esc</kbd> | Cancel |
-| <kbd>⌫</kbd> | Remove the last key — or, pressed first, leave the action with **no shortcut** |
+| 按下按键 | 设置绑定 |
+| 继续按键 | 串联一个序列——先 <kbd>⌃ B</kbd>，再按 <kbd>X</kbd> |
+| <kbd>Esc</kbd> | 取消 |
+| <kbd>⌫</kbd> | 删除最后一个键——或者作为第一个键按下，使该操作**不设快捷键** |
 
-Leaving an action unbound is how you hand a key back to whatever is running in
-the terminal: <kbd>⌥ 1</kbd>…<kbd>⌥ 9</kbd> jump between tabs by default, and
-vim wants them for its own tabs. Clear the nine **Go to Tab** rows and the
-digits go straight through. A cleared row shows `—` and grows a **Reset**
-button, which puts the default back.
+让某个操作保持未绑定，就是把按键交还给终端中正在运行的
+程序：默认情况下 <kbd>⌥ 1</kbd>…<kbd>⌥ 9</kbd> 用于在标签页之间跳转，而
+vim 想把它们用于自己的标签页。清除九个**跳到第 N 个标签页**行，
+数字键就会直接透传。已清除的行会显示 `—`，并出现一个**重置**
+按钮，用于恢复默认值。
 
-**Restore all defaults** at the bottom undoes every rebinding at once. There is
-no undo for that one.
+底部的**恢复全部默认值**会一次性撤销所有重新绑定。这个操作
+无法撤销。
 
-## Actions with no default key
+## 没有默认快捷键的操作
 
-Some actions ship deliberately unbound, because there is no obvious key left to
-take: pane resize and swap, workspace selection, most git commands, SFTP, and
-the panel tabs. They are all in Search Everywhere, and all bindable here.
+有些操作有意以未绑定状态发布，因为没有明显空余的按键
+可用：窗格调整大小与交换、工作区选择、大多数 git 命令、SFTP，以及
+面板标签页。它们都出现在全局搜索中，也都可以在这里绑定。
 
-## Editing `config.json` instead
+## 改为编辑 `config.json`
 
 ```json
 {
@@ -49,32 +49,32 @@ the panel tabs. They are all in Search Everywhere, and all bindable here.
 }
 ```
 
-An action's value takes one of two shapes:
+一个操作的值采用两种形式之一：
 
-| Value | Means |
+| 值 | 含义 |
 |---|---|
-| `"ctrl-alt-]"` | **Add** this shortcut. The default keeps working — <kbd>⌃ ⇥</kbd> still opens the tab switcher |
-| `["cmd-d"]` | **Replace**: exactly these shortcuts, nothing else. List several to have several |
-| `""` or `[]` | **Unbind** the action |
+| `"ctrl-alt-]"` | **添加**此快捷键。默认值继续有效——<kbd>⌃ ⇥</kbd> 仍会打开标签页切换器 |
+| `["cmd-d"]` | **替换**：仅这些快捷键，不保留其他快捷键。列出多个即可拥有多个 |
+| `""` 或 `[]` | **取消绑定**该操作 |
 
-Recording a shortcut on the Settings page replaces, so it writes the list
-shape. A shortcut you add that another action already uses is the one that
-runs. The exception is the terminal's own shortcuts: copy, paste, find, clear
-scrollback and insert newline keep theirs while a terminal has focus.
+在设置页面录制快捷键属于替换，因此会写入列表
+形式。你添加的快捷键如果已被另一个操作使用，实际生效的是你添加的
+这个。例外是终端自身的快捷键：终端获得焦点时，复制、粘贴、查找、
+清除回滚缓冲区和插入换行仍使用各自的快捷键。
 
 lyrel 从 `0.1.0` 起采用上述规则。旧产品的快捷键配置不会自动读取或迁移；在 lyrel 中录制快捷键会写入列表并替换默认值。直接编辑配置时，如需替换默认值，请使用列表，例如 `"NewTab": ["cmd-shift-n"]`。
 
-The syntax is modifiers joined by `-`, then the key. Chords are separated by a
-space.
+语法是修饰键以 `-` 连接，然后是按键。多步组合键之间用
+空格分隔。
 
-| Token | Means |
+| 标记 | 含义 |
 |---|---|
-| `secondary` | <kbd>⌘</kbd> on macOS, <kbd>Ctrl</kbd> elsewhere |
-| `cmd` · `ctrl` · `alt` · `shift` | Literal modifiers |
-| `ctrl-b n` | A two-key sequence |
+| `secondary` | macOS 上为 <kbd>⌘</kbd>，其他平台为 <kbd>Ctrl</kbd> |
+| `cmd` · `ctrl` · `alt` · `shift` | 字面修饰键 |
+| `ctrl-b n` | 一个两键序列 |
 
-To keep a key for the program running in the terminal, unbind the action that
-holds it. vim's tab keys, for instance:
+若要把某个按键留给终端中正在运行的程序，请取消占用它的操作
+绑定。例如 vim 的标签页按键：
 
 ```json
 {
@@ -86,45 +86,45 @@ holds it. vim's tab keys, for instance:
 }
 ```
 
-An unknown action name, an invalid keystroke, or a line that is neither a
-shortcut nor a list of them is skipped with a warning in the log rather than
-breaking the rest of your bindings.
+未知的操作名称、无效的按键，或者既不是快捷键也不是快捷键列表的
+值，都会被跳过，并在日志中记录一条警告，而不会破坏你其余的
+绑定。
 
-The full action list is on the [keyboard shortcuts](/reference/keyboard-shortcuts)
-page.
+完整的操作列表见[键盘快捷键](/reference/keyboard-shortcuts)
+页面。
 
-## The tmux preset
+## tmux 预设
 
-**Settings → Keyboard & Mouse → Keyboard shortcuts → Preset → tmux** remaps pane and tab actions onto a
-prefix — <kbd>⌃ B</kbd> by default, changeable in the **Prefix** field beside
-it.
-
-| | |
-|---|---|
-| <kbd>⌃ B</kbd> <kbd>C</kbd> · <kbd>X</kbd> | New tab · close tab |
-| <kbd>⌃ B</kbd> <kbd>%</kbd> · <kbd>"</kbd> | Split right · split down |
-| <kbd>⌃ B</kbd> <kbd>←→↑↓</kbd> | Move focus |
-| <kbd>⌃ B</kbd> <kbd>⌃ ←→↑↓</kbd> | Resize the pane |
-| <kbd>⌃ B</kbd> <kbd>O</kbd> · <kbd>;</kbd> | Next pane · previous pane |
-| <kbd>⌃ B</kbd> <kbd>&#123;</kbd> · <kbd>&#125;</kbd> | Swap with the previous · next pane |
-| <kbd>⌃ B</kbd> <kbd>Z</kbd> | Zoom the pane |
-| <kbd>⌃ B</kbd> <kbd>N</kbd> · <kbd>P</kbd> | Next tab · previous tab |
-| <kbd>⌃ B</kbd> <kbd>1</kbd>…<kbd>9</kbd> | Jump to a tab |
-
-Two details that make it livable:
-
-- A **bare prefix** reaches the shell after about a second, so <kbd>⌃ B</kbd>
-  still works as "back one character" when you meant it.
-- **Prefix plus an unbound key** is passed straight through to the terminal, so
-  a tmux binding you did not remap still lands in whatever is running.
-
-## Some non-obvious defaults
+**设置 → 键盘与鼠标 → 键盘快捷键 → 预设 → tmux** 会把窗格和标签页操作重新映射到
+前缀键上——默认是 <kbd>⌃ B</kbd>，可在旁边的**前缀**字段中
+更改。
 
 | | |
 |---|---|
-| <kbd>⇧ ⏎</kbd> · <kbd>⌥ ⏎</kbd> | Insert a newline at the prompt instead of submitting (`InsertNewline`) |
-| <kbd>⌘ ⇧ ⏎</kbd> | Zoom the focused pane |
-| <kbd>⌘ ⇧ E</kbd> | Toggle the code panel |
-| <kbd>⌘ ⇧ R</kbd> | Restart the SSH session in this pane |
-| <kbd>⌘ ⇧ O</kbd> | Workspace switcher |
-| <kbd>⌘ ⇧ N</kbd> | New workspace |
+| <kbd>⌃ B</kbd> <kbd>C</kbd> · <kbd>X</kbd> | 新建标签页 · 关闭标签页 |
+| <kbd>⌃ B</kbd> <kbd>%</kbd> · <kbd>"</kbd> | 向右拆分 · 向下拆分 |
+| <kbd>⌃ B</kbd> <kbd>←→↑↓</kbd> | 移动焦点 |
+| <kbd>⌃ B</kbd> <kbd>⌃ ←→↑↓</kbd> | 调整窗格大小 |
+| <kbd>⌃ B</kbd> <kbd>O</kbd> · <kbd>;</kbd> | 下一个窗格 · 上一个窗格 |
+| <kbd>⌃ B</kbd> <kbd>&#123;</kbd> · <kbd>&#125;</kbd> | 与上一个窗格 · 下一个窗格交换 |
+| <kbd>⌃ B</kbd> <kbd>Z</kbd> | 缩放窗格 |
+| <kbd>⌃ B</kbd> <kbd>N</kbd> · <kbd>P</kbd> | 下一个标签页 · 上一个标签页 |
+| <kbd>⌃ B</kbd> <kbd>1</kbd>…<kbd>9</kbd> | 跳转到某个标签页 |
+
+两个让它经得起日常使用的细节：
+
+- **单独按前缀键**约一秒后会传给 shell，所以当你的本意就是
+  “回退一个字符”时，<kbd>⌃ B</kbd> 仍然有效。
+- **前缀键加上未绑定的按键**会直接透传给终端，因此你未重新映射的
+  tmux 绑定仍会送达到正在运行的程序中。
+
+## 一些不那么直观的默认值
+
+| | |
+|---|---|
+| <kbd>⇧ ⏎</kbd> · <kbd>⌥ ⏎</kbd> | 在提示符处插入换行，而不是提交（`InsertNewline`） |
+| <kbd>⌘ ⇧ ⏎</kbd> | 缩放当前聚焦的窗格 |
+| <kbd>⌘ ⇧ E</kbd> | 切换代码面板 |
+| <kbd>⌘ ⇧ R</kbd> | 重启此窗格中的 SSH 会话 |
+| <kbd>⌘ ⇧ O</kbd> | 工作区切换器 |
+| <kbd>⌘ ⇧ N</kbd> | 新建工作区 |

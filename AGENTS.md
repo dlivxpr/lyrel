@@ -56,6 +56,13 @@ Windows/macOS 的默认 `build`/`test` 覆盖全部四个 workspace 成员。Lin
 
 Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command not found`／`invalid option name`，CRLF Rust 源文件还会使测试边界匹配失效并产生误报。当前 `.gitattributes` 未为 `.sh` 固定行尾；先排除行尾问题，不通过扩大 allowlist 掩盖。
 
+## 书写语言
+
+- `AGENTS.md` 使用简体中文。
+- GitHub issue 的标题、正文与评论使用英文。
+- Git 提交信息使用英文。
+- `docs/` 下的文档使用简体中文；代码、命令、路径与 API 名保留原文。
+
 ## 代码约定与常用模式
 
 - Rust 使用默认 rustfmt；函数／模块为 `snake_case`，类型为 `UpperCamelCase`。共享 Clippy 配置禁止 `dbg!` 和 `todo!`，允许 `type_complexity`。
@@ -99,6 +106,10 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 ## Agent skills
 
 CLI 操作使用 `skills/lyrel/SKILL.md`；委派其他 coding agent 前，按该 skill 读取 `references/delegation.md`。
+
+### 子智能体角色
+
+在 oh-my-pi 中需要委派子智能体时，调研类任务使用 `smol` 角色，代码类任务使用 `task` 角色。
 
 ### 工单跟踪
 

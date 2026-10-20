@@ -1,6 +1,6 @@
 ---
-title: "Tabs and splits"
-description: "Opening, arranging, and rearranging the panes in a tab."
+title: "标签页与分屏"
+description: "打开、排列并重新排列标签页中的窗格。"
 ---
 
 <Note>
@@ -9,116 +9,113 @@ description: "Opening, arranging, and rearranging the panes in a tab."
   [键盘快捷键](/reference/keyboard-shortcuts)。
 </Note>
 
-## Tabs
+<a id="tabs"></a>
+## 标签页
 
 | | |
 |---|---|
-| <kbd>⌘ T</kbd> | New tab |
-| <kbd>⌘ W</kbd> | Close the tab (or the focused pane, if the tab has more than one) |
-| <kbd>⌘ ⇧ T</kbd> | Reopen the tab you just closed |
-| <kbd>⌘ 1</kbd> … <kbd>⌘ 9</kbd> | Jump to tab 1–9 |
-| <kbd>⌃ ⇥</kbd> · <kbd>⌃ ⇧ ⇥</kbd> | Hold to walk the switcher forwards or backwards; it commits when you let go |
+| <kbd>⌘ T</kbd> | 新建标签页 |
+| <kbd>⌘ W</kbd> | 关闭标签页（如果标签页有多个窗格，则关闭聚焦的窗格） |
+| <kbd>⌘ ⇧ T</kbd> | 重新打开刚刚关闭的标签页 |
+| <kbd>⌘ 1</kbd> … <kbd>⌘ 9</kbd> | 跳转到标签页 1–9 |
+| <kbd>⌃ ⇥</kbd> · <kbd>⌃ ⇧ ⇥</kbd> | 按住可向前或向后浏览切换器；松开时选定 |
 
-A new tab always opens in the current pane's directory. Where it lands in the
-list is **Settings → General → New tab position** — *After current* by
-default, or *At end*.
+新标签页总是在当前窗格所在的目录中打开。它在列表中的位置由
+**设置 → 常规 → 新标签页位置**决定——默认为*当前之后*，或*末尾*。
 
-Right-click a tab for the rest: rename, split right or down, a new worktree tab,
-copy the working directory, copy the session id, close · close others · close to
-the right, and — when a coding agent is running there — mark unread and fork its
-session.
+右键点击标签页可进行其余操作：重命名、向右或向下拆分、新建工作树标签页、
+复制工作目录、复制会话 ID、关闭 · 关闭其他标签页 · 关闭右侧标签页，
+以及——如果其中有编程智能体正在运行——标记为未读并派生其会话。
 
-## Splits
+<a id="splits"></a>
+## 分屏
 
 | | |
 |---|---|
-| <kbd>⌘ D</kbd> | Split right |
-| <kbd>⌘ ⇧ D</kbd> | Split down |
-| <kbd>⌘ ]</kbd> · <kbd>⌘ [</kbd> | Next pane · previous pane |
-| <kbd>⌘ ⌥ ← → ↑ ↓</kbd> | Focus the pane in that direction |
-| <kbd>⌘ ⇧ ⏎</kbd> | Zoom the focused pane to fill the tab |
-| <kbd>⌘ ⏎</kbd> | Fullscreen the window |
+| <kbd>⌘ D</kbd> | 向右拆分 |
+| <kbd>⌘ ⇧ D</kbd> | 向下拆分 |
+| <kbd>⌘ ]</kbd> · <kbd>⌘ [</kbd> | 下一个窗格 · 上一个窗格 |
+| <kbd>⌘ ⌥ ← → ↑ ↓</kbd> | 聚焦该方向的窗格 |
+| <kbd>⌘ ⇧ ⏎</kbd> | 将聚焦窗格缩放至填满标签页 |
+| <kbd>⌘ ⏎</kbd> | 将窗口全屏 |
 
-A split inherits the current pane's working directory, so splitting inside a
-repository keeps you in the repository.
+拆分出的窗格会继承当前窗格的工作目录，因此在仓库内拆分后，你仍停留在该仓库中。
 
-Resizing and swapping panes have no default keys — bind them under **Settings →
-Keybindings**, or run them from Search Everywhere (*Resize Pane Left*, *Swap
-Pane Next*, and friends).
+调整窗格大小和交换窗格没有默认快捷键——可在**设置 → 按键绑定**中绑定，
+或从全局搜索运行它们（*Resize Pane Left*、*Swap Pane Next* 等）。
 
-Inactive panes are dimmed slightly so the focused one is obvious. Turn that off
-with **Settings → Appearance → Dim inactive panes**.
+非活动窗格会略微变暗，让聚焦的窗格一目了然。可通过
+**设置 → 外观 → 调暗非活动窗格**关闭此效果。
 
-## Rearranging by dragging
+<a id="rearranging-by-dragging"></a>
+## 拖动重新排列
 
-Hover a pane and a small grip appears along its top edge. Drag it to move that
-pane somewhere else in the tab.
+将指针悬停在窗格上，其顶部边缘会出现一个小拖动手柄。拖动它，即可将该窗格
+移到标签页中的其他位置。
 
-Where you drop it decides what happens:
+放置的位置决定会发生什么：
 
 <AccordionGroup>
-  <Accordion title="On a pane's side">
-    The pane goes in **beside** that one. If it is facing a neighbour in the
-    same row or column, it joins that row and takes an equal share of it. Only
-    when it faces across the layout — where there is no row to join — does it
-    split that pane in half.
+  <Accordion title="放在窗格的侧边">
+    窗格会落在该窗格的**旁边**。如果它面对的是同一行或同一列中的邻居，
+    就会加入那一行或那一列，并分得相等的一份。只有当它横跨布局相对——
+    没有可加入的行或列时——才会将那个窗格一分为二。
   </Accordion>
-  <Accordion title="On a pane's middle">
-    The two panes **trade places**.
+  <Accordion title="放在窗格的中间">
+    两个窗格**互换位置**。
   </Accordion>
-  <Accordion title="Past a pane's outer side">
-    The band beyond the outermost edge — the side facing the window rather than
-    another pane — makes the dragged pane a full-width or full-height band
-    beside everything else, sized to an even share of what that side already
-    holds. A pane in the middle of a 2×2 becomes a full-height *third* column in
-    one drag, rather than taking half the window.
+  <Accordion title="越过窗格的外侧">
+    最外缘之外的那条带状区域——朝向窗口而不是朝向另一个窗格的一侧——
+    会让被拖动的窗格成为其他所有内容旁边的一条全宽或全高带状窗格，
+    大小等于该侧现有内容平均分得的一份。2×2 布局中间的一个窗格，
+    一次拖动就会成为全高的*第三*列，而不是占据半个窗口。
   </Accordion>
 </AccordionGroup>
 
-The landing lights up while you drag, and only ever lights up when the drop
-would actually change the layout.
+拖动时落点会亮起，而且只有在放置确实会改变布局时才会亮起。
 
-## Making one tab a pane of another
+<a id="making-one-tab-a-pane-of-another"></a>
+## 将一个标签页变为另一个标签页的窗格
 
-Two sessions you keep switching between belong in one tab. Drag a tab — by its
-chip in the tab bar, or by its row in the sidebar — out over the panes and drop
-it where you want it: it becomes a pane of the tab you are looking at, and the
-tab it came from is gone.
+你反复切换的两个会话应该待在同一个标签页里。拖动一个标签页——抓住它在
+标签栏中的标签块，或它在侧边栏中的行——拖到窗格区域上方，然后放到你想要
+的位置：它会成为你正在查看的标签页中的一个窗格，而它原来所在的标签页会消失。
 
-The landing reads exactly as it does for a pane, minus the middle: a tab has
-nothing here to trade places with, so a pane's middle means "split it the way it
-is longest". A tab that was itself split arrives with its panes still arranged
-the way you left them, taking one share of whatever row or column it joined.
+落点提示与拖动窗格时完全一致，只是没有中间区域：标签页在这里没有可以互换
+位置的对象，因此窗格中间的含义是“沿着最长的方向拆分它”。本身已被拆分的
+标签页拖入后，其窗格仍保持你离开时的排列，并分得所加入那一行或那一列中
+的一份空间。
 
-Nothing restarts on the way over. A shell mid-command, an SSH session, a coding
-agent halfway through a turn — all of them keep running; only the tab they were
-in goes away. The tab's *name* does not come along.
+整个移动过程中不会有任何东西重启。处在命令执行中途的 shell、SSH 会话，
+以及一轮任务进行到一半的编程智能体——它们都会继续运行；消失的只是它们
+原来所在的标签页。标签页的*名称*不会一起带过去。
 
-Picking a tab up does not switch to it, so the tab you drop into is the one you
-were already looking at. A plain click still switches, as always.
+拿起标签页并不会切换到它，因此你拖入的标签页就是你原本正在查看的那个。
+普通点击仍和以往一样会切换标签页。
 
-## Making a pane a tab of its own
+<a id="making-a-pane-a-tab-of-its-own"></a>
+## 将窗格变为独立的标签页
 
-The same move backwards. Drag a pane by its grip up to the tab bar — or out to
-the sidebar, if that is where your tabs live — and a caret shows which two tabs
-it would go between. Drop it and it leaves the split it was in and becomes a tab
-of its own, at that spot.
+反向的相同操作。抓住窗格的拖动手柄，向上拖到标签栏——或者拖到侧边栏，
+如果你的标签页就在那里——插入光标会显示它将插入哪两个标签页之间。
+放开后，它会离开原有的拆分，在该位置成为独立的标签页。
 
-Nothing restarts here either. The last pane in a tab has nowhere to go, since it
-is already a tab on its own, so no caret appears for it.
+这里同样不会有任何东西重启。标签页中的最后一个窗格无处可去，因为它本身
+就已经是一个独立的标签页，所以不会为它显示插入光标。
 
-## Closing something that is busy
+<a id="closing-something-that-is-busy"></a>
+## 关闭仍在忙碌的内容
 
-Closing a pane or tab with a command still running asks first, and says what is
-running: *"cargo is still running. Closing ends it."* When a coding agent is
-mid-turn it says that instead — *"omp is still working. Closing ends its turn."*
+关闭仍有命令在运行的窗格或标签页时，会先询问，并说明正在运行什么：
+*"cargo 还在运行，关闭会终止它。"* 如果编程智能体正在处理一轮任务，
+则会改为提示——*"omp 还在工作，关闭会中断这一轮。"*
 
-## Where the tabs live
+<a id="where-the-tabs-live"></a>
+## 标签页的位置
 
-**Settings → General → Tab bar position** puts tabs in a vertical sidebar
-on the left (the default) or a horizontal strip on top. The sidebar has room for
-things a strip does not — git branch, diff counts, agent status — so most of
-[its own page](/window/sidebar) is about that.
+**设置 → 常规 → 标签栏位置**可将标签页放在左侧的垂直侧边栏（默认）中，
+或顶部的水平条中。侧边栏有空间容纳水平条放不下的内容——git 分支、差异计数、
+智能体状态——因此[它自己的页面](/window/sidebar)大部分内容都在讲这些。
 
-<kbd>⌘ B</kbd> toggles the sidebar; <kbd>⌘ J</kbd> toggles the
-[side panel](/window/side-panel) on the right.
+<kbd>⌘ B</kbd> 显示或隐藏侧边栏；<kbd>⌘ J</kbd> 显示或隐藏右侧的
+[侧面板](/window/side-panel)。
