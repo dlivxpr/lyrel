@@ -125,14 +125,16 @@ pub(super) fn activity_hover(day: &lyrel_core::statistics::analysis::Day) -> Str
         let Some(value) = day.activity_value(metric) else {
             return "—".to_owned();
         };
-        let value = match metric {
-            Metric::Cost => format!("{value:.4}"),
-            Metric::Tokens | Metric::Sessions => number(Some(value as u64)),
-        };
-        if day.value(metric).is_none() {
-            format!("≥{value}")
-        } else {
-            value
+        match metric {
+            Metric::Cost => format!("${value:.2}"),
+            Metric::Tokens => {
+                let precision = if value >= 1_000_000. { 2 } else { 6 };
+                let mut millions = format!("{:.*}", precision, value / 1_000_000.);
+                millions.truncate(millions.trim_end_matches('0').trim_end_matches('.').len());
+                millions.push('M');
+                millions
+            }
+            Metric::Sessions => number(Some(value as u64)),
         }
     };
     t_fmt(

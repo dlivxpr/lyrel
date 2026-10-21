@@ -319,13 +319,13 @@ impl LyrelApp {
                                 Some(value) if totals.is_complete() => compact(Some(value)),
                                 _ => totals
                                     .known_tokens()
-                                    .map(|value| format!("≥ {}", compact(Some(value))))
+                                    .map(|value| compact(Some(value)))
                                     .unwrap_or_else(|| "—".into()),
                             })
                             .unwrap_or_else(|| "—".into()),
                         Metric::Cost => totals
                             .and_then(Totals::recorded_usd)
-                            .map(|v| format!("USD {v:.2}"))
+                            .map(|v| format!("${v:.2}"))
                             .unwrap_or_else(|| "—".into()),
                         Metric::Sessions => totals.map(session_count).unwrap_or_else(|| "—".into()),
                     };

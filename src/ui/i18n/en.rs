@@ -233,7 +233,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "{metric} per day · dates outside the range are dimmed"
         }
         L10nKey::StatisticsActivityValues => {
-            "Total tokens: {tokens}\nEquivalent USD: {cost}\nSessions: {sessions}"
+            "Total tokens: {tokens}\nSpent {cost}\nSessions: {sessions}"
         }
         L10nKey::StatisticsLess => "Less",
         L10nKey::StatisticsMore => "More",

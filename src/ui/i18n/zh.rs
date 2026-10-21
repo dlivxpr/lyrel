@@ -202,9 +202,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatisticsLastSevenDays => "最近7天",
         L10nKey::StatisticsDailyTrendCompact => "每日 · {start} – {end}",
         L10nKey::StatisticsActivityCaption => "每日{metric} · 范围外日期淡化",
-        L10nKey::StatisticsActivityValues => {
-            "Token 总量：{tokens}\n等价 USD：{cost}\n会话数：{sessions}"
-        }
+        L10nKey::StatisticsActivityValues => "Token 总量：{tokens}\n花费{cost}\n会话数：{sessions}",
         L10nKey::StatisticsLess => "少",
         L10nKey::StatisticsMore => "多",
         L10nKey::StatisticsRankUsage => "{tokens} Token · {sessions} 会话",
