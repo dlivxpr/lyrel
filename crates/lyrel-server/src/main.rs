@@ -1,3 +1,4 @@
+// 本文件源自 l0ng-ai/tty7，lyrel 已修改（含本声明）；原有版权与许可保留。
 use std::io;
 use std::process::ExitCode;
 
@@ -21,6 +22,7 @@ OPTIONS:
     --stop                Ask the running daemon to shut down, and wait for it
     --config-dir <dir>    Use <dir> for the socket, config and session files
     --protocol            Print the dialects this binary speaks, as JSON
+    --license             Print the license and third-party notices and exit
     -V, --version         Print the version and exit
     -h, --help            Print this help and exit
 ";
@@ -32,6 +34,11 @@ fn main() -> ExitCode {
         if let (Some(agent), Some(event)) = (args.get(1), args.get(2)) {
             lyrel_core::core::agent_hooks::run_agent_hook(agent, event);
         }
+        return ExitCode::SUCCESS;
+    }
+
+    if args.iter().any(|a| a == "--license") {
+        print!("{}", include_str!("../../../LICENSE"));
         return ExitCode::SUCCESS;
     }
 

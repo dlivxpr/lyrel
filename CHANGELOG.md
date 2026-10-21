@@ -1,3 +1,4 @@
+<!-- 本文件源自 l0ng-ai/tty7，lyrel 已修改（含本声明）；原有版权与许可保留。 -->
 # 更新日志
 
 本文件仅记录 lyrel 的当前变更，不继承衍生来源的发行版本。lyrel 从 `0.1.0` 独立编号。
@@ -8,6 +9,7 @@
 
 ### lyrel 当前变更
 
+- 在现有 `LICENSE` 集中说明 tty7 来源并汇总必要的第三方版权与许可，仅为本次实质修改的文件保留修改声明，不批量添加源码文件头；macOS 包随附 `LICENSE.txt`，裸 server 内嵌同一份许可并通过 `--license` 提供，远端自动安装沿用同一二进制。
 - 启用 `.github/workflows/` 中的 CI 与 stable 发布管线，同步迁移打包、平台断言、Dependabot 和 issue 模板；显式准备 Node.js 测试运行时与官方 ConPTY，移除旧的 server 缺失跳过。发行汇总全部八件平台资产与 SHA-256 清单，先创建草稿再审核发布，重跑不得覆盖已发布资产；macOS ad-hoc／未公证和 Windows 未签名限制保持明确。
 - CI 与发行改用 Node.js 24 的 `actions/checkout@v7`，移除仍依赖 Node.js 20 的 Zig setup action，改用固定 `ziglang 0.16.0` 的官方 PyPI 分发；Linux runner 固定为 Ubuntu 24.04，避免 `ubuntu-latest` 迁移时改变构建环境。修正平台专属测试 helper 的条件编译和 GPUI 测试绘制后的 arena 清理；拖动测试验证真实手势状态与原生移动请求次数，不再依赖 headless 平台的 `unimplemented!` panic。
 - CI 与 Release 的桌面构建统一 updater feature 图，避免重复编译；发行桌面与 server 并行，仅打包等待 WSL server，并保留 Thin LTO、完整测试、ConPTY 和平台校验。缓存按 CI／发行分区，仅 main 保存供标签复用，已压缩包不再做外层压缩。草稿汇总直接使用创建响应的 release ID，支持严格核对仓库、源提交、成功构建与未过期完整 artifacts 后恢复；相同 SHA-256 的草稿资产可复用，不重编译、不覆盖已发布版本。
