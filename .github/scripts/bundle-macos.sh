@@ -1,4 +1,5 @@
 #!/bin/bash
+# 本文件源自 l0ng-ai/tty7，lyrel 已修改（含本声明）；原有版权与许可保留。
 # 在仓库根目录运行：bash .github/scripts/bundle-macos.sh <target-triple> <arch-label>
 # Package the release binary into dist/lyrel.app, then publish both:
 #   dist/lyrel-<version>-macos-<arch>.zip  (in-app updater)
@@ -56,6 +57,7 @@ if [[ "$PACKAGE_UPDATE_ZIP" != "0" ]]; then
     chmod +x "$APP/Contents/MacOS/lyrel-updater"
 fi
 cp assets/lyrel.icns "$APP/Contents/Resources/lyrel.icns"
+cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
 # Completion signatures are loaded at runtime (not embedded), resolved relative
 # to the executable as ../Resources/completions — see terminal::signature.
 mkdir -p "$APP/Contents/Resources/completions"

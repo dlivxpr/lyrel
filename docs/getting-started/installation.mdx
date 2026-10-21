@@ -3,6 +3,8 @@ title: "安装"
 description: "macOS、Windows 桌面构建，以及保留的 Linux server／CLI 和源码构建方法。"
 ---
 
+{/* 本文件源自 l0ng-ai/tty7，lyrel 已修改（含本声明）；原有版权与许可保留。 */}
+
 lyrel 的独立初版版本为 `0.1.0`。安装包及校验和以
 [**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 中对应版本的正式资产为准。macOS 包采用 ad-hoc 签名，未经过 Developer ID 签名或 Apple 公证；Windows 包未签名。缺少所需安装包时，请从源码构建，不要回退下载上游安装包。
 
@@ -226,7 +228,8 @@ bash .github/scripts/bundle-macos.sh aarch64-apple-darwin arm64
 ```
 
 DMG 和更新 ZIP 都承载 `lyrel.app`。`Contents/MacOS/` 内包含 `lyrel-app`、`lyrel`、
-`lyrel-updater`；`Contents/Resources/` 内包含 `lyrel.icns` 和 `completions/`。
+`lyrel-updater`；`Contents/Resources/` 内包含 `lyrel.icns`、`completions/` 和
+`LICENSE.txt`（项目许可证及必要的第三方声明）。
 图标从已批准图形的 `assets/lyrel.icns` 派生资源复制而来，生产脚本与打包脚本使用同一文件名。
 脚本会进行架构与签名检查；无证书时采用 ad-hoc 签名，不等于 Developer ID 签名或
 Apple 公证。公开分发所需的签名／公证是独立前提，本任务不授权配置外部凭据。
@@ -243,6 +246,10 @@ Windows 桌面与 server 均只发布 x86-64。
 | macOS | `lyrel-0.1.0-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
 | Windows | `lyrel-0.1.0-windows-x86_64.zip`、对应 `-setup.exe` | `lyrel-server-windows-x86_64.zip` |
 | Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
+
+server 将同一份项目许可证及第三方声明内嵌到二进制中，可运行
+`lyrel-server --license` 查看；自动安装到远端后同样可用，无需另外下载许可文件。
+Windows server ZIP 另保留随包的 `LICENSE.txt` 与 `LICENSE-ConPTY.txt`。
 
 macOS／Windows server 在对应工具链中使用 `cargo build --release --locked -p lyrel-server --target <target>`；
 Linux musl server 按 release workflow 使用 Zig `0.16.0` 与 cargo-zigbuild。Actions 在临时 Python venv 中安装官方 PyPI 的 `ziglang==0.16.0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向该解释器，不依赖旧 Node.js runtime 的 Zig setup action：
