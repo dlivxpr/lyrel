@@ -40,7 +40,6 @@ enum HttpSource {
     CommandWhoami,
     CommandCredits,
     CommandSubscriptions,
-    CommandSummary,
     CommandSessionIdentity,
     CommandEnhancement,
     Provider(Provider, u8),
@@ -49,7 +48,6 @@ struct UsageRequest<'a> {
     source: HttpSource,
     secret: &'a str,
     org: Option<&'a str>,
-    since: Option<&'a str>,
 }
 impl UsageRequest<'_> {
     fn endpoint(&self) -> String {
@@ -66,7 +64,6 @@ impl UsageRequest<'_> {
             HttpSource::CommandSubscriptions => {
                 "https://api.commandcode.ai/alpha/billing/subscriptions"
             }
-            HttpSource::CommandSummary => "https://api.commandcode.ai/alpha/usage/summary",
             HttpSource::CommandSessionIdentity => providers::command_code::IDENTITY_ENDPOINT,
             HttpSource::CommandEnhancement => providers::command_code::SESSION_ENDPOINT,
             HttpSource::Provider(provider, route) => match (provider, route) {
@@ -90,9 +87,6 @@ impl UsageRequest<'_> {
         if let Some(org) = self.org {
             params.append_pair("orgId", org);
         }
-        if let Some(since) = self.since {
-            params.append_pair("since", since);
-        }
         let query = params.finish();
         if query.is_empty() {
             base.to_owned()
@@ -109,8 +103,7 @@ impl UsageRequest<'_> {
             | HttpSource::KimiWeb
             | HttpSource::CommandWhoami
             | HttpSource::CommandCredits
-            | HttpSource::CommandSubscriptions
-            | HttpSource::CommandSummary => "Authorization",
+            | HttpSource::CommandSubscriptions => "Authorization",
             HttpSource::Platform(kind) => kind.header_name(),
             HttpSource::Provider(Provider::StepFun, _) => "Oasis-Token",
             HttpSource::Provider(..) => "Cookie",
@@ -127,8 +120,7 @@ impl UsageRequest<'_> {
             | HttpSource::KimiWeb
             | HttpSource::CommandWhoami
             | HttpSource::CommandCredits
-            | HttpSource::CommandSubscriptions
-            | HttpSource::CommandSummary => format!("Bearer {}", self.secret),
+            | HttpSource::CommandSubscriptions => format!("Bearer {}", self.secret),
             HttpSource::Platform(kind) => kind.authorization_value(self.secret),
             HttpSource::Provider(Provider::StepFun, _) => {
                 self.session_field("Oasis-Token").to_owned()
@@ -253,7 +245,6 @@ fn query(
             source,
             secret,
             org: None,
-            since: None,
         },
         proxy,
     )?;
@@ -1444,17 +1435,12 @@ fn pool_label(kind: providers::PoolKind) -> &'static str {
         PoolKind::MonthlyTotal => L10nKey::UsageMonthlyTotal,
         PoolKind::MonthlyCode => L10nKey::UsageMonthlyCode,
         PoolKind::Monthly => L10nKey::UsageMonthly,
-        PoolKind::Purchased => L10nKey::UsagePurchased,
         PoolKind::Free => L10nKey::UsageFree,
         PoolKind::Booster => L10nKey::UsageBooster,
         PoolKind::Coding => L10nKey::UsageCoding,
         PoolKind::CodeFiveHour => L10nKey::UsageCodeFiveHour,
         PoolKind::CodeWeekly => L10nKey::UsageCodeWeekly,
         PoolKind::BoosterMonthly => L10nKey::UsageBoosterMonthly,
-        PoolKind::BillingUsage => L10nKey::UsageBillingUsage,
-        PoolKind::RequestCount => L10nKey::UsageRequestCount,
-        PoolKind::SandboxMinutes => L10nKey::UsageSandboxMinutes,
-        PoolKind::OrganizationLimit => L10nKey::UsageOrganizationLimit,
         PoolKind::RawBalance => L10nKey::UsageRawBalance,
         PoolKind::Balance => L10nKey::UsageBalance,
         PoolKind::Cash => L10nKey::UsageCash,

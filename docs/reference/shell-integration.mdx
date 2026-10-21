@@ -40,6 +40,12 @@ Bash 4.4 及以上通过公开的 `PS0` 报告命令开始，保留你已有的 
 | 编辑模式（vi / emacs） | `OSC 133;V` | 让 lyrel 的按键处理与你的 shell 模式保持一致 |
 | 窗口标题 | `OSC 0` | 标签页标题。仅为 PowerShell 设置这一项——zsh、bash 和 fish 已经会自行设置标题，lyrel 会读取它们输出的标题 |
 
+lyrel 注入的命令开始／结束标记带有 `;aid=lyrel` 归属属性，例如
+`OSC 133;C;omp;aid=lyrel` 与 `OSC 133;D;0;aid=lyrel`。
+只有这些边界能更新 Windows 的 shell 命令识别依据；TUI 自己发出或恢复历史输出时重放的
+通用 `OSC 133` 输出块不清除仍在运行的 agent 图标。此属性用于区分协议来源，不是安全认证。
+更新后新建 shell 窗格才会加载新的注入脚本；已运行的 shell 不会被自动改写或重启。
+
 <a id="what-turns-off-without-it"></a>
 ## 没有集成时哪些功能会受影响
 

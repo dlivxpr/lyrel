@@ -10,22 +10,22 @@ pub(in super::super) const IDENTITY_ENDPOINT: &str = "https://api.commandcode.ai
 fn data(value: &serde_json::Value) -> &serde_json::Value {
     value.get("data").unwrap_or(value)
 }
-fn pool(
-    kind: PoolKind,
-    value: Option<&serde_json::Value>,
-    limit: Option<&serde_json::Value>,
-    reset: Option<String>,
-) -> Result<Pool, UsageError> {
-    Ok(Pool {
-        kind,
-        remaining: value.map(number).transpose()?.map(|v| v.to_string()),
-        used: None,
-        limit: limit.map(number).transpose()?.map(|v| v.to_string()),
-        unit: "credits".into(),
-        reset,
-        expires: None,
-        name: None,
-    })
+// 第一方 CLI 1.84.0 的 getPlanTotalCredits / Sr；不从余额或未核实的字段反推月限额。
+fn monthly_limit(subscription: &serde_json::Value) -> Option<f64> {
+    if subscription.get("status")?.as_str()? != "active" {
+        return None;
+    }
+    match subscription.get("planId")?.as_str()? {
+        "individual-go" | "individual-go-v1" => Some(10.0),
+        "individual-goat" => Some(70.0),
+        "individual-pro" => Some(30.0),
+        "individual-pro-v1" => Some(80.0),
+        "individual-provider" => Some(15.0),
+        "individual-max" => Some(150.0),
+        "individual-ultra" => Some(300.0),
+        "teams-pro" => Some(40.0),
+        _ => None,
+    }
 }
 pub(in super::super) fn query(
     http: &dyn BalanceHttp,
@@ -53,22 +53,7 @@ pub(in super::super) fn query(
         proxy,
     )?;
     let subscription = data(&subscription);
-    let reset = time(subscription.get("currentPeriodEnd"));
-    let mut pools = vec![
-        pool(
-            PoolKind::Monthly,
-            balances.get("monthlyCredits"),
-            None,
-            reset,
-        )?,
-        pool(
-            PoolKind::Purchased,
-            balances.get("purchasedCredits"),
-            None,
-            None,
-        )?,
-        pool(PoolKind::Free, balances.get("freeCredits"), None, None)?,
-    ];
+    let mut pools = Vec::with_capacity(3);
     let windows = credits
         .get("windowLimits")
         .or_else(|| balances.get("windowLimits"));
@@ -77,8 +62,16 @@ pub(in super::super) fn query(
         ("weekly", PoolKind::Weekly),
     ] {
         let window = windows.and_then(|v| v.get(key));
-        let used = window.and_then(|v| v.get("used")).map(number).transpose()?;
-        let cap = window.and_then(|v| v.get("cap")).map(number).transpose()?;
+        let used = window
+            .and_then(|v| v.get("used"))
+            .filter(|v| !v.is_null())
+            .map(number)
+            .transpose()?;
+        let cap = window
+            .and_then(|v| v.get("cap"))
+            .filter(|v| !v.is_null())
+            .map(number)
+            .transpose()?;
         pools.push(Pool {
             kind,
             remaining: used.zip(cap).map(|(u, c)| (c - u).max(0.0).to_string()),
@@ -90,68 +83,24 @@ pub(in super::super) fn query(
             name: None,
         });
     }
-    let since = text(subscription.get("currentPeriodStart"));
-    let (status, body) = http.get(
-        &UsageRequest {
-            source: HttpSource::CommandSummary,
-            secret: key,
-            org: org.as_deref(),
-            since: since.as_deref(),
-        },
-        proxy,
-    )?;
-    let summary = json(status, &body)?;
-    for (field, kind, unit) in [
-        ("totalCost", PoolKind::BillingUsage, "USD"),
-        ("totalCount", PoolKind::RequestCount, "requests"),
-    ] {
-        pools.push(Pool {
-            kind,
-            remaining: None,
-            used: summary
-                .get(field)
-                .map(number)
-                .transpose()?
-                .map(|v| v.to_string()),
-            limit: None,
-            unit: unit.into(),
-            reset: time(subscription.get("currentPeriodEnd")),
-            expires: None,
-            name: None,
-        });
-    }
-    if let Some(minutes) = credits.get("sandboxMinutes") {
-        let used = minutes.get("usedMinutes").map(number).transpose()?;
-        let limit = minutes.get("limitMinutes").map(number).transpose()?;
-        pools.push(Pool {
-            kind: PoolKind::SandboxMinutes,
-            remaining: used.zip(limit).map(|(u, l)| (l - u).max(0.0).to_string()),
-            used: used.map(|v| v.to_string()),
-            limit: limit.map(|v| v.to_string()),
-            unit: "minutes".into(),
-            reset: None,
-            expires: None,
-            name: None,
-        });
-    }
-    if let Some(limits) = who.get("orgLimits").and_then(|v| v.as_array()) {
-        for row in limits {
-            let limit = row.get("limit").map(number).transpose()?;
-            let spent = row.get("spent").map(number).transpose()?;
-            pools.push(Pool {
-                kind: PoolKind::OrganizationLimit,
-                remaining: limit.zip(spent).map(|(l, u)| (l - u).max(0.0).to_string()),
-                used: spent.map(|v| v.to_string()),
-                limit: limit.map(|v| v.to_string()),
-                unit: "USD".into(),
-                reset: time(row.get("resetAt")),
-                expires: None,
-                name: text(row.get("modelLabel"))
-                    .or_else(|| text(row.get("model")))
-                    .or_else(|| text(row.get("scope"))),
-            });
-        }
-    }
+    let remaining = balances
+        .get("monthlyCredits")
+        .filter(|v| !v.is_null())
+        .map(number)
+        .transpose()?;
+    let limit = monthly_limit(subscription);
+    pools.push(Pool {
+        kind: PoolKind::Monthly,
+        remaining: remaining.map(|v| v.to_string()),
+        used: remaining
+            .zip(limit)
+            .map(|(r, l)| (l - r).max(0.0).to_string()),
+        limit: limit.map(|v| v.to_string()),
+        unit: "credits".into(),
+        reset: time(subscription.get("currentPeriodEnd")),
+        expires: None,
+        name: None,
+    });
     if !pools.iter().any(|p| p.remaining.is_some()) {
         return Err(UsageError::Response);
     }
@@ -231,13 +180,20 @@ pub(in super::super) fn enhance(
     if !matches!(status, "active" | "trialing" | "past_due") {
         return Err(UsageError::Service);
     }
-    let end = time(data.get("cancelAt")).or_else(|| time(data.get("currentPeriodEnd")));
-    if let Some(end) = end {
-        if let Some(pool) = report
-            .pools
-            .iter_mut()
-            .find(|p| p.kind == PoolKind::Monthly)
-        {
+    if let Some(pool) = report
+        .pools
+        .iter_mut()
+        .find(|p| p.kind == PoolKind::Monthly)
+    {
+        let limit = monthly_limit(data);
+        pool.used = pool
+            .remaining
+            .as_deref()
+            .and_then(|v| v.parse::<f64>().ok())
+            .zip(limit)
+            .map(|(r, l)| (l - r).max(0.0).to_string());
+        pool.limit = limit.map(|v| v.to_string());
+        if let Some(end) = time(data.get("currentPeriodEnd")) {
             pool.reset = Some(end);
         }
     }

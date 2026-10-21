@@ -661,7 +661,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageMonthlyTotal => "Monthly total quota",
         L10nKey::UsageMonthlyCode => "Monthly code quota",
         L10nKey::UsageMonthly => "Monthly credits",
-        L10nKey::UsagePurchased => "Purchased credits",
         L10nKey::UsageFree => "Free credits",
         L10nKey::UsageBooster => "Booster wallet",
         L10nKey::UsageCoding => "Coding quota (provider-defined period)",
@@ -677,10 +676,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::UsageExpires => "Expires",
         L10nKey::UsageRawBalance => "Raw balance (provider units, unconverted)",
         L10nKey::UsageOverdrawn => "Provider reports this account is overdrawn",
-        L10nKey::UsageBillingUsage => "Billing-period usage cost",
-        L10nKey::UsageRequestCount => "Period requests",
-        L10nKey::UsageSandboxMinutes => "Sandbox minutes",
-        L10nKey::UsageOrganizationLimit => "Organization limit",
         L10nKey::UsageCommandSessionHelp => {
             "Explicitly copy one session cookie as name=value from an authorized Command Code login request, not an API key or the entire Cookie header. It is saved only after api.commandcode.ai verifies the same user as the key and returns enhancement data. Cookie names and subscription.userId are not assumed."
         }

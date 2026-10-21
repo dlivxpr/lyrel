@@ -42,7 +42,18 @@ fn menu_item(id: String, label: &'static str) -> PopupMenuItem {
             .child(label)
     })
 }
-fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
+fn remaining_ratio(pool: &providers::Pool) -> Option<f64> {
+    let remaining = pool.remaining.as_ref()?.parse::<f64>().ok()?;
+    let limit = if pool.unit == "%" {
+        100.
+    } else {
+        pool.limit.as_ref()?.parse::<f64>().ok()?
+    };
+    (remaining.is_finite() && remaining >= 0. && limit.is_finite() && limit > 0.)
+        .then(|| (remaining / limit).clamp(0., 1.))
+}
+fn render_pool(pool: &providers::Pool, percentages: bool, cx: &gpui_kit::App) -> gpui_kit::Div {
+    let ratio = remaining_ratio(pool);
     let unit = if pool.unit == "requests" {
         t(L10nKey::UsageRequests)
     } else {
@@ -67,34 +78,25 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
                     .text_sm()
                     .font_weight(gpui_kit::FontWeight::MEDIUM)
                     .child(format!(
-                        "{} {} {}",
+                        "{} {} {}{}",
                         t(L10nKey::UsageRemaining),
                         pool.remaining
                             .as_deref()
                             .unwrap_or(t(L10nKey::UsageUnknown)),
-                        unit
+                        unit,
+                        if percentages {
+                            ratio
+                                .map(|v| format!(" · {:.0}%", v * 100.))
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
+                        }
                     )),
             ),
     );
     // Only an upstream percentage or a real remaining/limit pair can draw a bar.
     // Original decimal strings remain the displayed source of truth (including Credits).
-    let remaining = pool
-        .remaining
-        .as_ref()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v >= 0.);
-    let limit = if pool.unit == "%" {
-        Some(100.)
-    } else {
-        pool.limit
-            .as_ref()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v > 0.)
-    };
-    if let Some(ratio) = remaining
-        .zip(limit)
-        .map(|(remaining, limit)| (remaining / limit).clamp(0., 1.) as f32)
-    {
+    if let Some(ratio) = ratio {
         metric = metric.child(
             div()
                 .h(gpui_kit::rems(0.25))
@@ -104,7 +106,7 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
                 .child(
                     div()
                         .h_full()
-                        .w(gpui_kit::relative(ratio))
+                        .w(gpui_kit::relative(ratio as f32))
                         .rounded_sm()
                         .bg(cx.theme().foreground),
                 ),
@@ -121,6 +123,15 @@ fn render_pool(pool: &providers::Pool, cx: &gpui_kit::App) -> gpui_kit::Div {
     ] {
         if let Some(value) = value {
             detail = detail.child(format!("{} {value} {unit}", t(label)));
+        }
+    }
+    if percentages && pool.used.is_some() {
+        if let Some(ratio) = ratio {
+            detail = detail.child(format!(
+                "{} {:.0}%",
+                t(L10nKey::UsageUsed),
+                (1. - ratio) * 100.
+            ));
         }
     }
     for (label, value) in [
@@ -541,7 +552,7 @@ impl UsagePage {
                         row = row.child(t(L10nKey::UsageUnavailable));
                     }
                     for pool in &report.pools {
-                        row = row.child(render_pool(pool, cx));
+                        row = row.child(render_pool(pool, command_code, cx));
                     }
                     if let Some(error) = report.enhancement {
                         row = row.child(div().text_color(danger).child(format!(
@@ -1093,5 +1104,36 @@ impl Render for UsagePage {
                 &self.scroll,
             ));
         page
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quota_percentage_requires_a_real_positive_limit() {
+        let mut pool = providers::Pool {
+            kind: providers::PoolKind::Monthly,
+            remaining: Some("56".into()),
+            used: Some("14".into()),
+            limit: Some("70".into()),
+            unit: "credits".into(),
+            reset: None,
+            expires: None,
+            name: None,
+        };
+        assert_eq!(remaining_ratio(&pool), Some(0.8));
+        for limit in [None, Some("0"), Some("-1"), Some("NaN"), Some("inf")] {
+            pool.limit = limit.map(str::to_owned);
+            assert_eq!(remaining_ratio(&pool), None);
+        }
+        pool.limit = Some("70".into());
+        pool.remaining = None;
+        assert_eq!(remaining_ratio(&pool), None);
+        pool.remaining = Some("0".into());
+        assert_eq!(remaining_ratio(&pool), Some(0.));
+        pool.remaining = Some("100".into());
+        assert_eq!(remaining_ratio(&pool), Some(1.));
     }
 }

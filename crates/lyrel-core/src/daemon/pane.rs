@@ -4036,19 +4036,27 @@ impl OscSniffer {
 }
 
 fn handle_osc133(shell: &mut ShellState, rest: &[u8]) -> bool {
+    // Generic OSC 133 blocks may be emitted by the foreground TUI, including
+    // when replaying a transcript. Only our shell integration owns its argv.
+    let command_mark = rest.strip_suffix(b";aid=lyrel");
+    let rest = command_mark.unwrap_or(rest);
     shell.active = true;
     match rest.first() {
         Some(b'A') | Some(b'B') => shell.at_prompt = true,
         Some(b'C') => {
             shell.at_prompt = false;
-            shell.command = rest
-                .strip_prefix(b"C;")
-                .map(|c| String::from_utf8_lossy(&percent_decode(c)).into_owned())
-                .filter(|s| !s.trim().is_empty());
+            if command_mark.is_some() {
+                shell.command = rest
+                    .strip_prefix(b"C;")
+                    .map(|c| String::from_utf8_lossy(&percent_decode(c)).into_owned())
+                    .filter(|s| !s.trim().is_empty());
+            }
         }
         Some(b'D') => {
             shell.at_prompt = true;
-            shell.command = None;
+            if command_mark.is_some() {
+                shell.command = None;
+            }
             shell.last_exit_code = rest
                 .strip_prefix(b"D;")
                 .and_then(|c| std::str::from_utf8(c).ok())
@@ -5441,12 +5449,37 @@ mod tests {
         assert_eq!(sig.shell[0].last_exit_code, Some(3));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn resumed_output_marks_do_not_release_the_running_agent() {
+        use crate::core::cli_agent::CLIAgent;
+
+        let mut sniffer = OscSniffer::new();
+        let mut state = test_state(true);
+        apply_signals(&mut state, sniffer.feed(b"\x1b]133;C;omp;aid=lyrel\x07"));
+        assert_eq!(state.agent, Some(CLIAgent::OhMyPi));
+
+        // Minimized from a real omp /resume: replayed output contains its own
+        // prompt/output block, but the enclosing shell command has not exited.
+        apply_signals(
+            &mut state,
+            sniffer.feed(b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07"),
+        );
+        assert_eq!(state.agent, Some(CLIAgent::OhMyPi));
+        assert_eq!(state.shell.command.as_deref(), Some("omp"));
+        apply_signals(&mut state, sniffer.feed(b"\x1b]133;D;0;aid=lyrel\x07"));
+        assert!(
+            state.agent.is_none(),
+            "the actual shell exit releases the agent"
+        );
+    }
+
     #[test]
     fn sniff_osc133_command_capture_drives_agent_detection() {
         let custom = std::collections::HashMap::new();
         let mut s = OscSniffer::new();
 
-        let c = s.feed(b"\x1b]133;C;omp%20--help\x07");
+        let c = s.feed(b"\x1b]133;C;omp%20--help;aid=lyrel\x07");
         let shell = c.shell.last().unwrap();
         assert!(!shell.at_prompt);
         assert_eq!(shell.command.as_deref(), Some("omp --help"));
@@ -5458,32 +5491,32 @@ mod tests {
             ))
         );
 
-        let d = s.feed(b"\x1b]133;D;0\x07");
+        let d = s.feed(b"\x1b]133;D;0;aid=lyrel\x07");
         let shell = d.shell.last().unwrap();
         assert_eq!(shell.command, None);
         assert_eq!(agent_from_shell_mark(shell, &custom), None);
 
-        let c = s.feed(b"\x1b]133;C;git%20status\x07");
+        let c = s.feed(b"\x1b]133;C;git%20status;aid=lyrel\x07");
         let shell = c.shell.last().unwrap();
         assert_eq!(shell.command.as_deref(), Some("git status"));
         assert_eq!(agent_from_shell_mark(shell, &custom), None);
 
-        let c = s.feed(b"\x1b]133;C\x07");
+        let c = s.feed(b"\x1b]133;C;;aid=lyrel\x07");
         assert_eq!(c.shell.last().unwrap().command, None);
 
-        let _ = s.feed(b"\x1b]133;C;pi\x07");
+        let _ = s.feed(b"\x1b]133;C;pi;aid=lyrel\x07");
         let a = s.feed(b"\x1b]133;A\x1b]133;B\x07");
         assert_eq!(a.shell.last().unwrap().command.as_deref(), Some("pi"));
-        let d = s.feed(b"\x1b]133;D;0\x07");
+        let d = s.feed(b"\x1b]133;D;0;aid=lyrel\x07");
         assert_eq!(d.shell.last().unwrap().command, None);
 
-        let c = s.feed(b"\x1b]133;C;echo%20a%0Aecho%20b\x07");
+        let c = s.feed(b"\x1b]133;C;echo%20a%0Aecho%20b;aid=lyrel\x07");
         assert_eq!(
             c.shell.last().unwrap().command.as_deref(),
             Some("echo a\necho b")
         );
 
-        let c = s.feed(b"\x1b]133;C;%20%20\x07");
+        let c = s.feed(b"\x1b]133;C;%20%20;aid=lyrel\x07");
         assert_eq!(c.shell.last().unwrap().command, None);
     }
 
@@ -5492,7 +5525,11 @@ mod tests {
         let mut s = OscSniffer::new();
 
         let mut prev = ShellState::default();
-        let c = s.feed(b"\x1b]133;C;.%5Cdev.ps1\x07").shell.pop().unwrap();
+        let c = s
+            .feed(b"\x1b]133;C;.%5Cdev.ps1;aid=lyrel\x07")
+            .shell
+            .pop()
+            .unwrap();
         assert!(shell_mark_capture_changed(&prev, &c));
         assert_eq!(
             agent_from_shell_mark(&c, &std::collections::HashMap::new()),
@@ -5504,7 +5541,7 @@ mod tests {
         assert!(!shell_mark_capture_changed(&prev, &ab));
         prev = ab;
 
-        let d = s.feed(b"\x1b]133;D;0\x07").shell.pop().unwrap();
+        let d = s.feed(b"\x1b]133;D;0;aid=lyrel\x07").shell.pop().unwrap();
         assert!(shell_mark_capture_changed(&prev, &d));
     }
 

@@ -2,21 +2,24 @@
 
 use std::rc::Rc;
 
+use gpui_kit::base::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use gpui_kit::component::{
-    ActiveTheme as _, IndexPath, Selectable, h_flex,
+    ActiveTheme as _, Icon, IconName, IndexPath, Selectable, h_flex,
+    input::{Input, InputEvent, InputState},
     list::{List, ListDelegate, ListEvent, ListState},
     v_flex,
 };
 use gpui_kit::{
-    App, ClickEvent, Context, Entity, EventEmitter, FontWeight, MouseButton, MouseDownEvent,
-    ScrollStrategy, Subscription, Task, Window, div, prelude::*, px, rems,
+    Action, App, ClickEvent, Context, Entity, EventEmitter, Focusable as _, FontWeight,
+    MouseButton, MouseDownEvent, ScrollStrategy, Subscription, Task, TestSupportExt as _, Window,
+    div, prelude::*, px, rems,
 };
 
 use super::command::{CommandKind, Item};
 use super::sources::{Catalog, Row, Section, plain};
 use super::{FileList, SearchTab};
 use crate::core::actions::{SearchNextTab, SearchPrevTab};
-use crate::ui::dialog::{CARD_RADIUS, FOOTER_H, KEYCAP, keycap};
+use crate::ui::dialog::{CARD_RADIUS, FOOTER_H, keycap};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 /// What the list is showing: one of the tabs, or a list a row opens — the
@@ -296,17 +299,11 @@ impl ListDelegate for SearchDelegate {
         };
         // The headline in body ink and the way out under it in caption ink:
         // two greys of the same size read as one sentence cut in half.
-        // The empty view is drawn in place of the rows, so the list's top
-        // padding — the room the scope row is laid over — does not reach it.
-        // It keeps clear of that row itself, and sits on the rows' own column,
-        // left-aligned, the way v5 draws its empty note.
-        let scopes = match self.scope {
-            Scope::Tab(_) => TABS_H,
-            Scope::Themes | Scope::SessionActions => 0.,
-        };
+        // Empty content follows the scope row in normal flow, sharing the
+        // result rows' leading edge rather than reserving an overlay slot.
         let theme = cx.theme();
         v_flex()
-            .pt(px(scopes + 20.))
+            .pt(px(20.))
             .pb(px(24.))
             .px(px(LABEL_INSET))
             .gap(px(4.))
@@ -426,6 +423,9 @@ pub enum SearchEvent {
 
 pub struct SearchView {
     list: Entity<ListState<SearchDelegate>>,
+    // List 0.8.0 does not expose its input or a 40px search-row size.
+    // Keep this input stable while List retains filtering and navigation.
+    query_input: Entity<InputState>,
     catalog: Rc<Catalog>,
     /// The tab showing — or, in the theme picker, the one Escape returns to.
     tab: SearchTab,
@@ -451,6 +451,7 @@ pub struct SearchView {
     /// less what cannot answer), set by whoever opened an editor tab.
     editor_tabs: Vec<SearchTab>,
     _sub: Subscription,
+    _query_sub: Subscription,
 }
 
 impl SearchView {
@@ -470,12 +471,17 @@ impl SearchView {
         let catalog = Rc::new(catalog);
         let delegate = SearchDelegate::new(catalog.clone(), Scope::Tab(tab), Vec::new(), cx);
         let list = Self::build_list(delegate, None, window, cx);
-        if !query.is_empty() {
-            list.update(cx, |state, cx| state.set_query(query, window, cx));
-        }
+        let query_input = cx.new(|cx| InputState::new(window, cx));
+        let _query_sub = cx.subscribe_in(&query_input, window, |this, input, event, window, cx| {
+            if matches!(event, InputEvent::Change) {
+                let query = input.read(cx).value();
+                this.set_query(&query, window, cx);
+            }
+        });
         let _sub = cx.subscribe_in(&list, window, Self::on_list_event);
-        Self {
+        let mut this = Self {
             list,
+            query_input,
             catalog,
             tab,
             parked_query: None,
@@ -486,12 +492,35 @@ impl SearchView {
             heading: None,
             editor_tabs: Vec::new(),
             _sub,
-        }
+            _query_sub,
+        };
+        this.set_query(query, window, cx);
+        this.focus(window, cx);
+        this
     }
 
     /// Puts the keyboard back in the search field (`palette`).
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
-        self.list.update(cx, |state, cx| state.focus(window, cx));
+        self.query_input
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    fn set_query(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.query_input.read(cx).value() != query {
+            self.query_input
+                .update(cx, |input, cx| input.set_value(query, window, cx));
+        }
+        if self.list.read(cx).delegate().query != query.trim() {
+            self.list
+                .update(cx, |list, cx| list.set_query(query, window, cx));
+        }
+        cx.notify();
+    }
+
+    fn dispatch_list_action(&self, action: &dyn Action, window: &mut Window, cx: &mut App) {
+        self.list
+            .focus_handle(cx)
+            .dispatch_action(action, window, cx);
     }
 
     /// Whether a row's list is showing rather than a tab.
@@ -510,7 +539,7 @@ impl SearchView {
         cx: &mut Context<Self>,
     ) -> Entity<ListState<SearchDelegate>> {
         let first = selected.or_else(|| delegate.first_row());
-        let list = cx.new(|cx| ListState::new(delegate, window, cx).searchable(true));
+        let list = cx.new(|cx| ListState::new(delegate, window, cx));
         list.update(cx, |state, cx| {
             // `ListState::new` starts with nothing selected, and it only picks a
             // row once a query changes. Opening the search and pressing Return
@@ -520,7 +549,6 @@ impl SearchView {
             if selected.is_some() {
                 state.scroll_to_selected_item(window, cx);
             }
-            state.focus(window, cx);
         });
         list
     }
@@ -533,6 +561,9 @@ impl SearchView {
     ) {
         self._sub = cx.subscribe_in(&list, window, Self::on_list_event);
         self.list = list;
+        let query = self.list.read(cx).delegate().query.clone();
+        self.set_query(&query, window, cx);
+        self.focus(window, cx);
         cx.notify();
     }
 
@@ -551,11 +582,11 @@ impl SearchView {
             return;
         }
         self.tab = tab;
+        if let Some(query) = query {
+            self.set_query(query, window, cx);
+        }
         self.list.update(cx, |state, cx| {
             state.delegate_mut().scope = Scope::Tab(tab);
-            if let Some(query) = query {
-                state.set_query(query, window, cx);
-            }
             // `set_query` searches only when the text changed; the tab did.
             state.delegate_mut().refresh(cx);
             let first = state.delegate().first_row();
@@ -975,7 +1006,7 @@ impl SearchView {
                         .child(tab.title())
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                             this.go_to_tab(tab, window, cx);
-                            this.list.update(cx, |state, cx| state.focus(window, cx));
+                            this.focus(window, cx);
                         }))
                 }))
             })
@@ -994,6 +1025,8 @@ impl SearchView {
         };
         let tabs = !self.in_sub_list() && self.scope_row().is_some();
         h_flex()
+            .id("search-footer")
+            .test_support()
             .flex_none()
             .items_center()
             .gap(px(16.))
@@ -1057,10 +1090,6 @@ const ROW_RADIUS: f32 = 7.;
 /// Its corner and its footer are `ui::dialog`'s, the switcher's numbers.
 const CARD_MARGIN: f32 = 24.;
 const CARD_MAX_W: f32 = 620.;
-
-/// The search row gpui-component's `List` draws above the rows: a 32px field
-/// with 6px above and below and a 1px rule.
-const SEARCH_H: f32 = 32. + 6. * 2. + 1.;
 
 /// A row's title, and the subtitle, hints and keycaps beside it: the
 /// switcher's row name and its metadata line.
@@ -1139,58 +1168,81 @@ impl Render for SearchView {
         // card's margin, including when a split-screen window is shorter than
         // the full list.
         let tabs_h = if tabs { TABS_H } else { 0. };
-        let chrome = tabs_h + SEARCH_H + FOOTER_H + CARD_MARGIN;
+        let chrome = tabs_h + FOOTER_H * 2. + CARD_MARGIN + 2.;
         let list_max_h = px((viewport.height.as_f32() - top - chrome)
             .max(ROW_H)
             .min(ROW_H * VISIBLE_ROWS + LIST_PAD * 2.));
-        let typed = !self.list.read(cx).delegate().query.is_empty();
+        let typed = !self.query_input.read(cx).value().is_empty();
         let placeholder = match self.scope(cx) {
             Scope::Tab(_) => self.tab.placeholder(),
             Scope::Themes => t(L10nKey::SearchTheme),
             Scope::SessionActions => t(L10nKey::SearchSessionActions),
         };
+        self.query_input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx);
+        });
         let card = v_flex()
+            .id("search-card")
+            .test_support()
             .relative()
             .w(px((viewport.width.as_f32() - 32.).clamp(0., CARD_MAX_W)))
             .map(|panel| crate::ui::theme::floating_surface(panel, cx))
             .rounded(px(CARD_RADIUS))
             .overflow_hidden()
             .child(
-                List::new(&self.list)
-                    .search_placeholder(placeholder)
-                    .pt(px(tabs_h + 6.))
-                    .pb(px(LIST_PAD))
-                    .max_h(list_max_h + px(tabs_h)),
+                h_flex()
+                    .id("search-header")
+                    .test_support()
+                    .key_context("List")
+                    .flex_none()
+                    .h(px(FOOTER_H))
+                    .px(px(8.))
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    // Keep the framework's list navigation without moving focus
+                    // out of the input. These handlers belong only to this row:
+                    // the list's propagated Cancel must not loop back into them.
+                    .on_action(cx.listener(|this, action: &SelectUp, window, cx| {
+                        this.dispatch_list_action(action, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, action: &SelectDown, window, cx| {
+                        this.dispatch_list_action(action, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, action: &Confirm, window, cx| {
+                        this.dispatch_list_action(action, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, action: &Cancel, window, cx| {
+                        this.dispatch_list_action(action, window, cx);
+                    }))
+                    .child(
+                        Input::new(&self.query_input)
+                            .id("search-input")
+                            .prefix(
+                                Icon::new(IconName::Search).text_color(cx.theme().muted_foreground),
+                            )
+                            .cleanable(true)
+                            .appearance(false)
+                            .p_0()
+                            // Input::h_full is multi-line-only; use Styled for
+                            // the single-line frame, with its normal text size.
+                            .map(gpui_kit::Styled::h_full)
+                            .when(!typed, |input| {
+                                input.suffix(
+                                    div()
+                                        .id("search-escape")
+                                        .test_support()
+                                        .child(keycap("esc", cx)),
+                                )
+                            }),
+                    ),
             )
-            // The scope row sits under the field, the way v5 draws it. The
-            // field is the list's own and the list gives nothing a slot
-            // between it and the rows, so the row is laid over the list's top
-            // padding instead — one pixel higher, over the field's rule, so
-            // the only rule is the one under the scopes.
-            .when(tabs, |card| {
-                card.child(
-                    div()
-                        .absolute()
-                        .top(px(SEARCH_H - 1.))
-                        .left_0()
-                        .right_0()
-                        .child(self.render_tabs(cx)),
-                )
-            })
-            // The switcher's `esc` cap in the search row's trailing corner.
-            // Laid over the row rather than inside it — the row is the list's
-            // own — and only while the field is empty, since typing brings up
-            // the field's clear button in the same spot. No handlers, so a
-            // click on it still reaches the field under it.
-            .when(!typed, |card| {
-                card.child(
-                    div()
-                        .absolute()
-                        .top(px((SEARCH_H - 1. - KEYCAP) / 2.))
-                        .right(px(16.))
-                        .child(keycap("esc", cx)),
-                )
-            })
+            .when(tabs, |card| card.child(self.render_tabs(cx)))
+            .child(
+                List::new(&self.list)
+                    .pt(px(6.))
+                    .pb(px(LIST_PAD))
+                    .max_h(list_max_h),
+            )
             .child(self.render_footer(cx));
 
         div()
@@ -1301,6 +1353,7 @@ impl RenderOnce for SearchRow {
 mod tests {
     use super::*;
     use crate::ui::app::{LyrelApp, test_window::harness_with_tabs};
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
 
     fn open(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Entity<SearchView> {
@@ -1314,6 +1367,110 @@ mod tests {
             let delegate = view.list.read(cx).delegate();
             Some(delegate.row_at(delegate.first_row()?)?.item()?.kind.clone())
         })
+    }
+
+    #[gpui_kit::test]
+    fn search_header_matches_footer_and_centers_escape_after_layout(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_search(SearchTab::Actions, "", window, cx)
+        });
+        for (font_size, scale, width, height) in [
+            (14., 1., 900., 700.),
+            (18., 1.25, 640., 480.),
+            (22., 1.5, 520., 300.),
+        ] {
+            vcx.simulate_resize(gpui_kit::size(px(width), px(height)));
+            vcx.simulate_scale_factor_change(scale);
+            vcx.update(|_, cx| {
+                cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let header = window.find("search-header").bounds();
+                let footer = window.find("search-footer").bounds();
+                let input = window.find("search-input").bounds();
+                let escape = window.find("search-escape").bounds();
+                let card = window.find("search-card").bounds();
+                assert_eq!(header.size.height, px(40.));
+                assert_eq!(header.size.height, footer.size.height);
+                assert!((input.top() - header.top()).abs() * scale <= px(0.5));
+                assert!((input.bottom() - header.bottom() + px(1.)).abs() * scale <= px(0.5));
+                assert!(
+                    (escape.center().y - input.center().y).abs() <= px(0.5),
+                    "font={font_size}, scale={scale}, header={header:?}, input={input:?}, escape={escape:?}"
+                );
+                assert!((escape.center().y - header.center().y).abs() * scale <= px(1.));
+                assert!(
+                    card.bottom() <= window.viewport_size().height - px(CARD_MARGIN),
+                    "font={font_size}, scale={scale}, card={card:?}, viewport={:?}",
+                    window.viewport_size()
+                );
+                assert_eq!(window.find("search-input").focused(), Some(true));
+            });
+        }
+    }
+
+    #[gpui_kit::test]
+    fn composed_input_keeps_list_navigation_clear_and_sublist_escape(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_search(SearchTab::Actions, "", window, cx)
+        });
+        vcx.run_until_parked();
+        let view = open(&app, &mut vcx);
+        let selected = view.read_with(&vcx, |view, cx| view.list.read(cx).selected_index());
+        vcx.simulate_keystrokes("down");
+        vcx.run_until_parked();
+        assert_ne!(
+            view.read_with(&vcx, |view, cx| view.list.read(cx).selected_index()),
+            selected
+        );
+        vcx.simulate_keystrokes("up");
+        vcx.run_until_parked();
+        assert_eq!(
+            view.read_with(&vcx, |view, cx| view.list.read(cx).selected_index()),
+            selected
+        );
+
+        vcx.simulate_input("split right");
+        vcx.run_until_parked();
+        assert_eq!(first_kind(&view, &mut vcx), Some(CommandKind::SplitRight));
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("search-escape").is_none());
+            window.within("search-input").click("clean", cx);
+        });
+        vcx.run_until_parked();
+        view.read_with(&vcx, |view, cx| {
+            assert_eq!(view.query_input.read(cx).value(), "");
+            assert_eq!(view.list.read(cx).delegate().query, "");
+        });
+
+        view.update_in(&mut vcx, |view, window, cx| {
+            view.set_query("theme", window, cx);
+            view.open_themes(window, cx);
+        });
+        vcx.run_until_parked();
+        view.read_with(&vcx, |view, cx| {
+            assert_eq!(view.scope(cx), Scope::Themes);
+            assert_eq!(view.query_input.read(cx).value(), "");
+        });
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        view.read_with(&vcx, |view, cx| {
+            assert_eq!(view.scope(cx), Scope::Tab(SearchTab::Actions));
+            assert_eq!(view.query_input.read(cx).value(), "theme");
+            assert_eq!(view.list.read(cx).delegate().query, "theme");
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find("search-input").focused(), Some(true));
+        });
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
     }
 
     #[gpui_kit::test]

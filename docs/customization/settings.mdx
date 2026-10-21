@@ -462,7 +462,9 @@ API-key `boosterWallet` 与四类配额分开显示。第一方 CLI 只将 `bala
 
 ### Command Code
 
-API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com/command-code@1.84.0/dist/cli.mjs) 请求 `https://api.commandcode.ai/alpha/whoami?limits=1`，并对返回的可选组织请求 `/alpha/billing/credits?orgId=…` 与 `/alpha/billing/subscriptions?orgId=…`，再用订阅的 `currentPeriodStart` 请求 `/alpha/usage/summary?orgId=…&since=…`。服务商用户身份、套餐、月度周期、组织限制与各窗口重置分别展示；月度 Credit、购买 Credit、免费 Credit、5 小时／周滚动窗口、当期费用／请求数及 Sandbox 分钟不相加、不折算为历史费用。滚动窗口与购买 Credit 的规则见[第一方用量限制说明](https://commandcode.ai/docs/resources/usage-limits)。
+API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com/command-code@1.84.0/dist/cli.mjs) 请求 `https://api.commandcode.ai/alpha/whoami?limits=1` 核对用户身份，并对返回的可选组织请求 `/alpha/billing/credits?orgId=…` 与 `/alpha/billing/subscriptions?orgId=…`。账户卡片只监控 **5 小时、每周、每月**三项订阅额度，显示真实已用、剩余、上限及可核实的百分比和重置时间。不再请求 `/alpha/usage/summary`，购买／赠送余额、请求数、账单费用、Sandbox 分钟和组织模型限制不展示，也不作为刷新成功的前提。原有账户与认证来源保留，旧快照中的额外监控项在加载时移除。
+
+5 小时与每周额度来自 `windowLimits.fiveHour`／`weekly` 的 `used`、`cap`、`resetAt`；月度剩余来自 `credits.monthlyCredits`，重置来自订阅 `currentPeriodEnd`。该响应没有已核实的月上限字段，因此仅在订阅为 `active` 且 `planId` 精确匹配第一方 CLI 的 `getPlanTotalCredits` 套餐表时显示月上限与百分比：GOAT（`individual-goat`）为 70 Credit，其他已知套餐按同一发布产物中的各自额度处理，不按名称前缀猜测。未知套餐、缺少订阅状态或缺少用量字段时保留未知，不把购买／赠送余额加入限额，不从 `monthlyCreditsGranted` 等未核实字段推导月上限，不补零或伪造百分之百。窗口规则见[第一方用量限制说明](https://commandcode.ai/docs/resources/usage-limits)。
 
 已添加 Command Code API-key 账户后，点击**设置会话增强…**，选择手工会话或浏览器来源。手工来源从你已授权的该站登录请求中明确复制一个会话 Cookie 的 `name=value`；不接受整段 Cookie、cURL 或 API key 代替会话。浏览器来源先明确选择浏览器，再选择 profile，最后确认验证；发现 profile 只读所选浏览器元数据，不扫描会话或替你选择账户。先向 `GET https://api.commandcode.ai/auth/get-session` 验证会话身份，只有 `user.id` 与主要 API-key `whoami.user.id` 相同时才查询 `GET https://api.commandcode.ai/internal/billing/subscriptions` 并合并套餐／周期。不会凭空假设订阅响应有 `userId`。两个增强请求均仅发送所选 Cookie，不发送 API key。
 

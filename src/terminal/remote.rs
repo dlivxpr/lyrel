@@ -1616,6 +1616,8 @@ impl RemoteTerminal {
                                                 // rather than holding a stale
                                                 // one.
                                                 let line = mark
+                                                    .strip_suffix(b";aid=lyrel")
+                                                    .unwrap_or(mark)
                                                     .strip_prefix(b"C;")
                                                     .map(|c| String::from_utf8_lossy(c).into_owned())
                                                     .unwrap_or_default();

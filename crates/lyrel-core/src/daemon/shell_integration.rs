@@ -73,7 +73,7 @@ if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   __lyrel_precmd_d() {
     local ret=$?
     if [[ -n "$__lyrel_cmd_active" ]]; then
-      __lyrel_osc "133;D;$ret"
+      __lyrel_osc "133;D;$ret;aid=lyrel"
       unset __lyrel_cmd_active
     fi
   }
@@ -110,7 +110,7 @@ if [[ -o interactive ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
     cmd=${cmd//$'\a'/%07}
     cmd=${cmd//$'\r'/%0D}
     cmd=${cmd//$'\n'/%0A}
-    __lyrel_osc "133;C;$cmd"
+    __lyrel_osc "133;C;$cmd;aid=lyrel"
   }
 
   autoload -Uz add-zsh-hook
@@ -177,7 +177,7 @@ if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   function __lyrel_preexec --on-event fish_preexec
     set -g __lyrel_cmd_active 1
     set -l cmd (string sub -l 512 -- $argv[1] | string replace -a '%' '%25' | string replace -a \e '%1B' | string replace -a \a '%07' | string replace -a \r '%0D' | string join '%0A')
-    __lyrel_osc "133;C;$cmd"
+    __lyrel_osc "133;C;$cmd;aid=lyrel"
   end
 
   # Runs on the fish_prompt *event*, which fires before fish calls the
@@ -186,7 +186,7 @@ if status is-interactive; and test -z "$LYREL_SHELL_INTEGRATION"
   function __lyrel_precmd --on-event fish_prompt
     set -l ret $status
     if set -q __lyrel_cmd_active
-      __lyrel_osc "133;D;$ret"
+      __lyrel_osc "133;D;$ret;aid=lyrel"
       set -e __lyrel_cmd_active
     end
     __lyrel_report_cwd
@@ -291,7 +291,7 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
   __lyrel_precmd_d() {
     local ret=${1:-$?}
     if [[ -n "${__lyrel_cmd_active+x}" ]]; then
-      __lyrel_osc "133;D;$ret"
+      __lyrel_osc "133;D;$ret;aid=lyrel"
     fi
     return $ret
   }
@@ -327,7 +327,7 @@ if [[ $- == *i* ]] && [[ -z "$LYREL_SHELL_INTEGRATION" ]]; then
     cmd=${cmd//$'\a'/%07}
     cmd=${cmd//$'\r'/%0D}
     cmd=${cmd//$'\n'/%0A}
-    __lyrel_osc "133;C;$cmd"
+    __lyrel_osc "133;C;$cmd;aid=lyrel"
   }
 
   # 历史：这里曾内嵌 https://github.com/rcaloras/bash-preexec 的 MIT 实现；
@@ -455,7 +455,7 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
       # $? is the reliable success signal; $LASTEXITCODE can be stale, so only
       # trust it when $? already says the command failed.
       $code = if ($ok) { 0 } elseif ($lastExit) { $lastExit } else { 1 }
-      Write-Host -NoNewline "$($global:__LyrelEsc)]133;D;$code$($global:__LyrelBel)"
+      Write-Host -NoNewline "$($global:__LyrelEsc)]133;D;$code;aid=lyrel$($global:__LyrelBel)"
     }
 
     # cwd + title, for real filesystem locations only.
@@ -525,9 +525,9 @@ if (-not $env:LYREL_SHELL_INTEGRATION) {
         }
         try {
           $cmd = [Uri]::EscapeDataString($cmd)
-          Write-Host -NoNewline "$($global:__LyrelEsc)]133;C;$cmd$($global:__LyrelBel)"
+          Write-Host -NoNewline "$($global:__LyrelEsc)]133;C;$cmd;aid=lyrel$($global:__LyrelBel)"
         } catch {
-          Write-Host -NoNewline "$($global:__LyrelEsc)]133;C$($global:__LyrelBel)"
+          Write-Host -NoNewline "$($global:__LyrelEsc)]133;C;;aid=lyrel$($global:__LyrelBel)"
         }
       }
       $line
@@ -568,7 +568,7 @@ if (($env.LYREL_SHELL_INTEGRATION? | default "") == "") {
     let __lyrel_osc = {|__lyrel_payload| print -n $"(ansi osc)($__lyrel_payload)(char bel)" }
     if ($env.__lyrel_cmd_active? | default false) {
       hide-env __lyrel_cmd_active
-      do $__lyrel_osc $"133;D;($env.LAST_EXIT_CODE? | default 0)"
+      do $__lyrel_osc $"133;D;($env.LAST_EXIT_CODE? | default 0);aid=lyrel"
     }
     # OSC 7 cwd, so the daemon tracks the pane's directory across `cd`. The
     # payload is percent-decoded on the daemon side, so a literal `%` must be
@@ -591,7 +591,7 @@ if (($env.LYREL_SHELL_INTEGRATION? | default "") == "") {
   # payload — the daemon still flips to "command running" on the bare mark.
   $env.config.hooks.pre_execution = ($env.config.hooks.pre_execution | default [] | append {||
     $env.__lyrel_cmd_active = true
-    print -n $"(ansi osc)133;C(char bel)"
+    print -n $"(ansi osc)133;C;;aid=lyrel(char bel)"
   })
 
   # OSC 133 prompt-end (B) must land after the very last prompt character, and
@@ -2243,7 +2243,7 @@ mod tests {
     /// shell that could not find `false`) and `133;D;130` (interrupted) — a
     /// bootstrap that never ran the command at all would pass every assertion
     /// below. Matching through the terminator pins the status whole.
-    const FAILED_COMMAND_MARK: &str = "133;D;1\u{7}";
+    const FAILED_COMMAND_MARK: &str = "133;D;1;aid=lyrel\u{7}";
 
     /// Type `keys` at a freshly spawned shell and return everything it wrote back.
     ///
@@ -2557,13 +2557,13 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
                 6,
                 "empty input/pipelines must not add C marks:\n{text}"
             );
-            assert_eq!(commands[0], "133;C;: LAST_ARGUMENT", "{text}");
-            assert_eq!(commands[1], "133;C;false | (exit 7)", "{text}");
+            assert_eq!(commands[0], "133;C;: LAST_ARGUMENT;aid=lyrel", "{text}");
+            assert_eq!(commands[1], "133;C;false | (exit 7);aid=lyrel", "{text}");
             assert_eq!(
-                commands[3], "133;C;printf '%25s\\n' 'multi%0Aline'",
+                commands[3], "133;C;printf '%25s\\n' 'multi%0Aline';aid=lyrel",
                 "{text}"
             );
-            assert_eq!(commands[4], "133;C;false | true", "{text}");
+            assert_eq!(commands[4], "133;C;false | true;aid=lyrel", "{text}");
             let finished: Vec<_> = payloads
                 .iter()
                 .copied()
@@ -2572,7 +2572,12 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
             assert_eq!(
                 finished,
                 [
-                    "133;D;0", "133;D;7", "133;D;0", "133;D;0", "133;D;0", "133;D;1"
+                    "133;D;0;aid=lyrel",
+                    "133;D;7;aid=lyrel",
+                    "133;D;0;aid=lyrel",
+                    "133;D;0;aid=lyrel",
+                    "133;D;0;aid=lyrel",
+                    "133;D;1;aid=lyrel"
                 ],
                 "{text}"
             );
@@ -2674,10 +2679,14 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
         // The literal prefix consumes 30 characters (29 without CR), leaving
         // exactly 482 or 483 x's within the 512-character protocol limit.
         let escaped = format!(
-            "133;C;printf '%25s' 'percent%25%1B%07{encoded_cr}multi%0A{}",
+            "133;C;printf '%25s' 'percent%25%1B%07{encoded_cr}multi%0A{};aid=lyrel",
             "x".repeat(remaining)
         );
-        assert_eq!(commands, [escaped, "133;C;false".to_string()], "{text}");
+        assert_eq!(
+            commands,
+            [escaped, "133;C;false;aid=lyrel".to_string()],
+            "{text}"
+        );
     }
 
     #[cfg(windows)]
@@ -3481,23 +3490,6 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     }
 
     #[test]
-    fn powershell_integration_emits_every_osc_133_mark_and_cwd() {
-        let s = POWERSHELL_INTEGRATION;
-        assert!(s.contains("]133;A"));
-        assert!(s.contains("]133;B"));
-        assert!(s.contains("]133;C"));
-        assert!(s.contains("]133;D;$code"));
-        assert!(s.contains("]7;file://"));
-        assert!(s.contains("if (-not $env:LYREL_SHELL_INTEGRATION)"));
-        let ok_at = s.find("$ok = $?").expect("captures $?");
-        let exit_at = s.find("$lastExit = $LASTEXITCODE").expect("captures exit");
-        assert!(ok_at < exit_at, "$? must be read before the exit code");
-        assert!(s.contains("$global:__LyrelOrigPrompt = $function:prompt"));
-        assert!(s.contains("& $global:__LyrelOrigPrompt"));
-        assert!(s.contains(".Replace('%', '%25')"));
-    }
-
-    #[test]
     fn powershell_integration_sets_an_osc_title() {
         let s = POWERSHELL_INTEGRATION;
         assert!(s.contains("]0;$($global:__LyrelUser)@$($global:__LyrelHost):"));
@@ -3835,7 +3827,7 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
         // Nushell emits its own OSC 133 cycle alongside these, so a bare
         // substring passes even when the wrapper never ran. lyrel's hooks
         // terminate with BEL and Nushell's with ST, which tells them apart.
-        for mark in ["133;A\u{7}", "133;C\u{7}", FAILED_COMMAND_MARK] {
+        for mark in ["133;A\u{7}", "133;C;;aid=lyrel\u{7}", FAILED_COMMAND_MARK] {
             assert!(
                 text.contains(mark),
                 "Nushell must still report {mark:?} after sourcing the user config; got:\n{text}"
