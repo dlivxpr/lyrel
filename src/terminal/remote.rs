@@ -4446,6 +4446,18 @@ mod replay_tests {
         false
     }
 
+    /// Direct PTY input does not order against the client's asynchronous resize.
+    /// Wait for its Size echo before recording the markers replayed by a new view.
+    fn wait_for_columns(term: &RemoteTerminal, expected: usize) -> bool {
+        for _ in 0..600 {
+            if columns(term) == expected {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        false
+    }
+
     /// Types `line` at the pane until the grid echoes `needle` back, and
     /// answers whether it ever did.
     ///
@@ -4505,6 +4517,10 @@ mod replay_tests {
         // pane is not 80x24 on screen, so the real geometry goes down the link
         // and the grid waits for the daemon to echo it back.
         first.resize(TermSize::new(120, 40), 8, 17);
+        assert!(
+            wait_for_columns(&first, 120),
+            "the initial resize was not acknowledged before preparing the replay"
+        );
         assert!(
             type_until_echoed(
                 &pane,
@@ -4590,6 +4606,10 @@ mod replay_tests {
 
         let (first_epoch, mut first, first_forward) = attach_client(&pane);
         first.resize(TermSize::new(120, 40), 8, 17);
+        assert!(
+            wait_for_columns(&first, 120),
+            "the initial resize was not acknowledged before preparing the replay"
+        );
         assert!(
             type_until_echoed(&pane, b"echo RACED-OUTPUT\r", &first, "RACED-OUTPUT"),
             "the pane never echoed; grid held:\n{}",
