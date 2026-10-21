@@ -1940,7 +1940,10 @@ impl TerminalElement {
                 .as_ref()
                 .and_then(|selection| selection.to_range(&term));
 
-            let cur = term.cursor();
+            let mut cur = term.cursor();
+            if let Some(position) = self.view.read(cx).terminal.paint_cursor_position() {
+                cur.pos = position;
+            }
             let cursor_row = cur.pos.row.0 + display_offset;
             let cursor_hidden = matches!(cur.content, CursorShape::Hidden);
             // TUIs that hide the hardware cursor (Kimi CLI, Ink apps) draw

@@ -3594,12 +3594,13 @@ fn apply_agent_signals(
     events: Vec<crate::core::cli_agent::AgentEvent>,
     notification: Option<String>,
 ) {
-    use crate::core::cli_agent::{AgentSessionState, AgentStatus};
+    use crate::core::cli_agent::{AgentEventKind, AgentSessionState, AgentStatus};
 
     if events.is_empty() && notification.is_none() {
         return;
     }
     let before = st.agent_session.clone();
+    let mut ended_session = false;
 
     for event in &events {
         if event.agent == Some(crate::core::cli_agent::CLIAgent::Kimi)
@@ -3627,6 +3628,28 @@ fn apply_agent_signals(
         {
             continue;
         }
+        if event.kind == AgentEventKind::SessionEnd {
+            if let (Some(current), Some(ended)) = (
+                st.agent_session
+                    .as_ref()
+                    .and_then(|s| s.session_id.as_ref()),
+                event.session_id.as_ref(),
+            ) && current != ended
+            {
+                continue;
+            }
+            // Shutdown releases ownership, not just the turn status. Handle it
+            // before a hook can claim the pane, including after a process probe
+            // has already observed the foreground agent leaving.
+            st.agent_session = None;
+            st.agent_argv = None;
+            st.kimi_observer = None;
+            if st.agent.take().is_some() {
+                notify(st, DaemonMsg::Agent(None));
+            }
+            ended_session = true;
+            continue;
+        }
         if st.agent.is_none() && event.agent.is_some() {
             st.agent = event.agent;
             notify(st, DaemonMsg::Agent(st.agent));
@@ -3634,14 +3657,10 @@ fn apply_agent_signals(
         st.agent_session
             .get_or_insert_with(AgentSessionState::default)
             .apply_event(event);
-        if event.agent == Some(crate::core::cli_agent::CLIAgent::Kimi) {
-            match event.kind {
-                crate::core::cli_agent::AgentEventKind::SessionStart => {
-                    st.kimi_observer = st.agent_session.as_ref().and_then(kimi_observer);
-                }
-                crate::core::cli_agent::AgentEventKind::SessionEnd => st.kimi_observer = None,
-                _ => {}
-            }
+        if event.agent == Some(crate::core::cli_agent::CLIAgent::Kimi)
+            && event.kind == AgentEventKind::SessionStart
+        {
+            st.kimi_observer = st.agent_session.as_ref().and_then(kimi_observer);
         }
     }
 
@@ -3662,7 +3681,7 @@ fn apply_agent_signals(
         sess.launch_argv = Some(argv.clone());
     }
 
-    if st.agent_session != before {
+    if ended_session || st.agent_session != before {
         notify(st, DaemonMsg::AgentStatus(st.agent_session.clone()));
     }
 }
@@ -5976,6 +5995,182 @@ mod tests {
         );
 
         withdraw_observations();
+    }
+
+    #[test]
+    fn an_explicit_agent_exit_clears_the_live_and_reopened_machine_snapshot() {
+        use crate::core::cli_agent::{AgentSessionState, CLIAgent};
+        use crate::core::machine::{
+            MACHINE_FILE, MachineStore, OBSERVE_SLOT, PaneSeed, publish_observations,
+            withdraw_observations,
+        };
+
+        const PANE: u64 = 79;
+        let _slot = OBSERVE_SLOT.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(MACHINE_FILE);
+        let store = MachineStore::open(&path);
+        let ws = store.workspace_create(None, None, None).unwrap();
+        store
+            .tab_create(ws.id, None, PaneSeed::bare(PANE), None, None)
+            .unwrap();
+        publish_observations(&store);
+
+        let mut state = test_state(true);
+        state.id = PANE;
+        state.agent = Some(CLIAgent::OhMyPi);
+        state.agent_argv = Some(vec!["omp".into()]);
+        state.agent_session = Some(AgentSessionState {
+            session_id: Some("explicitly-exited-session".into()),
+            launch_argv: state.agent_argv.clone(),
+            ..Default::default()
+        });
+        publish_facts(PANE, true, observed_facts(&state));
+        store.flush();
+        assert!(
+            MachineStore::open(&path)
+                .pane(PANE)
+                .unwrap()
+                .agent
+                .is_some()
+        );
+
+        let state = Arc::new(Mutex::new(state));
+        let stream = concat!(
+            "\x1b]777;notify;lyrel://cli-agent;",
+            r#"{"agent":"omp","event":"session-end","session_id":"explicitly-exited-session"}"#,
+            "\x07",
+        );
+        DaemonPane::spawn_reader(
+            state.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(OutputGate::new()),
+            Box::new(std::io::Cursor::new(stream.as_bytes().to_vec())),
+            null_writer(),
+            || false,
+            ForegroundProbes {
+                group: Box::new(|| None),
+                remote: Box::new(|| None),
+                // Unsupported or unavailable process probes must not be needed
+                // to honor the agent's own explicit shutdown event.
+                agent: Box::new(|| None),
+                cwd: Box::new(|| None),
+            },
+            Arc::new(DeathReporter::new(|| {})),
+        )
+        .join()
+        .unwrap();
+        store.flush();
+        let saved_agent = MachineStore::open(&path).pane(PANE).unwrap().agent;
+        let live_agent = store.pane(PANE).unwrap().agent;
+        withdraw_observations();
+
+        assert!(
+            saved_agent.is_none(),
+            "an explicitly exited agent must not be restored after restarting the daemon"
+        );
+        assert!(live_agent.is_none(), "the live machine tree must clear too");
+        let state = state.lock().unwrap();
+        assert!(state.agent.is_none());
+        assert!(state.agent_session.is_none());
+        assert!(state.agent_argv.is_none());
+        assert!(agent_state_snapshot(&state).is_none());
+        let (tx, rx) = mpsc::channel();
+        replay_state(&state, &tx, false);
+        assert!(!rx.try_iter().any(|msg| matches!(
+            msg,
+            DaemonMsg::Agent(Some(_)) | DaemonMsg::AgentStatus(Some(_))
+        )));
+    }
+
+    #[test]
+    fn a_finished_or_waiting_turn_keeps_its_reconnect_and_resume_identity() {
+        use crate::core::cli_agent::{AgentStatus, CLIAgent, parse_agent_event_body};
+
+        for (body, expected) in [
+            (
+                r#"{"agent":"omp","event":"prompt-submit"}"#,
+                AgentStatus::Working,
+            ),
+            (r#"{"agent":"omp","event":"stop"}"#, AgentStatus::Done),
+            (
+                r#"{"agent":"omp","event":"permission-request","request":{"id":"approval","kind":"permission"}}"#,
+                AgentStatus::Waiting,
+            ),
+        ] {
+            let mut state = test_state(true);
+            apply_agent(&mut state, Some((CLIAgent::OhMyPi, vec!["omp".into()])));
+            let start = parse_agent_event_body(
+                br#"{"agent":"omp","event":"session-start","session_id":"still-running","session_scope":{"session_file":"/isolated/still-running.jsonl"}}"#,
+            )
+            .unwrap();
+            apply_agent_signals(&mut state, vec![start], None);
+            apply_agent_signals(
+                &mut state,
+                vec![parse_agent_event_body(body.as_bytes()).unwrap()],
+                None,
+            );
+            let snapshot = agent_state_snapshot(&state).expect("reconnect keeps a live agent");
+            assert_eq!(snapshot.agent, Some(CLIAgent::OhMyPi));
+            assert_eq!(snapshot.state.status, expected);
+            assert_eq!(snapshot.state.session_id.as_deref(), Some("still-running"));
+            let facts = observed_facts(&state)
+                .agent
+                .expect("resume identity is kept");
+            assert_eq!(facts.session_id, snapshot.state.session_id);
+            assert_eq!(facts.launch_argv, Some(vec!["omp".into()]));
+            assert!(facts.session_scope.is_some());
+            let (tx, rx) = mpsc::channel();
+            replay_state(&state, &tx, true);
+            let replay: Vec<_> = rx.try_iter().collect();
+            assert!(
+                replay
+                    .iter()
+                    .any(|msg| matches!(msg, DaemonMsg::Agent(Some(CLIAgent::OhMyPi))))
+            );
+            assert!(replay.iter().any(|msg| matches!(
+                msg,
+                DaemonMsg::AgentStatus(Some(session)) if session == &snapshot.state
+            )));
+        }
+    }
+
+    #[test]
+    fn a_shutdown_after_the_foreground_exit_does_not_reclaim_the_pane() {
+        use crate::core::cli_agent::{CLIAgent, parse_agent_event_body};
+
+        let mut state = test_state(true);
+        apply_agent(&mut state, Some((CLIAgent::OhMyPi, vec!["omp".into()])));
+        apply_agent(&mut state, None);
+        let ended = parse_agent_event_body(
+            br#"{"agent":"omp","event":"session-end","session_id":"already-exited"}"#,
+        )
+        .unwrap();
+        apply_agent_signals(&mut state, vec![ended], None);
+        assert!(state.agent.is_none());
+        assert!(state.agent_session.is_none());
+        assert!(observed_facts(&state).agent.is_none());
+    }
+
+    #[test]
+    fn a_late_shutdown_from_the_previous_session_does_not_clear_the_current_agent() {
+        use crate::core::cli_agent::{CLIAgent, parse_agent_event_body};
+
+        let mut state = test_state(true);
+        apply_agent(&mut state, Some((CLIAgent::OhMyPi, vec!["omp".into()])));
+        let start = parse_agent_event_body(
+            br#"{"agent":"omp","event":"session-start","session_id":"current-session"}"#,
+        )
+        .unwrap();
+        apply_agent_signals(&mut state, vec![start], None);
+        let before = state.agent_session.clone();
+        let ended = parse_agent_event_body(
+            br#"{"agent":"omp","event":"session-end","session_id":"previous-session"}"#,
+        )
+        .unwrap();
+        apply_agent_signals(&mut state, vec![ended], None);
+        assert_eq!(state.agent, Some(CLIAgent::OhMyPi));
+        assert_eq!(state.agent_session, before);
     }
 
     /// The whole path a title takes into the tree: sniffed out of the pane's

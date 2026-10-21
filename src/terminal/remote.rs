@@ -107,6 +107,8 @@ pub struct EventProxy {
 struct ParseState {
     replaying: AtomicBool,
     history_limit: AtomicUsize,
+    /// ConPTY's transient visible caret, never a VT parsing position.
+    paint_cursor: Mutex<Option<rio_vt::crosswords::pos::Pos>>,
 }
 
 impl EventProxy {
@@ -1250,6 +1252,7 @@ impl RemoteTerminal {
             parse_state: Arc::new(ParseState {
                 replaying: AtomicBool::new(false),
                 history_limit: AtomicUsize::new(user_config.scrollback_limit),
+                paint_cursor: Mutex::new(None),
             }),
         };
 
@@ -1446,6 +1449,7 @@ impl RemoteTerminal {
                 // daemon's replay (an attach or a relink), which it sends
                 // entirely as `Snapshot`s followed by the stored state.
                 let mut replaying_state = true;
+                *proxy.parse_state.paint_cursor.lock().unwrap() = None;
                 let mut cursor_scan = ParkedCursorScanner::new();
                 let mut parked_cursor = ParkedCursorRepair::default();
                 // #837: the command marks, cut at exactly where they land so
@@ -1525,6 +1529,13 @@ impl RemoteTerminal {
                                 }
                                 command_cuts(&mut command_tok, &out_batch, &mut cuts);
                                 title_cuts(&mut title_tok, &mut title_life, &out_batch, &mut cuts);
+                                let cursor_at_end = cuts.last().is_some_and(|(off, cut)| {
+                                    *off == out_batch.len() && matches!(cut, ReaderCut::Parked(_))
+                                });
+                                let mut cuts_left = cuts.len();
+                                if local_conpty.load(Ordering::Relaxed) {
+                                    *proxy.parse_state.paint_cursor.lock().unwrap() = None;
+                                }
                                 {
                                     let t0 = trace.then(std::time::Instant::now);
                                     let Some(waited) = feed_grid(
@@ -1536,17 +1547,23 @@ impl RemoteTerminal {
                                         cuts,
                                         Some(&proxy.parse_state.history_limit),
                                         &quit,
-                                        |term, cut| match cut {
-                                            ReaderCut::Parked(cut) => {
-                                                parked_cursor.apply(term, cut)
+                                        |term, cut| {
+                                            cuts_left -= 1;
+                                            match cut {
+                                                ReaderCut::Parked(cut) => {
+                                                    let position = parked_cursor.apply(term, cut);
+                                                    if cursor_at_end && cuts_left == 0 {
+                                                        *proxy.parse_state.paint_cursor.lock().unwrap() = position;
+                                                    }
+                                                }
+                                                ReaderCut::Command(mark) => {
+                                                    command_cursor.apply(term, mark)
+                                                }
+                                                ReaderCut::Prompt(mark) => {
+                                                    prompt_break.apply(term, mark)
+                                                }
+                                                ReaderCut::RetireTitle => term.set_title(None),
                                             }
-                                            ReaderCut::Command(mark) => {
-                                                command_cursor.apply(term, mark)
-                                            }
-                                            ReaderCut::Prompt(mark) => {
-                                                prompt_break.apply(term, mark)
-                                            }
-                                            ReaderCut::RetireTitle => term.set_title(None),
                                         },
                                     ) else {
                                         return;
@@ -1555,6 +1572,9 @@ impl RemoteTerminal {
                                         tr_lock_t += waited;
                                         tr_adv_t += t0.elapsed() - waited;
                                     }
+                                }
+                                if cursor_at_end && processor.sync_timeout().sync_timeout().is_some() {
+                                    *proxy.parse_state.paint_cursor.lock().unwrap() = None;
                                 }
                                 if let Ok(mut notes) = osc_notes.lock() {
                                     osc.feed(&out_batch, &mut *notes);
@@ -1663,6 +1683,7 @@ impl RemoteTerminal {
                             // this frame must be parsed into the old grid.
                             DaemonMsg::Size(ws) => {
                                 flush_batch!();
+                                *proxy.parse_state.paint_cursor.lock().unwrap() = None;
                                 // A live echo lands just before the shell's
                                 // SIGWINCH redraw; a replayed Size heads old
                                 // bytes that nothing is going to repaint.
@@ -1688,6 +1709,7 @@ impl RemoteTerminal {
                                 flush_batch!();
                                 cursor_scan.reset();
                                 parked_cursor.reset();
+                                *proxy.parse_state.paint_cursor.lock().unwrap() = None;
                                 proxy.parse_state.replaying.store(true, Ordering::Relaxed);
                                 // The replay carries the command marks too, so
                                 // a pane reattached after `nvim` exited in it
@@ -2053,6 +2075,14 @@ impl RemoteTerminal {
         self.local_conpty.load(Ordering::Relaxed)
     }
 
+    pub(super) fn paint_cursor_position(&self) -> Option<rio_vt::crosswords::pos::Pos> {
+        if self.is_local_conpty() {
+            *self.proxy.parse_state.paint_cursor.lock().unwrap()
+        } else {
+            None
+        }
+    }
+
     pub(super) fn color_scheme_updates(&self) -> bool {
         self.color_scheme_updates.load(Ordering::Relaxed)
     }
@@ -2135,6 +2165,7 @@ impl RemoteTerminal {
         self.synced_size = true;
         self.size = size;
         self.synced_cell = cell;
+        *self.proxy.parse_state.paint_cursor.lock().unwrap() = None;
         if !echoed {
             let shell_redraws = !self.is_local_conpty() && self.at_prompt();
             super::prompt_reflow::resize(
@@ -5022,13 +5053,57 @@ mod parked_cursor_tests {
                     [rio_vt::crosswords::pos::Column(1)]
                 .c();
                 if painted == 'X' {
-                    let point = t.grid.cursor.pos;
+                    let point = term.paint_cursor_position().unwrap_or(t.grid.cursor.pos);
                     return (point.row.0, point.col.0);
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("the reader never applied the frame");
+    }
+
+    #[test]
+    fn streaming_lines_keep_the_previous_frame_before_the_final_repaint() {
+        use rio_vt::crosswords::pos::{Column, Line};
+
+        for pty in [PtySource::Raw, PtySource::LocalConpty] {
+            let (term, mut daemon) = terminal_on(pty, TermSize::new(40, 10));
+            for frame in [
+                b"\x1b[2;1H\x1b[?25l\x1b[2;1Hthinking first\r\nthinking second\x1b[?25h".as_slice(),
+                b"\r\nthinking third".as_slice(),
+            ] {
+                DaemonMsg::Output(frame.to_vec())
+                    .encode(&mut daemon)
+                    .unwrap();
+                daemon.flush().unwrap();
+                let expected = if frame.ends_with(b"third") { 't' } else { 's' };
+                let row = if expected == 't' { 3 } else { 2 };
+                for _ in 0..200 {
+                    if term.term.lock().grid[Line(row)][Column(9)].c() == expected {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+            let grid = term.term.lock();
+            let row = |line| {
+                (0..40)
+                    .map(|col| match grid.grid[Line(line)][Column(col)].c() {
+                        '\0' => ' ',
+                        ch => ch,
+                    })
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            };
+            assert_eq!(row(1), "thinking first", "{pty:?}");
+            assert_eq!(
+                row(2),
+                "thinking second",
+                "streaming overwrote a previous row: {pty:?}"
+            );
+            assert_eq!(row(3), "thinking third", "{pty:?}");
+        }
     }
 
     #[test]
