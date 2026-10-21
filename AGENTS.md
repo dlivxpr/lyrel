@@ -70,7 +70,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 - GPUI 使用 `Entity` 保存视图状态、`Global` 保存应用级状态。异步沿用 `cx.spawn`、`background_executor`，完成后通过实体／context 更新 UI；Host 阻塞调用不能放在 UI 线程。
 - daemon 使用 std 线程与 channel，SSH 引擎有自己的 Tokio runtime；不要将 GUI 与 daemon 视为同一个异步执行环境。
 - CLI 的依赖替换点是 `crates/lyrel-cli/src/backend.rs` 的 `Backend` trait；沿用真实 backend 与测试替身的分层。
-- Host/文件操作返回 `io::Result`；二进制边界使用 `anyhow` 和错误上下文。GUI 可见失败沿用 `HostOps::run_or_notify`／error notification，保留 CLI 的错误链与子进程退出码。
+- Host/文件操作返回 `io::Result`；二进制边界使用 `anyhow` 和错误上下文。GUI 通过 `HostOps::run_in` 执行操作，在完成回调中用 `HostOps::notify_err`／error notification 展示失败，保留 CLI 的错误链与子进程退出码。
 - 修改终端输出热路径时保留隐藏 pane 的通知门控，避免不可见输出触发整窗重绘，见 `src/terminal/view.rs`。
 - 修改 UI 先读 `docs/design-system.md`；颜色取自 `src/ui/presets.rs` 与 `src/ui/theme.rs` 的语义角色。新增文案通过 `src/ui/i18n/` 的 `L10nKey`，同步 `en`、`zh-CN` 翻译；`system` 仅为配置选择模式，不是第三种翻译语言。语言解析规则见 `docs/customization/settings.mdx`，不得用 PTY locale 代替 OS 界面语言。
 - 修改 IPC 前读 `crates/lyrel-core/src/daemon/control.rs` 与 `crates/lyrel-core/src/daemon/protocol.rs`。增删 control 消息变体需提升 `CONTROL_VERSION`；可忽略字段按 feature 协商。pane 协议另有版本，不能混用。

@@ -17,9 +17,7 @@ pub mod forwards;
 pub mod github;
 pub mod hints;
 pub mod home;
-#[allow(dead_code)]
 pub mod host_ops;
-#[allow(dead_code)]
 pub mod host_registry;
 pub mod i18n;
 pub(crate) mod ime;

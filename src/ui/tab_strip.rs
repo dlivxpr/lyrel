@@ -57,7 +57,7 @@ fn shell_spec(shell: &DetectedShell) -> ShellSpec {
 pub(crate) use lyrel_core::core::tab_view::strip_host_prefix;
 
 /// `home` is the home directory of the machine `path` is on, from
-/// [`Tab::leaf_title_and_home`](crate::ui::app::Tab::leaf_title_and_home) or
+/// [`Tab::label_view`](crate::ui::app::Tab::label_view) or
 /// the workspace's host; `None` leaves the path spelled out (#580).
 pub(crate) fn abbreviate_home<'a>(
     path: &'a str,
@@ -1284,50 +1284,6 @@ pub(crate) fn agent_status_label(
 pub(crate) const LIVE_DOT: u32 = 0x22C55E;
 
 pub(crate) const UNKNOWN_DOT: u32 = 0x9AA0A6;
-
-#[allow(dead_code)]
-pub(crate) fn workspace_avatar(
-    name: &str,
-    live: crate::terminal::pane_liveness::Liveness,
-    size: f32,
-    cx: &App,
-) -> impl IntoElement + use<> {
-    use crate::terminal::pane_liveness::Liveness;
-    let dot = match live {
-        Liveness::Alive => Some(LIVE_DOT),
-        Liveness::Unknown => Some(UNKNOWN_DOT),
-        Liveness::Stopped => None,
-    };
-    let initial: String = name
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "~".to_string());
-    // The disc reads the same on every row, current one included: the rows that
-    // are the current workspace already say so with a badge, a heavier name and
-    // a selected background, and dimming the disc on top of that only pushed the
-    // monogram under the liveness dot beside it, which is never dimmed.
-    div()
-        .relative()
-        .flex_shrink_0()
-        .size(px(size))
-        .child(
-            div()
-                .size(px(size))
-                .rounded_full()
-                .bg(cx.theme().secondary)
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px((size * 0.46).round()))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(cx.theme().foreground.opacity(0.65))
-                .child(initial),
-        )
-        .children(
-            dot.map(|rgb| LyrelApp::status_dot(rgb, 0, size, cx.theme().popover, false, false)),
-        )
-}
 
 pub(crate) fn select_workspace_action(index: usize) -> Option<Box<dyn gpui_kit::Action>> {
     Some(match index {

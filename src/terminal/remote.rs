@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 use std::io::Read as _;
 use std::path::PathBuf;
@@ -28,11 +26,10 @@ use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use crate::core::config::CursorStyle as ConfigCursorStyle;
 use crate::core::osc::{Note, NoteBudget, OscTokenizer, TitleEffect, TitleLifetime};
 use crate::daemon::protocol::{
-    AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, KnownHostEntry, KnownHostId,
-    LoopbackForward, LoopbackForwardRequest, ManagedForward, NativeSshSpec, PaneProcs,
-    RemoteContext, RemoteKind, RestoreFrom, SftpEntry, SftpJobProgress, SftpOp, SftpOpResult,
-    SftpTransferSpec, ShellSpec, SshForwardRule, SshPhase, SshTestReport, WinSize, WorkspaceOp,
-    WorkspaceRequest,
+    AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, LoopbackForward, LoopbackForwardRequest,
+    ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RemoteKind, RestoreFrom, SftpEntry,
+    SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, ShellSpec, SshForwardRule, SshPhase,
+    WinSize, WorkspaceOp, WorkspaceRequest,
 };
 use crate::daemon::transport::{self, Stream};
 use gpui_kit::EntityId;
@@ -816,26 +813,6 @@ fn spawn_workspace(owner: Option<&str>, route: &PaneRoute) -> Option<String> {
 }
 
 impl RemoteTerminal {
-    pub fn spawn(
-        size: TermSize,
-        cell_w: u16,
-        cell_h: u16,
-        cwd: Option<PathBuf>,
-        shell: Option<ShellSpec>,
-    ) -> anyhow::Result<(Self, u64)> {
-        Self::spawn_on(
-            &PaneRoute::Local,
-            size,
-            cell_w,
-            cell_h,
-            cwd,
-            shell,
-            None,
-            None,
-            None,
-        )
-    }
-
     pub fn spawn_on(
         route: &PaneRoute,
         size: TermSize,
@@ -1019,10 +996,6 @@ impl RemoteTerminal {
         if let Ok(mut guard) = self.cwd.lock() {
             guard.get_or_insert(cwd);
         }
-    }
-
-    pub fn attach(size: TermSize, cell_w: u16, cell_h: u16, pane_id: u64) -> anyhow::Result<Self> {
-        Self::attach_on(&PaneRoute::Local, size, cell_w, cell_h, pane_id)
     }
 
     pub fn attach_on(
@@ -1209,8 +1182,8 @@ impl RemoteTerminal {
         )
     }
 
-    /// A pane on a pty of this machine's own — what the tests build, and what
-    /// `spawn_on` narrows with the route it dialled.
+    /// A test pane backed by a pty of this machine's own.
+    #[cfg(test)]
     pub(super) fn from_stream(stream: Stream, size: TermSize) -> anyhow::Result<Self> {
         Self::from_stream_with(
             stream,
@@ -2306,10 +2279,6 @@ impl RemoteTerminal {
         self.size
     }
 
-    pub fn list_panes() -> Vec<crate::daemon::protocol::PaneInfo> {
-        Self::list_panes_on(&PaneRoute::Local)
-    }
-
     pub fn list_panes_on(route: &PaneRoute) -> Vec<crate::daemon::protocol::PaneInfo> {
         Self::try_list_panes_on(route).unwrap_or_default()
     }
@@ -2323,10 +2292,6 @@ impl RemoteTerminal {
             DaemonMsg::PaneList(list) => Ok(list),
             other => Err(anyhow::anyhow!("unexpected reply to List: {other:?}")),
         }
-    }
-
-    pub fn kill_pane(pane_id: u64) {
-        Self::kill_pane_on(&PaneRoute::Local, pane_id)
     }
 
     pub fn kill_pane_on(route: &PaneRoute, pane_id: u64) {
@@ -2486,61 +2451,6 @@ impl RemoteTerminal {
         });
     }
 
-    /// The client half of known-hosts management.
-    ///
-    /// Nothing calls this yet: there is no known-hosts surface in the window or
-    /// the CLI. What sits behind it is not a stub, though — `ssh::known_hosts`
-    /// parses the real file, fingerprints each key, and rewrites through a
-    /// 0600 temp file — so this is an interface waiting for a screen, not
-    /// scaffolding around nothing. Deleting it would throw away the finished
-    /// half of the feature.
-    pub fn list_known_hosts() -> Vec<KnownHostEntry> {
-        fn query() -> anyhow::Result<Vec<KnownHostEntry>> {
-            let mut stream = connect()?;
-            ClientMsg::ListKnownHosts.encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::KnownHostsList(list) => Ok(list),
-                other => Err(anyhow::anyhow!(
-                    "unexpected reply to ListKnownHosts: {other:?}"
-                )),
-            }
-        }
-        query().unwrap_or_default()
-    }
-
-    /// Ask the daemon to dial this spec and say what happened. Blocking, and
-    /// bounded by the spec's own connect timeout on the far side — call it off
-    /// the UI thread.
-    pub fn test_ssh(spec: Box<NativeSshSpec>) -> SshTestReport {
-        fn query(spec: Box<NativeSshSpec>) -> anyhow::Result<SshTestReport> {
-            let mut stream = connect()?;
-            ClientMsg::TestSsh { spec }.encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::SshTestResult(report) => Ok(report),
-                other => Err(anyhow::anyhow!("unexpected reply to TestSsh: {other:?}")),
-            }
-        }
-        query(spec).unwrap_or_else(|e| SshTestReport::Failed {
-            reason: e.to_string(),
-        })
-    }
-
-    /// See [`Self::list_known_hosts`] — same story, and it returns the list
-    /// after the removal so a caller can redraw from one round trip.
-    pub fn delete_known_host(id: KnownHostId) -> Vec<KnownHostEntry> {
-        fn query(id: KnownHostId) -> anyhow::Result<Vec<KnownHostEntry>> {
-            let mut stream = connect()?;
-            ClientMsg::DeleteKnownHost(id).encode(&mut stream)?;
-            match DaemonMsg::read(&mut stream)? {
-                DaemonMsg::KnownHostsList(list) => Ok(list),
-                other => Err(anyhow::anyhow!(
-                    "unexpected reply to DeleteKnownHost: {other:?}"
-                )),
-            }
-        }
-        query(id).unwrap_or_default()
-    }
-
     pub fn sftp_list(pane_id: u64, path: &str) -> Result<Vec<SftpEntry>, String> {
         fn query(pane_id: u64, path: String) -> anyhow::Result<Result<Vec<SftpEntry>, String>> {
             let mut stream = connect()?;
@@ -2695,20 +2605,6 @@ impl RemoteTerminal {
         match DaemonMsg::read(&mut stream)? {
             DaemonMsg::Error(msg) => Err(anyhow::anyhow!(msg)),
             reply => Ok(reply),
-        }
-    }
-
-    pub fn on_workspace_forwards(req: WorkspaceRequest) -> Vec<ManagedForward> {
-        match Self::on_workspace(req) {
-            Ok(DaemonMsg::ForwardList(list)) => list,
-            Ok(other) => {
-                log::warn!("unexpected reply to a workspace forward request: {other:?}");
-                Vec::new()
-            }
-            Err(e) => {
-                log::warn!("workspace forward request failed: {e}");
-                Vec::new()
-            }
         }
     }
 
