@@ -248,13 +248,40 @@ mod macos {
                 .arg(replacement),
             "verifying the staged app's code signature",
         )?;
-        let current_requirement = signing_requirement(current)?;
-        let replacement_requirement = signing_requirement(replacement)?;
-        if current_requirement != replacement_requirement {
+        let current_identity = signing_identity(current)?;
+        let replacement_identity = signing_identity(replacement)?;
+        if current_identity.identifier != replacement_identity.identifier {
             return Err(format!(
-                "the staged app has a different designated requirement: current \
-                 {current_requirement:?}, staged {replacement_requirement:?}"
+                "the staged app has a different code-signing identifier: current {:?}, staged {:?}",
+                current_identity.identifier, replacement_identity.identifier
             ));
+        }
+        if current_identity.ad_hoc {
+            // Ad-hoc signatures have no publisher identity; their synthesized
+            // requirements pin a cdhash that changes on every release. The
+            // authenticated release download and archive checksum remain the
+            // trust boundary, with a sealed signature and stable bundle id.
+            if !replacement_identity.ad_hoc {
+                return Err("the staged app has a different code-signing posture".to_string());
+            }
+        } else {
+            if replacement_identity.ad_hoc {
+                return Err(
+                    "the staged ad-hoc app cannot satisfy the current app's code-signing requirement"
+                        .to_string(),
+                );
+            }
+            // A displayed requirement is a claim, not evidence. Ask codesign
+            // to evaluate the installed identity against the replacement,
+            // retaining its certificate/anchor constraints instead of merely
+            // comparing the displayed requirement strings.
+            run_checked(
+                Command::new("/usr/bin/codesign")
+                    .args(["--verify", "--deep", "--strict", "-R"])
+                    .arg(format!("={}", current_identity.requirement))
+                    .arg(replacement),
+                "verifying the current app's code-signing requirement against the staged app",
+            )?;
         }
         Ok(())
     }
@@ -274,30 +301,30 @@ mod macos {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    /// The designated requirement out of what `codesign -d -r-` printed.
-    ///
-    /// Split from the call below so the parse can be exercised without a
-    /// bundle to point at — which is why nothing caught it reading the wrong
-    /// stream. `codesign` writes the requirement to **stdout** and puts only
-    /// the `-d` display header (`Executable=…`) on stderr, so a parse that
-    /// read stderr could never match: every in-app update on macOS failed
-    /// with "codesign did not report a designated requirement", on every
-    /// build and every release, with nothing a user could do about it (#708).
-    ///
-    /// Both streams are read, stdout first. Which stream carries which half is
-    /// codesign's own business and has moved before; a requirement found
-    /// anywhere in the output is the requirement, and the updater has no
-    /// reason to be the stricter party about where it was printed.
+    /// codesign prints synthesized ad-hoc requirements as `# designated =>`
+    /// and embedded requirements as `designated =>`, on either output stream.
     fn designated_requirement(stdout: &str, stderr: &str) -> Option<String> {
         [stdout, stderr]
             .into_iter()
             .flat_map(str::lines)
-            .find_map(|line| line.strip_prefix("designated => ").map(str::to_string))
+            .find_map(|line| {
+                line.strip_prefix("# ")
+                    .unwrap_or(line)
+                    .strip_prefix("designated => ")
+                    .filter(|requirement| !requirement.is_empty())
+                    .map(str::to_string)
+            })
     }
 
-    fn signing_requirement(app: &Path) -> Result<String, String> {
+    struct SigningIdentity {
+        identifier: String,
+        requirement: String,
+        ad_hoc: bool,
+    }
+
+    fn signing_identity(app: &Path) -> Result<SigningIdentity, String> {
         let output = Command::new("/usr/bin/codesign")
-            .args(["-d", "-r-"])
+            .args(["-d", "--verbose=4", "-r-"])
             .arg(app)
             .output()
             .map_err(|error| {
@@ -313,11 +340,21 @@ mod macos {
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        designated_requirement(
-            &String::from_utf8_lossy(&output.stdout),
-            &String::from_utf8_lossy(&output.stderr),
-        )
-        .ok_or_else(|| "codesign did not report a designated requirement".to_string())
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut lines = stdout.lines().chain(stderr.lines());
+        let identifier = lines
+            .clone()
+            .find_map(|line| line.strip_prefix("Identifier="))
+            .filter(|identifier| !identifier.is_empty())
+            .ok_or_else(|| "codesign did not report a code-signing identifier".to_string())?;
+        let requirement = designated_requirement(&stdout, &stderr)
+            .ok_or_else(|| "codesign did not report a designated requirement".to_string())?;
+        Ok(SigningIdentity {
+            identifier: identifier.to_string(),
+            requirement,
+            ad_hoc: lines.any(|line| line == "Signature=adhoc"),
+        })
     }
 
     fn replace_and_relaunch(
@@ -475,20 +512,8 @@ mod macos {
     mod tests {
         use super::*;
 
-        /// The stream split, held against `codesign` itself rather than
-        /// against what the updater believes about it.
-        ///
-        /// This is the test #708 was missing. The parse read stderr, where
-        /// `codesign` puts only the display header, so every in-app update on
-        /// macOS failed — and no unit test could see it, because the parse was
-        /// fused to the process call and the process needs a signed bundle.
-        ///
-        /// `/bin/ls` is that bundle: Apple-signed, present on every macOS, and
-        /// it answers `-d -r-` with a designated requirement of its own. If
-        /// this ever fails because the requirement moved streams again, the
-        /// function under test already reads both — so it failing means
-        /// `codesign` stopped printing one at all, which the updater must not
-        /// discover from a user's failed update.
+        /// Keep a certificate-signed fixture alongside the ad-hoc bundles below:
+        /// their embedded and synthesized requirements have different prefixes.
         #[test]
         fn the_designated_requirement_is_read_off_the_stream_codesign_uses() {
             let out = Command::new("/usr/bin/codesign")
@@ -505,13 +530,6 @@ mod macos {
                 requirement.contains("identifier"),
                 "a designated requirement names an identifier: {requirement:?}"
             );
-
-            // Named rather than merely relied on: the updater used to read
-            // only the stream that carries none of it.
-            assert!(
-                stdout.contains("designated => "),
-                "the requirement is on stdout; if this moved, so must the doc above"
-            );
         }
 
         /// Reading both streams is what keeps the choice above from being a
@@ -523,8 +541,130 @@ mod macos {
 
             assert_eq!(designated_requirement(line, "Executable=/x"), want);
             assert_eq!(designated_requirement("Executable=/x", line), want);
+            let synthesized = format!("# {line}");
+            assert_eq!(designated_requirement(&synthesized, ""), want);
+            assert_eq!(designated_requirement("", &synthesized), want);
+            assert_eq!(designated_requirement("designated => ", ""), None);
             assert_eq!(designated_requirement("Executable=/x", ""), None);
             assert_eq!(designated_requirement("", ""), None);
+        }
+
+        fn signed_bundle(path: &Path, version: &str, identifier: &str) {
+            fs::create_dir_all(path.join("Contents/MacOS")).unwrap();
+            fs::write(
+                path.join("Contents/Info.plist"),
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>{identifier}</string>
+<key>CFBundleExecutable</key><string>lyrel-app</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>{version}</string>
+</dict></plist>"#
+                ),
+            )
+            .unwrap();
+            for executable in ["lyrel-app", "lyrel-updater"] {
+                fs::copy("/bin/ls", path.join("Contents/MacOS").join(executable)).unwrap();
+            }
+            run_checked(
+                Command::new("/usr/bin/codesign")
+                    .args(["--force", "--deep", "--sign", "-"])
+                    .arg(path),
+                "ad-hoc signing the isolated test bundle",
+            )
+            .unwrap();
+        }
+
+        #[test]
+        fn verify_accepts_an_ad_hoc_update_with_a_new_cdhash() {
+            let root = tempfile::tempdir().unwrap();
+            let current = root.path().join("current.app");
+            let replacement = root.path().join("replacement.app");
+            signed_bundle(&current, "0.1.1", "io.github.dlivxpr.lyrel");
+            signed_bundle(&replacement, "0.1.2", "io.github.dlivxpr.lyrel");
+
+            let current_requirement = signing_identity(&current).unwrap().requirement;
+            let replacement_requirement = signing_identity(&replacement).unwrap().requirement;
+            assert_ne!(current_requirement, replacement_requirement);
+            verify_update(&current, &replacement, "0.1.2").unwrap();
+        }
+
+        #[test]
+        fn verify_rejects_an_ad_hoc_update_with_a_different_identifier() {
+            let root = tempfile::tempdir().unwrap();
+            let current = root.path().join("current.app");
+            let replacement = root.path().join("replacement.app");
+            signed_bundle(&current, "0.1.1", "io.github.dlivxpr.lyrel");
+            signed_bundle(&replacement, "0.1.2", "com.example.other");
+
+            let error = verify_update(&current, &replacement, "0.1.2").unwrap_err();
+            assert!(
+                error.contains("different code-signing identifier"),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn verify_rejects_a_corrupted_ad_hoc_update() {
+            let root = tempfile::tempdir().unwrap();
+            let current = root.path().join("current.app");
+            let replacement = root.path().join("replacement.app");
+            signed_bundle(&current, "0.1.1", "io.github.dlivxpr.lyrel");
+            signed_bundle(&replacement, "0.1.2", "io.github.dlivxpr.lyrel");
+            fs::write(replacement.join("Contents/MacOS/lyrel-updater"), b"corrupt").unwrap();
+
+            let error = verify_update(&current, &replacement, "0.1.2").unwrap_err();
+            assert!(
+                error.contains("verifying the staged app's code signature"),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn verify_rejects_an_unsigned_update() {
+            let root = tempfile::tempdir().unwrap();
+            let current = root.path().join("current.app");
+            let replacement = root.path().join("replacement.app");
+            signed_bundle(&current, "0.1.1", "io.github.dlivxpr.lyrel");
+            signed_bundle(&replacement, "0.1.2", "io.github.dlivxpr.lyrel");
+            run_checked(
+                Command::new("/usr/bin/codesign")
+                    .arg("--remove-signature")
+                    .arg(&replacement),
+                "removing the test bundle signature",
+            )
+            .unwrap();
+
+            let error = verify_update(&current, &replacement, "0.1.2").unwrap_err();
+            assert!(
+                error.contains("verifying the staged app's code signature"),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn verify_rejects_an_ad_hoc_update_of_a_certificate_signed_identity() {
+            let root = tempfile::tempdir().unwrap();
+            let replacement = root.path().join("replacement.app");
+            signed_bundle(&replacement, "0.1.2", "com.apple.ls");
+            // An explicit copied requirement is not proof of a signing identity.
+            // Use Apple's existing signature without creating a test keychain.
+            let requirement = signing_identity(Path::new("/bin/ls")).unwrap().requirement;
+            run_checked(
+                Command::new("/usr/bin/codesign")
+                    .args(["--force", "--sign", "-", "--requirements"])
+                    .arg(format!("=designated => {requirement}"))
+                    .arg(&replacement),
+                "copying the certificate-signed identity's requirement",
+            )
+            .unwrap();
+
+            let error = verify_update(Path::new("/bin/ls"), &replacement, "0.1.2").unwrap_err();
+            assert!(
+                error.contains("current app's code-signing requirement"),
+                "{error}"
+            );
         }
 
         fn bundle(path: &Path, marker: &str) {

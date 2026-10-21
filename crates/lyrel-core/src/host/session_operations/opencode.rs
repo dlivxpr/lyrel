@@ -1511,6 +1511,24 @@ fn api(
     operation: &[&str],
     params: &[String],
 ) -> Result<Value, SessionOperationError> {
+    use std::io::{Seek, SeekFrom};
+
+    // Bun-backed OpenCode can exit before a large pipe write is flushed on
+    // macOS (the OpenAPI document already exceeds the pipe's capacity).
+    // A private, automatically removed regular file makes that write synchronous;
+    // do not repair partial JSON or retry against a potentially different service.
+    let mut stdout = tempfile::tempfile().map_err(|error| {
+        failure(
+            SessionErrorKind::Command,
+            format!("cannot create private OpenCode API output: {error}"),
+        )
+    })?;
+    let output_handle = stdout.try_clone().map_err(|error| {
+        failure(
+            SessionErrorKind::Command,
+            format!("cannot capture OpenCode API output: {error}"),
+        )
+    })?;
     let mut command = Command::new(&launch[0]);
     command.arg("api").args(operation);
     if let Some(context) = &scope.opencode {
@@ -1523,8 +1541,8 @@ fn api(
         .current_dir(cwd)
         .envs(&scope.environment)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(output_handle))
+        .stderr(Stdio::piped());
     command
         .env_remove("LYREL")
         .env_remove(crate::daemon::pane::LYREL_PANE_ENV);
@@ -1535,17 +1553,32 @@ fn api(
             "cannot start the captured OpenCode API CLI",
         )
     })?;
-    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut reader = io::BufReader::new(stdout);
+        let mut reader = io::BufReader::new(stderr);
         let mut bytes = Vec::new();
-        let result = reader.by_ref().take(MAX_REPLY + 1).read_to_end(&mut bytes);
+        let result = reader.by_ref().take(4096).read_to_end(&mut bytes);
         let _ = tx.send(result.map(|_| bytes));
         let _ = io::copy(&mut reader, &mut io::sink());
     });
     let deadline = Instant::now() + Duration::from_secs(20);
     let status = loop {
+        match stdout.metadata() {
+            Ok(metadata) if metadata.len() <= MAX_REPLY => {}
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(failure(
+                    SessionErrorKind::Command,
+                    if result.is_ok() {
+                        "OpenCode API metadata exceeds its response limit"
+                    } else {
+                        "cannot inspect OpenCode API output"
+                    },
+                ));
+            }
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
@@ -1559,14 +1592,20 @@ fn api(
             }
         }
     };
-    let output = rx
+    let diagnostic = rx
         .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| {
-            failure(
-                SessionErrorKind::Command,
-                "OpenCode API CLI did not close its response",
-            )
-        })?
+        .ok()
+        .and_then(Result::ok)
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+        .filter(|text| !text.is_empty());
+    let mut output = Vec::new();
+    stdout
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| {
+            Read::by_ref(&mut stdout)
+                .take(MAX_REPLY + 1)
+                .read_to_end(&mut output)
+        })
         .map_err(|_| {
             failure(
                 SessionErrorKind::Command,
@@ -1590,13 +1629,23 @@ fn api(
         };
         return Err(failure(
             kind,
-            "OpenCode API rejected the request; verify the selected session and service connection in its native TUI",
+            match diagnostic {
+                Some(detail) => format!("OpenCode API rejected the request ({status}): {detail}"),
+                None => "OpenCode API rejected the request; verify the selected session and service connection in its native TUI".into(),
+            },
         ));
     }
-    serde_json::from_slice(&output).map_err(|_| {
+    serde_json::from_slice(&output).map_err(|error| {
+        let discovery = operation == ["GET", "/openapi.json"];
+        let message = if discovery {
+            "The selected OpenCode CLI/service does not provide a valid JSON OpenAPI document; history requires the official OpenCode 2.x public API"
+        } else {
+            "OpenCode API CLI returned invalid JSON"
+        };
         failure(
-            SessionErrorKind::Command,
-            "OpenCode API CLI returned invalid JSON",
+            if discovery { SessionErrorKind::Unsupported } else { SessionErrorKind::Command },
+            format!("{message}: {error} ({} bytes){}", output.len(),
+                diagnostic.map(|detail| format!("; {detail}")).unwrap_or_default()),
         )
     })
 }
@@ -1689,6 +1738,168 @@ mod tests {
             cwd: cwd.into(),
             launch_argv: vec!["opencode".into()],
             scope: SessionScope::default(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn cli_request(cwd: &Path, script: &str) -> SessionOperation {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = cwd.join("opencode");
+        std::fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut request = request(cwd);
+        request.launch_argv = vec![executable.to_string_lossy().into_owned()];
+        request
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_history_reads_large_native_json_without_pipe_exit_truncation() {
+        let cwd = tempfile::tempdir().unwrap();
+        // Reproduce the native Bun writer's exit-before-pipe-flush boundary:
+        // the same valid document is truncated only when stdout is a pipe.
+        let schema = format!(
+            "{}{}",
+            " ".repeat(300_000),
+            r#"{"paths":{"/api/info":{"get":{"operationId":"server.info"}}}}"#
+        );
+        std::fs::write(cwd.path().join("openapi.json"), schema).unwrap();
+        let request = cli_request(
+            cwd.path(),
+            r#"
+case "$2" in
+GET)
+    if [ -p /dev/fd/1 ]; then
+        dd if=openapi.json bs=262144 count=1 2>/dev/null
+    else
+        cat openapi.json
+    fi ;;
+server.info) printf '%s\n' '{"pid":55,"urls":["http://127.0.0.1:12345/"]}' ;;
+session.list) printf '{"data":[{"id":"ses_large","projectID":"proj_large","title":"large document","location":{"directory":"%s"},"time":{"created":1690000000000,"updated":1700000000000}}],"cursor":{}}\n' "$PWD" ;;
+esac
+"#,
+        );
+        let found = LocalHost::new().opencode_sessions(&request).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "ses_large");
+        assert_eq!(found[0].title, "large document");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_history_rejects_non_json_instead_of_hiding_an_unsupported_cli() {
+        let cwd = tempfile::tempdir().unwrap();
+        let request = cli_request(cwd.path(), "printf '%s\\n' 'Usage: opencode [project]' ");
+        let error = LocalHost::new().opencode_sessions(&request).unwrap_err();
+        assert_eq!(error.kind, SessionErrorKind::Unsupported);
+        assert!(error.retained.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_history_preserves_native_failure_details_and_identity_errors() {
+        for (body, kind) in [
+            ("", SessionErrorKind::Connection),
+            (
+                r#"{"_tag":"SessionNotFoundError"}"#,
+                SessionErrorKind::Identity,
+            ),
+        ] {
+            let cwd = tempfile::tempdir().unwrap();
+            let request = cli_request(
+                cwd.path(),
+                &format!(
+                    "printf '%s' '{body}'; printf '%s\\n' 'native server authentication failed' >&2; exit 1"
+                ),
+            );
+            let error = LocalHost::new().opencode_sessions(&request).unwrap_err();
+            assert_eq!(error.kind, kind);
+            assert!(
+                error
+                    .message
+                    .contains("native server authentication failed")
+            );
+            assert!(error.retained.is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_history_still_rejects_oversized_native_output() {
+        let cwd = tempfile::tempdir().unwrap();
+        let request = cli_request(cwd.path(), "dd if=/dev/zero bs=1048576 count=9 2>/dev/null");
+        let error = LocalHost::new().opencode_sessions(&request).unwrap_err();
+        assert_eq!(error.kind, SessionErrorKind::Command);
+        assert!(error.message.contains("exceeds its response limit"));
+    }
+
+    #[test]
+    #[ignore = "requires LYREL_TEST_OPENCODE_BINARY pointing to an installed official OpenCode CLI; uses a fresh isolated home/store/service"]
+    fn native_opencode_large_openapi_history_queries_do_not_truncate() {
+        let binary = PathBuf::from(std::env::var_os("LYREL_TEST_OPENCODE_BINARY").unwrap());
+        assert!(binary.is_absolute(), "use an explicit installed CLI path");
+        let cwd = tempfile::tempdir().unwrap();
+        let mut request = request(cwd.path());
+        request.launch_argv = vec![binary.to_string_lossy().into_owned()];
+        for (key, name) in [
+            ("HOME", "home"),
+            ("USERPROFILE", "home"),
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_STATE_HOME", "state"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("OPENCODE_DB", "history.db"),
+        ] {
+            request.scope.environment.insert(
+                key.into(),
+                cwd.path().join(name).to_string_lossy().into_owned(),
+            );
+        }
+        // Select an unused port before the native service is first started;
+        // an isolated home alone still uses the real service's fixed port.
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        struct ServiceGuard<'a> {
+            binary: &'a Path,
+            cwd: &'a Path,
+            environment: &'a BTreeMap<String, String>,
+        }
+        impl ServiceGuard<'_> {
+            fn command(&self) -> Command {
+                let mut command = Command::new(self.binary);
+                command
+                    .current_dir(self.cwd)
+                    .envs(self.environment)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                command
+            }
+        }
+        impl Drop for ServiceGuard<'_> {
+            fn drop(&mut self) {
+                let _ = self.command().args(["service", "stop"]).status();
+            }
+        }
+        let service = ServiceGuard {
+            binary: &binary,
+            cwd: cwd.path(),
+            environment: &request.scope.environment,
+        };
+        assert!(
+            service
+                .command()
+                .args(["service", "set", "port", &port.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let host = LocalHost::new();
+        for _ in 0..16 {
+            // This is the startup consumer, including large schema discovery,
+            // authenticated native service identity and empty session metadata.
+            assert!(host.opencode_sessions(&request).unwrap().is_empty());
         }
     }
 

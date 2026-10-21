@@ -10,6 +10,9 @@
 ### 修复
 
 - 发布草稿创建先将远端版本标签（包括附注标签）解析为真实提交 SHA，再作为 GitHub API 的 `target_commitish`，避免将标签名传入而反复触发 HTTP 422；非法目标在创建草稿或上传资产前拒绝。保留无证书的 Windows 未签名／macOS ad-hoc 路径和既有资产校验。
+- 修复启动时读取 Hermes 历史或统计，因 Homebrew 入口不支持源码安装专用 `--print-runtime-command` 参数而报错的问题。POSIX 单行 env/exec wrapper 使用其显式 `HERMES_PYTHON` 运行时，保留虚拟环境路径；源码安装与 Windows 继续使用公开运行时查询，不猜测系统 Python，也不将失败伪装为空历史。
+- 修复 macOS 自动更新无法识别 ad-hoc 的 `# designated =>` 输出，以及正常跨版本 `cdhash` 变化导致校验失败的问题；保留归档 SHA-256、版本与完整签名验证，ad-hoc 仅接受相同签名 Identifier，证书签名由 `codesign` 求值当前 requirement 并拒绝降级。
+- 修复 macOS 启动查询 OpenCode 历史时，正式 CLI 的大 JSON 响应在 stdout pipe 中被截断、却以成功状态退出而报错的问题。改用私有匿名临时文件完整接收，保留期限、大小上限与原生错误，不重试或过滤 JSON。
 
 ## [0.1.2] - 2026-10-21
 

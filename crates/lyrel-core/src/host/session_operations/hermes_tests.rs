@@ -46,6 +46,34 @@ fn hermes_profile_mismatch_cannot_fork_in_another_store() {
     assert!(error.retained.is_none());
 }
 
+/// Exercises the selected installation without touching the user's Hermes home.
+#[test]
+#[ignore = "requires LYREL_TEST_HERMES pointing to an installed Hermes launcher"]
+fn native_hermes_history_uses_selected_launcher_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut scope = SessionScope::default();
+    scope.environment.insert(
+        "HERMES_HOME".into(),
+        dir.path().to_string_lossy().into_owned(),
+    );
+    let request = SessionOperation {
+        expected_host: 0,
+        agent: CLIAgent::Hermes,
+        kind: SessionOperationKind::Resume,
+        source_id: String::new(),
+        cwd: dir.path().into(),
+        launch_argv: vec![std::env::var("LYREL_TEST_HERMES").unwrap()],
+        scope,
+    };
+    let sessions = crate::host::local::LocalHost::new()
+        .hermes_sessions(&request)
+        .expect("the selected Hermes installation must expose native history");
+    assert!(
+        sessions.is_empty(),
+        "an isolated home has no stored sessions"
+    );
+}
+
 /// Reopen an existing recovery target without ever creating another fork.
 #[test]
 #[ignore = "requires LYREL_TEST_HERMES, LYREL_TEST_HERMES_HOME, LYREL_TEST_HERMES_SESSION and LYREL_TEST_HERMES_CWD"]

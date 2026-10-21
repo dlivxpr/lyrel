@@ -74,6 +74,10 @@ ignore = "0.4"
 # new code.
 regex = "1"
 
+# Anonymous private files keep OpenCode's large CLI replies intact without
+# exposing session metadata or relying on its asynchronous stdout pipe flush.
+tempfile = "3"
+
 # Format-preserving TOML editing for `core::agent_hooks`: Kimi Code takes its
 # hooks as `[[hooks]]` entries in the same `config.toml` that holds the user's
 # providers, models and comments, so installing must edit that file in place
@@ -226,9 +230,6 @@ sha2 = "0.11.1"
 chrono-tz = "0.10"
 # Only the existing SSH transfer regression computes MD5 digests.
 md5 = "0.8"
-# Sandboxes for the `host::conformance` suite: a fresh empty directory per case,
-# removed on drop.
-tempfile = "3"
 
 # This crate's own tests with `remote-install` on: the Windows install suite
 # exercises the real ZIP unpack path, which is compiled only under that

@@ -342,8 +342,10 @@ USD 活动包含有效原生记录与明确 USD 单价估算的已知金额；�
 
 「设置 → 统计」可筛选 Hermes 或全部来源，并固定选择本机或远端机器。有效 home/profile
 复用已配置的 Hermes 启动命令与 Host 环境，不读取另一机器的默认 profile，不猜测系统 Python。
-仅通过 Hermes 0.22.2 正式 launcher 的 `--print-runtime-command --module tui_gateway.entry`
-查询 `projects.tree`；远端需要独立的 `hermes-statistics-v1` 能力，旧 server 明确要求升级。
+Hermes 0.22.2 源码安装通过 `--print-runtime-command --module tui_gateway.entry` 解析网关；
+Homebrew 等单行 POSIX env/exec wrapper 使用其显式声明的字面量绝对路径 `HERMES_PYTHON`。
+两者均在所属安装运行时中查询 `projects.tree`，不因包管理器入口缺少源码安装专用参数而误报。
+无法解析的运行时仍明确失败；远端需要独立的 `hermes-statistics-v1` 能力，旧 server 明确要求升级。
 统计响应在数据所属 Host 剔除 `title`／`preview`，不为统计传输会话标题或提示词片段；仅缓存结构化计量元数据。
 历史与统计查询在收到结果后，仍等待本次查询专属的网关完成关闭。网关 RPC、原生会话释放和进程退出共用同一 45 秒操作期限，不再以更短的独立退出期限提前判错；真正超时、关闭失败或非零退出仍显示失败。
 

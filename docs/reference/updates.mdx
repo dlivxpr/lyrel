@@ -48,6 +48,17 @@ lyrel 的独立初版版本／标签为 `0.1.0`／`v0.1.0`，发行源仅为
 <AccordionGroup>
   <Accordion title="macOS">
     自动更新要求可安全替换的应用包和可写目录。不满足条件时，通过发布页手动安装。
+    当前 ad-hoc 发行包没有可跨版本验证的签发者身份；其合成 designated requirement
+    中的 `cdhash` 会随版本变化。更新器要求新旧包均明确为 ad-hoc、签名 Identifier
+    相同，并继续验证官方发布归档的 SHA-256、预期版本与完整代码签名，不比较新旧 `cdhash`。
+    发行来源与下载链仍是固定的本项目 GitHub HTTPS 发布，ad-hoc 签名本身不提供签发者认证。
+    证书签名安装则由 `codesign` 对新包求值当前安装的 requirement；不接受降级为 ad-hoc，
+    也不自动跨越两种签名姿态。签名与公证不是同一件事。
+
+    若旧版本内置 updater 已报 `codesign did not report a designated requirement`，
+    需从本项目发布页手动安装包含修复的完整新包一次；修改源码不会替换已安装的旧 helper。
+    不要删除签名、绕过 checksum 或只替换单个可执行文件。requirement 与 ad-hoc 的差异见
+    [Apple TN3127](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)。
     新 GUI 在协议兼容时复用本地 server，使 shell 在更新后继续运行；协议不兼容时，
     明确询问用户保留还是重启 server。
   </Accordion>
