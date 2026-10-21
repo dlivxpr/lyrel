@@ -29,71 +29,62 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  fmt:
-    name: rustfmt
+  # 分类、格式、Host 边界与自动化回归共用一个前置 job；失败不启动重型验证。
+  preflight:
+    name: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      desktop: ${{ steps.diff.outputs.desktop }}
+      linux: ${{ steps.diff.outputs.linux }}
+      server: ${{ steps.diff.outputs.server }}
+      release: ${{ steps.diff.outputs.release }}
+      matrix: ${{ steps.diff.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --check
-
-  # Host 边界检查独立运行；检查器使用 Node.js 标准库解析 Rust 测试模块。
-  host-boundary:
-    name: host boundary
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
+          # 完整 push 的 before 可能不在最后两个提交内；PR 检查合并结果对 base 的差异。
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
           package-manager-cache: false
-      - run: bash .github/scripts/check-host-boundary.sh
-
-  # 仅跳过明确不编入程序的文档路径；不能按任意目录的 Markdown 后缀跳过，
-  # 因为 include_str!/include_bytes! 可以将资源或技能文档编入二进制。
-  # 当前源码没有嵌入 docs/ 或根目录 Markdown；新增这类输入时需同步此过滤器。
-  # 保留矩阵 job，仅跳过步骤，确保每个目标的检查名称稳定。
-  changes:
-    name: changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      code: ${{ steps.diff.outputs.code }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 2
-      # A PR checkout is the merge commit, so its first parent is the base.
-      # `--no-renames` lists both sides of a move, or `src/x.rs` -> `docs/x.md`
-      # would show only the docs path.
       - id: diff
+        run: node .github/scripts/ci-changes.cjs
+      - name: Check automation behavior
+        run: node --test .github/scripts/*.test.cjs
+      - name: Validate workflow syntax
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color -shellcheck= -pyflakes=
+      - name: Check release shell syntax
         run: |
-          files=$(git diff --name-only --no-renames HEAD^1 HEAD)
-          if [ "${{ github.event_name }}" != pull_request ] \
-              || grep -qvE '^docs/.*\.mdx?$|^[^/]+\.md$' <<<"$files"; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::docs-only change — Rust jobs skipped"
-          fi
+          for script in .github/scripts/*.sh; do bash -n "$script"; done
+      - name: Check release PowerShell syntax
+        shell: pwsh
+        run: |
+          $Failed = $false
+          Get-ChildItem .github/scripts/*.ps1, scripts/prepare-conpty.ps1 | ForEach-Object {
+            $Tokens = $null
+            $Errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$Tokens, [ref]$Errors)
+            if ($Errors) { $Errors | Write-Output; $Failed = $true }
+          }
+          if ($Failed) { exit 1 }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+      - run: bash .github/scripts/check-host-boundary.sh
 
   build:
     name: build & test (${{ matrix.target }})
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-    needs: changes
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+    needs: preflight
+    if: needs.preflight.outputs.desktop == 'true' || needs.preflight.outputs.linux == 'true'
     runs-on: ${{ matrix.runner }}
     # Line tables keep file:line in backtraces but shrink the cached target dir.
     env:
@@ -105,13 +96,11 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout lyrel
-        if: needs.changes.outputs.code == 'true'
         uses: actions/checkout@v7
 
       # Host 检查和 Pi 桥契约测试要求 Node.js 22.19+；setup-node 提供当前
       # runner 平台的原生 Node，Linux 不通过 Windows 的 node.exe 执行测试。
       - uses: actions/setup-node@v7
-        if: needs.changes.outputs.code == 'true'
         with:
           node-version: '22'
           package-manager-cache: false
@@ -119,21 +108,19 @@ jobs:
       # GUI 使用 registry 的 gpui-kit；Windows SDK 由 runner 提供。
       # Linux headless 保留 GSSAPI 的 MIT Kerberos 构建依赖，不安装 GUI 库。
       - name: Install Linux system dependencies
-        if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
           echo "LIBGSSAPI_IMPL=mit" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
         with:
           targets: ${{ matrix.target }}
 
       # 仅 main 写入缓存（含 main 上的手动运行）；其他 ref 只恢复。
       # 按 target 稳定共享 cache key，避免 job 名称变化产生重复缓存。
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
         with:
           shared-key: ci-v2-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -143,7 +130,7 @@ jobs:
       # same prepare entry developers run, so a broken prepare fails the build
       # step rather than degrading to the in-box conhost.
       - name: Prepare ConPTY
-        if: matrix.runner == 'windows-latest' && needs.changes.outputs.code == 'true'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: '& ./scripts/prepare-conpty.ps1'
 
@@ -155,13 +142,13 @@ jobs:
       # build too.
 
       - name: Build desktop and headless
-        if: needs.changes.outputs.code == 'true' && runner.os != 'Linux'
+        if: runner.os != 'Linux'
         # Cold-cache builds have been observed at ~10 min; warm ones at ~90s.
         timeout-minutes: 30
         run: cargo build --locked --features updater --target ${{ matrix.target }}
 
       - name: Build Linux headless
-        if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         timeout-minutes: 30
         run: cargo build --locked --workspace --exclude lyrel --all-features --target ${{ matrix.target }}
 
@@ -180,7 +167,7 @@ jobs:
       # proc-macro artifacts under it are host units, which are built without
       # the target's rustflags and legitimately import the CRT dynamically.
       - name: Assert the Windows binaries need no VC++ redistributable
-        if: needs.changes.outputs.code == 'true' && runner.os == 'Windows'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           & ./.github/scripts/assert-no-vcruntime.ps1 `
@@ -203,13 +190,13 @@ jobs:
       # also has to compile the test targets, on every platform. 20 minutes is
       # pure headroom, so a trip means a hang, not a slow runner.
       - name: Test desktop and headless
-        if: needs.changes.outputs.code == 'true' && runner.os != 'Linux'
+        if: runner.os != 'Linux'
         timeout-minutes: 20
         # SIGABRT 会丢失 libtest 捕获缓冲；直接保留原始 panic 和回溯。
         run: cargo test --locked --features updater --target ${{ matrix.target }} -- --nocapture
 
       - name: Test Linux headless
-        if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         timeout-minutes: 20
         run: cargo test --locked --workspace --exclude lyrel --all-features --target ${{ matrix.target }}
 
@@ -234,11 +221,10 @@ jobs:
   # onto the far machine (decision D10).
   # One binary has to run on any distro without regard to the target's glibc
   # version, so it is linked fully static against musl rather than built per
-  # distro. Compile-only — this job publishes nothing; release.yml carries the
-  # same job with an upload step.
+  # distro. 可信 main push 上传已验证产物，供同 SHA 的 Release 复用；PR 只验证。
   server-musl:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    needs: preflight
+    if: needs.preflight.outputs.server == 'true'
     name: lyrel-server musl (${{ matrix.target }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -295,16 +281,29 @@ jobs:
       - name: Assert the binary is static
         run: bash .github/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"
 
+      - name: Record verified server provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: node .github/scripts/server-artifact.cjs create "${{ matrix.target }}" "target/${{ matrix.target }}/release/lyrel-server" "$RUNNER_TEMP/ci-server-${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: ci-server-${{ matrix.target }}
+          path: ${{ runner.temp }}/ci-server-${{ matrix.target }}
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
   # The same headless server for remote Macs. A second job rather than more rows
   # in `server-musl`: that one exists to cross-compile from Linux with zig, and
   # neither half of it applies here — an Apple target needs an Apple runner for
   # the SDK, and there is no musl to link.
   #
   # 仅构建 Apple Silicon；独立 server 不依赖桌面 GUI 或系统 Kerberos。
-  # 与 server-musl 一样仅编译、签名并检查；release.yml 负责上传资产。
+  # 与 musl 一样只允许可信 main push 上传已签名、已验证的 CI 产物。
   server-macos:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    needs: preflight
+    if: needs.preflight.outputs.server == 'true'
     name: lyrel-server macOS (${{ matrix.target }})
     runs-on: macos-15
     timeout-minutes: 45
@@ -342,3 +341,27 @@ jobs:
         run: |
           bash .github/scripts/assert-macho.sh \
             "target/${{ matrix.target }}/release/lyrel-server" "${{ matrix.arch }}"
+
+      - name: Record verified server provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: node .github/scripts/server-artifact.cjs create "${{ matrix.target }}" "target/${{ matrix.target }}/release/lyrel-server" "$RUNNER_TEMP/ci-server-${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: ci-server-${{ matrix.target }}
+          path: ${{ runner.temp }}/ci-server-${{ matrix.target }}
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+  # 仅发布流程变更仍实际编译、打包并校验，但此 reusable workflow 没有发布权限。
+  release-validation:
+    needs: preflight
+    if: needs.preflight.outputs.release == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-build.yml
+    with:
+      source_sha: ${{ github.sha }}

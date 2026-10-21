@@ -281,15 +281,37 @@ bash .github/scripts/generate-checksums.sh <asset-dir>
 
 ### GitHub CI 与发布
 
-`.github/workflows/ci.yml` 在 `main` push、pull request 和手动触发时验证格式、Host 边界、
-Windows x86-64／macOS Apple Silicon 桌面及 headless、Linux GNU 完整 features 和静态 musl server。
-Node.js 22 显式安装，用于 Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。Linux runner 固定为 `ubuntu-24.04`；checkout 使用 Node.js 24 runtime 的 `actions/checkout@v7`。
+`.github/workflows/ci.yml` 在 `main` push、pull request 和手动触发时，先用同一个 `preflight` job 验证格式、Host 边界、工作流／发布脚本语法和自动化行为回归，再按完整变更范围选择重型 job。任何前置检查失败都阻止后续构建；PR 检查实际合并结果相对 base 的差异，push 检查完整 `before…after`，不会只看最后一个 commit。首次 push、强制改写、手动触发、范围不可取得或 checkout 不匹配时执行完整验证。
+Node.js 22 显式安装，用于自动化回归、Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。Linux runner 固定为 `ubuntu-24.04`；checkout 使用 Node.js 24 runtime 的 `actions/checkout@v7`。
+
+| 变更范围 | 保留验证 |
+| --- | --- |
+| 仅根 `src/`、根 `build.rs`，可附带非编译文档 | Windows／macOS 完整 build & test；不重复验证无依赖关系的 Linux headless 与三个独立 server 构建 |
+| 仅 CLI 源码或 `crates/lyrel-core/tests/`、`crates/lyrel-server/tests/` | 三个平台 build & test；跳过独立 server release-profile 构建 |
+| 仅 `docs/**/*.md(x)` 或根级 `*.md` | `preflight`；该规则同时适用于 main push 和 PR |
+| 仅发布工作流、打包／汇总脚本及非编译文档 | `preflight` 加真实 Release 构建、打包与平台断言；不重复执行无关 Rust CI |
+| core/server 生产源码、任意 Cargo manifest／lockfile、嵌入资源或未知输入 | 完整 Rust CI；共享发布断言变化还验证 Release 流程 |
+
+分类入口为 `.github/scripts/ci-changes.cjs`；新增编译输入时同步检查允许跳过的路径。`LICENSE` 被 server 内嵌，`skills/` 等目录不能按 Markdown 后缀当作纯文档。分类使用 `--no-renames` 保留重命名两端，移出源码目录仍会验证删除的影响。检查名称由原来的 `changes`／`rustfmt`／`host boundary` 收敛为 `preflight`；设置合并门禁时使用新名称及所需平台检查，不引用已移除的名称。
 
 CI 的桌面 build 与 test 统一启用 `--features updater`，同一次默认 workspace 测试覆盖 GUI、core、CLI、server 和 updater；不另起一轮不同 feature 图的 updater 编译。Linux 仍验证完整 headless features，所有平台断言保持不变。
+
+同一 SHA 的失败恢复只重跑失败 job，保留原有成功结果，不以本地新 HEAD 替换原提交，也不自动循环重试。先预览失败项，再显式执行：
+
+```bash
+node scripts/rerun-failed-ci.cjs <run-id> --dry-run
+node scripts/rerun-failed-ci.cjs <run-id>
+```
+
+该入口仅接受当前仓库已结束且有失败／取消项的 CI 或 Release，使用 `gh run rerun --failed`；确定性代码失败应先修复再跑新提交。main 每个提交的验证记录、PR 旧运行取消策略和矩阵 `fail-fast: false` 保持不变。
 
 发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
 及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
 桌面与 server 并行编译，桌面一次编译 GUI、CLI 和 updater。Windows 打包只等待本平台编译和真实 WSL musl server，macOS 打包只等待本平台编译，不跨平台互相阻塞。编译与打包间使用 tar 保留可执行权限，归档及恢复均使用相对路径，避免 GNU tar 把 Windows 的 `drive:` 绝对路径当作远程主机；已压缩包不再做外层压缩。Thin LTO 和单 codegen unit 的发行配置不变。
+
+正式发布与 CI 的发布流程验证共用 `.github/workflows/release-build.yml`。它只授予 `contents: read` 和 `actions: read`，仅生成构建／打包 artifacts，不包含创建草稿或发布的 job。CI 调用不传 Apple 签名凭据，macOS 按既有脚本执行 ad-hoc 路径；正式 Release 才显式传入可选签名凭据，草稿写权限只留在 `.github/workflows/release.yml` 的汇总 job。发布流程变化需要真实打包验证，不能只用普通 Rust 测试替代。
+
+可信 main push 在三个独立 server 构建及平台断言成功后上传 `ci-server-<target>`，保存 7 天。Release 可复用同仓库、同 SHA、已完整成功的 main CI 产物；PR、fork 和手动 CI 产物不作为发布来源。下载固定 artifact ID，核验来源 run、目标、文件 SHA-256、Cargo 输入及 Rust／Zig／SDK 构建契约，再执行原有静态链接／Mach-O／签名检查。缺失、过期、下载失败或契约不匹配时正常重新构建，不放宽校验；Windows server 不参与此复用。该机制不是字节级可重现构建声明。路径裁剪未生成该 SHA 的 server artifact 时，同样由 Release 正常构建。
 
 CI 与 Release 使用独立的稳定缓存键，保留 toolchain、target、flags 和依赖哈希隔离。仅 `main` 保存缓存，标签和 PR 只读取；不同标签不能读取彼此保存的缓存，但可以读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖：
 
