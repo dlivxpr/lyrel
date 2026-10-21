@@ -37,6 +37,10 @@ jobs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       tag: ${{ steps.source.outputs.tag }}
       artifact_run_id: ${{ steps.source.outputs.artifact_run_id }}
+      ci_server_run_id: ${{ steps.ci-server.outputs.run_id }}
+      ci_server_run_attempt: ${{ steps.ci-server.outputs.run_attempt }}
+      ci_server_repository_id: ${{ steps.ci-server.outputs.repository_id }}
+      ci_server_artifact_ids: ${{ steps.ci-server.outputs.artifact_ids }}
     steps:
       - name: Resolve immutable source and validate reusable production run
         id: source
@@ -92,7 +96,13 @@ jobs:
               const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
                 ...repo, run_id: runId, filter: 'latest', per_page: 100
               });
-              const production = jobs.filter(job => job.name !== 'draft-release');
+              const nested = jobs.some(job => job.name.startsWith('production / '));
+              const production = jobs.filter(job => job.name !== 'draft-release').map(job => {
+                if (nested && job.name !== 'version' && !job.name.startsWith('production / ')) {
+                  fail('reused run mixes flat and nested production job names');
+                }
+                return { ...job, name: job.name.replace(/^production \/ /, '') };
+              });
               if (production.some(job => job.status !== 'completed' || job.conclusion !== 'success' || job.head_sha !== sourceSha)) {
                 fail('every production job in the reused run must have succeeded at the tag commit');
               }
@@ -102,7 +112,9 @@ jobs:
                 }
               }
               const packs = production.filter(job => job.name === 'pack' || job.name.startsWith('pack ('));
-              if (packs.length !== 0 && packs.length !== 2) fail('reuse run has an incomplete desktop packaging matrix');
+              if ((nested && packs.length !== 2) || (!nested && packs.length !== 0 && packs.length !== 2)) {
+                fail('reuse run has an incomplete desktop packaging matrix');
+              }
               const expected = [
                 'release-macos-arm64', 'release-windows-x86_64',
                 'release-lyrel-server-linux-aarch64-musl', 'release-lyrel-server-linux-x86_64-musl',
@@ -129,6 +141,27 @@ jobs:
           ref: ${{ steps.source.outputs.source_sha }}
           persist-credentials: false
 
+      - name: Discover trusted independent CI server artifacts
+        id: ci-server
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        with:
+          script: |
+            let result = { runId: '', runAttempt: '', repositoryId: '', artifactIds: {} };
+            const fs = require('node:fs');
+            const helper = `${process.env.GITHUB_WORKSPACE}/.github/scripts/ci-server-reuse.cjs`;
+            if (fs.existsSync(helper)) {
+              const { discoverServerArtifacts } = require(helper);
+              result = await discoverServerArtifacts({ github, repo: context.repo, sourceSha: process.env.SOURCE_SHA, log: core.info });
+            } else {
+              core.info('Source predates server promotion; compiling normally');
+            }
+            core.setOutput('run_id', result.runId);
+            core.setOutput('run_attempt', result.runAttempt);
+            core.setOutput('repository_id', result.repositoryId);
+            core.setOutput('artifact_ids', JSON.stringify(result.artifactIds));
+
       - name: Check stable workspace version and tag
         id: version
         shell: bash
@@ -145,493 +178,36 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-  # 平台独立 DAG：macOS runner 缺货不阻塞 Windows 编译、WSL 打包和校验。
-  build-windows:
-    name: build (x86_64-pc-windows-msvc)
+  production:
     needs: version
     if: needs.version.result == 'success' && inputs.reuse_run_id == ''
-    timeout-minutes: 120
-    runs-on: windows-latest
-    steps:
-      - name: Checkout lyrel
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.source_sha }}
-          path: lyrel
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: lyrel
-          shared-key: release-v2-x86_64-pc-windows-msvc-desktop
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-
-      - name: Prepare ConPTY
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./scripts/prepare-conpty.ps1'
-
-      # 一次 feature 统一编译全部默认 bins，不重复构建无 updater 的桌面图。
-      - name: Build all default binaries with updater
-        working-directory: lyrel
-        shell: bash
-        run: cargo build --release --locked --features updater --target x86_64-pc-windows-msvc
-
-      - name: Archive desktop packaging inputs
-        working-directory: lyrel
-        shell: bash
-        run: |
-          set -euo pipefail
-          # GNU tar 会把 Windows drive: 绝对路径误认成远程主机；归档始终使用相对路径。
-          tar -czf desktop-x86_64-pc-windows-msvc.tar.gz \
-            target/x86_64-pc-windows-msvc/release/lyrel-app.exe \
-            target/x86_64-pc-windows-msvc/release/lyrel.exe \
-            target/x86_64-pc-windows-msvc/release/lyrel-updater.exe \
-            Cargo.toml LICENSE README.md assets/completions \
-            assets/windows/conpty/manifest.json .conpty/x64/conpty.dll \
-            .conpty/x64/OpenConsole.exe .conpty/LICENSE-ConPTY.txt
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: desktop-inputs-x86_64-pc-windows-msvc
-          path: lyrel/desktop-x86_64-pc-windows-msvc.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-  build-macos:
-    name: build (aarch64-apple-darwin)
-    needs: version
-    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
-    timeout-minutes: 120
-    runs-on: macos-15
-    steps:
-      - name: Checkout lyrel
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.source_sha }}
-          path: lyrel
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: lyrel
-          shared-key: release-v2-aarch64-apple-darwin-desktop
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-
-      - name: Build all default binaries with updater
-        working-directory: lyrel
-        shell: bash
-        run: cargo build --release --locked --features updater --target aarch64-apple-darwin
-
-      # tar 保留 macOS 可执行权限；只带打包输入，不传 target 缓存或整个源码树。
-      - name: Archive desktop packaging inputs
-        working-directory: lyrel
-        shell: bash
-        run: |
-          set -euo pipefail
-          tar -czf desktop-aarch64-apple-darwin.tar.gz \
-            target/aarch64-apple-darwin/release/lyrel-app \
-            target/aarch64-apple-darwin/release/lyrel \
-            target/aarch64-apple-darwin/release/lyrel-updater \
-            Cargo.toml LICENSE README.md assets/completions assets/lyrel.icns
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: desktop-inputs-aarch64-apple-darwin
-          path: lyrel/desktop-aarch64-apple-darwin.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-
-  pack-windows:
-    name: pack (x86_64-pc-windows-msvc)
-    needs: [version, build-windows, server-musl]
-    if: >-
-      always() && needs.version.result == 'success' && inputs.reuse_run_id == '' &&
-      needs.build-windows.result == 'success' && needs.server-musl.result == 'success'
-    timeout-minutes: 30
-    runs-on: windows-latest
-    steps:
-      - name: Checkout tagged packaging scripts
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.source_sha }}
-          path: lyrel
-          persist-credentials: false
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: desktop-inputs-x86_64-pc-windows-msvc
-          path: lyrel/desktop-inputs
-
-      - name: Restore desktop packaging inputs
-        working-directory: lyrel
-        shell: bash
-        run: tar -xzf desktop-inputs/desktop-x86_64-pc-windows-msvc.tar.gz
-
-      - name: Fetch the bundled Linux server
-        uses: actions/download-artifact@v8
-        with:
-          name: release-lyrel-server-linux-x86_64-musl
-          path: lyrel/bundled-server
-
-      - name: Package Windows installer + zip
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./.github/scripts/bundle-windows.ps1 "x86_64-pc-windows-msvc" "x86_64"'
-
-      - name: Verify Windows update package
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./.github/scripts/verify-windows-package.ps1 "x86_64"'
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: release-windows-x86_64
-          path: |
-            lyrel/dist/*.zip
-            lyrel/dist/*-setup.exe
-          compression-level: 0
-          if-no-files-found: error
-
-  pack-macos:
-    name: pack (aarch64-apple-darwin)
-    needs: [version, build-macos]
-    if: >-
-      always() && needs.version.result == 'success' && inputs.reuse_run_id == '' &&
-      needs.build-macos.result == 'success'
-    timeout-minutes: 30
-    runs-on: macos-15
-    steps:
-      - name: Checkout tagged packaging scripts
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.source_sha }}
-          path: lyrel
-          persist-credentials: false
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: desktop-inputs-aarch64-apple-darwin
-          path: lyrel/desktop-inputs
-
-      - name: Restore desktop packaging inputs and executable permissions
-        working-directory: lyrel
-        shell: bash
-        run: tar -xzf desktop-inputs/desktop-aarch64-apple-darwin.tar.gz
-
-      # 无 Apple secrets 时仍由原脚本做 ad-hoc 签名与 Mach-O 校验。
-      - name: Bundle macOS DMG
-        working-directory: lyrel
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bash .github/scripts/bundle-macos.sh "aarch64-apple-darwin" "arm64"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: release-macos-arm64
-          path: |
-            lyrel/dist/*.dmg
-            lyrel/dist/*.zip
-          compression-level: 0
-          if-no-files-found: error
-
-  # The headless server binary remote workspaces install on the far machine
-  # (decision D10). Statically linked against musl so a single binary runs
-  # on any distro whatever its glibc vintage, and shipped as a bare executable
-  # rather than an archive so the client can fetch exactly one file and verify it
-  # against checksums.txt. The asset names are a contract with the installer:
-  # `lyrel_core::daemon::install::asset` derives them from `uname -sm`.
-  #
-  # 与桌面编译独立：无 GUI toolchain、打包或代码签名，两个目标使用同类 runner。
-  server-musl:
-    needs: version
-    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      # `target` is the build triple; `asset` is the published filename. They
-      # are deliberately not the same string — the triple's vendor field is
-      # `unknown`, which says nothing to anyone reading the releases page. See
-      # `install::asset::ASSET_X86_64`, which pins these two names as literals.
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            asset: lyrel-server-linux-x86_64-musl
-          - target: aarch64-unknown-linux-musl
-            asset: lyrel-server-linux-aarch64-musl
-    runs-on: ubuntu-24.04
-    env:
-      RUSTFLAGS: -C strip=symbols
-    steps:
-      - name: Checkout lyrel
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.source_sha }}
-          path: lyrel
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      # zig provides the musl sysroot and the C cross-compiler for both targets
-      # from one x86_64 runner — see the same job in ci.yml for why the
-      # alternatives (cross, musl-tools) do not cope with aws-lc-rs' cmake build.
-      - name: Install Zig
-        run: |
-          python3 -m venv "$RUNNER_TEMP/zig"
-          "$RUNNER_TEMP/zig/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: ziglang==0.16.0
-          "$RUNNER_TEMP/zig/bin/python" -m ziglang version
-          echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/zig/bin/python" >> "$GITHUB_ENV"
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-zigbuild
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: lyrel
-          shared-key: release-v2-${{ matrix.target }}-server-musl
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-
-      # lyrel-server 已是 workspace 成员，完整 stable 发行不再允许跳过 server。
-
-      # `--locked` for the same reason the GUI build uses it: a release ships the
-      # dependency set the tag recorded. `-p lyrel-server` both addresses the
-      # package independently of its path and keeps feature unification off the
-      # GUI's `gssapi` feature, which cannot build under musl.
-      - name: Build static lyrel-server
-        working-directory: lyrel
-        run: cargo zigbuild --release --locked -p lyrel-server --target ${{ matrix.target }}
-
-      - name: Assert the binary is static
-        working-directory: lyrel
-        run: bash .github/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"
-
-      # Flat, version-free asset name — the tag in the download URL carries the
-      # version. See `install::asset` for the contract the client
-      # installer derives this name from.
-      - name: Stage the asset
-        working-directory: lyrel
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/lyrel-server" \
-             "dist/${{ matrix.asset }}"
-          chmod +x "dist/${{ matrix.asset }}"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: release-${{ matrix.asset }}
-          path: lyrel/dist/${{ matrix.asset }}
-          if-no-files-found: error
-
-  # The same server for remote Macs, published under the same contract: flat,
-  # version-free names that `install::asset` derives from `uname -sm`. Separate
-  # from `server-musl` because an Apple target needs an Apple runner, and the
-  # arm64 slice comes off one arm64 runner. See ci.yml's `server-macos` for the
-  # rest of the reasoning; keep the workflow matrices and `install::asset` in
-  # sync.
-  #
-  # macOS server 只做 ad-hoc 签名和 Mach-O 自包含检查，不提供公证声明。
-  server-macos:
-    needs: version
-    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            arch: arm64
-            asset: lyrel-server-macos-aarch64
-    runs-on: macos-15
-    env:
-      RUSTFLAGS: -C strip=symbols
-    steps:
-      - name: Checkout lyrel
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.source_sha }}
-          path: lyrel
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: lyrel
-          shared-key: release-v2-${{ matrix.target }}-server-macos
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-
-
-      - name: Build lyrel-server
-        working-directory: lyrel
-        run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
-
-      # 明确保留 ad-hoc 签名；不依赖 Apple secrets。
-      - name: Ad-hoc sign the binary
-        working-directory: lyrel
-        run: codesign --force --sign - "target/${{ matrix.target }}/release/lyrel-server"
-
-      - name: Assert the binary is self-contained
-        working-directory: lyrel
-        run: |
-          bash .github/scripts/assert-macho.sh \
-            "target/${{ matrix.target }}/release/lyrel-server" "${{ matrix.arch }}"
-
-      - name: Stage the asset
-        working-directory: lyrel
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/lyrel-server" \
-             "dist/${{ matrix.asset }}"
-          chmod +x "dist/${{ matrix.asset }}"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: release-${{ matrix.asset }}
-          path: lyrel/dist/${{ matrix.asset }}
-          if-no-files-found: error
-
-  # The server for remote Windows hosts (Windows OpenSSH), under the same
-  # contract: flat, version-free names that `install::asset` derives from the
-  # host's `PROCESSOR_ARCHITECTURE`, looked up in checksums.txt by exactly
-  # that name. The asset is a ZIP because the server cannot start a pane
-  # without the pinned ConPTY set beside it (`daemon::conpty` fails closed):
-  # `lyrel-server.exe` plus the `conpty.dll` / `OpenConsole.exe` /
-  # `LICENSE-ConPTY.txt` trio from the pinned official package, and the
-  # project's LICENSE.txt.
-  #
-  # No RUSTFLAGS here, unlike the other server jobs: setting it would replace
-  # `.cargo/config.toml`'s `+crt-static` wholesale, and a server that imports
-  # VCRUNTIME140.dll will not start on a Windows host without the Visual C++
-  # redistributable — which a headless server is the likeliest machine to lack.
-  # Symbols are stripped through the profile instead.
-  #
-  server-windows:
-    needs: version
-    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            asset: lyrel-server-windows-x86_64.zip
-    runs-on: windows-latest
-    env:
-      CARGO_PROFILE_RELEASE_STRIP: symbols
-    steps:
-      - name: Checkout lyrel
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.source_sha }}
-          path: lyrel
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: lyrel
-          shared-key: release-v2-${{ matrix.target }}-server-windows
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-
-      # The server's build.rs fails closed without the prepared ConPTY pair,
-      # and the packaging step below zips exactly the files it staged beside
-      # the built executable — the same prepare entry a developer runs, so
-      # this asset and every dev/test executable carry the identical pinned
-      # set.
-      - name: Prepare ConPTY
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./scripts/prepare-conpty.ps1'
-
-      - name: Build lyrel-server
-        working-directory: lyrel
-        run: cargo build --release --locked -p lyrel-server --target ${{ matrix.target }}
-
-      - name: Assert the binary needs no VC++ redistributable
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./.github/scripts/assert-no-vcruntime.ps1 "target/${{ matrix.target }}/release/lyrel-server.exe"'
-
-      # Zip the server with the ConPTY set build.rs staged beside it. The
-      # trio is re-hashed against the pinned manifest here so a staging
-      # mistake fails the release instead of shipping an uninstallable asset
-      # — the installer unpacks exactly this flat layout
-      # (`daemon::install::package`).
-      - name: Stage the asset
-        working-directory: lyrel
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $Release = "target/${{ matrix.target }}/release"
-          $ConptyArch = @{ 'x86_64-pc-windows-msvc' = 'x64' }['${{ matrix.target }}']
-          if (-not $ConptyArch) { throw "no prepared ConPTY for ${{ matrix.target }}" }
-          $Manifest = Get-Content -LiteralPath 'assets/windows/conpty/manifest.json' -Raw | ConvertFrom-Json
-          foreach ($File in 'conpty.dll', 'OpenConsole.exe') {
-            $Path = "$Release/$File"
-            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "build did not stage $Path" }
-            if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ne $Manifest.files.$ConptyArch.$File) {
-              throw "$Path SHA-256 mismatch against the pinned ConPTY manifest"
-            }
-          }
-          if ((Get-FileHash -LiteralPath "$Release/LICENSE-ConPTY.txt" -Algorithm SHA256).Hash -ne $Manifest.licenseSha256) {
-            throw "$Release/LICENSE-ConPTY.txt SHA-256 mismatch against the pinned ConPTY manifest"
-          }
-          New-Item -ItemType Directory -Force dist/server-stage | Out-Null
-          Copy-Item "$Release/lyrel-server.exe" 'dist/server-stage/lyrel-server.exe'
-          Copy-Item "$Release/conpty.dll" 'dist/server-stage/conpty.dll'
-          Copy-Item "$Release/OpenConsole.exe" 'dist/server-stage/OpenConsole.exe'
-          Copy-Item "$Release/LICENSE-ConPTY.txt" 'dist/server-stage/LICENSE-ConPTY.txt'
-          Copy-Item 'LICENSE' 'dist/server-stage/LICENSE.txt'
-          Compress-Archive -Path 'dist/server-stage/*' -DestinationPath "dist/${{ matrix.asset }}" -Force
-          Remove-Item -Recurse -Force dist/server-stage
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: release-${{ matrix.asset }}
-          path: lyrel/dist/${{ matrix.asset }}
-          compression-level: 0
-          if-no-files-found: error
+    uses: ./.github/workflows/release-build.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      source_sha: ${{ needs.version.outputs.source_sha }}
+      ci_server_run_id: ${{ needs.version.outputs.ci_server_run_id }}
+      ci_server_run_attempt: ${{ needs.version.outputs.ci_server_run_attempt }}
+      ci_server_repository_id: ${{ needs.version.outputs.ci_server_repository_id }}
+      ci_server_artifact_ids: ${{ needs.version.outputs.ci_server_artifact_ids }}
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
   # main 无显式 tag 的手动运行仅预热；有效复用可越过全部 skipped 生产 jobs。
   # 仅汇总 stable draft，不 publish；最终发布仍需 CI、资产与中文说明审核。
   draft-release:
-    needs: [version, build-windows, build-macos, pack-windows, pack-macos, server-musl, server-macos, server-windows]
+    needs: [version, production]
     if: >-
       always() && needs.version.result == 'success' && needs.version.outputs.tag != '' &&
       ((inputs.reuse_run_id != '' && needs.version.outputs.artifact_run_id == inputs.reuse_run_id) ||
-       (inputs.reuse_run_id == '' && needs.build-windows.result == 'success' && needs.build-macos.result == 'success' &&
-        needs.pack-windows.result == 'success' && needs.pack-macos.result == 'success' &&
-        needs.server-musl.result == 'success' && needs.server-macos.result == 'success' &&
-        needs.server-windows.result == 'success'))
+       (inputs.reuse_run_id == '' && needs.production.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
