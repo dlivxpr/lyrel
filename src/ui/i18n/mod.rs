@@ -1440,7 +1440,6 @@ l10n_keys! {
     ScmCommitAndPush,
     ScmCommitAndSync,
     ScmAmendLastCommit,
-    ScmCommitStaged,
     ScmStashAll,
     ScmNothingToCommit,
     ScmNetworkBusy,
@@ -1476,8 +1475,6 @@ l10n_keys! {
     ScmFetch,
     ScmCheckoutBranch,
     ScmCreateBranch,
-    ScmSearchBranches,
-    ScmStashAndSwitch,
     ScmGraphTitle,
     ScmGraphLoadMore,
     ScmGraphFilterPlaceholder,
@@ -1489,11 +1486,9 @@ l10n_keys! {
     ScmResetSoft,
     ScmResetMixed,
     ScmResetHard,
-    ScmCommitDetailTitle,
     ScmCopyCommitSha,
     ScmCherryPick,
     ScmRevertCommit,
-    ScmResetToCommit,
     ScmRefresh,
     ScmBackToChanges,
     ScmCommitParents,
@@ -2158,25 +2153,6 @@ l10n_keys! {
     GitHubShowAllReviewers,
 }
 
-/// The source control strings that are translated but not yet displayed.
-///
-/// They all ship in one go so both language files are edited once for the
-/// whole feature instead of once per step, and so the wording can be reviewed
-/// as a set rather than a string at a time. Naming them here is what keeps
-/// `dead_code` reporting on the rest of the enum: without it every unused key
-/// is folded into one warning and a genuinely stale key hides in the crowd.
-///
-/// **Delete a key from this list as soon as something renders it.**
-#[allow(dead_code)]
-const SCM_KEYS_AWAITING_A_CALLER: &[L10nKey] = &[
-    L10nKey::ScmCheckoutBranch,
-    L10nKey::ScmCommitDetailTitle,
-    L10nKey::ScmCommitStaged,
-    L10nKey::ScmResetToCommit,
-    L10nKey::ScmSearchBranches,
-    L10nKey::ScmStashAndSwitch,
-];
-
 pub fn set_locale(mode: &str) {
     let system = (mode == "system")
         .then(system::preferred_ui_language)
@@ -2251,16 +2227,6 @@ pub fn t_plural(key: L10nKey, count: usize, args: &[(&str, &str)]) -> String {
         translate_variant(current_locale_index(), key, branch),
         args,
         Some(count),
-    )
-}
-
-/// Select a named branch of a translation and fill placeholders.
-#[allow(dead_code)]
-pub fn t_select(key: L10nKey, branch: &'static str, args: &[(&str, &str)]) -> String {
-    apply_template(
-        translate_variant(current_locale_index(), key, branch),
-        args,
-        None,
     )
 }
 

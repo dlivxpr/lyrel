@@ -5,6 +5,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
+## [Unreleased]
+
+### 维护
+
+- 清理桌面端无调用方的终端与工作台包装、重复 Git 状态排序、只写不读的设置字段及未使用翻译；测试专用构造器和缓存查询仅在测试构建中保留。移除终端、Host 与 SCM 相关模块的整模块 `dead_code` 屏蔽，保留实际使用的 SSH／SFTP 实现、平台分支和 IPC 协议，并同步错误通知的开发约定。
+
 ## [0.1.1] - 2026-10-21
 
 ### 修复

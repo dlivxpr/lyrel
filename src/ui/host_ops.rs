@@ -251,32 +251,6 @@ impl HostOps {
         .detach();
     }
 
-    pub fn run_or_notify<T, E, F, L>(
-        host: SharedHost,
-        window: &Window,
-        cx: &mut Context<E>,
-        context: impl Into<String>,
-        f: F,
-        land: L,
-    ) where
-        E: 'static,
-        T: Send + 'static,
-        F: FnOnce(&dyn Host) -> std::io::Result<T> + Send + 'static,
-        L: FnOnce(&mut E, T, &mut Window, &mut Context<E>) + 'static,
-    {
-        let context = context.into();
-        Self::run_in(
-            host,
-            window,
-            cx,
-            f,
-            move |view, result, window, cx| match result {
-                Ok(value) => land(view, value, window, cx),
-                Err(e) => HostOps::notify_err(window, cx, &context, &e),
-            },
-        );
-    }
-
     /// Every context handed here is already a sentence about what failed —
     /// "Could not delete a.txt" — so it is the toast's title, and the reason
     /// sits under it. Run together as `{context}: {error}` on one plain line
@@ -381,6 +355,7 @@ impl<K: Eq + Hash + Clone> InFlight<K> {
         self.in_flight.iter()
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.in_flight.len()
     }
@@ -437,6 +412,7 @@ impl<K: Eq + Hash, V> ByHost<K, V> {
         self.map.clear();
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.map.values().map(HashMap::len).sum()
     }

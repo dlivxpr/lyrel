@@ -20,7 +20,7 @@ use crate::core::session::{
 use crate::core::shells::ShellInventory;
 use crate::core::ssh_config;
 use crate::core::window_state::{WindowGeometry as _, WindowState};
-use crate::daemon::protocol::{RemoteContext, RemoteKind, ShellSpec, ssh_option_takes_value};
+use crate::daemon::protocol::{RemoteKind, ShellSpec, ssh_option_takes_value};
 use crate::daemon::spawn::DaemonMismatch;
 use crate::terminal::view::{ChildExited, TerminalView};
 use crate::ui::forwards::{ForwardFields, added_forward, rule_of};
@@ -344,10 +344,6 @@ pub(crate) const TILE_GLYPH_SM: f32 = TILE_GLYPH;
 pub(crate) const TILE_SIZE_XS: f32 = 18.;
 pub(crate) const TILE_GLYPH_XS: f32 = 11.;
 
-/// Line-only controls share the toolbar icon size.
-#[allow(dead_code)]
-pub(crate) const TILE_GLYPH_LINE: f32 = 16.;
-
 pub(crate) const TILE_PAD: f32 = (TILE_SIZE - TILE_GLYPH) / 2.;
 pub(crate) const TILE_PAD_SM: f32 = (TILE_SIZE_SM - TILE_GLYPH_SM) / 2.;
 
@@ -361,11 +357,6 @@ const TILE_EDGE_GAP: f32 = 5.;
 
 pub(crate) fn tile_trailing_inset() -> f32 {
     (CONTENT_INSET - TILE_PAD).max(TILE_EDGE_GAP)
-}
-
-#[allow(dead_code)]
-pub(crate) fn tile_trailing_inset_sm() -> f32 {
-    (CONTENT_INSET - TILE_PAD_SM).max(TILE_EDGE_GAP)
 }
 
 pub(crate) const TITLE_BAR_LEAD: f32 = if cfg!(target_os = "macos") {
@@ -751,22 +742,6 @@ impl Tab {
         self.title_leaf(window, cx)
             .map(|l| l.read(cx).title.clone())
             .unwrap_or_default()
-    }
-
-    /// [`Self::leaf_title`] together with what a `~` in it would mean — one
-    /// leaf lookup, so the title and the home shortening it can never come
-    /// from different panes (#580).
-    #[allow(dead_code)]
-    pub(crate) fn leaf_title_and_home(
-        &self,
-        window: Option<&Window>,
-        cx: &App,
-    ) -> (String, Option<std::path::PathBuf>) {
-        let Some(leaf) = self.title_leaf(window, cx) else {
-            return (String::new(), None);
-        };
-        let leaf = leaf.read(cx);
-        (leaf.title.clone(), leaf.display_home(cx))
     }
 
     /// This tab as the shared label ladder reads it, together with what a `~`
@@ -3256,7 +3231,6 @@ impl LyrelApp {
 
         if let Some(s) = self.settings.as_mut() {
             s.theme_editor = Some(ThemeEditor {
-                for_id: theme.id.clone(),
                 seed,
                 ansi,
                 _subs: subs,
@@ -8732,41 +8706,6 @@ impl LyrelApp {
         self.leaf_close_reason(&leaf, cx)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn active_ssh_pane(
-        &self,
-        window: &Window,
-        cx: &App,
-    ) -> Option<(u64, RemoteContext)> {
-        let pane = self
-            .tabs
-            .get(self.active)?
-            .pane
-            .focused_or_first(window, cx)?;
-        let pane = pane.read(cx);
-        let remote = pane.remote_context()?;
-        (remote.kind != crate::daemon::protocol::RemoteKind::Wsl).then_some((pane.pane_id, remote))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn active_connected_native_ssh_pane(
-        &self,
-        window: &Window,
-        cx: &App,
-    ) -> Option<(u64, RemoteContext)> {
-        use crate::daemon::protocol::{RemoteKind, SshPhase};
-        let (pane_id, remote) = self.active_ssh_pane(window, cx)?;
-        if remote.kind != RemoteKind::NativeSsh {
-            return None;
-        }
-        let leaf = self
-            .tabs
-            .get(self.active)?
-            .pane
-            .focused_or_first(window, cx)?;
-        matches!(leaf.read(cx).ssh_phase(), Some(SshPhase::Connected)).then_some((pane_id, remote))
-    }
-
     pub(crate) fn select_settings_section(
         &mut self,
         target: SettingsSection,
@@ -9357,26 +9296,6 @@ impl LyrelApp {
         self.update_config(cx, |cfg| cfg.prefix = prefix);
         crate::ui::keymap::rebind(cx);
         cx.notify();
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn open_config_file(&self, cx: &Context<Self>) {
-        let Some(path) = crate::core::config::config_path("config.json") else {
-            return;
-        };
-        if !path.exists() {
-            cx.global::<Config>().save();
-        }
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else if cfg!(windows) {
-            "explorer"
-        } else {
-            "xdg-open"
-        };
-        if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
-            log::warn!("failed to open {}: {e}", path.display());
-        }
     }
 }
 

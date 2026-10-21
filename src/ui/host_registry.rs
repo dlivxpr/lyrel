@@ -57,10 +57,6 @@ impl HostRegistry {
         ids.sort_unstable();
         ids
     }
-
-    pub fn len(cx: &mut App) -> usize {
-        cx.default_global::<HostRegistry>().hosts.len()
-    }
 }
 
 #[cfg(test)]

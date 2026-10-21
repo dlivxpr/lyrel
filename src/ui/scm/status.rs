@@ -38,26 +38,6 @@ pub(crate) fn status_color(s: DecoStatus, cx: &gpui_kit::App) -> gpui_kit::Hsla 
     }
 }
 
-/// Display precedence for rolling a directory up to one status: the worst of
-/// everything beneath it wins.
-///
-/// This is `DecoStatus`'s own `Ord` spelled out rather than a second opinion —
-/// `StatusIndex` already rolls directories up with `max()`, so a rank that
-/// disagreed would make a folder and the file inside it contradict each other.
-/// Written out longhand so reordering the enum trips the test below instead of
-/// silently reshuffling the UI.
-pub(crate) fn status_rank(s: DecoStatus) -> u8 {
-    match s {
-        DecoStatus::Ignored => 0,
-        DecoStatus::Untracked => 1,
-        DecoStatus::Added => 2,
-        DecoStatus::Modified => 3,
-        DecoStatus::Renamed => 4,
-        DecoStatus::Deleted => 5,
-        DecoStatus::Conflict => 6,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,41 +67,5 @@ mod tests {
         }
         assert_eq!(status_glyph(DecoStatus::Conflict), "U");
         assert_eq!(status_glyph(DecoStatus::Untracked), "?");
-    }
-
-    #[test]
-    fn rank_orders_conflict_above_everything_and_ignored_below() {
-        let worst_first = [
-            DecoStatus::Conflict,
-            DecoStatus::Deleted,
-            DecoStatus::Renamed,
-            DecoStatus::Modified,
-            DecoStatus::Added,
-            DecoStatus::Untracked,
-            DecoStatus::Ignored,
-        ];
-        for pair in worst_first.windows(2) {
-            assert!(
-                status_rank(pair[0]) > status_rank(pair[1]),
-                "{:?} should outrank {:?}",
-                pair[0],
-                pair[1]
-            );
-        }
-    }
-
-    #[test]
-    fn rank_agrees_with_the_enums_own_ordering() {
-        // The data layer sorts by `Ord`; the UI sorts by `status_rank`. If the
-        // two ever disagree a directory rollup and a file row can disagree too.
-        for a in ALL {
-            for b in ALL {
-                assert_eq!(
-                    status_rank(a).cmp(&status_rank(b)),
-                    a.cmp(&b),
-                    "{a:?} vs {b:?}"
-                );
-            }
-        }
     }
 }

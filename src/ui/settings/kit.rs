@@ -34,8 +34,6 @@ pub(crate) struct Tk {
     pub k04: Hsla,
     pub k05: Hsla,
     pub k06: Hsla,
-    #[allow(dead_code)]
-    pub k07: Hsla,
     pub k08: Hsla,
     pub k15: Hsla,
     pub k3: Hsla,
@@ -90,7 +88,6 @@ impl Tk {
             k04: a(0.04, 0.055),
             k05: a(0.05, 0.07),
             k06: a(0.06, 0.08),
-            k07: a(0.07, 0.09),
             k08: a(0.08, 0.08),
             k15: a(0.15, 0.16),
             k3: a(0.3, 0.3),
