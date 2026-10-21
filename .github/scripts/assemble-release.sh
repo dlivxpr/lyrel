@@ -43,8 +43,16 @@ bash "$SCRIPT_DIR/generate-checksums.sh" "$ASSET_DIR"
 printf '%s\n' checksums.txt >> "$SCRATCH/expected-assets.txt"
 LC_ALL=C sort -o "$SCRATCH/expected-assets.txt" "$SCRATCH/expected-assets.txt"
 
-# 验证真实标签已存在；不允许创建 release 时隐式创建标签。
-gh api "repos/$REPOSITORY/git/ref/tags/$TAG" >/dev/null
+# 验证远端标签并解析实际提交；target_commitish 使用 commit SHA，不传标签名。
+TAG_OBJECT="$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG" | jq -e '.object')"
+for ((DEPTH = 0; DEPTH < 10; DEPTH++)); do
+  [[ "$(jq -r '.type' <<<"$TAG_OBJECT")" == tag ]] || break
+  TAG_SHA="$(jq -er '.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<<"$TAG_OBJECT")"
+  TAG_OBJECT="$(gh api "repos/$REPOSITORY/git/tags/$TAG_SHA" | jq -e '.object')"
+done
+SOURCE_SHA="$(jq -er 'select(.type == "commit") | .sha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<<"$TAG_OBJECT")" || {
+  echo "::error::release tag must resolve to a commit"; exit 1;
+}
 if [[ -n "${DRAFT_RELEASE_ID:-}" ]]; then
   [[ "$DRAFT_RELEASE_ID" =~ ^[1-9][0-9]*$ ]] || {
     echo "::error::draft release ID must be a positive integer"; exit 1;
@@ -57,7 +65,7 @@ else
     0)
       # 使用创建响应中的对象和 ID；不依赖列表端点立即看到新草稿。
       RELEASE="$(gh api --method POST "repos/$REPOSITORY/releases" \
-        -f tag_name="$TAG" -f target_commitish="$TAG" -f name="$TAG" \
+        -f tag_name="$TAG" -f target_commitish="$SOURCE_SHA" -f name="$TAG" \
         -f body='' -F draft=true -F prerelease=false)"
       ;;
     1) RELEASE="$(jq -c '.[0]' <<<"$MATCHES")" ;;
