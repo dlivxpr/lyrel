@@ -202,18 +202,18 @@
 
 
 ===============================================================================
-项目来源与第三方许可附录
+Project origin and third-party license appendix
 ===============================================================================
 
-lyrel 基于 l0ng-ai/tty7（https://github.com/l0ng-ai/tty7）开发，保留原 Copyright 2026 l0ng-ai。
-本项目已对原项目作出修改；现有 CHANGELOG.md 记录本项目的修改。
+lyrel is based on l0ng-ai/tty7 (https://github.com/l0ng-ai/tty7) and retains Copyright 2026 l0ng-ai.
+This project modifies the original project; CHANGELOG.md records its changes.
 
-下列第三方组件仍按各自许可证授权。本附录不改变其权利归属或许可，也不授予商标权。
-同一组内列出的组件共享其后所列许可原文；各自版权和其他通知分别保留。
-采用 Apache-2.0 的组件适用本文件开头的 Apache License, Version 2.0 正文，
-不因此采用本项目的版权声明。必须同时遵守的其他许可和通知仍在下文保留。
+Each third-party component below remains under its respective license. This appendix changes neither ownership nor licensing and grants no trademark rights.
+Components in each group share the license text that follows; their respective copyright and other notices are retained.
+Components using Apache-2.0 use the Apache License, Version 2.0 text at the beginning of this file.
+They retain their own copyright notices. Additional license terms and notices that also apply are retained below.
 
-一、采用 Apache-2.0 的第三方 Rust 组件
+I. Third-party Rust components using Apache-2.0
 
 accesskit 0.24.1
 accesskit_consumer 0.38.0
@@ -251,8 +251,8 @@ async-process 2.5.0
 async-signal 0.2.14
 async-task 4.7.1
 atomic-waker 1.1.2
-aws-lc-rs 1.18.0（同时适用：ISC AND Apache-2.0）
-aws-lc-sys 0.44.0（同时适用：ISC AND Apache-2.0 AND MIT AND BSD-3-Clause）
+aws-lc-rs 1.18.0 (also applies: ISC AND Apache-2.0)
+aws-lc-sys 0.44.0 (also applies: ISC AND Apache-2.0 AND MIT AND BSD-3-Clause)
 backtrace 0.3.76
 base16ct 1.0.0
 base64 0.22.1
@@ -324,14 +324,14 @@ dirs-sys 0.5.0
 dispatch2 0.3.1
 displaydoc 0.2.7
 downcast-rs 1.2.1
-dpi 0.1.2（同时适用：Apache-2.0 AND MIT）
+dpi 0.1.2 (also applies: Apache-2.0 AND MIT)
 dunce 1.0.5
 dyn-clone 1.0.20
 ecdsa 0.17.0
 ed25519 3.0.0
 either 1.17.0
 elliptic-curve 0.14.1
-encoding_rs 0.8.42（同时适用：Apache-2.0 AND BSD-3-Clause）
+encoding_rs 0.8.42 (also applies: Apache-2.0 AND BSD-3-Clause)
 encoding_rs_io 0.1.8
 enum_dispatch 0.3.13
 enumn 0.1.14
@@ -579,7 +579,7 @@ resvg 0.45.1
 resvg 0.46.0
 resvg 0.48.1
 rfc6979 0.6.0
-ring 0.17.14（同时适用：Apache-2.0 AND ISC）
+ring 0.17.14 (also applies: Apache-2.0 AND ISC)
 rio-unicode 0.5.28
 rle-decode-fast 1.0.3
 ropey 2.0.0-beta.1
@@ -690,7 +690,7 @@ unicode-bidi 0.3.18
 unicode-bidi-mirroring 0.4.0
 unicode-ccc 0.4.0
 unicode-id 0.3.6
-unicode-ident 1.0.24（同时适用：Apache-2.0 AND Unicode-3.0）
+unicode-ident 1.0.24 (also applies: Apache-2.0 AND Unicode-3.0)
 unicode-linebreak 0.1.5
 unicode-normalization 0.1.25
 unicode-properties 0.1.3
@@ -761,24 +761,24 @@ zune-inflate 0.2.54
 zune-jpeg 0.4.21
 zune-jpeg 0.5.15
 
-二、option-ext 0.2.0 的源码获取
+II. Source code for option-ext 0.2.0
 
-本项目使用未修改的 option-ext 0.2.0，按 MPL-2.0 授权；其完整许可原文见下文。
-对应版本的源代码可从以下地址获取：
+lyrel uses unmodified option-ext 0.2.0 under MPL-2.0; its complete license text appears below.
+The source code for this version is available at:
 https://crates.io/api/v1/crates/option-ext/0.2.0/download
 https://static.crates.io/crates/option-ext/option-ext-0.2.0.crate
-对应版本源码浏览入口：
+Browse the source code for this version at:
 https://docs.rs/crate/option-ext/0.2.0/source/
-MPL-2.0 适用于该组件，不将 lyrel 的其他独立文件改为 MPL-2.0。
+MPL-2.0 applies to this component, not to lyrel's other independent files.
 
-三、第三方版权、通知及许可原文
+III. Third-party copyrights, notices, and license texts
 
 -------------------------------------------------------------------------------
 T001
-适用组件及通知文件：
+Applicable components and notice files:
 - adler2 2.0.1 / LICENSE-0BSD
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (C) Jonas Schievink <jonasschievink@gmail.com>
 
@@ -795,10 +795,10 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 -------------------------------------------------------------------------------
 T002
-适用组件及通知文件：
+Applicable components and notice files:
 - adler32 1.2.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright notice for the Rust port:
 
@@ -846,7 +846,7 @@ Copyright notice for the original C code from the zlib project:
 
 -------------------------------------------------------------------------------
 T003
-适用组件及通知文件：
+Applicable components and notice files:
 - aho-corasick 1.1.5 / COPYING
 - byteorder 1.5.0 / COPYING
 - globset 0.4.20 / COPYING
@@ -860,7 +860,7 @@ T003
 - walkdir 2.5.0 / COPYING
 - winapi-util 0.1.11 / COPYING
 
-许可或通知原文：
+Original license or notice text:
 
 This project is dual-licensed under the Unlicense and MIT licenses.
 
@@ -868,7 +868,7 @@ You may use this code under the terms of either license.
 
 -------------------------------------------------------------------------------
 T004
-适用组件及通知文件：
+Applicable components and notice files:
 - aho-corasick 1.1.5 / LICENSE-MIT
 The MIT License (MIT)
 
@@ -1526,18 +1526,18 @@ Copyright (c) 2016 Alexandre Bury
 - zstd-sys 2.0.16+zstd.1.5.7 / LICENSE.Mit
 The MIT License (MIT)
 Copyright (c) 2016 Alexandre Bury
-- block 0.1.6 / Cargo.toml（MIT 声明）
-作者元数据：Steven Sheldon
-上游发布包未附单独版权行；其 Cargo.toml 声明使用 MIT 许可。
-- tree-sitter-diff 0.1.0 / Cargo.toml（MIT 声明）
-作者元数据：Michael Davis <mcarsondavis@gmail.com>
-上游发布包未附单独版权行；其 Cargo.toml 声明使用 MIT 许可。
+- block 0.1.6 / Cargo.toml (MIT declaration)
+Author metadata: Steven Sheldon
+The upstream package includes no separate copyright line; its Cargo.toml declares the MIT license.
+- tree-sitter-diff 0.1.0 / Cargo.toml (MIT declaration)
+Author metadata: Michael Davis <mcarsondavis@gmail.com>
+The upstream package includes no separate copyright line; its Cargo.toml declares the MIT license.
 - mac-notification-sys 0.6.15 / LICENSE-MIT
 MIT License
 
 Copyright (c) 2017 Felix Döring
 
-许可或通知原文：
+Original license or notice text:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1559,13 +1559,13 @@ THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T005
-适用组件及通知文件：
+Applicable components and notice files:
 - apple-native-keyring-store 1.0.2 / LICENSE-APACHE
 - keyring 4.2.0 / LICENSE-APACHE
 - keyring-core 1.0.0 / LICENSE-APACHE
 - windows-native-keyring-store 1.1.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright [2017] [keyring developers]
 
@@ -1583,10 +1583,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T006
-适用组件及通知文件：
+Applicable components and notice files:
 - array-init 2.1.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2017-2020 The array-init developers
 
@@ -1604,10 +1604,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T007
-适用组件及通知文件：
+Applicable components and notice files:
 - arrayref 0.3.9 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2015 David Roundy <roundyd@physics.oregonstate.edu>
 All rights reserved.
@@ -1638,11 +1638,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T008
-适用组件及通知文件：
+Applicable components and notice files:
 - atomic-waker 1.1.2 / LICENSE-THIRD-PARTY
 - futures-lite 2.6.1 / LICENSE-THIRD-PARTY
 
-许可或通知原文：
+Original license or notice text:
 
 ===============================================================================
 
@@ -1692,10 +1692,10 @@ DEALINGS IN THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T009
-适用组件及通知文件：
+Applicable components and notice files:
 - av1-grain 0.2.5 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD 2-Clause License
 
@@ -1725,10 +1725,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T010
-适用组件及通知文件：
+Applicable components and notice files:
 - avif-serialize 0.8.9 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD 3-Clause License
 
@@ -1762,7 +1762,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T011
-适用组件及通知文件：
+Applicable components and notice files:
 - objc2-foundation 0.3.2 / LICENSE.md
 - block2 0.6.2 / LICENSE.md
 - dispatch2 0.3.1 / LICENSE.md
@@ -1781,7 +1781,7 @@ T011
 - objc2-security 0.3.2 / LICENSE.md
 - objc2-user-notifications 0.3.2 / LICENSE.md
 
-许可或通知原文：
+Original license or notice text:
 
 # License
 
@@ -1820,10 +1820,10 @@ Xcode you have already agreed to the Xcode license).
 
 -------------------------------------------------------------------------------
 T012
-适用组件及通知文件：
+Applicable components and notice files:
 - bstr 1.13.0 / COPYING
 
-许可或通知原文：
+Original license or notice text:
 
 This project is licensed under either of
 
@@ -1836,11 +1836,11 @@ at your option.
 
 -------------------------------------------------------------------------------
 T013
-适用组件及通知文件：
+Applicable components and notice files:
 - bytemuck 1.25.2 / LICENSE-ZLIB
 - tinyvec 1.12.0 / LICENSE-ZLIB.md
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2019 Daniel "Lokathor" Gee.
 
@@ -1856,7 +1856,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 -------------------------------------------------------------------------------
 T014
-适用组件及通知文件：
+Applicable components and notice files:
 - chrono 0.4.45 / LICENSE.txt
 Rust-chrono is dual-licensed under The MIT License [1] and
 Apache 2.0 License [2]. Copyright (c) 2014--2026, Kang Seonghoon and
@@ -1872,7 +1872,7 @@ The MIT License (MIT)
 
 Copyright (c) 2014, Kang Seonghoon.
 
-许可或通知原文：
+Original license or notice text:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1900,7 +1900,7 @@ THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T015
-适用组件及通知文件：
+Applicable components and notice files:
 - cocoa 0.26.0 / COPYRIGHT
 - core-graphics 0.24.0 / COPYRIGHT
 - core-text 21.0.0 / COPYRIGHT
@@ -1911,7 +1911,7 @@ T015
 - unicode-segmentation 1.13.3 / COPYRIGHT
 - unicode-width 0.2.2 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
 http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -1921,10 +1921,10 @@ copied, modified, or distributed except according to those terms.
 
 -------------------------------------------------------------------------------
 T016
-适用组件及通知文件：
+Applicable components and notice files:
 - cursor-icon 1.2.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2023 Kirill Chibisov
 
@@ -1942,10 +1942,10 @@ Copyright 2023 Kirill Chibisov
 
 -------------------------------------------------------------------------------
 T017
-适用组件及通知文件：
+Applicable components and notice files:
 - cursor-icon 1.2.0 / LICENSE-ZLIB
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2023 Kirill Chibisov
 
@@ -1961,10 +1961,10 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 -------------------------------------------------------------------------------
 T018
-适用组件及通知文件：
+Applicable components and notice files:
 - curve25519-dalek 5.0.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2016-2021 isis agora lovecruft. All rights reserved.
 Copyright (c) 2016-2021 Henry de Valence. All rights reserved.
@@ -1998,10 +1998,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T019
-适用组件及通知文件：
+Applicable components and notice files:
 - deranged 0.5.8 / LICENSE-Apache
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2024 Jacob Pratt et al.
 
@@ -2019,12 +2019,12 @@ Copyright 2024 Jacob Pratt et al.
 
 -------------------------------------------------------------------------------
 T020
-适用组件及通知文件：
+Applicable components and notice files:
 - ecdsa 0.17.0 / LICENSE-APACHE
 - ed25519 3.0.0 / LICENSE-APACHE
 - rfc6979 0.6.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2018-2022 RustCrypto Developers
 
@@ -2042,10 +2042,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T021
-适用组件及通知文件：
+Applicable components and notice files:
 - ed25519-dalek 3.0.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2017-2019 isis agora lovecruft. All rights reserved.
 
@@ -2078,10 +2078,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T022
-适用组件及通知文件：
+Applicable components and notice files:
 - encoding_rs_io 0.1.8 / COPYING
 
-许可或通知原文：
+Original license or notice text:
 
 This project is licensed under either of
 
@@ -2094,11 +2094,11 @@ at your option.
 
 -------------------------------------------------------------------------------
 T023
-适用组件及通知文件：
+Applicable components and notice files:
 - enum-iterator 2.3.0 / LICENSE
 - enum-iterator-derive 1.5.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD Zero Clause License
 
@@ -2117,10 +2117,10 @@ PERFORMANCE OF THIS SOFTWARE.
 
 -------------------------------------------------------------------------------
 T024
-适用组件及通知文件：
+Applicable components and notice files:
 - etagere 0.2.15 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2020 Nicolas Silva
 
@@ -2138,10 +2138,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T025
-适用组件及通知文件：
+Applicable components and notice files:
 - exr 1.74.2 / LICENSE.md
 
-许可或通知原文：
+Original license or notice text:
 
 # Licenses
 
@@ -2179,7 +2179,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 -------------------------------------------------------------------------------
 T026
-适用组件及通知文件：
+Applicable components and notice files:
 - fax 0.2.7 / LICENSE
 Copyright © 2021 The pdf-rs contributers.
 - loop9 0.1.5 / LICENSE
@@ -2190,7 +2190,7 @@ The MIT License (MIT)
 
 Copyright © `2020` `Sebastian Thiel`
 
-许可或通知原文：
+Original license or notice text:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -2200,10 +2200,10 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 
 -------------------------------------------------------------------------------
 T027
-适用组件及通知文件：
+Applicable components and notice files:
 - foldhash 0.2.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2024 Orson Peters
 
@@ -2227,7 +2227,7 @@ the following restrictions:
 
 -------------------------------------------------------------------------------
 T028
-适用组件及通知文件：
+Applicable components and notice files:
 - futures 0.3.34 / LICENSE-APACHE
 - futures-channel 0.3.34 / LICENSE-APACHE
 - futures-core 0.3.34 / LICENSE-APACHE
@@ -2238,7 +2238,7 @@ T028
 - futures-task 0.3.34 / LICENSE-APACHE
 - futures-util 0.3.34 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2016 Alex Crichton
 Copyright (c) 2017 The Tokio Authors
@@ -2257,14 +2257,14 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T029
-适用组件及通知文件：
+Applicable components and notice files:
 - gpui-base 0.8.0 / LICENSE-APACHE
 - gpui-component 0.8.0 / LICENSE-APACHE
 - gpui-component-macros 0.8.0 / LICENSE-APACHE
 - gpui-kit 0.8.0 / LICENSE-APACHE
-- gpui-kit-assets 0.8.0（crate 代码 + 12 个保留的 GPUI Kit 图标） / LICENSE-APACHE
+- gpui-kit-assets 0.8.0 (crate code and 12 retained GPUI Kit icons) / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2024 - 2026 Longbridge <https://longbridge.com>
 
@@ -2282,10 +2282,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T030
-适用组件及通知文件：
+Applicable components and notice files:
 - gpui-kit-assets 0.8.0 / LICENSE-LUCIDE
 
-许可或通知原文：
+Original license or notice text:
 
 ISC License
 
@@ -2333,7 +2333,7 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 T031
-适用组件及通知文件：
+Applicable components and notice files:
 - gpui-pre 0.3.9 / LICENSE-APACHE
 - gpui-pre-apple 0.3.9 / LICENSE-APACHE
 - gpui-pre-collections 0.3.9 / LICENSE-APACHE
@@ -2353,7 +2353,7 @@ T031
 - gpui-pre-ztracing 0.3.9 / LICENSE-APACHE
 - gpui-pre-ztracing-macro 0.3.9 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2022 - 2025 Zed Industries, Inc.
 
@@ -2374,10 +2374,10 @@ Copyright 2022 - 2025 Zed Industries, Inc.
 
 -------------------------------------------------------------------------------
 T032
-适用组件及通知文件：
+Applicable components and notice files:
 - gpui-pre-reqwest 0.12.15 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2016 Sean McArthur
 
@@ -2395,10 +2395,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T033
-适用组件及通知文件：
+Applicable components and notice files:
 - granit-parser 1.3.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Inherited license notices:
 
@@ -2418,10 +2418,10 @@ Redistributions of this Work must include all inherited and new license notices,
 
 -------------------------------------------------------------------------------
 T034
-适用组件及通知文件：
+Applicable components and notice files:
 - group 0.14.0 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyrights in the "group" library are retained by their contributors. No
 copyright assignment is required to contribute to the "group" library.
@@ -2440,10 +2440,10 @@ conditions.
 
 -------------------------------------------------------------------------------
 T035
-适用组件及通知文件：
+Applicable components and notice files:
 - http 1.5.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2017 http-rs authors
 
@@ -2461,13 +2461,13 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T036
-适用组件及通知文件：
+Applicable components and notice files:
 - hyper-rustls 0.27.9 / LICENSE-ISC
 - rustls 0.23.43 / LICENSE-ISC
 - rustls-native-certs 0.8.4 / LICENSE-ISC
 - rustls-pemfile 2.2.0 / LICENSE-ISC
 
-许可或通知原文：
+Original license or notice text:
 
 ISC License (ISC)
 Copyright (c) 2016, Joseph Birr-Pixton <jpixton@gmail.com>
@@ -2487,10 +2487,10 @@ THIS SOFTWARE.
 
 -------------------------------------------------------------------------------
 T037
-适用组件及通知文件：
+Applicable components and notice files:
 - iana-time-zone 0.1.65 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2020 Andrew Straw
 
@@ -2508,7 +2508,7 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T038
-适用组件及通知文件：
+Applicable components and notice files:
 - icu_collator 2.3.1 / LICENSE
 - icu_collator_data 2.3.0 / LICENSE
 - icu_collections 2.3.0 / LICENSE
@@ -2532,7 +2532,7 @@ T038
 - zerovec 0.11.8 / LICENSE
 - zerovec-derive 0.11.6 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 UNICODE LICENSE V3
 
@@ -2583,11 +2583,11 @@ ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation a
 
 -------------------------------------------------------------------------------
 T039
-适用组件及通知文件：
+Applicable components and notice files:
 - inotify 0.11.4 / LICENSE
 - inotify-sys 0.1.8 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) Hanno Braun and contributors
 
@@ -2605,10 +2605,10 @@ THIS SOFTWARE.
 
 -------------------------------------------------------------------------------
 T040
-适用组件及通知文件：
+Applicable components and notice files:
 - instant 0.1.13 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2019, Sébastien Crozet
 All rights reserved.
@@ -2640,10 +2640,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T041
-适用组件及通知文件：
+Applicable components and notice files:
 - ipnet 2.12.1 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2017 Juniper Networks, Inc.
 
@@ -2661,10 +2661,10 @@ Copyright 2017 Juniper Networks, Inc.
 
 -------------------------------------------------------------------------------
 T042
-适用组件及通知文件：
+Applicable components and notice files:
 - kem 0.3.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2021 RustCrypto Developers
 
@@ -2682,10 +2682,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T043
-适用组件及通知文件：
+Applicable components and notice files:
 - lebe 0.5.3 / LICENSE-BSD-3-Clause
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2022 Contributors to the lebe Project. All rights reserved.
 
@@ -2716,10 +2716,10 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T044
-适用组件及通知文件：
+Applicable components and notice files:
 - libm 0.2.16 / LICENSE.txt
 
-许可或通知原文：
+Original license or notice text:
 
 rust-lang/libm as a whole is available for use under the MIT license:
 
@@ -2982,10 +2982,10 @@ Copyright notices are retained in src/* files where relevant.
 
 -------------------------------------------------------------------------------
 T045
-适用组件及通知文件：
+Applicable components and notice files:
 - linux-raw-sys 0.12.1 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Short version for non-lawyers:
 
@@ -3019,14 +3019,14 @@ at your option.
 
 -------------------------------------------------------------------------------
 T046
-适用组件及通知文件：
+Applicable components and notice files:
 - lyon 1.0.19 / LICENSE-APACHE
 - lyon_algorithms 1.0.20 / LICENSE-APACHE
 - lyon_geom 1.0.19 / LICENSE-APACHE
 - lyon_path 1.0.19 / LICENSE-APACHE
 - lyon_tessellation 1.0.20 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2016 Nicolas Silva
 
@@ -3044,10 +3044,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T047
-适用组件及通知文件：
+Applicable components and notice files:
 - mach2 0.6.0 / LICENSE-BSD
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2019 Nick Fitzgerald, 2021 Yuki Okushi
 All rights reserved.
@@ -3075,13 +3075,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T048
-适用组件及通知文件：
+Applicable components and notice files:
 - markdown 1.0.0 / license
 (The MIT License)
 
 Copyright (c) 2022 Titus Wormer <tituswormer@gmail.com>
 
-许可或通知原文：
+Original license or notice text:
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
@@ -3104,10 +3104,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T049
-适用组件及通知文件：
+Applicable components and notice files:
 - md5 0.8.1 / LICENSE.md
 
-许可或通知原文：
+Original license or notice text:
 
 # License
 
@@ -3161,10 +3161,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T050
-适用组件及通知文件：
+Applicable components and notice files:
 - memmap2 0.9.11 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright [2015] [Dan Burkert]
 
@@ -3182,11 +3182,11 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T051
-适用组件及通知文件：
+Applicable components and notice files:
 - miniz_oxide 0.8.9 / LICENSE-ZLIB.md
 - miniz_oxide 0.9.1 / LICENSE-ZLIB.md
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2013-2014 RAD Game Tools and Valve Software
 Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
@@ -3205,11 +3205,11 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 -------------------------------------------------------------------------------
 T052
-适用组件及通知文件：
+Applicable components and notice files:
 - moxcms 0.8.1 / LICENSE-APACHE.md
 - pxfm 0.1.30 / LICENSE-APACHE.md
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2024 Radzivon Bartoshyk
 
@@ -3227,11 +3227,11 @@ Copyright 2024 Radzivon Bartoshyk
 
 -------------------------------------------------------------------------------
 T053
-适用组件及通知文件：
+Applicable components and notice files:
 - moxcms 0.8.1 / LICENSE.md
 - pxfm 0.1.30 / LICENSE.md
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) Radzivon Bartoshyk. All rights reserved.
 
@@ -3262,10 +3262,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T054
-适用组件及通知文件：
+Applicable components and notice files:
 - muda 0.21.2 / LICENSE.spdx
 
-许可或通知原文：
+Original license or notice text:
 
 SPDXVersion: SPDX-2.1
 DataLicense: CC0-1.0
@@ -3289,10 +3289,10 @@ Creator: Person: Daniel Thompson-Yvetot
 
 -------------------------------------------------------------------------------
 T055
-适用组件及通知文件：
+Applicable components and notice files:
 - multiversion_no_op 1.0.0 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright Mozilla Foundation
 
@@ -3312,10 +3312,10 @@ limitations under the Licenses.
 
 -------------------------------------------------------------------------------
 T056
-适用组件及通知文件：
+Applicable components and notice files:
 - normpath 1.5.1 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2020 dylni (https://github.com/dylni)
 
@@ -3327,10 +3327,10 @@ copied, modified, or distributed except according to those terms.
 
 -------------------------------------------------------------------------------
 T057
-适用组件及通知文件：
+Applicable components and notice files:
 - notify 8.2.0 / LICENSE-CC0
 
-许可或通知原文：
+Original license or notice text:
 
 Creative Commons CC0 1.0 Universal
 
@@ -3376,10 +3376,10 @@ For these and/or other purposes and motivations, and without any expectation of 
 
 -------------------------------------------------------------------------------
 T058
-适用组件及通知文件：
+Applicable components and notice files:
 - notify-types 2.1.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2023 Notify Contributors
 
@@ -3397,10 +3397,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T059
-适用组件及通知文件：
+Applicable components and notice files:
 - option-ext 0.2.0 / LICENSE.txt
 
-许可或通知原文：
+Original license or notice text:
 
 Mozilla Public License Version 2.0
 ==================================
@@ -3778,10 +3778,10 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 -------------------------------------------------------------------------------
 T060
-适用组件及通知文件：
+Applicable components and notice files:
 - powerfmt 0.2.0 / LICENSE-Apache
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2023 Jacob Pratt et al.
 
@@ -3799,10 +3799,10 @@ Copyright 2023 Jacob Pratt et al.
 
 -------------------------------------------------------------------------------
 T061
-适用组件及通知文件：
+Applicable components and notice files:
 - ppv-lite86 0.2.21 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2019 The CryptoCorrosion Contributors
 
@@ -3820,10 +3820,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T062
-适用组件及通知文件：
+Applicable components and notice files:
 - proc-macro-error-attr3 3.1.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2019-2020 CreepySkeleton <creepy-skeleton@yandex.ru>
 
@@ -3841,10 +3841,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T063
-适用组件及通知文件：
+Applicable components and notice files:
 - proc-macro-error3 3.1.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2019-2020 CreepySkeleton <creepy-skeleton@yandex.ru>
 Copyright 2026 gamma0987 <gamma0987@posteo.de>
@@ -3863,7 +3863,7 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T064
-适用组件及通知文件：
+Applicable components and notice files:
 - rand 0.10.2 / COPYRIGHT
 - rand 0.8.7 / COPYRIGHT
 - rand 0.9.5 / COPYRIGHT
@@ -3872,7 +3872,7 @@ T064
 - rand_core 0.6.4 / COPYRIGHT
 - rand_core 0.9.5 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyrights in the Rand project are retained by their contributors. No
 copyright assignment is required to contribute to the Rand project.
@@ -3889,10 +3889,10 @@ published under these same licenses.
 
 -------------------------------------------------------------------------------
 T065
-适用组件及通知文件：
+Applicable components and notice files:
 - rand_core 0.10.1 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyrights in the Rand project are retained by their contributors. No
 copyright assignment is required to contribute to the Rand project.
@@ -3906,10 +3906,10 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 
 -------------------------------------------------------------------------------
 T066
-适用组件及通知文件：
+Applicable components and notice files:
 - rav1e 0.8.1 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD 2-Clause License
 
@@ -3939,10 +3939,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T067
-适用组件及通知文件：
+Applicable components and notice files:
 - ravif 0.13.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD 3-Clause License
 
@@ -3976,10 +3976,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T068
-适用组件及通知文件：
+Applicable components and notice files:
 - raw-window-handle 0.6.2 / LICENSE-ZLIB.md
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2020 Osspial
 
@@ -3995,10 +3995,10 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 -------------------------------------------------------------------------------
 T069
-适用组件及通知文件：
+Applicable components and notice files:
 - regex-syntax 0.8.11 / src/unicode_tables/LICENSE-UNICODE
 
-许可或通知原文：
+Original license or notice text:
 
 UNICODE, INC. LICENSE AGREEMENT - DATA FILES AND SOFTWARE
 
@@ -4060,10 +4060,10 @@ written authorization of the copyright holder.
 
 -------------------------------------------------------------------------------
 T070
-适用组件及通知文件：
+Applicable components and notice files:
 - rio-grapheme-width 0.5.28 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 MIT License
 
@@ -4101,10 +4101,10 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 T071
-适用组件及通知文件：
+Applicable components and notice files:
 - rle-decode-fast 1.0.3 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2019 Moritz "WanzenBug" Wanzenböck
 
@@ -4122,10 +4122,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T072
-适用组件及通知文件：
+Applicable components and notice files:
 - rustix 1.1.4 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Short version for non-lawyers:
 
@@ -4159,10 +4159,10 @@ at your option.
 
 -------------------------------------------------------------------------------
 T073
-适用组件及通知文件：
+Applicable components and notice files:
 - rustls-native-certs 0.8.4 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Rustls is distributed under the following three licenses:
 
@@ -4176,10 +4176,10 @@ of these licenses, at your option.
 
 -------------------------------------------------------------------------------
 T074
-适用组件及通知文件：
+Applicable components and notice files:
 - rustls-pemfile 2.2.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 rustls-pemfile is distributed under the following three licenses:
 
@@ -4193,10 +4193,10 @@ of these licenses, at your option.
 
 -------------------------------------------------------------------------------
 T075
-适用组件及通知文件：
+Applicable components and notice files:
 - rustls-pki-types 1.15.1 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2023 Dirkjan Ochtman
 
@@ -4214,10 +4214,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T076
-适用组件及通知文件：
+Applicable components and notice files:
 - rustls-webpki 0.103.13 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -4241,13 +4241,13 @@ third-party/chromium/LICENSE.
 
 -------------------------------------------------------------------------------
 T077
-适用组件及通知文件：
+Applicable components and notice files:
 - rustybuzz 0.20.1 / scripts/ms-use/COPYING
 MIT License
 
     Copyright (c) Microsoft Corporation.
 
-许可或通知原文：
+Original license or notice text:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to deal
@@ -4269,11 +4269,11 @@ Permission is hereby granted, free of charge, to any person obtaining a copy
 
 -------------------------------------------------------------------------------
 T078
-适用组件及通知文件：
+Applicable components and notice files:
 - ryu 1.0.23 / LICENSE-BOOST
 Boost Software License - Version 1.0 - August 17th, 2003
 
-许可或通知原文：
+Original license or notice text:
 
 Permission is hereby granted, free of charge, to any person or organization
 obtaining a copy of the software and accompanying documentation covered by
@@ -4299,10 +4299,10 @@ DEALINGS IN THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T079
-适用组件及通知文件：
+Applicable components and notice files:
 - serial2 0.2.38 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2021, Maarten de Vries <maarten@de-vri.es>
 
@@ -4320,10 +4320,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T080
-适用组件及通知文件：
+Applicable components and notice files:
 - serial2 0.2.38 / LICENSE-BSD
 
-许可或通知原文：
+Original license or notice text:
 
 BSD 2-Clause License
 
@@ -4352,10 +4352,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T081
-适用组件及通知文件：
+Applicable components and notice files:
 - sha1_smol 1.0.1 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD 3-Clause License
 
@@ -4420,10 +4420,10 @@ DEALINGS IN THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T082
-适用组件及通知文件：
+Applicable components and notice files:
 - siphasher 1.0.3 / COPYING
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2012-2016 The Rust Project Developers.
 Copyright 2016-2026 Frank Denis.
@@ -4435,10 +4435,10 @@ option.
 
 -------------------------------------------------------------------------------
 T083
-适用组件及通知文件：
+Applicable components and notice files:
 - slotmap 1.1.1 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2021 Orson Peters <orsonpeters@gmail.com>
 
@@ -4462,10 +4462,10 @@ the following restrictions:
 
 -------------------------------------------------------------------------------
 T084
-适用组件及通知文件：
+Applicable components and notice files:
 - snap 1.1.2 / COPYING
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2011, The Snappy-Rust Authors. All rights reserved.
 
@@ -4497,10 +4497,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T085
-适用组件及通知文件：
+Applicable components and notice files:
 - subtle 2.6.1 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence. All rights reserved.
 Copyright (c) 2016-2024 Isis Agora Lovecruft. All rights reserved.
@@ -4534,10 +4534,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T086
-适用组件及通知文件：
+Applicable components and notice files:
 - tauri-winrt-notification 0.8.1 / LICENSE.spdx
 
-许可或通知原文：
+Original license or notice text:
 
 SPDXVersion: SPDX-2.1
 DataLicense: CC0-1.0
@@ -4561,13 +4561,13 @@ Creator: Person: Daniel Thompson-Yvetot
 
 -------------------------------------------------------------------------------
 T087
-适用组件及通知文件：
+Applicable components and notice files:
 - tiny-skia 0.11.4 / LICENSE
 - tiny-skia 0.12.0 / LICENSE
 - tiny-skia-path 0.11.4 / LICENSE
 - tiny-skia-path 0.12.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2011 Google Inc. All rights reserved.
 Copyright (c) 2020 Yevhenii Reizner All rights reserved.
@@ -4602,10 +4602,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T088
-适用组件及通知文件：
+Applicable components and notice files:
 - tinyvec_macros 0.1.1 / LICENSE-APACHE.md
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2020 Tomasz "Soveu" Marx
 
@@ -4623,10 +4623,10 @@ Copyright 2020 Tomasz "Soveu" Marx
 
 -------------------------------------------------------------------------------
 T089
-适用组件及通知文件：
+Applicable components and notice files:
 - tinyvec_macros 0.1.1 / LICENSE-ZLIB.md
 
-许可或通知原文：
+Original license or notice text:
 
 zlib License
 
@@ -4650,10 +4650,10 @@ freely, subject to the following restrictions:
 
 -------------------------------------------------------------------------------
 T090
-适用组件及通知文件：
+Applicable components and notice files:
 - tokio-rustls 0.26.4 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2017 quininer kel
 
@@ -4671,10 +4671,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T091
-适用组件及通知文件：
+Applicable components and notice files:
 - tray-icon 0.26.1 / LICENSE.spdx
 
-许可或通知原文：
+Original license or notice text:
 
 SPDXVersion: SPDX-2.1
 DataLicense: CC0-1.0
@@ -4698,10 +4698,10 @@ Creator: Person: Daniel Thompson-Yvetot
 
 -------------------------------------------------------------------------------
 T092
-适用组件及通知文件：
+Applicable components and notice files:
 - tree-sitter 0.26.13 / src/unicode/LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 COPYRIGHT AND PERMISSION NOTICE (ICU 58 and later)
 
@@ -5120,11 +5120,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T093
-适用组件及通知文件：
+Applicable components and notice files:
 - tree-sitter-proto 0.2.0 / LICENSE
 Copyright (c) 2024-2025 Mohammad Ashar Khan
 
-许可或通知原文：
+Original license or notice text:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the " Software"), to deal in
@@ -5146,11 +5146,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 -------------------------------------------------------------------------------
 T094
-适用组件及通知文件：
+Applicable components and notice files:
 - tree-sitter-swift 0.7.3 / node_modules/isexe/LICENSE
 - tree-sitter-swift 0.7.3 / node_modules/which/LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 The ISC License
 
@@ -5170,19 +5170,19 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 -------------------------------------------------------------------------------
 T095
-适用组件及通知文件：
+Applicable components and notice files:
 - typenum 1.20.1 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 MIT OR Apache-2.0
 
 -------------------------------------------------------------------------------
 T096
-适用组件及通知文件：
+Applicable components and notice files:
 - typenum 1.20.1 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2014 Paho Lurie-Gregg
 
@@ -5200,10 +5200,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T097
-适用组件及通知文件：
+Applicable components and notice files:
 - unicode-bidi 0.3.18 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 This project is copyright 2015, The Servo Project Developers (given in the
 file AUTHORS).
@@ -5216,10 +5216,10 @@ according to those terms.
 
 -------------------------------------------------------------------------------
 T098
-适用组件及通知文件：
+Applicable components and notice files:
 - unicode-script 0.5.8 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2021 The Unicode-rs Developers
 
@@ -5237,11 +5237,11 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T099
-适用组件及通知文件：
+Applicable components and notice files:
 - untrusted 0.7.1 / LICENSE.txt
 - untrusted 0.9.0 / LICENSE.txt
 
-许可或通知原文：
+Original license or notice text:
 
 // Copyright 2015-2016 Brian Smith.
 //
@@ -5259,10 +5259,10 @@ T099
 
 -------------------------------------------------------------------------------
 T100
-适用组件及通知文件：
+Applicable components and notice files:
 - utf16_iter 1.0.5 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright Mozilla Foundation
 
@@ -5309,10 +5309,10 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 
 -------------------------------------------------------------------------------
 T101
-适用组件及通知文件：
+Applicable components and notice files:
 - utf8_iter 1.0.4 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright Mozilla Foundation
 
@@ -5359,10 +5359,10 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 
 -------------------------------------------------------------------------------
 T102
-适用组件及通知文件：
+Applicable components and notice files:
 - v_frame 0.3.9 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD 2-Clause License
 
@@ -5392,10 +5392,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T103
-适用组件及通知文件：
+Applicable components and notice files:
 - web-time 1.1.0 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2023 dAxpeDDa
 
@@ -5413,10 +5413,10 @@ Copyright 2023 dAxpeDDa
 
 -------------------------------------------------------------------------------
 T104
-适用组件及通知文件：
+Applicable components and notice files:
 - webpki-roots 1.0.9 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -5482,10 +5482,10 @@ insights.
 
 -------------------------------------------------------------------------------
 T105
-适用组件及通知文件：
+Applicable components and notice files:
 - write16 1.0.0 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright Mozilla Foundation
 
@@ -5510,11 +5510,11 @@ the individual files for PD/CC0-dedicated sections).
 
 -------------------------------------------------------------------------------
 T106
-适用组件及通知文件：
+Applicable components and notice files:
 - zerocopy 0.8.56 / LICENSE-APACHE
 - zerocopy-derive 0.8.56 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2023 The Fuchsia Authors
 
@@ -5532,11 +5532,11 @@ Copyright 2023 The Fuchsia Authors
 
 -------------------------------------------------------------------------------
 T107
-适用组件及通知文件：
+Applicable components and notice files:
 - zerocopy 0.8.56 / LICENSE-BSD
 - zerocopy-derive 0.8.56 / LICENSE-BSD
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2019 The Fuchsia Authors.
 
@@ -5565,20 +5565,20 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T108
-适用组件及通知文件：
+Applicable components and notice files:
 - zstd-safe 7.2.4 / LICENSE
 - zstd-sys 2.0.16+zstd.1.5.7 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 MIT or Apache-2.0
 
 -------------------------------------------------------------------------------
 T109
-适用组件及通知文件：
+Applicable components and notice files:
 - zstd-sys 2.0.16+zstd.1.5.7 / LICENSE.BSD-3-Clause
 
-许可或通知原文：
+Original license or notice text:
 
 The auto-generated bindings are under the 3-clause BSD license:
 
@@ -5615,11 +5615,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T110
-适用组件及通知文件：
+Applicable components and notice files:
 - zune-core 0.4.12 / LICENSE.md
 - zune-jpeg 0.4.21 / LICENSE.md
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) zune-image developers 
 
@@ -5633,11 +5633,11 @@ according to those terms
 
 -------------------------------------------------------------------------------
 T111
-适用组件及通知文件：
+Applicable components and notice files:
 - zune-core 0.5.3 / LICENSE-ZLIB
 - zune-jpeg 0.5.15 / LICENSE-ZLIB
 
-许可或通知原文：
+Original license or notice text:
 
 zlib License
 
@@ -5661,10 +5661,10 @@ freely, subject to the following restrictions:
 
 -------------------------------------------------------------------------------
 T112
-适用组件及通知文件：
+Applicable components and notice files:
 - zune-inflate 0.2.54 / LICENSE.md
 
-许可或通知原文：
+Original license or notice text:
 
 // Copyright (c) 2022 zune-image developers
 // Licensed under the Apache License, Version 2.0
@@ -5677,10 +5677,10 @@ T112
 
 -------------------------------------------------------------------------------
 T113
-适用组件及通知文件：
-- Hack 字体（assets/fonts/hack，嵌入 lyrel-app 二进制） / assets/fonts/hack/LICENSE.md
+Applicable components and notice files:
+- Hack fonts (assets/fonts/hack, embedded in the lyrel-app binary) / assets/fonts/hack/LICENSE.md
 
-许可或通知原文：
+Original license or notice text:
 
 The work in the Hack project is Copyright 2018 Source Foundry Authors and licensed under the MIT License
 
@@ -5730,10 +5730,10 @@ Except as contained in this notice, the names of Gnome, the Gnome Foundation, an
 
 -------------------------------------------------------------------------------
 T114
-适用组件及通知文件：
-- Kimi 品牌图标（assets/icons/agents/kimi.svg，源自 lobehub/lobe-icons） / https://raw.githubusercontent.com/lobehub/lobe-icons/master/LICENSE
+Applicable components and notice files:
+- Kimi brand icon (assets/icons/agents/kimi.svg, from lobehub/lobe-icons) / https://raw.githubusercontent.com/lobehub/lobe-icons/master/LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 MIT License
 
@@ -5759,10 +5759,10 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 T115
-适用组件及通知文件：
-- Oh My Pi 品牌图标（assets/icons/agents/omp.svg，源自 can1357/oh-my-pi assets/icon.svg） / https://raw.githubusercontent.com/can1357/oh-my-pi/main/LICENSE
+Applicable components and notice files:
+- Oh My Pi brand icon (assets/icons/agents/omp.svg, from can1357/oh-my-pi assets/icon.svg) / https://raw.githubusercontent.com/can1357/oh-my-pi/main/LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 MIT License
 
@@ -5790,16 +5790,16 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 T116
-适用组件及通知文件：
-- clap 4.6.7 / LICENSE-APACHE（版权声明）
-- clap_builder 4.6.7 / LICENSE-APACHE（版权声明）
-- clap_derive 4.6.7 / LICENSE-APACHE（版权声明）
-- toml_datetime 1.1.2+spec-1.1.0 / LICENSE-APACHE（版权声明）
-- toml_edit 0.25.17+spec-1.1.0 / LICENSE-APACHE（版权声明）
-- toml_parser 1.1.5+spec-1.1.0 / LICENSE-APACHE（版权声明）
-- toml_writer 1.1.3+spec-1.1.0 / LICENSE-APACHE（版权声明）
+Applicable components and notice files:
+- clap 4.6.7 / LICENSE-APACHE (copyright notice)
+- clap_builder 4.6.7 / LICENSE-APACHE (copyright notice)
+- clap_derive 4.6.7 / LICENSE-APACHE (copyright notice)
+- toml_datetime 1.1.2+spec-1.1.0 / LICENSE-APACHE (copyright notice)
+- toml_edit 0.25.17+spec-1.1.0 / LICENSE-APACHE (copyright notice)
+- toml_parser 1.1.5+spec-1.1.0 / LICENSE-APACHE (copyright notice)
+- toml_writer 1.1.3+spec-1.1.0 / LICENSE-APACHE (copyright notice)
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright Individual contributors
 
@@ -5817,38 +5817,38 @@ Copyright Individual contributors
 
 -------------------------------------------------------------------------------
 T117
-适用组件及通知文件：
-- windows 0.58.0 / license-apache-2.0（版权声明）
-- windows 0.62.2 / license-apache-2.0（版权声明）
-- windows_x86_64_msvc 0.52.6 / license-apache-2.0（版权声明）
-- windows_x86_64_msvc 0.53.1 / license-apache-2.0（版权声明）
-- windows-collections 0.3.2 / license-apache-2.0（版权声明）
-- windows-core 0.58.0 / license-apache-2.0（版权声明）
-- windows-core 0.62.2 / license-apache-2.0（版权声明）
-- windows-future 0.3.2 / license-apache-2.0（版权声明）
-- windows-implement 0.58.0 / license-apache-2.0（版权声明）
-- windows-implement 0.60.2 / license-apache-2.0（版权声明）
-- windows-interface 0.58.0 / license-apache-2.0（版权声明）
-- windows-interface 0.59.3 / license-apache-2.0（版权声明）
-- windows-link 0.1.3 / license-apache-2.0（版权声明）
-- windows-link 0.2.1 / license-apache-2.0（版权声明）
-- windows-numerics 0.3.1 / license-apache-2.0（版权声明）
-- windows-registry 0.4.0 / license-apache-2.0（版权声明）
-- windows-registry 0.6.1 / license-apache-2.0（版权声明）
-- windows-result 0.2.0 / license-apache-2.0（版权声明）
-- windows-result 0.3.4 / license-apache-2.0（版权声明）
-- windows-result 0.4.1 / license-apache-2.0（版权声明）
-- windows-strings 0.1.0 / license-apache-2.0（版权声明）
-- windows-strings 0.3.1 / license-apache-2.0（版权声明）
-- windows-strings 0.5.1 / license-apache-2.0（版权声明）
-- windows-sys 0.60.2 / license-apache-2.0（版权声明）
-- windows-sys 0.61.2 / license-apache-2.0（版权声明）
-- windows-targets 0.52.6 / license-apache-2.0（版权声明）
-- windows-targets 0.53.5 / license-apache-2.0（版权声明）
-- windows-threading 0.2.1 / license-apache-2.0（版权声明）
-- windows-version 0.1.7 / license-apache-2.0（版权声明）
+Applicable components and notice files:
+- windows 0.58.0 / license-apache-2.0 (copyright notice)
+- windows 0.62.2 / license-apache-2.0 (copyright notice)
+- windows_x86_64_msvc 0.52.6 / license-apache-2.0 (copyright notice)
+- windows_x86_64_msvc 0.53.1 / license-apache-2.0 (copyright notice)
+- windows-collections 0.3.2 / license-apache-2.0 (copyright notice)
+- windows-core 0.58.0 / license-apache-2.0 (copyright notice)
+- windows-core 0.62.2 / license-apache-2.0 (copyright notice)
+- windows-future 0.3.2 / license-apache-2.0 (copyright notice)
+- windows-implement 0.58.0 / license-apache-2.0 (copyright notice)
+- windows-implement 0.60.2 / license-apache-2.0 (copyright notice)
+- windows-interface 0.58.0 / license-apache-2.0 (copyright notice)
+- windows-interface 0.59.3 / license-apache-2.0 (copyright notice)
+- windows-link 0.1.3 / license-apache-2.0 (copyright notice)
+- windows-link 0.2.1 / license-apache-2.0 (copyright notice)
+- windows-numerics 0.3.1 / license-apache-2.0 (copyright notice)
+- windows-registry 0.4.0 / license-apache-2.0 (copyright notice)
+- windows-registry 0.6.1 / license-apache-2.0 (copyright notice)
+- windows-result 0.2.0 / license-apache-2.0 (copyright notice)
+- windows-result 0.3.4 / license-apache-2.0 (copyright notice)
+- windows-result 0.4.1 / license-apache-2.0 (copyright notice)
+- windows-strings 0.1.0 / license-apache-2.0 (copyright notice)
+- windows-strings 0.3.1 / license-apache-2.0 (copyright notice)
+- windows-strings 0.5.1 / license-apache-2.0 (copyright notice)
+- windows-sys 0.60.2 / license-apache-2.0 (copyright notice)
+- windows-sys 0.61.2 / license-apache-2.0 (copyright notice)
+- windows-targets 0.52.6 / license-apache-2.0 (copyright notice)
+- windows-targets 0.53.5 / license-apache-2.0 (copyright notice)
+- windows-threading 0.2.1 / license-apache-2.0 (copyright notice)
+- windows-version 0.1.7 / license-apache-2.0 (copyright notice)
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) Microsoft Corporation.
 
@@ -5866,10 +5866,10 @@ Copyright (c) Microsoft Corporation.
 
 -------------------------------------------------------------------------------
 T118
-适用组件及通知文件：
+Applicable components and notice files:
 - aws-lc-rs 1.18.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 SPDX-License-Identifier: ISC AND (Apache-2.0 OR ISC)
 
@@ -6076,10 +6076,10 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 -------------------------------------------------------------------------------
 T119
-适用组件及通知文件：
+Applicable components and notice files:
 - aws-lc-sys 0.44.0 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 AWS Libcrypto (AWS-LC)
 
@@ -6400,10 +6400,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 -------------------------------------------------------------------------------
 T120
-适用组件及通知文件：
+Applicable components and notice files:
 - crossbeam-channel 0.5.16 / LICENSE-THIRD-PARTY
 
-许可或通知原文：
+Original license or notice text:
 
 ===============================================================================
 
@@ -7001,10 +7001,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T121
-适用组件及通知文件：
+Applicable components and notice files:
 - dpi 0.1.2 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 Apache License
                            Version 2.0, January 2004
@@ -7210,10 +7210,10 @@ Apache License
 
 -------------------------------------------------------------------------------
 T122
-适用组件及通知文件：
+Applicable components and notice files:
 - dpi 0.1.2 / LICENSE-LIBM-MIT
 
-许可或通知原文：
+Original license or notice text:
 
 rust-lang/libm as a whole is available for use under the MIT license:
 
@@ -7269,10 +7269,10 @@ have been licensed under extremely permissive terms.
 
 -------------------------------------------------------------------------------
 T123
-适用组件及通知文件：
+Applicable components and notice files:
 - encoding_rs 0.8.42 / COPYRIGHT
 
-许可或通知原文：
+Original license or notice text:
 
 encoding_rs is copyright Mozilla Foundation.
 
@@ -7294,11 +7294,11 @@ designated (see the individual files for PD/CC0-dedicated sections).
 
 -------------------------------------------------------------------------------
 T124
-适用组件及通知文件：
+Applicable components and notice files:
 - encoding_rs 0.8.42 / LICENSE-APACHE
 - ring 0.17.14 / src/polyfill/once_cell/LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Apache License
                            Version 2.0, January 2004
@@ -7504,10 +7504,10 @@ Apache License
 
 -------------------------------------------------------------------------------
 T125
-适用组件及通知文件：
+Applicable components and notice files:
 - encoding_rs 0.8.42 / LICENSE-WHATWG
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
 
@@ -7538,10 +7538,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T126
-适用组件及通知文件：
+Applicable components and notice files:
 - normpath 1.5.1 / LICENSE-THIRD-PARTY
 
-许可或通知原文：
+Original license or notice text:
 
 ===============================================================================
 
@@ -7990,10 +7990,10 @@ https://github.com/nvzqz/fruity/blob/320efcf715c2c5fbd2f3084f671f2be2e03a6f2b/LI
 
 -------------------------------------------------------------------------------
 T127
-适用组件及通知文件：
+Applicable components and notice files:
 - parking 2.2.1 / LICENSE-THIRD-PARTY
 
-许可或通知原文：
+Original license or notice text:
 
 ===============================================================================
 
@@ -8007,10 +8007,10 @@ copied, modified, or distributed except according to those terms.
 
 -------------------------------------------------------------------------------
 T128
-适用组件及通知文件：
+Applicable components and notice files:
 - ring 0.17.14 / LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 *ring* uses an "ISC" license, like BoringSSL used to use, for new code
 files. See LICENSE-other-bits for the text of that license.
@@ -8024,10 +8024,10 @@ for the license to code that was sourced from the once_cell project.
 
 -------------------------------------------------------------------------------
 T129
-适用组件及通知文件：
+Applicable components and notice files:
 - ring 0.17.14 / LICENSE-BoringSSL
 
-许可或通知原文：
+Original license or notice text:
 
 Apache License
                            Version 2.0, January 2004
@@ -8303,10 +8303,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T130
-适用组件及通知文件：
+Applicable components and notice files:
 - ring 0.17.14 / LICENSE-other-bits
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright 2015-2025 Brian Smith.
 
@@ -8324,10 +8324,10 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 -------------------------------------------------------------------------------
 T131
-适用组件及通知文件：
+Applicable components and notice files:
 - unicode-ident 1.0.24 / LICENSE-APACHE
 
-许可或通知原文：
+Original license or notice text:
 
 Apache License
                         Version 2.0, January 2004
@@ -8508,10 +8508,10 @@ END OF TERMS AND CONDITIONS
 
 -------------------------------------------------------------------------------
 T132
-适用组件及通知文件：
+Applicable components and notice files:
 - unicode-ident 1.0.24 / LICENSE-UNICODE
 
-许可或通知原文：
+Original license or notice text:
 
 UNICODE LICENSE V3
 
@@ -8555,10 +8555,10 @@ authorization of the copyright holder.
 
 -------------------------------------------------------------------------------
 T133
-适用组件及通知文件：
+Applicable components and notice files:
 - aws-lc-sys 0.44.0 / aws-lc/third_party/fiat/LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 The MIT License (MIT)
 
@@ -8585,10 +8585,10 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 T134
-适用组件及通知文件：
+Applicable components and notice files:
 - ring 0.17.14 / third_party/fiat/LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 The Apache License, Version 2.0 (Apache-2.0)
 
@@ -8608,10 +8608,10 @@ limitations under the License.
 
 -------------------------------------------------------------------------------
 T135
-适用组件及通知文件：
+Applicable components and notice files:
 - zstd-sys 2.0.16+zstd.1.5.7 (bundled zstd 1.5.7) / zstd/LICENSE
 
-许可或通知原文：
+Original license or notice text:
 
 BSD License
 
@@ -8646,10 +8646,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -------------------------------------------------------------------------------
 T136
-适用组件及通知文件：
+Applicable components and notice files:
 - libsqlite3-sys 0.38.2 (bundled SQLite 3.53.2) / sqlite3/sqlite3.h:1-10
 
-许可或通知原文：
+Original license or notice text:
 
 /*
 ** 2001-09-15
@@ -8664,10 +8664,10 @@ T136
 
 -------------------------------------------------------------------------------
 T137
-适用组件及通知文件：
+Applicable components and notice files:
 - libsqlite3-sys 0.38.2 (bundled SQLite 3.53.2) / sqlite3/sqlite3.c:34-42
 
-许可或通知原文：
+Original license or notice text:
 
 **
 ** The author disclaims copyright to this source code.  In place of
@@ -8680,10 +8680,10 @@ T137
 
 -------------------------------------------------------------------------------
 T138
-适用组件及通知文件：
+Applicable components and notice files:
 - objc2-foundation 0.2.2 / LICENSE.txt
 
-许可或通知原文：
+Original license or notice text:
 
 MIT License
 
@@ -8709,10 +8709,10 @@ SOFTWARE.
 
 -------------------------------------------------------------------------------
 T139
-适用组件及通知文件：
-- simdutf 0.7.0 / cpp/simdutf.h 内嵌的 ISA 检测代码（BSD-3-Clause）
+Applicable components and notice files:
+- simdutf 0.7.0 / cpp/simdutf.h embedded ISA detection code (BSD-3-Clause)
 
-许可或通知原文：
+Original license or notice text:
 
 Copyright (c) 2016-     Facebook, Inc            (Adam Paszke)
 Copyright (c) 2014-     Facebook, Inc            (Soumith Chintala)
