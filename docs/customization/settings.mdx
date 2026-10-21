@@ -262,6 +262,8 @@ pi 格式与算法依据：[Session format](https://github.com/earendil-works/pi
 分别展示记录、自定义／公共估算与未计价覆盖。金额是历史计量小计，不是服务商账单、余额或套餐额度。
 平均 Token 包含子代理用量，分母是活跃主会话；结果不完整或分母无效时不显示精确平均值。
 
+Token 卡片的已知小计不带 `≥` 前缀，覆盖不足仍由「已知小计」和「数据不完整」提示。记录费用卡片使用 `$104.78` 格式，币种仍为 USD。热力图提示将 Token 换算为百万单位 `M`（例如 `16M`、`578.56M`），费用显示为「花费$104.78」；缩写和金额舍入仅影响显示，不改变计量数值或费用口径。
+
 扫描、解析与聚合在后台执行；按机器及来源缓存结构化计量，未变文件无需重解析，缓存命中不再重复深复制和写回。日期范围、热力图年份和分析智能体筛选复用已有快照，仅在后台重新聚合，不重扫原生历史；扫描期间改变这些筛选也不排队另一轮扫描，后续结果按最新筛选展示。手动刷新仍读取当前原生数据。
 计量快照与解析缓存改为进程内共享：关闭设置或切换页面不会丢失，应用退出后释放，不将计量缓存、提示词、对话正文或凭据写到磁盘。按机器连接、启动选择器及来源／价格配置隔离；完成扫描后 60 秒内复用快照，过期时先显示原快照与原时间，再后台更新。配置文件变化、来源／单价修改和 Host 重连不会复用旧作用域；最多保留 16 个非活跃请求缓存，进行中的请求完成后再回收。
 主窗口打开后延迟 5 秒，在后台对本机来源预热一次；若已进入统计页则复用交互请求。同一请求的多个窗口与重开设置共用扫描，关闭页面仍可完成共享缓存填充，不把晚到结果写回过期页面或范围。扫描与聚合各最多两个 worker，不在界面线程执行文件读取、原生 CLI 或聚合；不预扫远端，不自动下载公共价表或查询账户。
@@ -462,7 +464,7 @@ API-key `boosterWallet` 与四类配额分开显示。第一方 CLI 只将 `bala
 
 ### Command Code
 
-API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com/command-code@1.84.0/dist/cli.mjs) 请求 `https://api.commandcode.ai/alpha/whoami?limits=1` 核对用户身份，并对返回的可选组织请求 `/alpha/billing/credits?orgId=…` 与 `/alpha/billing/subscriptions?orgId=…`。账户卡片只监控 **5 小时、每周、每月**三项订阅额度，显示真实已用、剩余、上限及可核实的百分比和重置时间。不再请求 `/alpha/usage/summary`，购买／赠送余额、请求数、账单费用、Sandbox 分钟和组织模型限制不展示，也不作为刷新成功的前提。原有账户与认证来源保留，旧快照中的额外监控项在加载时移除。
+API key 是主要认证，按第一方 [`command-code@1.84.0`](https://unpkg.com/command-code@1.84.0/dist/cli.mjs) 请求 `https://api.commandcode.ai/alpha/whoami?limits=1` 核对用户身份，并对返回的可选组织请求 `/alpha/billing/credits?orgId=…` 与 `/alpha/billing/subscriptions?orgId=…`。账户卡片只监控 **5 小时、每周、每月**三项订阅额度：每行右侧仅显示可核实的剩余百分比，不附加剩余 Credit 数量；下方保留真实已用、上限、已用百分比和重置时间。缺少有效剩余值或正上限时，右侧显示未知，不补零。不再请求 `/alpha/usage/summary`，购买／赠送余额、请求数、账单费用、Sandbox 分钟和组织模型限制不展示，也不作为刷新成功的前提。原有账户与认证来源保留，旧快照中的额外监控项在加载时移除。
 
 5 小时与每周额度来自 `windowLimits.fiveHour`／`weekly` 的 `used`、`cap`、`resetAt`；月度剩余来自 `credits.monthlyCredits`，重置来自订阅 `currentPeriodEnd`。该响应没有已核实的月上限字段，因此仅在订阅为 `active` 且 `planId` 精确匹配第一方 CLI 的 `getPlanTotalCredits` 套餐表时显示月上限与百分比：GOAT（`individual-goat`）为 70 Credit，其他已知套餐按同一发布产物中的各自额度处理，不按名称前缀猜测。未知套餐、缺少订阅状态或缺少用量字段时保留未知，不把购买／赠送余额加入限额，不从 `monthlyCreditsGranted` 等未核实字段推导月上限，不补零或伪造百分之百。窗口规则见[第一方用量限制说明](https://commandcode.ai/docs/resources/usage-limits)。
 

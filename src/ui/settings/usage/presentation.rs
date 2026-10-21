@@ -77,25 +77,23 @@ fn render_pool(pool: &providers::Pool, percentages: bool, cx: &gpui_kit::App) ->
                 div()
                     .text_sm()
                     .font_weight(gpui_kit::FontWeight::MEDIUM)
-                    .child(format!(
-                        "{} {} {}{}",
-                        t(L10nKey::UsageRemaining),
-                        pool.remaining
-                            .as_deref()
-                            .unwrap_or(t(L10nKey::UsageUnknown)),
-                        unit,
-                        if percentages {
-                            ratio
-                                .map(|v| format!(" · {:.0}%", v * 100.))
-                                .unwrap_or_default()
-                        } else {
-                            String::new()
-                        }
-                    )),
+                    .child(if percentages {
+                        ratio
+                            .map(|v| format!("{:.0}%", v * 100.))
+                            .unwrap_or_else(|| t(L10nKey::UsageUnknown).into())
+                    } else {
+                        format!(
+                            "{} {} {unit}",
+                            t(L10nKey::UsageRemaining),
+                            pool.remaining
+                                .as_deref()
+                                .unwrap_or(t(L10nKey::UsageUnknown)),
+                        )
+                    }),
             ),
     );
     // Only an upstream percentage or a real remaining/limit pair can draw a bar.
-    // Original decimal strings remain the displayed source of truth (including Credits).
+    // Original decimal strings remain the source of truth in the quota details.
     if let Some(ratio) = ratio {
         metric = metric.child(
             div()
