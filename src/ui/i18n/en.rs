@@ -372,7 +372,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Kimi Code 2.2.0 hooks track requests; final results require readable main-agent durable history. Stop hooks may be blocked and do not prove completion. Reload Kimi after changing hooks. Disabled hooks or persistence cannot report authoritative state."
         }
         L10nKey::IntegrationHermesObserver => {
-            "Hermes observer home: {home}. Installation does not grant authorization. In this home/profile, run hermes plugins enable lyrel, then hermes plugins list. HERMES_SAFE_MODE or disabled plugins prevent reports. on_session_end carries finalized outcomes; on_session_finalize is not a turn result. Missing events never imply Idle/Done. Native history and operations require --print-runtime-command --module tui_gateway.entry. lyrel does not change plugin consent."
+            "Hermes observer home: {home}. Installation does not grant authorization. In this home/profile, run hermes plugins enable lyrel, then hermes plugins list. HERMES_SAFE_MODE or disabled plugins prevent reports. on_session_end carries finalized outcomes; on_session_finalize is not a turn result. Missing events never imply Idle/Done. Native history and operations use the selected installation's runtime, not the system Python. lyrel does not change plugin consent."
         }
         L10nKey::IntegrationScopeUnavailable => {
             "Integration scope is unavailable: {error}. No files were changed."

@@ -1,4 +1,4 @@
-//! Hermes 0.22.2 native stored-session operations via its official source-install launcher.
+//! Hermes 0.22.2 native stored-session operations via the selected installation's runtime.
 use super::*;
 
 const HOME_ENV: &[&str] = &["HOME", "USERPROFILE", "HERMES_HOME", "HERMES_RUNTIME_DIR"];
@@ -453,11 +453,76 @@ fn option_value(argv: &[String], index: &mut usize) -> Result<String, SessionOpe
     })
 }
 
+/// Packaged POSIX launchers (including Homebrew) publish their interpreter as
+/// HERMES_PYTHON instead of implementing the source installer's query flags.
+/// Accept only a single-line env/exec wrapper and a literal absolute executable;
+/// never evaluate shell expressions or substitute an ambient system Python.
+#[cfg(unix)]
+fn packaged_runtime_command(launcher: &[String], cwd: &Path) -> Option<Vec<String>> {
+    // Do not bypass an explicitly configured interpreter or wrapper with arguments.
+    if launcher.len() != 4 {
+        return None;
+    }
+    let program = Path::new(&launcher[0]);
+    let executable = if program.components().count() > 1 {
+        cwd.join(program)
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH")?)
+            .map(|dir| cwd.join(dir).join(program))
+            .find(|path| {
+                crate::core::cli_agent::program_on_path(
+                    &path.to_string_lossy(),
+                    std::ffi::OsStr::new(""),
+                )
+            })?
+    };
+    let mut script = String::new();
+    std::fs::File::open(executable)
+        .ok()?
+        .take(64 * 1024 + 1)
+        .read_to_string(&mut script)
+        .ok()?;
+    if script.len() > 64 * 1024 || !matches!(script.lines().next()?, "#!/bin/bash" | "#!/bin/sh") {
+        return None;
+    }
+    let mut lines = script
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'));
+    let (environment, _) = lines.next()?.split_once(" exec ")?;
+    if lines.next().is_some() || environment.matches("HERMES_PYTHON=").count() != 1 {
+        return None;
+    }
+    static PYTHON: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?:^|[ \t])HERMES_PYTHON=("[^"\r\n]*"|'[^'\r\n]*'|[^ \t\r\n]+)(?:[ \t]|$)"#,
+        )
+        .unwrap()
+    });
+    let value = PYTHON.captures(environment)?.get(1)?;
+    let mut python = crate::core::cli_agent::parse_command_argv(value.as_str()).ok()?;
+    if python.len() != 1
+        || !Path::new(&python[0]).is_absolute()
+        || !crate::core::cli_agent::program_on_path(&python[0], std::ffi::OsStr::new(""))
+    {
+        return None;
+    }
+    // Keep the declared venv path: canonicalizing its Python symlink loses the
+    // package's site-packages. Isolated mode also excludes the workspace CWD.
+    python.extend(["-I".into(), "-m".into(), "tui_gateway.entry".into()]);
+    Some(python)
+}
+
 fn runtime_command(
     launcher: &[String],
     scope: &SessionScope,
     cwd: &Path,
 ) -> Result<Vec<String>, SessionOperationError> {
+    #[cfg(unix)]
+    if let Some(runtime) = packaged_runtime_command(launcher, cwd) {
+        return Ok(runtime);
+    }
     let mut command = Command::new(&launcher[0]);
     command
         .args(&launcher[1..])
@@ -477,7 +542,7 @@ fn runtime_command(
         return Err(failure(
             SessionErrorKind::Unsupported,
             format!(
-                "The selected Hermes launcher does not provide --print-runtime-command --module tui_gateway.entry ({}): {}",
+                "The selected Hermes launcher provides neither a literal HERMES_PYTHON wrapper nor --print-runtime-command --module tui_gateway.entry ({}): {}",
                 output.status,
                 String::from_utf8_lossy(&output.stderr)
                     .chars()
@@ -508,8 +573,8 @@ fn rpc(
     method: &str,
     params: serde_json::Value,
 ) -> Result<(serde_json::Value, Option<String>), SessionOperationError> {
-    // Resolve the official Python/bootstrap argv so Windows .cmd wrappers do
-    // not retain ownership of a long-lived gateway child on timeout.
+    // Resolve the selected installation's Python/bootstrap argv directly, so
+    // Windows .cmd wrappers cannot retain a gateway child on timeout.
     let runtime = runtime_command(gateway, scope, cwd)?;
     let mut command = Command::new(&runtime[0]);
     command

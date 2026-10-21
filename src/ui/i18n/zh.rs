@@ -338,7 +338,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "Kimi Code 2.2.0 的 hooks 跟踪输入请求，最终结果需要可读的主智能体持久化历史。Stop hooks 可能被阻止，不能证明完成。修改 hooks 后请重新加载 Kimi；禁用 hooks 或持久化时无法报告权威状态。"
         }
         L10nKey::IntegrationHermesObserver => {
-            "Hermes observer 目录：{home}。安装不代表授权。请在同一 home/profile 运行 hermes plugins enable lyrel，再运行 hermes plugins list。HERMES_SAFE_MODE 或禁用插件会阻止报告。on_session_end 携带最终结果，on_session_finalize 不是本轮结果。缺少事件不代表 Idle/Done。原生历史与操作需要 --print-runtime-command --module tui_gateway.entry；lyrel 不更改插件授权。"
+            "Hermes observer 目录：{home}。安装不代表授权。请在同一 home/profile 运行 hermes plugins enable lyrel，再运行 hermes plugins list。HERMES_SAFE_MODE 或禁用插件会阻止报告。on_session_end 携带最终结果，on_session_finalize 不是本轮结果。缺少事件不代表 Idle/Done。原生历史与操作使用所选安装的运行时，不使用系统 Python；lyrel 不更改插件授权。"
         }
         L10nKey::IntegrationScopeUnavailable => "集成作用域不可用：{error}。未修改文件。",
         L10nKey::IntegrationOpenCodeUnreadable => "无法读取 OpenCode CLI 插件配置：{path}",

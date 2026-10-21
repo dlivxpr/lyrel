@@ -42,7 +42,7 @@ omp --resume /path/to/session.jsonl
 | Oh My Pi | 先由原生 RPC 核定源身份，再以 `omp --fork <精确会话路径> --mode rpc` 取得真实新身份，最后在新窗格原生恢复 |
 | pi | 核对精确源文件 header，以正式 `pi --fork <路径> --mode rpc` 获取新 ID／文件，再在新窗格执行 `pi --session <新路径>` |
 | Kimi Code 2.2.0 | 在源 Host 原生 `kimi fork <id>`，严格验证stdout与实际新目标后，在新窗格原生 `kimi --session <新ID>` |
-| Hermes | 经正式 launcher 的 `--print-runtime-command --module tui_gateway.entry` 取得准确启动 argv，调用 `session.branch_stored` 返回持久化新 ID，再在新窗格原生恢复 |
+| Hermes | 从所选安装的 launcher 取得准确运行时，调用 `session.branch_stored` 返回持久化新 ID，再在新窗格原生恢复 |
 
 lyrel 只调用智能体自己的操作，不复制内部会话文件。原生操作与新窗格打开分为独立阶段；实际证明范围见[验收状态与已知限制](#acceptance-status)，不能把一条可构造的命令当作分叉已经成功。
 
@@ -151,10 +151,13 @@ interaction及后台task记录更新状态与请求快照，真实 `turn.ended` 
 `pre_llm_call` 补齐。裸启动及部分 `/resume`／`/branch` 操作完成后、下一条命令／turn 前的
 即时身份更新仍缺正式事件与运行证据，不能声称已完整验收，也不从屏幕或内部 breadcrumb 猜 ID。
 
-网关由官方 source-install launcher 的公开
-`--print-runtime-command --module tui_gateway.entry` 返回准确 managed Python/bootstrap argv，
-再直接启动网关；这与正式 `--run-module tui_gateway.entry` 使用同一运行时契约，但避免
-Windows `.cmd` wrapper 在超时时遗留网关后代。不猜系统 Python，也不额外注册插件 CLI relay。
+网关使用所选 Hermes 安装自己的 Python 运行时，而不是假定所有安装渠道都支持同一组参数：
+源码安装通过公开的 `--print-runtime-command --module tui_gateway.entry` 返回准确 managed
+Python/bootstrap argv；Homebrew 等 POSIX 包装入口则从单行 env/exec wrapper 中读取显式声明的
+字面量绝对路径 `HERMES_PYTHON`，以该解释器的 `-I -m tui_gateway.entry` 启动网关。
+保留虚拟环境中的解释器路径，不把 Python 符号链接解析到虚拟环境外；动态 shell 表达式、
+相对解释器路径或带附加参数的未知包装入口不会被猜测执行。不使用系统 Python，不额外注册
+插件 CLI relay。两种入口都直接持有网关进程，保留 Windows `.cmd` 超时清理语义。
 准备进程不携带 pane 身份、不提交模型任务。操作返回后，以短 runtime `session_id` 调用公开 `session.close` 并确认释放，再关闭 stdio；关闭耗时仍受原有期限约束。分叉只接受 `stored_session_id`，恢复核对 `session.resume` 的 `session_key`；短 runtime ID 不得进入新窗格恢复目标。
 原生错误、空身份和目标失配均明确失败；已知新身份后的关闭／开窗错误保留同一目标。
 正式 `hermes acp` 的 fork 不适用于 `source=cli`，不是备用路径。
@@ -196,6 +199,12 @@ lyrel 只列出 `source=cli` 的普通 CLI 来源。观察到的 home/profile �
 ## OpenCode 2.x 的来源与操作
 
 正式基线为 `@opencode/cli@2.0.32`。历史只经 `session.list` 读取标题、目录、时间和原生身份元数据，不读旧 SQLite 表或对话正文；过滤 subagent 的 `parentID` 与归档项，保留原生 `fork` 来源的独立根会话。已有 TUI 的历史使用其已连接客户端；没有打开 OpenCode 窗格时，正常已安装／配置的默认作用域仍由实际 Host 的正式 `opencode api` 查询，并绑定查询返回的服务身份。
+
+Host 调用 `opencode api` 时以私有匿名临时文件接收 stdout，避免 macOS 上 CLI 在退出前
+未完全冲刷管道，导致大于管道容量的 OpenAPI／会话元数据被截断。文件在命令结束后有界读取，
+关闭后自动清理，不作为历史缓存；保留每次调用的 20 秒期限与 8 MiB 响应上限。
+原生 stderr 仅有界保留用于失败诊断；非零退出、服务身份错误和无效 JSON 仍失败，
+不重试到其他服务，不截取 JSON 片段，也不将失败返回为空历史。
 
 运行中的分叉只能来自当前前台 route。每个本地 TUI 有独立 `client_id`，通过用户隔离的私有登记和已认证 loopback 通道调用自己的正式 client；后台 tab、另一终端或共享服务环境不能替代该来源。断线、前台切换、错误响应、身份或目录失配明确失败，不回退到另一默认服务。通道仅支持有界的 `info`／`get`／`list`／`fork`，没有额外 Node／Bun helper，不关闭默认共享服务。
 
