@@ -674,9 +674,9 @@ fn config_dir_alone_resolves_both_endpoints(daemon: &Daemon) {
     // endpoints were derived by different rules. Exercise a pane verb over the
     // same lone variable.
     let shell = one_shot(if cfg!(windows) {
-        "echo %LYREL%^|%TERM_PROGRAM%^|%LYREL_CONFIG_DIR% & exit /b 9"
+        "echo %TERM_PROGRAM%^|%LYREL_CONFIG_DIR% & exit /b 9"
     } else {
-        "printf '%s|%s|%s\\n' \"$LYREL\" \"$TERM_PROGRAM\" \"$LYREL_CONFIG_DIR\"; exit 9"
+        "printf '%s|%s\\n' \"$TERM_PROGRAM\" \"$LYREL_CONFIG_DIR\"; exit 9"
     });
     let mut args = vec!["run", "--"];
     args.extend(shell.iter().map(String::as_str));
@@ -698,7 +698,7 @@ fn config_dir_alone_resolves_both_endpoints(daemon: &Daemon) {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains(&format!("0.1.0|lyrel|{}", daemon.config_dir.display())),
+        stdout.contains(&format!("lyrel|{}", daemon.config_dir.display())),
         "the actual shell must inherit the new product and config identity: {stdout}"
     );
 }

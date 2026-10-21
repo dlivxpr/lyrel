@@ -1247,11 +1247,10 @@ impl LyrelApp {
     /// root is also the cache key, which is what lets two panes in two
     /// subdirectories of one repository share a single status.
     ///
-    /// Resolved with its own `rev-parse` rather than borrowed from the cheap
-    /// per-tab cache. That cache holds a repository's *home*, which is a
-    /// different directory inside a linked worktree, and it is only filled in
-    /// for panes whose shell reports a cwd — a pane without shell integration
-    /// would leave the panel loading forever.
+    /// Prefer the pane cache's working-tree root, refreshed at command and cwd
+    /// boundaries, rather than its project home (which differs in a linked
+    /// worktree). Fall back to an independent `rev-parse` for panes without
+    /// shell integration.
     pub(crate) fn scm_repo_root(
         &mut self,
         host: &SharedHost,
@@ -1259,6 +1258,12 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> RepoLookup {
         let id = host.id();
+        if let Some(root) = cx
+            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .and_then(|cache| cache.repo_root_for(id, cwd))
+        {
+            return RepoLookup::Root(root.to_path_buf());
+        }
         let key = (id, cwd.to_path_buf());
         match self.scm.roots.get(&key) {
             Some((_, Some(root))) => return RepoLookup::Root(root.clone()),
@@ -3241,6 +3246,13 @@ mod render_idle_gpui_tests {
         DaemonMsg::Cwd(root.to_path_buf())
             .encode(&mut pane)
             .expect("the pane's socket takes the cwd");
+        DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: None,
+        }
+        .encode(&mut pane)
+        .expect("the pane starts at the shell prompt");
         app.update_in(&mut vcx, |app, _, cx| {
             app.right_panel_visible = true;
             app.right_panel_tab = RightPanelTab::Scm;
@@ -3349,6 +3361,185 @@ mod render_idle_gpui_tests {
         );
         assert_eq!(draws_while_idle(&mut vcx), 0);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn wait_for_created_repository(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        root: &Path,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            vcx.executor().advance_clock(Duration::from_millis(300));
+            vcx.run_until_parked();
+            let recognized = app.update_in(vcx, |app, window, cx| {
+                matches!(
+                    app.github_target(window, cx),
+                    crate::ui::github::GhTarget::Ready { repo, .. } if repo.root == root
+                ) && app.scm.repo.as_ref().is_some_and(|repo| {
+                    repo.root == root
+                        && status_of(cx, repo.host, &repo.root).is_some_and(|status| {
+                            status
+                                .untracked()
+                                .any(|entry| entry.path.text == "created.txt")
+                        })
+                })
+            });
+            if recognized {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Changes/GitHub did not discover {}: {}",
+                root.display(),
+                app.read_with(vcx, |app, cx| format!(
+                    "pane root={:?}, panel root={:?}, remote counts={:?}",
+                    cx.global::<crate::terminal::git_status::GitStatusCache>()
+                        .repo_root_for(HostId::LOCAL, root),
+                    app.scm.repo.as_ref().map(|repo| &repo.root),
+                    app.github
+                        .remotes
+                        .iter()
+                        .map(|(repo, lookup)| (
+                            &repo.root,
+                            match lookup {
+                                crate::ui::github::RemoteLookup::Loading => None,
+                                crate::ui::github::RemoteLookup::Ready { list, .. } =>
+                                    Some(list.len()),
+                            }
+                        ))
+                        .collect::<Vec<_>>()
+                ))
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn command_finished(pane: &mut crate::daemon::transport::Stream) {
+        for at_prompt in [false, true] {
+            DaemonMsg::Prompt {
+                active: true,
+                at_prompt,
+                last_exit: Some(0),
+            }
+            .encode(pane)
+            .unwrap();
+        }
+    }
+
+    fn create_repository_after_lookup(cx: &mut TestAppContext, nested: bool, cloned: bool) {
+        let _serial = serial();
+        let temp = tempfile::tempdir().unwrap();
+        let parent = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        let root = parent.join("destination");
+        std::fs::create_dir(&root).unwrap();
+        if nested {
+            git(&parent, &["init", "--quiet"]);
+        }
+        let want = root.clone();
+        let (app, mut vcx, mut pane) = scm_panel_on(cx, &root, move |app, _| {
+            app.scm.roots.contains_key(&(HostId::LOCAL, want.clone())) || app.scm.repo.is_some()
+        });
+        if cloned {
+            let source = parent.join("source");
+            std::fs::create_dir(&source).unwrap();
+            git(&source, &["init", "--quiet"]);
+            git(
+                &source,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "initial",
+                ],
+            );
+            git(&parent, &["clone", "--quiet", "source", "destination"]);
+            git(
+                &root,
+                &[
+                    "remote",
+                    "set-url",
+                    "origin",
+                    "https://github.com/dlivxpr/lyrel.git",
+                ],
+            );
+        } else {
+            git(&root, &["init", "--quiet"]);
+            git(
+                &root,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/dlivxpr/lyrel.git",
+                ],
+            );
+        }
+        std::fs::write(root.join("created.txt"), "new repository\n").unwrap();
+        command_finished(&mut pane);
+        wait_for_created_repository(&app, &mut vcx, &root);
+    }
+
+    #[gpui_kit::test]
+    fn initialized_repository_replaces_a_cached_negative_lookup(cx: &mut TestAppContext) {
+        create_repository_after_lookup(cx, false, false);
+    }
+
+    #[gpui_kit::test]
+    fn initialized_repository_replaces_a_cached_parent_lookup(cx: &mut TestAppContext) {
+        create_repository_after_lookup(cx, true, false);
+    }
+
+    #[gpui_kit::test]
+    fn cloned_repository_replaces_a_cached_parent_lookup(cx: &mut TestAppContext) {
+        create_repository_after_lookup(cx, true, true);
+    }
+
+    #[gpui_kit::test]
+    fn added_remote_replaces_a_cached_empty_remote_list(cx: &mut TestAppContext) {
+        let _serial = serial();
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        git(&root, &["init", "--quiet"]);
+        let (app, mut vcx, mut pane) = scm_panel_on(cx, &root, |app, _| app.scm.repo.is_some());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            vcx.run_until_parked();
+            if app.update_in(&mut vcx, |app, window, cx| {
+                matches!(
+                    app.github_target(window, cx),
+                    crate::ui::github::GhTarget::NoRemote
+                )
+            }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "initial remote lookup did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/dlivxpr/lyrel.git",
+            ],
+        );
+        std::fs::write(root.join("created.txt"), "new remote\n").unwrap();
+        command_finished(&mut pane);
+        wait_for_created_repository(&app, &mut vcx, &root);
     }
 
     /// The tree view and the filter, end to end over a real repository: the

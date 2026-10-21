@@ -596,7 +596,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageMonthlyTotal => "月度总配额",
         L10nKey::UsageMonthlyCode => "月度代码配额",
         L10nKey::UsageMonthly => "月度 Credit",
-        L10nKey::UsagePurchased => "购买 Credit",
         L10nKey::UsageFree => "免费 Credit",
         L10nKey::UsageBooster => "加油包钱包",
         L10nKey::UsageCoding => "Coding 配额（周期以上游返回为准）",
@@ -612,10 +611,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::UsageExpires => "到期",
         L10nKey::UsageRawBalance => "原始余额（按返回单位，未折算）",
         L10nKey::UsageOverdrawn => "服务商报告账户已超额",
-        L10nKey::UsageBillingUsage => "账单周期用量费用",
-        L10nKey::UsageRequestCount => "周期请求数",
-        L10nKey::UsageSandboxMinutes => "Sandbox 分钟数",
-        L10nKey::UsageOrganizationLimit => "组织限制",
         L10nKey::UsageCommandSessionHelp => {
             "从你已授权的 Command Code 登录请求中，明确复制一个会话 Cookie 的 name=value（不是 API key，也不是整段 Cookie）。仅在 api.commandcode.ai 验证会话用户与 API key 用户相同、并成功查询增强后保存；不假设 Cookie 名称或 subscription.userId。"
         }

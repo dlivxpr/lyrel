@@ -464,6 +464,8 @@ pub struct TerminalView {
     /// first move is where a rebuilt view consults [`AgentReadMarks`].
     agent_status_seen: bool,
     git_status_cwd: Option<std::path::PathBuf>,
+    /// Command completion can fall entirely between foreground polls.
+    git_prompt_cycle: u64,
     last_agent_activity: u64,
     cmd: CmdEditor,
     /// Mirrors `Config::prompt_editor`. Cached rather than read from the global
@@ -1933,6 +1935,7 @@ impl TerminalView {
             keep_unread_on_focus: false,
             agent_status_seen: false,
             git_status_cwd: None,
+            git_prompt_cycle: 0,
             last_agent_activity: 0,
             cmd: CmdEditor::new(),
             prompt_editor,
@@ -4187,8 +4190,12 @@ impl TerminalView {
                     .or_else(|| self.cwd())
             })
             .flatten();
-        if cwd_now.as_ref() != self.git_status_cwd.as_ref() || cmd_finished || turn_finished {
-            if cmd_finished || turn_finished {
+        let prompt_cycle = self.terminal.prompt_cycle();
+        let command_finished = std::mem::replace(&mut self.git_prompt_cycle, prompt_cycle)
+            != prompt_cycle
+            || cmd_finished;
+        if cwd_now.as_ref() != self.git_status_cwd.as_ref() || command_finished || turn_finished {
+            if command_finished || turn_finished {
                 self.mark_repo_changed(cwd_now.as_deref(), cx);
             }
             self.refresh_git_status(cwd_now, GitRefresh::Edge, cx);

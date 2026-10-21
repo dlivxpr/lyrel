@@ -127,6 +127,7 @@ impl Transcript {
                     ended = Some(begin(MARK_D));
                     exit_mark = payload
                         .strip_prefix(b"133;D;")
+                        .map(|c| c.strip_suffix(b";aid=lyrel").unwrap_or(c))
                         .and_then(|c| std::str::from_utf8(c).ok())
                         .and_then(|c| c.trim().parse().ok());
                 }
@@ -206,7 +207,8 @@ mod tests {
     /// What zsh with lyrel's integration prints for one `echo hi` typed at its
     /// prompt: the echo of the line, `C` with the line, the output, `D` with
     /// the exit code, then the next prompt.
-    const ONE_COMMAND: &[u8] = b"echo hi\r\n\x1b]133;C;echo hi\x07hi\r\n\x1b]133;D;0\x07\
+    const ONE_COMMAND: &[u8] =
+        b"echo hi\r\n\x1b]133;C;echo hi;aid=lyrel\x07hi\r\n\x1b]133;D;0;aid=lyrel\x07\
                                  \x1b]7;file://host/tmp\x07\x1b]133;A\x07% \x1b]133;B\x07";
 
     #[test]
@@ -216,6 +218,15 @@ mod tests {
         let done = t.prompt(true, Some(0)).expect("D then a prompt is the end");
         assert_eq!((done.exit, done.ran), (Some(0), true));
         assert_eq!(t.take(), (b"hi\r\n".to_vec(), 0));
+    }
+
+    #[test]
+    fn scoped_shell_marks_keep_the_actual_exit_code_without_a_prompt_code() {
+        let mut transcript = Transcript::new();
+        transcript.output(b"\x1b]133;C;false;aid=lyrel\x07failed\r\n\x1b]133;D;7;aid=lyrel\x07");
+        let finished = transcript.prompt(true, None).expect("the shell returned");
+        assert_eq!(finished.exit, Some(7));
+        assert_eq!(transcript.take().0, b"failed\r\n");
     }
 
     #[test]

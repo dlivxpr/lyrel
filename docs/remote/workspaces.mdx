@@ -42,7 +42,7 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
 
 Linux 二进制文件完全静态链接 musl，因此无论 glibc 版本新旧，都能在任何发行版上运行。macOS 二进制文件只链接每台 Mac 都已具备的库。无论哪种情况，都不会额外安装其他内容。
 
-二进制文件按其使用的通信协议版本命名，因此客户端和服务器协议不一致时，不会悄悄进入只能部分工作的状态——lyrel 会改为安装匹配的版本。客户端与服务器的应用版本统一为 `0.1.0`；这不重置 IPC 协议，当前文件名为 `lyrel-server-c12p7`，Windows 加 `.exe`。stdio 连接使用该程序的 `--stdio` 入口；pane 连接沿用既有 `--pane` 参数。
+二进制文件按其使用的通信协议版本命名，因此客户端和服务器协议不一致时，不会悄悄进入只能部分工作的状态——lyrel 会改为安装匹配的版本。客户端与服务器的应用版本统一为 `0.1.1`；这不重置 IPC 协议，当前文件名为 `lyrel-server-c12p7`，Windows 加 `.exe`。stdio 连接使用该程序的 `--stdio` 入口；pane 连接沿用既有 `--pane` 参数。
 
 SSH 优先查找客户端旁的包内程序：`server/`、客户端目录本身，以及 macOS 的 `Resources/server/`；没有匹配资产时才从 `https://github.com/dlivxpr/lyrel/releases/download/v<version>/` 下载。Linux 资产是 `lyrel-server-linux-x86_64-musl` 或 `lyrel-server-linux-aarch64-musl`，macOS 是 `lyrel-server-macos-aarch64`（仅 Apple 芯片），Windows 是 `lyrel-server-windows-x86_64.zip`（仅 x64 主机；ARM64 主机会被拒绝）。下载必须通过同一 release 的 `checksums.txt` SHA-256 校验；缺 release、匹配包、校验和或校验失败都会终止安装，不猜选其他平台资产，也不回退上游。上传后的临时程序还必须报告匹配的 control／pane 协议，才能发布到最终路径并启动。
 

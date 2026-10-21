@@ -279,20 +279,17 @@ fn kimi_manual_session_keeps_counts_and_old_snapshot_on_rate_limit_or_missing_us
     assert_eq!(http.calls.load(Ordering::SeqCst), 5);
 }
 
-const COMMAND_WHO: &[u8]=br#"{"success":true,"user":{"id":"command-user","userName":"work"},"org":{"id":"org_work","login":"work"}}"#;
-const COMMAND_CREDITS: &[u8]=br#"{"credits":{"monthlyCredits":85,"monthlyCreditsGranted":100,"purchasedCredits":20,"freeCredits":3,"planId":"individual-pro"},"windowLimits":{"fiveHour":{"used":12,"cap":25,"resetAt":"2026-10-20T00:00:00Z","exceeded":false},"weekly":{"used":30,"cap":100,"resetAt":"2026-10-25T00:00:00Z","exceeded":false}}}"#;
-const COMMAND_SUBSCRIPTION: &[u8]=br#"{"data":{"planId":"individual-pro","currentPeriodStart":"2026-10-01T00:00:00Z","currentPeriodEnd":"2026-11-01T00:00:00Z"}}"#;
-const COMMAND_SUMMARY: &[u8] =
-    br#"{"totalCost":15,"totalCount":123,"periodBasis":"billing-period"}"#;
+const COMMAND_WHO: &[u8]=br#"{"success":true,"user":{"id":"command-user","userName":"work"},"org":{"id":"org_work","login":"work"},"orgLimits":"irrelevant-old-display"}"#;
+const COMMAND_CREDITS: &[u8]=br#"{"credits":{"monthlyCredits":56,"purchasedCredits":"irrelevant","freeCredits":"irrelevant","planId":"individual-goat"},"windowLimits":{"fiveHour":{"used":12,"cap":25,"resetAt":"2026-10-20T00:00:00Z","exceeded":false},"weekly":{"used":30,"cap":100,"resetAt":"2026-10-25T00:00:00Z","exceeded":false}},"sandboxMinutes":"irrelevant-old-display"}"#;
+const COMMAND_SUBSCRIPTION: &[u8]=br#"{"data":{"planId":"individual-goat","status":"active","currentPeriodEnd":"2026-11-01T00:00:00Z"}}"#;
 fn reply_command(http: &Http) {
     http.reply(200, COMMAND_WHO);
     http.reply(200, COMMAND_CREDITS);
     http.reply(200, COMMAND_SUBSCRIPTION);
-    http.reply(200, COMMAND_SUMMARY);
 }
 
 #[gpui_kit::test]
-fn command_key_workflow_keeps_credit_sources_and_rolling_windows_separate(cx: &mut TestAppContext) {
+fn command_key_workflow_queries_only_three_subscription_quotas(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (app, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
@@ -321,25 +318,28 @@ fn command_key_workflow_keeps_credit_sources_and_rolling_windows_separate(cx: &m
             panic!("Command report")
         };
         assert_eq!(report.identity.as_deref(), Some("command-user"));
-        assert_eq!(report.plan.as_deref(), Some("individual-pro"));
+        assert_eq!(report.plan.as_deref(), Some("individual-goat"));
+        assert_eq!(report.pools.len(), 3);
         assert_eq!(
-            report.pools[..5]
+            report
+                .pools
                 .iter()
                 .map(|p| (p.kind, p.remaining.as_deref()))
                 .collect::<Vec<_>>(),
             vec![
-                (providers::PoolKind::Monthly, Some("85")),
-                (providers::PoolKind::Purchased, Some("20")),
-                (providers::PoolKind::Free, Some("3")),
                 (providers::PoolKind::FiveHour, Some("13")),
-                (providers::PoolKind::Weekly, Some("70"))
+                (providers::PoolKind::Weekly, Some("70")),
+                (providers::PoolKind::Monthly, Some("56"))
             ]
         );
-        assert_eq!(report.pools[5].used.as_deref(), Some("15"));
-        assert_eq!(report.pools[5].unit, "USD");
-        assert_eq!(report.pools[6].used.as_deref(), Some("123"));
+        assert_eq!(report.pools[0].used.as_deref(), Some("12"));
+        assert_eq!(report.pools[0].limit.as_deref(), Some("25"));
+        assert_eq!(report.pools[1].used.as_deref(), Some("30"));
+        assert_eq!(report.pools[1].limit.as_deref(), Some("100"));
+        assert_eq!(report.pools[2].used.as_deref(), Some("14"));
+        assert_eq!(report.pools[2].limit.as_deref(), Some("70"));
         assert_eq!(
-            report.pools[0].reset.as_deref(),
+            report.pools[2].reset.as_deref(),
             Some("2026-11-01T00:00:00Z")
         );
         account.id
@@ -365,8 +365,207 @@ fn command_key_workflow_keeps_credit_sources_and_rolling_windows_separate(cx: &m
         "https://api.commandcode.ai/alpha/whoami?limits=1"
     );
     assert_eq!(
-        requests[3].0,
-        "https://api.commandcode.ai/alpha/usage/summary?orgId=org_work&since=2026-10-01T00%3A00%3A00Z"
+        requests.len(),
+        3,
+        "unrelated summary must not gate quota refresh"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|(_, header, value)| header == "Authorization" && value == "Bearer command-key")
+    );
+}
+
+#[test]
+fn command_monthly_limit_uses_only_published_active_subscription_plans() {
+    for (plan, limit) in [
+        ("individual-go", "10"),
+        ("individual-go-v1", "10"),
+        ("individual-goat", "70"),
+        ("individual-pro", "30"),
+        ("individual-pro-v1", "80"),
+        ("individual-provider", "15"),
+        ("individual-max", "150"),
+        ("individual-ultra", "300"),
+        ("teams-pro", "40"),
+    ] {
+        let http = Http::default();
+        http.reply(200, COMMAND_WHO);
+        http.reply(200, br#"{"credits":{"monthlyCredits":5}}"#);
+        http.reply(
+            200,
+            &serde_json::to_vec(&serde_json::json!({"data": {
+                "planId": plan, "status": "active"
+            }}))
+            .unwrap(),
+        );
+        let report = providers::command_code::query(&http, "controlled-key", None).unwrap();
+        assert_eq!(report.pools.len(), 3);
+        assert_eq!(report.pools[2].limit.as_deref(), Some(limit), "{plan}");
+        assert_eq!(report.pools[2].remaining.as_deref(), Some("5"));
+        assert!(report.pools[2].used.is_some());
+        assert_eq!(http.calls.load(Ordering::SeqCst), 3);
+    }
+    for subscription in [
+        br#"{"data":{"planId":"unknown-plan","status":"active"}}"#.as_slice(),
+        br#"{"data":{"planId":"individual-goat","status":"canceled"}}"#,
+        br#"{"data":{"planId":"individual-goat","status":"trialing"}}"#,
+        br#"{"data":{"planId":"individual-goat"}}"#,
+        br#"{"data":{"status":"active"}}"#,
+    ] {
+        let http = Http::default();
+        http.reply(200, COMMAND_WHO);
+        http.reply(200, COMMAND_CREDITS);
+        http.reply(200, subscription);
+        let report = providers::command_code::query(&http, "controlled-key", None).unwrap();
+        assert_eq!(report.pools[2].remaining.as_deref(), Some("56"));
+        assert!(report.pools[2].limit.is_none());
+        assert!(report.pools[2].used.is_none());
+    }
+}
+
+#[test]
+fn command_missing_quotas_stay_unknown_and_unrelated_balances_cannot_make_refresh_succeed() {
+    for remaining in [serde_json::Value::Null, serde_json::json!(56)] {
+        let http = Http::default();
+        http.reply(200, COMMAND_WHO);
+        http.reply(200, &serde_json::to_vec(&serde_json::json!({
+            "credits": {"monthlyCredits": remaining, "monthlyCreditsGranted": 99999,
+                "purchasedCredits": 99999, "freeCredits": 99999},
+            "windowLimits": {"fiveHour": {"used": 30, "cap": 25}, "weekly": {"used": 0, "cap": 0}}
+        })).unwrap());
+        http.reply(200, COMMAND_SUBSCRIPTION);
+        let report = providers::command_code::query(&http, "controlled-key", None).unwrap();
+        assert_eq!(report.pools[0].remaining.as_deref(), Some("0"));
+        assert_eq!(report.pools[0].used.as_deref(), Some("30"));
+        assert_eq!(report.pools[1].limit.as_deref(), Some("0"));
+        assert_eq!(report.pools[2].limit.as_deref(), Some("70"));
+        assert_eq!(report.pools[2].used.is_some(), !remaining.is_null());
+        assert_eq!(report.pools[2].remaining.is_some(), !remaining.is_null());
+    }
+    let http = Http::default();
+    http.reply(200, COMMAND_WHO);
+    http.reply(
+        200,
+        br#"{"credits":{"purchasedCredits":100,"freeCredits":100}}"#,
+    );
+    http.reply(200, COMMAND_SUBSCRIPTION);
+    assert_eq!(
+        providers::command_code::query(&http, "controlled-key", None),
+        Err(UsageError::Response)
+    );
+}
+
+#[test]
+fn command_old_display_snapshot_cutover_keeps_accounts_credentials_and_other_providers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage.json");
+    let vault = Arc::new(InMemoryCredentialStore::new());
+    let http = Http::default();
+    reply_command(&http);
+    let report = providers::command_code::query(&http, "controlled-key", None).unwrap();
+    let mut accounts = Accounts::load(path.clone(), vault.clone()).unwrap();
+    let id = accounts
+        .save_verified(
+            None,
+            "Command",
+            VerifiedSource::ApiKey("controlled-key"),
+            Balance::Provider(report),
+            100,
+        )
+        .unwrap();
+    let other = accounts
+        .save_verified(
+            None,
+            "DeepSeek",
+            VerifiedSource::ApiKey("other-key"),
+            accounts::decode(200, BALANCE).unwrap(),
+            99,
+        )
+        .unwrap();
+    let mut stored = serde_json::to_value(&accounts.stored).unwrap();
+    let pools = stored
+        .pointer_mut("/accounts/0/snapshot/balance/pools")
+        .unwrap()
+        .as_array_mut()
+        .unwrap();
+    let mut old_pool = pools[2].clone();
+    for kind in [
+        "Purchased",
+        "Free",
+        "BillingUsage",
+        "RequestCount",
+        "SandboxMinutes",
+        "OrganizationLimit",
+    ] {
+        old_pool["kind"] = serde_json::json!(kind);
+        pools.push(old_pool.clone());
+    }
+    pools.reverse();
+    std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    let restored = Accounts::load(path, vault).unwrap();
+    assert_eq!(restored.stored.accounts.len(), 2);
+    assert_eq!(restored.secret(id).unwrap(), "controlled-key");
+    assert_eq!(restored.secret(other).unwrap(), "other-key");
+    assert_eq!(
+        restored
+            .account(other)
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .balance,
+        accounts
+            .account(other)
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .balance
+    );
+    let Balance::Provider(report) = &restored
+        .account(id)
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .balance
+    else {
+        panic!("Command report")
+    };
+    assert_eq!(
+        report.pools.iter().map(|p| p.kind).collect::<Vec<_>>(),
+        vec![
+            providers::PoolKind::FiveHour,
+            providers::PoolKind::Weekly,
+            providers::PoolKind::Monthly
+        ]
+    );
+}
+
+#[test]
+fn command_nullable_windows_and_authenticated_monthly_enhancement_keep_real_limits() {
+    let http = Http::default();
+    http.reply(200, COMMAND_WHO);
+    http.reply(200, br#"{"credits":{"monthlyCredits":56},"windowLimits":{"fiveHour":{"used":null,"cap":null},"weekly":{"used":30}}}"#);
+    http.reply(200, COMMAND_SUBSCRIPTION);
+    let mut report = providers::command_code::query(&http, "controlled-key", None).unwrap();
+    assert!(report.pools[0].remaining.is_none());
+    assert!(report.pools[0].used.is_none());
+    assert!(report.pools[0].limit.is_none());
+    assert!(report.pools[1].remaining.is_none());
+    assert_eq!(report.pools[1].used.as_deref(), Some("30"));
+    assert!(report.pools[1].limit.is_none());
+    http.reply(200, br#"{"user":{"id":"command-user"}}"#);
+    http.reply(200, br#"{"success":true,"data":{"planId":"individual-max","status":"active","cancelAt":"2026-10-30T00:00:00Z","currentPeriodEnd":"2026-12-01T00:00:00Z"}}"#);
+    providers::command_code::enhance(&http, "session=controlled", &mut report, None).unwrap();
+    assert_eq!(report.pools.len(), 3);
+    assert_eq!(report.pools[2].remaining.as_deref(), Some("56"));
+    assert_eq!(report.pools[2].used.as_deref(), Some("94"));
+    assert_eq!(report.pools[2].limit.as_deref(), Some("150"));
+    assert_eq!(
+        report.pools[2].reset.as_deref(),
+        Some("2026-12-01T00:00:00Z")
     );
 }
 
@@ -539,8 +738,8 @@ fn command_manual_enhancement_mismatch_and_expiry_never_replace_primary_key(
         let Balance::Provider(report) = &account.snapshot.as_ref().unwrap().balance else {
             panic!("Command")
         };
-        assert_eq!(report.pools[0].remaining.as_deref(), Some("85"));
-        assert_eq!(report.plan.as_deref(), Some("individual-pro"));
+        assert_eq!(report.pools[2].remaining.as_deref(), Some("56"));
+        assert_eq!(report.plan.as_deref(), Some("individual-goat"));
     });
     click(&mut vcx, &format!("usage-remove-{id}"));
     click(&mut vcx, "usage-submit");
@@ -836,8 +1035,8 @@ fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_
             panic!("Command report")
         };
         assert_eq!(report.identity.as_deref(), Some("command-user"));
-        assert_eq!(report.pools[0].remaining.as_deref(), Some("85"));
-        assert_eq!(report.plan.as_deref(), Some("individual-pro"));
+        assert_eq!(report.pools[2].remaining.as_deref(), Some("56"));
+        assert_eq!(report.plan.as_deref(), Some("individual-goat"));
     });
     assert_eq!(vault.len(), 1);
     db.execute_batch("BEGIN EXCLUSIVE").unwrap();
@@ -900,7 +1099,7 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
         let before = http.calls.load(Ordering::SeqCst);
         click(&mut vcx, "usage-submit");
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
-        while http.calls.load(Ordering::SeqCst) < before + 6 {
+        while http.calls.load(Ordering::SeqCst) < before + 5 {
             vcx.run_until_parked();
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
@@ -938,7 +1137,7 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
         if close_page {
             vcx.executor().advance_clock(Duration::from_secs(600));
             vcx.run_until_parked();
-            assert_eq!(http.calls.load(Ordering::SeqCst), before + 6);
+            assert_eq!(http.calls.load(Ordering::SeqCst), before + 5);
         }
     }
 }

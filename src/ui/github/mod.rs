@@ -74,7 +74,10 @@ pub(crate) type Connector = Arc<dyn Fn() -> Connection + Send + Sync>;
 
 pub(crate) enum RemoteLookup {
     Loading,
-    Ready(Arc<Vec<GitHubRemote>>),
+    Ready {
+        epoch: u64,
+        list: Arc<Vec<GitHubRemote>>,
+    },
 }
 
 #[derive(Default)]
@@ -278,11 +281,17 @@ impl LyrelApp {
         repo: RepoKey,
         cx: &mut Context<Self>,
     ) -> GhTarget {
+        let epoch = cx
+            .default_global::<crate::terminal::git_data::ScmData>()
+            .epoch(repo.host, &repo.root);
         let remotes = match self.github.remotes.get(&repo) {
-            Some(RemoteLookup::Ready(list)) => list.clone(),
+            Some(RemoteLookup::Ready {
+                epoch: read_epoch,
+                list,
+            }) if *read_epoch == epoch => list.clone(),
             Some(RemoteLookup::Loading) => return GhTarget::Pending,
-            None => {
-                self.github_load_remotes(host, repo, cx);
+            _ => {
+                self.github_load_remotes(host, repo, epoch, cx);
                 return GhTarget::Pending;
             }
         };
@@ -301,7 +310,13 @@ impl LyrelApp {
         }
     }
 
-    fn github_load_remotes(&mut self, host: SharedHost, repo: RepoKey, cx: &mut Context<Self>) {
+    fn github_load_remotes(
+        &mut self,
+        host: SharedHost,
+        repo: RepoKey,
+        epoch: u64,
+        cx: &mut Context<Self>,
+    ) {
         self.github
             .remotes
             .insert(repo.clone(), RemoteLookup::Loading);
@@ -313,9 +328,13 @@ impl LyrelApp {
             move |this, out, cx| {
                 let remotes =
                     lyrel_core::core::github::remote::github_remotes(&out.unwrap_or_default());
-                this.github
-                    .remotes
-                    .insert(repo, RemoteLookup::Ready(Arc::new(remotes)));
+                this.github.remotes.insert(
+                    repo,
+                    RemoteLookup::Ready {
+                        epoch,
+                        list: Arc::new(remotes),
+                    },
+                );
                 cx.notify();
             },
         );

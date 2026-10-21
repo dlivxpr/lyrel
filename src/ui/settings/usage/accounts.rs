@@ -150,8 +150,39 @@ pub(super) struct Accounts {
 impl Accounts {
     pub fn load(path: PathBuf, vault: Arc<dyn CredentialStore>) -> Result<Self, UsageError> {
         let stored = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice::<StoredAccounts>(&bytes)
-                .map_err(|_| UsageError::Persistence)?,
+            Ok(bytes) => {
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(|_| UsageError::Persistence)?;
+                // 删除旧监控项的快照，不删除账户、凭据引用或其他服务商的数据。
+                if let Some(accounts) = value.get_mut("accounts").and_then(|v| v.as_array_mut()) {
+                    for account in accounts {
+                        let Some(balance) = account.pointer_mut("/snapshot/balance") else {
+                            continue;
+                        };
+                        if balance.get("provider").and_then(|v| v.as_str()) != Some("CommandCode") {
+                            continue;
+                        }
+                        if let Some(pools) = balance.get_mut("pools").and_then(|v| v.as_array_mut())
+                        {
+                            pools.retain(|pool| {
+                                matches!(
+                                    pool.get("kind").and_then(|v| v.as_str()),
+                                    Some("FiveHour" | "Weekly" | "Monthly")
+                                )
+                            });
+                            pools.sort_by_key(|pool| {
+                                match pool.get("kind").and_then(|v| v.as_str()) {
+                                    Some("FiveHour") => 0,
+                                    Some("Weekly") => 1,
+                                    _ => 2,
+                                }
+                            });
+                        }
+                    }
+                }
+                serde_json::from_value::<StoredAccounts>(value)
+                    .map_err(|_| UsageError::Persistence)?
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => StoredAccounts::default(),
             Err(_) => return Err(UsageError::Persistence),
         };
