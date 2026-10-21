@@ -2278,12 +2278,16 @@ mod tests {
             cmd.cwd(dir);
         }
         let mut child = pty.slave.spawn_command(cmd).expect("spawn shell");
+        // ConPTY's slave owns the same console as its master. Keeping it here
+        // would prevent dropping the master from actually closing the console.
+        drop(pty.slave);
+        let bash_prompt = matches!(shell_kind(Some(program)), Some(ShellKind::Bash));
 
         let mut writer = pty.master.take_writer().expect("writer");
         let mut reader = pty.master.try_clone_reader().expect("reader");
 
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        let reader_thread = std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
@@ -2332,7 +2336,6 @@ mod tests {
             // Bash emits A from PROMPT_COMMAND before Readline owns the tty.
             // Wait for its displayed prompt so literal-next input is not
             // consumed by the tty's canonical line discipline instead.
-            let bash_prompt = matches!(shell_kind(Some(program)), Some(ShellKind::Bash));
             if !typed && (text.contains("133;B") || (!bash_prompt && text.contains("133;A"))) {
                 writer.write_all(keys).expect("write");
                 writer.flush().expect("flush");
@@ -2356,11 +2359,27 @@ mod tests {
                 }
             }
         }
-        // Reap before asserting: a panic here would otherwise leave the shell
-        // holding the pty open for the rest of the test run.
-        let _ = child.kill();
-        let _ = child.wait();
+        // Git's bin/bash.exe is a launcher: killing and waiting for that process
+        // does not reap the actual Bash holding cwd open. Once the command has
+        // finished, ask Bash itself to exit and let the launcher wait for it.
+        // Keep teardown output out of `out`: it is not part of the sampled
+        // consumer contract (in particular, it adds another command-start mark).
+        let exit_status = if bash_prompt && seen_fail.is_some() {
+            writer.write_all(b"builtin exit 0\n").expect("exit Bash");
+            writer.flush().expect("flush Bash exit");
+            Some(child.wait().expect("wait for Bash exit"))
+        } else {
+            // Reap before asserting even when the expected prompt never arrived.
+            let _ = child.kill();
+            child.wait().expect("wait for shell exit");
+            None
+        };
+        drop(writer);
         drop(pty.master);
+        reader_thread.join().expect("join PTY reader");
+        if let Some(status) = exit_status {
+            assert!(status.success(), "Bash did not exit cleanly: {status}");
+        }
         assert!(
             typed,
             "no prompt-start mark ever arrived, so nothing was typed; got:\n{}",
@@ -2691,6 +2710,7 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     }
 
     /// The OSC 0 title the shell settled on, as `user@host:dir`.
+    #[cfg(unix)]
     fn reported_title(text: &str) -> String {
         text.split("\u{1b}]")
             .filter_map(|s| s.strip_prefix("0;"))

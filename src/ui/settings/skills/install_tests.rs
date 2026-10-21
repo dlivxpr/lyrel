@@ -31,7 +31,7 @@ impl Transport for PublicRepository {
 fn settle_install(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
-        cx.background_executor.run_until_parked();
+        cx.run_until_parked();
         if app.update_in(cx, |app, _, _| {
             app.active_settings()
                 .is_some_and(|s| !s.skills.install.busy && !s.skills.loading)
@@ -52,12 +52,15 @@ fn click_form(window: &mut Window, cx: &mut App, id: &'static str) {
 #[gpui_kit::test]
 fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(temp.path()).unwrap(),
+    );
+    let project = root.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
-        super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
+        super::super::tests::isolate_native_roots(&root.join("home"), cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);
         let state = &mut app.active_settings_mut().unwrap().skills.install;
         state.github = Some(Arc::new(PublicRepository));
@@ -99,6 +102,9 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     vcx.update(|window, cx| {
         window.render_frame(cx);
         click_form(window, cx, "skills-candidate-skills/needle/SKILL.md");
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
         window.click("skills-install-review", cx);
     });
     settle_install(&app, &mut vcx);
@@ -106,6 +112,7 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
         window.render_frame(cx);
         window.click("skills-install-cancel", cx);
     });
+    vcx.run_until_parked();
     assert!(!project.join(".agents").exists());
     assert!(!project.join("skills-lock.json").exists());
     vcx.update(|window, cx| {
@@ -410,8 +417,11 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
     cx: &mut TestAppContext,
 ) {
     let temp = tempfile::tempdir().unwrap();
-    let local = temp.path().join("local/home");
-    let remote = temp.path().join("remote/home");
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(temp.path()).unwrap(),
+    );
+    let local = root.join("local/home");
+    let remote = root.join("remote/home");
     std::fs::create_dir_all(&remote).unwrap();
     let remote_id = HostId(404);
     let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
@@ -436,12 +446,24 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
     vcx.update(|window, cx| {
         window.render_frame(cx);
         click_form(window, cx, "skills-candidate-skills/needle/SKILL.md");
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
         window.click("skills-install-review", cx);
     });
     settle_install(&app, &mut vcx);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.press("escape", cx);
+    });
+    vcx.run_until_parked();
+    app.read_with(&vcx, |app, _| {
+        let state = &app.active_settings().unwrap().skills.install;
+        assert!(
+            state.open,
+            "Escape from review must keep the installer open"
+        );
+        assert!(state.preview.is_none(), "Escape must cancel the review");
     });
     assert!(!remote.join(".agents").exists());
     assert!(!local.join(".agents").exists());
@@ -472,6 +494,11 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
         &std::fs::read(remote.join("cwd/.state/skills/.skill-lock.json")).unwrap(),
     )
     .unwrap();
+    // 此 fixture 由 LocalHost 承载；安装身份使用它规范化后的真实路径，
+    // 不能与临时目录的 Windows 短路径或 macOS 符号链接拼写直接比较。
+    let installed_path = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(remote.join(".agents/skills/needle")).unwrap(),
+    );
     app.update_in(&mut vcx, |app, _, _| {
         let snapshot = app
             .active_settings()
@@ -480,11 +507,13 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
             .snapshot
             .as_ref()
             .unwrap();
+        assert_eq!(snapshot.host(), remote_id);
         let installed = snapshot
             .installations()
             .iter()
-            .find(|skill| skill.path() == remote.join(".agents/skills/needle"))
-            .unwrap();
+            .find(|skill| skill.path() == installed_path)
+            .expect("the remote snapshot must contain the canonical shared installation");
+        assert_eq!(installed.host(), remote_id);
         assert_eq!(
             installed.source_record().unwrap().source(),
             "example/skills"

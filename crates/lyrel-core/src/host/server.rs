@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

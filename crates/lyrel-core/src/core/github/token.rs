@@ -383,6 +383,7 @@ mod tests {
         assert_eq!(unique.len(), c.len());
     }
 
+    #[cfg(unix)]
     const STATUS: &str = r#"{"hosts":{"github.com":[
         {"state":"success","active":true,"host":"github.com","login":"me"},
         {"state":"success","active":false,"host":"github.com","login":"work"},

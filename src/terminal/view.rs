@@ -4842,6 +4842,11 @@ impl TerminalView {
         if self.on_alt_screen() {
             return Some("the pane is on the alternate screen");
         }
+        // Main-screen agents can keep the shell's last prompt report alive.
+        // Their input wins until detection reports that the agent has exited.
+        if self.terminal.foreground_agent().is_some() {
+            return Some("the foreground agent owns input");
+        }
         if self.shell_vi_prompt() {
             return Some("the shell prompt is in vi mode");
         }
@@ -13018,6 +13023,197 @@ mod gpui_tests {
             None,
             "the clipboard must stay where it is: vim's Ctrl+V is blockwise select, not paste"
         );
+    }
+
+    #[gpui_kit::test]
+    fn agent_question_arrows_bypass_prompt_history_after_a_stale_prompt(cx: &mut TestAppContext) {
+        assert_agent_question_owns_arrows(cx, crate::core::cli_agent::CLIAgent::OhMyPi, false);
+    }
+
+    #[gpui_kit::test]
+    fn agent_question_arrows_bypass_prompt_history_when_detection_arrives_last(
+        cx: &mut TestAppContext,
+    ) {
+        assert_agent_question_owns_arrows(cx, crate::core::cli_agent::CLIAgent::Pi, true);
+    }
+
+    fn assert_agent_question_owns_arrows(
+        cx: &mut TestAppContext,
+        agent: crate::core::cli_agent::CLIAgent,
+        prompt_first: bool,
+    ) {
+        let (window, mut daemon) = harness(cx);
+        prompt_ready(&window, cx, &mut daemon);
+        window
+            .update(cx, |view, window, cx| {
+                view.history = vec!["echo shell-history".into()];
+                view.history_frecency = vec![0.0];
+                for chord in ["up", "down"] {
+                    view.on_key_down(
+                        &KeyDownEvent {
+                            keystroke: key(chord),
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    assert_eq!(
+                        view.cmd.text(),
+                        if chord == "up" {
+                            "echo shell-history"
+                        } else {
+                            ""
+                        },
+                        "ordinary shell prompts must retain local history navigation"
+                    );
+                }
+                view.cmd.set("interactive-agent");
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("enter"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"interactive-agent\r".to_vec())
+        );
+
+        // Agent detection and shell integration arrive independently. A stale
+        // prompt must not reclaim input from a main-screen question TUI.
+        let prompt = DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: None,
+        };
+        let detected = DaemonMsg::Agent(Some(agent));
+        let messages = if prompt_first {
+            [prompt, detected]
+        } else {
+            [detected, prompt]
+        };
+        for message in messages {
+            message.encode(&mut daemon).unwrap();
+        }
+        DaemonMsg::Output(b"\x1b[?2004hChoose an answer:\r\n> Yes\r\n  No".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            cx.run_until_parked();
+            let ready = window
+                .update(cx, |view, _, _| {
+                    view.agent() == Some(agent)
+                        && view.terminal.prompt_seq() >= 2
+                        && view
+                            .terminal
+                            .term
+                            .lock()
+                            .mode()
+                            .contains(Mode::BRACKETED_PASTE)
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, window, cx| {
+                assert_eq!(view.agent(), Some(agent));
+                assert!(view.terminal.prompt_seq() >= 2, "the stale report arrived");
+                assert!(
+                    view.terminal
+                        .term
+                        .lock()
+                        .mode()
+                        .contains(Mode::BRACKETED_PASTE)
+                );
+                assert!(view.terminal.at_prompt(), "retain the stale shell report");
+                assert!(!view.on_alt_screen(), "the question uses the main screen");
+                for chord in ["up", "down"] {
+                    view.on_key_down(
+                        &KeyDownEvent {
+                            keystroke: key(chord),
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    assert_eq!(
+                        view.cmd.text(),
+                        "",
+                        "{chord} in an agent question must not recall shell history"
+                    );
+                    assert!(view.history_nav.is_none());
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            next_input_until_timeout(&mut daemon),
+            Some(b"\x1b[B".to_vec())
+        );
+
+        let prompt = DaemonMsg::Prompt {
+            active: true,
+            at_prompt: true,
+            last_exit: Some(0),
+        };
+        let exited = DaemonMsg::Agent(None);
+        let messages = if prompt_first {
+            [prompt, exited]
+        } else {
+            [exited, prompt]
+        };
+        for message in messages {
+            message.encode(&mut daemon).unwrap();
+        }
+        for _ in 0..200 {
+            cx.run_until_parked();
+            let ready = window
+                .update(cx, |view, _, _| {
+                    view.agent().is_none() && view.terminal.prompt_seq() >= 3
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, window, cx| {
+                assert!(view.agent().is_none());
+                assert!(
+                    view.terminal.prompt_seq() >= 3,
+                    "the returned prompt arrived"
+                );
+                assert!(
+                    view.input_active(),
+                    "the returned shell prompt owns input again"
+                );
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: key("up"),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(view.cmd.text(), "interactive-agent");
+            })
+            .unwrap();
+        assert_eq!(next_input_until_timeout(&mut daemon), None);
     }
 
     #[gpui_kit::test]

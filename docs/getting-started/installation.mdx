@@ -245,12 +245,16 @@ Windows 桌面与 server 均只发布 x86-64。
 | Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
 
 macOS／Windows server 在对应工具链中使用 `cargo build --release --locked -p lyrel-server --target <target>`；
-Linux musl server 按 release workflow 使用 Zig 与 cargo-zigbuild：
+Linux musl server 按 release workflow 使用 Zig `0.16.0` 与 cargo-zigbuild。Actions 在临时 Python venv 中安装官方 PyPI 的 `ziglang==0.16.0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向该解释器，不依赖旧 Node.js runtime 的 Zig setup action：
 
 ```bash
 cargo zigbuild --release --locked -p lyrel-server --target x86_64-unknown-linux-musl
 bash .github/scripts/assert-static.sh target/x86_64-unknown-linux-musl/release/lyrel-server
 ```
+
+Rust 与 Zig 的组合仍可能输出 `ignoring deprecated linker optimization setting '1'`，见
+[Rust 上游记录](https://github.com/rust-lang/rust/issues/158192)。这是 rustc 自动传入已被 Zig 忽略的链接优化参数所致；保留这条已知误报，不关闭其他 linker diagnostics，静态链接断言仍必须通过。
+
 Windows 包内 WSL server 固定为 x86_64：构建 `x86_64-unknown-linux-musl` 后，将实际二进制复制并命名为
 `bundled-server/lyrel-server-linux-x86_64-musl`，再打 Windows 包；不能放占位文件，也不能重命名其他架构的产物。
 macOS server 沿用 ad-hoc 签名和 `assert-macho.sh` 检查，Windows server 使用
@@ -272,11 +276,30 @@ bash .github/scripts/generate-checksums.sh <asset-dir>
 
 `.github/workflows/ci.yml` 在 `main` push、pull request 和手动触发时验证格式、Host 边界、
 Windows x86-64／macOS Apple Silicon 桌面及 headless、Linux GNU 完整 features 和静态 musl server。
-Node.js 22 显式安装，用于 Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。
+Node.js 22 显式安装，用于 Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。Linux runner 固定为 `ubuntu-24.04`；checkout 使用 Node.js 24 runtime 的 `actions/checkout@v7`。
+
+CI 的桌面 build 与 test 统一启用 `--features updater`，同一次默认 workspace 测试覆盖 GUI、core、CLI、server 和 updater；不另起一轮不同 feature 图的 updater 编译。Linux 仍验证完整 headless features，所有平台断言保持不变。
 
 发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
 及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
-手动触发 release workflow 仅构建，不发布；重跑不能覆盖已发布版本。
+桌面与 server 并行编译，桌面一次编译 GUI、CLI 和 updater。Windows 打包只等待本平台编译和真实 WSL musl server，macOS 打包只等待本平台编译，不跨平台互相阻塞。编译与打包间使用 tar 保留可执行权限，归档及恢复均使用相对路径，避免 GNU tar 把 Windows 的 `drive:` 绝对路径当作远程主机；已压缩包不再做外层压缩。Thin LTO 和单 codegen unit 的发行配置不变。
+
+CI 与 Release 使用独立的稳定缓存键，保留 toolchain、target、flags 和依赖哈希隔离。仅 `main` 保存缓存，标签和 PR 只读取；不同标签不能读取彼此保存的缓存，但可以读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖：
+
+```bash
+gh workflow run release.yml --repo dlivxpr/lyrel --ref main
+```
+
+无 `tag` 的手动运行仅构建、打包和预热，不创建草稿或发布。汇总失败时，可通过 `main` 的新版 workflow 复用已有完整产物，不移动原标签、不重新编译：
+
+```bash
+gh workflow run release.yml --repo dlivxpr/lyrel --ref main \
+  -f tag="v<version>" -f reuse_run_id="<run-id>" -f draft_release_id="<draft-id>"
+```
+
+已有草稿时显式传入 `draft_release_id`；没有草稿时省略。复用必须来自当前仓库、当前 Release workflow、与标签完全相同的源提交；生产构建须全部成功，六件正式 artifacts 须完整且未过期，允许仅原草稿汇总失败。条件不符即停止；产物过期或缺失时应省略 `reuse_run_id` 正常重建，不得跳过来源或完整性校验。
+
+汇总入口为 `.github/scripts/assemble-release.sh`，直接使用创建响应中的 release ID，不依赖列表立即可见；恢复时只复用 SHA-256 相同的已有草稿资产。每次上传前复核精确标签及 draft 状态，拒绝不同字节、预发布或已发布版本，不覆盖资产，也不自动 publish。
 
 ### 品牌切换后的维护与验收
 

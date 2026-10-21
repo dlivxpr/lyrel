@@ -487,6 +487,16 @@ pub(crate) fn window_move_gesture(
     window: &mut gpui_kit::Window,
     cx: &mut gpui_kit::App,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
+    window_move_gesture_with(row, key, window, cx, gpui_kit::Window::start_window_move)
+}
+
+fn window_move_gesture_with(
+    row: gpui_kit::Stateful<gpui_kit::Div>,
+    key: &'static str,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+    start_move: impl Fn(&gpui_kit::Window) + 'static,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     let arm = window.use_keyed_state(key, cx, |_, _| WindowMoveArm { should_move: false });
     row.window_control_area(gpui_kit::WindowControlArea::Drag)
         .on_mouse_down(
@@ -512,14 +522,15 @@ pub(crate) fn window_move_gesture(
                 arm.should_move = false;
             }),
         )
-        .on_mouse_move(
-            window.listener_for(&arm, |arm, _: &gpui_kit::MouseMoveEvent, window, _| {
+        .on_mouse_move(window.listener_for(
+            &arm,
+            move |arm, _: &gpui_kit::MouseMoveEvent, window, _| {
                 if arm.should_move {
                     arm.should_move = false;
-                    window.start_window_move();
+                    start_move(window);
                 }
-            }),
-        )
+            },
+        ))
 }
 
 pub(crate) fn window_mark() -> Option<impl IntoElement> {
@@ -11791,20 +11802,36 @@ mod window_drag_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    struct Host;
+    fn row(
+        key: &'static str,
+        moves: &Rc<Cell<usize>>,
+        window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        let moves = moves.clone();
+        super::window_move_gesture_with(
+            div().id(key).w_full().h(px(40.)),
+            key,
+            window,
+            cx,
+            move |_| moves.set(moves.get() + 1),
+        )
+    }
+
+    struct Host {
+        moves: Rc<Cell<usize>>,
+    }
     impl Render for Host {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(super::title_bar_drag(
-                div().id("stand-in-title-bar").w_full().h(px(40.)),
-                "stand-in-title-bar",
-                window,
-                cx,
-            ))
+            div()
+                .size_full()
+                .child(row("stand-in-title-bar", &self.moves, window, cx))
         }
     }
 
     struct HandleOverRow {
         occluded: bool,
+        moves: Rc<Cell<usize>>,
     }
     impl Render for HandleOverRow {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -11824,35 +11851,8 @@ mod window_drag_tests {
             div()
                 .relative()
                 .size_full()
-                .child(super::title_bar_drag(
-                    div().id("stand-in-title-bar").w_full().h(px(40.)),
-                    "stand-in-title-bar",
-                    window,
-                    cx,
-                ))
+                .child(row("stand-in-title-bar", &self.moves, window, cx))
                 .child(handle)
-        }
-    }
-
-    struct PerFrameCellHost;
-    impl Render for PerFrameCellHost {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            let should_move = Rc::new(Cell::new(false));
-            div().size_full().child(
-                div()
-                    .id("per-frame-cell")
-                    .w_full()
-                    .h(px(40.))
-                    .on_mouse_down(MouseButton::Left, {
-                        let should_move = should_move.clone();
-                        move |_, _, _| should_move.set(true)
-                    })
-                    .on_mouse_move(move |_, window, _| {
-                        if should_move.replace(false) {
-                            window.start_window_move();
-                        }
-                    }),
-            )
         }
     }
 
@@ -11906,23 +11906,31 @@ mod window_drag_tests {
     }
 
     #[gpui_kit::test]
-    #[should_panic(expected = "not implemented")]
-    fn the_arm_survives_a_repaint_between_press_and_move(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Host);
+    fn a_drag_survives_repaint_and_requests_one_native_move(cx: &mut TestAppContext) {
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| Host {
+            moves: moves.clone(),
+        });
         let mut vcx = VisualTestContext::from_window(window.into(), cx);
         press_repaint_move(&mut vcx, ON_ROW);
-    }
-
-    #[gpui_kit::test]
-    fn a_per_frame_cell_loses_the_arm_to_the_same_repaint(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| PerFrameCellHost);
-        let mut vcx = VisualTestContext::from_window(window.into(), cx);
-        press_repaint_move(&mut vcx, ON_ROW);
+        assert_eq!(moves.get(), 1);
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(drifted(drifted(ON_ROW)), true), cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(
+            moves.get(),
+            1,
+            "one press must request only one native move"
+        );
     }
 
     #[gpui_kit::test]
     fn a_press_alone_does_not_move_the_window(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Host);
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| Host {
+            moves: moves.clone(),
+        });
         let mut vcx = VisualTestContext::from_window(window.into(), cx);
         vcx.update(|window, cx| {
             window.dispatch_event(moved(ON_ROW, false), cx);
@@ -11930,11 +11938,15 @@ mod window_drag_tests {
             window.dispatch_event(up(ON_ROW), cx);
         });
         vcx.run_until_parked();
+        assert_eq!(moves.get(), 0);
     }
 
     #[gpui_kit::test]
     fn a_release_disarms_so_a_later_hover_does_not_drag(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Host);
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| Host {
+            moves: moves.clone(),
+        });
         let mut vcx = VisualTestContext::from_window(window.into(), cx);
         vcx.update(|window, cx| {
             window.dispatch_event(moved(ON_ROW, false), cx);
@@ -11947,46 +11959,54 @@ mod window_drag_tests {
             window.dispatch_event(moved(drifted(ON_ROW), false), cx);
         });
         vcx.run_until_parked();
+        assert_eq!(moves.get(), 0);
     }
 
     #[gpui_kit::test]
     fn a_press_on_a_resize_handle_does_not_move_the_window(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| HandleOverRow { occluded: true });
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| HandleOverRow {
+            occluded: true,
+            moves: moves.clone(),
+        });
         let mut vcx = VisualTestContext::from_window(window.into(), cx);
         press_repaint_move(&mut vcx, ON_ROW);
+        assert_eq!(moves.get(), 0);
     }
 
     #[gpui_kit::test]
-    #[should_panic(expected = "not implemented")]
     fn a_handle_without_a_blocking_hitbox_hands_the_press_to_the_row(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| HandleOverRow { occluded: false });
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| HandleOverRow {
+            occluded: false,
+            moves: moves.clone(),
+        });
         let mut vcx = VisualTestContext::from_window(window.into(), cx);
         press_repaint_move(&mut vcx, ON_ROW);
+        assert_eq!(moves.get(), 1);
     }
 
     #[gpui_kit::test]
     fn two_rows_on_screen_keep_separate_arms(cx: &mut TestAppContext) {
-        struct TwoRows;
+        struct TwoRows {
+            first: Rc<Cell<usize>>,
+            second: Rc<Cell<usize>>,
+        }
         impl Render for TwoRows {
             fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 div()
                     .size_full()
-                    .child(super::title_bar_drag(
-                        div().id("row-a").w_full().h(px(40.)),
-                        "row-a",
-                        window,
-                        cx,
-                    ))
-                    .child(super::title_bar_drag(
-                        div().id("row-b").w_full().h(px(40.)),
-                        "row-b",
-                        window,
-                        cx,
-                    ))
+                    .child(row("row-a", &self.first, window, cx))
+                    .child(row("row-b", &self.second, window, cx))
             }
         }
 
-        let window = cx.add_window(|_, _| TwoRows);
+        let first = Rc::new(Cell::new(0));
+        let second = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| TwoRows {
+            first: first.clone(),
+            second: second.clone(),
+        });
         let mut vcx = VisualTestContext::from_window(window.into(), cx);
         vcx.update(|window, cx| {
             window.dispatch_event(moved(point(px(300.), px(20.)), false), cx);
@@ -11998,6 +12018,9 @@ mod window_drag_tests {
             window.dispatch_event(moved(point(px(312.), px(60.)), false), cx);
         });
         vcx.run_until_parked();
+        assert_eq!((first.get(), second.get()), (0, 0));
+        press_repaint_move(&mut vcx, point(px(300.), px(60.)));
+        assert_eq!((first.get(), second.get()), (0, 1));
     }
 }
 
@@ -15073,7 +15096,7 @@ fn remember_sessions(
 mod spawn_consumer_tests {
     use super::*;
     use crate::ui::pending_pane::{PendingPane, PendingSpawn};
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::TestAppContext;
 
     fn pending(
         app: &mut LyrelApp,

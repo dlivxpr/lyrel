@@ -4,148 +4,351 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Stable tag to assemble; empty only builds and warms caches'
+        required: false
+        type: string
+      reuse_run_id:
+        description: 'Completed Release run whose production artifacts should be reused'
+        required: false
+        type: string
+      draft_release_id:
+        description: 'Existing stable draft release ID to assemble without publishing'
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
   cancel-in-progress: false
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      tag: ${{ steps.source.outputs.tag }}
+      artifact_run_id: ${{ steps.source.outputs.artifact_run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Resolve immutable source and validate reusable production run
+        id: source
+        uses: actions/github-script@v8
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REUSE_RUN_ID: ${{ inputs.reuse_run_id }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
         with:
+          script: |
+            const fail = message => { throw new Error(message); };
+            const repo = context.repo;
+            const tag = context.eventName === 'push'
+              ? context.ref.replace(/^refs\/tags\//, '') : process.env.INPUT_TAG;
+            const reuse = process.env.REUSE_RUN_ID;
+            const draft = process.env.DRAFT_RELEASE_ID;
+            const positiveId = value => /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value));
+            if (reuse && (!process.env.INPUT_TAG || !positiveId(reuse))) {
+              fail('reuse_run_id requires an explicit tag and a positive integer run ID');
+            }
+            if (draft && (!tag || !positiveId(draft))) {
+              fail('draft_release_id requires a tag and a positive integer release ID');
+            }
+            let sourceSha = context.sha;
+            if (tag) {
+              if (!/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(tag)) {
+                fail('tag must be an exact stable v<version> tag');
+              }
+              let object = (await github.rest.git.getRef({ ...repo, ref: `tags/${tag}` })).data.object;
+              for (let depth = 0; object.type === 'tag' && depth < 10; depth++) {
+                object = (await github.rest.git.getTag({ ...repo, tag_sha: object.sha })).data.object;
+              }
+              if (object.type !== 'commit') fail('tag must resolve to a commit');
+              sourceSha = object.sha;
+              if (context.eventName === 'push' && sourceSha !== context.sha) {
+                fail('tag commit no longer matches the triggering source SHA');
+              }
+            }
+            if (!/^[0-9a-f]{40}$/.test(sourceSha)) fail('source SHA must be an immutable commit');
+            if (reuse) {
+              const runId = Number(reuse);
+              const run = (await github.rest.actions.getWorkflowRun({ ...repo, run_id: runId })).data;
+              const workflow = (await github.rest.actions.getWorkflow({ ...repo, workflow_id: 'release.yml' })).data;
+              const repository = `${repo.owner}/${repo.repo}`;
+              if (run.repository.full_name !== repository || run.head_repository?.full_name !== repository ||
+                  run.head_repository?.fork !== false || run.workflow_id !== workflow.id ||
+                  run.path !== '.github/workflows/release.yml' || workflow.path !== '.github/workflows/release.yml' ||
+                  run.head_sha !== sourceSha || run.status !== 'completed' ||
+                  !['push', 'workflow_dispatch'].includes(run.event) ||
+                  (run.pull_requests || []).some(pr => pr.head.repo.id !== run.repository.id)) {
+                fail('reuse run must be a completed same-repository Release workflow run at the exact tag commit, not a fork PR');
+              }
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                ...repo, run_id: runId, filter: 'latest', per_page: 100
+              });
+              const production = jobs.filter(job => job.name !== 'draft-release');
+              if (production.some(job => job.status !== 'completed' || job.conclusion !== 'success' || job.head_sha !== sourceSha)) {
+                fail('every production job in the reused run must have succeeded at the tag commit');
+              }
+              for (const [name, count] of [['version', 1], ['build', 2], ['server-musl', 2], ['server-macos', 1], ['server-windows', 1]]) {
+                if (production.filter(job => job.name === name || job.name.startsWith(`${name} (`)).length !== count) {
+                  fail(`reuse run is missing the complete successful ${name} production matrix`);
+                }
+              }
+              const packs = production.filter(job => job.name === 'pack' || job.name.startsWith('pack ('));
+              if (packs.length !== 0 && packs.length !== 2) fail('reuse run has an incomplete desktop packaging matrix');
+              const expected = [
+                'release-macos-arm64', 'release-windows-x86_64',
+                'release-lyrel-server-linux-aarch64-musl', 'release-lyrel-server-linux-x86_64-musl',
+                'release-lyrel-server-macos-aarch64', 'release-lyrel-server-windows-x86_64.zip'
+              ];
+              const artifacts = (await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                ...repo, run_id: runId, per_page: 100
+              })).filter(artifact => artifact.name.startsWith('release-'));
+              if (artifacts.length !== expected.length || expected.some(name =>
+                  artifacts.filter(artifact => artifact.name === name && artifact.expired === false &&
+                    artifact.size_in_bytes > 0 && Date.parse(artifact.expires_at) > Date.now() &&
+                    artifact.workflow_run?.id === runId && artifact.workflow_run?.head_sha === sourceSha &&
+                    artifact.workflow_run?.repository_id === run.repository.id &&
+                    artifact.workflow_run?.head_repository_id === run.repository.id).length !== 1)) {
+                fail('reuse requires exactly the six unexpired release artifacts from the verified source run');
+              }
+            }
+            core.setOutput('source_sha', sourceSha);
+            core.setOutput('tag', tag);
+            core.setOutput('artifact_run_id', reuse || String(context.runId));
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.source.outputs.source_sha }}
           persist-credentials: false
 
       - name: Check stable workspace version and tag
         id: version
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
         run: |
           set -euo pipefail
           VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
             echo "::error::workspace.package.version must be stable"; exit 1;
           }
-          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+          if [[ -n "$RELEASE_TAG" && "$RELEASE_TAG" != "v$VERSION" ]]; then
             echo "::error::release tag must match workspace.package.version: v$VERSION"; exit 1
-          fi
-          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch && "$GITHUB_REF" != "refs/tags/v$VERSION" ]]; then
-            echo "::error::only an exact stable version tag can assemble a release"; exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-  build:
-    # Windows 包必须嵌入真实 Linux musl WSL server；缺失时停止打包。
-    needs: [version, server-musl]
+  # 平台独立 DAG：macOS runner 缺货不阻塞 Windows 编译、WSL 打包和校验。
+  build-windows:
+    name: build (x86_64-pc-windows-msvc)
+    needs: version
+    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            os: macos
-            arch: arm64
-            target: aarch64-apple-darwin
-          - runner: windows-latest
-            os: windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-            wsl-server: lyrel-server-linux-x86_64-musl
-    runs-on: ${{ matrix.runner }}
+    runs-on: windows-latest
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
+          ref: ${{ needs.version.outputs.source_sha }}
           path: lyrel
           persist-credentials: false
 
-
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: lyrel
-          # 每个目标独立缓存，避免平台产物相互覆盖。
-          key: ${{ matrix.target }}
+          shared-key: release-v2-x86_64-pc-windows-msvc-desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
-      # Windows build.rs fails without the prepared ConPTY pair: fetch and
-      # verify the pinned nupkg before compiling. Not a release download — this
-      # is the same prepare entry a developer runs.
       - name: Prepare ConPTY
-        if: matrix.os == 'windows'
         working-directory: lyrel
         shell: pwsh
         run: '& ./scripts/prepare-conpty.ps1'
 
-      # `--locked` because a release must ship the dependency set the tag
-      # recorded, not whatever cargo would re-resolve at build time. Nothing
-      # rewrites Cargo.toml: this is a plain checkout of the tagged commit.
-      # 桌面 updater 仅随 macOS bundle 和 Windows 包分发。
+      # 一次 feature 统一编译全部默认 bins，不重复构建无 updater 的桌面图。
+      - name: Build all default binaries with updater
+        working-directory: lyrel
+        shell: bash
+        run: cargo build --release --locked --features updater --target x86_64-pc-windows-msvc
 
-      - name: Build
+      - name: Archive desktop packaging inputs
         working-directory: lyrel
         shell: bash
         run: |
-          cargo build --release --locked --target "${{ matrix.target }}"
-          cargo build --release --locked --features updater \
-            --bin lyrel-updater --target "${{ matrix.target }}"
+          set -euo pipefail
+          # GNU tar 会把 Windows drive: 绝对路径误认成远程主机；归档始终使用相对路径。
+          tar -czf desktop-x86_64-pc-windows-msvc.tar.gz \
+            target/x86_64-pc-windows-msvc/release/lyrel-app.exe \
+            target/x86_64-pc-windows-msvc/release/lyrel.exe \
+            target/x86_64-pc-windows-msvc/release/lyrel-updater.exe \
+            Cargo.toml LICENSE README.md assets/completions \
+            assets/windows/conpty/manifest.json .conpty/x64/conpty.dll \
+            .conpty/x64/OpenConsole.exe .conpty/LICENSE-ConPTY.txt
 
-      # ---- Packaging: one step per OS ----------------------------------------
-      # 无 Apple secrets 时使用 ad-hoc 签名，不声称 Developer ID 或公证。
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-inputs-x86_64-pc-windows-msvc
+          path: lyrel/desktop-x86_64-pc-windows-msvc.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+
+  build-macos:
+    name: build (aarch64-apple-darwin)
+    needs: version
+    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
+    timeout-minutes: 120
+    runs-on: macos-15
+    steps:
+      - name: Checkout lyrel
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+          path: lyrel
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lyrel
+          shared-key: release-v2-aarch64-apple-darwin-desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
+      - name: Build all default binaries with updater
+        working-directory: lyrel
+        shell: bash
+        run: cargo build --release --locked --features updater --target aarch64-apple-darwin
+
+      # tar 保留 macOS 可执行权限；只带打包输入，不传 target 缓存或整个源码树。
+      - name: Archive desktop packaging inputs
+        working-directory: lyrel
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf desktop-aarch64-apple-darwin.tar.gz \
+            target/aarch64-apple-darwin/release/lyrel-app \
+            target/aarch64-apple-darwin/release/lyrel \
+            target/aarch64-apple-darwin/release/lyrel-updater \
+            Cargo.toml LICENSE README.md assets/completions assets/lyrel.icns
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-inputs-aarch64-apple-darwin
+          path: lyrel/desktop-aarch64-apple-darwin.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+
+  pack-windows:
+    name: pack (x86_64-pc-windows-msvc)
+    needs: [version, build-windows, server-musl]
+    if: >-
+      always() && needs.version.result == 'success' && inputs.reuse_run_id == '' &&
+      needs.build-windows.result == 'success' && needs.server-musl.result == 'success'
+    timeout-minutes: 30
+    runs-on: windows-latest
+    steps:
+      - name: Checkout tagged packaging scripts
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+          path: lyrel
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-inputs-x86_64-pc-windows-msvc
+          path: lyrel/desktop-inputs
+
+      - name: Restore desktop packaging inputs
+        working-directory: lyrel
+        shell: bash
+        run: tar -xzf desktop-inputs/desktop-x86_64-pc-windows-msvc.tar.gz
+
+      - name: Fetch the bundled Linux server
+        uses: actions/download-artifact@v8
+        with:
+          name: release-lyrel-server-linux-x86_64-musl
+          path: lyrel/bundled-server
+
+      - name: Package Windows installer + zip
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./.github/scripts/bundle-windows.ps1 "x86_64-pc-windows-msvc" "x86_64"'
+
+      - name: Verify Windows update package
+        working-directory: lyrel
+        shell: pwsh
+        run: '& ./.github/scripts/verify-windows-package.ps1 "x86_64"'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows-x86_64
+          path: |
+            lyrel/dist/*.zip
+            lyrel/dist/*-setup.exe
+          compression-level: 0
+          if-no-files-found: error
+
+  pack-macos:
+    name: pack (aarch64-apple-darwin)
+    needs: [version, build-macos]
+    if: >-
+      always() && needs.version.result == 'success' && inputs.reuse_run_id == '' &&
+      needs.build-macos.result == 'success'
+    timeout-minutes: 30
+    runs-on: macos-15
+    steps:
+      - name: Checkout tagged packaging scripts
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+          path: lyrel
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-inputs-aarch64-apple-darwin
+          path: lyrel/desktop-inputs
+
+      - name: Restore desktop packaging inputs and executable permissions
+        working-directory: lyrel
+        shell: bash
+        run: tar -xzf desktop-inputs/desktop-aarch64-apple-darwin.tar.gz
+
+      # 无 Apple secrets 时仍由原脚本做 ad-hoc 签名与 Mach-O 校验。
       - name: Bundle macOS DMG
-        if: matrix.os == 'macos'
         working-directory: lyrel
         env:
-          # macOS code signing — the cert is imported into a throwaway keychain.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          # Notarization — required for Developer ID builds to pass Gatekeeper.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bash .github/scripts/bundle-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
+        run: bash .github/scripts/bundle-macos.sh "aarch64-apple-darwin" "arm64"
 
-      # 完整 stable Windows 包必须带同架构 WSL server；缺失时停止打包。
-      - name: Fetch the bundled Linux server
-        if: matrix.os == 'windows'
-        uses: actions/download-artifact@v8
-        with:
-          name: release-${{ matrix.wsl-server }}
-          path: lyrel/bundled-server
-
-      - name: Package Windows installer + zip
-        if: matrix.os == 'windows'
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./.github/scripts/bundle-windows.ps1 "${{ matrix.target }}" "${{ matrix.arch }}"'
-
-      # The in-app updater refuses a package whose marker, helper or stamped
-      # version is wrong — on the user's machine, after the download. Check the
-      # same facts here so a packaging mistake fails the release instead.
-      - name: Verify Windows update package
-        if: matrix.os == 'windows'
-        working-directory: lyrel
-        shell: pwsh
-        run: '& ./.github/scripts/verify-windows-package.ps1 "${{ matrix.arch }}"'
-
-      # 只上传正式包；应用目录、entitlements 和 Windows 暂存目录不得进入 Release。
       - uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          name: release-macos-arm64
           path: |
             lyrel/dist/*.dmg
             lyrel/dist/*.zip
-            lyrel/dist/*-setup.exe
+          compression-level: 0
           if-no-files-found: error
 
   # The headless server binary remote workspaces install on the far machine
@@ -155,10 +358,10 @@ jobs:
   # against checksums.txt. The asset names are a contract with the installer:
   # `lyrel_core::daemon::install::asset` derives them from `uname -sm`.
   #
-  # Separate from the `build` matrix above because it shares nothing with it: no
-  # GUI toolchain, no bundling, no code signing, two targets off one runner.
+  # 与桌面编译独立：无 GUI toolchain、打包或代码签名，两个目标使用同类 runner。
   server-musl:
     needs: version
+    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -172,13 +375,14 @@ jobs:
             asset: lyrel-server-linux-x86_64-musl
           - target: aarch64-unknown-linux-musl
             asset: lyrel-server-linux-aarch64-musl
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       RUSTFLAGS: -C strip=symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
+          ref: ${{ needs.version.outputs.source_sha }}
           path: lyrel
           persist-credentials: false
 
@@ -189,9 +393,12 @@ jobs:
       # zig provides the musl sysroot and the C cross-compiler for both targets
       # from one x86_64 runner — see the same job in ci.yml for why the
       # alternatives (cross, musl-tools) do not cope with aws-lc-rs' cmake build.
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      - name: Install Zig
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: ziglang==0.16.0
+          "$RUNNER_TEMP/zig/bin/python" -m ziglang version
+          echo "CARGO_ZIGBUILD_PYTHON_PATH=$RUNNER_TEMP/zig/bin/python" >> "$GITHUB_ENV"
 
       - uses: taiki-e/install-action@v2
         with:
@@ -200,7 +407,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: lyrel
-          key: ${{ matrix.target }}
+          shared-key: release-v2-${{ matrix.target }}-server-musl
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       # lyrel-server 已是 workspace 成员，完整 stable 发行不再允许跳过 server。
 
@@ -244,6 +453,7 @@ jobs:
   # macOS server 只做 ad-hoc 签名和 Mach-O 自包含检查，不提供公证声明。
   server-macos:
     needs: version
+    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -257,8 +467,9 @@ jobs:
       RUSTFLAGS: -C strip=symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
+          ref: ${{ needs.version.outputs.source_sha }}
           path: lyrel
           persist-credentials: false
 
@@ -269,7 +480,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: lyrel
-          key: ${{ matrix.target }}
+          shared-key: release-v2-${{ matrix.target }}-server-macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
 
       - name: Build lyrel-server
@@ -319,6 +532,7 @@ jobs:
   #
   server-windows:
     needs: version
+    if: needs.version.result == 'success' && inputs.reuse_run_id == ''
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -331,8 +545,9 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: symbols
     steps:
       - name: Checkout lyrel
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
+          ref: ${{ needs.version.outputs.source_sha }}
           path: lyrel
           persist-credentials: false
 
@@ -343,7 +558,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: lyrel
-          key: ${{ matrix.target }}
+          shared-key: release-v2-${{ matrix.target }}-server-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       # The server's build.rs fails closed without the prepared ConPTY pair,
       # and the packaging step below zips exactly the files it staged beside
@@ -401,23 +618,34 @@ jobs:
         with:
           name: release-${{ matrix.asset }}
           path: lyrel/dist/${{ matrix.asset }}
+          compression-level: 0
           if-no-files-found: error
 
-  # 仅 tag push 汇总 draft；手动 dispatch 只构建与保存 artifacts。
-  # 发布前必须等待 CI、复核全部资产和中文说明，再由发行负责人 publish。
+  # main 无显式 tag 的手动运行仅预热；有效复用可越过全部 skipped 生产 jobs。
+  # 仅汇总 stable draft，不 publish；最终发布仍需 CI、资产与中文说明审核。
   draft-release:
-    needs: [version, build, server-musl, server-macos, server-windows]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    needs: [version, build-windows, build-macos, pack-windows, pack-macos, server-musl, server-macos, server-windows]
+    if: >-
+      always() && needs.version.result == 'success' && needs.version.outputs.tag != '' &&
+      ((inputs.reuse_run_id != '' && needs.version.outputs.artifact_run_id == inputs.reuse_run_id) ||
+       (inputs.reuse_run_id == '' && needs.build-windows.result == 'success' && needs.build-macos.result == 'success' &&
+        needs.pack-windows.result == 'success' && needs.pack-macos.result == 'success' &&
+        needs.server-musl.result == 'success' && needs.server-macos.result == 'success' &&
+        needs.server-windows.result == 'success'))
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ needs.version.outputs.version }}
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
     steps:
-      - uses: actions/checkout@v4
+      # 旧 tag 可能没有新汇总脚本；脚本必须来自本次受信 workflow 的固定提交。
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ github.workflow_sha }}
           path: lyrel
           persist-credentials: false
 
@@ -426,87 +654,11 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.version.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
 
-      - name: Require all eight platform assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          EXPECTED=(
-            "lyrel-$VERSION-macos-arm64.dmg"
-            "lyrel-$VERSION-macos-arm64.zip"
-            "lyrel-$VERSION-windows-x86_64-setup.exe"
-            "lyrel-$VERSION-windows-x86_64.zip"
-            lyrel-server-linux-aarch64-musl
-            lyrel-server-linux-x86_64-musl
-            lyrel-server-macos-aarch64
-            lyrel-server-windows-x86_64.zip
-          )
-          printf '%s\n' "${EXPECTED[@]}" | LC_ALL=C sort > "$RUNNER_TEMP/expected-assets.txt"
-          find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort > "$RUNNER_TEMP/actual-assets.txt"
-          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
-          for ASSET in "${EXPECTED[@]}"; do
-            [[ -f "dist/$ASSET" && ! -L "dist/$ASSET" && -s "dist/$ASSET" ]] || {
-              echo "::error::missing or empty regular release asset: $ASSET"; exit 1;
-            }
-          done
-
-      - name: Generate and verify checksums.txt
+      - name: Assemble stable draft without publishing or replacing assets
         working-directory: lyrel
-        run: bash .github/scripts/generate-checksums.sh "$GITHUB_WORKSPACE/dist"
-
-      - name: Assemble the draft release without overwriting published assets
         shell: bash
-        run: |
-          set -euo pipefail
-          # 分页读取 draft，拒绝重复 tag、prerelease 与已发布版本；API 错误不视为不存在。
-          release_for_tag() {
-            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              | jq -c '[.[][] | select(.tag_name == env.GITHUB_REF_NAME)]'
-          }
-          MATCHES="$(release_for_tag)"
-          if [[ "$(jq length <<<"$MATCHES")" == 0 ]]; then
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --verify-tag --draft --title "$GITHUB_REF_NAME" --notes ""
-            MATCHES="$(release_for_tag)"
-          fi
-          jq -e 'length == 1 and .[0].draft == true and .[0].prerelease == false' <<<"$MATCHES" >/dev/null || {
-            echo "::error::expected exactly one stable draft; published releases must never be changed"; exit 1;
-          }
-          RELEASE_ID="$(jq -r '.[0].id' <<<"$MATCHES")"
-          RELEASE_API="repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
-          # 固定 release ID，每次上传前重查 draft；永不使用 --clobber、PATCH 或 DELETE。
-          # 相同字节的既有资产可复用；内容不同则停止，让负责人显式处理 draft。
-          for FILE in dist/*; do
-            NAME="${FILE##*/}"
-            RELEASE="$(gh api "$RELEASE_API")"
-            jq -e '.draft == true and .prerelease == false and .tag_name == env.GITHUB_REF_NAME' <<<"$RELEASE" >/dev/null || {
-              echo "::error::release is no longer the expected stable draft"; exit 1;
-            }
-            ASSETS="$(gh api --paginate --slurp "$RELEASE_API/assets?per_page=100" | jq 'add')"
-            EXISTING="$(jq -c --arg name "$NAME" '[.[] | select(.name == $name)]' <<<"$ASSETS")"
-            COUNT="$(jq length <<<"$EXISTING")"
-            if [[ "$COUNT" != 0 ]]; then
-              DIGEST="sha256:$(sha256sum "$FILE" | cut -d ' ' -f1)"
-              jq -e --arg digest "$DIGEST" 'length == 1 and .[0].state == "uploaded" and .[0].digest == $digest' <<<"$EXISTING" >/dev/null || {
-                echo "::error::existing draft asset differs or has no verifiable digest: $NAME"; exit 1;
-              }
-              echo "Reusing identical draft asset: $NAME"
-              continue
-            fi
-            gh api --method POST \
-              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$NAME" \
-              -H 'Content-Type: application/octet-stream' --input "$FILE" >/dev/null
-          done
-          # 确认远端恰好九件资产，且逐件 SHA-256 与本次产物一致。
-          gh api "$RELEASE_API" --jq '.draft and (.prerelease | not)' | grep -Fx true
-          ASSETS="$(gh api --paginate --slurp "$RELEASE_API/assets?per_page=100" | jq 'add')"
-          jq -r '.[].name' <<<"$ASSETS" | LC_ALL=C sort > "$RUNNER_TEMP/uploaded-assets.txt"
-          printf '%s\n' checksums.txt >> "$RUNNER_TEMP/expected-assets.txt"
-          LC_ALL=C sort -o "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/expected-assets.txt"
-          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/uploaded-assets.txt"
-          for FILE in dist/*; do
-            DIGEST="sha256:$(sha256sum "$FILE" | cut -d ' ' -f1)"
-            jq -e --arg name "${FILE##*/}" --arg digest "$DIGEST" \
-              'any(.[]; .name == $name and .state == "uploaded" and .digest == $digest)' <<<"$ASSETS" >/dev/null
-          done
-          echo "Draft assembled; CI, asset review and Chinese release notes are required before publication."
+        run: bash .github/scripts/assemble-release.sh "$RELEASE_TAG" "$GITHUB_WORKSPACE/dist"
