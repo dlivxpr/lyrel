@@ -307,6 +307,7 @@ node scripts/rerun-failed-ci.cjs <run-id>
 
 发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
 及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
+草稿汇总先解析远端标签及附注标签链，确认最终目标为真实提交；创建 Release 时，`target_commitish` 使用该提交的完整 SHA，不直接填写版本标签名。无法解析、非提交目标或无效 SHA 会在创建草稿／上传资产前失败；无需为解决此 API 参数错误配置代码签名证书。
 桌面与 server 并行编译，桌面一次编译 GUI、CLI 和 updater。Windows 打包只等待本平台编译和真实 WSL musl server，macOS 打包只等待本平台编译，不跨平台互相阻塞。编译与打包间使用 tar 保留可执行权限，归档及恢复均使用相对路径，避免 GNU tar 把 Windows 的 `drive:` 绝对路径当作远程主机；已压缩包不再做外层压缩。Thin LTO 和单 codegen unit 的发行配置不变。
 
 正式发布与 CI 的发布流程验证共用 `.github/workflows/release-build.yml`。它只授予 `contents: read` 和 `actions: read`，仅生成构建／打包 artifacts，不包含创建草稿或发布的 job。CI 调用不传 Apple 签名凭据，macOS 按既有脚本执行 ad-hoc 路径；正式 Release 才显式传入可选签名凭据，草稿写权限只留在 `.github/workflows/release.yml` 的汇总 job。发布流程变化需要真实打包验证，不能只用普通 Rust 测试替代。
