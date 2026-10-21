@@ -282,7 +282,7 @@ default-members = [".", "crates/lyrel-core", "crates/lyrel-server", "crates/lyre
 edition = "2024"
 # 所有一起发布的 workspace 成员通过 version.workspace 继承此版本。
 # 发布时只修改这一处，不将应用版本与 IPC 协议版本混用。
-version = "0.1.2"
+version = "0.1.3"
 
 [workspace.dependencies]
 # The public facade supplies component, base, assets and platform layers.
