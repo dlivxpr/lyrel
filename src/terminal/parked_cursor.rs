@@ -12,9 +12,9 @@
 //! spinner tick, which reads as a second cursor blinking in the wrong place.
 //!
 //! [`ParkedCursorScanner`] finds those hide/show pairs in the byte stream and
-//! [`ParkedCursorRepair`] restores the cell the cursor stood on when it went
-//! invisible, which is the cell the correcting frame would have moved it back
-//! to anyway.
+//! [`ParkedCursorRepair`] supplies the cell to paint the cursor on. The VT
+//! parser's cursor is never changed: later relative output must continue from
+//! the position conhost actually left behind.
 //!
 //! Only conhost parks a cursor, so the reader runs this for panes on a ConPTY
 //! alone — see [`crate::terminal::remote::PtySource`], which answers that per
@@ -184,7 +184,7 @@ impl ParkedCursorScanner {
     }
 }
 
-/// The other half: keeps the cell the cursor was hidden on, and restores it
+/// Keeps the cell the cursor was hidden on and supplies a paint-only position
 /// when the matching show turns out to be parked.
 #[derive(Default)]
 pub struct ParkedCursorRepair {
@@ -193,8 +193,6 @@ pub struct ParkedCursorRepair {
 
 struct Hidden {
     point: Pos,
-    /// rio's `Cursor::should_wrap`: the deferred-wrap latch.
-    should_wrap: bool,
     at: Instant,
 }
 
@@ -210,35 +208,30 @@ impl ParkedCursorRepair {
     /// frame — whatever it shows the cursor on is its own choice and stands.
     const FRAME: Duration = Duration::from_millis(100);
 
-    pub fn apply<T: EventListener>(&mut self, term: &mut Crosswords<T>, cut: CursorCut) {
+    pub fn apply<T: EventListener>(&mut self, term: &Crosswords<T>, cut: CursorCut) -> Option<Pos> {
         match cut {
             CursorCut::Hidden => {
-                let cursor = &term.grid.cursor;
                 let hidden = Hidden {
-                    point: cursor.pos,
-                    should_wrap: cursor.should_wrap,
+                    point: term.grid.cursor.pos,
                     at: Instant::now(),
                 };
-                // A second hide while already hidden changes nothing: the cell
-                // wanted is the one the cursor was last *seen* on.
+                // A repeated hide keeps the last position actually seen.
                 self.hidden.get_or_insert(hidden);
+                None
             }
             CursorCut::Shown { parked } => {
-                let Some(hidden) = self.hidden.take() else {
-                    return;
-                };
+                let hidden = self.hidden.take()?;
                 if !parked || hidden.at.elapsed() > Self::FRAME {
-                    return;
+                    return None;
                 }
-                let grid = &mut term.grid;
+                let grid = &term.grid;
                 let line = hidden
                     .point
                     .row
                     .0
                     .clamp(0, grid.screen_lines().saturating_sub(1) as i32);
                 let column = hidden.point.col.0.min(grid.columns().saturating_sub(1));
-                grid.cursor.pos = Pos::new(Line(line), Column(column));
-                grid.cursor.should_wrap = hidden.should_wrap;
+                Some(Pos::new(Line(line), Column(column)))
             }
         }
     }
@@ -265,6 +258,7 @@ mod tests {
         let mut cuts = Vec::new();
         scanner.feed(stream, |off, cut| cuts.push((off, cut)));
         let mut at = 0;
+        let mut painted = None;
         let mut keyboard = lyrel_core::core::term_modes::KeyboardStacks::default();
         for (off, cut) in cuts {
             parser.advance(
@@ -272,13 +266,17 @@ mod tests {
                 &stream[at..off],
             );
             at = off;
-            repair.apply(&mut term, cut);
+            painted = repair.apply(&term, cut);
         }
         parser.advance(
             &mut ParseBridge::new(&mut term, VoidListener, &mut keyboard, None),
             &stream[at..],
         );
-        let point = term.grid.cursor.pos;
+        let point = if at == stream.len() {
+            painted.unwrap_or(term.grid.cursor.pos)
+        } else {
+            term.grid.cursor.pos
+        };
         (point.row.0, point.col.0)
     }
 

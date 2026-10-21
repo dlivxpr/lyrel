@@ -6,6 +6,10 @@ description: "历史命令幽灵建议、带说明的 Tab 补全、语法高亮�
 lyrel 在 shell 提示符处提供了一个编辑器。无需安装任何东西，也无需加载插件
 ——只要受支持的 shell 在窗格中启动，提示符就会具备以下功能。
 
+这一层只在 shell 提示符处接管输入。前台智能体（包括使用主屏而非 alternate screen 的 TUI）
+运行时，方向键、字符和输入法提交直接交给程序；例如 omp 的 ask 弹窗可用 <kbd>↑</kbd>／<kbd>↓</kbd>
+选择答案，不会调用 shell 命令历史。智能体退出并回到 shell 提示符后，编辑器自动恢复。
+
 <a id="ghost-suggestions"></a>
 ## 幽灵建议
 
