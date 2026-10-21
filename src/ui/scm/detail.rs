@@ -1228,9 +1228,10 @@ mod detail_gpui_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Copied from `panel.rs`'s own idle tests: arm the probe, let every timer
-    /// the panel owns fire, and count the frames nobody asked for.
+    /// Settle the pane's Git probe and real watcher callbacks before counting
+    /// frames, using the same barrier as the panel and graph idle tests.
     fn draws_while_idle(vcx: &mut VisualTestContext) -> u64 {
+        test_window::quiesce(vcx, None);
         render_probe::arm(200);
         vcx.background_executor.run_until_parked();
         vcx.executor()

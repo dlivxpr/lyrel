@@ -87,7 +87,7 @@ function buildContract(target, sourceSha) {
     if (musl) {
         requireValue(process.env.CARGO_ZIGBUILD_PYTHON_PATH, 'missing Zig Python environment');
         contract.zig = run(process.env.CARGO_ZIGBUILD_PYTHON_PATH, ['-m', 'ziglang', 'version']);
-        contract.zigbuild = run('cargo', ['zigbuild', '--version']);
+        contract.zigbuild = run('cargo-zigbuild', ['--version']);
     } else contract.sdk = run('xcrun', ['--sdk', 'macosx', '--show-sdk-version']);
     return contract;
 }
