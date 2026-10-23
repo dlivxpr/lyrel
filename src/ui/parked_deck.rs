@@ -3,14 +3,17 @@
 //! 所有 pane 参数都是不透明的客户端卡片 token，不是 daemon pane id；禁止持久化或传给 daemon。
 //! 将 view 放在 workbench-content 内的绝对定位 overlay；status bar 必须是 content 的兄弟。
 
-use gpui_kit::{base::Selectable as _, component::{
-    ActiveTheme, FocusTrapElement, Sizable,
-    button::{Button, ButtonVariants},
-    scroll::Scrollbar,
-    v_flex,
-}};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use gpui_kit::{
+    base::Selectable as _,
+    component::{
+        ActiveTheme, FocusTrapElement, Sizable,
+        button::{Button, ButtonVariants},
+        scroll::Scrollbar,
+        v_flex,
+    },
+};
 use lyrel_core::core::machine::TabId;
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 
@@ -331,6 +334,14 @@ impl ParkedDeck {
         }
         self.drop_target = visible;
         cx.notify();
+    }
+
+    pub fn is_drop_target_visible(&self) -> bool {
+        self.drop_target
+    }
+
+    pub fn drop_target_contains(&self, position: Point<Pixels>) -> bool {
+        self.drop_target && self.frame.borrow().park_target_contains(position)
     }
 
     pub fn cards(&self) -> impl ExactSizeIterator<Item = &ParkedCard> {
@@ -908,7 +919,7 @@ impl Render for ParkedDeck {
                             deck_bounds.size.width =
                                 (deck_bounds.size.width - window.rem_size() * 6.5).max(px(0.));
                         }
-                        let scene = Rc::new(Frame::new(
+                        let scene = Frame::new(
                             bounds,
                             viewport,
                             f32::from(window.rem_size()) / 16.,
@@ -917,7 +928,10 @@ impl Render for ParkedDeck {
                             park,
                             park_ink,
                             deck_bounds,
-                        ));
+                        );
+                        let park_hover =
+                            park && scene.park_target_contains(window.mouse_position());
+                        let scene = Rc::new(scene.with_drop_hover(park_hover));
                         *frame.borrow_mut() = scene.clone();
                         let group_bounds = scene.keyboard_bounds();
                         let key_weak = prepaint_weak.clone();
@@ -925,6 +939,25 @@ impl Render for ParkedDeck {
                             .relative()
                             .w(group_bounds.size.width)
                             .h(group_bounds.size.height);
+                        if park {
+                            for (id, bounds) in [
+                                ("park-drop-target", scene.park_target_bounds()),
+                                ("park-drop-pill", scene.park_pill_bounds()),
+                            ] {
+                                semantics = semantics.child(
+                                    div()
+                                        .id(id)
+                                        .test_support()
+                                        .absolute()
+                                        .left(bounds.left() - group_bounds.left())
+                                        .top(bounds.top() - group_bounds.top())
+                                        .w(bounds.size.width)
+                                        .h(bounds.size.height)
+                                        .role(Role::Group)
+                                        .aria_label(labels.park.clone()),
+                                );
+                            }
+                        }
                         for (model, bounds, selected, restore) in
                             scene.semantic_cards().filter(|_| has_cards)
                         {

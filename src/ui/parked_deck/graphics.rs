@@ -180,7 +180,7 @@ struct CardFrame {
 #[derive(Clone, Default, Debug)]
 pub(super) struct Frame {
     bounds: Bounds<Pixels>, deck_bounds: Bounds<Pixels>, viewport: Bounds<Pixels>, cards: Vec<CardFrame>,
-    zoom: f32, fan: f32, park: bool, park_ink: Option<Sprite>,
+    zoom: f32, fan: f32, park: bool, park_hover: bool, park_ink: Option<Sprite>,
 }
 
 pub(super) struct FrameCard {
@@ -197,7 +197,7 @@ pub(super) fn park_label(label: &str, font: &str) -> Sprite {
 
 impl Frame {
     pub fn new(bounds: Bounds<Pixels>, viewport: Bounds<Pixels>, zoom: f32, cards: Vec<FrameCard>, fan: f32, park: bool, park_ink: Sprite, deck_bounds: Bounds<Pixels>) -> Self {
-        let mut result = Self { bounds, deck_bounds, viewport, cards: Vec::with_capacity(cards.len()), zoom, fan, park, park_ink: Some(park_ink) };
+        let mut result = Self { bounds, deck_bounds, viewport, cards: Vec::with_capacity(cards.len()), zoom, fan, park, park_hover: false, park_ink: Some(park_ink) };
         let target_x = cards.iter().find(|c| c.selected || c.highlighted).map(|c| c.pose.x).unwrap_or(0.);
         let half_width = (f32::from(viewport.size.width) / zoom / 2. - 105.).max(0.);
         let shift = target_x - target_x.clamp(-half_width, half_width);
@@ -230,6 +230,39 @@ impl Frame {
     }
 
     pub fn viewport(&self) -> Bounds<Pixels> { self.viewport }
+
+    pub fn with_drop_hover(mut self, hovered: bool) -> Self {
+        self.park_hover = hovered;
+        self
+    }
+
+    // Keep the approved rem-sized target and label; narrow content clips its outer arc,
+    // rather than shrinking the pill's text and pointer target along with the viewport.
+    fn park_target_geometry(&self) -> Bounds<Pixels> {
+        let scale = self.zoom.min(f32::from(self.viewport.size.height) / 170.).max(0.);
+        let extent = size(px(360. * scale), px(170. * scale));
+        Bounds::new(point(self.viewport.center().x - extent.width / 2., self.viewport.bottom() - extent.height), extent)
+    }
+
+    /// Semantic bounds, release hits and paint share the same content clip.
+    pub fn park_target_bounds(&self) -> Bounds<Pixels> {
+        self.park_target_geometry().intersect(&self.viewport)
+    }
+
+    pub fn park_pill_bounds(&self) -> Bounds<Pixels> {
+        let target = self.park_target_geometry();
+        let scale = f32::from(target.size.width) / 360.;
+        Bounds::new(target.origin + point(px(140. * scale), px(12. * scale)), size(px(80. * scale), px(24. * scale))).intersect(&self.viewport)
+    }
+
+    pub fn park_target_contains(&self, position: Point<Pixels>) -> bool {
+        let target = self.park_target_geometry();
+        if !self.viewport.contains(&position) || !target.contains(&position) || position.y >= self.viewport.bottom()
+            || target.size.width <= px(0.) || target.size.height <= px(0.) { return false; }
+        let x = f32::from(position.x - target.center().x) / f32::from(target.size.width / 2.);
+        let y = f32::from(position.y - target.bottom()) / f32::from(target.size.height);
+        x * x + y * y <= 1.
+    }
 
     pub fn keyboard_bounds(&self) -> Bounds<Pixels> {
         let width = self.viewport.size.width.min(px(360. * self.zoom));
@@ -314,13 +347,19 @@ impl Frame {
     fn halo(&self, park: bool, tokens: Tokens, window: &mut Window, cx: &App) -> Result<(), String> {
         let (width, height) = if park { (360., 170.) } else { (260., 130.) };
         let data = if park {
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><defs><filter id="p" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter></defs><path d="M1 170V169 A179 169 0 0 1 359 169V170" fill="white" fill-opacity=".08" stroke="white" stroke-opacity=".54"/><rect x="140" y="16" width="80" height="24" rx="12" fill="white" fill-opacity=".22" filter="url(#p)"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white" fill-opacity=".82"/></svg>"#
+            if self.park_hover {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><path d="M0 170 A180 170 0 0 1 360 170" fill="white" fill-opacity=".14" stroke="white" stroke-opacity=".8"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white"/></svg>"#
+            } else {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><defs><filter id="p" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter></defs><path d="M0 170 A180 170 0 0 1 360 170" fill="white" fill-opacity=".08" stroke="white" stroke-opacity=".54"/><rect x="140" y="16" width="80" height="24" rx="12" fill="white" fill-opacity=".22" filter="url(#p)"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white" fill-opacity=".82"/></svg>"#
+            }
         } else {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="130"><path d="M1 130 A129 129 0 0 1 259 130" fill="white" fill-opacity=".07" stroke="white" stroke-opacity=".58"/></svg>"#
         };
-        let center = if park { self.bounds.center().x } else { self.deck_bounds.center().x };
-        let bounds = Bounds { origin: point(center - px(width * self.zoom / 2.), self.bounds.bottom() - px(height * self.zoom)), size: size(px(width * self.zoom), px(height * self.zoom)) };
-        window.paint_layer(self.viewport, |window| window.paint_svg(bounds, if park { "parked-deck/drop" } else { "parked-deck/aura" }.into(), Some(data.as_bytes()), TransformationMatrix::unit(), tokens.warm, cx))
+        let bounds = if park { self.park_target_geometry() } else {
+            Bounds { origin: point(self.deck_bounds.center().x - px(width * self.zoom / 2.), self.bounds.bottom() - px(height * self.zoom)), size: size(px(width * self.zoom), px(height * self.zoom)) }
+        };
+        let key = if park { if self.park_hover { "parked-deck/drop-hover" } else { "parked-deck/drop" } } else { "parked-deck/aura" };
+        window.paint_layer(self.viewport, |window| window.paint_svg(bounds, key.into(), Some(data.as_bytes()), TransformationMatrix::unit(), tokens.warm, cx))
             .map_err(|error| error.to_string())?;
         if park && let Some(ink) = &self.park_ink {
             window.paint_layer(self.viewport, |window| window.paint_svg(bounds, ink.key.clone(), Some(ink.data.as_bytes()), TransformationMatrix::unit(), tokens.warm_ink, cx))

@@ -24,6 +24,12 @@ impl PipInteraction {
     pub(crate) fn cancel(&self) {
         self.gesture.set(None);
     }
+
+    pub(crate) fn dragged_pane(&self) -> Option<EntityId> {
+        self.gesture.get().filter(|gesture| !gesture.resize && gesture.dragged).map(|gesture| gesture.pane)
+    }
+
+    pub(crate) fn has_gesture(&self) -> bool { self.gesture.get().is_some() }
 }
 
 #[derive(Clone, Copy)]
@@ -33,6 +39,7 @@ struct Gesture {
     initial: Bounds<Pixels>,
     geometry: PipGeometry,
     resize: bool,
+    dragged: bool,
 }
 
 fn resolve(intent: PipGeometry, viewport: Bounds<Pixels>, rem: f32) -> Bounds<Pixels> {
@@ -126,7 +133,6 @@ pub(crate) fn render(
         state,
         chrome: PaneChrome {
             dim_inactive: false,
-            rearrangeable: false,
             app: chrome.app.clone(),
             lifted: None,
             drag: chrome.drag.clone(),
@@ -273,6 +279,8 @@ fn render_in_viewport(
                     let Some(viewport) = state.viewport.get() else {
                         return;
                     };
+                    let delta = event.position - gesture.start;
+                    gesture.dragged |= delta.x.abs().max(delta.y.abs()) >= window.rem_size() / 4.;
                     gesture.geometry = changed(
                         gesture,
                         event.position,
@@ -316,7 +324,6 @@ fn render_in_viewport(
     .size_full();
     let terminal_chrome = PaneChrome {
         dim_inactive: false,
-        rearrangeable: false,
         app: app.clone(),
         lifted: None,
         drag: chrome.drag.clone(),
@@ -422,6 +429,7 @@ fn render_in_viewport(
                         initial: resolve(intent, viewport, window.rem_size().as_f32()),
                         geometry: intent,
                         resize,
+                        dragged: false,
                     }));
                     window.refresh();
                     cx.stop_propagation();
@@ -439,6 +447,7 @@ fn render_in_viewport(
                         "up" => point(px(0.), -step),
                         "down" => point(px(0.), step),
                         "escape" | "enter" => {
+                            state.cancel();
                             window.focus(&slot.focus_handle(cx), cx);
                             cx.stop_propagation();
                             return;
@@ -456,6 +465,7 @@ fn render_in_viewport(
                             initial: bounds,
                             geometry: intent,
                             resize,
+                            dragged: false,
                         },
                         delta,
                         viewport,
