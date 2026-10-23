@@ -73,6 +73,10 @@ impl ControlClient {
         self.link.call(req)
     }
 
+    pub fn host_metrics(&self) -> io::Result<crate::host::metrics::HostMetrics> {
+        self.link.host_metrics()
+    }
+
     pub fn request_full(&self, req: ControlRequest, blob: &[u8]) -> io::Result<ControlResponse> {
         self.link.call_full(req, blob)
     }

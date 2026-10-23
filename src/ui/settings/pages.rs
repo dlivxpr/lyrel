@@ -51,7 +51,7 @@ impl LyrelApp {
                                 &[("error", &error)],
                             ),
                         };
-                        window.push_notification(message, cx);
+                        window.notify_app(message, cx);
                     },
                 )
                 .into_any_element();

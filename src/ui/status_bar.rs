@@ -225,10 +225,12 @@ impl LyrelApp {
                         }),
                 )
             })
+            .when(!document, |bar| bar.child(self.render_host_metrics(cx)))
             .when(document_context == Some(crate::ui::app::OverlayTop::Code), |bar| {
                 bar.child(self.render_document_status(cx))
             })
             .child(self.status_clock.clone())
+            .child(self.notification_bell.clone())
             .into_any_element()
     }
 }

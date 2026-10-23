@@ -1,12 +1,12 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, Context, Window};
 
 use crate::ui::i18n::L10nKey;
-use gpui_kit::component::notification::Notification;
+use crate::ui::notification_history::Notification;
 
 #[allow(unused_imports)]
 pub use lyrel_core::host::{
@@ -256,7 +256,7 @@ impl HostOps {
     /// sits under it. Run together as `{context}: {error}` on one plain line
     /// the two read as a log entry, with nothing to mark it as a failure.
     pub fn notify_err(window: &mut Window, cx: &mut App, context: &str, err: &std::io::Error) {
-        window.push_notification(
+        window.notify_app(
             Notification::error(explain_io(err)).title(context.to_string()),
             cx,
         );
