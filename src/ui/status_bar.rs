@@ -182,11 +182,12 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
+    use crate::core::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
     use crate::core::config::Config;
-    use crate::ui::app::test_window::harness;
+    use crate::ui::app::test_window::harness_with_pane;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
+    use rio_vt::crosswords::grid::Dimensions as _;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();
@@ -196,11 +197,12 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_remains_reachable_below_terminal_and_filled_document(cx: &mut TestAppContext) {
-        let (app, mut vcx) = harness(cx);
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
         for (width, font) in [(1440., 16.), (720., 20.)] {
             vcx.simulate_resize(size(px(width), px(720.)));
             app.update_in(&mut vcx, |app, _, cx| {
                 cx.global_mut::<Config>().ui_font_size = font;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font));
                 app.sidebar_collapsed = true;
                 app.right_panel_visible = false;
                 cx.notify();
@@ -211,6 +213,13 @@ mod tests {
                     vcx.dispatch_action(ToggleDocumentFill);
                 }
                 settle(&mut vcx);
+                if !filled {
+                    app.read_with(&vcx, |app, cx| {
+                        let pane = app.tabs[app.active].pane.terminals()[0].read(cx);
+                        assert!(pane.terminal.term.lock().screen_lines() >= 24,
+                            "the terminal must use the content height, not collapse to its intrinsic size");
+                    });
+                }
                 vcx.update(|window, cx| {
                     let status = window.find("workbench-status").bounds();
                     let content = window.find("workbench-content").bounds();
@@ -224,6 +233,10 @@ mod tests {
                 vcx.simulate_keystrokes("escape");
                 settle(&mut vcx);
                 assert!(app.read_with(&vcx, |app, _| app.active_settings().is_none()));
+                if filled {
+                    vcx.dispatch_action(ToggleCodePanel);
+                    settle(&mut vcx);
+                }
             }
         }
     }
