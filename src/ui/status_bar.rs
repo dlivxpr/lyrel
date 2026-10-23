@@ -240,7 +240,6 @@ mod tests {
     use crate::ui::app::test_window::harness_with_pane;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
-    use rio_vt::crosswords::grid::Dimensions as _;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();

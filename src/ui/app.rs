@@ -3,9 +3,10 @@ use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, WindowExt as _};
 use gpui_kit::{
-    App, Axis, Bounds, Context, Entity, Focusable, Pixels, PromptLevel, Size, Subscription,
-    Window, div, img, point, prelude::*, px, size,
+    App, Axis, Bounds, Context, Entity, Focusable, Pixels, PromptLevel, Subscription, Window, div,
+    img, point, prelude::*, px, size,
 };
+use lyrel_core::core::machine::TabId;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -368,16 +369,13 @@ pub(crate) const TITLE_BAR_LEAD: f32 = if cfg!(target_os = "macos") {
 
 pub(crate) const WINDOW_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 0. } else { 102. };
 
-
 /// 保存窗口可见内容的边界，供下次启动恢复位置与尺寸。
 /// Windows/macOS 后端的 `inner_window_bounds` 默认与窗口边界一致。
 fn window_bounds_to_remember(window: &Window) -> Bounds<Pixels> {
     window.inner_window_bounds().get_bounds()
 }
 
-
 pub(crate) const WINDOW_MARK_SIZE: f32 = 20.;
-
 
 pub(crate) fn title_bar_drag(
     row: gpui_kit::Stateful<gpui_kit::Div>,
@@ -456,7 +454,9 @@ pub(crate) fn window_mark() -> impl IntoElement {
             ))
         })
         .clone();
-    img(logo).size(gpui_kit::rems(WINDOW_MARK_SIZE / 16.)).flex_shrink_0()
+    img(logo)
+        .size(gpui_kit::rems(WINDOW_MARK_SIZE / 16.))
+        .flex_shrink_0()
 }
 
 pub struct Tab {
@@ -3733,7 +3733,6 @@ impl LyrelApp {
         self.update_config(cx, |cfg| cfg.dim_inactive_panes = on);
     }
 
-
     pub(crate) fn set_cursor_blink(&mut self, on: bool, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| cfg.cursor_blink = on);
         if !on {
@@ -3770,11 +3769,9 @@ impl LyrelApp {
         self.update_config(cx, |cfg| cfg.confirm_close = mode);
     }
 
-
     pub(crate) fn set_sidebar_auto_grouping(&mut self, on: bool, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| cfg.sidebar_auto_grouping = on);
     }
-
 
     pub(crate) fn toggle_left_panel(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
@@ -3993,7 +3990,12 @@ impl LyrelApp {
     /// it now that has to remember it.
     pub(crate) fn remember_focused_leaf(&mut self, leaf: gpui_kit::EntityId) {
         remember_leaf_in(&mut self.tabs, leaf);
-        if let Some(tab) = self.tabs.iter().find(|tab| tab.pane.leaves().iter().any(|pane| pane.entity_id() == leaf)) {
+        if let Some(tab) = self.tabs.iter().find(|tab| {
+            tab.pane
+                .leaves()
+                .iter()
+                .any(|pane| pane.entity_id() == leaf)
+        }) {
             self.status_document_focus = Some((tab.tree_id.get(), false));
         }
     }
@@ -5245,15 +5247,23 @@ impl LyrelApp {
         const BAND_REACH: f32 = 6.;
 
         let pointer = window.mouse_position();
-        if !self.sidebar_open(cx) { return None; }
+        if !self.sidebar_open(cx) {
+            return None;
+        }
         let viewport = window.viewport_size();
         let band = |drawn: &[(usize, Bounds<Pixels>)]| {
             let top = drawn.iter().map(|(_, b)| b.origin.y).reduce(Pixels::min)?;
             let left = drawn.iter().map(|(_, b)| b.origin.x).reduce(Pixels::min)?;
-            let right = drawn.iter().map(|(_, b)| b.origin.x + b.size.width).reduce(Pixels::max)?;
+            let right = drawn
+                .iter()
+                .map(|(_, b)| b.origin.x + b.size.width)
+                .reduce(Pixels::max)?;
             Some(Bounds {
                 origin: point(left, top - px(BAND_REACH)),
-                size: size(right - left, (viewport.height - top + px(BAND_REACH)).max(px(0.))),
+                size: size(
+                    right - left,
+                    (viewport.height - top + px(BAND_REACH)).max(px(0.)),
+                ),
             })
         };
         let measured = |slots: &[Bounds<Pixels>]| -> Vec<(usize, Bounds<Pixels>)> {
@@ -5265,7 +5275,9 @@ impl LyrelApp {
                 .collect()
         };
         let mut drawn = measured(&self.sidebar_slots.borrow());
-        if !band(&drawn).is_some_and(|bounds| bounds.contains(&pointer)) { return None; }
+        if !band(&drawn).is_some_and(|bounds| bounds.contains(&pointer)) {
+            return None;
+        }
         drawn.sort_by(|(_, a), (_, b)| a.origin.y.as_f32().total_cmp(&b.origin.y.as_f32()));
 
         let row: Vec<Bounds<Pixels>> = drawn.iter().map(|(_, b)| *b).collect();
@@ -6664,24 +6676,24 @@ impl LyrelApp {
         // system picker, which browses this computer: a path picked there
         // names nothing on a remote workspace's machine, where "Pin as
         // Group" in the file tree is the way in instead.
+        actions.push(
+            Item::localized(L10nKey::CmdNewGroup, CommandKind::NewGroup)
+                .with_subtitle(t(L10nKey::CmdNewGroupSubtitle))
+                .in_group(CommandGroup::TabsPanes),
+        );
+        if !WorkspaceStore::all(cx)
+            .get(self.workspace)
+            .is_some_and(|w| w.is_remote())
+        {
             actions.push(
-                Item::localized(L10nKey::CmdNewGroup, CommandKind::NewGroup)
-                    .with_subtitle(t(L10nKey::CmdNewGroupSubtitle))
-                    .in_group(CommandGroup::TabsPanes),
+                Item::localized(
+                    L10nKey::CmdOpenFolderAsGroup,
+                    CommandKind::OpenFolderAsGroup,
+                )
+                .with_subtitle(t(L10nKey::CmdOpenFolderAsGroupSubtitle))
+                .in_group(CommandGroup::TabsPanes),
             );
-            if !WorkspaceStore::all(cx)
-                .get(self.workspace)
-                .is_some_and(|w| w.is_remote())
-            {
-                actions.push(
-                    Item::localized(
-                        L10nKey::CmdOpenFolderAsGroup,
-                        CommandKind::OpenFolderAsGroup,
-                    )
-                    .with_subtitle(t(L10nKey::CmdOpenFolderAsGroupSubtitle))
-                    .in_group(CommandGroup::TabsPanes),
-                );
-            }
+        }
 
         // The editor's text commands, while there is a buffer to run them on.
         if self.editor_can_dispatch() {
@@ -8229,7 +8241,8 @@ impl LyrelApp {
                         let _ = settings.update(cx, |_, window, _| window.remove_window());
                         let _ = owner.update(cx, |_, window, cx| {
                             window.activate_window();
-                            let _ = app.update(cx, |this, cx| this.focus_previous_content(window, cx));
+                            let _ =
+                                app.update(cx, |this, cx| this.focus_previous_content(window, cx));
                         });
                     });
                 }
@@ -9891,9 +9904,16 @@ impl LyrelApp {
             .flex()
             .flex_col()
             .child(self.render_window_title_bar(window, cx))
-            .child(div().flex_1().min_h_0().w_full().flex().flex_row()
-                .when_some(sidebar, |this, sidebar| this.child(sidebar))
-                .child(panel_row))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .when_some(sidebar, |this, sidebar| this.child(sidebar))
+                    .child(panel_row),
+            )
             .into_any_element()
     }
 }
@@ -11948,11 +11968,10 @@ mod tests {
         close_prompt, document_column_px, inherited_start_dir, join_shell_args,
         leaf_shares_the_window_daemon, mru_order, native_ssh_pane_alive, one_slot_move,
         pane_free_for, parse_ssh_connect_input, parse_ssh_option_words, rename_outcome,
-        side_panel_max, split_machine_held, split_shell_args, step_in_order,
-        title_strip_centre, title_strip_content_centre, title_strip_rule_and_pad, wd_path_saveable,
+        side_panel_max, split_machine_held, split_shell_args, step_in_order, title_strip_centre,
+        title_strip_content_centre, title_strip_rule_and_pad, wd_path_saveable,
     };
     use gpui_kit::{point, px, size};
-
 
     /// A title-bar row spends [`TITLE_BAR_BORDER`] of its height below its
     /// contents, and there are two ways it does that: it carries the whole point
@@ -12062,7 +12081,6 @@ mod tests {
         assert_eq!(tab.focus_origin(id(2), Dir::Left), Some(id(1)));
     }
 
-
     /// Fullscreen takes the window buttons and nothing else: the strip keeps
     /// its row, and the room reserved for the buttons at its end comes back.
     /// macOS never had any to take.
@@ -12076,7 +12094,6 @@ mod tests {
         );
         assert_eq!(super::window_controls_w(false), super::WINDOW_CONTROLS_W);
     }
-
 
     /// Two panels that each cap themselves at half the window leave the
     /// terminal nothing when both are open, so the cap is what is left after
@@ -12830,6 +12847,7 @@ pub(crate) mod test_window {
             let mut streams = Vec::new();
             for i in 0..n {
                 let (view, stream) = quiet_test_pane(i as u64 + 1, window, cx);
+                super::watch_pane_focus(&view.focus_handle(cx), view.entity_id(), window, cx);
                 app.tabs
                     .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
                 streams.push(stream);
@@ -12860,6 +12878,7 @@ pub(crate) mod test_window {
         });
         let stream = app.update_in(&mut vcx, |app, window, cx| {
             let (view, stream) = quiet_test_pane(1, window, cx);
+            super::watch_pane_focus(&view.focus_handle(cx), view.entity_id(), window, cx);
             app.tabs
                 .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
             app.active = 0;
@@ -15210,7 +15229,10 @@ mod pane_menu_tests {
             );
         });
         vcx.update(|window, cx| {
-            let zoom = window.find_by_label(t(L10nKey::CmdZoomPane)).bounds().center();
+            let zoom = window
+                .find_by_label(t(L10nKey::CmdZoomPane))
+                .bounds()
+                .center();
             window.pointer_down(zoom, gpui_kit::MouseButton::Left, cx);
             window.pointer_up(zoom, gpui_kit::MouseButton::Left, cx);
         });

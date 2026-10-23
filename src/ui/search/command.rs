@@ -634,7 +634,6 @@ impl Item {
     /// ones only it can judge (`LyrelApp::search_catalog`).
     pub fn actions(cx: &App, chrome: ChromeState) -> Vec<Item> {
         use CommandKind::*;
-        let cfg = cx.global::<Config>();
         let sidebar_hidden = chrome.rail_collapsed;
         let right_panel_open = chrome.right_panel_visible;
         let document_filled = chrome.document_filled;

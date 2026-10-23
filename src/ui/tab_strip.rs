@@ -22,7 +22,7 @@ use crate::core::cli_agent::CLIAgent;
 use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab, tile_trailing_inset};
+use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::search::SearchTab;
 
