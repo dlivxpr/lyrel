@@ -2,6 +2,16 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
+        L10nKey::NotificationInbox => "Notifications",
+        L10nKey::NotificationClearHistory => "Clear notification history",
+        L10nKey::NotificationScope => "Received app notifications on this computer · latest 500",
+        L10nKey::NotificationEmpty => "No notifications. New application notifications will appear here.",
+        L10nKey::NotificationSourceUnavailable => "Source unavailable",
+        L10nKey::NotificationUnread => "Unread",
+        L10nKey::NotificationSuccess => "Success",
+        L10nKey::NotificationInfo => "Information",
+        L10nKey::NotificationWarning => "Warning",
+        L10nKey::NotificationError => "Error",
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
             "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."
@@ -2045,6 +2055,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "This window is a workspace on {machine}, but lyrel has no connection details for it — check its SSH profile or ~/.ssh/config entry still exists."
         }
         L10nKey::RemoteThisComputer => "this computer",
+        L10nKey::HostMetricsWaiting => "Waiting for host sample",
+        L10nKey::HostMetricsConnecting => "Connecting to host",
+        L10nKey::HostMetricsReconnecting => "Reconnecting to host",
+        L10nKey::HostMetricsUnavailable => "Host metrics unavailable",
+        L10nKey::HostMetricsDisconnected => "Host disconnected",
+        L10nKey::HostMetricsFailed => "Host sampling failed: {reason}",
+        L10nKey::HostMetricsError => "Host sampling failed",
+        L10nKey::HostMetricsSample => "{host} · Whole-host CPU · RAM {used} / {total} GiB",
         L10nKey::RemoteProfileGone => "deleted profile",
         L10nKey::RemoteRestartTitle => "Restart lyrel's server on \"{machine}\"?",
         L10nKey::RemoteRestartBody => {
@@ -2407,6 +2425,15 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PaneRestorePip => "Restore picture-in-picture to tiled layout",
         L10nKey::PaneTogglePip => "Toggle pane picture-in-picture",
         L10nKey::PanePipTitle => "Picture-in-picture terminal",
+        L10nKey::PanePark => "Park pane",
+        L10nKey::PaneRestoreParked => "Restore parked pane…",
+        L10nKey::ParkedDeckTitle => "Parked panes",
+        L10nKey::ParkedRestore => "Restore",
+        L10nKey::ParkedAlive => "Running",
+        L10nKey::ParkedExited => "Exited",
+        L10nKey::ParkedEmpty => "All panes are parked. Restore a card or create a pane.",
+        L10nKey::PanePipMove => "Move picture-in-picture (arrow keys; Escape returns to terminal)",
+        L10nKey::PanePipResize => "Resize picture-in-picture (arrow keys; Escape returns to terminal)",
         L10nKey::PaneFindScrollback => "Find in scrollback…",
         L10nKey::PaneOpenScrollback => "Open scrollback in editor",
         L10nKey::PaneClearScreen => "Clear screen",

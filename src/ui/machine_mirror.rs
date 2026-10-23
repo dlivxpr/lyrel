@@ -992,42 +992,87 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_stale_machine_get_cannot_undo_local_pip_or_its_restore(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
+    fn a_stale_machine_get_cannot_undo_local_pip_or_its_restore(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
             let id = WorkspaceId::new();
             let mut tab = leaf_tab(1);
             tab.root.split_leaf(1, 2, Axis::Horizontal, 0.4, false);
             let original = tab.clone();
-            let snapshot = |tab: Tab| machine_with(Workspace {
-                id,
-                tabs: vec![tab],
-                ..Workspace::default()
-            });
+            let snapshot = |tab: Tab| {
+                machine_with(Workspace {
+                    id,
+                    tabs: vec![tab],
+                    ..Workspace::default()
+                })
+            };
             MachineMirrors::install(cx, HostId::LOCAL, snapshot(original.clone()));
             assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
             assert!(tab.set_pip(Some(2), Some(1)));
             MachineMirrors::note_synced_workspace(
-                cx, HostId::LOCAL, id, vec![tab.clone()], Some(tab.id),
+                cx,
+                HostId::LOCAL,
+                id,
+                vec![tab.clone()],
+                Some(tab.id),
             );
             MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(original)));
-            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL).unwrap().workspaces[0].tabs[0];
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL)
+                .unwrap()
+                .workspaces[0]
+                .tabs[0];
             assert_eq!(mirrored.presentation.pip().map(|pip| pip.pane()), Some(2));
             assert_eq!(mirrored.root.pane_ids(), vec![1, 2]);
-            assert_eq!(mirrored.visible_root(), Some(lyrel_core::core::machine::PaneNode::Leaf { pane: 1 }));
+            assert_eq!(
+                mirrored.visible_root(),
+                Some(lyrel_core::core::machine::PaneNode::Leaf { pane: 1 })
+            );
 
             let promoted = tab.clone();
             assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
             assert!(tab.set_pip(None, Some(1)));
             MachineMirrors::note_synced_workspace(
-                cx, HostId::LOCAL, id, vec![tab.clone()], Some(tab.id),
+                cx,
+                HostId::LOCAL,
+                id,
+                vec![tab.clone()],
+                Some(tab.id),
             );
             MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(promoted)));
-            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL).unwrap().workspaces[0].tabs[0];
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL)
+                .unwrap()
+                .workspaces[0]
+                .tabs[0];
             assert_eq!(mirrored, &tab);
             assert!(mirrored.presentation.pip().is_none());
             assert_eq!(mirrored.root.pane_ids(), vec![1, 2]);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn stale_snapshot_cannot_erase_a_park_or_a_chosen_restore(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            let id = WorkspaceId::new();
+            let mut tab = leaf_tab(1);
+            tab.root.split_leaf(1, 2, Axis::Horizontal, 0.4, false);
+            let snapshot = |tab: Tab| machine_with(Workspace { id, tabs: vec![tab], ..Workspace::default() });
+            let original = tab.clone();
+            MachineMirrors::install(cx, HostId::LOCAL, snapshot(original.clone()));
+            assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
+            assert!(tab.park(1));
+            assert!(tab.park(2));
+            MachineMirrors::note_synced_workspace(cx, HostId::LOCAL, id, vec![tab.clone()], Some(tab.id));
+            MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(original)));
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL).unwrap().workspaces[0].tabs[0];
+            assert!(mirrored.visible_root().is_none());
+            assert_eq!(mirrored.root.pane_ids(), vec![1, 2]);
+            let parked = tab.clone();
+            assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
+            assert!(tab.restore_parked(2, None));
+            MachineMirrors::note_synced_workspace(cx, HostId::LOCAL, id, vec![tab.clone()], Some(tab.id));
+            MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(parked)));
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL).unwrap().workspaces[0].tabs[0];
+            assert_eq!(mirrored.visible_root().unwrap().pane_ids(), vec![2]);
+            assert!(mirrored.presentation.is_parked(1));
         });
     }
 
@@ -1133,6 +1178,7 @@ mod tests {
                 a: Box::new(PaneNode::Leaf { pane: 1 }),
                 b: Box::new(PaneNode::Leaf { pane: 2 }),
             },
+            presentation: Default::default(),
             hibernated: false,
         };
         assert!(apply(

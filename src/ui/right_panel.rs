@@ -1,8 +1,9 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, InteractiveElementExt as _, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _,
     h_flex, v_flex,
 };
 use gpui_kit::{AnyElement, Context, Window, div, prelude::*, px, rems};
@@ -1564,7 +1565,7 @@ impl LyrelApp {
                                 app.refresh_managed_forwards(pane_id, cx);
                             }
                         }
-                        Err(e) => window.push_notification(
+                        Err(e) => window.notify_app(
                             crate::ui::host_ops::failure(
                                 t_fmt(
                                     L10nKey::LoopbackForwardFailed,
@@ -1711,7 +1712,7 @@ impl LyrelApp {
             let _ = this.update_in(cx, |app, window, cx| {
                 for (port, local) in built {
                     match local {
-                        Ok(local) => window.push_notification(
+                        Ok(local) => window.notify_app(
                             t_fmt(
                                 L10nKey::PortAutoForwarded,
                                 &[("port", &port.to_string()), ("local", &local.to_string())],

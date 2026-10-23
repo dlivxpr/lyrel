@@ -1,8 +1,9 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use super::remote::PaneEvent;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, WindowExt as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
     App, ClipboardEntry, ClipboardItem, Context, EntityId, ExternalPaths, FocusHandle, Focusable,
     Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollDelta,
@@ -4031,11 +4032,11 @@ impl TerminalView {
         let name = local
             .file_name()
             .map_or_else(|| local.to_string_lossy(), |n| n.to_string_lossy());
-        window.push_notification(
-            crate::ui::i18n::t_fmt(
+        window.notify_app(
+            crate::ui::notification_history::Notification::info(crate::ui::i18n::t_fmt(
                 crate::ui::i18n::L10nKey::SftpPasteUploadFailed,
                 &[("name", &name), ("host", host), ("error", reason)],
-            ),
+            )).pane(self.owner_workspace(), self.pane_id),
             cx,
         );
     }
@@ -4054,14 +4055,14 @@ impl TerminalView {
         log::warn!("failed to open file link {}: {reason}", path.display());
         let path = path.display().to_string();
         let reason = reason.to_string();
-        window.push_notification(
+        window.notify_app(
             crate::ui::host_ops::failure(
                 crate::ui::i18n::t_fmt(
                     crate::ui::i18n::L10nKey::LinkFileOpenFailed,
                     &[("path", path.as_str()), ("error", reason.as_str())],
                 ),
                 &reason,
-            ),
+            ).pane(self.owner_workspace(), self.pane_id),
             cx,
         );
     }
@@ -6678,7 +6679,7 @@ impl TerminalView {
             None if rooted => t_fmt(L10nKey::LinkFileMissing, &[("path", &candidate.path)]),
             None => t_fmt(L10nKey::LinkFileNoDirectory, &[("path", &candidate.path)]),
         };
-        window.push_notification(message, cx);
+        window.notify_app(crate::ui::notification_history::Notification::info(message).pane(self.owner_workspace(), self.pane_id), cx);
         true
     }
 
@@ -6687,7 +6688,7 @@ impl TerminalView {
             LoopbackOpen::Forwarded(url) => cx.open_url(&url),
             LoopbackOpen::NotLoopback => cx.open_url(url),
             LoopbackOpen::ForwardFailed(reason) => {
-                window.push_notification(reason, cx);
+                window.notify_app(crate::ui::notification_history::Notification::info(reason).pane(self.owner_workspace(), self.pane_id), cx);
             }
         }
     }

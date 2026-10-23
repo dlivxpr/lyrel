@@ -4,7 +4,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, TitleBar, h_flex};
 use gpui_kit::{AnyElement, Context, Window, div, prelude::*, rems};
 
-use crate::core::actions::{SplitDown, SplitRight, ToggleLeftPanel, TogglePalette, ToggleRightPanel};
+use crate::core::actions::{
+    SplitDown, SplitRight, ToggleLeftPanel, TogglePalette, ToggleRightPanel,
+};
 use crate::ui::app::{LyrelApp, window_controls_drawn};
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::search::SearchTab;
@@ -19,57 +21,127 @@ impl LyrelApp {
     ) -> AnyElement {
         let left_open = self.left_panel_open(cx);
         let right_open = self.right_panel_open(cx);
-        let can_split = self.tabs.get(self.active).and_then(|tab| tab.detail_pane(window, cx)).is_some();
-        let tile = |button: Button| {
-            button.custom(chrome_tile_variant(cx)).size_8().rounded_lg()
-        };
+        let can_split = self
+            .tabs
+            .get(self.active)
+            .and_then(|tab| tab.detail_pane(window, cx))
+            .is_some();
+        let tile = |button: Button| button.custom(chrome_tile_variant(cx)).size_8().rounded_lg();
         let group = || {
-            h_flex().flex_none().p_0p5().gap_0p5().rounded_lg()
+            h_flex()
+                .flex_none()
+                .p_0p5()
+                .gap_0p5()
+                .rounded_lg()
                 .bg(cx.theme().muted.opacity(0.5))
         };
         let left = group()
-            .child(tile(Button::new("titlebar-left-panel").icon(
-                Icon::empty().path(if left_open { "icons/panel-left.svg" } else { "icons/panel-left-collapsed.svg" }).size_4(),
-            ))
-                .accessibility_label(t(if left_open { L10nKey::TabTooltipHideSidebar } else { L10nKey::TabTooltipShowSidebar }))
-                .tooltip_with_action(t(if left_open { L10nKey::TabTooltipHideSidebar } else { L10nKey::TabTooltipShowSidebar }), &ToggleLeftPanel, None)
+            .child(
+                tile(
+                    Button::new("titlebar-left-panel").icon(
+                        Icon::empty()
+                            .path(if left_open {
+                                "icons/panel-left.svg"
+                            } else {
+                                "icons/panel-left-collapsed.svg"
+                            })
+                            .size_4(),
+                    ),
+                )
+                .accessibility_label(t(if left_open {
+                    L10nKey::TabTooltipHideSidebar
+                } else {
+                    L10nKey::TabTooltipShowSidebar
+                }))
+                .tooltip_with_action(
+                    t(if left_open {
+                        L10nKey::TabTooltipHideSidebar
+                    } else {
+                        L10nKey::TabTooltipShowSidebar
+                    }),
+                    &ToggleLeftPanel,
+                    None,
+                )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_left_panel(cx);
                     this.focus_active(window, cx);
-                })))
-            .child(tile(Button::new("titlebar-search").icon(Icon::new(IconName::Search).size_4()))
-                .accessibility_label(t(L10nKey::AppMenuSearchEverywhere))
-                .tooltip_with_action(t(L10nKey::AppMenuSearchEverywhere), &TogglePalette, None)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    match this.search.is_some() {
-                        true => this.close_search(window, cx),
-                        false => this.open_search(SearchTab::All, "", window, cx),
-                    }
-                })))
+                })),
+            )
+            .child(
+                tile(Button::new("titlebar-search").icon(Icon::new(IconName::Search).size_4()))
+                    .accessibility_label(t(L10nKey::AppMenuSearchEverywhere))
+                    .tooltip_with_action(t(L10nKey::AppMenuSearchEverywhere), &TogglePalette, None)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| match this.search.is_some() {
+                            true => this.close_search(window, cx),
+                            false => this.open_search(SearchTab::All, "", window, cx),
+                        }),
+                    ),
+            )
             .child(self.new_tab_button("titlebar-add", cx));
         let right = group()
-            .child(tile(Button::new("titlebar-split-right").icon(Icon::empty().path("icons/split-right.svg").size_4()))
+            .child(
+                tile(
+                    Button::new("titlebar-split-right")
+                        .icon(Icon::empty().path("icons/split-right.svg").size_4()),
+                )
                 .disabled(!can_split)
                 .accessibility_label(t(L10nKey::AppMenuSplitRight))
                 .tooltip_with_action(t(L10nKey::AppMenuSplitRight), &SplitRight, None)
-                .on_click(cx.listener(|this, _, window, cx| this.split(gpui_kit::Axis::Horizontal, window, cx))))
-            .child(tile(Button::new("titlebar-split-down").icon(Icon::empty().path("icons/split-down.svg").size_4()))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.split(gpui_kit::Axis::Horizontal, window, cx)
+                })),
+            )
+            .child(
+                tile(
+                    Button::new("titlebar-split-down")
+                        .icon(Icon::empty().path("icons/split-down.svg").size_4()),
+                )
                 .disabled(!can_split)
                 .accessibility_label(t(L10nKey::AppMenuSplitDown))
                 .tooltip_with_action(t(L10nKey::AppMenuSplitDown), &SplitDown, None)
-                .on_click(cx.listener(|this, _, window, cx| this.split(gpui_kit::Axis::Vertical, window, cx))))
-            .child(tile(Button::new("titlebar-right-panel").icon(
-                Icon::empty().path(if right_open { "icons/panel-right.svg" } else { "icons/panel-right-collapsed.svg" }).size_4(),
-            ))
-                .accessibility_label(t(if right_open { L10nKey::TabTooltipHideDetailPanel } else { L10nKey::TabTooltipShowDetailPanel }))
-                .tooltip_with_action(t(if right_open { L10nKey::TabTooltipHideDetailPanel } else { L10nKey::TabTooltipShowDetailPanel }), &ToggleRightPanel, None)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.split(gpui_kit::Axis::Vertical, window, cx)
+                })),
+            )
+            .child(
+                tile(
+                    Button::new("titlebar-right-panel").icon(
+                        Icon::empty()
+                            .path(if right_open {
+                                "icons/panel-right.svg"
+                            } else {
+                                "icons/panel-right-collapsed.svg"
+                            })
+                            .size_4(),
+                    ),
+                )
+                .accessibility_label(t(if right_open {
+                    L10nKey::TabTooltipHideDetailPanel
+                } else {
+                    L10nKey::TabTooltipShowDetailPanel
+                }))
+                .tooltip_with_action(
+                    t(if right_open {
+                        L10nKey::TabTooltipHideDetailPanel
+                    } else {
+                        L10nKey::TabTooltipShowDetailPanel
+                    }),
+                    &ToggleRightPanel,
+                    None,
+                )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_right_panel(cx);
                     this.focus_active(window, cx);
-                })));
+                })),
+            );
         let strip = h_flex()
             .id("workbench-window-controls")
-            .w_full().min_w_0().h_full().gap_2().pr_1()
+            .w_full()
+            .min_w_0()
+            .h_full()
+            .gap_2()
+            .pr_1()
             .child(crate::ui::app::window_mark())
             .child(left)
             .child(div().flex_1().min_w_4())
@@ -79,11 +151,20 @@ impl LyrelApp {
                 .h(rems(3.))
                 // 交通灯是原生平台几何，不随界面字体放大。
                 .pl(gpui_kit::px(crate::ui::app::TITLE_BAR_LEAD))
-                .bg(cx.theme().transparent).border_color(cx.theme().transparent)
-                .child(strip).into_any_element()
+                .bg(cx.theme().transparent)
+                .border_color(cx.theme().transparent)
+                .child(strip)
+                .into_any_element()
         } else {
-            let row = h_flex().id("workbench-fullscreen-drag").h_12().flex_none().w_full().px_3().child(strip);
-            crate::ui::app::title_bar_drag(row, "workbench-fullscreen-drag", window, cx).into_any_element()
+            let row = h_flex()
+                .id("workbench-fullscreen-drag")
+                .h_12()
+                .flex_none()
+                .w_full()
+                .px_3()
+                .child(strip);
+            crate::ui::app::title_bar_drag(row, "workbench-fullscreen-drag", window, cx)
+                .into_any_element()
         }
     }
 }
@@ -93,7 +174,7 @@ mod gpui_tests {
     use std::io::ErrorKind;
 
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{Entity, Focusable as _, TestAppContext, VisualTestContext, px, size};
+    use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
 
     use crate::core::actions::{ActivateTab1, ActivateTab2};
     use crate::core::config::RightPanelTab;
@@ -136,77 +217,100 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn closing_panel_chrome_restores_terminal_input_with_either_sidebar_state(cx: &mut TestAppContext) {
+    fn closing_panel_chrome_restores_terminal_input_with_either_sidebar_state(
+        cx: &mut TestAppContext,
+    ) {
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 2);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         let original = app.read_with(&vcx, |app, cx| {
             (
                 app.workspace,
-                app.tabs.iter().map(|tab| tab.tree_id.get()).collect::<Vec<_>>(),
-                app.tabs.iter().map(|tab| {
-                    let terminal = tab.pane.terminals().pop().unwrap();
-                    (terminal.entity_id(), terminal.read(cx).pane_id)
-                }).collect::<Vec<_>>(),
+                app.tabs
+                    .iter()
+                    .map(|tab| tab.tree_id.get())
+                    .collect::<Vec<_>>(),
+                app.tabs
+                    .iter()
+                    .map(|tab| {
+                        let terminal = tab.pane.terminals().pop().unwrap();
+                        (terminal.entity_id(), terminal.read(cx).pane_id)
+                    })
+                    .collect::<Vec<_>>(),
             )
         });
 
-            for collapsed in [false, true] {
-                app.update_in(&mut vcx, |app, window, cx| {
-                    app.sidebar_collapsed = collapsed;
-                    app.right_panel_visible = false;
-                    app.right_panel_tab = RightPanelTab::Files;
-                    app.focus_active(window, cx);
-                    cx.notify();
-                });
-                settle(&mut vcx);
-                vcx.update(|window, cx| {
-                    assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
-                    window.click("titlebar-right-panel", cx);
-                });
-                settle(&mut vcx);
-                app.update_in(&mut vcx, |app, window, cx| {
-                    assert!(app.right_panel_open(cx));
-                    app.file_search.update(cx, |search, cx| search.focus(window, cx));
-                });
-                settle(&mut vcx);
-                vcx.update(|window, cx| {
-                    assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
-                    window.click("titlebar-right-panel", cx);
-                });
-                settle(&mut vcx);
-                assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
-                assert!(terminal_focused(&app, &mut vcx));
+        for collapsed in [false, true] {
+            app.update_in(&mut vcx, |app, window, cx| {
+                app.sidebar_collapsed = collapsed;
+                app.right_panel_visible = false;
+                app.right_panel_tab = RightPanelTab::Files;
+                app.focus_active(window, cx);
+                cx.notify();
+            });
+            settle(&mut vcx);
+            vcx.update(|window, cx| {
+                assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
+                window.click("titlebar-right-panel", cx);
+            });
+            settle(&mut vcx);
+            app.update_in(&mut vcx, |app, window, cx| {
+                assert!(app.right_panel_open(cx));
+                app.file_search
+                    .update(cx, |search, cx| search.focus(window, cx));
+            });
+            settle(&mut vcx);
+            vcx.update(|window, cx| {
+                assert_eq!(window.find_all("titlebar-right-panel").len(), 1);
+                window.click("titlebar-right-panel", cx);
+            });
+            settle(&mut vcx);
+            assert!(!app.read_with(&vcx, |app, cx| app.right_panel_open(cx)));
+            assert!(terminal_focused(&app, &mut vcx));
 
-                vcx.simulate_keystrokes("x");
-                settle(&mut vcx);
-                assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"x"[..]));
-                assert_eq!(input(&mut streams[0]), None, "one key is delivered once");
-                assert_eq!(input(&mut streams[1]), None, "the hidden tab receives no key");
-                vcx.dispatch_action(ActivateTab2);
-                settle(&mut vcx);
-                assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
-                assert!(terminal_focused(&app, &mut vcx));
-                vcx.dispatch_action(ActivateTab1);
-                settle(&mut vcx);
-            }
+            vcx.simulate_keystrokes("x");
+            settle(&mut vcx);
+            assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"x"[..]));
+            assert_eq!(input(&mut streams[0]), None, "one key is delivered once");
+            assert_eq!(
+                input(&mut streams[1]),
+                None,
+                "the hidden tab receives no key"
+            );
+            vcx.dispatch_action(ActivateTab2);
+            settle(&mut vcx);
+            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert!(terminal_focused(&app, &mut vcx));
+            vcx.dispatch_action(ActivateTab1);
+            settle(&mut vcx);
+        }
         app.read_with(&vcx, |app, cx| {
             assert_eq!(app.workspace, original.0);
-            assert_eq!(app.tabs.iter().map(|tab| tab.tree_id.get()).collect::<Vec<_>>(), original.1);
-            assert_eq!(app.tabs.iter().map(|tab| {
-                let terminal = tab.pane.terminals().pop().unwrap();
-                (terminal.entity_id(), terminal.read(cx).pane_id)
-            }).collect::<Vec<_>>(), original.2);
+            assert_eq!(
+                app.tabs
+                    .iter()
+                    .map(|tab| tab.tree_id.get())
+                    .collect::<Vec<_>>(),
+                original.1
+            );
+            assert_eq!(
+                app.tabs
+                    .iter()
+                    .map(|tab| {
+                        let terminal = tab.pane.terminals().pop().unwrap();
+                        (terminal.entity_id(), terminal.read(cx).pane_id)
+                    })
+                    .collect::<Vec<_>>(),
+                original.2
+            );
         });
     }
-
 
     #[gpui_kit::test]
     fn navigation_clicks_and_modal_keys_reach_only_the_selected_session(cx: &mut TestAppContext) {
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 2);
         vcx.simulate_resize(size(px(1440.), px(900.)));
-        let first_tab_key = vcx.update(|_, cx| {
-            crate::ui::keymap::effective_key("ActivateTab1", cx).unwrap()
-        });
+        let first_tab_key =
+            vcx.update(|_, cx| crate::ui::keymap::effective_key("ActivateTab1", cx).unwrap());
         for collapsed in [false, true] {
             app.update_in(&mut vcx, |app, window, cx| {
                 app.sidebar_collapsed = collapsed;
@@ -252,7 +356,10 @@ mod gpui_tests {
     }
     #[gpui_kit::test]
     fn file_fill_keeps_search_available_and_returns_input_to_the_document(cx: &mut TestAppContext) {
-        use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
+        use crate::core::actions::ToggleDocumentFill;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("navigation.txt");
+        std::fs::write(&path, "").unwrap();
         for collapsed in [false, true] {
             let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
             vcx.simulate_resize(size(px(1000.), px(800.)));
@@ -262,11 +369,14 @@ mod gpui_tests {
                 app.focus_active(window, cx);
                 cx.notify();
             });
-            vcx.dispatch_action(EditorNewFile);
+            app.update_in(&mut vcx, |app, window, cx| {
+                app.open_file_in_editor(&path, window, cx)
+            });
             settle(&mut vcx);
             vcx.dispatch_action(ToggleDocumentFill);
             settle(&mut vcx);
-            let editor = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.clone());
+            let editor =
+                app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
             vcx.simulate_keystrokes("a");
             settle(&mut vcx);
             let before = editor.read_with(&vcx, |editor, _| editor.value().to_string());
@@ -277,17 +387,31 @@ mod gpui_tests {
             vcx.simulate_keystrokes("escape");
             settle(&mut vcx);
             assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
-            assert_eq!(editor.read_with(&vcx, |editor, _| editor.value().to_string()), before);
-            assert!(app.update_in(&mut vcx, |app, window, cx| app.document_dock_px(window, cx).is_none()));
+            assert_eq!(
+                editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+                before
+            );
+            assert!(app.update_in(&mut vcx, |app, window, cx| {
+                app.document_dock_px(window, cx).is_none()
+            }));
             vcx.simulate_keystrokes("b");
             settle(&mut vcx);
-            assert_eq!(editor.read_with(&vcx, |editor, _| editor.value().to_string()), format!("{before}b"));
-            assert_eq!(input(&mut streams[0]), None, "search and editor input never leak into the terminal");
+            assert_eq!(
+                editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+                format!("{before}b")
+            );
+            assert_eq!(
+                input(&mut streams[0]),
+                None,
+                "search and editor input never leak into the terminal"
+            );
         }
     }
 
     #[gpui_kit::test]
-    fn persistent_controls_keep_navigation_and_real_sidebar_resizing_available(cx: &mut TestAppContext) {
+    fn persistent_controls_keep_navigation_and_real_sidebar_resizing_available(
+        cx: &mut TestAppContext,
+    ) {
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         app.update_in(&mut vcx, |app, window, cx| {
@@ -297,7 +421,9 @@ mod gpui_tests {
             cx.notify();
         });
         settle(&mut vcx);
-        let initial = app.read_with(&vcx, |app, _| (app.sidebar_width.get(), app.right_panel_width.get()));
+        let initial = app.read_with(&vcx, |app, _| {
+            (app.sidebar_width.get(), app.right_panel_width.get())
+        });
         vcx.update(|window, cx| {
             let left = window.find("sidebar-resize").bounds().center();
             window.drag(left, left + gpui_kit::point(px(70.), px(0.)), cx);
@@ -311,8 +437,14 @@ mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             assert!(app.sidebar_width.get() > initial.0 + 40.);
             assert!(app.right_panel_width.get() > initial.1 + 40.);
-            assert_eq!(cx.global::<crate::core::config::Config>().sidebar_width, app.sidebar_width.get());
-            assert_eq!(cx.global::<crate::core::config::Config>().right_panel_width, app.right_panel_width.get());
+            assert_eq!(
+                cx.global::<crate::core::config::Config>().sidebar_width,
+                app.sidebar_width.get()
+            );
+            assert_eq!(
+                cx.global::<crate::core::config::Config>().right_panel_width,
+                app.right_panel_width.get()
+            );
         });
         vcx.update(|window, cx| window.click("rail-workspace-head", cx));
         settle(&mut vcx);
@@ -330,7 +462,11 @@ mod gpui_tests {
             settle(&mut vcx);
             vcx.simulate_keystrokes("q");
             settle(&mut vcx);
-            assert_eq!(input(&mut streams[0]), None, "new-tab choices own keyboard input until dismissed");
+            assert_eq!(
+                input(&mut streams[0]),
+                None,
+                "new-tab choices own keyboard input until dismissed"
+            );
             vcx.simulate_keystrokes("escape");
             settle(&mut vcx);
             assert!(terminal_focused(&app, &mut vcx));
@@ -339,5 +475,4 @@ mod gpui_tests {
             assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"n"[..]));
         }
     }
-
 }

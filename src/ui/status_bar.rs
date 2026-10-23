@@ -225,10 +225,12 @@ impl LyrelApp {
                         }),
                 )
             })
+            .when(!document, |bar| bar.child(self.render_host_metrics(cx)))
             .when(document_context == Some(crate::ui::app::OverlayTop::Code), |bar| {
                 bar.child(self.render_document_status(cx))
             })
             .child(self.status_clock.clone())
+            .child(self.notification_bell.clone())
             .into_any_element()
     }
 }
@@ -240,7 +242,6 @@ mod tests {
     use crate::ui::app::test_window::harness_with_pane;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
-    use rio_vt::crosswords::grid::Dimensions as _;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();

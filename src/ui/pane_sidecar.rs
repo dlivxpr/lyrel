@@ -100,14 +100,21 @@ fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, cx: &App) -
     true
 }
 
-pub(crate) fn toggle_for_tab(tab: &mut Tab, pane: EntityId, fallback: Option<EntityId>, cx: &App) -> Option<bool> {
+pub(crate) fn change_for_tab(tab: &mut Tab, pane: EntityId, fallback: Option<EntityId>, parked: Option<bool>, cx: &App) -> Option<bool> {
     if !mixed(tab, cx) { return None; }
     let leaves = tab.pane.leaves();
     let target = leaves.iter().find(|slot| slot.entity_id() == pane).and_then(|slot| scoped_pane(slot, cx))?;
     let fallback = fallback.and_then(|id| leaves.iter().find(|slot| slot.entity_id() == id)).and_then(|slot| scoped_pane(slot, cx));
     let mut logical = snapshot(tab, cx)?;
-    let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target)).then_some(target);
-    if !logical.set_pip(promote, fallback) { return Some(false); }
+    let changed = match parked {
+        Some(true) => logical.park(target),
+        Some(false) => logical.restore_parked(target, fallback),
+        None => {
+            let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target)).then_some(target);
+            logical.set_pip(promote, fallback)
+        }
+    };
+    if !changed { return Some(false); }
     Some(install_presentation(tab, logical, cx))
 }
 

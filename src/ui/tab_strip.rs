@@ -7,8 +7,8 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Side, Sizable as _, h_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Axis, Context, FontWeight, MouseButton, Pixels, SharedString, Window,
-    div, prelude::*, px,
+    AnyElement, App, Axis, Context, FontWeight, MouseButton, Pixels, SharedString, Window, div,
+    prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -22,7 +22,7 @@ use crate::core::cli_agent::CLIAgent;
 use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab, tile_trailing_inset};
+use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::search::SearchTab;
 
@@ -31,7 +31,6 @@ use crate::ui::search::SearchTab;
 /// enough that nobody waits on it.
 pub(crate) const TRANSITION_MS: u64 = 140;
 pub(crate) const REORDER_SLIDE_MS: u64 = TRANSITION_MS;
-
 
 const KEEP_SEGMENTS: usize = 3;
 
@@ -196,37 +195,6 @@ pub(crate) fn label_of(
         TabLabel::Process(title) => title.to_string(),
         TabLabel::Unknown => unnamed(),
     }
-}
-
-/// What a row can add on hover: the name behind the one [`label_of`] cut down,
-/// or `None` when it cut nothing and the tooltip would only repeat the row.
-///
-/// The comparison has to happen on the *same* spelling, which is the whole
-/// trick here. `label_of` abbreviates a path under the home before it elides
-/// it, and this returns the abbreviated form too, so a raw `/Users/x/repo`
-/// measured against a label of `~/repo` looks like a difference that isn't
-/// one — and every tab named after a directory inside the home would hang a
-/// tooltip saying exactly what it already says. Abbreviate first, compare
-/// after.
-fn tooltip_of(
-    view: &crate::ui::machine_mirror::TabView,
-    index: usize,
-    home: Option<&std::path::Path>,
-) -> Option<SharedString> {
-    use crate::ui::machine_mirror::TabLabel;
-
-    // The other rungs are never shortened: a given name and a process name are
-    // printed whole, and an agent's is a word.
-    let raw = match view.label() {
-        TabLabel::Osc(title) => title,
-        TabLabel::Cwd(cwd) => cwd,
-        _ => return None,
-    };
-    let full = abbreviate_home(raw.trim(), home);
-    if full.trim().is_empty() || full.as_ref() == label_of(view, index, home).as_str() {
-        return None;
-    }
-    Some(SharedString::from(full.into_owned()))
 }
 
 /// Width of `text` shaped in `font` at `size`, in pixels.
@@ -623,7 +591,6 @@ pub(crate) fn hit_target(button: Button) -> Button {
     button.w(px(MIN_TARGET)).h(px(MIN_TARGET))
 }
 
-
 pub(crate) fn chrome_tile(button: Button, selected: bool, cx: &gpui_kit::App) -> Button {
     chrome_tile_sized(button, TILE_SIZE, TILE_GLYPH, selected, cx)
 }
@@ -675,7 +642,6 @@ pub(crate) const TAB_OUTER_PAD: f32 = 2.;
 /// A label's hover target reaches this far past its word.
 const TAB_INNER_PAD: f32 = 4.;
 
-
 pub(crate) fn chrome_tile_sized(
     button: Button,
     tile: f32,
@@ -715,7 +681,6 @@ const MENU_SHELLS: usize = 3;
 /// Only agents that have been run are named — there is no "default agent" to
 /// lead the way shells' default does. Everything else is one row away.
 const MENU_AGENTS: usize = 3;
-
 
 /// How wide the New Tab menu is allowed to get.
 const MENU_W: Pixels = px(360.);
@@ -1276,7 +1241,6 @@ impl LyrelApp {
             .into_any_element()
     }
 
-
     /// The right panel's tabs: words, the current one in body ink and medium
     /// weight on a pill (ink and weight alone read as no selection at all).
     /// Four names fit the panel's resting width once Search folded into Files.
@@ -1563,29 +1527,6 @@ impl LyrelApp {
             // the chord lands in the same slot the chrome tiles use.
             .tooltip(move |window, cx| tip(window, cx).into())
             .into_any_element()
-    }
-
-    /// The full title behind a shortened one, for the row to name on hover.
-    ///
-    /// `tab_label` hands back a path elided to its last three segments and then
-    /// capped, and the chip truncates whatever is left over — so a tab could
-    /// read `…/a/b/c` with no way to find out which `a` that was. `None` when
-    /// nothing was dropped, so tabs that already show their whole name stay
-    /// quiet under the pointer.
-    ///
-    /// It has to unshorten whatever the label was *made of*, which is why it
-    /// reads the same [`TabView`](crate::ui::machine_mirror::TabView) the label
-    /// did: a tab named after its directory wants that directory spelled out,
-    /// not the title it never had. See [`tooltip_of`].
-    pub(crate) fn tab_title_tooltip(
-        &self,
-        tab: &Tab,
-        index: usize,
-        window: Option<&Window>,
-        cx: &App,
-    ) -> Option<SharedString> {
-        let (view, home) = tab.label_view(window, cx);
-        tooltip_of(&view, index, home.as_deref())
     }
 
     /// What this window puts on a tab of its own — the same ladder, through the
@@ -2069,7 +2010,6 @@ impl LyrelApp {
                 }),
             )
     }
-
 }
 
 /// The tab menu's SSH row, against real tabs in a real window.
@@ -2363,7 +2303,6 @@ mod tests {
     use gpui_kit::TestAppContext;
     use std::path::Path;
     use unicode_segmentation::UnicodeSegmentation;
-
 
     /// Most of these tests are about where a title is *cut*, not about what
     /// `~` means: the paths they pass either already start with `~` or are
@@ -2892,7 +2831,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn configured_shell_arguments_remain_user_authored_in_the_menu() {
         let shell = DetectedShell {
@@ -2981,47 +2919,6 @@ mod tests {
         );
     }
 
-    /// A tooltip exists to say what the row had to leave out. One that repeats
-    /// the row is worse than none, and the label and the raw string it came
-    /// from are not comparable until both have been abbreviated: `~/repo` and
-    /// `/Users/x/repo` are the same name spelled two ways, and reading them as
-    /// a difference hung a tooltip on every tab named after a directory under
-    /// the home — which, after this change, is most of them.
-    #[test]
-    fn a_tab_named_after_a_directory_says_nothing_more_on_hover_unless_it_was_cut() {
-        let mut tab = strip_tab();
-        tab.cwd = Some("/Users/x/repo".into());
-
-        assert_eq!(label_of(&tab, 0, Some(home())), "~/repo");
-        assert_eq!(
-            tooltip_of(&tab, 0, Some(home())),
-            None,
-            "the row is already showing the whole directory"
-        );
-
-        // Cut down to its last three segments, so the head is worth having.
-        tab.cwd = Some("/Users/x/repo/crates/lyrel-core/src".into());
-        assert_eq!(label_of(&tab, 0, Some(home())), "…/crates/lyrel-core/src");
-        assert_eq!(
-            tooltip_of(&tab, 0, Some(home())).as_deref(),
-            Some("~/repo/crates/lyrel-core/src")
-        );
-
-        // The same holds for a title that happens to be a path — the rung this
-        // guard was already getting wrong before a directory could reach it.
-        let mut titled = strip_tab();
-        titled.osc_title = Some("/Users/x/repo".into());
-        assert_eq!(tooltip_of(&titled, 0, Some(home())), None);
-
-        // A shell integration's `user@host:` head is not in the label, so it
-        // is still worth spelling out.
-        titled.osc_title = Some("me@box:/Users/x/repo".into());
-        assert_eq!(
-            tooltip_of(&titled, 0, Some(home())).as_deref(),
-            Some("me@box:/Users/x/repo")
-        );
-    }
-
     /// The one test that fails if any of the wiring is put back: a real tab,
     /// built the way the window builds one, named through `tab_label` — and
     /// checked against what the switcher renders from the machine tree's view
@@ -3080,12 +2977,6 @@ mod tests {
                 strip,
                 label_of(&from_tree, index, home.as_deref()),
                 "the two columns name the same tab the same way"
-            );
-
-            assert_eq!(
-                app.tab_title_tooltip(tab, index, Some(window), cx),
-                None,
-                "and the row is showing the whole path, so it stays quiet"
             );
         });
     }
@@ -3161,12 +3052,10 @@ mod tests {
             "measured against the home of the host it is on, not of this one"
         );
 
-        // The root of a filesystem is a directory like any other: a tab
-        // sitting in it says so, and says nothing more on hover.
+        // The root of a filesystem is a directory like any other.
         let mut root = strip_tab();
         root.cwd = Some("/".into());
         assert_eq!(label_of(&root, 0, Some(home())), "/");
-        assert_eq!(tooltip_of(&root, 0, Some(home())), None);
     }
 
     fn inventory(labels: &[&str]) -> Vec<DetectedShell> {

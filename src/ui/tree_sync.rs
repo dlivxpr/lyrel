@@ -1,8 +1,8 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, Global};
 use lyrel_core::core::machine::{
     AgentFacts, Axis as TreeAxis, LayoutDelta, Machine, PaneNode, PaneRecord, PaneSeed, Side,
@@ -77,9 +77,31 @@ pub(crate) fn toggle_pip_for_tab(
     workspace: WorkspaceId,
     cx: &App,
 ) -> bool {
+    change_presentation_for_tab(tab, pane, fallback, None, workspace, cx)
+}
+
+pub(crate) fn set_parked_for_tab(
+    tab: &mut crate::ui::app::Tab,
+    pane: gpui_kit::EntityId,
+    fallback: Option<gpui_kit::EntityId>,
+    parked: bool,
+    workspace: WorkspaceId,
+    cx: &App,
+) -> bool {
+    change_presentation_for_tab(tab, pane, fallback, Some(parked), workspace, cx)
+}
+
+fn change_presentation_for_tab(
+    tab: &mut crate::ui::app::Tab,
+    pane: gpui_kit::EntityId,
+    fallback: Option<gpui_kit::EntityId>,
+    parked: Option<bool>,
+    workspace: WorkspaceId,
+    cx: &App,
+) -> bool {
     let leaves = tab.pane.leaves();
     let remote = WorkspaceStore::all(cx).get(workspace).is_some_and(|w| w.is_remote());
-    if remote && let Some(changed) = crate::ui::pane_sidecar::toggle_for_tab(tab, pane, fallback, cx) {
+    if remote && let Some(changed) = crate::ui::pane_sidecar::change_for_tab(tab, pane, fallback, parked, cx) {
         return changed;
     }
     let Some(target_slot) = leaves.iter().find(|slot| slot.entity_id() == pane) else { return false; };
@@ -115,11 +137,16 @@ pub(crate) fn toggle_pip_for_tab(
         last_auto: None,
         hibernated: false,
     };
-    let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target))
-        .then_some(target);
-    if !logical.set_pip(promote, fallback) {
-        return false;
-    }
+    let changed = match parked {
+        Some(true) => logical.park(target),
+        Some(false) => logical.restore_parked(target, fallback),
+        None => {
+            let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target))
+                .then_some(target);
+            logical.set_pip(promote, fallback)
+        }
+    };
+    if !changed { return false; }
     if logical_node(&tab.pane, remote, cx).as_ref() != Some(&logical.root) {
         let Some(pane) = pane_from_existing(&logical.root, &mut slots) else {
             return false;
@@ -523,9 +550,10 @@ pub(crate) fn desired_tabs(
             // A group that really is gone was already cleared by the machine.
             group: tab.group.get(),
             last_auto: tab.auto_group.borrow().clone(),
-            presentation: match tab.presentation.pip() {
-                Some(pip) if root.seed_of(pip.pane()).is_none() => TabPresentation::default(),
-                _ => tab.presentation.clone(),
+            presentation: {
+                let mut presentation = tab.presentation.clone();
+                presentation.remap_panes(|pane| root.seed_of(pane).map(|_| pane));
+                presentation
             },
             presentation_fallback: tab.last_focused.and_then(|focused| {
                 tab.pane.leaves().into_iter()
@@ -1008,6 +1036,21 @@ fn reconcile_presentation(
     want: &DesiredTab,
     ops: &mut Vec<ControlRequest>,
 ) {
+    // Apply recovery before reconciling the tree, then replay records after
+    // arbitrary reshaping. No parked leaf is ever interpreted as PaneClose.
+    let removed = tab.presentation.parked().iter()
+        .filter(|entry| !want.presentation.is_parked(entry.pane()))
+        .map(|entry| entry.pane()).collect::<Vec<_>>();
+    for pane in removed {
+        if tab.restore_parked(pane, want.presentation_fallback) {
+            ops.push(ControlRequest::PaneRestore { workspace, pane, fallback: want.presentation_fallback });
+        }
+    }
+    for restore in want.presentation.parked() {
+        if tab.park_with_restore(restore.pane(), Some(restore.clone())) {
+            ops.push(ControlRequest::PanePark { workspace, pane: restore.pane(), restore: Some(restore.clone()) });
+        }
+    }
     let have = tab.presentation.pip().map(|pip| pip.pane());
     let desired = want.presentation.pip().map(|pip| pip.pane());
     if tab.presentation == want.presentation {
@@ -1030,6 +1073,11 @@ fn reconcile_presentation(
             pip: desired.is_some(),
             fallback,
             restore,
+        });
+    }
+    if tab.presentation.set_pip_geometry(want.presentation.pip_geometry()) && desired.is_some() {
+        ops.push(ControlRequest::PaneSetPipGeometry {
+            workspace, pane, geometry: want.presentation.pip_geometry(),
         });
     }
 }
@@ -2682,7 +2730,7 @@ fn say_why_the_window_is_empty(cx: &mut App, client_ws: WorkspaceId) {
         return;
     };
     let _ = handle.update(cx, |_, window, cx| {
-        window.push_notification(t(L10nKey::TreeWindowOpenedEmpty), cx);
+        window.notify_app(t(L10nKey::TreeWindowOpenedEmpty), cx);
     });
 }
 
@@ -3513,6 +3561,7 @@ impl LyrelApp {
                 }
             }
         };
+        if applied { self.refocus_parked_pane(window, cx); }
         cx.notify();
         applied
     }

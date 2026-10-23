@@ -98,6 +98,16 @@ pub struct Interactions {
 
 impl Global for Interactions {}
 
+/// 停放交互的暖色引导，不表示 warning、离线或会话异常。
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Parking {
+    pub affordance: Semantic,
+    pub shadow: u32,
+}
+
+impl Global for Parking {}
+
 pub mod state {
     pub const HOVER: f32 = 1.18;
     pub const SELECTED: f32 = 1.30;
@@ -334,6 +344,19 @@ impl Theme {
             choice,
             choice_ink: legible_foreground(choice, m.foreground),
             input_border: m.border,
+        }
+    }
+
+    pub(crate) fn parking(&self) -> Parking {
+        let seed = if self.dark { 0xe0a345 } else { 0xb7791f };
+        let fill = self.clear_ink(seed, ACCENT_FLOOR);
+        Parking {
+            affordance: Semantic {
+                ink: self.clear_ink(seed, TEXT_FLOOR),
+                fill,
+                on_fill: ink_on(fill, self.neutrals().foreground, TEXT_FLOOR),
+            },
+            shadow: 0x000000,
         }
     }
 

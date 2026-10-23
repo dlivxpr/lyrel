@@ -144,6 +144,12 @@ fn merge_tab(current: &mut Tab<ScopedPane>, base: Option<&Tab<ScopedPane>>, desi
         if let Some(pip) = desired.presentation.pip() {
             current.set_pip_with_restore(Some(pip.pane()), desired.root.pane_ids().first().copied(), Some(pip.clone()));
         }
+        for entry in desired.presentation.parked() {
+            current.park_with_restore(entry.pane(), Some(entry.clone()));
+        }
+        if desired.presentation.pip_geometry().is_some() {
+            current.presentation.set_pip_geometry(desired.presentation.pip_geometry());
+        }
         return;
     };
     if current == base {
@@ -180,6 +186,19 @@ fn merge_tab(current: &mut Tab<ScopedPane>, base: Option<&Tab<ScopedPane>>, desi
     if desired.name != base.name { current.name = desired.name.clone(); }
     if desired.group != base.group { current.group = desired.group; }
     if desired.last_auto != base.last_auto { current.last_auto = desired.last_auto.clone(); }
+    for entry in base.presentation.parked() {
+        if !desired.presentation.is_parked(entry.pane()) && current.presentation.is_parked(entry.pane()) {
+            current.restore_parked(entry.pane(), want.first().copied());
+        }
+    }
+    for entry in desired.presentation.parked() {
+        if !base.presentation.parked().contains(entry) {
+            current.park_with_restore(entry.pane(), Some(entry.clone()));
+        }
+    }
+    if desired.presentation.pip_geometry() != base.presentation.pip_geometry() {
+        current.presentation.set_pip_geometry(desired.presentation.pip_geometry());
+    }
     let before = base.presentation.pip().map(|pip| pip.pane());
     let after = desired.presentation.pip().map(|pip| pip.pane());
     if before != after {

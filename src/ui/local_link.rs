@@ -1010,3 +1010,7 @@ mod claims_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "host_metrics_tests.rs"]
+mod metrics_tests;

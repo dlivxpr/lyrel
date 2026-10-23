@@ -393,6 +393,9 @@ fn handshake<R: Read>(
         feature::HERMES_STATISTICS.to_string(),
         feature::OPENCODE_STATISTICS.to_string(),
     ];
+    if host.id().is_local() {
+        features.push(feature::HOST_METRICS.to_string());
+    }
     if host.agent_environment().is_ok() {
         features.push(feature::AGENT_ENVIRONMENT.to_string());
     }
@@ -631,6 +634,7 @@ fn run_request(
 
     Ok(match req {
         ControlRequest::Ping => (ReplyOk::Pong, Vec::new()),
+        ControlRequest::HostMetrics => (ReplyOk::HostMetrics(h.host_metrics()?), Vec::new()),
 
         ControlRequest::ReadDir { dir, root } => {
             let root = root.map(|r| p(&r));
@@ -975,6 +979,18 @@ fn run_request(
         ),
         ControlRequest::PaneSetPresentation { workspace, pane, pip, fallback, restore } => {
             conn.machine()?.pane_set_presentation(workspace, pane, pip, fallback, restore, conn.machine_origin)?;
+            (ReplyOk::Unit, Vec::new())
+        }
+        ControlRequest::PanePark { workspace, pane, restore } => {
+            conn.machine()?.pane_park(workspace, pane, restore, conn.machine_origin)?;
+            (ReplyOk::Unit, Vec::new())
+        }
+        ControlRequest::PaneRestore { workspace, pane, fallback } => {
+            conn.machine()?.pane_restore(workspace, pane, fallback, conn.machine_origin)?;
+            (ReplyOk::Unit, Vec::new())
+        }
+        ControlRequest::PaneSetPipGeometry { workspace, pane, geometry } => {
+            conn.machine()?.pane_set_pip_geometry(workspace, pane, geometry, conn.machine_origin)?;
             (ReplyOk::Unit, Vec::new())
         }
         ControlRequest::PaneSetRatio {
