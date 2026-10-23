@@ -1986,6 +1986,8 @@ l10n_keys! {
     ParkedAlive,
     ParkedExited,
     ParkedEmpty,
+    ParkedMore,
+    ParkedOverflowHint,
     PanePipMove,
     PanePipResize,
     PaneFindScrollback,

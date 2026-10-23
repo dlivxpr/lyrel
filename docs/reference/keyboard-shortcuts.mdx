@@ -144,6 +144,11 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | SSH | `ToggleSftp` · `ShowSshForwards` · `OpenSshProfiles` |
 | 应用 | `CloseWindow` · `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` |
 
+停放牌堆没有默认全局快捷键，可用 `RestoreParkedPane` 打开键盘预览。牌堆及「更多…」列表均支持
+方向键、<kbd>Home</kbd>／<kbd>End</kbd>；列表另支持 <kbd>Page Up</kbd>／<kbd>Page Down</kbd>。
+<kbd>Enter</kbd> 先预览，再恢复当前窗格。列表预览的 <kbd>Escape</kbd> 先返回列表，
+再关闭列表并归还焦点；这些按键只在牌堆／列表取得焦点时处理，不截获 Shell 输入。
+
 <a id="rebinding-syntax"></a>
 ## 重新绑定语法
 
