@@ -79,6 +79,9 @@ pub(crate) fn toggle_pip_for_tab(
 ) -> bool {
     let leaves = tab.pane.leaves();
     let remote = WorkspaceStore::all(cx).get(workspace).is_some_and(|w| w.is_remote());
+    if remote && let Some(changed) = crate::ui::pane_sidecar::toggle_for_tab(tab, pane, fallback, cx) {
+        return changed;
+    }
     let Some(target_slot) = leaves.iter().find(|slot| slot.entity_id() == pane) else { return false; };
     if remote && matches!(target_slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local()) {
         return false;
@@ -233,6 +236,7 @@ pub(crate) struct Retiring {
 /// #672, #716, and Restart Server emptying a workspace with sixteen agents in
 /// it). Absence alone now only ever leaves the machine's tab where it is.
 pub(crate) fn intend_close(cx: &mut App, client_ws: WorkspaceId, tab: TabId) {
+    crate::ui::pane_sidecar::intend_close(cx, client_ws, tab);
     let closing = &mut cx
         .default_global::<TreeSync>()
         .windows
@@ -601,6 +605,11 @@ fn every_leaf_is_native_ssh(pane: &Pane, cx: &App) -> bool {
             every_leaf_is_native_ssh(a, cx) && every_leaf_is_native_ssh(b, cx)
         }
     }
+}
+
+pub(crate) fn seed_for_slot(slot: &PaneSlot, cx: &App) -> Option<PaneSeed> {
+    let node = desired_node(&Pane::Leaf(slot.clone()), false, cx)?;
+    Some(node.first_leaf().1.clone())
 }
 
 fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNode> {
@@ -1536,6 +1545,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
     if !cx.has_global::<crate::core::session::WorkspaceStore>() {
         return;
     }
+    crate::ui::pane_sidecar::sync_window(app, cx);
     if crate::ui::remote_workspace::workspace_is_preempted(cx, client_ws) {
         return;
     }
@@ -1620,6 +1630,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
 }
 
 pub(crate) fn on_link_up(cx: &mut App, host: HostId) {
+    if host.is_local() { crate::ui::pane_sidecar::on_local_link_up(cx); }
     for (workspace, app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
         if WorkspaceStore::host_of(cx, workspace) != host {
             continue;
@@ -3169,6 +3180,14 @@ fn on_workspace_deleted(cx: &mut App, client_ws: WorkspaceId) {
 }
 
 pub(crate) fn on_layout_delta(cx: &mut App, host: HostId, key: &str, delta: LayoutDelta) {
+    if host.is_local()
+        && let LayoutDelta::WorkspaceCreated { workspace } = &delta
+        && workspace.foreign_view.is_some()
+    {
+        crate::ui::machine_mirror::MachineMirrors::apply_delta(cx, host, key, &delta);
+        crate::ui::pane_sidecar::on_sidecar_delta(cx, workspace);
+        return;
+    }
     // Asked while the mirror still holds the pane as it was.
     let nothing_shown =
         crate::ui::machine_mirror::MachineMirrors::delta_changes_nothing_shown(cx, host, &delta);
@@ -3545,6 +3564,7 @@ impl LyrelApp {
         let remote = WorkspaceStore::all(cx)
             .get(self.workspace)
             .is_some_and(|w| w.is_remote());
+        if remote { crate::ui::pane_sidecar::note_primary_tab(&mut self.tabs[index], tab, cx); }
         let presentation = tab.presentation.clone();
         if logical_node(&self.tabs[index].pane, remote, cx).as_ref() == Some(&tab.root) {
             let gui = &mut self.tabs[index];

@@ -2210,8 +2210,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::PaneRestorePip => "将画中画恢复到分屏布局",
         L10nKey::PaneTogglePip => "切换窗格画中画",
         L10nKey::PanePipTitle => "画中画终端",
-        L10nKey::PanePipClientLocalUnavailable => "此客户端本地 SSH 窗格暂不支持画中画",
-        L10nKey::PanePipClientLocalDetail => "此 SSH 窗格由本机拥有，不在远端工作区的机器布局中。请在本地工作区打开它以使用持久画中画。",
         L10nKey::PaneFindScrollback => "在滚动历史中查找…",
         L10nKey::PaneOpenScrollback => "在编辑器中打开滚动历史",
         L10nKey::PaneClearScreen => "清屏",

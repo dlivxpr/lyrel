@@ -1546,6 +1546,17 @@ fn apply_fallback_chain(
 }
 
 impl TerminalView {
+    /// Attaches an existing local-owner session without ever spawning a substitute.
+    pub(crate) fn attach_owned_terminal(
+        pane_id: u64,
+        owner: Option<crate::core::session::WorkspaceId>,
+    ) -> anyhow::Result<ShellParts> {
+        let terminal = RemoteTerminal::attach_on(
+            &crate::terminal::PaneRoute::Local, TermSize::new(80, 24), 8, 17, pane_id,
+        )?;
+        Ok(ShellParts { terminal, pane_id, shell_spec: None, workspace: None, restored: true, owner })
+    }
+
     pub fn spawn_shell_terminal_in(
         workspace: Option<crate::terminal::PaneWorkspace>,
         working_directory: Option<std::path::PathBuf>,
@@ -2424,6 +2435,10 @@ impl TerminalView {
 
     pub fn ssh_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> {
         self.ssh_spec.clone()
+    }
+
+    pub(crate) fn set_restored_ssh_spec(&mut self, spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>) {
+        self.ssh_spec = spec;
     }
 
     pub fn ssh_phase(&self) -> Option<crate::daemon::protocol::SshPhase> {

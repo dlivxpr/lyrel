@@ -783,6 +783,14 @@ fn run_request(
             ReplyOk::WorkspaceTree(Box::new(conn.machine()?.workspace(workspace)?)),
             Vec::new(),
         ),
+        ControlRequest::WorkspaceSidecarGet { remote } => (
+            ReplyOk::WorkspaceSidecar(conn.machine()?.sidecar_snapshot(&remote).map(Box::new)),
+            Vec::new(),
+        ),
+        ControlRequest::WorkspaceSidecarApply { remote, updates, panes } => {
+            conn.machine()?.sidecar_apply(remote.clone(), updates, panes, conn.machine_origin)?;
+            (ReplyOk::WorkspaceSidecar(conn.machine()?.sidecar_snapshot(&remote).map(Box::new)), Vec::new())
+        },
         ControlRequest::WorkspaceCreate { name, workspace } => (
             ReplyOk::WorkspaceTree(Box::new(conn.machine()?.workspace_create(
                 workspace,
