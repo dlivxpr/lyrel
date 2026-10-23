@@ -188,6 +188,15 @@ pub(crate) fn change_for_tab(
     Some(install_presentation(tab, logical, cx))
 }
 
+pub(crate) fn retain_client_local(tab: &mut Tab, cx: &App) -> bool {
+    let Some(local) = snapshot(tab, cx)
+        .and_then(|tab| tab.map_panes(|pane| pane.owner().is_client_local().then_some(pane)))
+    else {
+        return false;
+    };
+    install_presentation(tab, local, cx)
+}
+
 pub(crate) fn note_primary_tab(tab: &mut Tab, primary: &TreeTab, cx: &App) {
     if tab.foreign_presentation.is_none() {
         return;

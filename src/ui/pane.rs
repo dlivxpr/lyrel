@@ -216,13 +216,6 @@ impl<L: Clone> Pane<L> {
         leaves.len() > 1 && leaves.iter().any(pred)
     }
 
-    pub fn leaf_matching_or_first(&self, pred: impl Fn(&L) -> bool) -> Option<L> {
-        self.leaves()
-            .into_iter()
-            .find(|l| pred(l))
-            .or_else(|| self.first_leaf())
-    }
-
     fn split_leaf_where(
         &mut self,
         is_target: &impl Fn(&L) -> bool,
@@ -1417,19 +1410,6 @@ mod tests {
         split(&mut pane, 0, Axis::Vertical, 3);
         assert_eq!(pane.leaves(), vec![0, 3, 1, 2]);
         assert_eq!(pane.first_leaf(), Some(0));
-    }
-
-    #[test]
-    fn leaf_matching_or_first_prefers_the_match_then_falls_back_to_first() {
-        let mut pane = TestPane::leaf(0);
-        split(&mut pane, 0, Axis::Horizontal, 1);
-        split(&mut pane, 1, Axis::Vertical, 2);
-        assert_eq!(pane.leaves(), vec![0, 1, 2]);
-
-        assert_eq!(pane.leaf_matching_or_first(is(2)), Some(2));
-        assert_eq!(pane.leaf_matching_or_first(is(1)), Some(1));
-        assert_eq!(pane.leaf_matching_or_first(is(99)), Some(0));
-        assert_eq!(TestPane::Empty.leaf_matching_or_first(is(0)), None);
     }
 
     #[test]

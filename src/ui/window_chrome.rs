@@ -227,8 +227,7 @@ mod gpui_tests {
             app.open_file_in_editor(&path, window, cx)
         });
         settle(&mut vcx);
-        let editor =
-            app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
+        let editor = app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
         assert!(app.update_in(&mut vcx, |app, window, cx| {
             app.document_dock_px(window, cx).is_some()
         }));
@@ -286,7 +285,9 @@ mod gpui_tests {
         assert!(init.status.success());
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
-        DaemonMsg::Cwd(root.clone()).encode(&mut streams[0]).unwrap();
+        DaemonMsg::Cwd(root.clone())
+            .encode(&mut streams[0])
+            .unwrap();
         app.update_in(&mut vcx, |app, _, cx| {
             app.right_panel_visible = true;
             app.right_panel_tab = RightPanelTab::Scm;
@@ -313,7 +314,8 @@ mod gpui_tests {
             }
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             loop {
-                vcx.executor().advance_clock(std::time::Duration::from_millis(300));
+                vcx.executor()
+                    .advance_clock(std::time::Duration::from_millis(300));
                 settle(&mut vcx);
                 let ready = app.read_with(&vcx, |app, cx| {
                     app.scm.repo.as_ref().is_some_and(|repo| {
@@ -324,7 +326,10 @@ mod gpui_tests {
                 if ready {
                     break;
                 }
-                assert!(std::time::Instant::now() < deadline, "SCM count did not reach {expected}");
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "SCM count did not reach {expected}"
+                );
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             vcx.update(|window, cx| {
@@ -334,7 +339,9 @@ mod gpui_tests {
                     assert!(counts.is_empty(), "a clean working tree clears the count");
                 } else {
                     assert_eq!(counts.len(), 1, "Changes owns the only count surface");
-                    let count = window.within("panel-title").find("right-panel-change-count");
+                    let count = window
+                        .within("panel-title")
+                        .find("right-panel-change-count");
                     assert!(count.visible());
                     assert_eq!(count.label(), Some(expected.to_string().as_str()));
                 }

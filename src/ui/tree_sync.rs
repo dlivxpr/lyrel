@@ -3378,7 +3378,7 @@ fn apply_to_mirror(mirror: &mut WsMirror, delta: &LayoutDelta) -> bool {
             mirror.tabs.insert(at, tab.clone());
             true
         }
-        LayoutDelta::TabClosed { tab } => {
+        LayoutDelta::TabClosed { tab, .. } => {
             let before = mirror.tabs.len();
             mirror.tabs.retain(|t| t.id != *tab);
             if mirror.tabs.is_empty() {
@@ -3546,8 +3546,25 @@ impl LyrelApp {
             LayoutDelta::TabCreated { at, tab } => {
                 self.insert_tab_from_tree((*at).min(self.tabs.len()), tab, window, cx)
             }
-            LayoutDelta::TabClosed { tab } => {
+            LayoutDelta::TabClosed { tab, reason } => {
+                if *reason == lyrel_core::core::machine::TabCloseReason::Explicit {
+                    crate::ui::pane_sidecar::intend_close(cx, self.workspace, *tab);
+                }
                 if let Some(index) = index_of(&self.tabs, *tab) {
+                    let removed_focus = self.tabs[index].pane.focused_leaf(window, cx).is_some();
+                    if *reason == lyrel_core::core::machine::TabCloseReason::Emptied
+                        && crate::ui::pane_sidecar::retain_client_local(&mut self.tabs[index], cx)
+                    {
+                        self.tabs[index].zoomed = None;
+                        self.maximized = None;
+                        if removed_focus {
+                            self.focus_active(window, cx);
+                        }
+                        crate::ui::pane_sidecar::sync_window(self, cx);
+                        self.refocus_parked_pane(window, cx);
+                        cx.notify();
+                        return true;
+                    }
                     let active_id = self.tabs.get(self.active).map(|t| t.tree_id.get());
                     self.tabs.remove(index);
                     self.active = active_id
@@ -6330,7 +6347,10 @@ mod tests {
         );
         assert!(!apply_to_mirror(
             &mut mirror,
-            &LayoutDelta::TabClosed { tab: TabId::new() },
+            &LayoutDelta::TabClosed {
+                tab: TabId::new(),
+                reason: lyrel_core::core::machine::TabCloseReason::Explicit
+            },
         ),);
     }
 

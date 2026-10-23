@@ -12202,8 +12202,8 @@ fn remember_leaf_in(tabs: &mut [Tab], leaf: gpui_kit::EntityId) {
 /// Focus arriving in a pane that is still coming up is recorded against the
 /// *pending* slot — that is why connecting slots are watched at all — and that
 /// slot's id dies the moment the pane lands. Left behind, the memory names an
-/// entity no tab holds, `focus_target` falls through `leaf_matching_or_first`,
-/// and the tab comes back to its first leaf: #843 again, one landing later.
+/// entity no tab holds, so `focus_target` falls back to the first visible leaf:
+/// #843 again, one landing later.
 ///
 /// Nothing else writes the answer down in that case. `land_pane` re-focuses
 /// the pane it built only when the pending slot still held focus, and with
@@ -16816,6 +16816,65 @@ mod sidecar_snapshot_gpui_tests {
             vec![remote_stream, native_stream],
             sidecar,
         )
+    }
+
+    #[gpui_kit::test]
+    fn an_explicit_primary_tab_close_does_not_reappear_from_a_stale_sidecar(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _native, _streams, sidecar) = native_sidecar_window(cx, false);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let tab = app.tabs[0].tree_id.get();
+            assert!(app.apply_layout_delta(
+                &LayoutDelta::TabClosed {
+                    tab,
+                    reason: lyrel_core::core::machine::TabCloseReason::Explicit,
+                },
+                window,
+                cx
+            ));
+            assert!(app.tabs.is_empty());
+        });
+        deliver_sidecar(&mut vcx, sidecar);
+        app.read_with(&vcx, |app, _| assert!(app.tabs.is_empty()));
+    }
+
+    #[gpui_kit::test]
+    fn an_emptied_primary_tab_preserves_its_native_shell_and_rejects_stale_remote_leaves(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, native, _streams, sidecar) = native_sidecar_window(cx, false);
+        vcx.dispatch_action(ParkPane);
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            let tab = app.tabs[0].tree_id.get();
+            assert!(app.apply_layout_delta(
+                &LayoutDelta::TabClosed {
+                    tab,
+                    reason: lyrel_core::core::machine::TabCloseReason::Emptied
+                },
+                window,
+                cx
+            ));
+            assert!(
+                app.tabs
+                    .iter()
+                    .any(|candidate| candidate.tree_id.get() == tab),
+                "emptying the remote projection must not close its client-local leaves"
+            );
+        });
+        deliver_sidecar(&mut vcx, sidecar);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("parked-empty").visible());
+        });
+        app.update_in(&mut vcx, |app, window, cx| {
+            let restored = crate::ui::pane_sidecar::snapshot(&app.tabs[0], cx).unwrap();
+            assert_eq!(restored.root.pane_ids(), vec![ScopedPane::client_local(1)]);
+            assert!(app.tabs[0].is_parked_slot(&native, cx));
+            app.restore_parked(native.entity_id(), window, cx);
+            assert!(native.contains_focused(window, cx));
+        });
     }
 
     fn deliver_sidecar(vcx: &mut gpui_kit::VisualTestContext, sidecar: Workspace) {

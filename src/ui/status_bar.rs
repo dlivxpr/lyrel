@@ -319,15 +319,14 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn long_host_and_cjk_path_yield_to_global_controls_at_narrow_zoom(
-        cx: &mut TestAppContext,
-    ) {
+    fn long_host_and_cjk_path_yield_to_global_controls_at_narrow_zoom(cx: &mut TestAppContext) {
         use crate::core::session::{
             RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
         };
         let (app, mut vcx, _stream) = harness_with_pane(cx);
         let hostname = "构建主机很长的机器名称-build-host.example.internal";
-        let path = "/srv/项目目录/具有很长名称的工作区/多语言测试与生产环境/源码目录/工作台状态栏回归";
+        let path =
+            "/srv/项目目录/具有很长名称的工作区/多语言测试与生产环境/源码目录/工作台状态栏回归";
         let remote = WindowView::on_remote(RemoteRef::new(
             RemoteTarget::direct("developer", hostname, 22),
             WorkspaceId::new(),
@@ -455,8 +454,10 @@ mod tests {
                         let eol = window.find("status-eol");
                         assert!(eol.visible());
                         assert!(eol.bounds().right() <= document.right());
-                        assert!(eol.bounds().left() < eol_before.left(),
-                            "only document status must scroll, not global controls");
+                        assert!(
+                            eol.bounds().left() < eol_before.left(),
+                            "only document status must scroll, not global controls"
+                        );
                         assert_global_controls_in_bounds(window);
                         let label = eol.label().unwrap().to_owned();
                         window.click("status-eol", cx);

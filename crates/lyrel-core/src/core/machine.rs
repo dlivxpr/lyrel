@@ -981,6 +981,13 @@ impl PaneSeed {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabCloseReason {
+    Explicit,
+    Emptied,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutDelta {
@@ -1003,6 +1010,7 @@ pub enum LayoutDelta {
     },
     TabClosed {
         tab: TabId,
+        reason: TabCloseReason,
     },
     TabRenamed {
         tab: TabId,
@@ -1400,7 +1408,13 @@ impl MachineStore {
                 .position(|t| t.id == tab)
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no tab {tab}")))?;
             ws.tabs.remove(index);
-            let mut deltas = vec![(workspace, LayoutDelta::TabClosed { tab })];
+            let mut deltas = vec![(
+                workspace,
+                LayoutDelta::TabClosed {
+                    tab,
+                    reason: TabCloseReason::Explicit,
+                },
+            )];
             if let Some(active) = heal_active_tab(ws, index) {
                 deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
             }
@@ -1421,9 +1435,7 @@ impl MachineStore {
     /// [`CLOSED_TAB_TTL`] in the same mutation, measured from `now` (seconds
     /// since the epoch) so the rule can be tested without a clock.
     ///
-    /// Other windows hear the same `TabClosed` a plain close raises: to them
-    /// the tab is gone either way, and a client that predates the list decodes
-    /// nothing new.
+    /// Other windows hear the same explicit `TabClosed` a plain close raises.
     pub fn tab_close_remembered(
         &self,
         workspace: WorkspaceId,
@@ -1448,7 +1460,13 @@ impl MachineStore {
                 tab: closed,
                 closed_at: now,
             });
-            let mut deltas = vec![(workspace, LayoutDelta::TabClosed { tab })];
+            let mut deltas = vec![(
+                workspace,
+                LayoutDelta::TabClosed {
+                    tab,
+                    reason: TabCloseReason::Explicit,
+                },
+            )];
             if let Some(active) = heal_active_tab(ws, index) {
                 deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
             }
@@ -1754,7 +1772,13 @@ impl MachineStore {
             match ws.tabs[index].root.remove_leaf(pane) {
                 None => {
                     let closed = ws.tabs.remove(index);
-                    deltas.push((workspace, LayoutDelta::TabClosed { tab: closed.id }));
+                    deltas.push((
+                        workspace,
+                        LayoutDelta::TabClosed {
+                            tab: closed.id,
+                            reason: TabCloseReason::Emptied,
+                        },
+                    ));
                     if let Some(active) = heal_active_tab(ws, index) {
                         deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
                     }
@@ -1980,7 +2004,13 @@ impl MachineStore {
                         return Err(refuse("a pane cannot be moved next to itself".to_string()));
                     }
                     let closed = ws.tabs.remove(from);
-                    deltas.push((workspace, LayoutDelta::TabClosed { tab: closed.id }));
+                    deltas.push((
+                        workspace,
+                        LayoutDelta::TabClosed {
+                            tab: closed.id,
+                            reason: TabCloseReason::Emptied,
+                        },
+                    ));
                     if let Some(active) = heal_active_tab(ws, from) {
                         deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
                     }
@@ -3155,7 +3185,7 @@ mod tests {
             matches!(
                 heard.lock().unwrap().as_slice(),
                 [
-                    (_, LayoutDelta::TabClosed { tab }),
+                    (_, LayoutDelta::TabClosed { tab, reason: TabCloseReason::Explicit }),
                     (_, LayoutDelta::ActiveTabChanged { tab: active })
                 ] if *tab == second.id && *active == first.id
             ),
@@ -3281,7 +3311,7 @@ mod tests {
         assert!(store.workspace(ws).unwrap().tabs.is_empty());
         assert!(matches!(
             heard.lock().unwrap()[0].1,
-            LayoutDelta::TabClosed { tab: id } if id == tab.id
+            LayoutDelta::TabClosed { tab: id, reason: TabCloseReason::Emptied } if id == tab.id
         ));
     }
 
@@ -3331,6 +3361,7 @@ mod tests {
             .tab_create(ws, None, seed(2, "/b"), None, None)
             .unwrap();
 
+        let (_sub, heard) = recorded(&store);
         store
             .pane_move(ws, 2, 1, Axis::Vertical, false, None)
             .unwrap();
@@ -3343,6 +3374,9 @@ mod tests {
             "the source tab is gone"
         );
         assert!(store.pane(2).is_some(), "the pane moved; it did not die");
+        assert!(
+            matches!(heard.lock().unwrap()[0].1, LayoutDelta::TabClosed { tab, reason: TabCloseReason::Emptied } if tab == second.id)
+        );
 
         let err = store
             .pane_move(ws, 2, 2, Axis::Vertical, false, None)
@@ -4112,7 +4146,9 @@ mod tests {
             "a stopped pane's record must not read as running to `lyrel wait`"
         );
         let heard = heard.lock().unwrap();
-        assert!(matches!(&heard[0].1, LayoutDelta::TabClosed { tab: t } if *t == tab.id));
+        assert!(
+            matches!(&heard[0].1, LayoutDelta::TabClosed { tab: t, reason: TabCloseReason::Explicit } if *t == tab.id)
+        );
     }
 
     /// A pane the window held but never got into the tree has no entry to

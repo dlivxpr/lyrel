@@ -454,12 +454,16 @@ fn escape_cancels_a_valid_parking_drag_without_a_late_drop_or_menu(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(cx: &mut TestAppContext) {
+fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(
+    cx: &mut TestAppContext,
+) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
         let left = app.tabs[0].pane.first_leaf().unwrap();
         let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-        app.tabs[0].pane.split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
+        app.tabs[0]
+            .pane
+            .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
         window.focus(&left.focus_handle(cx), cx);
         cx.notify();
         (left, right)
@@ -470,7 +474,10 @@ fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(cx
             vcx.run_until_parked();
             let (start, release) = vcx.update(|window, cx| {
                 window.render_frame(cx);
-                let start = window.find(("pane-drag-handle", left.entity_id().as_u64() as usize)).bounds().center();
+                let start = window
+                    .find(("pane-drag-handle", left.entity_id().as_u64() as usize))
+                    .bounds()
+                    .center();
                 let content = window.find("pane-presentations").bounds();
                 let aim = point(content.center().x, content.bottom() - window.rem_size());
                 window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
@@ -500,18 +507,32 @@ fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(cx
                 window.render_frame(cx);
                 assert!(!cx.has_active_drag(), "{cancellation}");
                 assert!(window.captured_hitbox().is_none(), "{cancellation}");
-                assert!(window.try_find("park-drop-target").is_none(), "{cancellation}");
+                assert!(
+                    window.try_find("park-drop-target").is_none(),
+                    "{cancellation}"
+                );
                 window.pointer_move(release, Some(gpui_kit::MouseButton::Left), cx);
                 window.pointer_up(release, gpui_kit::MouseButton::Left, cx);
                 assert!(!cx.has_active_drag(), "late move after {cancellation}");
-                assert!(window.try_find_by_label(t(L10nKey::PanePark)).is_none(), "late menu after {cancellation}");
+                assert!(
+                    window.try_find_by_label(t(L10nKey::PanePark)).is_none(),
+                    "late menu after {cancellation}"
+                );
             });
             app.update_in(&mut vcx, |app, _, cx| {
                 assert_eq!(app.tabs.len(), 1);
                 let leaves = app.tabs[0].pane.leaves();
                 assert_eq!(leaves.len(), 2);
-                assert_eq!(leaves[0].entity_id(), left.entity_id(), "late split after {cancellation}");
-                assert_eq!(leaves[1].entity_id(), right.entity_id(), "late split after {cancellation}");
+                assert_eq!(
+                    leaves[0].entity_id(),
+                    left.entity_id(),
+                    "late split after {cancellation}"
+                );
+                assert_eq!(
+                    leaves[1].entity_id(),
+                    right.entity_id(),
+                    "late split after {cancellation}"
+                );
                 assert!(app.tabs[0].presentation.parked().is_empty());
                 assert!(app.pane_drag.borrow().is_none());
                 assert!(app.parked_deck.read(cx).cards().next().is_none());
@@ -904,7 +925,9 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
             }
             window.render_frame(cx);
             assert!(
-                window.find(("parked-overflow-row", pane.entity_id().as_u64() as usize)).visible(),
+                window
+                    .find(("parked-overflow-row", pane.entity_id().as_u64() as usize))
+                    .visible(),
                 "every original pane remains reachable, including virtualized rows"
             );
         }
@@ -1186,9 +1209,9 @@ fn overflow_tabbed_rows_activate_their_own_pane_before_restore(cx: &mut TestAppC
         let mut parked = Vec::new();
         while app.tabs.len() > 1 {
             let pane = app.tabs.remove(1).pane.first_leaf().unwrap();
-            app.tabs[0].pane.split_leaf(
-                current.entity_id(), Axis::Horizontal, false, pane.clone(),
-            );
+            app.tabs[0]
+                .pane
+                .split_leaf(current.entity_id(), Axis::Horizontal, false, pane.clone());
             app.park_pane(pane.entity_id(), window, cx);
             parked.push(pane);
         }
@@ -1240,9 +1263,13 @@ fn overflow_tabbed_rows_activate_their_own_pane_before_restore(cx: &mut TestAppC
         assert!(!app.tabs[0].is_parked_slot(&parked[2], cx));
         assert!(app.tabs[0].is_parked_slot(&parked[0], cx));
         assert!(app.tabs[0].is_parked_slot(&parked[1], cx));
-        assert!(app.tabs[0].pane.leaves().iter().any(|pane| {
-            pane.entity_id() == parked[2].entity_id()
-        }));
+        assert!(
+            app.tabs[0]
+                .pane
+                .leaves()
+                .iter()
+                .any(|pane| { pane.entity_id() == parked[2].entity_id() })
+        );
     });
 }
 

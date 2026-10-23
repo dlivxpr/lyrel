@@ -61,20 +61,6 @@ impl ParkedCard {
             &labels.exited
         })
     }
-
-    /// 返回 App 提供的不透明客户端 token；恢复会话的 Host/daemon 身份由 App 查找对应 slot。
-    pub fn pane(&self) -> u64 {
-        self.pane
-    }
-    pub fn title(&self) -> &str {
-        &self.title
-    }
-    pub fn path(&self) -> &str {
-        &self.path
-    }
-    pub fn is_alive(&self) -> bool {
-        self.alive
-    }
 }
 
 /// 由现有 L10nKey 系统解析后注入；更换语言时重新 set_labels，不把文案写入共享状态。
@@ -344,14 +330,13 @@ impl ParkedDeck {
         self.drop_target && self.frame.borrow().park_target_contains(position)
     }
 
+    #[cfg(test)]
     pub fn cards(&self) -> impl ExactSizeIterator<Item = &ParkedCard> {
         self.cards.iter().map(|card| &card.model)
     }
+    #[cfg(test)]
     pub fn selected_pane(&self) -> Option<u64> {
         self.selected
-    }
-    pub fn last_paint_error(&self) -> Option<String> {
-        self.paint_error.borrow().clone()
     }
 
     /// trigger 省略时记录当前真实焦点；既不默认 focus 新建 view，也不从 render 抢焦点。

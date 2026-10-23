@@ -124,11 +124,17 @@ mod tests {
         machine.workspaces.insert(0, projection);
         machine.panes.push(native);
 
-        assert_eq!(workspace(&machine, &parse_workspace("api")).unwrap().id, api);
+        assert_eq!(
+            workspace(&machine, &parse_workspace("api")).unwrap().id,
+            api
+        );
         assert!(workspace(&machine, &parse_workspace(&id.to_string())).is_err());
         assert!(workspace(&machine, &parse_workspace(&short_id(&id))).is_err());
         assert_eq!(tab_index(&machine).len(), 3);
-        assert_eq!(super::tab(&machine, &TabAddress::Ordinal(3)).unwrap().1, web_tab);
+        assert_eq!(
+            super::tab(&machine, &TabAddress::Ordinal(3)).unwrap().1,
+            web_tab
+        );
         assert!(super::tab(&machine, &TabAddress::Id(tab.to_string())).is_err());
         assert_eq!(workspace_of_pane(&machine, 77).unwrap().id, id);
     }

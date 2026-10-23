@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 use lyrel_core::daemon::control::{ControlClient, ControlHello};
-use lyrel_core::host::Host as _;
 
 use crate::core::actions::{
     EditorNewFile, RestorePanePip, SelectNextTab, ToggleDocumentFill, TogglePanePip,
@@ -95,7 +94,10 @@ pub(crate) fn assert_metrics_status(vcx: &mut VisualTestContext, key: crate::ui:
             Some(crate::ui::i18n::t(key)),
         );
     });
-    assert!(!has_sample(vcx), "a pending link displayed an old host sample");
+    assert!(
+        !has_sample(vcx),
+        "a pending link displayed an old host sample"
+    );
 }
 
 #[gpui_kit::test]
@@ -311,7 +313,9 @@ fn remote_workspace_metrics_never_relabel_another_hosts_sample(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
-fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(cx: &mut TestAppContext) {
+fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(
+    cx: &mut TestAppContext,
+) {
     let local_a = HostServer::new();
     let local_b = HostServer::new();
     let target = RemoteTarget::Alias {
@@ -355,10 +359,13 @@ fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(cx:
                 State::Ready(accepted) if accepted == snapshot
             ));
             for kind in [std::io::ErrorKind::BrokenPipe, std::io::ErrorKind::Other] {
-                assert!(matches!(
-                    source.response_state(host, Err(std::io::Error::from(kind)), cx),
-                    State::Waiting
-                ), "an old connection's error contaminated the healthy replacement");
+                assert!(
+                    matches!(
+                        source.response_state(host, Err(std::io::Error::from(kind)), cx),
+                        State::Waiting
+                    ),
+                    "an old connection's error contaminated the healthy replacement"
+                );
             }
             assert!(matches!(
                 replacement.response_state(host, Err(std::io::Error::other("sampling denied")), cx),
@@ -370,10 +377,13 @@ fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(cx:
             ));
             let mut stale = serde_json::to_value(&snapshot).unwrap();
             stale["instance"] = "previous-daemon-instance".into();
-            assert!(matches!(
-                source.response_state(host, Ok(serde_json::from_value(stale).unwrap()), cx),
-                State::Waiting
-            ), "a previous daemon's completion was accepted by its replacement");
+            assert!(
+                matches!(
+                    source.response_state(host, Ok(serde_json::from_value(stale).unwrap()), cx),
+                    State::Waiting
+                ),
+                "a previous daemon's completion was accepted by its replacement"
+            );
         });
     }
 }

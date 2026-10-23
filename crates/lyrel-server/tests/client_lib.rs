@@ -965,7 +965,12 @@ fn mixed_owner_sidecar_survives_clients_without_colliding_or_overwriting_new_pan
         other => panic!("{other:?}"),
     };
     assert_eq!(machine.user_workspaces().count(), 0);
-    assert!(machine.workspaces.iter().any(|workspace| workspace.id == saved.id));
+    assert!(
+        machine
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == saved.id)
+    );
     assert!(machine.panes.iter().any(|pane| pane.id == local_id));
     assert!(
         local_panes

@@ -1051,10 +1051,10 @@ mod claims_tests {
 #[cfg(test)]
 mod metrics_lifecycle_tests {
     use super::*;
-    use std::time::{Duration, Instant};
-    use gpui_kit::TestAppContext;
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::host_metrics::tests::{HostServer, assert_metrics_status, wait_sample};
+    use gpui_kit::TestAppContext;
+    use std::time::{Duration, Instant};
 
     #[gpui_kit::test]
     fn local_metrics_follow_daemon_connection_lifecycle(cx: &mut TestAppContext) {

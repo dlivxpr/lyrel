@@ -367,7 +367,7 @@ fn apply(machine: &mut Machine, workspace: WorkspaceId, delta: &LayoutDelta) -> 
             ws.tabs.insert(at, tab.clone());
             true
         }
-        LayoutDelta::TabClosed { tab } => {
+        LayoutDelta::TabClosed { tab, .. } => {
             let before = ws.tabs.len();
             ws.tabs.retain(|t| t.id != *tab);
             if ws.tabs.is_empty() {

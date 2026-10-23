@@ -2632,7 +2632,11 @@ mod tests {
         assert_eq!(listed["panes"][0]["orphan"], false);
         assert_eq!(listed["orphans"], 0);
 
-        run_cli(&["lyrel", "send", "%77", "native input"], &ctx, &mut backend);
+        run_cli(
+            &["lyrel", "send", "%77", "native input"],
+            &ctx,
+            &mut backend,
+        );
         assert_eq!(backend.sent, vec![(77, b"native input".to_vec())]);
         backend.capture_segments = vec![segment(b"native output")];
         let captured = run_cli(&["lyrel", "capture", "%77"], &ctx, &mut backend);
@@ -2641,7 +2645,10 @@ mod tests {
 
         let out = run_cli(&["lyrel", "pane", "close", "--orphans"], &ctx, &mut backend);
         assert_eq!(json_of(out)["closed"], json!([]));
-        assert!(backend.killed.is_empty(), "a projection pane is not an orphan");
+        assert!(
+            backend.killed.is_empty(),
+            "a projection pane is not an orphan"
+        );
         backend.replies.push_back(ReplyOk::Panes(vec![77]));
         let out = run_cli(&["lyrel", "pane", "close", "%77"], &ctx, &mut backend);
         assert_eq!(json_of(out)["closed"], json!([77]));
@@ -2659,15 +2666,16 @@ mod tests {
             workspaces: vec![projection],
             panes: vec![native],
         });
-        let Outcome::Report(report) = run_cli(
-            &["lyrel", "ws", "ls"],
-            &Context::default(),
-            &mut backend,
-        ) else {
+        let Outcome::Report(report) =
+            run_cli(&["lyrel", "ws", "ls"], &Context::default(), &mut backend)
+        else {
             panic!("a workspace listing is a report");
         };
         assert_eq!(report.json["workspaces"], json!([]));
-        assert_eq!(report.human, "no workspaces — `lyrel new <path>` starts one\n");
+        assert_eq!(
+            report.human,
+            "no workspaces — `lyrel new <path>` starts one\n"
+        );
     }
 
     #[test]
