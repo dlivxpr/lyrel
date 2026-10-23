@@ -25,6 +25,8 @@ pub enum CommandKind {
     SplitRight,
     SplitDown,
     MovePaneToTab,
+    TogglePanePip,
+    RestorePanePip,
     OpenScrollbackInEditor,
     ClearPaneScreen,
     RestartPaneShell,
@@ -208,6 +210,8 @@ impl CommandKind {
             SplitRight => "split-right",
             SplitDown => "split-down",
             MovePaneToTab => "move-pane-to-tab",
+            TogglePanePip => "toggle-pane-pip",
+            RestorePanePip => "restore-pane-pip",
             OpenScrollbackInEditor => "open-scrollback-in-editor",
             ClearPaneScreen => "clear-pane-screen",
             RestartPaneShell => "restart-pane-shell",
@@ -360,6 +364,8 @@ impl CommandKind {
             SplitRight => "SplitRight",
             SplitDown => "SplitDown",
             MovePaneToTab => "MovePaneToTab",
+            TogglePanePip => "TogglePanePip",
+            RestorePanePip => "RestorePanePip",
             OpenScrollbackInEditor => "OpenScrollbackInEditor",
             ClearPaneScreen => "ClearPaneScreen",
             RestartPaneShell => "RestartPaneShell",
@@ -763,6 +769,8 @@ impl Item {
         ];
 
         let terminal = [
+            Item::localized(L10nKey::PaneTogglePip, TogglePanePip),
+            Item::localized(L10nKey::PaneRestorePip, RestorePanePip),
             Item::localized(L10nKey::CmdClearScrollback, ClearTerminal),
             Item::localized(L10nKey::PaneClearScreen, ClearPaneScreen),
             Item::localized(L10nKey::PaneOpenScrollback, OpenScrollbackInEditor),

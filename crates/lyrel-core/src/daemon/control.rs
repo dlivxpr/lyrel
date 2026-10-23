@@ -65,7 +65,8 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// directory hints. Both belong to one unpublished cutover; pane framing stays v7.
 /// v14 adds independently gated native statistics requests; pane framing stays v7.
 /// v15 adds raw symbolic-link/junction target reads; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 15;
+/// v16 adds durable pane presentation; pane framing stays v7.
+pub const CONTROL_VERSION: u32 = 16;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -411,6 +412,14 @@ pub enum ControlRequest {
         workspace: WorkspaceId,
         pane: u64,
     },
+    PaneSetPresentation {
+        workspace: WorkspaceId,
+        pane: u64,
+        pip: bool,
+        fallback: Option<u64>,
+        #[serde(default)]
+        restore: Option<crate::core::machine::PipPane>,
+    },
     PaneSetRatio {
         workspace: WorkspaceId,
         tab: TabId,
@@ -564,6 +573,7 @@ impl ControlRequest {
             | TabSetHibernated { .. }
             | PaneSplit { .. }
             | PaneClose { .. }
+            | PaneSetPresentation { .. }
             | PaneSetRatio { .. }
             | PaneMove { .. }
             | PaneReplace { .. } => Duration::from_secs(10),
