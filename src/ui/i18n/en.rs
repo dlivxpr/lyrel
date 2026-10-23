@@ -2,6 +2,16 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
+        L10nKey::NotificationInbox => "Notifications",
+        L10nKey::NotificationClearHistory => "Clear notification history",
+        L10nKey::NotificationScope => "Received app notifications on this computer · latest 500",
+        L10nKey::NotificationEmpty => "No notifications. New application notifications will appear here.",
+        L10nKey::NotificationSourceUnavailable => "Source unavailable",
+        L10nKey::NotificationUnread => "Unread",
+        L10nKey::NotificationSuccess => "Success",
+        L10nKey::NotificationInfo => "Information",
+        L10nKey::NotificationWarning => "Warning",
+        L10nKey::NotificationError => "Error",
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
             "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."
@@ -2411,6 +2421,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PaneDragHandleTooltip => "Drag to move, or click for pane commands",
         L10nKey::PaneMenuTitle => "Pane commands",
         L10nKey::PaneMoveToTab => "Move pane to new tab",
+        L10nKey::PaneEnterPip => "Move pane to picture-in-picture",
+        L10nKey::PaneRestorePip => "Restore picture-in-picture to tiled layout",
+        L10nKey::PaneTogglePip => "Toggle pane picture-in-picture",
+        L10nKey::PanePipTitle => "Picture-in-picture terminal",
+        L10nKey::PanePipClientLocalUnavailable => "PiP unavailable for this client-local SSH pane",
+        L10nKey::PanePipClientLocalDetail => "This SSH pane belongs to this computer, not the remote workspace's machine tree. Open it in a local workspace to use durable picture-in-picture.",
         L10nKey::PaneFindScrollback => "Find in scrollback…",
         L10nKey::PaneOpenScrollback => "Open scrollback in editor",
         L10nKey::PaneClearScreen => "Clear screen",

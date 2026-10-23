@@ -1,5 +1,6 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, WindowExt as _};
+use gpui_kit::component::{ActiveTheme as _};
 use gpui_kit::{
     AnyElement, Context, Div, Entity, PromptLevel, Subscription, Window, div, prelude::*, px, rems,
 };
@@ -121,7 +122,7 @@ impl LyrelApp {
         let base = p.base.read(cx).value().trim().to_string();
         let (name, branch) = match (name.is_empty(), branch.is_empty()) {
             (true, true) => {
-                window.push_notification(t(L10nKey::WorktreePromptNeedsName), cx);
+                window.notify_app(t(L10nKey::WorktreePromptNeedsName), cx);
                 return;
             }
             (true, false) => (branch.clone(), branch),
@@ -189,7 +190,7 @@ impl LyrelApp {
                     if let Some(p) = this.worktree_prompt.as_mut() {
                         p.busy = false;
                     }
-                    window.push_notification(
+                    window.notify_app(
                         crate::ui::host_ops::failure(
                             t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
                             &e,
@@ -221,7 +222,7 @@ impl LyrelApp {
                 .map(|(p, why)| format!("{p} ({why})"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            window.push_notification(
+            window.notify_app(
                 t_fmt(L10nKey::AppWorktreeNotCarried, &[("paths", &paths)]),
                 cx,
             );

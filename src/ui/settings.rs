@@ -1,8 +1,10 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::InteractiveElementExt as _;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState, TextareaState};
 use gpui_kit::component::link::Link;
-use gpui_kit::component::notification::{Notification, NotificationType};
+use gpui_kit::component::notification::NotificationType;
+use crate::ui::notification_history::Notification;
 use gpui_kit::component::{Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Background, Context, Div, ElementId, Entity, Focusable as _, FontWeight,
@@ -2476,7 +2478,7 @@ impl LyrelApp {
         }
 
         for line in failures {
-            window.push_notification(line, cx);
+            window.notify_app(line, cx);
         }
 
         // What the form would now read back, so a save leaves it clean.
@@ -2673,7 +2675,7 @@ impl LyrelApp {
         let source = report.source.display().to_string();
 
         if !report.source_read {
-            window.push_notification(
+            window.notify_app(
                 Notification::error(t_fmt(
                     L10nKey::SettingsImportUnreadable,
                     &[("path", &source)],
@@ -2684,7 +2686,7 @@ impl LyrelApp {
             return;
         }
         if report.profiles.is_empty() {
-            window.push_notification(
+            window.notify_app(
                 Notification::warning(t_fmt(L10nKey::SettingsImportNoHosts, &[("path", &source)]))
                     .id1::<Self>(NOTIFICATION),
                 cx,
@@ -2748,7 +2750,7 @@ impl LyrelApp {
                 // either. The counts alone still fade on their own.
                 .autohide(false);
         }
-        window.push_notification(notification, cx);
+        window.notify_app(notification, cx);
     }
 }
 

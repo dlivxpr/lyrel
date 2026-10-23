@@ -28,6 +28,14 @@ description: "各个命令、对应的标志，以及使用 --json 时输出的 
 在 lyrel shell 之外，需要指定目标地址的命令会失败，并显示：
 `not inside a lyrel shell — pass an explicit %pane/@tab/workspace`。
 
+画中画（PiP）窗格仍属于原工作区和标签页，保留同一 `%PANE` 与会话身份。
+`pane ls`／`tab ls`／`ws tree` 按完整逻辑树发现它，`send`、`capture`、`procs` 和 `wait`
+继续访问原窗格，不因退出平铺布局而关闭它，也不额外创建 Shell。
+PiP 是呈现状态，不是新的 CLI pane 类型；当前没有独立的 CLI PiP 子命令。
+control 客户端使用 `PaneSetPresentation { workspace, pane, pip, fallback, restore }` 修改它；
+普通操作传 `restore: None`，同步树重建时携带已保存的原关系 record，避免覆盖浮动前的恢复位置。
+与 daemon 的版本必须一致（control 16，pane 仍为 7）。
+
 <a id="exit-codes"></a>
 ## 退出码
 

@@ -43,6 +43,8 @@ actions!(
         SplitRight,
         SplitDown,
         MovePaneToTab,
+        TogglePanePip,
+        RestorePanePip,
         OpenScrollbackInEditor,
         ClearPaneScreen,
         RestartPaneShell,
