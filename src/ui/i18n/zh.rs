@@ -1578,6 +1578,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorStripCloseOthers => "关闭其他",
         L10nKey::EditorBackToTerminal => "返回终端 (Esc)",
         L10nKey::EditorLnCol => "行 {line}，列 {column}",
+        L10nKey::EditorToggleLineEnding => "在 LF 与 CRLF 换行符之间切换",
+        L10nKey::StatusRemoteHost => "远端主机 {id}",
         L10nKey::EditorEdit => "编辑",
         L10nKey::EditorPreview => "预览",
         L10nKey::EditorWrapOn => "自动换行：开",

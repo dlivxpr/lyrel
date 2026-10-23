@@ -1718,6 +1718,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorStripCloseOthers => "Close others",
         L10nKey::EditorBackToTerminal => "Back to Terminal (Esc)",
         L10nKey::EditorLnCol => "Ln {line}, Col {column}",
+        L10nKey::EditorToggleLineEnding => "Switch line endings between LF and CRLF",
+        L10nKey::StatusRemoteHost => "Remote host {id}",
         L10nKey::EditorEdit => "Edit",
         L10nKey::EditorPreview => "Preview",
         L10nKey::EditorWrapOn => "Wrap: on",

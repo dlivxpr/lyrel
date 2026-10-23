@@ -178,10 +178,11 @@ impl LyrelApp {
             None => {}
         }
         self.remember_active_pane(window, cx);
+        let focus_handle = cx.focus_handle();
+        self.watch_document_status_focus(&focus_handle, window, cx);
         let Some(tab) = self.tabs.get_mut(active) else {
             return;
         };
-        let focus_handle = cx.focus_handle();
         tab.diff_overlay = Some(DiffOverlayState {
             host_id: host,
             cwd,
