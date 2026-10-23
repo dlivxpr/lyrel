@@ -122,19 +122,33 @@ pub(crate) fn note_primary_tab(tab: &mut Tab, primary: &TreeTab, cx: &App) {
     if tab.foreign_presentation.is_none() { return; }
     let before = tab.presentation.pip().map(|pip| pip.pane());
     let after = primary.presentation.pip().map(|pip| pip.pane());
-    if before == after { return; }
     let Some(mut logical) = snapshot(tab, cx) else { return; };
-    let current = logical.presentation.pip().map(|pip| pip.pane());
-    if after.is_some() {
-        let fallback = logical.root.pane_ids().first().copied();
-        logical.set_pip(None, fallback);
-        if !install_presentation(tab, logical, cx) { return; }
-        tab.foreign_presentation = Some(primary.presentation.map_panes(|pane| Some(ScopedPane::workspace(pane))));
-    } else if current.is_some_and(|pane| !pane.owner().is_client_local() && Some(pane.pane()) == before) {
-        let fallback = logical.root.pane_ids().first().copied();
-        logical.set_pip(None, fallback);
-        install_presentation(tab, logical, cx);
+    let initial = logical.presentation.clone();
+    let fallback = logical.root.pane_ids().first().copied();
+    for entry in tab.presentation.parked() {
+        if !primary.presentation.is_parked(entry.pane()) {
+            logical.restore_parked(ScopedPane::workspace(entry.pane()), fallback);
+        }
     }
+    for entry in primary.presentation.parked() {
+        if !tab.presentation.parked().contains(entry) {
+            let restore = entry.map_panes(|pane| Some(ScopedPane::workspace(pane)));
+            logical.park_with_restore(ScopedPane::workspace(entry.pane()), restore);
+        }
+    }
+    if primary.presentation.pip_geometry() != tab.presentation.pip_geometry() {
+        logical.presentation.set_pip_geometry(primary.presentation.pip_geometry());
+    }
+    let current = logical.presentation.pip().map(|pip| pip.pane());
+    if before != after {
+        if let Some(after) = after {
+            let restore = primary.presentation.pip().and_then(|entry| entry.map_panes(|pane| Some(ScopedPane::workspace(pane))));
+            logical.set_pip_with_restore(Some(ScopedPane::workspace(after)), fallback, restore);
+        } else if current.is_some_and(|pane| !pane.owner().is_client_local() && Some(pane.pane()) == before) {
+            logical.set_pip(None, fallback);
+        }
+    }
+    if logical.presentation != initial { install_presentation(tab, logical, cx); }
 }
 
 pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {

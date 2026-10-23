@@ -634,6 +634,16 @@ impl Tab {
             .is_some_and(|parked| parked.entity_id() == slot.entity_id())
     }
 
+    fn parked_slots(&self, cx: &App) -> Vec<PaneSlot> {
+        if let Some(presentation) = &self.foreign_presentation {
+            let leaves = self.pane.leaves();
+            return presentation.parked().iter().filter_map(|entry| {
+                leaves.iter().find(|slot| crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(entry.pane())).cloned()
+            }).collect();
+        }
+        self.presentation.parked().iter().filter_map(|entry| self.presentation_slot(entry.pane(), cx)).collect()
+    }
+
     fn render_panes(
         &self,
         chrome: &crate::ui::pane::PaneChrome,
@@ -4052,7 +4062,7 @@ impl LyrelApp {
         if let Some(leaf) = tab.focus_target(cx) {
             let handle = leaf.focus_handle(cx);
             window.focus(&handle, cx);
-        } else if !tab.presentation.parked().is_empty() {
+        } else if !tab.parked_slots(cx).is_empty() {
             self.sync_parked_deck(window, cx);
             self.parked_deck.update(cx, |deck, cx| {
                 deck.focus(Some(deck.focus_handle(cx)), window, cx)
@@ -4795,8 +4805,7 @@ impl LyrelApp {
     fn sync_parked_deck(&self, window: &mut Window, cx: &mut App) {
         use crate::ui::parked_deck::{ParkedCard, ParkedDeckLabels};
         let tab = self.tabs.get(self.active);
-        let cards = tab.into_iter().flat_map(|tab| tab.presentation.parked().iter().filter_map(|entry| {
-            let slot = tab.presentation_slot(entry.pane(), cx)?;
+        let cards = tab.into_iter().flat_map(|tab| tab.parked_slots(cx).into_iter().filter_map(|slot| {
             Some(match &slot {
                 PaneSlot::Ready(view) => {
                     let view = view.read(cx);
