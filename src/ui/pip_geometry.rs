@@ -78,6 +78,88 @@ pub(crate) fn render(
     intent: Option<PipGeometry>,
     state: Rc<PipInteraction>,
     chrome: &PaneChrome,
+    _window: &mut Window,
+    _cx: &mut App,
+) -> gpui_kit::AnyElement {
+    PipViewport { slot, tab_id, intent, state, chrome: PaneChrome {
+        dim_inactive: false, rearrangeable: false, app: chrome.app.clone(),
+        lifted: None, drag: chrome.drag.clone(),
+    }}.into_any_element()
+}
+
+/// Resolve against this frame's actual viewport before laying out the terminal.
+/// A cached previous-frame size would briefly resize the PTY against stale
+/// sidebar/window bounds and clip the shadow on the first frame after resize.
+struct PipViewport {
+    slot: PaneSlot,
+    tab_id: TabId,
+    intent: Option<PipGeometry>,
+    state: Rc<PipInteraction>,
+    chrome: PaneChrome,
+}
+
+impl IntoElement for PipViewport {
+    type Element = Self;
+    fn into_element(self) -> Self { self }
+}
+
+impl gpui_kit::Element for PipViewport {
+    type RequestLayoutState = gpui_kit::AnyElement;
+    type PrepaintState = gpui_kit::AnyElement;
+
+    fn id(&self) -> Option<gpui_kit::ElementId> { None }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> { None }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui_kit::GlobalElementId>,
+        _inspector_id: Option<&gpui_kit::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui_kit::LayoutId, Self::RequestLayoutState) {
+        let mut container = div().absolute().size_full().into_any_element();
+        let layout = container.request_layout(window, cx);
+        (layout, container)
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui_kit::GlobalElementId>,
+        _inspector_id: Option<&gpui_kit::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.state.viewport.set(Some(bounds));
+        let mut content = render_in_viewport(self.slot.clone(), self.tab_id, self.intent,
+            self.state.clone(), &self.chrome, bounds, window, cx);
+        content.prepaint_as_root(bounds.origin,
+            size(gpui_kit::AvailableSpace::Definite(bounds.size.width), gpui_kit::AvailableSpace::Definite(bounds.size.height)), window, cx);
+        content
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui_kit::GlobalElementId>,
+        _inspector_id: Option<&gpui_kit::InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _layout: &mut Self::RequestLayoutState,
+        content: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        content.paint(window, cx);
+    }
+}
+
+fn render_in_viewport(
+    slot: PaneSlot,
+    tab_id: TabId,
+    intent: Option<PipGeometry>,
+    state: Rc<PipInteraction>,
+    chrome: &PaneChrome,
+    viewport: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui_kit::AnyElement {
@@ -88,15 +170,9 @@ pub(crate) fn render(
     let app = chrome.app.clone();
     let rem = window.rem_size().as_f32();
     let intent = state.gesture.get().map(|g| g.geometry).or(intent).filter(|g| g.is_valid()).unwrap_or_default();
-    let viewport = state.viewport.get().unwrap_or_else(|| Bounds::new(point(px(0.), px(0.)), window.viewport_size()));
     let resolved = resolve(intent, viewport, rem);
     let local = resolved.origin - viewport.origin;
-    let measurement = canvas({
-        let state = state.clone();
-        move |bounds, window, _| {
-            if state.viewport.replace(Some(bounds)) != Some(bounds) { window.refresh(); }
-        }
-    }, {
+    let measurement = canvas(|_, _, _| (), {
         let state = state.clone();
         let app = app.clone();
         move |_, _, window, _| {
@@ -187,5 +263,5 @@ pub(crate) fn render(
             });
         shell = shell.child(handle);
     }
-    div().absolute().size_full().child(measurement).child(shell).into_any_element()
+    div().relative().size_full().child(measurement).child(shell).into_any_element()
 }
