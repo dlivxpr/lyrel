@@ -1046,7 +1046,6 @@ impl Pane<PaneSlot> {
                     .size_full()
                     .relative()
                     .overflow_hidden()
-                    .pt(gpui_kit::rems(crate::ui::pane_drag::HANDLE_STRIP))
                     .map(|d| match v {
                         PaneSlot::Ready(t) => {
                             t.update(cx, |v, _cx| v.set_dim(dim));
@@ -1062,6 +1061,7 @@ impl Pane<PaneSlot> {
                             chrome.rearrangeable,
                             &chrome.drag,
                             &chrome.app,
+                            window,
                             cx,
                         ))
                     })
