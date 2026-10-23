@@ -1,6 +1,6 @@
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, TitleBar, WindowExt as _};
+use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, WindowExt as _};
 use gpui_kit::{
     App, Axis, Bounds, Context, Edges, Entity, Focusable, Pixels, PromptLevel, Size, Subscription,
     Window, div, img, point, prelude::*, px, size,
@@ -9593,77 +9593,10 @@ impl ForwardRoute {
     }
 }
 
-impl Render for LyrelApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        #[cfg(test)]
-        render_probe::record();
-        let prof = crate::ui::perf::enabled().then(std::time::Instant::now);
-        // Every window's root is this view, so setting the rem here is what
-        // makes `ui_font_size` reach the whole interface — the rem ladder
-        // (`text_sm`, `text_xs`, `rems(..)`) resolves against it, and the
-        // terminal grid, sized in absolute px from `font_size`, does not move.
-        window.set_rem_size(px(cx.global::<Config>().ui_font_size));
-        self.claim_pending_tab(window, cx);
-        // Before anything asks where a tab is drawn: a tab that walked into a
-        // pinned folder since the last frame is filed there on this one.
-        self.settle_sidebar_groups(cx);
-        self.touch_active_tab();
-        self.declare_displayed_panes(cx);
-        self.scm_sync_watchers(window, cx);
-        self.editor_sync(window, cx);
-        // Keeps looking for new listening ports on the pane in front, panel
-        // open or not — a port that appears while the panel is shut is exactly
-        // the one worth forwarding unasked.
-        self.sync_port_watch(window, cx);
-        if cx.has_active_drag() {
-            crate::ui::reorder::clear_pending(&self.reorder);
-            crate::ui::pane_drag::clear_landing(&self.pane_drag);
-        } else {
-            // Taken first either way: this is what ends the drag, and the merge
-            // below must not find the tab it just moved still in the air.
-            let landed = crate::ui::reorder::take_landed(&self.reorder);
-            if let Some((tab, zone)) = self.tab_merge.take() {
-                self.merge_tab(tab, zone, window, cx);
-            } else if let Some((tab, target)) = landed.regroup {
-                // A drop into another group outranks the reordering the drag
-                // did on its way out of the one it came from. The pointer
-                // left that group; the shuffle it caused before leaving is
-                // not what was being asked for.
-                self.regroup_tab(tab, target, cx);
-            } else if let Some(key) = landed.pin {
-                // The same for a header let go above the divider: it was
-                // carried there to be pinned, not to be reordered on the way.
-                self.pin_auto_group(key, cx);
-            } else if let Some(order) = landed.order {
-                match landed.surface {
-                    Some(crate::ui::reorder::Surface::PinnedGroups) => {
-                        self.apply_pinned_order(&order, cx)
-                    }
-                    _ => self.apply_tab_order(&order, cx),
-                }
-            }
-            // Also what ends the pane drag, so it is taken whichever of the two
-            // readings the last frame left behind.
-            let landing = crate::ui::pane_drag::take_landing(&self.pane_drag);
-            if let Some((pane, at)) = self.pane_detach.take() {
-                self.detach_pane(pane, at, window, cx);
-            } else if let Some((from, zone)) = landing {
-                self.drop_pane(from, zone, window, cx);
-            }
-        }
-        // Windows has no closed-hand cursor and gpui answers `ClosedHand` with
-        // the plain arrow there, which would drop the grip's pointing hand the
-        // instant the drag it advertised began.
-        let held = if cfg!(target_os = "windows") {
-            gpui_kit::CursorStyle::PointingHand
-        } else {
-            gpui_kit::CursorStyle::ClosedHand
-        };
-        if (self.reorder.borrow().is_some() || self.pane_drag.borrow().is_some())
-            && cx.active_drag_cursor_style() != Some(held)
-        {
-            cx.set_active_drag_cursor_style(held, window);
-        }
+impl LyrelApp {
+    /// 唯一工作区组合入口；终端、文档、面板与内容浮层在此各挂载一次。
+    /// 窗口级提示仍由 render 挂载，后续全局状态栏应与本区域并列。
+    fn render_work_area(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let vertical = matches!(cx.global::<Config>().tab_bar_position, TabBarPosition::Left)
             && !self.tabs.is_empty();
         // Asked through the predicate the right panel sizes itself against —
@@ -9689,9 +9622,10 @@ impl Render for LyrelApp {
         // they put their tabs last frame — which is what they are about to
         // blank and write again.
         let tab_landing = self.tab_landing(window, cx);
-        let detach_caret = self.detach_caret(window, cx);
-        let strip = self.tab_strip(!vertical, window, cx);
-        let sidebar = rail.then(|| self.tab_sidebar(window, cx));
+        let sidebar = rail.then(|| {
+            let header = self.render_sidebar_chrome(window, cx);
+            self.tab_sidebar(header, window, cx)
+        });
         let ssh_status = self
             .tabs
             .get(self.active)
@@ -9728,41 +9662,7 @@ impl Render for LyrelApp {
             }
         };
 
-        // No window buttons in fullscreen, where they cannot work: the window
-        // has no caption for the platform to hit-test, so they would draw,
-        // light up under the pointer and do nothing when clicked. `TitleBar`
-        // always draws them, so the strip goes into a plain row of the same
-        // geometry instead — the row itself stays, since it holds the tabs,
-        // the chrome tiles and the docked document's header.
-        let title_bar =
-            if window_controls_drawn(window.is_fullscreen()) || cfg!(target_os = "macos") {
-                // `TitleBar` pads its own fixed 80pt; the lead is ours, since
-                // it follows where the traffic lights are put.
-                TitleBar::new()
-                    .h(px(TITLE_BAR_HEIGHT))
-                    .pl(px(TITLE_BAR_LEAD))
-                    .bg(cx.theme().transparent)
-                    .border_color(cx.theme().transparent)
-                    .child(strip)
-                    .into_any_element()
-            } else {
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_row()
-                    .pl(px(TITLE_BAR_LEAD))
-                    .title_strip_row(px(TITLE_BAR_BORDER), cx.theme().transparent)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .h_full()
-                            .flex_1()
-                            .child(strip),
-                    )
-                    .into_any_element()
-            };
+        let title_bar = self.render_window_title_bar(!vertical, window, cx);
         let body_area = div()
             .flex_1()
             .relative()
@@ -9898,7 +9798,7 @@ impl Render for LyrelApp {
             .child(terminal_column)
             .when_some(document_column, |this, column| this.child(column))
             .when_some(right_panel, |this, panel| this.child(panel));
-        let main_layout = div()
+        div()
             .flex_1()
             .min_h_0()
             .w_full()
@@ -9964,7 +9864,7 @@ impl Render for LyrelApp {
                                         .right(px(panel_px))
                                         .w(px(document_px))
                                         .when(panel_px <= 0., |d| {
-                                            d.pr(px(crate::ui::tab_strip::trailing_chrome_w(
+                                            d.pr(px(crate::ui::window_chrome::trailing_chrome_w(
                                                 window.is_fullscreen(),
                                             )))
                                         })
@@ -9985,7 +9885,83 @@ impl Render for LyrelApp {
                     .into_any_element(),
                 None => panel_row.into_any_element(),
             })
-            .into_any_element();
+            .into_any_element()
+    }
+}
+
+impl Render for LyrelApp {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        render_probe::record();
+        let prof = crate::ui::perf::enabled().then(std::time::Instant::now);
+        // Every window's root is this view, so setting the rem here is what
+        // makes `ui_font_size` reach the whole interface — the rem ladder
+        // (`text_sm`, `text_xs`, `rems(..)`) resolves against it, and the
+        // terminal grid, sized in absolute px from `font_size`, does not move.
+        window.set_rem_size(px(cx.global::<Config>().ui_font_size));
+        self.claim_pending_tab(window, cx);
+        // Before anything asks where a tab is drawn: a tab that walked into a
+        // pinned folder since the last frame is filed there on this one.
+        self.settle_sidebar_groups(cx);
+        self.touch_active_tab();
+        self.declare_displayed_panes(cx);
+        self.scm_sync_watchers(window, cx);
+        self.editor_sync(window, cx);
+        // Keeps looking for new listening ports on the pane in front, panel
+        // open or not — a port that appears while the panel is shut is exactly
+        // the one worth forwarding unasked.
+        self.sync_port_watch(window, cx);
+        if cx.has_active_drag() {
+            crate::ui::reorder::clear_pending(&self.reorder);
+            crate::ui::pane_drag::clear_landing(&self.pane_drag);
+        } else {
+            // Taken first either way: this is what ends the drag, and the merge
+            // below must not find the tab it just moved still in the air.
+            let landed = crate::ui::reorder::take_landed(&self.reorder);
+            if let Some((tab, zone)) = self.tab_merge.take() {
+                self.merge_tab(tab, zone, window, cx);
+            } else if let Some((tab, target)) = landed.regroup {
+                // A drop into another group outranks the reordering the drag
+                // did on its way out of the one it came from. The pointer
+                // left that group; the shuffle it caused before leaving is
+                // not what was being asked for.
+                self.regroup_tab(tab, target, cx);
+            } else if let Some(key) = landed.pin {
+                // The same for a header let go above the divider: it was
+                // carried there to be pinned, not to be reordered on the way.
+                self.pin_auto_group(key, cx);
+            } else if let Some(order) = landed.order {
+                match landed.surface {
+                    Some(crate::ui::reorder::Surface::PinnedGroups) => {
+                        self.apply_pinned_order(&order, cx)
+                    }
+                    _ => self.apply_tab_order(&order, cx),
+                }
+            }
+            // Also what ends the pane drag, so it is taken whichever of the two
+            // readings the last frame left behind.
+            let landing = crate::ui::pane_drag::take_landing(&self.pane_drag);
+            if let Some((pane, at)) = self.pane_detach.take() {
+                self.detach_pane(pane, at, window, cx);
+            } else if let Some((from, zone)) = landing {
+                self.drop_pane(from, zone, window, cx);
+            }
+        }
+        // Windows has no closed-hand cursor and gpui answers `ClosedHand` with
+        // the plain arrow there, which would drop the grip's pointing hand the
+        // instant the drag it advertised began.
+        let held = if cfg!(target_os = "windows") {
+            gpui_kit::CursorStyle::PointingHand
+        } else {
+            gpui_kit::CursorStyle::ClosedHand
+        };
+        if (self.reorder.borrow().is_some() || self.pane_drag.borrow().is_some())
+            && cx.active_drag_cursor_style() != Some(held)
+        {
+            cx.set_active_drag_cursor_style(held, window);
+        }
+        let detach_caret = self.detach_caret(window, cx);
+        let main_layout = self.render_work_area(window, cx);
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);
@@ -12118,8 +12094,8 @@ mod tests {
         );
         assert_eq!(super::window_controls_w(false), super::WINDOW_CONTROLS_W);
         assert_eq!(
-            crate::ui::tab_strip::trailing_chrome_w(true),
-            crate::ui::tab_strip::trailing_chrome_tiles_w()
+            crate::ui::window_chrome::trailing_chrome_w(true),
+            crate::ui::window_chrome::trailing_chrome_tiles_w()
         );
     }
 

@@ -4244,4 +4244,62 @@ mod close_gpui_tests {
         }));
         assert_eq!(panel(&app, &mut vcx), (true, 0));
     }
+
+    #[gpui_kit::test]
+    fn document_dock_fill_and_close_keep_the_same_editor_and_terminal(cx: &mut TestAppContext) {
+        use crate::core::actions::{
+            ActivateTab1, ActivateTab2, EditorNewFile, ToggleCodePanel, ToggleDocumentFill,
+        };
+        use crate::core::config::{Config, TabBarPosition};
+        use gpui_kit::size;
+
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
+        vcx.simulate_resize(size(px(1600.), px(900.)));
+        for position in [TabBarPosition::Top, TabBarPosition::Left] {
+            app.update_in(&mut vcx, |app, window, cx| {
+                cx.global_mut::<Config>().tab_bar_position = position;
+                app.right_panel_visible = true;
+                app.focus_active(window, cx);
+                cx.notify();
+            });
+            settle(&mut vcx);
+            let pane = app.read_with(&vcx, |app, _| app.tabs[0].pane.first_leaf().unwrap().entity_id());
+            vcx.dispatch_action(EditorNewFile);
+            settle(&mut vcx);
+            let editor = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.clone());
+            assert!(app.update_in(&mut vcx, |app, window, cx| app.document_dock_px(window, cx).is_some()));
+            for _ in 0..2 {
+                vcx.dispatch_action(ToggleDocumentFill);
+                settle(&mut vcx);
+                app.read_with(&vcx, |app, _| {
+                    assert_eq!(app.active_buffer().unwrap().input.entity_id(), editor.entity_id());
+                    assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), pane);
+                });
+                vcx.update(|window, _| {
+                    assert!(window.find("editor-panel-close").visible());
+                    assert_eq!(window.find_all("editor-panel-close").len(), 1);
+                });
+            }
+            vcx.update(|window, cx| window.click("editor-panel-close", cx));
+            settle(&mut vcx);
+            assert!(!app.read_with(&vcx, |app, _| app.code_panel_visible()));
+            assert!(terminal_focused(&app, &mut vcx));
+            vcx.dispatch_action(ToggleCodePanel);
+            settle(&mut vcx);
+            assert_eq!(app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.entity_id()), editor.entity_id());
+            vcx.dispatch_action(CloseActiveTab);
+            settle(&mut vcx);
+            assert!(app.read_with(&vcx, |app, _| app.code_panel_visible()));
+            vcx.dispatch_action(CloseActiveTab);
+            settle(&mut vcx);
+            assert!(!app.read_with(&vcx, |app, _| app.code_panel_visible()));
+            assert!(terminal_focused(&app, &mut vcx));
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.len()), 2);
+            vcx.dispatch_action(ActivateTab2);
+            settle(&mut vcx);
+            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            vcx.dispatch_action(ActivateTab1);
+            settle(&mut vcx);
+        }
+    }
 }

@@ -60,6 +60,7 @@ pub mod tab_strip;
 pub mod theme;
 pub mod tray;
 pub mod tree_sync;
+mod window_chrome;
 pub mod windows;
 pub mod worktree_prompt;
 
