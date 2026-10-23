@@ -593,8 +593,7 @@ impl Tab {
         }
     }
 
-    pub(crate) fn pip_slot(&self, cx: &App) -> Option<PaneSlot> {
-        let pane = self.presentation.pip()?.pane();
+    pub(crate) fn presentation_slot(&self, pane: u64, cx: &App) -> Option<PaneSlot> {
         let leaves = self.pane.leaves();
         let matches = |slot: &&PaneSlot| match slot {
             PaneSlot::Ready(view) => view.read(cx).pane_id == pane,
@@ -607,6 +606,20 @@ impl Tab {
         }).cloned().or_else(|| leaves.iter().find(matches).cloned())
     }
 
+    pub(crate) fn pip_slot(&self, cx: &App) -> Option<PaneSlot> {
+        self.presentation_slot(self.presentation.pip()?.pane(), cx)
+    }
+
+    pub(crate) fn is_parked_slot(&self, slot: &PaneSlot, cx: &App) -> bool {
+        let pane = match slot {
+            PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
+            PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane,
+        };
+        pane.filter(|pane| self.presentation.is_parked(*pane))
+            .and_then(|pane| self.presentation_slot(pane, cx))
+            .is_some_and(|parked| parked.entity_id() == slot.entity_id())
+    }
+
     fn render_panes(
         &self,
         chrome: &crate::ui::pane::PaneChrome,
@@ -614,7 +627,12 @@ impl Tab {
         cx: &mut App,
     ) -> gpui_kit::AnyElement {
         let pip = self.pip_slot(cx);
-        let tiled = self.pane.render_without(pip.as_ref().map(PaneSlot::entity_id), chrome, window, cx);
+        let hidden = self.presentation.parked().iter()
+            .filter_map(|entry| self.presentation_slot(entry.pane(), cx))
+            .map(|slot| slot.entity_id())
+            .chain(pip.as_ref().map(PaneSlot::entity_id))
+            .collect::<Vec<_>>();
+        let tiled = self.pane.render_without(&hidden, chrome, window, cx);
         div()
             .id("pane-presentations")
             .test_support()
@@ -669,11 +687,13 @@ impl Tab {
         self.asleep.as_ref().and_then(|a| a.view.agent)
     }
 
-    fn focus_target(&self) -> Option<crate::ui::pane::PaneSlot> {
-        match self.last_focused {
-            Some(id) => self.pane.leaf_matching_or_first(|l| l.entity_id() == id),
-            None => self.pane.first_leaf(),
-        }
+    fn focus_target(&self, cx: &App) -> Option<crate::ui::pane::PaneSlot> {
+        let leaves = self.pane.leaves();
+        let visible = |slot: &&PaneSlot| !self.is_parked_slot(slot, cx);
+        leaves.iter().filter(visible)
+            .find(|slot| Some(slot.entity_id()) == self.last_focused)
+            .or_else(|| leaves.iter().find(visible))
+            .cloned()
     }
 
     /// The pane a move in `dir` out of `at` should return to, if it reverses
@@ -705,7 +725,7 @@ impl Tab {
     ) -> Option<Entity<TerminalView>> {
         self.pane
             .focused_leaf(window, cx)
-            .or_else(|| self.focus_target())
+            .or_else(|| self.focus_target(cx))
             .and_then(|slot| slot.terminal().cloned())
     }
 
@@ -716,10 +736,10 @@ impl Tab {
             Some(window) => self
                 .pane
                 .focused_leaf(window, cx)
-                .or_else(|| self.focus_target()),
-            None => self.focus_target(),
+                .or_else(|| self.focus_target(cx)),
+            None => self.focus_target(cx),
         };
-        leaf.and_then(|l| l.terminal().cloned())
+        leaf.or_else(|| self.pane.first_leaf()).and_then(|l| l.terminal().cloned())
     }
 
     pub(crate) fn leaf_title(&self, window: Option<&Window>, cx: &App) -> String {
@@ -1066,6 +1086,8 @@ pub struct LyrelApp {
     pub(crate) sidebar_reveal: Rc<Cell<Option<lyrel_core::core::machine::TabId>>>,
     pub(crate) reorder: Rc<RefCell<Option<crate::ui::reorder::Reorder>>>,
     pub(crate) pane_drag: crate::ui::pane_drag::PaneDragState,
+    pub(crate) parked_deck: Entity<crate::ui::parked_deck::ParkedDeck>,
+    _parked_deck_sub: Subscription,
     /// Where a tab held over the layout would be grafted in, as the last
     /// painted frame read it. The same bargain the pane drag's landing keeps:
     /// offered only once the tree agrees it changes something, so releasing
@@ -1634,6 +1656,22 @@ impl LyrelApp {
                 (tabs, active)
             }
         };
+        let parked_deck = cx.new(crate::ui::parked_deck::ParkedDeck::new);
+        let parked_deck_sub = cx.subscribe_in(&parked_deck, window, |this, _, event, window, cx| {
+            match event {
+                crate::ui::parked_deck::ParkedDeckEvent::Restore(token) => {
+                    let slot = this.tabs.get(this.active).and_then(|tab| tab.pane.leaves().into_iter()
+                        .find(|slot| slot.entity_id().as_u64() == *token));
+                    if let Some(slot) = slot {
+                        this.restore_parked(slot.entity_id(), window, cx);
+                    }
+                }
+                crate::ui::parked_deck::ParkedDeckEvent::Dismiss => {
+                    this.refocus_parked_pane(window, cx);
+                    if window.focused(cx).is_none() { this.focus_active(window, cx); }
+                }
+            }
+        });
         let file_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchFiles))
         });
@@ -1729,6 +1767,8 @@ impl LyrelApp {
             sidebar_reveal: Rc::new(Cell::new(None)),
             reorder: Rc::new(RefCell::new(None)),
             pane_drag: Rc::new(RefCell::new(None)),
+            parked_deck,
+            _parked_deck_sub: parked_deck_sub,
             tab_merge: Cell::new(None),
             pane_detach: Cell::new(None),
             sidebar_slots: Rc::new(RefCell::new(Vec::new())),
@@ -4016,9 +4056,14 @@ impl LyrelApp {
             window.focus(&overlay.focus_handle, cx);
             return;
         }
-        if let Some(leaf) = tab.focus_target() {
+        if let Some(leaf) = tab.focus_target(cx) {
             let handle = leaf.focus_handle(cx);
             window.focus(&handle, cx);
+        } else if !tab.presentation.parked().is_empty() {
+            self.sync_parked_deck(window, cx);
+            self.parked_deck.update(cx, |deck, cx| {
+                deck.focus(Some(deck.focus_handle(cx)), window, cx)
+            });
         }
     }
 
@@ -4539,11 +4584,12 @@ impl LyrelApp {
         let pip = tab.pip_slot(cx).is_some_and(|slot| slot.entity_id() == pane);
         let client_local = WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote())
             && terminal.as_ref().is_some_and(|view| view.read(cx).pane_route().is_local());
-        let entries: [(L10nKey, Option<Box<dyn gpui_kit::Action>>, bool, bool); 14] = [
+        let entries: [(L10nKey, Option<Box<dyn gpui_kit::Action>>, bool, bool); 15] = [
             (L10nKey::AppMenuPaste, Some(Box::new(crate::terminal::view::PasteText)), !live, false),
             (L10nKey::AppMenuSplitRight, Some(Box::new(SplitRight)), !ready, false),
             (L10nKey::AppMenuSplitDown, Some(Box::new(SplitDown)), !ready, false),
             (if client_local { L10nKey::PanePipClientLocalUnavailable } else if pip { L10nKey::PaneRestorePip } else { L10nKey::PaneEnterPip }, Some(Box::new(TogglePanePip)), !live || client_local, pip),
+            (L10nKey::PanePark, Some(Box::new(ParkPane)), !ready, false),
             (L10nKey::CmdZoomPane, Some(Box::new(ToggleMaximizePane)), !ready || !multiple, zoomed),
             (L10nKey::PaneMoveToTab, Some(Box::new(MovePaneToTab)), !multiple, false),
             (L10nKey::PaneMenuTitle, None, false, false),
@@ -4627,7 +4673,7 @@ impl LyrelApp {
     fn toggle_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let remote = WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote());
         let Some(tab) = self.tabs.get_mut(self.active) else { return; };
-        let Some(target) = tab.pane.focused_leaf(window, cx).or_else(|| tab.focus_target()) else { return; };
+        let Some(target) = tab.pane.focused_leaf(window, cx).or_else(|| tab.focus_target(cx)) else { return; };
         if remote && matches!(&target, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local()) {
             window.push_notification(gpui_kit::component::notification::Notification::warning(
                 t(L10nKey::PanePipClientLocalDetail)), cx);
@@ -4663,11 +4709,93 @@ impl LyrelApp {
         cx.notify();
     }
 
+    fn park_active_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let slot = self.tabs.get(self.active).and_then(|tab| {
+            tab.pane.focused_leaf(window, cx).or_else(|| tab.focus_target(cx))
+        });
+        if let Some(slot) = slot {
+            self.park_pane(slot.entity_id(), window, cx);
+        }
+    }
+
+    pub(crate) fn park_pane(&mut self, target: gpui_kit::EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else { return; };
+        let fallback = tab.pane.leaves().into_iter()
+            .find(|slot| slot.entity_id() != target && !tab.is_parked_slot(slot, cx));
+        if !crate::ui::tree_sync::set_parked_for_tab(tab, target, fallback.as_ref().map(PaneSlot::entity_id), true, self.workspace, cx) {
+            return;
+        }
+        tab.last_focused = fallback.as_ref().map(PaneSlot::entity_id);
+        self.maximized = None;
+        self.pane_drag.borrow_mut().take();
+        self.sync_parked_deck(window, cx);
+        if let Some(slot) = fallback {
+            self.focus_leaf(&slot, window, cx);
+        } else {
+            self.parked_deck.update(cx, |deck, cx| {
+                deck.focus(Some(deck.focus_handle(cx)), window, cx)
+            });
+        }
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn restore_parked(&mut self, target: gpui_kit::EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else { return; };
+        let Some(slot) = tab.pane.leaves().into_iter().find(|slot| slot.entity_id() == target) else { return; };
+        if !tab.is_parked_slot(&slot, cx) { return; }
+        let fallback = tab.focus_target(cx).map(|slot| slot.entity_id());
+        if !crate::ui::tree_sync::set_parked_for_tab(tab, target, fallback, false, self.workspace, cx) { return; }
+        self.maximized = None;
+        self.sync_parked_deck(window, cx);
+        self.focus_leaf(&slot, window, cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    fn preview_parked_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_parked_deck(window, cx);
+        let first = self.tabs.get(self.active).and_then(|tab| tab.presentation.parked().first()
+            .and_then(|entry| tab.presentation_slot(entry.pane(), cx)))
+            .map(|slot| slot.entity_id().as_u64());
+        let Some(pane) = first else { return; };
+        let trigger = window.focused(cx);
+        self.parked_deck.update(cx, |deck, cx| deck.preview(pane, trigger, window, cx));
+    }
+
+    fn sync_parked_deck(&self, window: &mut Window, cx: &mut App) {
+        use crate::ui::parked_deck::{ParkedCard, ParkedDeckLabels};
+        let tab = self.tabs.get(self.active);
+        let cards = tab.into_iter().flat_map(|tab| tab.presentation.parked().iter().filter_map(|entry| {
+            let slot = tab.presentation_slot(entry.pane(), cx)?;
+            let view = slot.terminal()?.read(cx);
+            Some(ParkedCard::new(slot.entity_id().as_u64(), view.title.clone(),
+                view.cwd().map(|path| path.display().to_string()).unwrap_or_default(), !view.terminal.exited))
+        })).collect();
+        let tab_id = tab.map(|tab| tab.tree_id.get());
+        self.parked_deck.update(cx, |deck, cx| {
+            deck.set_tab(tab_id, cx);
+            deck.set_labels(ParkedDeckLabels::new(t(L10nKey::ParkedDeckTitle), t(L10nKey::ParkedRestore),
+                t(L10nKey::PanePark), t(L10nKey::ParkedAlive), t(L10nKey::ParkedExited)), cx);
+            deck.sync_cards(cards, window, cx);
+        });
+    }
+
+    pub(crate) fn refocus_parked_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let hidden_focused = self.tabs.get(self.active).is_some_and(|tab| {
+            tab.pane.focused_leaf(window, cx).is_some_and(|slot| tab.is_parked_slot(&slot, cx))
+        });
+        if hidden_focused {
+            self.maximized = None;
+            self.focus_active(window, cx);
+        }
+    }
+
     fn move_pane_to_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(slot) = self.tabs.get(self.active).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
-                .or_else(|| tab.focus_target())
+                .or_else(|| tab.focus_target(cx))
         }) else {
             return;
         };
@@ -4812,7 +4940,8 @@ impl LyrelApp {
         let target = self.tabs.get(self.active).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
-                .or_else(|| tab.focus_target())
+                .or_else(|| tab.focus_target(cx))
+                .or_else(|| tab.pane.first_leaf())
                 .and_then(|slot| slot.terminal().cloned())
         })?;
         if !self.guard_local_spawn(window, cx) {
@@ -4915,7 +5044,7 @@ impl LyrelApp {
         let Some(slot) = self.tabs.get(self.active).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
-                .or_else(|| tab.focus_target())
+                .or_else(|| tab.focus_target(cx))
         }) else {
             return;
         };
@@ -5482,12 +5611,8 @@ impl LyrelApp {
         self.activate(index, window, cx);
     }
 
-    /// Declare to the pane registry which terminals are on screen this
-    /// frame: the active tab's, nobody else's. Stated per frame rather than
-    /// maintained at every tab operation, the way `scm_sync_watchers` is.
-    /// Entity ids only — reading the entities here would put them into the
-    /// window's tracked set, which is exactly what the registry routes
-    /// around.
+    /// Declare which terminals are actually painted. Parked sessions keep
+    /// processing output, but their wakeups must not dirty the whole window.
     fn declare_displayed_panes(&self, cx: &App) {
         let active = self.active;
         crate::terminal::view::declare_displayed(
@@ -5496,7 +5621,10 @@ impl LyrelApp {
                 tab.pane
                     .leaves()
                     .into_iter()
-                    .filter_map(move |slot| Some((slot.terminal()?.entity_id(), i == active)))
+                    .filter_map(move |slot| {
+                        let id = slot.terminal()?.entity_id();
+                        Some((id, i == active && !tab.is_parked_slot(&slot, cx)))
+                    })
             }),
         );
     }
@@ -5782,7 +5910,7 @@ impl LyrelApp {
         let leaf = tab
             .pane
             .focused_leaf(window, cx)
-            .or_else(|| tab.focus_target())
+            .or_else(|| tab.focus_target(cx))
             .and_then(|slot| slot.terminal().cloned());
         if let Some(leaf) = leaf {
             let handle = leaf.read(cx).focus_handle.clone();
@@ -6130,7 +6258,7 @@ impl LyrelApp {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        let refocus = (index == self.active).then(|| tab.focus_target()).flatten();
+        let refocus = (index == self.active).then(|| tab.focus_target(cx)).flatten();
         for leaf in tab.pane.terminals() {
             let refocus_incoming =
                 refocus.as_ref().map(|s| s.entity_id()) == Some(leaf.entity_id());
@@ -7264,7 +7392,7 @@ impl LyrelApp {
         self.tabs.get(self.active).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
-                .or_else(|| tab.focus_target())
+                .or_else(|| tab.focus_target(cx))
                 .and_then(|slot| slot.terminal().cloned())
         })
     }
@@ -7294,6 +7422,8 @@ impl LyrelApp {
             MovePaneToTab => self.move_pane_to_tab(window, cx),
             TogglePanePip => self.toggle_pane_pip(window, cx),
             RestorePanePip => self.restore_pane_pip(window, cx),
+            ParkPane => self.park_active_pane(window, cx),
+            RestoreParkedPane => self.preview_parked_pane(window, cx),
             OpenScrollbackInEditor => self.open_scrollback_in_editor(window, cx),
             ClearPaneScreen => {
                 if let Some(view) = self.focused_leaf(window, cx) {
@@ -9855,6 +9985,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        self.sync_parked_deck(window, cx);
         let tab_landing = self.tab_landing(window, cx);
         let sidebar = self.sidebar_open(cx).then(|| self.tab_sidebar(window, cx));
         let ssh_status = self
@@ -9893,7 +10024,19 @@ impl LyrelApp {
                             lifted: crate::ui::pane_drag::lifted(&self.pane_drag),
                             drag: self.pane_drag.clone(),
                         };
-                        active_tab.render_panes(&chrome, window, cx)
+                        let panes = active_tab.render_panes(&chrome, window, cx);
+                        let all_parked = active_tab.pip_slot(cx).is_none()
+                            && active_tab.focus_target(cx).is_none()
+                            && !active_tab.presentation.parked().is_empty();
+                        div().size_full().relative().child(panes)
+                            .when(all_parked, |body| body.child(
+                                div().id("parked-empty").test_support().absolute().inset_0()
+                                    .flex().flex_col().items_center().justify_center().gap_3()
+                                    .text_sm().text_color(cx.theme().muted_foreground)
+                                    .child(t(L10nKey::ParkedEmpty))
+                                    .child(Button::new("parked-new-pane").label(t(L10nKey::AppMenuSplitRight))
+                                        .on_click(|_, window, cx| window.dispatch_action(Box::new(SplitRight), cx)))
+                            )).into_any_element()
                     }
                 }
             }
@@ -9987,7 +10130,8 @@ impl LyrelApp {
             .flex_col()
             .relative()
             .child(body_area)
-            .children(overlays);
+            .children(overlays)
+            .child(div().absolute().inset_0().child(self.parked_deck.clone()));
         let panel_row = div()
             .flex_1()
             .min_h_0()
@@ -10190,6 +10334,12 @@ impl Render for LyrelApp {
                 }))
                 .on_action(cx.listener(|this, _: &RestorePanePip, window, cx| {
                     this.restore_pane_pip(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &ParkPane, window, cx| {
+                    this.park_active_pane(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &RestoreParkedPane, window, cx| {
+                    this.preview_parked_pane(window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &OpenScrollbackInEditor, window, cx| {
                     this.open_scrollback_in_editor(window, cx)
@@ -14484,7 +14634,7 @@ mod unfocused_shortcut_tests {
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
             let expected = match app.tabs.get(app.active) {
-                Some(tab) => tab.focus_target().unwrap().focus_handle(cx),
+                Some(tab) => tab.focus_target(cx).unwrap().focus_handle(cx),
                 None => app.home_focus.clone(),
             };
             assert!(
@@ -14711,7 +14861,7 @@ mod tab_focus_memory_tests {
         let (a, b) = window.update(cx, |_, _, cx| (leaf(cx), leaf(cx))).unwrap();
         let mut tabs = vec![two_pane_tab(&a, &b)];
         assert_eq!(
-            tabs[0].focus_target().map(|l| l.entity_id()),
+            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
             Some(a.entity_id()),
             "a tab nobody has worked in yet still opens on its first leaf"
         );
@@ -14724,7 +14874,7 @@ mod tab_focus_memory_tests {
         // and the tab is switched away from. `remember_active_pane` finds no
         // focused leaf and writes nothing, which is now harmless.
         assert_eq!(
-            tabs[0].focus_target().map(|l| l.entity_id()),
+            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
             Some(b.entity_id()),
             "#843: the tab has to come back to the pane the reader was in"
         );
@@ -14746,12 +14896,12 @@ mod tab_focus_memory_tests {
         remember_leaf_in(&mut tabs, c.entity_id());
 
         assert_eq!(
-            tabs[1].focus_target().map(|l| l.entity_id()),
+            cx.update(|cx| tabs[1].focus_target(cx).map(|l| l.entity_id())),
             Some(c.entity_id()),
             "the tab holding the focused pane is the one that remembers it"
         );
         assert_eq!(
-            tabs[0].focus_target().map(|l| l.entity_id()),
+            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
             Some(a.entity_id()),
             "and no other tab's memory is touched"
         );
@@ -14772,7 +14922,7 @@ mod tab_focus_memory_tests {
         remember_leaf_in(&mut tabs, gone.entity_id());
 
         assert_eq!(
-            tabs[0].focus_target().map(|l| l.entity_id()),
+            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
             Some(b.entity_id()),
             "a stranger's arrival leaves the tab's own answer alone"
         );
@@ -14804,7 +14954,7 @@ mod tab_focus_memory_tests {
         );
 
         assert_eq!(
-            tabs[0].focus_target().map(|l| l.entity_id()),
+            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
             Some(landed.entity_id()),
             "#843: the memory follows the pane, not the slot it arrived in"
         );
@@ -14813,7 +14963,7 @@ mod tab_focus_memory_tests {
         // question and does not touch it.
         replace_leaf_in(&mut tabs, a.entity_id(), PaneSlot::Connecting(other));
         assert_eq!(
-            tabs[0].focus_target().map(|l| l.entity_id()),
+            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
             Some(landed.entity_id()),
             "another pane landing leaves the tab's answer alone"
         );
@@ -15814,3 +15964,7 @@ mod pip_native_owned_gpui_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "parking_tests.rs"]
+mod parking_gpui_tests;

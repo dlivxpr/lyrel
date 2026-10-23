@@ -969,6 +969,14 @@ fn run_request(
             conn.machine()?.pane_set_presentation(workspace, pane, pip, fallback, restore, conn.machine_origin)?;
             (ReplyOk::Unit, Vec::new())
         }
+        ControlRequest::PanePark { workspace, pane, restore } => {
+            conn.machine()?.pane_park(workspace, pane, restore, conn.machine_origin)?;
+            (ReplyOk::Unit, Vec::new())
+        }
+        ControlRequest::PaneRestore { workspace, pane, fallback } => {
+            conn.machine()?.pane_restore(workspace, pane, fallback, conn.machine_origin)?;
+            (ReplyOk::Unit, Vec::new())
+        }
         ControlRequest::PaneSetRatio {
             workspace,
             tab,

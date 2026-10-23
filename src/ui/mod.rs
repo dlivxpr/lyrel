@@ -31,6 +31,7 @@ pub mod pane;
 pub mod pane_drag;
 pub mod panel_github;
 pub mod panel_search;
+pub(crate) mod parked_deck;
 pub mod path_display;
 pub mod pending_pane;
 pub mod perf;
