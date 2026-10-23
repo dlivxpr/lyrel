@@ -2,6 +2,16 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
+        L10nKey::NotificationInbox => "Notifications",
+        L10nKey::NotificationClearHistory => "Clear notification history",
+        L10nKey::NotificationScope => "Received app notifications on this computer · latest 500",
+        L10nKey::NotificationEmpty => "No notifications. New application notifications will appear here.",
+        L10nKey::NotificationSourceUnavailable => "Source unavailable",
+        L10nKey::NotificationUnread => "Unread",
+        L10nKey::NotificationSuccess => "Success",
+        L10nKey::NotificationInfo => "Information",
+        L10nKey::NotificationWarning => "Warning",
+        L10nKey::NotificationError => "Error",
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
             "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."

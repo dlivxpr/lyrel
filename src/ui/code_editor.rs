@@ -1,3 +1,4 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -1207,7 +1208,7 @@ impl LyrelApp {
                     app.open_outside_the_editor(host_id, &path, window, cx);
                 }
                 Err(EditorOpenError::Message(message)) => {
-                    window.push_notification(message, cx);
+                    window.notify_app(message, cx);
                 }
             },
         );
@@ -1230,7 +1231,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         if !host_id.is_local() || !self.can_spawn_locally(cx) || is_program(path) {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(
                     L10nKey::EditorBinaryFile,
                     &[("path", &path.display().to_string())],
@@ -1252,7 +1253,7 @@ impl LyrelApp {
     ) {
         if let Err(e) = opener(path) {
             log::warn!("failed to open {}: {e}", path.display());
-            window.push_notification(
+            window.notify_app(
                 crate::ui::host_ops::failure(
                     t_fmt(
                         L10nKey::LinkFileOpenFailed,
@@ -2121,7 +2122,7 @@ impl LyrelApp {
         if let Some(other) = self.buffer_at(host.id(), &path)
             && other != id
         {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(
                     L10nKey::EditorAlreadyOpen,
                     &[("path", &path.display().to_string())],
@@ -3065,7 +3066,7 @@ impl LyrelApp {
             };
             let name = self.buffer(id).map(OpenFile::label).unwrap_or_default();
             self.editor_show_in_tab(tab, id, false, window, cx);
-            window.push_notification(t_fmt(L10nKey::EditorOrphanAdopted, &[("name", &name)]), cx);
+            window.notify_app(t_fmt(L10nKey::EditorOrphanAdopted, &[("name", &name)]), cx);
             changed = true;
         }
         if changed {

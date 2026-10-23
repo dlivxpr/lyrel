@@ -2,13 +2,14 @@
 //! `code_editor.rs` makes when its buffers change, the commands (go to
 //! definition, format, rename), and the status bar's word on the server.
 
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::component::input::EditorState;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, RopeExt as _, Sizable as _, WindowExt as _, h_flex,
+    ActiveTheme as _, Icon, IconName, RopeExt as _, Sizable as _, h_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Entity, WeakEntity, Window, div, px};
@@ -322,7 +323,7 @@ impl LyrelApp {
                 Ok(None) => {}
                 Err(e) => {
                     let context = t_fmt(L10nKey::LspRenameFailed, &[("name", &old_name)]);
-                    window.push_notification(
+                    window.notify_app(
                         crate::ui::host_ops::failure(context, &format!("{e:#}")),
                         cx,
                     );

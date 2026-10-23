@@ -2,6 +2,16 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::NotificationInbox => "通知",
+        L10nKey::NotificationClearHistory => "清空通知历史",
+        L10nKey::NotificationScope => "本机已收到的应用通知 · 最近 500 条",
+        L10nKey::NotificationEmpty => "暂无通知。新的应用通知会显示在这里。",
+        L10nKey::NotificationSourceUnavailable => "来源已不可用",
+        L10nKey::NotificationUnread => "未读",
+        L10nKey::NotificationSuccess => "成功",
+        L10nKey::NotificationInfo => "信息",
+        L10nKey::NotificationWarning => "警告",
+        L10nKey::NotificationError => "错误",
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
             "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 或 skills.sh 发现候选，审查共享安装、检查更新、保留本地改动并安全移除精确关联链接。"
