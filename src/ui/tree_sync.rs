@@ -2055,7 +2055,7 @@ fn start_prime(cx: &mut App, client_ws: WorkspaceId) {
 pub(crate) fn fresh_workspace_name(cx: &App, host: HostId) -> String {
     let mut taken: Vec<String> = Vec::new();
     if let Some(machine) = crate::ui::machine_mirror::MachineMirrors::machine(cx, host) {
-        taken.extend(machine.workspaces.iter().filter_map(|w| w.name.clone()));
+        taken.extend(machine.user_workspaces().filter_map(|w| w.name.clone()));
     }
     // Labels are the names the switcher actually shows, which for an unnamed
     // workspace is its directory. Counting those as taken is deliberately
@@ -2921,8 +2921,7 @@ fn pull_workspace(
     // The whole tree is already in hand, so the taken names can be read
     // straight off it rather than passed down from the main thread.
     let taken: Vec<&str> = machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .filter_map(|w| w.name.as_deref())
         .collect();
     // A name the user typed beats a rolled one. This create and `start_prime`'s
@@ -2999,7 +2998,8 @@ fn layout_of(
     machine: Machine,
     machine_ws: WorkspaceId,
 ) -> Result<(Machine, WsMirror, Session), Machine> {
-    let Some(ws) = machine.workspaces.iter().find(|w| w.id == machine_ws) else {
+    let workspace = machine.user_workspaces().find(|w| w.id == machine_ws);
+    let Some(ws) = workspace else {
         return Err(machine);
     };
     let mirror = WsMirror {
@@ -3067,8 +3067,7 @@ fn settle_hydration(
     // reconnected onto one opens taken over instead, with Take Back.
     if host.is_local() {
         let holder = machine
-            .workspaces
-            .iter()
+            .user_workspaces()
             .find(|w| w.id == machine_ws)
             .and_then(|w| w.attachment.as_ref())
             .map(|a| a.hostname.clone());
@@ -3087,8 +3086,7 @@ fn settle_hydration(
     // What the tree that is about to be installed calls this workspace, which
     // for a pull that had to create it is the name that create proposed.
     let answered = machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .find(|w| w.id == machine_ws)
         .and_then(|w| w.name.clone());
     crate::ui::machine_mirror::MachineMirrors::install(cx, host, machine);

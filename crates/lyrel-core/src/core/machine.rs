@@ -106,6 +106,17 @@ pub struct Machine {
     pub panes: Vec<PaneRecord>,
 }
 
+impl Machine {
+    /// Workspaces users can list, open, or navigate independently. A foreign
+    /// view is an internal owning-daemon projection, not another workspace.
+    /// Pane ownership and sidecar consumers must still read the complete tree.
+    pub fn user_workspaces(&self) -> impl Iterator<Item = &Workspace> {
+        self.workspaces
+            .iter()
+            .filter(|workspace| workspace.foreign_view.is_none())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attachment {
     /// Proof that a connection is the one holding the workspace, so it stays

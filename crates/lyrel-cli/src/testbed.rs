@@ -76,3 +76,53 @@ pub fn two_workspace_machine() -> Machine {
         ],
     }
 }
+
+/// The owning daemon keeps only the local native SSH leaf in its ordinary tree.
+pub fn mixed_sidecar_projection() -> (Workspace, PaneRecord) {
+    use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
+    use lyrel_core::core::session::{RemoteRef, RemoteTarget};
+
+    let remote = RemoteRef::new(
+        RemoteTarget::Alias {
+            alias: "remote-workbench".into(),
+        },
+        WorkspaceId::new(),
+    );
+    let mut mixed = Tab::leaf(ScopedPane::workspace(1));
+    mixed.root = PaneNode::Split {
+        axis: Axis::Horizontal,
+        ratio: 0.5,
+        a: Box::new(PaneNode::Leaf {
+            pane: ScopedPane::workspace(1),
+        }),
+        b: Box::new(PaneNode::Leaf {
+            pane: ScopedPane::client_local(77),
+        }),
+    };
+    let projection = mixed
+        .map_panes(|pane| pane.owner().is_client_local().then_some(pane.pane()))
+        .unwrap();
+    let mut foreign = ForeignWorkspace::new(remote);
+    foreign.apply(&[SidecarUpdate::new(None, mixed)]).unwrap();
+    (
+        Workspace {
+            name: Some("internal-projection".into()),
+            tabs: vec![projection],
+            foreign_view: Some(foreign),
+            ..Workspace::default()
+        },
+        PaneRecord {
+            live: true,
+            ssh_spec: Some(
+                serde_json::from_value(serde_json::json!({
+                    "host": "native-box",
+                    "port": 22,
+                    "user": "developer",
+                    "auth_mode": "agent"
+                }))
+                .unwrap(),
+            ),
+            ..PaneRecord::new(77)
+        },
+    )
+}

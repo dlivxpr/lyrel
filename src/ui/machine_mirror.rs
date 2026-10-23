@@ -440,7 +440,7 @@ fn view_of<'a>(
 ) -> Option<(&'a Workspace, &'a [PaneRecord])> {
     let machine = MachineMirrors::machine(cx, entry.host_id())?;
     let machine_ws = entry.host.as_ref().map(|r| r.workspace).unwrap_or(entry.id);
-    let ws = machine.workspaces.iter().find(|w| w.id == machine_ws)?;
+    let ws = machine.user_workspaces().find(|w| w.id == machine_ws)?;
     Some((ws, &machine.panes))
 }
 
@@ -543,7 +543,7 @@ pub fn tab_views_for(cx: &App, client_ws: WorkspaceId) -> Option<(Vec<TabView>, 
 
 fn local_view_of(cx: &App, id: WorkspaceId) -> Option<(&Workspace, &[PaneRecord])> {
     let machine = MachineMirrors::machine(cx, HostId::LOCAL)?;
-    let ws = machine.workspaces.iter().find(|w| w.id == id)?;
+    let ws = machine.user_workspaces().find(|w| w.id == id)?;
     Some((ws, &machine.panes))
 }
 
@@ -572,8 +572,7 @@ pub fn unclaimed_local_workspaces(cx: &App) -> Vec<UnclaimedWorkspace> {
     };
     let views = crate::core::session::WorkspaceStore::all(cx);
     machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .filter(|ws| views.get(ws.id).is_none())
         .map(|ws| UnclaimedWorkspace {
             id: ws.id,
@@ -1125,6 +1124,19 @@ mod tests {
                 ..Workspace::default()
             };
             let cli_made = theirs.id;
+            let projection = Workspace {
+                tabs: vec![leaf_tab(77)],
+                foreign_view: Some(lyrel_core::core::pane_sidecar::ForeignWorkspace::new(
+                    crate::core::session::RemoteRef::new(
+                        crate::core::session::RemoteTarget::Alias {
+                            alias: "remote-workbench".into(),
+                        },
+                        WorkspaceId::new(),
+                    ),
+                )),
+                ..Workspace::default()
+            };
+            let projection_id = projection.id;
             MachineMirrors::install(
                 cx,
                 HostId::LOCAL,
@@ -1136,6 +1148,7 @@ mod tests {
                             ..Workspace::default()
                         },
                         theirs,
+                        projection,
                     ],
                     panes: vec![PaneRecord {
                         cwd: Some("/repo/demo".into()),
@@ -1159,6 +1172,16 @@ mod tests {
             let (tabs, _) = tab_views_for(cx, cli_made).expect("readable without a store entry");
             assert_eq!(tabs.len(), 1);
             assert_eq!(tabs[0].cwd.as_deref(), Some("/repo/demo"));
+            assert!(tab_views_for(cx, projection_id).is_none());
+            assert!(!machine_holds_tabs(cx, projection_id));
+            assert!(
+                MachineMirrors::machine(cx, HostId::LOCAL)
+                    .unwrap()
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.id == projection_id),
+                "the owner projection remains in the mirror for pane routing"
+            );
 
             assert!(!machine_holds_tabs(cx, WorkspaceId::new()));
         });
