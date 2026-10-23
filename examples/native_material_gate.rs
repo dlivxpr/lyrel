@@ -52,10 +52,21 @@ use options::Options;
 use policy::{BackdropAppearance, Material};
 use tokens::{Palette, ProbeTheme};
 
-actions!(native_material_gate, [
-    NextMaterial, NextTheme, NextZoom, NextOpacity, ReplayMaterial,
-    ToggleWidth, ToggleLegacyBlur, ToggleFullscreen, FocusProbe, QuitProbe,
-]);
+actions!(
+    native_material_gate,
+    [
+        NextMaterial,
+        NextTheme,
+        NextZoom,
+        NextOpacity,
+        ReplayMaterial,
+        ToggleWidth,
+        ToggleLegacyBlur,
+        ToggleFullscreen,
+        FocusProbe,
+        QuitProbe,
+    ]
+);
 
 struct StderrLogger;
 static LOGGER: StderrLogger = StderrLogger;
@@ -106,12 +117,19 @@ fn main() {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
-            }).detach();
-            let alpha = if options.material == Material::Opaque { 1.0 } else { options.opacity };
+            })
+            .detach();
+            let alpha = if options.material == Material::Opaque {
+                1.0
+            } else {
+                options.opacity
+            };
             let appearance = options.material.resolve(options.legacy_blur, alpha);
             let window_options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None, size(px(options.width), px(options.height)), cx,
+                    None,
+                    size(px(options.width), px(options.height)),
+                    cx,
                 ))),
                 window_min_size: Some(size(px(840.), px(600.))),
                 window_background: appearance.as_gpui(),
@@ -124,7 +142,8 @@ fn main() {
             };
             gpui_kit::open_window(window_options, cx, move |window, cx| {
                 cx.new(|cx| MaterialProbe::new(options, window, cx))
-            }).expect("failed to open native material probe");
+            })
+            .expect("failed to open native material probe");
             cx.activate(true);
         });
 }
@@ -145,13 +164,21 @@ struct MaterialProbe {
 
 impl MaterialProbe {
     fn new(options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let alpha = if options.material == Material::Opaque { 1.0 } else { options.opacity };
+        let alpha = if options.material == Material::Opaque {
+            1.0
+        } else {
+            options.opacity
+        };
         let appearance = options.material.resolve(options.legacy_blur, alpha);
         let palette = Palette::apply(options.theme, alpha, 16. * options.zoom / 100., cx);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        let inputs = ["Left sidebar · 左侧栏", "Terminal-like · 中文输入 ABC", "Right sidebar · 右侧栏"]
-            .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value)));
+        let inputs = [
+            "Left sidebar · 左侧栏",
+            "Terminal-like · 中文输入 ABC",
+            "Right sidebar · 右侧栏",
+        ]
+        .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value)));
         let activation_watch = cx.observe_window_activation(window, |this, _window, cx| {
             this.activation_events += 1;
             // 与生产工作台、Settings 一样，Windows 激活与失活都重放；其他平台不写。
@@ -171,7 +198,11 @@ impl MaterialProbe {
             cx.notify();
         });
         let mut probe = Self {
-            options, palette, focus, inputs, appearance,
+            options,
+            palette,
+            focus,
+            inputs,
+            appearance,
             last_scale: window.scale_factor(),
             native_requests: 0,
             activation_events: 0,
@@ -184,7 +215,11 @@ impl MaterialProbe {
     }
 
     fn effective_opacity(&self) -> f32 {
-        if self.options.material == Material::Opaque { 1.0 } else { self.options.opacity }
+        if self.options.material == Material::Opaque {
+            1.0
+        } else {
+            self.options.opacity
+        }
     }
 
     fn replay(&mut self, window: &Window, reason: &str) {
@@ -192,16 +227,29 @@ impl MaterialProbe {
         self.native_requests += 1;
         log::info!(
             "material request #{} reason={} requested={} resolved={:?} carrier={:?} alpha={:.2} scale={:.2} active={} (NOT visual acceptance)",
-            self.native_requests, reason, self.options.material.id(), self.appearance,
-            self.appearance.as_gpui(), self.effective_opacity(), window.scale_factor(),
+            self.native_requests,
+            reason,
+            self.options.material.id(),
+            self.appearance,
+            self.appearance.as_gpui(),
+            self.effective_opacity(),
+            window.scale_factor(),
             window.is_window_active(),
         );
     }
 
     fn refresh_presentation(&mut self, window: &Window, cx: &mut Context<Self>) {
         let alpha = self.effective_opacity();
-        self.palette = Palette::apply(self.options.theme, alpha, 16. * self.options.zoom / 100., cx);
-        let next = self.options.material.resolve(self.options.legacy_blur, alpha);
+        self.palette = Palette::apply(
+            self.options.theme,
+            alpha,
+            16. * self.options.zoom / 100.,
+            cx,
+        );
+        let next = self
+            .options
+            .material
+            .resolve(self.options.legacy_blur, alpha);
         if next != self.appearance {
             self.appearance = next;
             self.replay(window, "policy-change");
@@ -210,33 +258,51 @@ impl MaterialProbe {
     }
 
     fn next_material(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let ix = Material::ALL.iter().position(|material| *material == self.options.material).unwrap();
+        let ix = Material::ALL
+            .iter()
+            .position(|material| *material == self.options.material)
+            .unwrap();
         self.options.material = Material::ALL[(ix + 1) % Material::ALL.len()];
         self.refresh_presentation(window, cx);
     }
 
     fn next_theme(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let ix = ProbeTheme::ALL.iter().position(|theme| *theme == self.options.theme).unwrap();
+        let ix = ProbeTheme::ALL
+            .iter()
+            .position(|theme| *theme == self.options.theme)
+            .unwrap();
         self.options.theme = ProbeTheme::ALL[(ix + 1) % ProbeTheme::ALL.len()];
         self.refresh_presentation(window, cx);
     }
 
     fn next_zoom(&mut self, cx: &mut Context<Self>) {
         let steps = [75., 100., 125., 150.];
-        self.options.zoom = steps.into_iter().find(|zoom| *zoom > self.options.zoom).unwrap_or(75.);
-        Theme::update(cx, |theme| theme.font_size = px(16. * self.options.zoom / 100.));
+        self.options.zoom = steps
+            .into_iter()
+            .find(|zoom| *zoom > self.options.zoom)
+            .unwrap_or(75.);
+        Theme::update(cx, |theme| {
+            theme.font_size = px(16. * self.options.zoom / 100.)
+        });
         cx.notify();
     }
 
     fn next_opacity(&mut self, window: &Window, cx: &mut Context<Self>) {
         let steps = [0.55, 0.76, 0.82, 1.0];
-        self.options.opacity = steps.into_iter().find(|alpha| *alpha > self.options.opacity + 0.001).unwrap_or(0.55);
+        self.options.opacity = steps
+            .into_iter()
+            .find(|alpha| *alpha > self.options.opacity + 0.001)
+            .unwrap_or(0.55);
         self.refresh_presentation(window, cx);
     }
 
     fn toggle_width(&mut self, window: &mut Window) {
         // 逻辑尺寸是 native API 边界，不是产品 UI 的固定像素布局。
-        let width = if window.viewport_size().width > px(1200.) { 920. } else { 1440. };
+        let width = if window.viewport_size().width > px(1200.) {
+            920.
+        } else {
+            1440.
+        };
         window.resize(size(px(width), window.viewport_size().height));
     }
 
@@ -246,47 +312,122 @@ impl MaterialProbe {
     }
 
     fn controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().flex_col().gap_2().p_3().flex_shrink_0()
-            .child(div().flex().flex_wrap().gap_2().children(Material::ALL.iter().copied().map(|material| {
-                Button::new(material.id()).small().outline().label(material.label())
-                    .selected(self.options.material == material)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.options.material = material;
-                        this.refresh_presentation(window, cx);
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(Material::ALL.iter().copied().map(|material| {
+                        Button::new(material.id())
+                            .small()
+                            .outline()
+                            .label(material.label())
+                            .selected(self.options.material == material)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.options.material = material;
+                                this.refresh_presentation(window, cx);
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .children(ProbeTheme::ALL.into_iter().map(|theme| {
+                        Button::new(theme.id())
+                            .small()
+                            .outline()
+                            .label(theme.label())
+                            .selected(self.options.theme == theme)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.options.theme = theme;
+                                this.refresh_presentation(window, cx);
+                            }))
                     }))
-            })))
-            .child(div().flex().flex_wrap().items_center().gap_2()
-                .children(ProbeTheme::ALL.into_iter().map(|theme| {
-                    Button::new(theme.id()).small().outline().label(theme.label())
-                        .selected(self.options.theme == theme)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.options.theme = theme;
-                            this.refresh_presentation(window, cx);
-                        }))
-                }))
-                .child(Button::new("zoom").small().ghost().label(format!("缩放 {:.0}% · F3", self.options.zoom))
-                    .on_click(cx.listener(|this, _, _, cx| this.next_zoom(cx))))
-                .child(Button::new("opacity").small().ghost().label(format!("底色 α {:.2} · F4", self.options.opacity))
-                    .on_click(cx.listener(|this, _, window, cx| this.next_opacity(window, cx))))
-                .child(Button::new("replay").small().ghost().label("重放 · F5")
-                    .on_click(cx.listener(|this, _, window, cx| { this.replay(window, "manual"); cx.notify(); })))
-                .child(Button::new("width").small().ghost().label("宽 / 窄 · F6")
-                    .on_click(cx.listener(|this, _, window, _| this.toggle_width(window))))
-                .when(cfg!(target_os = "windows"), |row| row.child(
-                    Button::new("auto-blur").small().ghost().label(format!("Auto blur {} · F7", self.options.legacy_blur))
-                        .on_click(cx.listener(|this, _, window, cx| this.toggle_legacy_blur(window, cx))),
-                ))
-                .child(Button::new("fullscreen").small().ghost().label("全屏 · F8")
-                    .on_click(|_, window, _| window.toggle_fullscreen())))
+                    .child(
+                        Button::new("zoom")
+                            .small()
+                            .ghost()
+                            .label(format!("缩放 {:.0}% · F3", self.options.zoom))
+                            .on_click(cx.listener(|this, _, _, cx| this.next_zoom(cx))),
+                    )
+                    .child(
+                        Button::new("opacity")
+                            .small()
+                            .ghost()
+                            .label(format!("底色 α {:.2} · F4", self.options.opacity))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.next_opacity(window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("replay")
+                            .small()
+                            .ghost()
+                            .label("重放 · F5")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.replay(window, "manual");
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("width")
+                            .small()
+                            .ghost()
+                            .label("宽 / 窄 · F6")
+                            .on_click(cx.listener(|this, _, window, _| this.toggle_width(window))),
+                    )
+                    .when(cfg!(target_os = "windows"), |row| {
+                        row.child(
+                            Button::new("auto-blur")
+                                .small()
+                                .ghost()
+                                .label(format!("Auto blur {} · F7", self.options.legacy_blur))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_legacy_blur(window, cx)
+                                })),
+                        )
+                    })
+                    .child(
+                        Button::new("fullscreen")
+                            .small()
+                            .ghost()
+                            .label("全屏 · F8")
+                            .on_click(|_, window, _| window.toggle_fullscreen()),
+                    ),
+            )
     }
 
-    fn specimen(&self, ix: usize, title: &'static str, lines: &'static [&'static str]) -> impl IntoElement {
-        div().flex().flex_col().gap_3().p_3().min_w_0()
+    fn specimen(
+        &self,
+        ix: usize,
+        title: &'static str,
+        lines: &'static [&'static str],
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .min_w_0()
             .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title))
             .child(Input::new(&self.inputs[ix]).small())
-            .child(div().flex().flex_col().gap_2().text_sm().children(lines.iter().map(|line| {
-                div().child(*line)
-            })))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .text_sm()
+                    .children(lines.iter().map(|line| div().child(*line))),
+            )
     }
 }
 
@@ -295,13 +436,29 @@ impl Render for MaterialProbe {
         let translucent = self.effective_opacity() < 1.0;
         let viewport = window.viewport_size();
         // 缩窄时侧面同比收缩；三面仍都在同一个 window 内，不创建子窗或独立 blur。
-        let sidebar_width = if viewport.width / window.rem_size() < 72.0 { 10.0 } else { 14.5 };
+        let sidebar_width = if viewport.width / window.rem_size() < 72.0 {
+            10.0
+        } else {
+            14.5
+        };
         let status = format!(
             "请求 {} → {:?} | {} | {:.0}% | α {:.2} | {:.0}×{:.0} logical | DPI {:.2} | {} | activation {} / bounds {} / native requests {}",
-            self.options.material.id(), self.appearance, self.options.theme.id(), self.options.zoom,
-            self.effective_opacity(), f32::from(viewport.width), f32::from(viewport.height),
-            window.scale_factor(), if window.is_window_active() { "已激活" } else { "未激活" },
-            self.activation_events, self.bounds_events, self.native_requests,
+            self.options.material.id(),
+            self.appearance,
+            self.options.theme.id(),
+            self.options.zoom,
+            self.effective_opacity(),
+            f32::from(viewport.width),
+            f32::from(viewport.height),
+            window.scale_factor(),
+            if window.is_window_active() {
+                "已激活"
+            } else {
+                "未激活"
+            },
+            self.activation_events,
+            self.bounds_events,
+            self.native_requests,
         );
         div().id("material-probe").key_context("NativeMaterialGate").track_focus(&self.focus)
             .flex().flex_col().size_full().min_h_0().text_color(self.palette.foreground)

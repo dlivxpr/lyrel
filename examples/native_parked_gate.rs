@@ -16,6 +16,8 @@ fn main() {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn main() {
-    eprintln!("native_parked_gate requires Windows or macOS; Linux is not a native acceptance target");
+    eprintln!(
+        "native_parked_gate requires Windows or macOS; Linux is not a native acceptance target"
+    );
     std::process::exit(1);
 }

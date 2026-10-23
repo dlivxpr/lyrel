@@ -45,19 +45,17 @@ pub(crate) struct Palette {
 
 impl Palette {
     fn for_theme(theme: ProbeTheme) -> Self {
-        let (background, rail, sidebar, foreground, muted, divider, selection, accent) = match theme {
+        let (background, rail, sidebar, foreground, muted, divider, selection, accent) = match theme
+        {
             ProbeTheme::Light => (
-                0xfcfcfb, 0xf5f5f3, 0xfcfcfb, 0x1c1c1e,
-                0x66666d, 0xdedee2, 0xe7e7e9, 0x1f6bf0,
+                0xfcfcfb, 0xf5f5f3, 0xfcfcfb, 0x1c1c1e, 0x66666d, 0xdedee2, 0xe7e7e9, 0x1f6bf0,
             ),
             ProbeTheme::Dark => (
-                0x18181a, 0x1e1e20, 0x18181a, 0xececed,
-                0xa2a2aa, 0x3b3b42, 0x303036, 0x78a8f5,
+                0x18181a, 0x1e1e20, 0x18181a, 0xececed, 0xa2a2aa, 0x3b3b42, 0x303036, 0x78a8f5,
             ),
             // 代表自定义低亮度蓝绿底，检验不能假设所有主题为中性灰。
             ProbeTheme::Custom => (
-                0x102c31, 0x17383d, 0x133137, 0xe2f2ed,
-                0xafc7c3, 0x4b6f70, 0x30565a, 0x9fd9cf,
+                0x102c31, 0x17383d, 0x133137, 0xe2f2ed, 0xafc7c3, 0x4b6f70, 0x30565a, 0x9fd9cf,
             ),
         };
         Self {
@@ -74,7 +72,11 @@ impl Palette {
 
     pub(crate) fn apply(theme: ProbeTheme, opacity: f32, font_size: f32, cx: &mut App) -> Self {
         Theme::change(
-            if theme == ProbeTheme::Light { ThemeMode::Light } else { ThemeMode::Dark },
+            if theme == ProbeTheme::Light {
+                ThemeMode::Light
+            } else {
+                ThemeMode::Dark
+            },
             None,
             cx,
         );

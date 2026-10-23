@@ -183,7 +183,12 @@ impl Material {
         };
         // 与生产 Windows ClearType policy 相同；不把 alpha=1 的无材质窗口误报为透明。
         #[cfg(target_os = "windows")]
-        if opacity >= 1.0 && matches!(resolved, BackdropAppearance::Transparent | BackdropAppearance::Blurred) {
+        if opacity >= 1.0
+            && matches!(
+                resolved,
+                BackdropAppearance::Transparent | BackdropAppearance::Blurred
+            )
+        {
             return BackdropAppearance::Opaque;
         }
         #[cfg(not(target_os = "windows"))]

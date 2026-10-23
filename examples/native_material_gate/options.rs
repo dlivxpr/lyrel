@@ -57,19 +57,27 @@ impl Options {
             let value = args.next().ok_or_else(|| format!("{key} 缺少值"))?;
             match key.as_str() {
                 "--theme" => {
-                    options.theme = ProbeTheme::ALL.into_iter().find(|theme| theme.id() == value)
+                    options.theme = ProbeTheme::ALL
+                        .into_iter()
+                        .find(|theme| theme.id() == value)
                         .ok_or_else(|| format!("不支持的主题：{value}"))?;
                 }
                 "--material" => {
-                    options.material = Material::ALL.iter().copied().find(|material| material.id() == value)
+                    options.material = Material::ALL
+                        .iter()
+                        .copied()
+                        .find(|material| material.id() == value)
                         .ok_or_else(|| format!("当前平台不支持的材质：{value}"))?;
                 }
                 "--width" => options.width = number(&key, &value, 840., 3840.)?,
                 "--height" => options.height = number(&key, &value, 600., 2160.)?,
                 "--zoom" => options.zoom = number(&key, &value, 75., 150.)?,
                 "--opacity" => options.opacity = number(&key, &value, 0.35, 1.)?,
-                "--legacy-blur" => options.legacy_blur = value.parse()
-                    .map_err(|_| "--legacy-blur 需要 true 或 false".to_owned())?,
+                "--legacy-blur" => {
+                    options.legacy_blur = value
+                        .parse()
+                        .map_err(|_| "--legacy-blur 需要 true 或 false".to_owned())?
+                }
                 _ => return Err(format!("未知参数：{key}")),
             }
         }
