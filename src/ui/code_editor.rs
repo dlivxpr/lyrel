@@ -1592,6 +1592,27 @@ impl LyrelApp {
         }
     }
 
+    /// Settings borrows focus, not the terminal's place in the workbench.
+    /// Keep explicit terminal commands on `focus_active`; only an overlay's
+    /// return path restores the foreground document or the last docked shell.
+    pub(crate) fn focus_previous_content(&self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.status_document_context(window, cx) {
+            Some(crate::ui::app::OverlayTop::Code) => {
+                if self.active_buffer().is_some_and(|file| !file.preview) {
+                    self.focus_editor(window, cx);
+                } else {
+                    self.editor.empty_focus.focus(window, cx);
+                }
+            }
+            Some(crate::ui::app::OverlayTop::Diff) => {
+                if let Some(diff) = self.tabs.get(self.active).and_then(|tab| tab.diff_overlay.as_ref()) {
+                    window.focus(&diff.focus_handle, cx);
+                }
+            }
+            None => self.focus_active(window, cx),
+        }
+    }
+
     /// Brings the file at `pos` in the active tab's strip to the front.
     pub(crate) fn editor_activate(
         &mut self,
@@ -4456,6 +4477,42 @@ mod close_gpui_tests {
         vcx.dispatch_action(ToggleCodePanel);
         settle(&mut vcx);
         vcx.update(|window, _| assert!(window.find("status-cursor").visible()));
+    }
+
+    #[gpui_kit::test]
+    fn settings_escape_restores_the_current_document_or_docked_terminal(cx: &mut TestAppContext) {
+        use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
+        vcx.dispatch_action(EditorNewFile);
+        settle(&mut vcx);
+        // Both dock and fill must return typing to the document, not its shell.
+        for text in ["docked", "filled"] {
+            if text == "filled" {
+                vcx.dispatch_action(ToggleDocumentFill);
+                settle(&mut vcx);
+            }
+            vcx.update(|window, cx| window.click("status-settings", cx));
+            settle(&mut vcx);
+            assert!(app.read_with(&vcx, |app, _| app.active_settings().is_some()));
+            vcx.simulate_keystrokes("escape");
+            settle(&mut vcx);
+            assert!(app.update_in(&mut vcx, |app, window, cx| app.editor_has_focus(window, cx)));
+            vcx.update(|window, cx| window.input(text, cx));
+            settle(&mut vcx);
+        }
+        assert_eq!(app.read_with(&vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string()), "dockedfilled");
+        vcx.dispatch_action(ToggleDocumentFill);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let handle = app.tabs[0].pane.first_leaf().unwrap().focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("status-settings", cx));
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("escape");
+        settle(&mut vcx);
+        assert!(terminal_focused(&app, &mut vcx));
     }
 }
 

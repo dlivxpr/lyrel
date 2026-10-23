@@ -8267,11 +8267,11 @@ impl LyrelApp {
                         let _ = settings.update(cx, |_, window, _| window.remove_window());
                         let _ = owner.update(cx, |_, window, cx| {
                             window.activate_window();
-                            let _ = app.update(cx, |this, cx| this.focus_active(window, cx));
+                            let _ = app.update(cx, |this, cx| this.focus_previous_content(window, cx));
                         });
                     });
                 }
-                None => self.focus_active(window, cx),
+                None => self.focus_previous_content(window, cx),
             }
             cx.notify();
         }
@@ -14577,6 +14577,34 @@ mod unfocused_shortcut_tests {
             );
             assert!(expected.is_focused(window));
         });
+    }
+
+    #[gpui_kit::test]
+    fn separate_settings_escape_returns_focus_to_the_filled_document(cx: &mut TestAppContext) {
+        use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
+        use gpui_kit::test::TestWindowExt as _;
+        let (app, mut vcx, _streams) = super::test_window::harness_with_tabs(cx, 1);
+        vcx.dispatch_action(EditorNewFile);
+        vcx.dispatch_action(ToggleDocumentFill);
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            assert!(app.editor_has_focus(window, cx));
+            // Use the production separate-window constructor: normal test
+            // Actions intentionally keep Settings inline in the harness.
+            app.open_settings_window_then(window, cx, None);
+        });
+        vcx.run_until_parked();
+        let settings = app.read_with(&vcx, |app, _| app.settings_window.unwrap().0);
+        let mut settings_vcx = VisualTestContext::from_window(settings, cx);
+        settings_vcx.update(|window, cx| window.render_frame(cx));
+        settings_vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        assert!(app.update_in(&mut vcx, |app, window, cx| {
+            app.active_settings().is_none() && app.editor_has_focus(window, cx)
+        }));
+        vcx.update(|window, cx| window.input("returns to document", cx));
+        assert!(app.update_in(&mut vcx, |app, window, cx| app.editor_has_focus(window, cx)));
     }
 }
 
