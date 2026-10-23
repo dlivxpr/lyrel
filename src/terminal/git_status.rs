@@ -1,9 +1,10 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use crate::core::git::{GitStatus, RepoProbe, RepoSnapshot, probe_repo};
-use crate::ui::host_ops::{ByHost, HostId, InFlight};
+use crate::ui::host_ops::{ByHost, Host, HostId, InFlight};
 
 /// The spelling a directory is keyed by in here.
 ///
@@ -25,6 +26,18 @@ fn key(host: HostId, path: &Path) -> Cow<'_, Path> {
     lyrel_core::core::path_spelling::spelling_on(host, path)
 }
 
+/// Cheap identity discovery; called on a HostOps worker, never the UI thread.
+pub(crate) fn discover_root(host: &dyn Host, cwd: &Path) -> std::io::Result<Option<PathBuf>> {
+    let cwd = host.canonicalize(cwd)?;
+    host.repo_root(&cwd)
+}
+
+#[derive(Default)]
+struct RootChecks {
+    checked: ByHost<PathBuf, (Instant, Option<u64>)>,
+    next: u64,
+}
+
 #[derive(Default)]
 pub struct GitStatusCache {
     roots: ByHost<PathBuf, Option<PathBuf>>,
@@ -32,6 +45,8 @@ pub struct GitStatusCache {
     status: ByHost<PathBuf, GitStatus>,
     probes: InFlight<(HostId, PathBuf)>,
     last_probe: ByHost<PathBuf, Instant>,
+    // Scheduling must not notify observers when a check confirms the same root.
+    root_checks: RefCell<RootChecks>,
 }
 
 impl gpui_kit::Global for GitStatusCache {}
@@ -69,10 +84,12 @@ impl GitStatusCache {
         self.homes.clear_host(host);
         self.status.clear_host(host);
         self.last_probe.clear_host(host);
+        self.root_checks.get_mut().checked.clear_host(host);
     }
 
     pub fn begin_probe(&mut self, host: HostId, cwd: &Path) -> bool {
         let key = (host, key(host, cwd).into_owned());
+        self.root_checks.get_mut().checked.remove(host, &key.1);
         if self.probes.begin(key.clone()) {
             true
         } else {
@@ -93,6 +110,7 @@ impl GitStatusCache {
         let cwd = key(host, cwd);
         let throttle = self.throttle_key(host, &cwd).to_path_buf();
         self.last_probe.insert(host, throttle, Instant::now());
+        self.root_checks.get_mut().checked.remove(host, &*cwd);
         self.probes.begin((host, cwd.into_owned()));
         true
     }
@@ -120,6 +138,60 @@ impl GitStatusCache {
     pub fn retry_due(&self, host: HostId, cwd: &Path, min_interval: Duration) -> bool {
         !matches!(self.roots.get(host, &*key(host, cwd)), Some(Some(_)))
             && self.probe_due(host, cwd, min_interval)
+    }
+
+    /// Revalidate positive discoveries too: a nested working tree can appear
+    /// without a shell prompt or any write to the old repository's `.git`.
+    /// Unlike status throttling, this is keyed by cwd, not the previous root.
+    pub(crate) fn begin_root_check(
+        &self,
+        host: HostId,
+        cwd: &Path,
+        min_interval: Duration,
+    ) -> Option<u64> {
+        self.repo_root_for(host, cwd)?;
+        let cwd = key(host, cwd);
+        let mut checks = self.root_checks.borrow_mut();
+        if checks
+            .checked
+            .get(host, &*cwd)
+            .is_some_and(|(at, pending)| pending.is_some() || at.elapsed() < min_interval)
+            || self.probes.is_pending(&(host, cwd.to_path_buf()))
+        {
+            return None;
+        }
+        checks.next += 1;
+        let request = checks.next;
+        checks
+            .checked
+            .insert(host, cwd.into_owned(), (Instant::now(), Some(request)));
+        Some(request)
+    }
+
+    /// Whether a current, successful root check requires a full status probe.
+    /// A command-boundary probe or disconnect retires its pending request.
+    pub(crate) fn finish_root_check(
+        &self,
+        host: HostId,
+        cwd: &Path,
+        request: u64,
+        result: std::io::Result<Option<PathBuf>>,
+    ) -> bool {
+        let cwd = key(host, cwd);
+        let mut checks = self.root_checks.borrow_mut();
+        if !checks
+            .checked
+            .get(host, &*cwd)
+            .is_some_and(|(_, pending)| *pending == Some(request))
+        {
+            return false;
+        }
+        checks
+            .checked
+            .insert(host, cwd.to_path_buf(), (Instant::now(), None));
+        let Ok(root) = result else { return false };
+        let root = root.as_deref().map(|root| key(host, root));
+        self.roots.get(host, &*cwd).map(Option::as_deref) != Some(root.as_deref())
     }
 
     /// `cwd` is already in the cache's own spelling — every caller of this one
@@ -207,6 +279,10 @@ impl GitStatusCache {
             None => cwd.to_path_buf(),
         };
         self.last_probe.insert(host, throttle, Instant::now());
+        self.root_checks
+            .get_mut()
+            .checked
+            .insert(host, cwd.to_path_buf(), (Instant::now(), None));
         match snapshot {
             Some(snap) => {
                 let (added, removed) = snap.counts.unwrap_or_else(|| {
@@ -247,6 +323,10 @@ impl GitStatusCache {
         let rerun = !self.probes.finish(&(host, cwd.to_path_buf()));
         let throttle = self.throttle_key(host, &cwd).to_path_buf();
         self.last_probe.insert(host, throttle, Instant::now());
+        self.root_checks
+            .get_mut()
+            .checked
+            .insert(host, cwd.to_path_buf(), (Instant::now(), None));
         rerun
     }
 }
@@ -274,6 +354,39 @@ mod tests {
             counts: Some((0, 0)),
         }
     }
+    #[test]
+    fn a_link_into_a_repository_subdirectory_keeps_the_physical_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("physical");
+        let subdir = root.join("subdir");
+        let alias = temp.path().join("alias");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let host = lyrel_core::host::local::LocalHost::new();
+        assert!(host.git(&root, &["init", "--quiet"]).unwrap().success());
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&subdir, &alias).unwrap();
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(&alias)
+                .arg(&subdir)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+
+        let mut cache = GitStatusCache::default();
+        let snapshot = crate::core::git::probe(&*host, &alias).unwrap();
+        cache.finish_probe(L, &alias, Some(snapshot));
+        let request = cache.begin_root_check(L, &alias, Duration::ZERO).unwrap();
+        assert!(
+            !cache.finish_root_check(L, &alias, request, discover_root(&*host, &alias)),
+            "an unchanged linked cwd must not trigger a full Git status/diff probe"
+        );
+    }
+
     #[test]
     fn a_diff_read_corrects_the_counts() {
         let mut cache = GitStatusCache::default();

@@ -43,7 +43,7 @@ use lyrel_core::core::config::RightPanelTab;
 use lyrel_core::core::github::CheckState;
 
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::SharedHost;
+use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::scm::panel::RepoLookup;
 use crate::ui::scm::state::RepoKey;
 
@@ -73,7 +73,9 @@ pub(crate) struct Connection {
 pub(crate) type Connector = Arc<dyn Fn() -> Connection + Send + Sync>;
 
 pub(crate) enum RemoteLookup {
-    Loading,
+    Loading {
+        request: u64,
+    },
     Ready {
         epoch: u64,
         list: Arc<Vec<GitHubRemote>>,
@@ -145,6 +147,9 @@ pub(crate) struct GitHubPanelState {
     /// `None` builds the real HTTPS transport.
     pub(crate) connector: Option<Connector>,
     pub(crate) remotes: HashMap<RepoKey, RemoteLookup>,
+    remote_request: u64,
+    metadata_seen: Option<(RepoKey, u64)>,
+    metadata_watch: Option<gpui_kit::Subscription>,
     /// The remote the user picked per repository, by remote name.
     pub(crate) remote_pick: HashMap<RepoKey, String>,
     pub(crate) kind: Kind,
@@ -184,7 +189,9 @@ pub(crate) enum GhTarget {
     NoPane,
     Pending,
     NotARepo,
-    NoRemote,
+    NoRemote {
+        repo: RepoKey,
+    },
     Ready {
         host: SharedHost,
         repo: RepoKey,
@@ -252,6 +259,50 @@ fn system_connector(proxy: Option<String>) -> Connector {
 }
 
 impl LyrelApp {
+    pub(crate) fn github_metadata_target(
+        &self,
+        window: &Window,
+        cx: &gpui_kit::App,
+    ) -> Option<(HostId, std::path::PathBuf)> {
+        if !self.right_panel_visible || self.right_panel_tab != RightPanelTab::GitHub {
+            return None;
+        }
+        let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
+        let view = leaf.read(cx);
+        let host = view.host_id();
+        let cwd = view.effective_host_cwd()?;
+        let root = cx
+            .try_global::<crate::terminal::git_status::GitStatusCache>()?
+            .repo_root_for(host, &cwd)?;
+        Some((host, root.to_path_buf()))
+    }
+
+    fn github_watch_metadata(&mut self, repo: &RepoKey, epoch: u64, cx: &mut Context<Self>) {
+        match &mut self.github.metadata_seen {
+            Some((seen_repo, seen_epoch)) if seen_repo == repo => *seen_epoch = epoch,
+            seen => *seen = Some((repo.clone(), epoch)),
+        }
+        if self.github.metadata_watch.is_some() {
+            return;
+        }
+        self.github.metadata_watch = Some(cx.observe_global::<crate::terminal::git_data::ScmData>(
+            |this, cx| {
+                if !this.right_panel_visible || this.right_panel_tab != RightPanelTab::GitHub {
+                    return;
+                }
+                let Some((repo, seen)) = this.github.metadata_seen.as_mut() else {
+                    return;
+                };
+                let data = cx.global::<crate::terminal::git_data::ScmData>();
+                let epoch = data.epoch(repo.host, &repo.root);
+                if epoch != *seen && !data.is_change_pending(repo.host, &repo.root) {
+                    *seen = epoch;
+                    cx.notify();
+                }
+            },
+        ));
+    }
+
     /// The active pane's GitHub repository, resolving whatever is not known
     /// yet. Safe to call every frame: each lookup is dispatched once and
     /// cached.
@@ -261,11 +312,18 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> GhTarget {
         let Some((host, cwd)) = self.scm_pane_target(window, cx) else {
+            self.github.metadata_seen = None;
             return GhTarget::NoPane;
         };
         let root = match self.scm_repo_root(&host, &cwd, cx) {
-            RepoLookup::Pending => return GhTarget::Pending,
-            RepoLookup::NotARepo => return GhTarget::NotARepo,
+            RepoLookup::Pending => {
+                self.github.metadata_seen = None;
+                return GhTarget::Pending;
+            }
+            RepoLookup::NotARepo => {
+                self.github.metadata_seen = None;
+                return GhTarget::NotARepo;
+            }
             RepoLookup::Root(root) => root,
         };
         let repo = RepoKey {
@@ -284,12 +342,13 @@ impl LyrelApp {
         let epoch = cx
             .default_global::<crate::terminal::git_data::ScmData>()
             .epoch(repo.host, &repo.root);
+        self.github_watch_metadata(&repo, epoch, cx);
         let remotes = match self.github.remotes.get(&repo) {
             Some(RemoteLookup::Ready {
                 epoch: read_epoch,
                 list,
             }) if *read_epoch == epoch => list.clone(),
-            Some(RemoteLookup::Loading) => return GhTarget::Pending,
+            Some(RemoteLookup::Loading { .. }) => return GhTarget::Pending,
             _ => {
                 self.github_load_remotes(host, repo, epoch, cx);
                 return GhTarget::Pending;
@@ -306,7 +365,7 @@ impl LyrelApp {
                     chosen,
                 }
             }
-            None => GhTarget::NoRemote,
+            None => GhTarget::NoRemote { repo },
         }
     }
 
@@ -317,15 +376,31 @@ impl LyrelApp {
         epoch: u64,
         cx: &mut Context<Self>,
     ) {
+        self.github.remote_request += 1;
+        let request = self.github.remote_request;
         self.github
             .remotes
-            .insert(repo.clone(), RemoteLookup::Loading);
+            .insert(repo.clone(), RemoteLookup::Loading { request });
         let root = repo.root.clone();
         crate::ui::host_ops::HostOps::run(
             host,
             cx,
             move |h| lyrel_core::core::git::git(h, &root, &["remote", "-v"]),
             move |this, out, cx| {
+                if !matches!(this.github.remotes.get(&repo),
+                    Some(RemoteLookup::Loading { request: current }) if *current == request)
+                {
+                    return;
+                }
+                if cx
+                    .global::<crate::terminal::git_data::ScmData>()
+                    .epoch(repo.host, &repo.root)
+                    != epoch
+                {
+                    this.github.remotes.remove(&repo);
+                    cx.notify();
+                    return;
+                }
                 let remotes =
                     lyrel_core::core::github::remote::github_remotes(&out.unwrap_or_default());
                 this.github.remotes.insert(

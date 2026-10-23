@@ -73,12 +73,28 @@ impl LyrelApp {
                 );
                 return self.github_shell(title, Vec::new(), body, false);
             }
-            GhTarget::NoRemote => {
+            GhTarget::NoRemote { repo } => {
                 let body = self.panel_empty(
                     t(L10nKey::GitHubNoRemote),
                     Some(t(L10nKey::GitHubNoRemoteHint)),
                     cx,
                 );
+                let body = v_flex()
+                    .gap(px(8.))
+                    .child(body)
+                    .child(
+                        h_flex().px(px(TEXT_INSET)).child(
+                            Button::new("panel-github-refresh-empty")
+                                .ghost()
+                                .small()
+                                .icon(IconName::RefreshCw)
+                                .label(t(L10nKey::GitHubRefresh))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.github_refresh(Some(repo.clone()), cx);
+                                })),
+                        ),
+                    )
+                    .into_any_element();
                 return self.github_shell(title, Vec::new(), body, false);
             }
             GhTarget::Ready {
@@ -919,6 +935,7 @@ mod gpui_tests {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab;
     use lyrel_core::core::github::{ApiError, Kind, Reply, Transport};
@@ -1002,6 +1019,104 @@ mod gpui_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    fn wait_for_remotes(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        root: &Path,
+        expected: Option<&str>,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(300));
+            vcx.run_until_parked();
+            let ready = app.read_with(vcx, |app, _| {
+                app.github.remotes.iter().any(|(repo, lookup)| {
+                    repo.root == root
+                        && matches!(lookup, crate::ui::github::RemoteLookup::Ready { list, .. }
+                            if list.first().map(|remote| remote.slug.full()).as_deref() == expected)
+                })
+            });
+            if ready {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "GitHub did not follow remote change to {expected:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn github_alone_follows_remote_changes_without_shell_marks(cx: &mut TestAppContext) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        git(&root, &["init", "--quiet"]);
+        let (app, mut vcx, mut pane) = test_window::harness_with_pane(cx);
+        let transport: Arc<dyn Transport> = Arc::new(Fake {
+            asked: Mutex::new(Vec::new()),
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.github.connector = Some(Arc::new(move || Connection {
+                transport: transport.clone(),
+            }));
+            app.right_panel_visible = true;
+            app.right_panel_tab = RightPanelTab::GitHub;
+            cx.notify();
+        });
+        DaemonMsg::Cwd(root.clone()).encode(&mut pane).unwrap();
+        wait_for_remotes(&app, &mut vcx, &root, None);
+
+        git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        wait_for_remotes(&app, &mut vcx, &root, Some("acme/widgets"));
+        git(
+            &root,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "git@github.com:acme/gadgets.git",
+            ],
+        );
+        wait_for_remotes(&app, &mut vcx, &root, Some("acme/gadgets"));
+        git(&root, &["remote", "remove", "origin"]);
+        wait_for_remotes(&app, &mut vcx, &root, None);
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("panel-github-refresh-empty").visible());
+            window.click("panel-github-refresh-empty", cx);
+        });
+        wait_for_remotes(&app, &mut vcx, &root, None);
+
+        test_window::quiesce(&mut vcx, Some(&root));
+        crate::ui::app::render_probe::arm(200);
+        vcx.executor()
+            .advance_clock(std::time::Duration::from_secs(9));
+        vcx.run_until_parked();
+        assert_eq!(crate::ui::app::render_probe::draws(), 0);
+
+        app.read_with(&vcx, |app, cx| {
+            assert!(app.scm.repo.is_none(), "Changes was never opened");
+            assert!(
+                cx.global::<crate::terminal::git_data::ScmData>()
+                    .status_for(crate::ui::host_ops::HostId::LOCAL, &root)
+                    .is_none(),
+                "GitHub metadata must not trigger a full working-tree status read"
+            );
+        });
     }
 
     #[gpui_kit::test]

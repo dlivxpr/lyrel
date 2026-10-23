@@ -2289,6 +2289,48 @@ impl TerminalView {
         cache.retry_due(self.host_id, cwd, GIT_RETRY_GAP)
     }
 
+    fn recheck_git_root(&self, cx: &mut Context<Self>) {
+        if !self.displayed.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let Some(cwd) = self.git_status_cwd.as_deref() else {
+            return;
+        };
+        let Some(host) = self.host(cx).filter(|host| host.is_connected()) else {
+            return;
+        };
+        let id = self.host_id;
+        let Some(request) = cx
+            .global::<crate::terminal::git_status::GitStatusCache>()
+            .begin_root_check(id, cwd, GIT_RETRY_GAP)
+        else {
+            return;
+        };
+        let cwd = cwd.to_path_buf();
+        let probe_cwd = cwd.clone();
+        let pane = cx.weak_entity();
+        crate::ui::host_ops::HostOps::run_detached(
+            host,
+            cx,
+            move |host| crate::terminal::git_status::discover_root(host, &probe_cwd),
+            move |cx, result| {
+                let changed = cx
+                    .global::<crate::terminal::git_status::GitStatusCache>()
+                    .finish_root_check(id, &cwd, request, result);
+                if changed {
+                    let _ = pane.update(cx, |view, cx| {
+                        if view.host_id == id
+                            && view.git_status_cwd.as_deref() == Some(&cwd)
+                            && view.displayed.load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            view.refresh_git_status(Some(cwd), GitRefresh::Edge, cx);
+                        }
+                    });
+                }
+            },
+        );
+    }
+
     /// Plant the cwd the git-status poll would have found. For tests that
     /// need a pane to look like it is sitting somewhere known — a real poll
     /// needs a live shell reporting a directory, which a quiet test pane has
@@ -4203,6 +4245,8 @@ impl TerminalView {
             self.refresh_git_status(cwd_now, GitRefresh::Opportunistic, cx);
         } else if self.git_retry_due(cx) {
             self.refresh_git_status(cwd_now, GitRefresh::Retry, cx);
+        } else {
+            self.recheck_git_root(cx);
         }
 
         self.follow_history_scope(cx);
