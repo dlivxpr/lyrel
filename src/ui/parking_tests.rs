@@ -434,6 +434,7 @@ fn escape_cancels_a_valid_parking_drag_without_a_late_drop_or_menu(cx: &mut Test
         window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
         window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
         assert!(window.find("park-drop-target").visible());
+        assert!(cx.has_active_drag());
         window.press("escape", cx);
         assert!(!cx.has_active_drag());
         assert!(window.captured_hitbox().is_none());
@@ -450,6 +451,73 @@ fn escape_cancels_a_valid_parking_drag_without_a_late_drop_or_menu(cx: &mut Test
         assert!(pane.contains_focused(window, cx));
         assert!(app.pane_drag.borrow().is_none());
     });
+}
+
+#[gpui_kit::test]
+fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
+    let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
+        let left = app.tabs[0].pane.first_leaf().unwrap();
+        let right = app.tabs.remove(1).pane.first_leaf().unwrap();
+        app.tabs[0].pane.split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
+        window.focus(&left.focus_handle(cx), cx);
+        cx.notify();
+        (left, right)
+    });
+    for cancellation in ["escape", "mouse-exit", "deactivate"] {
+        for release_at_handle in [false, true] {
+            vcx.update(|window, _| window.activate_window());
+            vcx.run_until_parked();
+            let (start, release) = vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let start = window.find(("pane-drag-handle", left.entity_id().as_u64() as usize)).bounds().center();
+                let content = window.find("pane-presentations").bounds();
+                let aim = point(content.center().x, content.bottom() - window.rem_size());
+                window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
+                window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
+                assert!(cx.has_active_drag());
+                assert!(window.find("park-drop-target").visible());
+                let release = if release_at_handle {
+                    start
+                } else {
+                    // This would move the left pane to the right of its sibling
+                    // if a stale drag were allowed to acquire another landing.
+                    point(content.right() - window.rem_size(), content.center().y)
+                };
+                (start, release)
+            });
+            match cancellation {
+                "escape" => vcx.update(|window, cx| window.press("escape", cx)),
+                "mouse-exit" => vcx.simulate_event(gpui_kit::MouseExitEvent {
+                    position: start,
+                    pressed_button: Some(gpui_kit::MouseButton::Left),
+                    ..Default::default()
+                }),
+                "deactivate" => vcx.deactivate_window(),
+                _ => unreachable!(),
+            }
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                assert!(!cx.has_active_drag(), "{cancellation}");
+                assert!(window.captured_hitbox().is_none(), "{cancellation}");
+                assert!(window.try_find("park-drop-target").is_none(), "{cancellation}");
+                window.pointer_move(release, Some(gpui_kit::MouseButton::Left), cx);
+                window.pointer_up(release, gpui_kit::MouseButton::Left, cx);
+                assert!(!cx.has_active_drag(), "late move after {cancellation}");
+                assert!(window.try_find_by_label(t(L10nKey::PanePark)).is_none(), "late menu after {cancellation}");
+            });
+            app.update_in(&mut vcx, |app, _, cx| {
+                assert_eq!(app.tabs.len(), 1);
+                let leaves = app.tabs[0].pane.leaves();
+                assert_eq!(leaves.len(), 2);
+                assert_eq!(leaves[0].entity_id(), left.entity_id(), "late split after {cancellation}");
+                assert_eq!(leaves[1].entity_id(), right.entity_id(), "late split after {cancellation}");
+                assert!(app.tabs[0].presentation.parked().is_empty());
+                assert!(app.pane_drag.borrow().is_none());
+                assert!(app.parked_deck.read(cx).cards().is_empty());
+            });
+        }
+    }
 }
 
 #[gpui_kit::test]
