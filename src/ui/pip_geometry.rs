@@ -112,10 +112,19 @@ pub(crate) fn commit(
         {
             return;
         }
-        if let Some(presentation) = &mut tab.foreign_presentation {
-            presentation.set_pip_geometry(Some(geometry));
-        }
-        if tab.presentation.set_pip_geometry(Some(geometry)) {
+        let changed = if let Some(presentation) = &mut tab.foreign_presentation {
+            let changed = presentation.set_pip_geometry(Some(geometry));
+            if presentation
+                .pip()
+                .is_some_and(|pip| !pip.pane().owner().is_client_local())
+            {
+                tab.presentation.set_pip_geometry(Some(geometry));
+            }
+            changed
+        } else {
+            tab.presentation.set_pip_geometry(Some(geometry))
+        };
+        if changed {
             app.save_session(cx);
             cx.notify();
         }

@@ -124,6 +124,19 @@ fn pane_from_existing(
     }
 }
 
+fn install_tab_presentation(tab: &mut Tab, presentation: TabPresentation<ScopedPane>) {
+    let mut primary =
+        presentation.map_panes(|pane| (!pane.owner().is_client_local()).then_some(pane.pane()));
+    if presentation
+        .pip()
+        .is_none_or(|pip| pip.pane().owner().is_client_local())
+    {
+        primary.set_pip_geometry(tab.presentation.pip_geometry());
+    }
+    tab.presentation = primary;
+    tab.foreign_presentation = Some(presentation);
+}
+
 fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, cx: &App) -> bool {
     if logical_node(&tab.pane, cx).as_ref() != Some(&logical.root) {
         let mut slots = tab
@@ -137,10 +150,7 @@ fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, cx: &App) -
         };
         tab.pane = pane;
     }
-    tab.presentation = logical
-        .presentation
-        .map_panes(|pane| (!pane.owner().is_client_local()).then_some(pane.pane()));
-    tab.foreign_presentation = Some(logical.presentation);
+    install_tab_presentation(tab, logical.presentation);
     true
 }
 
@@ -200,11 +210,6 @@ pub(crate) fn note_primary_tab(tab: &mut Tab, primary: &TreeTab, cx: &App) {
             logical.park_with_restore(ScopedPane::workspace(entry.pane()), restore);
         }
     }
-    if primary.presentation.pip_geometry() != tab.presentation.pip_geometry() {
-        logical
-            .presentation
-            .set_pip_geometry(primary.presentation.pip_geometry());
-    }
     let current = logical.presentation.pip().map(|pip| pip.pane());
     if before != after || primary.presentation.pip() != tab.presentation.pip() {
         if let Some(after) = after {
@@ -218,6 +223,15 @@ pub(crate) fn note_primary_tab(tab: &mut Tab, primary: &TreeTab, cx: &App) {
         {
             logical.set_pip(None, fallback);
         }
+    }
+    if logical
+        .presentation
+        .pip()
+        .is_some_and(|pip| !pip.pane().owner().is_client_local())
+    {
+        logical
+            .presentation
+            .set_pip_geometry(primary.presentation.pip_geometry());
     }
     if logical.presentation != initial {
         install_presentation(tab, logical, cx);
@@ -326,11 +340,12 @@ pub(crate) fn intend_close(cx: &mut App, workspace: WorkspaceId, tab: TabId) {
     let state = cx
         .default_global::<PaneSidecars>()
         .0
-        .entry(remote)
+        .entry(remote.clone())
         .or_default();
-    if state.baseline.remove(&tab).is_some() {
+    if state.baseline.remove(&tab).is_some() || !state.loaded {
         state.pending.push(SidecarUpdate::close_tab(tab));
     }
+    pump(cx, remote);
 }
 
 pub(crate) fn on_sidecar_delta(cx: &mut App, workspace: &Workspace) {
@@ -640,17 +655,13 @@ fn adopt(
         {
             // Preserve every existing view and focus owner; only composition is shared.
             tab.pane = pane;
-            tab.foreign_presentation = Some(presentation.clone());
-            tab.presentation = presentation
-                .map_panes(|key| (!key.owner().is_client_local()).then_some(key.pane()));
+            install_tab_presentation(tab, presentation);
         } else {
             let mut tab = Tab::new(pane);
             tab.tree_id.set(source.id);
             tab.name = source.name.clone();
             tab.group.set(source.group);
-            tab.foreign_presentation = Some(presentation.clone());
-            tab.presentation = presentation
-                .map_panes(|key| (!key.owner().is_client_local()).then_some(key.pane()));
+            install_tab_presentation(&mut tab, presentation);
             app.tabs.push(tab);
         }
     }
@@ -663,6 +674,7 @@ fn adopt(
         app.active = app.active.min(app.tabs.len().saturating_sub(1));
         app.focus_active(window, cx);
     }
+    app.refocus_parked_pane(window, cx);
     app.save_session(cx);
     cx.notify();
 }
