@@ -678,12 +678,17 @@ impl LyrelApp {
     pub(crate) fn panel_title(
         &self,
         _text: &str,
-        _count: Option<String>,
+        count: Option<String>,
         trailing: Option<AnyElement>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tabs = self.right_panel_tabs(cx);
+        let changes_count = if self.right_panel_tab == RightPanelTab::Scm {
+            count.map(gpui_kit::SharedString::from)
+        } else {
+            None
+        };
+        let tabs = self.right_panel_tabs(changes_count, cx);
         h_flex()
             .id("panel-title")
             .flex_none()

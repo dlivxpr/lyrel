@@ -1,3 +1,4 @@
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
@@ -1244,7 +1245,11 @@ impl LyrelApp {
     /// The right panel's tabs: words, the current one in body ink and medium
     /// weight on a pill (ink and weight alone read as no selection at all).
     /// Four names fit the panel's resting width once Search folded into Files.
-    pub(crate) fn right_panel_tabs(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(crate) fn right_panel_tabs(
+        &self,
+        changes_count: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let active_tab = self.right_panel_tab;
         let body_ink = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
@@ -1273,6 +1278,9 @@ impl LyrelApp {
                     .child(
                         div()
                             .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap_1()
                             .px(px(TAB_INNER_PAD))
                             .py_0p5()
                             .rounded_md()
@@ -1284,7 +1292,20 @@ impl LyrelApp {
                             })
                             .text_color(ink)
                             .hover(move |s| s.text_color(body_ink))
-                            .child(t(label_key)),
+                            .child(t(label_key))
+                            .when(tab == RightPanelTab::Scm, |label| {
+                                label.when_some(changes_count.clone(), |label, count| {
+                                    label.child(
+                                        div()
+                                            .id("right-panel-change-count")
+                                            .test_support()
+                                            .aria_label(count.clone())
+                                            .font_weight(FontWeight::NORMAL)
+                                            .text_color(muted)
+                                            .child(count),
+                                    )
+                                })
+                            }),
                     )
                     // The current one does nothing: only ⌘J and the title-bar
                     // panel tile put the panel away.
