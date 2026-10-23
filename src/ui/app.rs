@@ -615,6 +615,7 @@ impl Tab {
         cx: &mut App,
     ) -> gpui_kit::AnyElement {
         let pip = self.pip_slot(cx);
+        if pip.is_none() { self.pip_interaction.cancel(); }
         let tiled =
             self.pane
                 .render_without(pip.as_ref().map(PaneSlot::entity_id), chrome, window, cx);
