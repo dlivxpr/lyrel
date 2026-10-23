@@ -267,7 +267,7 @@ fn workspace_name_of(owner: &str, cx: &App) -> Option<String> {
         cx,
         crate::core::session::HostId::LOCAL,
     )?;
-    let ws = machine.workspaces.iter().find(|ws| ws.id == id)?;
+    let ws = machine.user_workspaces().find(|ws| ws.id == id)?;
     Some(crate::ui::machine_mirror::display_name_of(
         ws,
         &machine.panes,
@@ -4110,6 +4110,67 @@ mod gpui_tests {
 
     use super::Column;
     use crate::ui::app::test_window::harness_with_tabs;
+
+    #[gpui_kit::test]
+    fn sidecar_projection_never_becomes_a_local_or_remote_switcher_workspace(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::core::session::{HostId, RemoteRef, RemoteTarget, WorkspaceId};
+        use lyrel_core::core::machine::{Machine, PaneRecord, Tab, Workspace};
+        use lyrel_core::core::pane_sidecar::ForeignWorkspace;
+
+        let (app, _vcx) = crate::ui::app::test_window::harness(cx);
+        let target = RemoteTarget::Alias {
+            alias: "build-box".into(),
+        };
+        let ordinary = Workspace {
+            name: Some("cli-created".into()),
+            tabs: vec![Tab::leaf(7)],
+            ..Workspace::default()
+        };
+        let ordinary_id = ordinary.id;
+        let projection = Workspace {
+            name: Some("internal-projection".into()),
+            tabs: vec![Tab::leaf(77)],
+            foreign_view: Some(ForeignWorkspace::new(RemoteRef::new(
+                target.clone(),
+                WorkspaceId::new(),
+            ))),
+            ..Workspace::default()
+        };
+        let projection_id = projection.id;
+        app.update(cx, |app, cx| {
+            let machine = Machine {
+                workspaces: vec![projection, ordinary],
+                panes: vec![PaneRecord::new(7), PaneRecord::new(77)],
+            };
+            app.host_snapshots.insert(
+                target.host_id(),
+                super::HostSnapshot {
+                    target: target.clone(),
+                    rows: crate::ui::remote_connect::rows_from_machine(&machine),
+                },
+            );
+            crate::ui::machine_mirror::MachineMirrors::install(cx, HostId::LOCAL, machine);
+
+            let groups = app.switcher_groups(cx);
+            let local: Vec<_> = groups
+                .iter()
+                .flat_map(|group| group.rows.iter())
+                .filter(|row| row.adopt.is_none())
+                .map(|row| row.id)
+                .collect();
+            assert!(local.contains(&ordinary_id));
+            assert!(!local.contains(&projection_id));
+            let remote: Vec<_> = groups
+                .iter()
+                .flat_map(|group| group.rows.iter().filter_map(|row| row.remote_id))
+                .collect();
+            assert!(remote.contains(&ordinary_id));
+            assert!(!remote.contains(&projection_id));
+            assert!(super::held_local_pane_ids(cx).contains(&77));
+        });
+    }
 
     /// Deleting a remote workspace has to take the listing snapshot's row with
     /// it. The snapshot every window keeps for the switcher is merged into the

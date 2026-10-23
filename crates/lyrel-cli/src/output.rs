@@ -102,12 +102,8 @@ fn render_row(out: &mut String, cells: &mut dyn Iterator<Item = String>, widths:
 }
 
 pub fn workspace_table(machine: &Machine) -> String {
-    if machine.workspaces.is_empty() {
-        return "no workspaces — `lyrel new <path>` starts one\n".to_string();
-    }
     let rows: Vec<Vec<String>> = machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .map(|ws| {
             vec![
                 resolve::short_id(&ws.id),
@@ -125,6 +121,9 @@ pub fn workspace_table(machine: &Machine) -> String {
             ]
         })
         .collect();
+    if rows.is_empty() {
+        return "no workspaces — `lyrel new <path>` starts one\n".to_string();
+    }
     table(&["WORKSPACE", "NAME", "TABS", "PANES", "ATTACHED"], &rows)
 }
 
@@ -135,13 +134,15 @@ pub fn pane_table(machine: &Machine, only: Option<WorkspaceId>) -> String {
             continue;
         }
         for tab in &ws.tabs {
-            let ordinal = resolve::ordinal_of(machine, tab.id).unwrap_or(0);
+            let ordinal = resolve::ordinal_of(machine, tab.id)
+                .map(|ordinal| format!("@{ordinal}"))
+                .unwrap_or_else(|| "-".to_string());
             for pane in tab.root.pane_ids() {
                 let record = machine.panes.iter().find(|p| p.id == pane);
                 rows.push(vec![
                     format!("%{pane}"),
                     ws.name.clone().unwrap_or_else(|| resolve::short_id(&ws.id)),
-                    format!("@{ordinal}"),
+                    ordinal.clone(),
                     record
                         .and_then(|r| r.cwd.clone())
                         .unwrap_or_else(|| "-".to_string()),

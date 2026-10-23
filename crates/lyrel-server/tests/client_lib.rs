@@ -960,6 +960,21 @@ fn mixed_owner_sidecar_survives_clients_without_colliding_or_overwriting_new_pan
             ScopedPane::client_local(local_id)
         ]
     );
+    let machine = match first.request(ControlRequest::MachineGet).unwrap() {
+        ReplyOk::MachineTree(machine) => machine,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(machine.user_workspaces().count(), 0);
+    assert!(machine.workspaces.iter().any(|workspace| workspace.id == saved.id));
+    assert!(machine.panes.iter().any(|pane| pane.id == local_id));
+    assert!(
+        local_panes
+            .list()
+            .unwrap()
+            .iter()
+            .any(|pane| pane.pane_id == local_id && pane.alive),
+        "hiding a projection from workspace navigation must not hide its real pane"
+    );
     local_panes
         .send_input(
             local_id,
