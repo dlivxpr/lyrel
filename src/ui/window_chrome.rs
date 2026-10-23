@@ -220,9 +220,15 @@ mod gpui_tests {
     fn sidebar_chrome_preserves_document_and_terminal_input(cx: &mut TestAppContext) {
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 2);
         vcx.simulate_resize(size(px(1600.), px(900.)));
-        vcx.dispatch_action(crate::core::actions::EditorNewFile);
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("sidebar-focus.txt");
+        std::fs::write(&path, "").unwrap();
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_file_in_editor(&path, window, cx)
+        });
         settle(&mut vcx);
-        let editor = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.clone());
+        let editor =
+            app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
         assert!(app.update_in(&mut vcx, |app, window, cx| {
             app.document_dock_px(window, cx).is_some()
         }));
