@@ -1263,6 +1263,11 @@ impl LyrelApp {
             .and_then(|cache| cache.repo_root_for(id, cwd))
         {
             return RepoLookup::Root(root.to_path_buf());
+        } else if cx
+            .try_global::<crate::terminal::git_status::GitStatusCache>()
+            .is_some_and(|cache| cache.known_repo_for(id, cwd) == Some(None))
+        {
+            return RepoLookup::NotARepo;
         }
         let key = (id, cwd.to_path_buf());
         match self.scm.roots.get(&key) {
@@ -3403,7 +3408,7 @@ mod render_idle_gpui_tests {
                         .map(|(repo, lookup)| (
                             &repo.root,
                             match lookup {
-                                crate::ui::github::RemoteLookup::Loading => None,
+                                crate::ui::github::RemoteLookup::Loading { .. } => None,
                                 crate::ui::github::RemoteLookup::Ready { list, .. } =>
                                     Some(list.len()),
                             }
@@ -3439,7 +3444,7 @@ mod render_idle_gpui_tests {
             git(&parent, &["init", "--quiet"]);
         }
         let want = root.clone();
-        let (app, mut vcx, mut pane) = scm_panel_on(cx, &root, move |app, _| {
+        let (app, mut vcx, _pane) = scm_panel_on(cx, &root, move |app, _| {
             app.scm.roots.contains_key(&(HostId::LOCAL, want.clone())) || app.scm.repo.is_some()
         });
         if cloned {
@@ -3483,7 +3488,8 @@ mod render_idle_gpui_tests {
             );
         }
         std::fs::write(root.join("created.txt"), "new repository\n").unwrap();
-        command_finished(&mut pane);
+        // No command-completion mark: shells and tools may change repositories
+        // without reporting a prompt boundary to the terminal.
         wait_for_created_repository(&app, &mut vcx, &root);
     }
 
@@ -3517,7 +3523,7 @@ mod render_idle_gpui_tests {
             if app.update_in(&mut vcx, |app, window, cx| {
                 matches!(
                     app.github_target(window, cx),
-                    crate::ui::github::GhTarget::NoRemote
+                    crate::ui::github::GhTarget::NoRemote { .. }
                 )
             }) {
                 break;

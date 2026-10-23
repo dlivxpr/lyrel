@@ -167,7 +167,6 @@ impl Debounce {
     }
 
     /// Is an event still waiting for its probe?
-    #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.opened.is_some()
     }
@@ -216,6 +215,8 @@ impl Drop for NetworkSlot {
 pub enum ScmWatcher {
     /// The source control panel, while it is the visible tab.
     Panel,
+    /// The GitHub tab needs metadata changes, not a working-tree status read.
+    GitHub,
     /// The file tree, while it is showing a directory inside the repository.
     FileTree,
     /// The code editor, while it has a file from the repository open.
@@ -507,6 +508,21 @@ impl ScmData {
 
     pub fn is_subscribed(&self, host: HostId, root: &Path) -> bool {
         self.subs.is_subscribed(host, root)
+    }
+
+    fn needs_status(&self, host: HostId, root: &Path) -> bool {
+        self.subs
+            .held
+            .iter()
+            .any(|((_, who), (held_host, held_root))| {
+                *who != ScmWatcher::GitHub && *held_host == host && held_root == root
+            })
+    }
+
+    pub(crate) fn is_change_pending(&self, host: HostId, root: &Path) -> bool {
+        self.watches.iter().any(|((held_host, held_root), watch)| {
+            *held_host == host && held_root == root && watch.debounce.is_open()
+        })
     }
 
     /// A window is gone: whatever it was holding open, it holds no longer.
@@ -804,7 +820,8 @@ impl LyrelApp {
                 }
             }
             let _ = this.update(cx, |app, cx| {
-                if cx.default_global::<ScmData>().generation(host, &root) != sub_gen {
+                let data = cx.default_global::<ScmData>();
+                if data.generation(host, &root) != sub_gen || !data.needs_status(host, &root) {
                     return;
                 }
                 let Some(shared) = crate::ui::host_registry::HostRegistry::get(cx, host) else {
@@ -827,6 +844,7 @@ impl LyrelApp {
 
         let wanted = [
             (ScmWatcher::Panel, self.scm_panel_target(window, cx)),
+            (ScmWatcher::GitHub, self.github_metadata_target(window, cx)),
             (ScmWatcher::FileTree, self.scm_tree_target(window, cx)),
             (ScmWatcher::Editor, self.scm_editor_target(cx)),
         ];
@@ -854,7 +872,9 @@ impl LyrelApp {
                 continue;
             };
             self.scm_open_watch(shared.clone(), root.clone(), cx);
-            self.scm_refresh(shared, root, cx);
+            if cx.global::<ScmData>().needs_status(host, &root) {
+                self.scm_refresh(shared, root, cx);
+            }
         }
     }
 
@@ -947,6 +967,7 @@ impl LyrelApp {
             // The panel's own per-cwd caches too — `roots` grows one entry
             // per directory ever visited on the dead link otherwise.
             self.scm.forget_host(host);
+            self.github.remotes.retain(|repo, _| repo.host != host);
         }
     }
 
@@ -1015,6 +1036,9 @@ impl LyrelApp {
         let Some(events) = events else {
             return;
         };
+        // Re-read after subscribing too: config may have changed while the
+        // watch was opening, before it could deliver an event.
+        self.scm_invalidate(host, &root, cx);
         cx.spawn(async move |app, cx| {
             // The batch is not read. Anything at all under `.git` means the
             // answer to "what does this repository look like" may have moved,
