@@ -127,7 +127,6 @@ pub(crate) fn set_menus(cx: &mut App) {
             MenuItem::action(t(L10nKey::AppMenuLeftSidebar), ToggleLeftPanel),
             MenuItem::action(t(L10nKey::AppMenuRightPanel), ToggleRightPanel),
             MenuItem::action(t(L10nKey::AppMenuCodePanel), ToggleCodePanel),
-            MenuItem::action(t(L10nKey::AppMenuTabBarPosition), ToggleTabSidebar),
             MenuItem::separator(),
             MenuItem::action(t(L10nKey::CmdSshRemoteFiles), ToggleSftp),
             MenuItem::action(t(L10nKey::CmdSshPortForwarding), ShowSshForwards),

@@ -15,6 +15,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Context, ScrollHandle, Window, div, px};
+use gpui_kit::TestSupportExt as _;
 use lsp_types::DiagnosticSeverity;
 
 use crate::ui::app::LyrelApp;
@@ -319,6 +320,7 @@ impl LyrelApp {
         Some(
             v_flex()
                 .id("editor-problems")
+                .test_support()
                 .flex_none()
                 .h(px(PANE_HEIGHT))
                 .w_full()

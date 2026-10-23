@@ -553,7 +553,6 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         // config away from being retired. See
         // `f11_is_the_only_default_on_a_bare_function_key`.
         ("ToggleFullscreen", per_platform("secondary-enter", "f11")),
-        ("ToggleTabSidebar", ""),
         (
             "ToggleLeftPanel",
             per_platform("secondary-b", "secondary-shift-b"),
@@ -938,10 +937,6 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
         "ToggleFullscreen" => (
             CommandGroup::View,
             t(L10nKey::CmdEnterFullScreen).to_string(),
-        ),
-        "ToggleTabSidebar" => (
-            CommandGroup::View,
-            t(L10nKey::AppMenuTabBarPosition).to_string(),
         ),
         "ToggleLeftPanel" => (
             CommandGroup::View,
@@ -1799,7 +1794,6 @@ fn make_binding(action: &str, keystroke: &str) -> Option<KeyBinding> {
         "ReopenClosedTab" => KeyBinding::new(keystroke, ReopenClosedTab, None),
         "ToggleMaximizePane" => KeyBinding::new(keystroke, ToggleMaximizePane, None),
         "ToggleFullscreen" => KeyBinding::new(keystroke, ToggleFullscreen, None),
-        "ToggleTabSidebar" => KeyBinding::new(keystroke, ToggleTabSidebar, None),
         "ToggleLeftPanel" => KeyBinding::new(keystroke, ToggleLeftPanel, None),
         "ToggleRightPanel" => KeyBinding::new(keystroke, ToggleRightPanel, None),
         "ShowRightPanelInfo" => KeyBinding::new(keystroke, ShowRightPanelInfo, None),
