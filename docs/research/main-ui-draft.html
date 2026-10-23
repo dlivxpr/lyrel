@@ -706,70 +706,213 @@
       position: absolute;
       z-index: 7;
       left: 50%;
-      bottom: 34px;
-      width: 300px;
-      height: 168px;
+      bottom: 0;
+      width: 360px;
+      height: 170px;
       display: none;
-      place-items: end center;
+      place-items: start center;
       transform: translateX(-50%);
-      border-radius: 160px 160px 0 0;
-      background: radial-gradient(ellipse at 50% 100%, color-mix(in srgb, var(--accent) 15%, transparent) 0%, transparent 68%);
+      border: 1px solid color-mix(in srgb, var(--warning) 54%, transparent);
+      border-bottom: 0;
+      border-radius: 360px 360px 0 0;
+      background: color-mix(in srgb, var(--warning) 8%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 10%, transparent);
       pointer-events: none;
     }
 
     .park-zone.active { display: grid; }
 
     .park-target {
-      width: 92px;
-      height: 72px;
+      height: 24px;
       display: grid;
       place-items: center;
-      gap: 2px;
-      border: 1px dashed color-mix(in srgb, var(--foreground) 28%, transparent);
-      border-radius: 10px;
-      background: color-mix(in srgb, var(--popover) 66%, transparent);
-      color: var(--muted-foreground);
+      margin-top: 12px;
+      border: 0;
+      border-radius: 999px;
+      padding: 0 12px;
+      background: color-mix(in srgb, var(--warning) 82%, transparent);
+      color: #22180a;
       font-size: 11px;
+      font-weight: 700;
       text-align: center;
+      box-shadow: 0 4px 14px color-mix(in srgb, var(--warning) 22%, transparent);
     }
 
     .park-zone.park-hover .park-target {
-      border-color: var(--accent);
-      color: var(--foreground);
-      background: var(--accent-soft);
+      background: var(--warning);
+      transform: scale(1.04);
+    }
+
+    .park-dock {
+      position: absolute;
+      z-index: 9;
+      left: 50%;
+      bottom: 0;
+      width: 360px;
+      height: 154px;
+      display: none;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+
+    .park-dock.visible { display: block; }
+
+    .park-aura {
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      width: 260px;
+      height: 130px;
+      transform: translateX(-50%);
+      border: 1px solid color-mix(in srgb, var(--warning) 58%, transparent);
+      border-bottom: 0;
+      border-radius: 260px 260px 0 0;
+      background: color-mix(in srgb, var(--warning) 7%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 10%, transparent);
+      opacity: 0;
+      transition: opacity 180ms ease;
+      pointer-events: none;
+    }
+
+    .park-dock.fan-open .park-aura,
+    .park-dock:focus-within .park-aura,
+    .park-dock.preview-open .park-aura { opacity: 1; }
+
+    .park-stack {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
     }
 
     .park-card {
       position: absolute;
-      z-index: 9;
       left: 50%;
-      bottom: 34px;
-      width: 92px;
-      height: 72px;
-      display: none;
+      bottom: 0;
+      width: 56px;
+      height: 74px;
+      margin-left: -28px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0;
+      background: color-mix(in srgb, var(--popover) 90%, transparent);
+      color: var(--muted-foreground);
+      cursor: default;
+      pointer-events: auto;
+      transform: translateX(var(--stack-x)) translateY(var(--stack-y)) rotate(var(--stack-rotate));
+      transform-origin: 50% 100%;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+      transition: transform 220ms ease, border-color 160ms ease, color 160ms ease, opacity 180ms ease;
+    }
+
+    .park-card:hover,
+    .park-card:focus-visible {
+      border-color: var(--accent);
+      color: var(--foreground);
+    }
+
+    .park-dock.fan-open .park-card,
+    .park-dock:focus-within .park-card,
+    .park-dock.preview-open .park-card {
+      transform: translateX(var(--fan-x)) translateY(var(--fan-y)) rotate(var(--fan-rotate));
+    }
+
+    .park-dock.fan-open .park-card.hovered,
+    .park-dock:focus-within .park-card:focus-visible {
+      z-index: 7;
+      transform: translateX(var(--fan-x)) translateY(-30px) rotate(0deg) scale(1.28);
+      border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+      color: var(--foreground);
+    }
+
+    .park-dock.preview-open .park-card:not(.selected) { opacity: 0.72; }
+
+    .park-dock .park-card.selected,
+    .park-dock .park-card.selected.hovered {
+      z-index: 8;
+      border-color: var(--accent);
+      color: var(--foreground);
+      transform: translateX(var(--fan-x)) translateY(-66px) rotate(0deg) scale(1.58);
+      box-shadow: 0 22px 54px rgba(0, 0, 0, 0.36);
+    }
+
+    .park-card-inner {
+      position: absolute;
+      inset: 0;
+      transform-style: preserve-3d;
+      transition: transform 260ms ease;
+    }
+
+    .park-card.selected .park-card-inner { transform: rotateY(180deg); }
+
+    .park-card-face {
+      position: absolute;
+      inset: 0;
+      display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 3px;
-      transform: translateX(-50%);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: color-mix(in srgb, var(--popover) 88%, transparent);
-      color: var(--muted-foreground);
-      font-size: 11px;
-      cursor: default;
-      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+      padding: 7px 4px;
+      overflow: hidden;
+      border-radius: 9px;
+      backface-visibility: hidden;
+      pointer-events: none;
+      text-align: center;
     }
 
-    .park-card.visible { display: flex; }
-    .park-card:hover { color: var(--foreground); border-color: var(--accent); }
+    .park-card.selected .park-card-face.back { pointer-events: auto; }
+
+    .park-card-face.back {
+      justify-content: flex-start;
+      gap: 4px;
+      padding-top: 9px;
+      background: color-mix(in srgb, var(--popover) 96%, transparent);
+      transform: rotateY(180deg);
+    }
+
     .park-card svg {
       width: 16px;
       height: 16px;
+      flex: 0 0 16px;
       stroke: currentColor;
       stroke-width: 1.8;
       fill: none;
     }
+
+    .park-title,
+    .park-state,
+    .park-path {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .park-title {
+      color: var(--foreground);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .park-state,
+    .park-path { font-size: 10px; }
+
+    .park-restore {
+      min-width: 48px;
+      height: 20px;
+      border: 0;
+      border-radius: 5px;
+      margin-top: 2px;
+      padding: 0 7px;
+      background: var(--accent);
+      color: #10131a;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: default;
+    }
+
+    .park-restore:hover,
+    .park-restore:focus-visible { filter: brightness(1.08); }
 
     .pip-card {
       position: absolute;
@@ -1089,6 +1232,8 @@
     .code .fn { color: var(--terminal-cyan); }
 
     .statusbar {
+      position: relative;
+      z-index: 10;
       height: var(--statusbar-h);
       display: grid;
       grid-template-columns: minmax(260px, 1fr) auto minmax(360px, 1fr);
@@ -1559,8 +1704,11 @@
                 </div>
               </section>
             </div>
-            <div class="park-zone" id="park-zone" aria-hidden="true"><div class="park-target">拖到这里<br>停放窗格</div></div>
-            <button class="park-card" type="button" id="park-card" title="恢复停放的窗格"><svg><use href="#i-terminal"></use></svg><span>~</span><span>idle</span></button>
+            <div class="park-zone" id="park-zone" aria-hidden="true"><div class="park-target">Park</div></div>
+            <div class="park-dock" id="park-dock" aria-label="底部停放窗格">
+              <div class="park-aura" aria-hidden="true"></div>
+              <div class="park-stack" id="park-stack"></div>
+            </div>
             <div class="pip-card" id="pip-card" role="dialog" aria-label="画中画窗格">
               <div class="pip-card-header"><span class="pip-title" id="pip-title">π > lyrel</span><button class="pip-action" type="button" data-pip-action="stash" title="停放到底部" aria-label="停放到底部">▁</button><button class="pip-action" type="button" data-pip-action="dock" title="还原为分屏" aria-label="还原为分屏">◫</button></div>
               <div class="pip-card-body" id="pip-body">~/Documents/rscode/lyrel<br>等待输入</div>
@@ -1719,7 +1867,10 @@
         <li>随处搜索使用 macOS Command 图形；左栏内重复的“筛选标签页”输入框移除。</li>
         <li>右侧“信息 / 文件 / 更改 / GitHub”保持独立页签行，位于右侧面板开关下方。</li>
         <li>pane 抓手只在指针接近 pane 顶部时出现；点击打开命令菜单，拖动移动窗格。</li>
-        <li>底部 park 落点参考 tern 截图；官方 Stencil Tern 文档中可核实的对应能力是 <code>pip stash</code>，不是名为 park 的公开命令。</li>
+        <li>底部 park 改为可放多个窗格的紧凑牌堆；静止时牌堆底部与状态栏顶边对齐、不进入状态栏，悬停时出现暖色半圆光环，只有指针下的牌抬升、转正并放大，其他牌仍贴近底部。</li>
+        <li>点击某张停放牌会翻面并放大为预览，背面显示标题、路径和“恢复”按钮；点击牌堆外部或按 <code>Esc</code> 关闭预览。</li>
+        <li>拖拽进入底部 park 时显示暖色大半圆和顶部 <code>Park</code> 胶囊，不再使用虚线小框。</li>
+        <li>底部 park 落点参考 tern 截图与录屏；官方 Stencil Tern 文档中可核实的对应能力是 <code>pip stash</code> 与 PiP deck/fan 类交互，不是名为 park 的公开命令。</li>
         <li>设置预览不再重绘设置界面，只说明按钮仍打开现有独立设置窗口。</li>
       </ul>
 
@@ -1730,6 +1881,7 @@
       <ul>
         <li>HTML 的 <code>backdrop-filter</code> 只是近似；GPUI 真实实现应使用整窗 <code>WindowBackdrop</code>，不做左右栏独立模糊。</li>
         <li>park 卡片表达“PiP 贴边暂存后留下的恢复入口”；底部落点来自截图观察，官方文档只明确左／右边缘 stash。</li>
+        <li>HTML 用 <code>rotateY</code> 表达翻面；GPUI 若没有等价 3D transform，生产实现应改为水平压缩、交换前后两面、再展开的等效动画。</li>
         <li>park 与 PiP 只改变 pane 的可见布局，不复制或停止终端会话；若只剩一个 pane，真实实现应禁用 PiP。</li>
         <li>CPU 与 MEM 是小组件示意，不表示第一版已有采集实现。</li>
       </ul>
@@ -1742,6 +1894,8 @@
         <li>初始只有一个终端；点击“向右分屏”会在当前 pane 右侧新增终端，点击“向下分屏”会在当前 pane 下方新增终端。</li>
         <li>连续分屏会相对当前激活 pane 插入新终端；pane 菜单中的两个分屏命令与当前产品右键菜单同名同快捷键。</li>
         <li>收起左栏后，lyrel 图标仍留在窗口左上角，左侧三按钮组位于图标右侧；收起右栏后，右侧三按钮组浮在窗口控制按钮左侧。</li>
+        <li>停放多个窗格后，牌堆与扇形光环的实际包围盒都不越过状态栏顶边；悬停时扇形展开，点击其中一张会翻面放大并显示“恢复”。</li>
+        <li>点击某张牌的“恢复”只恢复该窗格；其余停放窗格仍保留在底部牌堆。</li>
         <li>切换或新建标签页时，状态栏中央不出现“已切换”或“已新建”提示。</li>
         <li>左栏没有“筛选标签页”输入框；状态栏中央默认没有常驻文字。</li>
         <li>指针进入 pane 顶部 36px 才显示抓手；点击抓手打开菜单。</li>
@@ -1781,7 +1935,8 @@
     const tabList = document.getElementById('tab-list');
     const terminalGrid = document.getElementById('terminal-grid');
     const parkZone = document.getElementById('park-zone');
-    const parkCard = document.getElementById('park-card');
+    const parkDock = document.getElementById('park-dock');
+    const parkStack = document.getElementById('park-stack');
     const pipCard = document.getElementById('pip-card');
     const pipTitle = document.getElementById('pip-title');
     const pipBody = document.getElementById('pip-body');
@@ -1794,6 +1949,8 @@
     let hiddenPane = null;
     let hiddenMode = null;
     let pipPane = null;
+    let selectedParkedPaneId = null;
+    const parkedPanes = [];
     let menuPane = null;
     let newTabCount = 0;
     let statusTimer = null;
@@ -1964,6 +2121,67 @@
     layoutRoot = { type: 'pane', paneId: initialPane.id };
     activePaneId = initialPane.id;
 
+    function parkLabel(pane) {
+      const title = pane.dataset.title?.replace(/^π >\s*/, '') || '终端';
+      return title || pane.dataset.path?.split('/').filter(Boolean).at(-1) || '窗格';
+    }
+
+    function renderParkDock() {
+      const count = parkedPanes.length;
+      if (!count) {
+        selectedParkedPaneId = null;
+        parkDock.classList.remove('visible', 'preview-open');
+        parkStack.replaceChildren();
+        return;
+      }
+      if (!parkedPanes.some((pane) => pane.id === selectedParkedPaneId)) selectedParkedPaneId = null;
+      parkDock.classList.add('visible');
+      parkDock.classList.toggle('preview-open', !!selectedParkedPaneId);
+      const middle = (count - 1) / 2;
+      const fanStep = count > 1 ? Math.min(58, 230 / (count - 1)) : 0;
+      const cards = parkedPanes.map((pane, index) => {
+        const offset = index - middle;
+        const card = document.createElement('article');
+        card.className = 'park-card';
+        card.dataset.parkId = pane.id;
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-label', `预览停放的窗格 ${pane.dataset.title}`);
+        card.setAttribute('aria-pressed', String(selectedParkedPaneId === pane.id));
+        card.classList.toggle('selected', selectedParkedPaneId === pane.id);
+        card.style.setProperty('--stack-x', `${offset * 13}px`);
+        card.style.setProperty('--stack-y', `${Math.abs(offset) * -8}px`);
+        card.style.setProperty('--stack-rotate', `${offset * 7}deg`);
+        card.style.setProperty('--fan-x', `${offset * fanStep}px`);
+        card.style.setProperty('--fan-y', `${Math.abs(offset) * -8}px`);
+        card.style.setProperty('--fan-rotate', `${offset * 12}deg`);
+        card.innerHTML = `
+          <div class="park-card-inner">
+            <div class="park-card-face front"><svg><use href="#i-terminal"></use></svg><span class="park-title">${parkLabel(pane)}</span><span class="park-state">idle</span></div>
+            <div class="park-card-face back"><svg><use href="#i-terminal"></use></svg><span class="park-title">${pane.dataset.title}</span><span class="park-path">${pane.dataset.path}</span><span class="park-state">已停放 · 会话保持</span><button class="park-restore" type="button" data-park-restore>恢复</button></div>
+          </div>`;
+        return card;
+      });
+      parkStack.replaceChildren(...cards);
+    }
+
+    function restoreParkedPane(paneId, announce = true) {
+      const index = parkedPanes.findIndex((pane) => pane.id === paneId);
+      if (index < 0) return;
+      const [pane] = parkedPanes.splice(index, 1);
+      const state = paneStates.get(pane.id);
+      if (selectedParkedPaneId === pane.id) selectedParkedPaneId = null;
+      if (state) {
+        state.hidden = false;
+        state.hiddenMode = null;
+        activePaneId = state.id;
+      }
+      renderTerminalLayout();
+      renderStatus();
+      renderParkDock();
+      if (announce) flashStatus('已恢复停放的窗格');
+    }
+
     function renderStatus() {
       statusCenter.textContent = '';
       if (mode === 'fill') {
@@ -2001,36 +2219,34 @@
         pipPane = null;
         pipCard.classList.remove('visible');
       }
-      hiddenPane = pane;
-      hiddenMode = how;
+      if (how === 'parked') {
+        if (!parkedPanes.includes(pane)) parkedPanes.push(pane);
+      } else {
+        hiddenPane = pane;
+        hiddenMode = how;
+      }
       state.hidden = true;
       state.hiddenMode = how;
       if (zoomedPaneId === pane.id) zoomedPaneId = null;
       if (activePaneId === pane.id) activePaneId = firstVisiblePane()?.id || null;
       renderTerminalLayout();
-      parkCard.classList.toggle('visible', how === 'parked');
-      if (how === 'parked') {
-        parkCard.querySelector('span:nth-of-type(1)').textContent = pane.dataset.path === '~/Documents/rscode/lyrel' ? '~' : 'cac';
-        parkCard.querySelector('span:nth-of-type(2)').textContent = 'idle';
-      }
+      renderParkDock();
       renderStatus();
     }
 
     function restorePane(announce = true) {
       if (!hiddenPane) return;
       const state = paneStates.get(hiddenPane.id);
-      const wasParked = hiddenMode === 'parked';
       if (state) {
         state.hidden = false;
         state.hiddenMode = null;
         activePaneId = state.id;
       }
-      parkCard.classList.remove('visible');
       hiddenPane = null;
       hiddenMode = null;
       renderTerminalLayout();
       renderStatus();
-      if (announce) flashStatus(wasParked ? '已恢复停放的窗格' : '已恢复窗格');
+      if (announce) flashStatus('已恢复窗格');
     }
 
     function showPiP(pane) {
@@ -2076,13 +2292,10 @@
       const state = paneStates.get(pane.id);
       pipPane = null;
       pipCard.classList.remove('visible');
-      hiddenPane = pane;
-      hiddenMode = 'parked';
+      if (!parkedPanes.includes(pane)) parkedPanes.push(pane);
       if (state) state.hiddenMode = 'parked';
-      parkCard.classList.add('visible');
-      parkCard.querySelector('span:nth-of-type(1)').textContent = pane.dataset.path === '~/Documents/rscode/lyrel' ? '~' : 'cac';
-      parkCard.querySelector('span:nth-of-type(2)').textContent = 'idle';
       renderTerminalLayout();
+      renderParkDock();
       renderStatus();
       flashStatus('已停放画中画');
     }
@@ -2203,9 +2416,47 @@
 
     document.addEventListener('pointerdown', (event) => {
       if (!paneMenu.contains(event.target) && !event.target.closest('.pane-grip')) closePaneMenu();
+      if (selectedParkedPaneId && !parkDock.contains(event.target)) {
+        selectedParkedPaneId = null;
+        renderParkDock();
+      }
     });
 
-    parkCard.addEventListener('click', () => restorePane());
+    function selectParkedPane(paneId) {
+      selectedParkedPaneId = selectedParkedPaneId === paneId ? null : paneId;
+      renderParkDock();
+    }
+
+    parkStack.addEventListener('click', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (!card) return;
+      if (event.target.closest('[data-park-restore]')) restoreParkedPane(card.dataset.parkId);
+      else selectParkedPane(card.dataset.parkId);
+    });
+
+    parkStack.addEventListener('keydown', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (!card || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      selectParkedPane(card.dataset.parkId);
+    });
+
+    parkStack.addEventListener('pointerover', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (!card) return;
+      parkDock.classList.add('fan-open');
+      parkStack.querySelectorAll('.park-card.hovered').forEach((item) => item.classList.remove('hovered'));
+      card.classList.add('hovered');
+    });
+
+    parkStack.addEventListener('pointerout', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (event.relatedTarget && card?.contains(event.relatedTarget)) return;
+      card?.classList.remove('hovered');
+      if (event.relatedTarget && parkStack.contains(event.relatedTarget)) return;
+      parkDock.classList.remove('fan-open');
+    });
+
     pipCard.addEventListener('click', (event) => {
       const action = event.target.closest('[data-pip-action]')?.dataset.pipAction;
       if (action === 'stash') stashPiP();
@@ -2371,6 +2622,12 @@
         openSettings();
         return;
       }
+      if (selectedParkedPaneId && event.key === 'Escape') {
+        event.preventDefault();
+        selectedParkedPaneId = null;
+        renderParkDock();
+        return;
+      }
       if (paneMenu.classList.contains('open') && event.key === 'Escape') {
         event.preventDefault();
         closePaneMenu();
@@ -2402,6 +2659,7 @@
     });
 
     renderTerminalLayout();
+    renderParkDock();
     renderStatus();
     renderPalette();
   </script>
