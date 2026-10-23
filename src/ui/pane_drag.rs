@@ -104,7 +104,6 @@ impl Render for DragPane {
 /// threshold owns movement. A completed drag never becomes a button click.
 pub(crate) fn handle(
     slot: &crate::ui::pane::PaneSlot,
-    rearrangeable: bool,
     state: &PaneDragState,
     app: &gpui_kit::WeakEntity<crate::ui::app::LyrelApp>,
     window: &mut Window,
@@ -146,15 +145,13 @@ pub(crate) fn handle(
                 })
                 .accessibility_label(t(L10nKey::PaneMenuTitle))
                 .tooltip(t(L10nKey::PaneDragHandleTooltip))
-                .when(rearrangeable, |button| {
+                .map(|button| {
                     let mut button = crate::ui::reorder::cursor_grab(button);
-                    button
-                        .interactivity()
-                        .on_drag(DragPane, move |_, _, _, cx| {
-                            cx.stop_propagation();
-                            begin(&state, pane);
-                            cx.new(|_| DragPane)
-                        });
+                    button.interactivity().on_drag(DragPane, move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        begin(&state, pane);
+                        cx.new(|_| DragPane)
+                    });
                     button
                 })
                 .child(

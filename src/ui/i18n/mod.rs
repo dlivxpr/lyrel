@@ -1986,6 +1986,7 @@ l10n_keys! {
     ParkedAlive,
     ParkedExited,
     ParkedEmpty,
+    ParkDropTarget,
     PanePipMove,
     PanePipResize,
     PanePipClientLocalUnavailable,

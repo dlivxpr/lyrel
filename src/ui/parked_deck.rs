@@ -197,6 +197,11 @@ impl ParkedDeck {
         cx.notify();
     }
 
+
+    pub fn drop_target_contains(&self, position: Point<Pixels>) -> bool {
+        self.drop_target && self.frame.borrow().park_target_contains(position)
+    }
+
     pub fn cards(&self) -> impl ExactSizeIterator<Item = &ParkedCard> { self.cards.iter().map(|card| &card.model) }
     pub fn selected_pane(&self) -> Option<u64> { self.selected }
     pub fn last_paint_error(&self) -> Option<String> { self.paint_error.borrow().clone() }
@@ -408,11 +413,20 @@ impl Render for ParkedDeck {
         div().id("parked-deck").test_support().size_full().min_w_0().min_h_0().child(canvas(
             move |bounds, window, cx| {
                 let viewport = bounds.intersect(&window.content_mask().bounds);
-                let scene = Rc::new(Frame::new(bounds, viewport, f32::from(window.rem_size()) / 16., cards, aura, park, park_ink));
+                let scene = Frame::new(bounds, viewport, f32::from(window.rem_size()) / 16., cards, aura, park, park_ink);
+                let park_hover = park && scene.park_target_contains(window.mouse_position());
+                let scene = Rc::new(scene.with_drop_hover(park_hover));
                 *frame.borrow_mut() = scene.clone();
                 let group_bounds = scene.keyboard_bounds();
                 let key_weak = prepaint_weak.clone();
                 let mut semantics = div().relative().w(group_bounds.size.width).h(group_bounds.size.height);
+                if park {
+                    for (id, bounds) in [("park-drop-target", scene.park_target_bounds()), ("park-drop-pill", scene.park_pill_bounds())] {
+                        semantics = semantics.child(div().id(id).test_support().absolute()
+                            .left(bounds.left() - group_bounds.left()).top(bounds.top() - group_bounds.top())
+                            .w(bounds.size.width).h(bounds.size.height).role(Role::Group).aria_label(labels.park.clone()));
+                    }
+                }
                 for (model, bounds, selected, restore) in scene.semantic_cards() {
                     if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) { continue; }
                     let pane = model.pane;

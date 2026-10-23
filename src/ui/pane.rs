@@ -125,9 +125,6 @@ impl Dir {
 pub(crate) struct PaneChrome {
     /// Fade every pane but the focused one.
     pub dim_inactive: bool,
-    /// Whether a pane can be picked up and put somewhere else. False for a tab
-    /// holding one pane: there is nowhere to move it to.
-    pub rearrangeable: bool,
     pub app: gpui_kit::WeakEntity<crate::ui::app::LyrelApp>,
     /// The pane being dragged, drawn faded where it came from.
     pub lifted: Option<gpui_kit::EntityId>,
@@ -1071,7 +1068,6 @@ impl Pane<PaneSlot> {
                     .when(grip, |d| {
                         d.child(crate::ui::pane_drag::handle(
                             v,
-                            chrome.rearrangeable,
                             &chrome.drag,
                             &chrome.app,
                             window,
