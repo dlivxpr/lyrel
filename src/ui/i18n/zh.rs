@@ -435,7 +435,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSaveError => "无法保存更改：{error}",
         L10nKey::SettingsRetrySave => "重新保存",
 
-        L10nKey::SearchTabs => "搜索标签页…",
         L10nKey::SearchFiles => "搜索文件…",
         L10nKey::PanelSearchPlaceholder => "在文件中搜索…",
         L10nKey::PanelSearchWholeWord => "全字匹配",
@@ -793,10 +792,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::FollowTheme => "跟随主题",
         L10nKey::SettingsDimInactivePanes => "调暗非活动窗格",
         L10nKey::SettingsDimInactivePanesDesc => "在分屏中淡化未聚焦的窗格，让活动窗格更突出。",
-        L10nKey::SettingsAutoHideTitlebarButtons => "悬停时显示标题栏按钮",
-        L10nKey::SettingsAutoHideTitlebarButtonsDesc => {
-            "新标签页、侧栏开关等按钮平时隐藏，鼠标移到标题栏上才出现。"
-        }
         L10nKey::SettingsOpenThemesFolder => "打开主题文件夹",
         L10nKey::SettingsChangeThemeImage => "更改…",
         L10nKey::SettingsChooseThemeImage => "选择…",
@@ -1130,8 +1125,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ConfirmCloseNever => "从不",
         L10nKey::ConfirmCloseWhenBusy => "有程序在运行时",
         L10nKey::ConfirmCloseAlways => "总是",
-        L10nKey::SettingsTabBarPosition => "标签栏位置",
-        L10nKey::SettingsTabBarPositionDesc => "将标签页显示为顶部横向条或左侧垂直侧栏。",
         L10nKey::SettingsSidebarGrouping => "自动分组",
         L10nKey::SettingsSidebarGroupingDesc => {
             "未固定的标签页按 git 仓库分组，SSH 标签页按主机分组。"
@@ -1153,8 +1146,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsStartupFullscreen => "全屏",
         L10nKey::SettingsAfterCurrent => "当前之后",
         L10nKey::SettingsAtEnd => "末尾",
-        L10nKey::SettingsTop => "顶部",
-        L10nKey::SettingsLeft => "左侧",
         L10nKey::SettingsPreset => "预设",
         L10nKey::SettingsPresetDesc => "tmux 预设把操作映射为前缀键（如 Ctrl-B C）。",
         L10nKey::SettingsPrefix => "前缀",
@@ -1306,9 +1297,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchDimInactivePanesKeywords => {
             "调暗 非活动窗格 淡化 未聚焦 分屏 高亮 active dimming pane focus"
         }
-        L10nKey::SettingsSearchAutoHideTitlebarButtonsKeywords => {
-            "自动隐藏 标题栏 按钮 悬停 鼠标 简洁 新标签页 侧栏 auto hide title bar buttons hover"
-        }
         L10nKey::SettingsSearchFocusFollowsMouseKeywords => {
             "焦点跟随鼠标 悬停 激活 窗格 focus follows mouse hover activate pane"
         }
@@ -1433,9 +1421,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsSearchPromptEditorKeywords => {
             "提示符编辑器 提示符 编辑器 原生输入 行编辑 键位 快捷键 输入法 粘贴 prompt editor native shell input zle readline"
-        }
-        L10nKey::SettingsSearchTabBarPositionKeywords => {
-            "标签栏位置 标签栏 侧边栏 左侧 顶部 布局 tab bar position tabs sidebar left top"
         }
         L10nKey::SettingsSearchTabCompletionKeywords => {
             "Tab补全 补全 菜单 建议 tab completion suggestions prompt"
@@ -2087,8 +2072,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdHideRightPanel => "隐藏右侧面板",
         L10nKey::CmdShowRightPanel => "显示右侧面板",
         L10nKey::CmdShowCodePanel => "显示代码面板",
-        L10nKey::CmdTabBarMoveToTop => "标签栏：移到顶部",
-        L10nKey::CmdTabBarMoveToLeftSidebar => "标签栏：移到左侧边栏",
         L10nKey::CmdRightPanelInfo => "右侧面板：信息",
         L10nKey::CmdRightPanelChanges => "右侧面板：变更",
         L10nKey::CmdRightPanelFiles => "右侧面板：文件",
@@ -2438,7 +2421,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppMenuLeftSidebar => "左侧边栏",
         L10nKey::AppMenuRightPanel => "右侧面板",
         L10nKey::AppMenuCodePanel => "代码面板",
-        L10nKey::AppMenuTabBarPosition => "标签栏位置",
         L10nKey::AppMenuFocusNextPane => "聚焦下一个窗格",
         L10nKey::AppMenuFocusPreviousPane => "聚焦上一个窗格",
         L10nKey::AppMenuZoomPane => "缩放窗格",
@@ -2737,12 +2719,3 @@ pub fn translate_variant_zh(key: L10nKey, branch: &'static str) -> Option<&'stat
     Some(res)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn chinese_covers_every_key() {
-        assert_eq!(translate_zh(L10nKey::SearchTabs), Some("搜索标签页…"));
-    }
-}
