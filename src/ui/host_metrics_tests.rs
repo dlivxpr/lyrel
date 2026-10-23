@@ -83,6 +83,96 @@ fn wait_sample(vcx: &mut VisualTestContext, wanted: bool) {
     }
 }
 
+fn assert_metrics_status(vcx: &mut VisualTestContext, key: crate::ui::i18n::L10nKey) {
+    vcx.update(|window, _| window.refresh());
+    settle(vcx);
+    vcx.update(|window, _| {
+        assert_eq!(
+            window.find("status-host-metrics").label(),
+            Some(crate::ui::i18n::t(key)),
+        );
+    });
+    assert!(!has_sample(vcx), "a pending link displayed an old host sample");
+}
+
+#[gpui_kit::test]
+fn local_metrics_follow_daemon_connection_lifecycle(cx: &mut TestAppContext) {
+    use crate::ui::i18n::L10nKey;
+
+    let (_app, mut vcx, _pane_streams) = harness_with_tabs(cx, 1);
+    // Drive the existing LocalLink seam without starting the real daemon or
+    // its pump. These are the states before, during and after tick's connect.
+    vcx.update(|_, cx| {
+        cx.set_global(LocalLink {
+            pumping: true,
+            ..LocalLink::default()
+        });
+    });
+    vcx.executor().advance_clock(Duration::from_secs(1));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsConnecting);
+    vcx.update(|_, cx| cx.global_mut::<LocalLink>().attempting = true);
+    vcx.executor().advance_clock(Duration::from_secs(1));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsConnecting);
+
+    // A failed first attempt is still an initial connection during backoff.
+    vcx.update(|_, cx| {
+        let link = cx.global_mut::<LocalLink>();
+        link.attempting = false;
+        link.backoff.advance();
+        link.next_attempt = Some(Instant::now() + Duration::from_secs(30));
+    });
+    vcx.executor().advance_clock(Duration::from_secs(1));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsConnecting);
+
+    let server = HostServer::new();
+    vcx.update(|_, cx| {
+        let link = cx.global_mut::<LocalLink>();
+        link.instance = server.client.hello().instance.clone();
+        link.client = Some(server.client.clone());
+        link.backoff.reset();
+        link.next_attempt = None;
+    });
+    wait_sample(&mut vcx, true);
+
+    // The render guard must clear old values even before another poll, when
+    // the reader has noticed loss but tick has not yet removed the client.
+    server.client.close();
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+    vcx.update(|_, cx| LocalLink::invalidate(cx));
+    vcx.executor().advance_clock(Duration::from_secs(1));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+    vcx.update(|_, cx| {
+        let link = cx.global_mut::<LocalLink>();
+        link.backoff.advance();
+        link.next_attempt = Some(Instant::now() + Duration::from_secs(30));
+    });
+    vcx.executor().advance_clock(Duration::from_secs(1));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+    vcx.update(|_, cx| {
+        let link = cx.global_mut::<LocalLink>();
+        link.next_attempt = None;
+        link.attempting = true;
+    });
+    vcx.executor().advance_clock(Duration::from_secs(1));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+
+    let replacement = HostServer::new();
+    vcx.update(|_, cx| {
+        let link = cx.global_mut::<LocalLink>();
+        link.attempting = false;
+        link.instance = replacement.client.hello().instance.clone();
+        link.client = Some(replacement.client.clone());
+        link.backoff.reset();
+    });
+    wait_sample(&mut vcx, true);
+
+    // No installed connection service is genuinely disconnected, not a retry.
+    vcx.update(|_, cx| cx.set_global(LocalLink::default()));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsDisconnected);
+    vcx.executor().advance_clock(Duration::from_secs(1));
+    assert_metrics_status(&mut vcx, L10nKey::HostMetricsDisconnected);
+}
+
 #[gpui_kit::test]
 fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppContext) {
     let server = HostServer::new();

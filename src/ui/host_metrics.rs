@@ -17,7 +17,7 @@ use lyrel_core::host::{
 
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::local_link::LocalLink;
+use crate::ui::local_link::{LocalLink, LocalLinkStatus};
 use crate::ui::remote_connect::HostLinks;
 use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
 
@@ -82,6 +82,15 @@ enum State {
 }
 
 fn missing_source(host: HostId, cx: &App) -> State {
+    if host.is_local() {
+        return match LocalLink::status(cx) {
+            LocalLinkStatus::Connecting => State::Connecting,
+            LocalLinkStatus::Reconnecting => State::Reconnecting,
+            // A supposedly connected source that is missing or just failed a
+            // transport request must not pass its last sample off as current.
+            LocalLinkStatus::Disconnected | LocalLinkStatus::Connected => State::Disconnected,
+        };
+    }
     match RemoteLinks::machine_status(cx, host) {
         Some(MachineStatus::Connecting) => State::Connecting,
         Some(MachineStatus::Reconnecting { .. }) => State::Reconnecting,
@@ -177,7 +186,11 @@ impl HostMetricsView {
         Self {
             host,
             state: if host.is_local() {
-                State::Waiting
+                if LocalLink::status(cx) == LocalLinkStatus::Connected {
+                    State::Waiting
+                } else {
+                    missing_source(host, cx)
+                }
             } else {
                 State::Connecting
             },

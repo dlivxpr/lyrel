@@ -7,6 +7,14 @@ use lyrel_core::daemon::control::{ControlClient, ControlRequest, ReplyOk};
 use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::ui::remote_workspace::{Backoff, RemoteStatus};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LocalLinkStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Reconnecting,
+}
+
 #[derive(Default)]
 pub struct LocalLink {
     client: Option<Arc<ControlClient>>,
@@ -53,6 +61,28 @@ impl LocalLink {
     pub fn client(cx: &mut App) -> Option<Arc<ControlClient>> {
         let link = cx.default_global::<LocalLink>();
         link.client.as_ref().filter(|c| c.is_connected()).cloned()
+    }
+
+    /// The pump owns connection progress, including its backoff. A remembered
+    /// daemon instance distinguishes first startup from reconnecting, even
+    /// after invalidate has dropped the old client and reset the retry timer.
+    pub(crate) fn status(cx: &App) -> LocalLinkStatus {
+        let Some(link) = cx.try_global::<LocalLink>() else {
+            return LocalLinkStatus::Disconnected;
+        };
+        if link
+            .client
+            .as_ref()
+            .is_some_and(|client| client.is_connected())
+        {
+            LocalLinkStatus::Connected
+        } else if !link.pumping {
+            LocalLinkStatus::Disconnected
+        } else if link.instance.is_empty() {
+            LocalLinkStatus::Connecting
+        } else {
+            LocalLinkStatus::Reconnecting
+        }
     }
 
     /// Whether the local daemon advertised `feature` on its control hello —
