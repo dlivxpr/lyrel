@@ -4444,7 +4444,7 @@ impl LyrelApp {
             (L10nKey::PaneMenuTitle, None, false, false),
             (L10nKey::PaneClose, Some(Box::new(CloseActiveTab)), false, false),
         ];
-        menu = menu.scrollable(true).max_h(gpui_kit::rems(28.));
+        menu = menu.scrollable(true).max_h(cx.theme().font_size * 28.);
         for (label, action, disabled, checked) in entries {
             let Some(action) = action else { menu = menu.separator(); continue; };
             let app = app.downgrade();
@@ -15015,7 +15015,8 @@ mod pane_menu_tests {
             let terminal = pane.read(cx).terminal.term.clone();
             let output = format!("buried-history\r\n{}", "line\r\n".repeat(40));
             rio_vt::performer::handler::Processor::default().advance(&mut *terminal.lock(), output.as_bytes());
-            window.focus(&pane.read(cx).focus_handle, cx);
+            let focus = pane.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
             pane
         });
         vcx.dispatch_action(ClearPaneScreen);
@@ -15044,7 +15045,8 @@ mod pane_menu_tests {
                 target: crate::core::session::RemoteTarget::direct("me", "offline-build", 22),
                 spec: None, label: None, resize_echo: false,
             })));
-            window.focus(&remote.read(cx).focus_handle, cx);
+            let focus = remote.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
             remote
         });
         vcx.dispatch_action(RestartPaneShell);
