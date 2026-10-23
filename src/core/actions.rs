@@ -83,7 +83,6 @@ actions!(
         ReopenClosedTab,
         ToggleMaximizePane,
         ToggleFullscreen,
-        ToggleTabSidebar,
         ToggleLeftPanel,
         ToggleRightPanel,
         ShowRightPanelInfo,

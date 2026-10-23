@@ -59,15 +59,66 @@ impl Render for Clock {
 }
 
 impl LyrelApp {
+    /// Only content focus changes this choice; opening a status control or a
+    /// window overlay must not silently switch a docked editor back to a shell.
+    pub(crate) fn watch_document_status_focus(
+        &self,
+        handle: &gpui_kit::FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.on_focus_in(handle, window, |this, _, cx| {
+            if let Some(tab) = this.tabs.get(this.active) {
+                this.status_document_focus = Some((tab.tree_id.get(), true));
+                cx.notify();
+            }
+        }).detach();
+    }
+
+    pub(crate) fn status_document_context(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<crate::ui::app::OverlayTop> {
+        let front = self.document_front()?;
+        if self.document_dock_px(window, cx).is_none() {
+            return Some(front);
+        }
+        let tab = self.tabs.get(self.active)?;
+        if tab.pane.leaves().iter().any(|leaf| leaf.contains_focused(window, cx)) {
+            return None;
+        }
+        let document = self.editor_panel_has_focus(window, cx)
+            || tab.diff_overlay.as_ref().is_some_and(|diff| diff.focus_handle.contains_focused(window, cx))
+            || self.status_document_focus.filter(|(id, _)| *id == tab.tree_id.get()).is_none_or(|(_, document)| document);
+        document.then_some(front)
+    }
+
     pub(crate) fn render_status_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let host = self.remote_machine_label(cx);
-        let document = self.code_panel_visible();
+        let document_context = self.status_document_context(window, cx);
+        let document = document_context.is_some();
+        let location = match document_context {
+            Some(crate::ui::app::OverlayTop::Code) => self.editor_active_location(),
+            Some(crate::ui::app::OverlayTop::Diff) => self.tabs.get(self.active)
+                .and_then(|tab| tab.diff_overlay.as_ref())
+                .map(|diff| (diff.host_id, diff.cwd.as_path())),
+            None => None,
+        };
+        let host = location.map_or_else(|| self.remote_machine_label(cx), |(id, _)| {
+            if id.is_local() {
+                return t(L10nKey::RemoteThisComputer).to_string();
+            }
+            crate::core::session::WorkspaceStore::all(cx).views.iter()
+                .filter_map(|workspace| workspace.host.as_ref())
+                .find(|host| host.host_id() == id)
+                .map(|host| crate::ui::remote_connect::route_label(cx, host))
+                .or_else(|| self.host_snapshots.get(&id).map(|snapshot| snapshot.target.to_string()))
+                .unwrap_or_else(|| crate::ui::i18n::t_fmt(L10nKey::StatusRemoteHost, &[("id", &format!("{:016x}", id.0))]))
+        });
         let path = if document {
-            self.editor_active_location().map(|(host, path)| {
+            location.map(|(host, path)| {
                 if host.is_local() {
-                    crate::ui::path_display::native_separators(path)
-                        .display()
-                        .to_string()
+                    crate::ui::path_display::native_separators(path).display().to_string()
                 } else {
                     path.display().to_string()
                 }
@@ -174,6 +225,9 @@ impl LyrelApp {
                         }),
                 )
             })
+            .when(document_context == Some(crate::ui::app::OverlayTop::Code), |bar| {
+                bar.child(self.render_document_status(cx))
+            })
             .child(self.status_clock.clone())
             .into_any_element()
     }
@@ -181,11 +235,12 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
+    use crate::core::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
     use crate::core::config::Config;
-    use crate::ui::app::test_window::harness;
+    use crate::ui::app::test_window::harness_with_pane;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
+    use rio_vt::crosswords::grid::Dimensions as _;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();
@@ -195,11 +250,12 @@ mod tests {
 
     #[gpui_kit::test]
     fn settings_remains_reachable_below_terminal_and_filled_document(cx: &mut TestAppContext) {
-        let (app, mut vcx) = harness(cx);
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
         for (width, font) in [(1440., 16.), (720., 20.)] {
             vcx.simulate_resize(size(px(width), px(720.)));
             app.update_in(&mut vcx, |app, _, cx| {
                 cx.global_mut::<Config>().ui_font_size = font;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font));
                 app.sidebar_collapsed = true;
                 app.right_panel_visible = false;
                 cx.notify();
@@ -210,6 +266,13 @@ mod tests {
                     vcx.dispatch_action(ToggleDocumentFill);
                 }
                 settle(&mut vcx);
+                if !filled {
+                    app.read_with(&vcx, |app, cx| {
+                        let pane = app.tabs[app.active].pane.terminals()[0].read(cx);
+                        assert!(pane.terminal.term.lock().screen_lines() >= 24,
+                            "the terminal must use the content height, not collapse to its intrinsic size");
+                    });
+                }
                 vcx.update(|window, cx| {
                     let status = window.find("workbench-status").bounds();
                     let content = window.find("workbench-content").bounds();
@@ -223,6 +286,10 @@ mod tests {
                 vcx.simulate_keystrokes("escape");
                 settle(&mut vcx);
                 assert!(app.read_with(&vcx, |app, _| app.active_settings().is_none()));
+                if filled {
+                    vcx.dispatch_action(ToggleCodePanel);
+                    settle(&mut vcx);
+                }
             }
         }
     }

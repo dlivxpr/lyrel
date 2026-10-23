@@ -34,6 +34,8 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/git-commit.svg" => include_bytes!("../../assets/icons/git-commit.svg"),
         "icons/panel-left.svg" => include_bytes!("../../assets/icons/panel-left.svg"),
         "icons/panel-right.svg" => include_bytes!("../../assets/icons/panel-right.svg"),
+        "icons/split-right.svg" => include_bytes!("../../assets/icons/split-right.svg"),
+        "icons/split-down.svg" => include_bytes!("../../assets/icons/split-down.svg"),
         "icons/panel-left-collapsed.svg" => {
             include_bytes!("../../assets/icons/panel-left-collapsed.svg")
         }

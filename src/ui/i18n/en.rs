@@ -482,7 +482,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSaveChanges => "Save changes",
         L10nKey::SettingsThemeDraft => "Theme changes are previewed until you save.",
 
-        L10nKey::SearchTabs => "Search tabs…",
         L10nKey::SearchFiles => "Search files…",
         L10nKey::PanelSearchPlaceholder => "Search in files…",
         L10nKey::PanelSearchWholeWord => "Match whole word",
@@ -873,10 +872,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsDimInactivePanes => "Dim inactive panes",
         L10nKey::SettingsDimInactivePanesDesc => {
             "Fade unfocused panes so the active one stands out."
-        }
-        L10nKey::SettingsAutoHideTitlebarButtons => "Show title bar buttons on hover",
-        L10nKey::SettingsAutoHideTitlebarButtonsDesc => {
-            "Keep the new tab and sidebar buttons out of sight until the pointer is over the title bar."
         }
         L10nKey::SettingsOpenThemesFolder => "Open themes folder",
         L10nKey::SettingsChangeThemeImage => "Change…",
@@ -1281,8 +1276,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ConfirmCloseNever => "Never",
         L10nKey::ConfirmCloseWhenBusy => "When busy",
         L10nKey::ConfirmCloseAlways => "Always",
-        L10nKey::SettingsTabBarPosition => "Tab bar position",
-        L10nKey::SettingsTabBarPositionDesc => "A strip on top or a sidebar on the left.",
         L10nKey::SettingsSidebarGrouping => "Auto grouping",
         L10nKey::SettingsSidebarGroupingDesc => {
             "Group unpinned tabs by git repository, SSH tabs by host."
@@ -1308,8 +1301,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsStartupFullscreen => "Fullscreen",
         L10nKey::SettingsAfterCurrent => "After current",
         L10nKey::SettingsAtEnd => "At end",
-        L10nKey::SettingsTop => "Top",
-        L10nKey::SettingsLeft => "Left",
         L10nKey::SettingsPreset => "Preset",
         L10nKey::SettingsPresetDesc => "tmux maps pane and tab actions to prefix keys (Ctrl-B C).",
         L10nKey::SettingsPrefix => "Prefix",
@@ -1465,9 +1456,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSearchDimInactivePanesKeywords => {
             "fade unfocused inactive split pane focus opacity highlight active dimming"
         }
-        L10nKey::SettingsSearchAutoHideTitlebarButtonsKeywords => {
-            "auto hide autohide title bar titlebar buttons chrome hover pointer minimal clean new tab sidebar toggle"
-        }
         L10nKey::SettingsSearchFocusFollowsMouseKeywords => "pane hover activate",
         L10nKey::SettingsSearchFontFamilyKeywords => "typeface monospace typography",
         L10nKey::SettingsSearchFontLigaturesKeywords => "typography glyph fira",
@@ -1566,9 +1554,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsSearchPromptEditorKeywords => {
             "prompt editor native shell input line editor zle readline fish keybindings ime paste"
-        }
-        L10nKey::SettingsSearchTabBarPositionKeywords => {
-            "tabs vertical sidebar left top layout rail"
         }
         L10nKey::SettingsSearchTabCompletionKeywords => {
             "complete completion menu suggestions tab prompt"
@@ -1718,6 +1703,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorStripCloseOthers => "Close others",
         L10nKey::EditorBackToTerminal => "Back to Terminal (Esc)",
         L10nKey::EditorLnCol => "Ln {line}, Col {column}",
+        L10nKey::EditorToggleLineEnding => "Switch line endings between LF and CRLF",
+        L10nKey::StatusRemoteHost => "Remote host {id}",
         L10nKey::EditorEdit => "Edit",
         L10nKey::EditorPreview => "Preview",
         L10nKey::EditorWrapOn => "Wrap: on",
@@ -2276,8 +2263,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdHideRightPanel => "Hide Right Panel",
         L10nKey::CmdShowRightPanel => "Show Right Panel",
         L10nKey::CmdShowCodePanel => "Show Code Panel",
-        L10nKey::CmdTabBarMoveToTop => "Tab Bar: Move to Top",
-        L10nKey::CmdTabBarMoveToLeftSidebar => "Tab Bar: Move to Left Sidebar",
         L10nKey::CmdRightPanelInfo => "Right Panel: Info",
         L10nKey::CmdRightPanelChanges => "Right Panel: Changes",
         L10nKey::CmdRightPanelFiles => "Right Panel: Files",
@@ -2653,7 +2638,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppMenuLeftSidebar => "Left Sidebar",
         L10nKey::AppMenuRightPanel => "Right Panel",
         L10nKey::AppMenuCodePanel => "Code Panel",
-        L10nKey::AppMenuTabBarPosition => "Tab Bar Position",
         L10nKey::AppMenuFocusNextPane => "Focus Next Pane",
         L10nKey::AppMenuFocusPreviousPane => "Focus Previous Pane",
         L10nKey::AppMenuZoomPane => "Zoom Pane",
@@ -2993,11 +2977,9 @@ mod tests {
 
     #[test]
     fn english_is_the_complete_table() {
-        assert_eq!(translate_en(L10nKey::SearchTabs), "Search tabs…");
         assert_eq!(
             translate_variant_en(L10nKey::SettingsAliasesLinked, "one"),
             Some("1 alias linked.")
         );
-        assert_eq!(translate_variant_en(L10nKey::SearchTabs, "one"), None);
     }
 }
