@@ -1014,6 +1014,7 @@ pub(crate) fn apply_theme(mut window: Option<&mut Window>, cx: &mut App) {
     });
     cx.set_global(surfaces.clone());
     cx.set_global(interaction);
+    cx.set_global(theme.parking());
     cx.set_global(presets::ActiveAccent(m.accent));
     // Same treatment as `Surfaces`: derived once here rather than recomputed
     // in `render`, because the graph reads it once per visible row per frame
