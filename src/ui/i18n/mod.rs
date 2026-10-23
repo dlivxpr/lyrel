@@ -1300,6 +1300,8 @@ l10n_keys! {
     EditorStripCloseOthers,
     EditorBackToTerminal,
     EditorLnCol,
+    EditorToggleLineEnding,
+    StatusRemoteHost,
     EditorEdit,
     EditorPreview,
     EditorWrapOn,

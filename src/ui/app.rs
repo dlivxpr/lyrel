@@ -1155,6 +1155,7 @@ pub struct LyrelApp {
     pub(crate) group_rename: Option<GroupRename>,
     window_title: std::cell::RefCell<String>,
     pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
+    pub(crate) status_document_focus: Option<(TabId, bool)>,
     pub(crate) connect: Option<crate::ui::remote_workspace::ConnectFlow>,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
     pub(crate) host_snapshots: std::collections::HashMap<
@@ -1796,6 +1797,7 @@ impl LyrelApp {
             group_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
             status_clock: cx.new(crate::ui::status_bar::Clock::new),
+            status_document_focus: None,
             connect: None,
             switcher: None,
             host_snapshots: std::collections::HashMap::new(),
@@ -4126,6 +4128,9 @@ impl LyrelApp {
     /// it now that has to remember it.
     pub(crate) fn remember_focused_leaf(&mut self, leaf: gpui_kit::EntityId) {
         remember_leaf_in(&mut self.tabs, leaf);
+        if let Some(tab) = self.tabs.iter().find(|tab| tab.pane.leaves().iter().any(|pane| pane.entity_id() == leaf)) {
+            self.status_document_focus = Some((tab.tree_id.get(), false));
+        }
     }
 
     /// Toggle fullscreen, and say how to leave it on the way in.
