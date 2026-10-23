@@ -3817,7 +3817,6 @@ impl LyrelApp {
 
     fn render_editor_empty(&self, cx: &Context<Self>) -> gpui_kit::Div {
         v_flex()
-            .track_focus(&self.editor.empty_focus)
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.editor.empty_focus.focus(window, cx)),
@@ -4344,7 +4343,7 @@ mod close_gpui_tests {
 
     #[gpui_kit::test]
     fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppContext) {
-        use crate::core::actions::{EditorNewFile, EditorSave, ToggleDocumentFill};
+        use crate::core::actions::{EditorNewFile, EditorSaveAs, ToggleDocumentFill};
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
         vcx.dispatch_action(EditorNewFile);
@@ -4363,6 +4362,13 @@ mod close_gpui_tests {
             let pos = app.active_buffer().unwrap().input.read(cx).cursor_position();
             assert_eq!((pos.line, pos.character), (1, 1));
         });
+        vcx.update(|window, cx| window.click("status-cursor", cx));
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("escape");
+        settle(&mut vcx);
+        assert!(app.update_in(&mut vcx, |app, window, cx| {
+            app.code_panel_visible() && app.editor_has_focus(window, cx)
+        }));
         for _ in 0..2 {
             vcx.dispatch_action(ToggleDocumentFill);
             settle(&mut vcx);
@@ -4379,17 +4385,15 @@ mod close_gpui_tests {
         // The line-ending control changes the real save output, not just its label.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("status.txt");
-        app.update_in(&mut vcx, |app, _, _| {
-            let id = app.tab_code().unwrap().active_id().unwrap();
-            let file = app.buffer_mut(id).unwrap();
-            file.path = path.clone();
-            file.untitled = None;
-            file.disk_mtime = None;
-        });
         vcx.update(|window, cx| window.click("status-eol", cx));
         settle(&mut vcx);
-        vcx.dispatch_action(EditorSave);
+        vcx.dispatch_action(EditorSaveAs);
         settle(&mut vcx);
+        vcx.update(|window, cx| {
+            window.press("secondary-a", cx);
+            window.input(&path.to_string_lossy(), cx);
+            window.press("enter", cx);
+        });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !path.exists() || app.read_with(&vcx, |app, _| app.active_buffer().unwrap().saving) {
             assert!(std::time::Instant::now() < deadline, "the document save did not finish");
@@ -4419,7 +4423,7 @@ mod close_gpui_tests {
             window.click("status-problems", cx);
         });
         settle(&mut vcx);
-        assert!(app.read_with(&vcx, |app, _| app.editor.problems.open));
+        vcx.update(|window, _| assert!(window.find("editor-problems").visible()));
         vcx.update(|window, cx| window.click("editor-panel-close", cx));
         settle(&mut vcx);
         assert!(terminal_focused(&app, &mut vcx));
