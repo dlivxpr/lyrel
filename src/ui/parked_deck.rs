@@ -542,6 +542,10 @@ impl ParkedDeck {
             "end" => self.navigate(self.cards.len().saturating_sub(1), window, cx),
             "pageup" => self.navigate(ix.saturating_sub(5), window, cx),
             "pagedown" => self.navigate(ix + 5, window, cx),
+            // Native row Buttons activate their own pane on keyup. Only the
+            // deck's focus may activate the arrow-key selection; intercepting
+            // descendants here would preview a stale active pane instead.
+            "enter" | "space" if !self.focus.is_focused(window) => return,
             "enter" | "space" => {
                 if let Some(pane) = self.selected {
                     self.restore(pane, cx);

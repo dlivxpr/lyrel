@@ -879,6 +879,9 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
         window.focus(&current.focus_handle(cx), cx);
         (parked, current)
     });
+    // The harness starts maximized on the test display, where all twenty
+    // cards may fit. Pin the consumer viewport that must need overflow.
+    vcx.simulate_resize(size(px(900.), px(600.)));
     vcx.run_until_parked();
     let last = parked.last().unwrap();
     vcx.update(|window, cx| {
@@ -886,8 +889,10 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
         assert!(
             window
                 .try_find(("parked-card", last.entity_id().as_u64() as usize))
-                .is_none()
+                .is_none_or(|card| !card.visible()),
+            "the last pane needs the overflow path at this viewport"
         );
+        assert!(window.find("parked-more").visible());
         window.click("parked-more", cx);
     });
     vcx.run_until_parked();
@@ -1169,6 +1174,75 @@ fn overflow_uses_content_width_and_zoom_without_shrinking_targets_or_losing_entr
                 .contains_focused(window, cx),
             "a vanished More returns to the still-valid deck"
         );
+    });
+}
+
+#[gpui_kit::test]
+fn overflow_tabbed_rows_activate_their_own_pane_before_restore(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 4);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    let parked = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let mut parked = Vec::new();
+        while app.tabs.len() > 1 {
+            let pane = app.tabs.remove(1).pane.first_leaf().unwrap();
+            app.tabs[0].pane.split_leaf(
+                current.entity_id(), Axis::Horizontal, false, pane.clone(),
+            );
+            app.park_pane(pane.entity_id(), window, cx);
+            parked.push(pane);
+        }
+        parked
+    });
+    // Leave room for all three Tab stops; virtualization is covered separately.
+    vcx.simulate_resize(size(px(620.), px(900.)));
+    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(24., cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.run_until_parked();
+    for (pane, activation) in [(&parked[1], "enter"), (&parked[2], "space")] {
+        vcx.update(|window, cx| {
+            // Home deliberately leaves the arrow-key target on the first pane.
+            // Tab moves native focus, not that retained active selection.
+            window.press("home", cx);
+            let row = ("parked-overflow-row", pane.entity_id().as_u64() as usize);
+            for _ in 0..8 {
+                if window.find(row).focused() == Some(true) {
+                    break;
+                }
+                window.press("tab", cx);
+            }
+            assert_eq!(window.find(row).focused(), Some(true));
+            window.press(activation, cx);
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, _, cx| {
+            assert_eq!(
+                app.parked_deck.read(cx).selected_pane(),
+                Some(pane.entity_id().as_u64()),
+                "Enter and Space must preview the focused row, not the old active pane"
+            );
+            assert_eq!(app.tabs[0].presentation.parked().len(), 3);
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("parked-preview").visible());
+            if activation == "enter" {
+                window.press("escape", cx);
+            } else {
+                window.press("enter", cx);
+            }
+        });
+        vcx.run_until_parked();
+    }
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(parked[2].contains_focused(window, cx));
+        assert!(!app.tabs[0].is_parked_slot(&parked[2], cx));
+        assert!(app.tabs[0].is_parked_slot(&parked[0], cx));
+        assert!(app.tabs[0].is_parked_slot(&parked[1], cx));
+        assert!(app.tabs[0].pane.leaves().iter().any(|pane| {
+            pane.entity_id() == parked[2].entity_id()
+        }));
     });
 }
 
