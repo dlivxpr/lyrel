@@ -4286,14 +4286,13 @@ mod close_gpui_tests {
         use crate::core::actions::{
             ActivateTab1, ActivateTab2, EditorNewFile, ToggleCodePanel, ToggleDocumentFill,
         };
-        use crate::core::config::{Config, TabBarPosition};
         use gpui_kit::size;
 
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
         vcx.simulate_resize(size(px(1600.), px(900.)));
-        for position in [TabBarPosition::Top, TabBarPosition::Left] {
+        for collapsed in [false, true] {
             app.update_in(&mut vcx, |app, window, cx| {
-                cx.global_mut::<Config>().tab_bar_position = position;
+                app.sidebar_collapsed = collapsed;
                 app.right_panel_visible = true;
                 app.focus_active(window, cx);
                 cx.notify();

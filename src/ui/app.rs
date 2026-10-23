@@ -3,7 +3,7 @@ use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, WindowExt as _};
 use gpui_kit::{
-    App, Axis, Bounds, Context, Edges, Entity, Focusable, Pixels, PromptLevel, Size, Subscription,
+    App, Axis, Bounds, Context, Entity, Focusable, Pixels, PromptLevel, Size, Subscription,
     Window, div, img, point, prelude::*, px, size,
 };
 use std::cell::{Cell, RefCell};
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::core::actions::*;
 use crate::core::config::{
     Config, CursorStyle as ConfigCursorStyle, MouseZoomModifier, NewTabPosition, RightPanelTab,
-    ShellConfig, TabBarPosition, WindowBackdrop,
+    ShellConfig, WindowBackdrop,
 };
 use crate::core::session::{
     Session, SessionAxis, SessionPane, SessionTab, WorkspaceId, WorkspaceStore,
@@ -368,13 +368,6 @@ pub(crate) const TITLE_BAR_LEAD: f32 = if cfg!(target_os = "macos") {
 
 pub(crate) const WINDOW_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 0. } else { 102. };
 
-pub(crate) fn title_bar_hug_offset() -> f32 {
-    if cfg!(target_os = "macos") {
-        0.
-    } else {
-        tile_trailing_inset() - TITLE_BAR_LEAD
-    }
-}
 
 /// 保存窗口可见内容的边界，供下次启动恢复位置与尺寸。
 /// Windows/macOS 后端的 `inner_window_bounds` 默认与窗口边界一致。
@@ -382,81 +375,9 @@ fn window_bounds_to_remember(window: &Window) -> Bounds<Pixels> {
     window.inner_window_bounds().get_bounds()
 }
 
-/// The band the tab strip claims for a drop, in the window's outer coordinates.
-///
-/// The strip is the top of the *content*, and under client-side decorations the
-/// content sits inside the frame padding while `viewport` still measures the
-/// whole surface, shadow included — so the band starts at the padding and stops
-/// at the far edge of the frame, one padding in from each side. Anything else
-/// leaves the outermost chips outside the zone that is supposed to contain
-/// them. `window_paddings` answers `Edges::all(0)` under server-side
-/// decorations, which is every platform but Linux CSD, so off Linux this stays
-/// the full-width rectangle from the window's corner it has always been.
-fn strip_band(viewport: Size<Pixels>, pad: Edges<Pixels>) -> Bounds<Pixels> {
-    Bounds {
-        origin: point(pad.left, pad.top),
-        size: size(
-            (viewport.width - pad.left - pad.right).max(px(0.)),
-            px(TITLE_BAR_HEIGHT),
-        ),
-    }
-}
 
 pub(crate) const WINDOW_MARK_SIZE: f32 = 20.;
 
-/// A transparent sheet that answers one question: is the pointer inside the
-/// box it covers. Lay it over a region as that region's *last* child and read
-/// the flag to reveal chrome only while the pointer is there.
-///
-/// The obvious way to write this is `group_hover` on the region itself, and it
-/// does not work. Group hover asks whether the group's *hitbox* is the one
-/// under the pointer, and gpui's hit test stops at the first `occlude()`d
-/// element it meets on the way down. Tab chips and the chrome tiles are all
-/// occluding, so the region stopped counting as hovered the instant the
-/// pointer reached the very button it was revealing, and the button vanished
-/// from under the cursor. Painted last, this sheet's own hitbox sits in front
-/// of all of them, and it blocks nothing — it is not opaque, so the rows,
-/// chips and tiles underneath keep their clicks, cursors and tooltips.
-pub(crate) fn hover_sheet(
-    id: &'static str,
-    flag: &Rc<Cell<bool>>,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _};
-    let flag = flag.clone();
-    gpui_kit::div()
-        .id(id)
-        .absolute()
-        .inset_0()
-        .on_hover(move |over, window, _cx| {
-            if flag.get() != *over {
-                flag.set(*over);
-                window.refresh();
-            }
-        })
-}
-
-/// Whether a group of title-bar tiles paints this frame: always, unless
-/// `auto_hide_titlebar_buttons` is on, and then only while the pointer is over
-/// the bar the group sits in.
-pub(crate) fn titlebar_chrome_shown(auto_hide: bool, pointer_over_bar: bool) -> bool {
-    !auto_hide || pointer_over_bar
-}
-
-/// Take the paint off a chrome tile that [`titlebar_chrome_shown`] says is
-/// resting, and nothing else.
-///
-/// Opacity, not `invisible()`. Both keep the tile's slot, so revealing it never
-/// shifts what is beside it. But gpui skips a hidden element's whole paint
-/// pass, and that is where its click handler, its accessibility actions and
-/// its tooltip are registered: a hidden tile still shows up to a screen reader,
-/// by label, from prepaint, and then does nothing when pressed from there. At
-/// zero opacity the tile is fully there and merely not drawn.
-pub(crate) fn resting_chrome<E: gpui_kit::Styled>(tile: E, shown: bool) -> E {
-    match shown {
-        true => tile,
-        false => tile.opacity(0.),
-    }
-}
 
 pub(crate) fn title_bar_drag(
     row: gpui_kit::Stateful<gpui_kit::Div>,
@@ -525,10 +446,7 @@ fn window_move_gesture_with(
         ))
 }
 
-pub(crate) fn window_mark() -> Option<impl IntoElement> {
-    if cfg!(target_os = "macos") {
-        return None;
-    }
+pub(crate) fn window_mark() -> impl IntoElement {
     static LOGO: std::sync::OnceLock<Arc<gpui_kit::Image>> = std::sync::OnceLock::new();
     let logo = LOGO
         .get_or_init(|| {
@@ -538,7 +456,7 @@ pub(crate) fn window_mark() -> Option<impl IntoElement> {
             ))
         })
         .clone();
-    Some(img(logo).size(px(WINDOW_MARK_SIZE)).flex_shrink_0())
+    img(logo).size(gpui_kit::rems(WINDOW_MARK_SIZE / 16.)).flex_shrink_0()
 }
 
 pub struct Tab {
@@ -1008,6 +926,7 @@ pub struct LyrelApp {
     _appearance_watch: Subscription,
     pub(crate) search: Option<Entity<SearchView>>,
     search_sub: Option<Subscription>,
+    search_return_focus: Option<gpui_kit::FocusHandle>,
     /// Preset that was live when the search's theme picker started previewing.
     /// `Some` means the theme on screen is a preview that was never written to
     /// disk, and closing the search without confirming puts this one back.
@@ -1048,15 +967,6 @@ pub struct LyrelApp {
     pub(crate) editor: crate::ui::code_editor::EditorPanelState,
     pub(crate) sidebar_width: Rc<Cell<f32>>,
     pub(crate) sidebar_dragging: Rc<Cell<bool>>,
-    /// Whether the pointer is over the sidebar and over the tab strip. With
-    /// `auto_hide_titlebar_buttons` on, the chrome tiles in each — new tab and
-    /// the panel toggles — are painted only while its own flag is set, so a
-    /// window nobody is pointing at carries no buttons at all. The right
-    /// panel's own title bar is the exception: its tiles are always painted
-    /// while the panel is open. Written by [`hover_sheet`]; nobody reads them
-    /// while the setting is off.
-    pub(crate) sidebar_chrome_hover: Rc<Cell<bool>>,
-    pub(crate) strip_chrome_hover: Rc<Cell<bool>>,
     /// How much width a settings row will actually get, measured once per
     /// render. `settings_row` is called from page builders that never see the
     /// window, and the answer differs per page — the SSH page spends a host
@@ -1105,16 +1015,7 @@ pub struct LyrelApp {
     /// tabs it would go. Read back a frame later by the drop, like the two
     /// landings above.
     pub(crate) pane_detach: Cell<Option<(gpui_kit::EntityId, usize)>>,
-    /// Where the strip drew each tab's chip and where the sidebar drew each
-    /// tab's row, by tab — the geometry a pane dropped on either of them reads
-    /// its new place out of.
-    ///
-    /// Written from paint, so what a frame reads is where things were on the
-    /// frame before. That is exactly as good as it needs to be: neither the
-    /// strip nor the sidebar moves while a drag is in flight. A tab with no
-    /// rectangle was not drawn — scrolled out of a full strip, filtered out of
-    /// the sidebar — and takes no part in the reading.
-    pub(crate) strip_slots: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// 左侧标签行的上一帧几何；折叠分组中未绘制的行不接受拖放。
     pub(crate) sidebar_slots: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     /// Where each pinned group's block was drawn last frame, so a tab held
     /// over one can be told which group it is over. Only pinned groups are
@@ -1134,9 +1035,7 @@ pub struct LyrelApp {
     /// Where the active tab's panes were last drawn, which is the frame of
     /// reference a drag's landing is worked out in.
     pub(crate) pane_area: Rc<Cell<Option<Bounds<Pixels>>>>,
-    pub(crate) sidebar_search: Entity<InputState>,
     pub(crate) file_search: Entity<InputState>,
-    _sidebar_search_sub: Subscription,
     _file_search_sub: Subscription,
     settings: Option<SettingsState>,
     /// The window settings are drawn in, and the workspace window that opened
@@ -1669,15 +1568,6 @@ impl LyrelApp {
                 (tabs, active)
             }
         };
-        let sidebar_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchTabs))
-        });
-        let sidebar_search_sub =
-            cx.subscribe_in(&sidebar_search, window, |_this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            });
         let file_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchFiles))
         });
@@ -1713,6 +1603,7 @@ impl LyrelApp {
             _appearance_watch: appearance_watch,
             search: None,
             search_sub: None,
+            search_return_focus: None,
             theme_preview_restore: None,
             closed: Vec::new(),
             renaming: None,
@@ -1757,8 +1648,6 @@ impl LyrelApp {
             editor,
             sidebar_width: Rc::new(Cell::new(sidebar_width)),
             sidebar_dragging: Rc::new(Cell::new(false)),
-            sidebar_chrome_hover: Rc::new(Cell::new(false)),
-            strip_chrome_hover: Rc::new(Cell::new(false)),
             settings_row_width: Cell::new(f32::MAX),
             settings_viewport_w: Cell::new(f32::MAX),
             settings_hit_anchored: Cell::new(false),
@@ -1776,14 +1665,11 @@ impl LyrelApp {
             pane_drag: Rc::new(RefCell::new(None)),
             tab_merge: Cell::new(None),
             pane_detach: Cell::new(None),
-            strip_slots: Rc::new(RefCell::new(Vec::new())),
             sidebar_slots: Rc::new(RefCell::new(Vec::new())),
             sidebar_group_slots: Rc::new(RefCell::new(Vec::new())),
             sidebar_divider: Rc::new(Cell::new(None)),
             sidebar_groups: Default::default(),
             pane_area: Rc::new(Cell::new(None)),
-            sidebar_search,
-            _sidebar_search_sub: sidebar_search_sub,
             file_search,
             _file_search_sub: file_search_sub,
             settings: None,
@@ -3845,9 +3731,6 @@ impl LyrelApp {
         self.update_config(cx, |cfg| cfg.dim_inactive_panes = on);
     }
 
-    pub(crate) fn set_auto_hide_titlebar_buttons(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.auto_hide_titlebar_buttons = on);
-    }
 
     pub(crate) fn set_cursor_blink(&mut self, on: bool, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| cfg.cursor_blink = on);
@@ -3885,39 +3768,21 @@ impl LyrelApp {
         self.update_config(cx, |cfg| cfg.confirm_close = mode);
     }
 
-    pub(crate) fn set_tab_bar_position(&mut self, pos: TabBarPosition, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.tab_bar_position = pos);
-    }
 
     pub(crate) fn set_sidebar_auto_grouping(&mut self, on: bool, cx: &mut Context<Self>) {
         self.update_config(cx, |cfg| cfg.sidebar_auto_grouping = on);
     }
 
-    pub(crate) fn toggle_tab_sidebar(&mut self, cx: &mut Context<Self>) {
-        let next = match cx.global::<Config>().tab_bar_position {
-            TabBarPosition::Top => TabBarPosition::Left,
-            TabBarPosition::Left => TabBarPosition::Top,
-        };
-        self.set_tab_bar_position(next, cx);
-    }
 
     pub(crate) fn toggle_left_panel(&mut self, cx: &mut Context<Self>) {
-        let (pos, collapsed) = match cx.global::<Config>().tab_bar_position {
-            TabBarPosition::Top => (TabBarPosition::Left, false),
-            TabBarPosition::Left => (TabBarPosition::Left, !self.sidebar_collapsed),
-        };
-        self.sidebar_collapsed = collapsed;
-        self.update_config(cx, |cfg| {
-            cfg.tab_bar_position = pos;
-            cfg.sidebar_collapsed = collapsed;
-        });
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        let collapsed = self.sidebar_collapsed;
+        self.update_config(cx, |cfg| cfg.sidebar_collapsed = collapsed);
         cx.notify();
     }
 
-    pub(crate) fn left_panel_open(&self, cx: &gpui_kit::App) -> bool {
-        matches!(cx.global::<Config>().tab_bar_position, TabBarPosition::Left)
-            && !self.sidebar_collapsed
-            && !self.tabs.is_empty()
+    pub(crate) fn left_panel_open(&self, _cx: &gpui_kit::App) -> bool {
+        !self.sidebar_collapsed && !self.tabs.is_empty()
     }
 
     pub(crate) fn set_notify_mode(
@@ -5232,41 +5097,17 @@ impl LyrelApp {
         const BAND_REACH: f32 = 6.;
 
         let pointer = window.mouse_position();
-        // The two surfaces never share a window: the sidebar *is* the tab bar
-        // when it is up, and the strip is what stands in for it when it is not.
-        let vertical = matches!(cx.global::<Config>().tab_bar_position, TabBarPosition::Left)
-            && !self.tabs.is_empty();
+        if !self.sidebar_open(cx) { return None; }
         let viewport = window.viewport_size();
-        let pad = gpui_kit::component::window_paddings(window);
-        // The band each surface claims, read off the tabs it drew rather than
-        // measured as an element of its own: the chips and the rows are the
-        // only part of either surface a drop has anything to say about, and a
-        // band derived from them cannot disagree with the gaps measured inside
-        // it. Stretched past the outermost tab so the empty space beyond —
-        // where the strip keeps its New Tab button, where the sidebar keeps
-        // nothing at all — still reads as "after everything".
-        let band = |axis: Axis, drawn: &[(usize, Bounds<Pixels>)]| {
+        let band = |drawn: &[(usize, Bounds<Pixels>)]| {
             let top = drawn.iter().map(|(_, b)| b.origin.y).reduce(Pixels::min)?;
             let left = drawn.iter().map(|(_, b)| b.origin.x).reduce(Pixels::min)?;
-            let right = drawn
-                .iter()
-                .map(|(_, b)| b.origin.x + b.size.width)
-                .reduce(Pixels::max)?;
-            Some(match axis {
-                Axis::Horizontal => strip_band(viewport, pad),
-                Axis::Vertical => Bounds {
-                    origin: point(left, top - px(BAND_REACH)),
-                    size: size(
-                        right - left,
-                        (viewport.height - top + px(BAND_REACH)).max(px(0.)),
-                    ),
-                },
+            let right = drawn.iter().map(|(_, b)| b.origin.x + b.size.width).reduce(Pixels::max)?;
+            Some(Bounds {
+                origin: point(left, top - px(BAND_REACH)),
+                size: size(right - left, (viewport.height - top + px(BAND_REACH)).max(px(0.))),
             })
         };
-
-        // Sorted by where they were drawn rather than by tab: the sidebar
-        // groups its rows, and a strip that has scrolled shows a window of
-        // chips. What the pointer is between is a matter of the screen.
         let measured = |slots: &[Bounds<Pixels>]| -> Vec<(usize, Bounds<Pixels>)> {
             slots
                 .iter()
@@ -5275,27 +5116,12 @@ impl LyrelApp {
                 .map(|(i, b)| (i, *b))
                 .collect()
         };
-        let surfaces = [
-            (!vertical).then(|| (Axis::Horizontal, measured(&self.strip_slots.borrow()))),
-            self.sidebar_open(cx)
-                .then(|| (Axis::Vertical, measured(&self.sidebar_slots.borrow()))),
-        ];
-        let (axis, mut drawn) = surfaces
-            .into_iter()
-            .flatten()
-            .find(|(axis, drawn)| band(*axis, drawn).is_some_and(|b| b.contains(&pointer)))?;
-        let lead = |b: &Bounds<Pixels>| match axis {
-            Axis::Horizontal => b.origin.x,
-            Axis::Vertical => b.origin.y,
-        };
-        drawn.sort_by(|(_, a), (_, b)| lead(a).as_f32().total_cmp(&lead(b).as_f32()));
+        let mut drawn = measured(&self.sidebar_slots.borrow());
+        if !band(&drawn).is_some_and(|bounds| bounds.contains(&pointer)) { return None; }
+        drawn.sort_by(|(_, a), (_, b)| a.origin.y.as_f32().total_cmp(&b.origin.y.as_f32()));
 
         let row: Vec<Bounds<Pixels>> = drawn.iter().map(|(_, b)| *b).collect();
-        let (gap, caret) = crate::ui::pane_drag::insertion(&row, axis, pointer)?;
-        // The gap counts tabs on screen; what an insert needs is a place in the
-        // list. Past the last tab drawn is the end of the list, which is not
-        // the same thing as the last tab drawn plus one: a strip too narrow to
-        // show every chip has tabs on either side of the ones it drew.
+        let (gap, caret) = crate::ui::pane_drag::insertion(&row, Axis::Vertical, pointer)?;
         let at = drawn.get(gap).map(|(i, _)| *i).unwrap_or(self.tabs.len());
         Some((at, caret))
     }
@@ -6690,7 +6516,6 @@ impl LyrelApp {
         // system picker, which browses this computer: a path picked there
         // names nothing on a remote workspace's machine, where "Pin as
         // Group" in the file tree is the way in instead.
-        if cx.global::<Config>().tab_bar_position == TabBarPosition::Left {
             actions.push(
                 Item::localized(L10nKey::CmdNewGroup, CommandKind::NewGroup)
                     .with_subtitle(t(L10nKey::CmdNewGroupSubtitle))
@@ -6709,7 +6534,6 @@ impl LyrelApp {
                     .in_group(CommandGroup::TabsPanes),
                 );
             }
-        }
 
         // The editor's text commands, while there is a buffer to run them on.
         if self.editor_can_dispatch() {
@@ -6882,6 +6706,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_return_focus = window.focused(cx);
         let catalog = self.search_catalog(window, cx);
         let view = cx.new(|cx| SearchView::new(catalog, tab, query, window, cx));
         if tab.in_editor_row() {
@@ -7167,7 +6992,10 @@ impl LyrelApp {
         // A previewed theme was never persisted: closing the search any way
         // other than confirming the pick puts the old one back.
         self.cancel_preset_preview(window, cx);
-        self.focus_active(window, cx);
+        match self.search_return_focus.take() {
+            Some(focus) => window.focus(&focus, cx),
+            None => self.focus_active(window, cx),
+        }
         // Nor was a symbol Go to Symbol previewed: the caret goes back, and
         // the keyboard with it to the editor it came from.
         self.editor_symbol_preview_cancel(window, cx);
@@ -7231,7 +7059,6 @@ impl LyrelApp {
             MoveTabRight => self.move_tab(true, cx),
             ToggleMaximizePane => self.toggle_maximize(window, cx),
             ToggleFullscreen => self.toggle_fullscreen(window, cx),
-            ToggleTabSidebar => self.toggle_tab_sidebar(cx),
             ToggleLeftPanel => self.toggle_left_panel(cx),
             ToggleRightPanel => self.toggle_right_panel(cx),
             ShowRightPanel(tab) => self.set_right_panel_tab(tab, cx),
@@ -7551,9 +7378,6 @@ impl LyrelApp {
             L10nKey::SettingsDimInactivePanes => {
                 self.set_dim_inactive_panes(defaults.dim_inactive_panes, cx)
             }
-            L10nKey::SettingsAutoHideTitlebarButtons => {
-                self.set_auto_hide_titlebar_buttons(defaults.auto_hide_titlebar_buttons, cx)
-            }
             L10nKey::SettingsCursorBlink => self.set_cursor_blink(defaults.cursor_blink, cx),
             L10nKey::SettingsCursorShape => self.set_cursor_style(defaults.cursor_style, cx),
             L10nKey::SettingsPromptCursorShape => {
@@ -7564,9 +7388,6 @@ impl LyrelApp {
                 self.set_new_tab_position(defaults.new_tab_position, cx)
             }
             L10nKey::SettingsConfirmClose => self.set_confirm_close(defaults.confirm_close, cx),
-            L10nKey::SettingsTabBarPosition => {
-                self.set_tab_bar_position(defaults.tab_bar_position, cx)
-            }
             L10nKey::SettingsSidebarGrouping => {
                 self.set_sidebar_auto_grouping(defaults.sidebar_auto_grouping, cx)
             }
@@ -8039,9 +7860,6 @@ impl LyrelApp {
     }
 
     pub(crate) fn refresh_locale_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.sidebar_search.update(cx, |state, cx| {
-            state.set_placeholder(t(L10nKey::SearchTabs), window, cx)
-        });
         self.file_search.update(cx, |state, cx| {
             state.set_placeholder(t(L10nKey::SearchFiles), window, cx)
         });
@@ -9775,35 +9593,8 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let vertical = matches!(cx.global::<Config>().tab_bar_position, TabBarPosition::Left)
-            && !self.tabs.is_empty();
-        // Asked through the predicate the right panel sizes itself against —
-        // two spellings of "is the rail up" is one more than the layout can
-        // afford to have disagree.
-        let rail = self.sidebar_open(cx);
-        // A hover flag is only written by its sheet, and only on a change of
-        // state it saw. A sheet that is not in the tree sees none: the rail
-        // hidden by its own tile with the pointer on it, or the switch turned
-        // off mid-hover, would leave its flag set, and the tiles would come
-        // back painted, with nobody pointing at them, the next time the sheet
-        // does. Clear the flag of every sheet not built this frame.
-        let auto_hide_chrome = cx.global::<Config>().auto_hide_titlebar_buttons;
-        if !auto_hide_chrome || !rail {
-            self.sidebar_chrome_hover.set(false);
-        }
-        if !auto_hide_chrome {
-            self.strip_chrome_hover.set(false);
-        }
-        // Both read before the strip and the sidebar are built: a tab held out
-        // over the layout suspends the reorder, which is what those two ask
-        // what to draw, and a pane held over *them* is measured against where
-        // they put their tabs last frame — which is what they are about to
-        // blank and write again.
         let tab_landing = self.tab_landing(window, cx);
-        let sidebar = rail.then(|| {
-            let header = self.render_sidebar_chrome(window, cx);
-            self.tab_sidebar(header, window, cx)
-        });
+        let sidebar = self.sidebar_open(cx).then(|| self.tab_sidebar(window, cx));
         let ssh_status = self
             .tabs
             .get(self.active)
@@ -9844,7 +9635,6 @@ impl LyrelApp {
             }
         };
 
-        let title_bar = self.render_window_title_bar(!vertical, window, cx);
         let body_area = div()
             .flex_1()
             .relative()
@@ -9888,19 +9678,7 @@ impl LyrelApp {
         // are rendered, ordered by `overlay_top`, and the front one wins on
         // paint order as it always has.
         let document_dock_px = self.document_dock_px(window, cx);
-        // Where the docked header sits. Everywhere but macOS the title bar
-        // spans the workspace and leaves the strip above the column empty, so
-        // the header goes up into it; on macOS the column already reaches the
-        // top of the window and its own first row lands there.
-        let document_chrome = if cfg!(target_os = "macos") {
-            crate::ui::document_column::DocumentChrome::Dock
-        } else {
-            crate::ui::document_column::DocumentChrome::DockHoisted
-        };
-        let document_header = document_dock_px
-            .is_some()
-            .then(|| self.render_document_header(document_chrome, window, cx))
-            .flatten();
+        let document_chrome = crate::ui::document_column::DocumentChrome::Dock;
         let (overlays, document_column) = match document_dock_px {
             Some(w) => (
                 Vec::new(),
@@ -9936,41 +9714,16 @@ impl LyrelApp {
                 )
             }
         };
-        let document_px = document_column
-            .as_ref()
-            .map_or(0., |_| document_dock_px.unwrap_or_default());
 
         let right_panel = self.render_right_panel(window, cx);
-        // A docked document takes the same fork the right panel does: on
-        // Windows and Linux the window controls live at the right end of the
-        // title bar, so the bar has to span the workspace rather than sit
-        // inside the terminal column with a column drawn to the right of it.
-        let panel_below_title_bar =
-            (right_panel.is_some() || document_column.is_some()) && !cfg!(target_os = "macos");
-        let (column_title_bar, spanning_title_bar) = if panel_below_title_bar {
-            (None, Some(title_bar))
-        } else {
-            (Some(title_bar), None)
-        };
-        let (column_overlays, hoisted_overlays) = if panel_below_title_bar {
-            (Vec::new(), overlays)
-        } else {
-            (overlays, Vec::new())
-        };
-        let panel_px = if right_panel.is_some() {
-            self.right_panel_px(window, cx)
-        } else {
-            0.
-        };
         let terminal_column = div()
             .flex_1()
             .min_w_0()
             .flex()
             .flex_col()
             .relative()
-            .when_some(column_title_bar, |this, bar| this.child(bar))
             .child(body_area)
-            .children(column_overlays);
+            .children(overlays);
         let panel_row = div()
             .flex_1()
             .min_h_0()
@@ -9985,88 +9738,11 @@ impl LyrelApp {
             .min_h_0()
             .w_full()
             .flex()
-            .flex_row()
-            .when_some(sidebar, |this, sidebar| this.child(sidebar))
-            .child(match spanning_title_bar {
-                Some(bar) => div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .relative()
-                    .child(
-                        div()
-                            .relative()
-                            .flex_none()
-                            // One patch per column below, rather than one for
-                            // both: each carries the left border its own column
-                            // carries, so the rule between the document and the
-                            // detail panel runs the full height of the window
-                            // instead of stopping at the title bar.
-                            .when(panel_px > 0., |this| {
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .right_0()
-                                        .w(px(panel_px))
-                                        .bg(crate::ui::theme::workspace_surface_color(cx))
-                                        .border_l(crate::ui::theme::hairline(window))
-                                        .border_color(cx.theme().sidebar_border),
-                                )
-                            })
-                            .when(document_px > 0., |this| {
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .right(px(panel_px))
-                                        .w(px(document_px))
-                                        .bg(crate::ui::theme::workspace_surface_color(cx))
-                                        .border_l(crate::ui::theme::hairline(window))
-                                        .border_color(cx.theme().sidebar_border),
-                                )
-                            })
-                            .child(bar)
-                            // The document's header, in the strip the spanning
-                            // title bar leaves empty above its column. Drawn
-                            // after the bar so it sits over the tab strip's
-                            // slack — and stopping short of the trailing
-                            // chrome, which is only in the way when the detail
-                            // panel is closed and this column is the one at the
-                            // window's right edge.
-                            .when_some(document_header, |this, header| {
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .h(px(TITLE_BAR_HEIGHT))
-                                        .right(px(panel_px))
-                                        .w(px(document_px))
-                                        .when(panel_px <= 0., |d| {
-                                            d.pr(px(crate::ui::window_chrome::trailing_chrome_w(
-                                                window.is_fullscreen(),
-                                            )))
-                                        })
-                                        .child(header),
-                                )
-                            }),
-                    )
-                    .child(panel_row)
-                    .children(hoisted_overlays.into_iter().map(|overlay| {
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .bottom_0()
-                            .right(px(panel_px))
-                            .child(overlay)
-                    }))
-                    .into_any_element(),
-                None => panel_row.into_any_element(),
-            })
+            .flex_col()
+            .child(self.render_window_title_bar(window, cx))
+            .child(div().flex_1().min_h_0().w_full().flex().flex_row()
+                .when_some(sidebar, |this, sidebar| this.child(sidebar))
+                .child(panel_row))
             .into_any_element()
     }
 }
@@ -10355,9 +10031,6 @@ impl Render for LyrelApp {
                 }))
                 .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
                     this.toggle_fullscreen(window, cx)
-                }))
-                .on_action(cx.listener(|this, _: &ToggleTabSidebar, _window, cx| {
-                    this.toggle_tab_sidebar(cx)
                 }))
                 .on_action(
                     cx.listener(|this, _: &ToggleLeftPanel, _window, cx| {
@@ -12124,20 +11797,11 @@ mod tests {
         close_prompt, document_column_px, inherited_start_dir, join_shell_args,
         leaf_shares_the_window_daemon, mru_order, native_ssh_pane_alive, one_slot_move,
         pane_free_for, parse_ssh_connect_input, parse_ssh_option_words, rename_outcome,
-        side_panel_max, split_machine_held, split_shell_args, step_in_order, strip_band,
+        side_panel_max, split_machine_held, split_shell_args, step_in_order,
         title_strip_centre, title_strip_content_centre, title_strip_rule_and_pad, wd_path_saveable,
     };
-    use gpui_kit::{Edges, point, px, size};
+    use gpui_kit::{point, px, size};
 
-    #[test]
-    fn title_bar_buttons_rest_out_of_sight_only_when_asked_to_and_nobody_points() {
-        // Off: painted whether or not the pointer is anywhere near.
-        assert!(super::titlebar_chrome_shown(false, false));
-        assert!(super::titlebar_chrome_shown(false, true));
-        // On: painted exactly while the pointer is over the bar.
-        assert!(!super::titlebar_chrome_shown(true, false));
-        assert!(super::titlebar_chrome_shown(true, true));
-    }
 
     /// A title-bar row spends [`TITLE_BAR_BORDER`] of its height below its
     /// contents, and there are two ways it does that: it carries the whole point
@@ -12247,35 +11911,6 @@ mod tests {
         assert_eq!(tab.focus_origin(id(2), Dir::Left), Some(id(1)));
     }
 
-    /// #679: the band now starts at the frame padding rather than at the
-    /// window's corner, and off Linux CSD there is no padding to start at —
-    /// `window_paddings` answers `Edges::all(0)` under server-side decorations,
-    /// which is what macOS, Windows and a bare X session all report.
-    #[test]
-    fn an_undecorated_frame_leaves_the_strips_drop_band_where_it_was() {
-        let band = strip_band(size(px(1200.), px(800.)), Edges::all(px(0.)));
-        assert_eq!(band.origin, point(px(0.), px(0.)));
-        assert_eq!(band.size, size(px(1200.), px(TITLE_BAR_HEIGHT)));
-    }
-
-    /// The viewport measures the whole surface, shadow included, so the band
-    /// has to lose one padding at each end — not one twice over, and not none.
-    /// Getting it wrong puts the outermost chips outside the band drawn to hold
-    /// them, and a drop on them reads as a drop on nothing.
-    #[test]
-    fn a_client_side_frame_pulls_the_drop_band_in_by_the_shadow_on_both_sides() {
-        let viewport = size(px(1200.), px(800.));
-        let pad = Edges::all(px(12.));
-        let band = strip_band(viewport, pad);
-
-        assert_eq!(band.origin, point(pad.left, pad.top));
-        assert_eq!(
-            band.origin.x + band.size.width,
-            viewport.width - pad.right,
-            "the band must reach the far edge of the frame, not of the surface"
-        );
-        assert_eq!(band.size.height, px(TITLE_BAR_HEIGHT));
-    }
 
     /// Fullscreen takes the window buttons and nothing else: the strip keeps
     /// its row, and the room reserved for the buttons at its end comes back.
@@ -12289,20 +11924,8 @@ mod tests {
             !cfg!(target_os = "macos")
         );
         assert_eq!(super::window_controls_w(false), super::WINDOW_CONTROLS_W);
-        assert_eq!(
-            crate::ui::window_chrome::trailing_chrome_w(true),
-            crate::ui::window_chrome::trailing_chrome_tiles_w()
-        );
     }
 
-    /// A surface narrower than its own shadow is only reachable mid-resize, but
-    /// a negative width would make `Bounds::contains` answer for a rectangle
-    /// that is inside out.
-    #[test]
-    fn a_drop_band_narrower_than_its_frame_collapses_instead_of_inverting() {
-        let band = strip_band(size(px(10.), px(800.)), Edges::all(px(12.)));
-        assert_eq!(band.size.width, px(0.));
-    }
 
     /// Two panels that each cap themselves at half the window leave the
     /// terminal nothing when both are open, so the cap is what is left after

@@ -1,15 +1,14 @@
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Side, Sizable as _, h_flex,
 };
 use gpui_kit::{
-    Animation, AnimationExt as _, AnyElement, App, Axis, Bounds, Context, FontWeight, MouseButton,
-    Pixels, SharedString, Window, canvas, deferred, div, ease_out_quint, linear_color_stop,
-    linear_gradient, prelude::*, px,
+    AnyElement, App, Axis, Context, FontWeight, MouseButton, Pixels, SharedString, Window,
+    div, prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -24,9 +23,7 @@ use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
 use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab, tile_trailing_inset};
-use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::search::SearchTab;
 
 /// One duration and one curve for every transition the app runs, so a fade and
@@ -34,7 +31,6 @@ use crate::ui::search::SearchTab;
 /// enough that nobody waits on it.
 pub(crate) const TRANSITION_MS: u64 = 140;
 pub(crate) const REORDER_SLIDE_MS: u64 = TRANSITION_MS;
-pub(crate) const CHIP_GAP: f32 = 6.;
 
 
 const KEEP_SEGMENTS: usize = 3;
@@ -627,25 +623,6 @@ pub(crate) fn hit_target(button: Button) -> Button {
     button.w(px(MIN_TARGET)).h(px(MIN_TARGET))
 }
 
-/// The narrowest a chip gets: its `min_w`, which flex-shrink cannot go under.
-const CHIP_MIN_W: f32 = 100.;
-
-/// The run of chips to draw when they cannot all fit.
-///
-/// The row clips what overflows, so past a certain tab count the chips at the
-/// end simply were not drawn — including, right after ⌘T, the tab that was
-/// just opened and made active. Slide the run instead: keep it anchored at the
-/// first tab until the active one would fall off the right edge, then move it
-/// by as little as it takes to hold the active chip.
-fn visible_chips(order: &[usize], active: usize, avail: f32) -> Vec<usize> {
-    let fits = ((avail / (CHIP_MIN_W + CHIP_GAP)).floor() as usize).max(1);
-    if order.len() <= fits {
-        return order.to_vec();
-    }
-    let at = order.iter().position(|&i| i == active).unwrap_or(0);
-    let start = at.saturating_sub(fits - 1).min(order.len() - fits);
-    order[start..start + fits].to_vec()
-}
 
 pub(crate) fn chrome_tile(button: Button, selected: bool, cx: &gpui_kit::App) -> Button {
     chrome_tile_sized(button, TILE_SIZE, TILE_GLYPH, selected, cx)
@@ -1199,7 +1176,7 @@ impl LyrelApp {
                 .id("workspace-rename")
                 .flex_shrink_0()
                 .items_center()
-                .h(px(28.))
+                .h(gpui_kit::rems(1.75))
                 .w_full()
                 .px(px(9.))
                 .rounded_md()
@@ -1235,7 +1212,7 @@ impl LyrelApp {
                             .w_full()
                             .h_full()
                             .items_center()
-                            .gap(px(6.))
+                            .gap_1p5()
                             // The tile's own hover is a fill the palette keeps
                             // a hair off the surface, which on the rail is
                             // barely a change at all — and the name and the
@@ -1251,10 +1228,10 @@ impl LyrelApp {
                                     .flex_shrink_0()
                                     .items_center()
                                     .justify_center()
-                                    .size(px(Self::AVATAR_PX))
+                                    .size(gpui_kit::rems(Self::AVATAR_PX / 16.))
                                     .rounded_full()
                                     .bg(cx.theme().secondary)
-                                    .text_size(px(10.))
+                                    .text_size(gpui_kit::rems(10. / 16.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(monogram),
                             )
@@ -1265,10 +1242,10 @@ impl LyrelApp {
                                 // headers' weight so the one dark line in
                                 // the column stays the tab in front.
                                 div()
-                                    .flex_shrink(1.)
+                                    .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(13.))
+                                    .text_size(gpui_kit::rems(13. / 16.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(cx.theme().foreground)
                                     .child(SharedString::from(current.clone())),
@@ -1278,18 +1255,14 @@ impl LyrelApp {
                                 // panel, not a menu hanging off the button.
                                 Icon::empty()
                                     .path("icons/chevrons-up-down.svg")
-                                    .size(px(11.))
+                                    .size(gpui_kit::rems(11. / 16.))
                                     .flex_shrink_0(),
                             ),
                     )
                     .xsmall()
                     .w_full()
-                    .h(px(28.))
-                    .rounded(px(7.))
-                    // Button pins the arrow for every non-link variant; the
-                    // switcher's own rows point, so the tile that opens them
-                    // does too.
-                    .cursor_pointer()
+                    .h(gpui_kit::rems(1.75))
+                    .rounded_lg()
                     .accessibility_label(t(L10nKey::HomeSwitchWorkspace))
                     .tooltip_with_action(
                         t(L10nKey::HomeSwitchWorkspace),
@@ -1701,7 +1674,10 @@ impl LyrelApp {
             false,
             cx,
         )
-        .rounded(px(RAIL_TILE_RADIUS))
+        .w(gpui_kit::rems(tile / 16.))
+        .h(gpui_kit::rems(tile / 16.))
+        .with_size(cx.theme().font_size * (glyph / BUTTON_ICON_SCALE / 16.))
+        .rounded_lg()
         // Every other tile in this row names itself on hover — Switch
         // Workspace, More, Hide Sidebar. The three New Tab buttons that
         // come through here were the ones left silent. The chord is worth
@@ -1789,9 +1765,7 @@ impl LyrelApp {
         };
         let this = entity.read(cx);
         // Taken before `this` is let go for the Move to Group submenu below.
-        let sidebar =
-            cx.global::<Config>().tab_bar_position == crate::core::config::TabBarPosition::Left;
-        let move_targets = sidebar.then(|| {
+        let move_targets = Some({
             let keys = this.sidebar_group_keys(cx);
             crate::ui::tab_sidebar::move_targets(&keys, &this.sidebar_groups, index)
         });
@@ -2096,297 +2070,6 @@ impl LyrelApp {
             )
     }
 
-    pub(crate) fn tab_strip(
-        &self,
-        show_chips: bool,
-        chips_avail: Pixels,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let active = self.active;
-        let show_badges = self.mod_hint_badges;
-        let mut chips = h_flex()
-            .items_center()
-            .gap(px(CHIP_GAP))
-            .min_w_0()
-            .max_w(chips_avail)
-            .overflow_hidden();
-
-        // Held by the app rather than by the frame: a pane dropped up here has
-        // to read the gaps between the chips, and it is asking a frame later
-        // than the one that drew them. Blanked here and written again from
-        // paint, so a chip that is not drawn this time — the strip is hidden,
-        // or the chip scrolled out of it — leaves nothing behind to aim at.
-        let slots = self.strip_slots.clone();
-        *slots.borrow_mut() = vec![Bounds::default(); self.tabs.len()];
-        let preview = reorder::preview(
-            &self.reorder,
-            &Surface::Strip,
-            self.tabs.len(),
-            window.mouse_position(),
-        );
-        let display: Vec<usize> = match &preview {
-            Some(p) => {
-                reorder::set_pending(&self.reorder, &Surface::Strip, p.order.clone());
-                p.order.clone()
-            }
-            None => (0..self.tabs.len()).collect(),
-        };
-        let display = visible_chips(&display, active, f32::from(chips_avail));
-
-        for i in display {
-            if !show_chips {
-                break;
-            }
-            let dragged = preview.as_ref().is_some_and(|p| p.from == i);
-            let tab = &self.tabs[i];
-            let is_active = i == active;
-            let label = self.tab_label(tab, i, Some(window), cx);
-            let full_title = self.tab_title_tooltip(tab, i, Some(window), cx);
-            let ssh_dot = self.tab_ssh_dot(tab, cx);
-            let asleep = tab.is_asleep();
-            let agent = tab.agent(cx).or_else(|| tab.asleep_agent());
-            let agent_status = tab.agent_status(cx);
-            let agent_unread = tab.agent_unread_count(cx);
-            let zoomed = self.tab_is_zoomed(i);
-
-            let rename_input = self
-                .renaming
-                .as_ref()
-                .filter(|r| r.tab == tab.tree_id.get())
-                .map(|r| r.input.clone());
-            let label_region = match rename_input {
-                Some(input) => div()
-                    .id(("tab-rename", i))
-                    .flex_1()
-                    .min_w_0()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    // The chip switches tabs on the *release* now, so holding
-                    // the press back is no longer enough: a click landing in
-                    // the field would reach the chip behind it and switch away
-                    // from the name being typed, taking the focus with it.
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    // No inset of its own: the label it replaces starts
-                    // flush, and the field's 12px padding jumped the name
-                    // sideways the moment rename began.
-                    .child(Input::new(&input).appearance(false).px_0())
-                    .into_any_element(),
-                None => div()
-                    .id(("tab-label", i))
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .when(is_active, |d| d.font_weight(FontWeight::MEDIUM))
-                    .when_some(full_title, |d, title| {
-                        d.tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(title.clone())
-                                .build(window, cx)
-                        })
-                    })
-                    .child(label)
-                    .into_any_element(),
-            };
-
-            let chip = h_flex()
-                .id(("tab-chip", i))
-                .on_drag(DragTab, {
-                    let state = self.reorder.clone();
-                    let slots = slots.clone();
-                    let id = tab.tree_id.get();
-                    move |_drag, grab, _window, cx| {
-                        cx.stop_propagation();
-                        *state.borrow_mut() = Some(
-                            Reorder::new(
-                                Surface::Strip,
-                                i,
-                                slots.borrow().clone(),
-                                Axis::Horizontal,
-                                px(CHIP_GAP),
-                                grab,
-                            )
-                            .of_tab(id),
-                        );
-                        cx.new(|_| DragTab)
-                    }
-                })
-                .occlude()
-                .group(SharedString::from(format!("tab-chip-{i}")))
-                .cursor_pointer()
-                .items_center()
-                .justify_between()
-                .gap_1p5()
-                .h(px(30.))
-                .min_w(px(CHIP_MIN_W))
-                .flex_shrink(1.)
-                .pl_3()
-                .pr_1p5()
-                .rounded_lg()
-                .when(is_active, |s| {
-                    s.bg(cx.theme().secondary).text_color(cx.theme().foreground)
-                })
-                .when(!is_active, |s| {
-                    s.text_color(cx.theme().muted_foreground)
-                        .hover(|s| s.bg(cx.theme().muted))
-                })
-                // Faded as well as marked: a row of chips is read at a glance,
-                // and the tabs holding nothing should be the quiet ones.
-                .when(asleep, |s| s.opacity(0.6))
-                .when(dragged, |s| s.opacity(0.75))
-                .child(
-                    canvas(
-                        {
-                            let slots = slots.clone();
-                            move |bounds, _window, _cx| {
-                                if let Some(slot) = slots.borrow_mut().get_mut(i) {
-                                    *slot = bounds;
-                                }
-                            }
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-                // The press is kept from the title bar under it, but it is the
-                // release that switches tabs: a press that turns into a drag is
-                // the tab being picked up, and picking a tab up to drop it into
-                // another one must not first put it on screen.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(
-                    cx.listener(move |this, ev: &gpui_kit::ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        let double =
-                            matches!(ev, gpui_kit::ClickEvent::Mouse(e) if e.down.click_count >= 2);
-                        if double {
-                            window.titlebar_double_click();
-                        } else {
-                            this.activate(i, window, cx);
-                        }
-                    }),
-                )
-                .when_some(ssh_dot, |c, rgb| {
-                    c.child(
-                        div()
-                            .flex_shrink_0()
-                            .size(px(6.))
-                            .rounded_full()
-                            .bg(gpui_kit::rgb(rgb)),
-                    )
-                })
-                .when_some(agent, |chip, agent| {
-                    chip.child(self.tab_avatar(
-                        ("tab-avatar", i),
-                        Some(agent),
-                        agent_status,
-                        agent_unread,
-                        None,
-                        18.,
-                        cx,
-                    ))
-                })
-                // Leading, beside the other state marks: the trailing end of a
-                // chip belongs to the badge and to the close button that fades
-                // in over it, and a mark parked there would vanish under the
-                // pointer that came to read it.
-                .when(zoomed, |chip| {
-                    chip.child(self.zoom_mark(("tab-zoom", i), cx))
-                })
-                .when(asleep, |chip| {
-                    chip.child(self.sleep_mark(("tab-asleep", i), cx))
-                })
-                .child(label_region)
-                .when(show_badges && i < 9, |chip| {
-                    chip.child(
-                        div()
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(20.))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if is_active {
-                                cx.theme().foreground
-                            } else {
-                                cx.theme().muted_foreground
-                            })
-                            .child(tab_badge_label(i)),
-                    )
-                })
-                .when(!(show_badges && i < 9), |chip| {
-                    let backing = if is_active {
-                        cx.theme().secondary
-                    } else {
-                        cx.theme().muted
-                    };
-                    let mut fade_from = backing;
-                    fade_from.a = 0.;
-                    chip.child(
-                        h_flex()
-                            .absolute()
-                            // 3 + MIN_TARGET + 3 centres the button in the 30px chip.
-                            .top(px(3.))
-                            .right(px(6.))
-                            .opacity(0.)
-                            .group_hover(SharedString::from(format!("tab-chip-{i}")), |s| {
-                                s.opacity(1.)
-                            })
-                            .child(div().w(px(10.)).h(px(MIN_TARGET)).bg(linear_gradient(
-                                90.,
-                                linear_color_stop(fade_from, 0.),
-                                linear_color_stop(backing, 1.),
-                            )))
-                            .child(
-                                div().bg(backing).child(
-                                    hit_target(
-                                        Button::new(("tab-close", i))
-                                            .icon(IconName::Close)
-                                            .ghost()
-                                            .xsmall(),
-                                    )
-                                    .tooltip(t(L10nKey::TabContextCloseTab))
-                                    // Held here, because the chip behind it
-                                    // switches tabs on the release too: without
-                                    // this the same click closes tab `i` and
-                                    // then activates whichever tab slid into
-                                    // its place.
-                                    .on_click(cx.listener(
-                                        move |this, _, window, cx| {
-                                            cx.stop_propagation();
-                                            this.close_tab(i, window, cx);
-                                        },
-                                    )),
-                                ),
-                            ),
-                    )
-                });
-
-            let menu_app = cx.entity().downgrade();
-            let chip = chip.context_menu(move |menu, window, cx| {
-                Self::tab_context_menu(menu, i, false, &menu_app, window, cx)
-            });
-            chips = chips.child(match &preview {
-                Some(p) if p.from == i => deferred(chip.relative().left(p.held)).into_any_element(),
-                Some(p) => {
-                    let offset = p.offsets[i].as_f32();
-                    chip.with_animation(
-                        (
-                            SharedString::from(format!("chip-slide-{}", p.generation)),
-                            i,
-                        ),
-                        Animation::new(std::time::Duration::from_millis(REORDER_SLIDE_MS))
-                            .with_easing(ease_out_quint()),
-                        move |el, delta| el.left(px(offset * (1. - delta))),
-                    )
-                    .into_any_element()
-                }
-                None => chip.into_any_element(),
-            });
-        }
-
-        chips
-    }
 }
 
 /// The tab menu's SSH row, against real tabs in a real window.
@@ -3209,48 +2892,6 @@ mod tests {
         }
     }
 
-    /// One chip is 100 wide plus a 6 gap, so this is "room for exactly four".
-    const FOUR_CHIPS: f32 = 4. * (CHIP_MIN_W + CHIP_GAP);
-
-    #[test]
-    fn every_chip_is_drawn_while_they_all_fit() {
-        let order: Vec<usize> = (0..4).collect();
-        assert_eq!(visible_chips(&order, 0, FOUR_CHIPS), order);
-        assert_eq!(visible_chips(&order, 3, FOUR_CHIPS), order);
-        assert_eq!(visible_chips(&[0, 1], 1, FOUR_CHIPS), vec![0, 1]);
-    }
-
-    #[test]
-    fn the_run_stays_put_until_the_active_chip_would_fall_off() {
-        let order: Vec<usize> = (0..9).collect();
-        // Anchored at the first tab for as long as the active one is inside it.
-        assert_eq!(visible_chips(&order, 0, FOUR_CHIPS), vec![0, 1, 2, 3]);
-        assert_eq!(visible_chips(&order, 3, FOUR_CHIPS), vec![0, 1, 2, 3]);
-        // Then it slides by exactly as much as it has to.
-        assert_eq!(visible_chips(&order, 4, FOUR_CHIPS), vec![1, 2, 3, 4]);
-        assert_eq!(visible_chips(&order, 8, FOUR_CHIPS), vec![5, 6, 7, 8]);
-    }
-
-    #[test]
-    fn the_active_chip_is_always_among_the_drawn_ones() {
-        let order: Vec<usize> = (0..40).collect();
-        for active in 0..40 {
-            for avail in [0., 1., 80., FOUR_CHIPS, 4000.] {
-                let shown = visible_chips(&order, active, avail);
-                assert!(
-                    shown.contains(&active),
-                    "active {active} missing at {avail}px: {shown:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_reordered_run_is_sliced_in_its_own_order() {
-        // Mid-drag the strip renders `preview.order`, not 0..n.
-        let order = vec![3, 0, 1, 2, 4, 5];
-        assert_eq!(visible_chips(&order, 5, FOUR_CHIPS), vec![1, 2, 4, 5]);
-    }
 
     #[test]
     fn configured_shell_arguments_remain_user_authored_in_the_menu() {

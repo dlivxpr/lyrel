@@ -1,3 +1,4 @@
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{
@@ -10,8 +11,7 @@ use std::path::PathBuf;
 use crate::core::config::{Config, RightPanelTab};
 use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
 use crate::ui::app::{
-    CONTENT_INSET, LyrelApp, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, TITLE_BAR_BORDER,
-    TitleStripRow as _, tile_trailing_inset,
+    CONTENT_INSET, LyrelApp, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, tile_trailing_inset,
 };
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::scrollbar::with_vertical_scrollbar;
@@ -35,10 +35,7 @@ pub(crate) const MIN_WIDTH: f32 = 240.;
 /// What the tab row needs with the count dropped: the labels, the row's lead,
 /// its 2px gaps, and the panel toggle at the trailing end.
 fn right_panel_tabs_floor(window: &Window, cx: &gpui_kit::App) -> f32 {
-    let chrome = match cfg!(target_os = "macos") {
-        true => crate::ui::window_chrome::trailing_chrome_tiles_w(),
-        false => tile_trailing_inset(),
-    };
+    let chrome = tile_trailing_inset();
     (TAB_ROW_LEAD + crate::ui::tab_strip::right_panel_tab_labels_w(window, cx) + chrome).ceil()
 }
 
@@ -569,42 +566,6 @@ impl LyrelApp {
                 .bg(crate::ui::theme::workspace_surface_color(cx))
                 .border_l(crate::ui::theme::hairline(window))
                 .border_color(cx.theme().sidebar_border)
-                .children(cfg!(target_os = "macos").then(|| {
-                    let row = h_flex()
-                        .id("right-panel-titlebar-drag")
-                        .flex_none()
-                        // Match TitleBar's content height, including its invisible
-                        // bottom border. Otherwise this row centres the toggle
-                        // half a point below its position in the closed panel.
-                        .title_strip_row(px(TITLE_BAR_BORDER), cx.theme().transparent);
-                    crate::ui::app::window_move_gesture(
-                        row,
-                        "right-panel-titlebar-drag",
-                        window,
-                        cx,
-                    )
-                    .on_double_click(|_, window, _| window.titlebar_double_click())
-                    .items_center()
-                    .pl(px(TAB_ROW_LEAD))
-                    .relative()
-                    .children(self.right_panel_tabs(cx))
-                    .child(div().flex_1())
-                    // The toggle keeps its title-bar size and trailing inset
-                    // when it moves into this row, so opening the panel does
-                    // not shift the glyph or change its hover target.
-                    .child(self.window_chrome(cx))
-                }))
-                // Only the Files and Search tabs step down 8px. Their first row
-                // is a filled search well whose top edge is the first thing you
-                // see, so it wants air under the tab row. Info and Source Control open on
-                // bare text centred in a 28px row, which already sits ~7px
-                // under the row's top; adding 8 more put their first line a
-                // visible step lower than the Files well beside them.
-                .children(
-                    (cfg!(target_os = "macos")
-                        && matches!(tab, RightPanelTab::Files | RightPanelTab::Search))
-                    .then(|| div().flex_none().h(px(8.))),
-                )
                 .child(body)
                 .children(self.sftp_transfers_footer(cx))
                 .child(handle)
@@ -686,7 +647,8 @@ impl LyrelApp {
 
         let active = self.right_panel_dragging.get();
         let handle = div()
-            .group("right-panel-resize")
+            .id("right-panel-resize")
+            .test_support()
             .occlude()
             .absolute()
             .top_0()
@@ -701,8 +663,7 @@ impl LyrelApp {
                 div()
                     .w(px(1.))
                     .h_full()
-                    .when(active, |d| d.bg(cx.theme().drag_border))
-                    .group_hover("right-panel-resize", |s| s.bg(cx.theme().drag_border)),
+                    .when(active, |d| d.bg(cx.theme().drag_border)),
             )
             .on_mouse_down(MouseButton::Left, {
                 let dragging = self.right_panel_dragging.clone();
@@ -718,82 +679,23 @@ impl LyrelApp {
 
     pub(crate) fn panel_title(
         &self,
-        text: &str,
-        count: Option<String>,
+        _text: &str,
+        _count: Option<String>,
         trailing: Option<AnyElement>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let has_trailing = trailing.is_some();
-        let tabs = (!cfg!(target_os = "macos")).then(|| self.right_panel_tabs(cx));
-        if tabs.is_none() && !has_trailing {
-            return div().flex_none().into_any_element();
-        }
-        let row = crate::ui::app::window_move_gesture(
-            h_flex().id("panel-title"),
-            "panel-title-drag",
-            window,
-            cx,
-        );
-        row.flex_none()
-            .h(px(if tabs.is_some() { TAB_ROW_HEIGHT } else { 32. }))
+        let tabs = self.right_panel_tabs(cx);
+        h_flex()
+            .id("panel-title")
+            .flex_none()
+            .h(rems(TAB_ROW_HEIGHT / 16.))
             .items_center()
-            // A bare heading is text, so it starts on the text column; a
-            // trailing tile lines its glyph up with that column's far edge.
-            .pl(px(TEXT_INSET))
-            .pr(px(match (&tabs, has_trailing) {
-                (Some(_), _) => tile_trailing_inset(),
-                (None, true) => TEXT_INSET - crate::ui::app::TILE_PAD_SM,
-                (None, false) => TEXT_INSET,
-            }))
-            // Where the tabs live in this row, they are the heading: the
-            // current one already names the panel, and the Changes tab carries
-            // the count. No rule under it — the body's own inset is the break.
-            .when(tabs.is_some(), |row| row.pl(px(TAB_ROW_LEAD)))
-            .when(tabs.is_none(), |row| {
-                row.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_baseline()
-                        .gap(px(7.))
-                        .child(
-                            // The title step of the panel ramp, SEMIBOLD and
-                            // uppercased. It reads as a label rather than as
-                            // content because of the weight and the caps.
-                            div()
-                                .text_size(rems(META))
-                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                .text_color(cx.theme().muted_foreground)
-                                .child(text.to_string()),
-                        )
-                        .when_some(count, |this, c| {
-                            this.child(
-                                // A count is a token hanging off the heading, not
-                                // part of it: one step down, mono, regular weight.
-                                div()
-                                    .text_size(rems(META_MONO))
-                                    .font_family(cx.theme().mono_font_family.clone())
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(c),
-                            )
-                        }),
-                )
-            })
-            // Leading, as on macOS: the tabs open the row and whatever the
-            // panel adds trails at the far end.
-            .when_some(tabs, |this, tiles| {
-                this.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        // Full height, so each tab's click target is the
-                        // whole row, not a glyph-tall strip in its middle.
-                        .h_full()
-                        .items_center()
-                        .children(tiles),
-                )
-            })
+            .pl(rems(TAB_ROW_LEAD / 16.))
+            .pr(rems(tile_trailing_inset() / 16.))
+            .child(h_flex().flex_shrink_0().h_full().children(tabs))
             .child(div().flex_1().min_w_0())
-            .when_some(trailing, |this, t| this.child(t))
+            .when_some(trailing, |row, trailing| row.child(trailing))
             .into_any_element()
     }
 

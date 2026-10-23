@@ -1,3 +1,4 @@
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent};
 use gpui_kit::component::menu::{ContextMenu, ContextMenuExt as _, PopupMenuItem};
@@ -60,12 +61,7 @@ const HEADER_HEIGHT: f32 = 22.;
 /// The group heading and the row's branch line: 11.5px at the default size.
 const META_REM: f32 = 11.5 / 16.;
 
-/// The rail's side inset, for its header tiles, controls and rows alike.
-pub(crate) const RAIL_INSET: f32 = 12.;
 
-/// The workspace chip and the search field under the rail's header.
-const HEAD_CONTROL_HEIGHT: f32 = 28.;
-const HEAD_CONTROL_RADIUS: f32 = 7.;
 
 /// What sits between a group's branch and its diff counts.
 const META_SEP_TRIMMED: &str = "·";
@@ -217,12 +213,9 @@ struct SidebarInfo {
 }
 
 impl LyrelApp {
-    /// Whether the tab rail is on screen — the same three conditions `render`
-    /// assembles the layout from, in one place the panel opposite can ask.
+    /// 左侧是唯一标签导航；收起时不绘制迷你轨道。
     pub(crate) fn sidebar_open(&self, cx: &gpui_kit::App) -> bool {
-        cx.global::<Config>().tab_bar_position == crate::core::config::TabBarPosition::Left
-            && !self.tabs.is_empty()
-            && !self.sidebar_collapsed
+        self.left_panel_open(cx)
     }
 
     /// What the right panel has reserved, from the sidebar's point of view.
@@ -254,7 +247,6 @@ impl LyrelApp {
 
     pub(crate) fn tab_sidebar(
         &self,
-        header: AnyElement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -262,10 +254,6 @@ impl LyrelApp {
         let sf = cx.global::<crate::ui::presets::Surfaces>().rail;
         let show_badges = self.mod_hint_badges;
         let width = self.sidebar_px(window, cx);
-        let query = self.sidebar_search.read(cx).value().trim().to_lowercase();
-        // Blanked here, written again from paint: a row filtered out by the
-        // search — or hidden with its collapsed group — must leave no rectangle
-        // behind for a pane to be dropped between.
         *self.sidebar_slots.borrow_mut() = vec![Bounds::default(); self.tabs.len()];
         // Read before it is blanked: the rectangles a tab held over the
         // sidebar is measured against are the ones drawn last frame, the
@@ -283,9 +271,6 @@ impl LyrelApp {
             crate::ui::reorder::set_regroup(&self.reorder, target);
         }
         self.sidebar_group_slots.borrow_mut().clear();
-        // Every group drops itself when its rows filter out, so a query that
-        // matches nothing left the sidebar showing only its own search box.
-        let mut any_rows = false;
 
         let mut list = v_flex()
             .id("tab-sidebar-list")
@@ -306,10 +291,6 @@ impl LyrelApp {
         let keys: Rc<Vec<Option<GroupKey>>> = Rc::new(self.sidebar_group_keys(cx));
         let groups = &self.sidebar_groups;
         let sections = sidebar_sections(&keys, groups);
-        // A search outranks a fold. Typing something that matches a row inside
-        // a folded group has to show that row — a box that says nothing
-        // matches while the match sits behind a chevron is just lying.
-        let folds_apply = query.is_empty();
 
         // ⌘N runs ActivateTabN, which goes through `activate_visual` — the
         // Nth row as the sidebar lays it out, not the Nth tab in `self.tabs`.
@@ -324,34 +305,7 @@ impl LyrelApp {
             pos
         };
 
-        // The row shows an elided title and a branch; the filter used to read
-        // only the elided title, so typing the branch you can see, or the part
-        // of the path the row dropped, matched nothing. The label is built
-        // here only when there is a query to match it against — the rows
-        // themselves elide against measured width and no longer need it.
-        let visible_by_section: Vec<Vec<usize>> = sections
-            .iter()
-            .map(|s| {
-                s.tabs
-                    .iter()
-                    .copied()
-                    .filter(|&i| {
-                        query.is_empty()
-                            || self
-                                .tab_label(&self.tabs[i], i, Some(window), cx)
-                                .to_lowercase()
-                                .contains(&query)
-                            || self.tabs[i]
-                                .leaf_title(Some(window), cx)
-                                .to_lowercase()
-                                .contains(&query)
-                            || self.tabs[i]
-                                .git_status(Some(window), cx)
-                                .is_some_and(|g| g.branch.to_lowercase().contains(&query))
-                    })
-                    .collect()
-            })
-            .collect();
+        let visible_by_section: Vec<Vec<usize>> = sections.iter().map(|section| section.tabs.clone()).collect();
 
         let pointer = window.mouse_position();
         // The row text is measured against real glyphs before it is elided:
@@ -402,13 +356,7 @@ impl LyrelApp {
             cx.theme().muted_foreground,
             rail_fill,
         );
-        // A pinned group is drawn with no tabs in it — it is kept, and the
-        // row it grows says how to fill it — except while a search is
-        // narrowing the list, where a group with nothing matching is noise.
-        let rendered = |ix: &usize| {
-            !visible_by_section[*ix].is_empty()
-                || (query.is_empty() && sections[*ix].pinned().is_some())
-        };
+        let rendered = |ix: &usize| !visible_by_section[*ix].is_empty() || sections[*ix].pinned().is_some();
         // Pinned headers reorder among themselves, by hand; that order is the
         // workspace's and is written back whole when a drag lands.
         let pinned_slots: Vec<usize> = (0..sections.len())
@@ -532,8 +480,7 @@ impl LyrelApp {
             // nothing to click otherwise, and the one headerless section (the
             // list below the pinned groups, when nothing else is there) must
             // never answer to Ungrouped's fold.
-            let folded =
-                section.name.is_some() && folds_apply && groups.is_folded(group_key.as_ref());
+            let folded = section.name.is_some() && groups.is_folded(group_key.as_ref());
             let mut rows: Vec<ContextMenu<Stateful<Div>>> = Vec::new();
             // The header keeps counting every row the group has; folding only
             // stops them being drawn. Nothing downstream then registers a
@@ -1657,7 +1604,6 @@ impl LyrelApp {
                     .inset_0(),
                 );
 
-            any_rows = true;
             list = list.child(match (preview, slot) {
                 (Some(p), Some(slot)) if p.from == slot => {
                     deferred(block.relative().top(p.held)).into_any_element()
@@ -1717,65 +1663,15 @@ impl LyrelApp {
                 }),
         );
 
-        if !any_rows && !query.is_empty() {
-            list = list.child(
-                div()
-                    .px_2()
-                    .py_3()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(crate::ui::i18n::t_fmt(
-                        crate::ui::i18n::L10nKey::SettingsNothingMatches,
-                        &[("query", &query)],
-                    )),
-            );
-        }
 
-        // The tile inside asks for `w_full`, and a percentage is only a width
-        // while some box above it has a real one. This row used to have none of
-        // its own and borrowed the column's by cross-axis stretch, which did not
-        // always hold; `w_full` here swapped that for a second percentage, and a
-        // row whose width is `Percent` is no longer `auto`, so it lost stretch
-        // as well — on the passes that size the column from its content there
-        // was still nothing to resolve against and the tile fell back to hugging
-        // the workspace name. Hand the row real pixels: the rail is
-        // `w(px(width))` and layout is border-box, so its content is one pixel
-        // narrower than that because of the right border.
-        let search = h_flex()
-            .w_full()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(7.))
-            .h(px(HEAD_CONTROL_HEIGHT))
-            .pl_2()
-            .pr_1()
-            .rounded(px(HEAD_CONTROL_RADIUS))
-            .bg(cx.theme().muted)
-            .child(
-                Icon::new(IconName::Search)
-                    .size(px(12.))
-                    .flex_shrink_0()
-                    .text_color(cx.theme().muted_foreground),
-            )
-            .child(
-                div().flex_1().min_w_0().child(
-                    Input::new(&self.sidebar_search)
-                        .appearance(false)
-                        .cleanable(true)
-                        .pl_0(),
-                ),
-            );
         let workspace_head = v_flex()
             .w(px(width - 1.))
             .flex_shrink_0()
-            .gap(px(10.))
-            .px(px(RAIL_INSET))
-            .pt(px(4.))
-            .pb(px(16.))
-            .child(self.workspace_head(cx))
-            .child(search);
+            .px_3()
+            .pt_1()
+            .pb_4()
+            .child(self.workspace_head(cx));
 
-        let auto_hide_chrome = cx.global::<Config>().auto_hide_titlebar_buttons;
         let container: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
         // Read while there is still a `cx` to read it from: the drag handler
         // below only ever sees a `Window`, and the cap it clamps against has to
@@ -1838,7 +1734,8 @@ impl LyrelApp {
 
         let handle_active = self.sidebar_dragging.get();
         let handle = div()
-            .group("sidebar-resize")
+            .id("sidebar-resize")
+            .test_support()
             .occlude()
             .absolute()
             .top_0()
@@ -1853,8 +1750,7 @@ impl LyrelApp {
                 div()
                     .w(px(1.))
                     .h_full()
-                    .when(handle_active, |d| d.bg(cx.theme().drag_border))
-                    .group_hover("sidebar-resize", |s| s.bg(cx.theme().drag_border)),
+                    .when(handle_active, |d| d.bg(cx.theme().drag_border)),
             )
             .on_mouse_down(MouseButton::Left, {
                 let dragging = self.sidebar_dragging.clone();
@@ -1885,7 +1781,6 @@ impl LyrelApp {
                 v_flex()
                     .w(px(width - 1.))
                     .h_full()
-                    .child(header)
                     .child(workspace_head)
                     .child(crate::ui::scrollbar::with_vertical_scrollbar(
                         "tab-sidebar-scrollbar",
@@ -1894,12 +1789,6 @@ impl LyrelApp {
                     )),
             )
             .child(handle)
-            .when(auto_hide_chrome, |rail| {
-                rail.child(crate::ui::app::hover_sheet(
-                    "sidebar-chrome-hover",
-                    &self.sidebar_chrome_hover,
-                ))
-            })
     }
 
     /// The boundary between the kept groups and the derived ones, recording
@@ -2722,9 +2611,6 @@ impl LyrelApp {
     }
 
     pub(crate) fn visual_tab_order(&self, cx: &gpui_kit::App) -> Vec<usize> {
-        if cx.global::<Config>().tab_bar_position != crate::core::config::TabBarPosition::Left {
-            return (0..self.tabs.len()).collect();
-        }
         let keys = self.sidebar_group_keys(cx);
         sidebar_sections(&keys, &self.sidebar_groups)
             .into_iter()
@@ -2736,9 +2622,6 @@ impl LyrelApp {
     /// sidebar section on a left tab bar, every tab on a top one. Empty when
     /// no run holds `index`.
     pub(crate) fn tab_run(&self, index: usize, cx: &gpui_kit::App) -> Vec<usize> {
-        if cx.global::<Config>().tab_bar_position != crate::core::config::TabBarPosition::Left {
-            return (0..self.tabs.len()).collect();
-        }
         let keys = self.sidebar_group_keys(cx);
         sidebar_sections(&keys, &self.sidebar_groups)
             .into_iter()
@@ -3929,39 +3812,6 @@ mod fold_tests {
         });
     }
 
-    #[gpui_kit::test]
-    fn a_search_outranks_a_fold(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-        let alpha = AutoKey::Repo(PathBuf::from("/w/alpha"));
-
-        app.update(&mut vcx, |app, cx| {
-            for i in 0..2 {
-                *app.tabs[i].auto_group.borrow_mut() = Some(alpha.clone());
-            }
-            app.toggle_sidebar_group(Some(&GroupKey::Auto(alpha.clone())), cx);
-        });
-        vcx.run_until_parked();
-        app.update(&mut vcx, |app, _| {
-            assert!(!drawn(app, 1), "folded, so the row is not drawn");
-        });
-
-        // Whatever the row is actually showing — the label is derived from the
-        // test process's cwd, and this has to be a query that matches it.
-        app.update_in(&mut vcx, |app, window, cx| {
-            let label = app.tab_label(&app.tabs[1], 1, Some(window), cx).to_string();
-            app.sidebar_search.update(cx, |state, cx| {
-                state.set_value(&label, window, cx);
-            });
-        });
-        vcx.run_until_parked();
-
-        app.update(&mut vcx, |app, _| {
-            assert!(
-                drawn(app, 1),
-                "a row a query matches has to show, fold or no fold"
-            );
-        });
-    }
 
     /// A fold hides every row the group has, the active one included. The
     /// alternative — leaving the active row on screen under a shut chevron,

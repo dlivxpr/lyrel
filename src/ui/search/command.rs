@@ -7,7 +7,7 @@ use lyrel_core::core::session::WorkspaceId;
 use uuid::Uuid;
 
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
-use crate::core::config::{Config, RightPanelTab, TabBarPosition};
+use crate::core::config::{Config, RightPanelTab};
 use crate::ui::i18n::{L10nKey, alias_translations, t, t_fmt};
 
 /// Everything a row can do once it is picked. `LyrelApp::run_command` is the
@@ -61,7 +61,6 @@ pub enum CommandKind {
     MoveTabRight,
     ToggleMaximizePane,
     ToggleFullscreen,
-    ToggleTabSidebar,
     ToggleLeftPanel,
     ToggleRightPanel,
     ShowRightPanel(RightPanelTab),
@@ -244,7 +243,6 @@ impl CommandKind {
             MoveTabRight => "move-tab-right",
             ToggleMaximizePane => "zoom-pane",
             ToggleFullscreen => "full-screen",
-            ToggleTabSidebar => "tab-bar-position",
             ToggleLeftPanel => "left-sidebar",
             ToggleRightPanel => "right-panel",
             ShowRightPanel(RightPanelTab::Info) => "right-panel-info",
@@ -397,7 +395,6 @@ impl CommandKind {
             MoveTabRight => "MoveTabRight",
             ToggleMaximizePane => "ToggleMaximizePane",
             ToggleFullscreen => "ToggleFullscreen",
-            ToggleTabSidebar => "ToggleTabSidebar",
             ToggleLeftPanel => "ToggleLeftPanel",
             ToggleRightPanel => "ToggleRightPanel",
             ShowRightPanel(tab) => match tab {
@@ -638,8 +635,7 @@ impl Item {
     pub fn actions(cx: &App, chrome: ChromeState) -> Vec<Item> {
         use CommandKind::*;
         let cfg = cx.global::<Config>();
-        let tab_bar_left = cfg.tab_bar_position == TabBarPosition::Left;
-        let sidebar_hidden = chrome.rail_collapsed || !tab_bar_left;
+        let sidebar_hidden = chrome.rail_collapsed;
         let right_panel_open = chrome.right_panel_visible;
         let document_filled = chrome.document_filled;
 
@@ -724,14 +720,6 @@ impl Item {
             Item::localized(L10nKey::CmdDocumentWidthTwoThirds, DocumentWidthTwoThirds),
             Item::localized(L10nKey::CmdToggleDocumentPreview, ToggleDocumentPreview),
             Item::localized(L10nKey::CmdToggleDocumentWrap, ToggleDocumentWrap),
-            Item::localized(
-                if tab_bar_left {
-                    L10nKey::CmdTabBarMoveToTop
-                } else {
-                    L10nKey::CmdTabBarMoveToLeftSidebar
-                },
-                ToggleTabSidebar,
-            ),
             Item::localized(
                 L10nKey::CmdRightPanelInfo,
                 ShowRightPanel(RightPanelTab::Info),
