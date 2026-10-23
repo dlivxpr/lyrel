@@ -584,3 +584,339 @@ fn pip_restore_keeps_intervening_splits_without_adopting_a_later_move() {
     drop(sessions);
     for pane in [a, b, c] { panes.kill(pane).unwrap(); }
 }
+
+fn parking_workspace(client: &ControlClient) -> lyrel_core::core::machine::WorkspaceId {
+    match client
+        .request(ControlRequest::WorkspaceCreate {
+            name: Some("parking".into()),
+            workspace: None,
+        })
+        .unwrap()
+    {
+        ReplyOk::WorkspaceTree(workspace) => workspace.id,
+        other => panic!("expected WorkspaceTree, got {other:?}"),
+    }
+}
+
+fn parking_tree(
+    client: &ControlClient,
+    workspace: lyrel_core::core::machine::WorkspaceId,
+) -> lyrel_core::core::machine::Workspace {
+    match client
+        .request(ControlRequest::WorkspaceTree { workspace })
+        .unwrap()
+    {
+        ReplyOk::WorkspaceTree(workspace) => *workspace,
+        other => panic!("expected WorkspaceTree, got {other:?}"),
+    }
+}
+
+fn parking_shell(
+    daemon: &Daemon,
+    workspace: lyrel_core::core::machine::WorkspaceId,
+) -> lyrel_core::client::PaneSession {
+    let session = daemon
+        .panes()
+        .spawn(
+            None,
+            size(),
+            Some(interactive_shell()),
+            Some(workspace.to_string()),
+            None,
+        )
+        .unwrap();
+    session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    session
+}
+
+fn parking_wait_for_deck(
+    watcher: &ControlClient,
+    workspace: lyrel_core::core::machine::WorkspaceId,
+    expected: &[u64],
+) {
+    let deadline = Instant::now() + STREAM_WITHIN;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "parking change was not broadcast");
+        if let Some(ControlEvent::Layout {
+            workspace: changed,
+            delta: LayoutDelta::TabRestructured { tab, pane: None },
+        }) = watcher.next_event(remaining)
+        {
+            let mut parked = tab
+                .presentation
+                .parked()
+                .iter()
+                .map(|entry| entry.pane())
+                .collect::<Vec<_>>();
+            parked.sort_unstable();
+            if changed == workspace.to_string() && parked == expected {
+                return;
+            }
+        }
+    }
+}
+
+#[test]
+fn parking_and_chosen_restore_keep_the_same_live_shells_for_every_client() {
+    use lyrel_core::core::machine::{Axis, MACHINE_FILE, MachineStore};
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let writer = daemon.control("parking-writer");
+    let watcher = daemon.control("parking-watcher");
+    watcher.request(ControlRequest::Ping).unwrap();
+    let ws = parking_workspace(&writer);
+    let mut first = parking_shell(&daemon, ws);
+    let second = parking_shell(&daemon, ws);
+    let (a, b) = (first.pane_id(), second.pane_id());
+    writer.request(ControlRequest::TabCreate {
+        workspace: ws, at: None, pane: seed(a), tab: None,
+    }).unwrap();
+    writer.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: a, axis: Axis::Horizontal, ratio: 0.4,
+        new: seed(b), first: false,
+    }).unwrap();
+    first.input(if cfg!(windows) {
+        b"set lyrel_park_state=retained\recho BEFORE_%lyrel_park_state%\r"
+    } else {
+        b"lyrel_park_state=retained\rprintf 'BEFORE_%s\\n' \"$lyrel_park_state\"\r"
+    }).unwrap();
+    assert!(collect_until(&mut first, b"BEFORE_retained").1.is_none());
+
+    writer.request(ControlRequest::PanePark {
+        workspace: ws, pane: a, restore: None,
+    }).unwrap();
+    writer.request(ControlRequest::PaneSetPresentation {
+        workspace: ws, pane: b, pip: true, fallback: None, restore: None,
+    }).unwrap();
+    writer.request(ControlRequest::PanePark {
+        workspace: ws, pane: b, restore: None,
+    }).unwrap();
+    let mut expected = vec![a, b];
+    expected.sort_unstable();
+    parking_wait_for_deck(&watcher, ws, &expected);
+    let all_parked = parking_tree(&watcher, ws);
+    assert_eq!(all_parked.tabs.len(), 1, "parking the last pane retains its tab");
+    let tab = &all_parked.tabs[0];
+    assert!(tab.visible_root().is_none());
+    assert!(tab.presentation.pip().is_none(), "PiP moves into the deck");
+    assert!(tab.root.contains(a) && tab.root.contains(b), "both panes remain discoverable");
+    let listed = panes.list().unwrap();
+    assert_eq!(listed.len(), 2, "all parked never starts a filler shell");
+    for id in [a, b] {
+        let pane = listed.iter().find(|pane| pane.pane_id == id).unwrap();
+        assert!(pane.alive);
+        assert_eq!(pane.owner.as_deref(), Some(ws.to_string().as_str()));
+    }
+    let persisted = MachineStore::open(daemon.dir.path().join(MACHINE_FILE)).machine();
+    assert_eq!(persisted.workspaces[0].tabs[0].presentation, tab.presentation);
+    first.detach().unwrap();
+    writer.close();
+    let reconnected = daemon.control("parking-reconnected");
+    assert_eq!(parking_tree(&reconnected, ws).tabs[0].presentation, tab.presentation);
+    let mut replay = panes.attach(a, size()).unwrap();
+    replay.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    assert!(collect_until(&mut replay, b"BEFORE_retained").1.is_none());
+    panes.send_input(a, if cfg!(windows) {
+        b"echo PARKED_%lyrel_park_state%\r"
+    } else {
+        b"printf 'PARKED_%s\\n' \"$lyrel_park_state\"\r"
+    }).unwrap();
+    assert!(collect_until(&mut replay, b"PARKED_retained").1.is_none());
+
+    reconnected.request(ControlRequest::PaneRestore {
+        workspace: ws, pane: b, fallback: None,
+    }).unwrap();
+    parking_wait_for_deck(&watcher, ws, &[a]);
+    let chosen = parking_tree(&watcher, ws);
+    assert_eq!(chosen.tabs[0].visible_root().unwrap().pane_ids(), vec![b]);
+    assert!(chosen.tabs[0].presentation.is_parked(a));
+    assert!(!chosen.tabs[0].presentation.is_parked(b));
+    assert!(chosen.tabs[0].presentation.pip().is_none(), "a parked PiP restores tiled");
+    reconnected.request(ControlRequest::PaneRestore {
+        workspace: ws, pane: a, fallback: Some(b),
+    }).unwrap();
+    parking_wait_for_deck(&watcher, ws, &[]);
+    assert_eq!(parking_tree(&watcher, ws).tabs[0].visible_root().unwrap().pane_ids(), vec![a, b]);
+    panes.send_input(a, if cfg!(windows) {
+        b"echo RESTORED_%lyrel_park_state%\r"
+    } else {
+        b"printf 'RESTORED_%s\\n' \"$lyrel_park_state\"\r"
+    }).unwrap();
+    assert!(collect_until(&mut replay, b"RESTORED_retained").1.is_none());
+    assert_eq!(panes.list().unwrap().len(), 2);
+    drop((replay, second));
+    for id in [a, b] { panes.kill(id).unwrap(); }
+}
+
+#[test]
+fn parked_restore_preserves_intervening_splits_then_uses_a_live_fallback() {
+    use lyrel_core::core::machine::Axis;
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let client = daemon.control("parking-relationship");
+    let ws = parking_workspace(&client);
+    let sessions = (0..4).map(|_| parking_shell(&daemon, ws)).collect::<Vec<_>>();
+    let (a, b, c, d) = (sessions[0].pane_id(), sessions[1].pane_id(), sessions[2].pane_id(), sessions[3].pane_id());
+    client.request(ControlRequest::TabCreate {
+        workspace: ws, at: None, pane: seed(a), tab: None,
+    }).unwrap();
+    client.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: a, axis: Axis::Horizontal, ratio: 0.4, new: seed(b), first: false,
+    }).unwrap();
+    client.request(ControlRequest::PanePark { workspace: ws, pane: b, restore: None }).unwrap();
+    client.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: a, axis: Axis::Vertical, ratio: 0.6, new: seed(c), first: false,
+    }).unwrap();
+    client.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: c, axis: Axis::Vertical, ratio: 0.7, new: seed(d), first: false,
+    }).unwrap();
+    client.request(ControlRequest::PanePark { workspace: ws, pane: d, restore: None }).unwrap();
+    client.request(ControlRequest::PaneMove {
+        workspace: ws, pane: b, to: c, axis: Axis::Vertical, first: false,
+    }).unwrap();
+    client.request(ControlRequest::PaneRestore { workspace: ws, pane: b, fallback: Some(c) }).unwrap();
+    let restored = parking_tree(&client, ws);
+    assert_eq!(restored.tabs[0].visible_root().unwrap().pane_ids(), vec![a, b, c],
+        "the chosen pane returns beside its original sibling, before the newer split");
+    assert!(restored.tabs[0].presentation.is_parked(d));
+    client.request(ControlRequest::PanePark { workspace: ws, pane: b, restore: None }).unwrap();
+    client.request(ControlRequest::PaneClose { workspace: ws, pane: a }).unwrap();
+    client.request(ControlRequest::PaneRestore { workspace: ws, pane: b, fallback: Some(c) }).unwrap();
+    let fallback = parking_tree(&client, ws);
+    assert_eq!(fallback.tabs[0].visible_root().unwrap().pane_ids(), vec![c, b],
+        "an invalid original sibling falls back beside the current surviving pane");
+    assert!(fallback.tabs[0].presentation.is_parked(d));
+    assert_eq!(panes.list().unwrap().iter().filter(|pane| pane.alive).count(), 4,
+        "layout edits never stop or replace any of the four sessions");
+    drop(sessions);
+    for id in [a, b, c, d] { panes.kill(id).unwrap(); }
+}
+
+#[test]
+fn parked_exit_and_explicit_close_never_revive_or_close_another_session() {
+    use lyrel_core::core::machine::Axis;
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let client = daemon.control("parking-lifecycle");
+    let ws = parking_workspace(&client);
+    let mut exiting = parking_shell(&daemon, ws);
+    let mut survivor = parking_shell(&daemon, ws);
+    let (a, b) = (exiting.pane_id(), survivor.pane_id());
+    client.request(ControlRequest::TabCreate {
+        workspace: ws, at: None, pane: seed(a), tab: None,
+    }).unwrap();
+    client.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: a, axis: Axis::Horizontal, ratio: 0.5, new: seed(b), first: false,
+    }).unwrap();
+    for pane in [a, b] {
+        client.request(ControlRequest::PanePark { workspace: ws, pane, restore: None }).unwrap();
+    }
+    exiting.input(b"exit 7\r").unwrap();
+    drain_until_exit(&mut exiting);
+    let deadline = Instant::now() + STREAM_WITHIN;
+    while panes.list().unwrap().iter().any(|pane| pane.pane_id == a && pane.alive) {
+        assert!(Instant::now() < deadline, "the exited shell was still reported live");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    client.request(ControlRequest::PaneRestore { workspace: ws, pane: a, fallback: None }).unwrap();
+    assert!(!panes.list().unwrap().iter().any(|pane| pane.pane_id == a && pane.alive),
+        "restoring an exited view must not respawn its process");
+    assert!(parking_tree(&client, ws).tabs[0].presentation.is_parked(b));
+    client.request(ControlRequest::PaneClose { workspace: ws, pane: a }).unwrap();
+    let stale = client.request(ControlRequest::PaneRestore {
+        workspace: ws, pane: a, fallback: Some(b),
+    }).unwrap_err();
+    assert_eq!(stale.kind(), std::io::ErrorKind::NotFound);
+    let after_close = parking_tree(&client, ws);
+    assert!(!after_close.tabs[0].root.contains(a));
+    assert!(!after_close.tabs[0].presentation.is_parked(a));
+    assert!(after_close.tabs[0].presentation.is_parked(b));
+    assert!(after_close.tabs[0].visible_root().is_none());
+    assert!(panes.list().unwrap().iter().any(|pane| pane.pane_id == b && pane.alive));
+    survivor.input(if cfg!(windows) {
+        b"echo PARK_SURVIVOR_%LYREL_PANE%\r"
+    } else {
+        b"printf 'PARK_SURVIVOR_%s\\n' \"$LYREL_PANE\"\r"
+    }).unwrap();
+    assert!(collect_until(&mut survivor, format!("PARK_SURVIVOR_{b}").as_bytes()).1.is_none(),
+        "stale restore of the exited pane must not close the other parked shell");
+    drop((exiting, survivor));
+    panes.kill(b).unwrap();
+}
+
+#[test]
+fn a_rebuilt_tree_preserves_the_original_parked_relationship_on_the_wire() {
+    use lyrel_core::core::machine::{Axis, MACHINE_FILE, MachineStore};
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let writer = daemon.control("parking-record-writer");
+    let watcher = daemon.control("parking-record-watcher");
+    watcher.request(ControlRequest::Ping).unwrap();
+    let ws = parking_workspace(&writer);
+    let sessions = (0..3).map(|_| parking_shell(&daemon, ws)).collect::<Vec<_>>();
+    let (a, b, c) = (sessions[0].pane_id(), sessions[1].pane_id(), sessions[2].pane_id());
+    writer.request(ControlRequest::TabCreate {
+        workspace: ws, at: None, pane: seed(a), tab: None,
+    }).unwrap();
+    writer.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: a, axis: Axis::Horizontal, ratio: 0.4, new: seed(b), first: false,
+    }).unwrap();
+    writer.request(ControlRequest::PaneSetPresentation {
+        workspace: ws, pane: b, pip: true, fallback: Some(a), restore: None,
+    }).unwrap();
+    let original = parking_tree(&writer, ws).tabs[0].presentation.pip().unwrap().clone();
+    writer.request(ControlRequest::PaneSetPresentation {
+        workspace: ws, pane: b, pip: false, fallback: Some(a), restore: None,
+    }).unwrap();
+    writer.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: a, axis: Axis::Vertical, ratio: 0.6, new: seed(c), first: false,
+    }).unwrap();
+    writer.request(ControlRequest::PaneMove {
+        workspace: ws, pane: b, to: c, axis: Axis::Vertical, first: false,
+    }).unwrap();
+    writer.request(ControlRequest::PanePark { workspace: ws, pane: b, restore: None }).unwrap();
+    assert_ne!(parking_tree(&writer, ws).tabs[0].presentation.parked(), &[original.clone()]);
+    writer.request(ControlRequest::PanePark {
+        workspace: ws, pane: b, restore: Some(original.clone()),
+    }).unwrap();
+    let deadline = Instant::now() + STREAM_WITHIN;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "metadata-only parking change was not broadcast");
+        if let Some(ControlEvent::Layout {
+            workspace,
+            delta: LayoutDelta::TabRestructured { tab, pane: None },
+        }) = watcher.next_event(remaining)
+        {
+            if workspace == ws.to_string() && tab.presentation.parked() == [original.clone()] {
+                break;
+            }
+        }
+    }
+    let persisted = MachineStore::open(daemon.dir.path().join(MACHINE_FILE)).machine();
+    assert_eq!(persisted.workspaces[0].tabs[0].presentation.parked(), &[original.clone()]);
+    let mismatch = writer.request(ControlRequest::PanePark {
+        workspace: ws, pane: c, restore: Some(original.clone()),
+    }).unwrap_err();
+    assert_eq!(mismatch.kind(), std::io::ErrorKind::InvalidInput);
+    let missing = writer.request(ControlRequest::PanePark {
+        workspace: ws, pane: u64::MAX, restore: None,
+    }).unwrap_err();
+    assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+    writer.close();
+    let reconnected = daemon.control("parking-record-reconnected");
+    assert_eq!(parking_tree(&reconnected, ws).tabs[0].presentation.parked(), &[original]);
+    reconnected.request(ControlRequest::PaneRestore {
+        workspace: ws, pane: b, fallback: Some(c),
+    }).unwrap();
+    assert_eq!(parking_tree(&reconnected, ws).tabs[0].visible_root().unwrap().pane_ids(), vec![a, b, c],
+        "the supplied original relationship wins over a later move without removing the new split");
+    assert_eq!(panes.list().unwrap().iter().filter(|pane| pane.alive).count(), 3);
+    drop(sessions);
+    for pane in [a, b, c] { panes.kill(pane).unwrap(); }
+}

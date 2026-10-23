@@ -24,23 +24,42 @@ omp --resume /path/to/session.jsonl
 不会重新打开已退出的对话。单轮结束（`done`）或等待人工输入（`waiting`）不代表退出，
 仍在运行的智能体也不会因关闭、重开窗口而被清除。清屏仅影响终端显示，不用于判断会话是否结束。
 
-### 画中画与会话身份
+### 画中画、停车与会话身份
 
 画中画（PiP）只改变同一标签页中窗格的呈现方式，不新建、关闭或分叉 Shell／智能体会话。
 每个标签页最多有一个 PiP；切换目标前先恢复原 PiP。唯一窗格也可以进入 PiP，平铺区为空，
 不会为填充布局额外启动 Shell。输入、输出历史和会话身份继续属于原 pane。
 
-daemon 的 `Tab.root` 始终保存完整逻辑树，`Tab.presentation` 保存独立的 PiP 元数据；
-客户端通过 `Tab::visible_root()` 获取平铺投影，不能把不可见窗格同步为 `PaneClose`。
-正常还原只取消隐藏，不覆盖浮动期间的分屏或比例修改。原相邻窗格全部失效时，仅把目标窗格
-移到当前有效的平铺回退窗格旁；没有其他平铺窗格时恢复铺满，不重放整张旧树快照。
+daemon 的 `Tab.root` 始终保存完整逻辑树，`Tab.presentation` 保存独立的 PiP 与停车元数据；
+客户端通过 `Tab::visible_root()` 获取同时排除两者的平铺投影，不能把不可见窗格同步为 `PaneClose`。
+恢复优先返回目标的原分屏关系，保留隐藏期间其他窗格的分屏、移动或比例修改。原相邻窗格
+全部失效时，仅把目标窗格移到当前有效的平铺回退窗格旁；没有其他平铺窗格时恢复铺满，
+不重放整张旧树快照。
 
 呈现状态与机器树一起落盘，并通过现有 `TabRestructured` 事件推送给其他客户端。
 重连保留同一状态；daemon 重启后确需重建的 Shell 仍是新进程，不能称为原进程持续运行。
-恢复时 `TabPresentation::remap_panes` 同步重绑 PiP 和原 sibling 身份；目标未能恢复时清除呈现元数据。
+恢复时 `TabPresentation::remap_panes` 同步重绑 PiP、停车目标和原 sibling 身份；目标未能恢复时清除对应呈现元数据。
 任意重排需要重建标签页树时，通过 `PaneSetPresentation.restore` 传回原 `PipPane` record，
 由共享 `Tab::set_pip_with_restore` 应用，不能在新树上重新捕获原关系。
 record 必须属于请求的目标 pane；仅原关系变化、PiP 目标不变时也会持久化并广播。
+
+**停车（Park）**把同一标签页中的平铺或 PiP 窗格放入底部牌堆，只释放显示空间，
+不改变工作区所有权、pane ID、PTY、Shell 环境变量或智能体会话。全部窗格都停车时，
+标签页和牌堆仍保留，中央可以为空，不自动新建 Shell。PiP 停车后不再浮动；
+点击某张卡片的 **Restore** 只恢复该窗格到平铺布局，其他停车窗格仍在牌堆中。
+
+停车及原关系由所属机器的 daemon 持久化并广播，另一个客户端或 GUI 重连可读取相同状态；
+悬停、卡片选择、翻面预览、焦点和动画进度只属于本地窗口，不写回共享布局。
+预览不接收终端输入，关闭预览也不取消停车。CLI 仍使用原 `%PANE` 发现、输入和捕获会话。
+
+control API 为 `PanePark { workspace, pane, restore }` 与
+`PaneRestore { workspace, pane, fallback }`。普通停车传 `restore: None`；树重建同步时
+用原 `PipPane` record 携带最初的恢复关系，不能从已修改的树重新推导。
+`TabPresentation::parked()`／`is_parked(id)` 提供共享停车状态，不能用本地预览是否打开代替它。
+
+停车不是休眠，也不是退出后重新启动：进程正常退出时保持既有退出状态，Restore 不复活它。
+明确关闭窗格会删除其停车记录；旧客户端对已关闭 pane 的恢复请求失败，不得误关或恢复其他窗格。
+daemon 重启依然遵循原有会话恢复规则，持久停车记录不代表原 PTY 进程跨重启存活。
 
 <Note>
   恢复会话需要安装智能体的钩子，因为会话 ID 来自这些钩子。[安装钩子 →](/agents/status)
