@@ -1119,6 +1119,7 @@ pub struct LyrelApp {
     pub(crate) group_rename: Option<GroupRename>,
     window_title: std::cell::RefCell<String>,
     pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
+    pub(crate) status_metrics: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
     pub(crate) status_document_focus: Option<(TabId, bool)>,
     pub(crate) connect: Option<crate::ui::remote_workspace::ConnectFlow>,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
@@ -1748,6 +1749,7 @@ impl LyrelApp {
             group_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
             status_clock: cx.new(crate::ui::status_bar::Clock::new),
+            status_metrics: None,
             status_document_focus: None,
             connect: None,
             switcher: None,
@@ -6754,7 +6756,6 @@ impl LyrelApp {
     /// judge are worth offering.
     pub(crate) fn search_actions(&self, window: &Window, cx: &App) -> Vec<Item> {
         let mut actions = Item::actions(
-            cx,
             ChromeState {
                 rail_collapsed: self.sidebar_collapsed,
                 right_panel_visible: self.right_panel_visible,
@@ -10040,6 +10041,7 @@ impl Render for LyrelApp {
         // open or not — a port that appears while the panel is shut is exactly
         // the one worth forwarding unasked.
         self.sync_port_watch(window, cx);
+        self.sync_status_metrics(window, cx);
         if cx.has_active_drag() {
             crate::ui::reorder::clear_pending(&self.reorder);
             crate::ui::pane_drag::clear_landing(&self.pane_drag);
@@ -12922,7 +12924,7 @@ pub(crate) mod test_window {
     use crate::core::config::Config;
     use crate::core::session::Session;
     use crate::ui::app::LyrelApp;
-    use gpui_kit::{AppContext, Entity, TestAppContext, VisualTestContext};
+    use gpui_kit::{AppContext, Entity, Focusable, TestAppContext, VisualTestContext};
 
     pub(crate) fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
         crate::core::config::pin_test_config_dir();

@@ -1876,6 +1876,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "此窗口是 {machine} 上的工作区，但 lyrel 没有它的连接信息了——检查其 SSH 配置或 ~/.ssh/config 条目是否还在。"
         }
         L10nKey::RemoteThisComputer => "本机",
+        L10nKey::HostMetricsWaiting => "等待主机采样",
+        L10nKey::HostMetricsUnavailable => "主机指标不可用",
+        L10nKey::HostMetricsDisconnected => "主机已断开",
+        L10nKey::HostMetricsFailed => "主机采样失败：{reason}",
+        L10nKey::HostMetricsError => "主机采样失败",
+        L10nKey::HostMetricsSample => "{host} · 整机 CPU · 内存 {used} / {total} GiB",
         L10nKey::RemoteProfileGone => "已删除的配置",
         L10nKey::RemoteRestartTitle => "重启“{machine}”上的 lyrel server？",
         L10nKey::RemoteRestartBody => {

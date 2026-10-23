@@ -393,6 +393,9 @@ fn handshake<R: Read>(
         feature::HERMES_STATISTICS.to_string(),
         feature::OPENCODE_STATISTICS.to_string(),
     ];
+    if host.id().is_local() {
+        features.push(feature::HOST_METRICS.to_string());
+    }
     if host.agent_environment().is_ok() {
         features.push(feature::AGENT_ENVIRONMENT.to_string());
     }
@@ -631,6 +634,7 @@ fn run_request(
 
     Ok(match req {
         ControlRequest::Ping => (ReplyOk::Pong, Vec::new()),
+        ControlRequest::HostMetrics => (ReplyOk::HostMetrics(h.host_metrics()?), Vec::new()),
 
         ControlRequest::ReadDir { dir, root } => {
             let root = root.map(|r| p(&r));

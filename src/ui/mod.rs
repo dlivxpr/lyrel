@@ -47,6 +47,7 @@ pub mod right_panel;
 pub mod rounding;
 pub mod scm;
 pub mod scrollbar;
+pub(crate) mod host_metrics;
 pub mod search;
 pub mod settings;
 pub mod settings_window;

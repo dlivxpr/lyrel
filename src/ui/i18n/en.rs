@@ -2045,6 +2045,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "This window is a workspace on {machine}, but lyrel has no connection details for it — check its SSH profile or ~/.ssh/config entry still exists."
         }
         L10nKey::RemoteThisComputer => "this computer",
+        L10nKey::HostMetricsWaiting => "Waiting for host sample",
+        L10nKey::HostMetricsUnavailable => "Host metrics unavailable",
+        L10nKey::HostMetricsDisconnected => "Host disconnected",
+        L10nKey::HostMetricsFailed => "Host sampling failed: {reason}",
+        L10nKey::HostMetricsError => "Host sampling failed",
+        L10nKey::HostMetricsSample => "{host} · Whole-host CPU · RAM {used} / {total} GiB",
         L10nKey::RemoteProfileGone => "deleted profile",
         L10nKey::RemoteRestartTitle => "Restart lyrel's server on \"{machine}\"?",
         L10nKey::RemoteRestartBody => {

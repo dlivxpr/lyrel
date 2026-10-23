@@ -638,7 +638,7 @@ impl Item {
 
     /// The actions every window offers, in group order. The window adds the
     /// ones only it can judge (`LyrelApp::search_catalog`).
-    pub fn actions(cx: &App, chrome: ChromeState) -> Vec<Item> {
+    pub fn actions(chrome: ChromeState) -> Vec<Item> {
         use CommandKind::*;
         let sidebar_hidden = chrome.rail_collapsed;
         let right_panel_open = chrome.right_panel_visible;
@@ -1024,7 +1024,7 @@ mod gpui_tests {
                 remote_server: None,
             };
             let mut seen = std::collections::HashSet::new();
-            for cmd in Item::actions(cx, chrome) {
+            for cmd in Item::actions(chrome) {
                 // Frecency is keyed by this string. A command without one is
                 // never learned, so it never rises in the list no matter how
                 // often it is run.
@@ -1049,7 +1049,7 @@ mod gpui_tests {
                 document_filled: false,
                 remote_server: None,
             };
-            let cmds = Item::actions(cx, chrome);
+            let cmds = Item::actions(chrome);
             let git = cmds
                 .iter()
                 .filter(|c| c.group == Some(CommandGroup::Git))
@@ -1079,7 +1079,7 @@ mod gpui_tests {
             cx.set_global(Config::default());
             crate::ui::i18n::set_locale("en");
 
-            let local = Item::actions(cx, chrome(None));
+            let local = Item::actions(chrome(None));
             assert!(
                 local
                     .iter()
@@ -1092,7 +1092,7 @@ mod gpui_tests {
                 "a local window has no remote server to update"
             );
 
-            let remote = Item::actions(cx, chrome(Some("build-box")));
+            let remote = Item::actions(chrome(Some("build-box")));
             let update = remote
                 .iter()
                 .find(|c| c.kind == CommandKind::UpdateRemoteServer)
