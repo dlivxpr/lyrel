@@ -26,6 +26,7 @@ pub mod local_link;
 pub mod lsp;
 pub mod machine_mirror;
 pub mod notice;
+pub(crate) mod notification_history;
 pub(crate) mod palette;
 pub mod pane;
 pub mod pane_drag;

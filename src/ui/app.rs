@@ -1,3 +1,4 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -988,6 +989,7 @@ pub struct LyrelApp {
     tab_use_seq: std::cell::Cell<u64>,
     /// A tab asked for before its workspace finished hydrating.
     pending_tab: Option<lyrel_core::core::machine::TabId>,
+    pub(crate) pending_notification_source: Option<crate::ui::notification_history::Source>,
     pub(crate) font_size: f32,
     pub(crate) line_height: f32,
     pub(crate) font_family: String,
@@ -1155,6 +1157,7 @@ pub struct LyrelApp {
     pub(crate) group_rename: Option<GroupRename>,
     window_title: std::cell::RefCell<String>,
     pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
+    pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
     pub(crate) connect: Option<crate::ui::remote_workspace::ConnectFlow>,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
     pub(crate) host_snapshots: std::collections::HashMap<
@@ -1695,6 +1698,7 @@ impl LyrelApp {
             active,
             tab_use_seq: std::cell::Cell::new(0),
             pending_tab: None,
+            pending_notification_source: None,
             font_size,
             line_height,
             font_family,
@@ -1796,6 +1800,7 @@ impl LyrelApp {
             group_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
             status_clock: cx.new(crate::ui::status_bar::Clock::new),
+            notification_bell: cx.new(crate::ui::notification_history::NotificationBell::new),
             connect: None,
             switcher: None,
             host_snapshots: std::collections::HashMap::new(),
@@ -2098,6 +2103,7 @@ impl LyrelApp {
         }
         // Anything parked for the workspace we are leaving is now meaningless.
         self.pending_tab = None;
+        self.pending_notification_source = None;
         if self.tabs.is_empty() && crate::ui::tree_sync::workspace_is_disposable(cx, previous) {
             crate::ui::tree_sync::fire_workspace_op(cx, previous, |ws| {
                 lyrel_core::daemon::control::ControlRequest::WorkspaceRemove { workspace: ws }
@@ -2155,8 +2161,8 @@ impl LyrelApp {
             cx,
         );
         if dropped > 0 {
-            window.push_notification(
-                gpui_kit::component::notification::Notification::warning(t_plural(
+            window.notify_app(
+                crate::ui::notification_history::Notification::warning(t_plural(
                     L10nKey::AppTabsNotRestored,
                     dropped,
                     &[],
@@ -2271,8 +2277,8 @@ impl LyrelApp {
             window,
             cx,
         ) else {
-            window.push_notification(
-                gpui_kit::component::notification::Notification::error(t(
+            window.notify_app(
+                crate::ui::notification_history::Notification::error(t(
                     L10nKey::AppReopenTabFailed,
                 )),
                 cx,
@@ -2482,7 +2488,7 @@ impl LyrelApp {
         let target = remote.target.clone();
         let label = crate::ui::remote_connect::route_label(cx, &remote);
         if !target.hosts_our_server() {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(L10nKey::AppRestartServerNoServer, &[("label", &label)]),
                 cx,
             );
@@ -2511,7 +2517,7 @@ impl LyrelApp {
     /// their shells for no change.
     fn update_local_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if crate::daemon::spawn::local_daemon_is_this_build() {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(
                     L10nKey::AppLocalServerAlreadyCurrent,
                     &[("build", env!("CARGO_PKG_VERSION"))],
@@ -2534,7 +2540,7 @@ impl LyrelApp {
         let target = remote.target.clone();
         let label = crate::ui::remote_connect::route_label(cx, &remote);
         if !target.hosts_our_server() {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(L10nKey::AppRestartServerNoServer, &[("label", &label)]),
                 cx,
             );
@@ -2645,7 +2651,7 @@ impl LyrelApp {
                         &[("error", &e.to_string())],
                     );
                     this.startup_error = Some(gpui_kit::SharedString::from(text.clone()));
-                    window.push_notification(text, cx);
+                    window.notify_app(text, cx);
                 }
             })
             .is_err()
@@ -3639,7 +3645,7 @@ impl LyrelApp {
                 }
             }
             Err(e) => {
-                window.push_notification(
+                window.notify_app(
                     crate::ui::host_ops::failure(
                         t_fmt(L10nKey::ForwardSwitchFailed, &[("error", &e.to_string())]),
                         &e,
@@ -4160,8 +4166,8 @@ impl LyrelApp {
             // just without naming a key that would not work.
             None => t(L10nKey::AppFullscreenEnteredNoKey).to_string(),
         };
-        window.push_notification(
-            gpui_kit::component::notification::Notification::new()
+        window.notify_app(
+            crate::ui::notification_history::Notification::new()
                 .id::<FullscreenHint>()
                 .message(hint),
             cx,
@@ -4433,7 +4439,7 @@ impl LyrelApp {
                 // A retry from the home screen fails the same way; keep the
                 // reason on screen rather than only in a toast that leaves.
                 self.startup_error = Some(gpui_kit::SharedString::from(text.clone()));
-                window.push_notification(crate::ui::host_ops::failure(text, &e), cx);
+                window.notify_app(crate::ui::host_ops::failure(text, &e), cx);
                 cx.notify();
                 return None;
             }
@@ -4468,7 +4474,7 @@ impl LyrelApp {
             Ok(view) => view,
             Err(e) => {
                 log::error!("native SSH spawn failed: {e}");
-                window.push_notification(
+                window.notify_app(
                     crate::ui::host_ops::failure(
                         t_fmt(
                             L10nKey::AppSshConnectionFailed,
@@ -4506,7 +4512,7 @@ impl LyrelApp {
             Ok(view) => view,
             Err(e) => {
                 log::error!("native SSH respawn failed: {e}");
-                window.push_notification(
+                window.notify_app(
                     crate::ui::host_ops::failure(
                         t_fmt(L10nKey::AppSshReconnectFailed, &[("error", &e.to_string())]),
                         &e,
@@ -4653,7 +4659,7 @@ impl LyrelApp {
                 // disconnected host is not permission to start a local shell.
                 if let Some(workspace) = &workspace {
                     if let Err(error) = workspace.route_header() {
-                        window.push_notification(error.to_string(), cx);
+                        window.notify_app(error.to_string(), cx);
                         return;
                     }
                 }
@@ -4666,7 +4672,7 @@ impl LyrelApp {
         let fresh = match fresh {
             Ok(fresh) => fresh,
             Err(error) => {
-                window.push_notification(crate::ui::host_ops::failure(
+                window.notify_app(crate::ui::host_ops::failure(
                     t_fmt(L10nKey::PaneRestartFailed, &[("error", &error.to_string())]), &error), cx);
                 return;
             }
@@ -4747,7 +4753,7 @@ impl LyrelApp {
                     Ok(view) => PaneSlot::Ready(view),
                     Err(e) => {
                         log::error!("native SSH split spawn failed: {e}");
-                        window.push_notification(
+                        window.notify_app(
                             crate::ui::host_ops::failure(
                                 t_fmt(
                                     L10nKey::AppSshConnectionFailed,
@@ -4775,7 +4781,7 @@ impl LyrelApp {
                     Ok(view) => view,
                     Err(e) => {
                         log::error!("split spawn failed: {e}");
-                        window.push_notification(
+                        window.notify_app(
                             crate::ui::host_ops::failure(
                                 t_fmt(L10nKey::AppSplitPaneFailed, &[("error", &e.to_string())]),
                                 &e,
@@ -5629,8 +5635,8 @@ impl LyrelApp {
         let tab = &mut self.tabs[index];
         let Some(pane) = pane else {
             tab.asleep = Some(asleep);
-            window.push_notification(
-                gpui_kit::component::notification::Notification::error(t(L10nKey::TabWakeFailed)),
+            window.notify_app(
+                crate::ui::notification_history::Notification::error(t(L10nKey::TabWakeFailed)),
                 cx,
             );
             return false;
@@ -5903,7 +5909,7 @@ impl LyrelApp {
                             cx,
                             move |h| crate::core::worktree::remove(h, &wt, force),
                             move |_this, result, window, cx| match result {
-                                Ok(removed) => window.push_notification(
+                                Ok(removed) => window.notify_app(
                                     t_fmt(
                                         if removed.branch_kept {
                                             L10nKey::AppWorktreeRemovedBranchKept
@@ -5914,7 +5920,7 @@ impl LyrelApp {
                                     ),
                                     cx,
                                 ),
-                                Err(e) => window.push_notification(
+                                Err(e) => window.notify_app(
                                     crate::ui::host_ops::failure(
                                         t_fmt(
                                             L10nKey::AppWorktreeRemoveFailed,
@@ -6128,7 +6134,7 @@ impl LyrelApp {
         use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind};
         let view = source.read(cx);
         let Some(agent) = view.agent() else {
-            window.push_notification(t(L10nKey::AppPaneNoCodingAgent), cx);
+            window.notify_app(t(L10nKey::AppPaneNoCodingAgent), cx);
             return;
         };
         let session = view.agent_session().unwrap_or_default();
@@ -6143,7 +6149,7 @@ impl LyrelApp {
             session.session_id.clone()
         };
         let Some(source_id) = source_id else {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(
                     L10nKey::AppForkNoSessionId,
                     &[("name", agent.display_name())],
@@ -6153,7 +6159,7 @@ impl LyrelApp {
             return;
         };
         let (Some(host), Some(cwd)) = (view.host(cx), view.host_cwd()) else {
-            window.push_notification(t(L10nKey::AppPaneNoKnownDirectory), cx);
+            window.notify_app(t(L10nKey::AppPaneNoKnownDirectory), cx);
             return;
         };
         let shell = view.shell_spec();
@@ -6367,7 +6373,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let Some((host, cwd)) = self.tab_host_cwd(index, window, cx) else {
-            window.push_notification(t(L10nKey::AppTabNoWorkingDirectory), cx);
+            window.notify_app(t(L10nKey::AppTabNoWorkingDirectory), cx);
             return;
         };
         let sheet_host = host.clone();
@@ -6379,7 +6385,7 @@ impl LyrelApp {
             move |h| crate::core::worktree::defaults(h, &probe_cwd),
             move |this, result, window, cx| match result {
                 Ok(defaults) => this.open_worktree_prompt(sheet_host, cwd, defaults, window, cx),
-                Err(e) => window.push_notification(
+                Err(e) => window.notify_app(
                     crate::ui::host_ops::failure(
                         t_fmt(L10nKey::AppNewWorktreeFailed, &[("error", &e.to_string())]),
                         &e,
@@ -6412,7 +6418,7 @@ impl LyrelApp {
             Ok(view) => view,
             Err(e) => {
                 log::error!("worktree tab spawn failed: {e}");
-                window.push_notification(
+                window.notify_app(
                     crate::ui::host_ops::failure(
                         t_fmt(L10nKey::AppOpenTerminalFailed, &[("error", &e.to_string())]),
                         &e,
@@ -10082,6 +10088,7 @@ impl Render for LyrelApp {
         // terminal grid, sized in absolute px from `font_size`, does not move.
         window.set_rem_size(px(cx.global::<Config>().ui_font_size));
         self.claim_pending_tab(window, cx);
+        self.claim_notification_source(window, cx);
         // Before anything asks where a tab is drawn: a tab that walked into a
         // pinned folder since the last frame is filed there on this one.
         self.settle_sidebar_groups(cx);
@@ -10762,7 +10769,7 @@ fn restore_agent_in_pane(
     };
     let view = terminal.read(cx);
     let (Some(host), Some(cwd)) = (view.host(cx), view.host_cwd()) else {
-        window.push_notification(t(L10nKey::AppPaneNoKnownDirectory), cx);
+        window.notify_app(t(L10nKey::AppPaneNoKnownDirectory), cx);
         return;
     };
     let mut scope = scope.unwrap_or_default();

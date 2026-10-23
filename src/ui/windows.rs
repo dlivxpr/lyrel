@@ -106,12 +106,11 @@ impl WindowRegistry {
             .and_then(|w| w.app.upgrade())
     }
 
-    pub fn app_for(cx: &mut App, workspace: WorkspaceId) -> Option<WeakEntity<LyrelApp>> {
-        Self::sweep(cx);
-        cx.global::<Self>()
+    pub fn app_for(cx: &App, workspace: WorkspaceId) -> Option<WeakEntity<LyrelApp>> {
+        cx.try_global::<Self>()?
             .windows
             .iter()
-            .find(|w| w.workspace == workspace)
+            .find(|w| w.workspace == workspace && w.app.upgrade().is_some())
             .map(|w| w.app.clone())
     }
 
@@ -473,7 +472,7 @@ pub fn announce_detached_at_launch(cx: &mut App, restored: Option<RestoreTarget>
         return;
     };
     let _ = handle.update(cx, |_, window, cx| {
-        gpui_kit::component::WindowExt::push_notification(
+        crate::ui::notification_history::NotificationWindowExt::notify_app(
             window,
             t_plural(L10nKey::LaunchWorkspacesLeftRunning, detached, &[]),
             cx,

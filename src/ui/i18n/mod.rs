@@ -88,6 +88,16 @@ macro_rules! l10n_keys {
 }
 
 l10n_keys! {
+    NotificationInbox,
+    NotificationClearHistory,
+    NotificationScope,
+    NotificationEmpty,
+    NotificationSourceUnavailable,
+    NotificationUnread,
+    NotificationSuccess,
+    NotificationInfo,
+    NotificationWarning,
+    NotificationError,
     SettingsNavSkills,
     SkillsPageDescription,
     SkillsProject,
