@@ -1,3 +1,4 @@
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, WindowExt as _};
@@ -1155,6 +1156,7 @@ pub struct LyrelApp {
     pub(crate) workspace_rename: Option<WorkspaceRename>,
     pub(crate) group_rename: Option<GroupRename>,
     window_title: std::cell::RefCell<String>,
+    pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
     pub(crate) connect: Option<crate::ui::remote_workspace::ConnectFlow>,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
     pub(crate) host_snapshots: std::collections::HashMap<
@@ -1796,6 +1798,7 @@ impl LyrelApp {
             workspace_rename: None,
             group_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
+            status_clock: cx.new(crate::ui::status_bar::Clock::new),
             connect: None,
             switcher: None,
             host_snapshots: std::collections::HashMap::new(),
@@ -9596,7 +9599,11 @@ impl ForwardRoute {
 impl LyrelApp {
     /// 唯一工作区组合入口；终端、文档、面板与内容浮层在此各挂载一次。
     /// 窗口级提示仍由 render 挂载，后续全局状态栏应与本区域并列。
-    fn render_work_area(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn render_work_area(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         let vertical = matches!(cx.global::<Config>().tab_bar_position, TabBarPosition::Left)
             && !self.tabs.is_empty();
         // Asked through the predicate the right panel sizes itself against —
@@ -10439,30 +10446,30 @@ impl Render for LyrelApp {
                 .on_action(cx.listener(|_, _: &OpenProject, _window, cx| cx.open_url(PROJECT_URL)))
                 .on_action(cx.listener(|_, _: &ReportIssue, _window, cx| cx.open_url(ISSUES_URL)))
                 .children(bg_image)
-                .child(main_layout)
-                // Window-level because the strip lives in the title bar and the
-                // sidebar down the side: the caret between two tabs is in
-                // neither of the boxes the rest of the drag feedback is drawn
-                // in.
-                .when_some(detach_caret, |this, caret| this.child(caret))
-                .when_some(settings_overlay, |this, overlay| this.child(overlay))
-                // Window-level, like the switcher and the palette: the prompt
-                // blocks the whole app, so its scrim has to reach the title bar
-                // and the side panels too. Parented to `body_area` it was
-                // clipped to the terminal area, which read as "only the
-                // terminal is busy".
-                .when_some(self.render_worktree_prompt_overlay(cx), |this, el| {
-                    this.child(el)
-                })
-                // Same reason, and the ssh prompt has more claim to it than any
-                // of them: nothing in the window can proceed until the password
-                // is answered, so the scrim has to cover the whole window and
-                // not stop at the terminal area.
-                .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
-                    this.child(el)
-                })
-                .children(self.render_switcher(window, cx))
-                .when_some(self.search.clone(), |this, search| this.child(search));
+                .child(
+                    div()
+                        .id("workbench-content")
+                        .test_support()
+                        .flex()
+                        .flex_col()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .overflow_hidden()
+                        .child(main_layout)
+                        .when_some(detach_caret, |this, caret| this.child(caret))
+                        .when_some(settings_overlay, |this, overlay| this.child(overlay))
+                        .when_some(self.render_worktree_prompt_overlay(cx), |this, el| {
+                            this.child(el)
+                        })
+                        .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
+                            this.child(el)
+                        })
+                        .children(self.render_switcher(window, cx))
+                        .when_some(self.search.clone(), |this, search| this.child(search)),
+                )
+                .child(self.render_status_bar(window, cx));
         let root = Self::with_editor_text_commands(root, cx);
 
         if let Some(start) = prof {
