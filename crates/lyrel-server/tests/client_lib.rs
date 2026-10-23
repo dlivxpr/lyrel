@@ -374,3 +374,179 @@ fn input_reaches_the_shell_and_a_reattach_replays_it() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[test]
+fn pip_keeps_the_live_shell_across_replacement_fallback_and_reconnect() {
+    use lyrel_core::core::machine::{Axis, Machine, PaneNode};
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let writer = daemon.control("pip-writer");
+    let watcher = daemon.control("pip-watcher");
+    watcher.request(ControlRequest::Ping).unwrap();
+    let ws = match writer.request(ControlRequest::WorkspaceCreate {
+        name: Some("pip".into()), workspace: None,
+    }).unwrap() {
+        ReplyOk::WorkspaceTree(ws) => ws.id,
+        other => panic!("{other:?}"),
+    };
+    let mut session = panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let original = session.pane_id();
+    writer.request(ControlRequest::TabCreate {
+        workspace: ws, at: None, pane: seed(original), tab: None,
+    }).unwrap();
+    let get = |client: &ControlClient| -> Machine {
+        match client.request(ControlRequest::MachineGet).unwrap() {
+            ReplyOk::MachineTree(machine) => *machine,
+            other => panic!("{other:?}"),
+        }
+    };
+    let present = |pane, pip, fallback| {
+        writer.request(ControlRequest::PaneSetPresentation { workspace: ws, pane, pip, fallback, restore: None }).unwrap();
+    };
+    let initial = get(&writer);
+    session.input(if cfg!(windows) { b"set lyrel_pip_state=retained\r" } else { b"lyrel_pip_state=retained\r" }).unwrap();
+    present(original, true, None);
+    let single = get(&watcher);
+    let tab = &single.workspaces[0].tabs[0];
+    assert_eq!(tab.root, initial.workspaces[0].tabs[0].root);
+    assert_eq!(tab.presentation.pip().unwrap().pane(), original);
+    assert_eq!(tab.visible_root(), None, "single-pane PiP does not create a filler shell");
+    let deadline = Instant::now() + STREAM_WITHIN;
+    loop {
+        let event = watcher.next_event(deadline.saturating_duration_since(Instant::now())).expect("PiP delta");
+        if matches!(event, ControlEvent::Layout { delta: LayoutDelta::TabRestructured { tab, pane: None }, .. }
+            if tab.presentation.pip().is_some_and(|pip| pip.pane() == original)) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no presentation delta");
+    }
+    assert_eq!(panes.list().unwrap().iter().filter(|p| p.alive).count(), 1);
+    assert!(writer.request(ControlRequest::PaneSetPresentation {
+        workspace: ws, pane: u64::MAX, pip: true, fallback: None,
+        restore: None,
+    }).is_err());
+    assert_eq!(get(&writer).workspaces[0].tabs[0].presentation, tab.presentation);
+    present(original, false, None);
+    assert_eq!(get(&writer).workspaces[0].tabs[0], initial.workspaces[0].tabs[0],
+        "ordinary restore only unhides and keeps the complete logical tree");
+    present(original, true, None);
+    panes.send_input(original, if cfg!(windows) {
+        b"echo PIP_%lyrel_pip_state%\r"
+    } else {
+        b"printf 'PIP_%s\\n' \"$lyrel_pip_state\"\r"
+    }).unwrap();
+    assert!(collect_until(&mut session, b"PIP_retained").1.is_none());
+    session.detach().unwrap();
+    let mut captured = panes.attach(original, size()).unwrap();
+    captured.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    assert!(collect_until(&mut captured, b"PIP_retained").1.is_none(), "capture/replay retains the original session");
+
+    let sibling_session = panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    let sibling = sibling_session.pane_id();
+    writer.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: original, axis: Axis::Vertical, ratio: 0.3,
+        new: seed(sibling), first: false,
+    }).unwrap();
+    present(sibling, true, Some(original));
+    assert_eq!(get(&writer).workspaces[0].tabs[0].presentation.pip().unwrap().pane(), sibling);
+    present(original, true, Some(sibling));
+    let replacement_session = panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    let replacement = replacement_session.pane_id();
+    writer.request(ControlRequest::PaneReplace {
+        workspace: ws, old: original, new: seed(replacement),
+    }).unwrap();
+    assert_eq!(get(&writer).workspaces[0].tabs[0].presentation.pip().unwrap().pane(), replacement);
+    let original_relationship = get(&writer).workspaces[0].tabs[0].presentation.pip().cloned();
+
+    let fallback_session = panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    let fallback = fallback_session.pane_id();
+    writer.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: sibling, axis: Axis::Horizontal, ratio: 0.6,
+        new: seed(fallback), first: false,
+    }).unwrap();
+    let other_session = panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    let other = other_session.pane_id();
+    writer.request(ControlRequest::PaneSplit {
+        workspace: ws, pane: fallback, axis: Axis::Horizontal, ratio: 0.6,
+        new: seed(other), first: false,
+    }).unwrap();
+    writer.request(ControlRequest::PaneClose { workspace: ws, pane: sibling }).unwrap();
+    writer.request(ControlRequest::PaneMove {
+        workspace: ws, pane: replacement, to: other, axis: Axis::Horizontal, first: false,
+    }).unwrap();
+    writer.request(ControlRequest::PaneSetPresentation {
+        workspace: ws, pane: replacement, pip: true, fallback: Some(fallback),
+        restore: original_relationship.clone(),
+    }).unwrap();
+    assert_eq!(get(&writer).workspaces[0].tabs[0].presentation.pip(), original_relationship.as_ref(),
+        "same-pane synchronization restores original relationship after arbitrary reshaping");
+    let deadline = Instant::now() + STREAM_WITHIN;
+    loop {
+        let event = watcher.next_event(deadline.saturating_duration_since(Instant::now())).expect("metadata-only delta");
+        if matches!(event, ControlEvent::Layout { delta: LayoutDelta::TabRestructured { tab, pane: None }, .. }
+            if tab.root.pane_ids() == vec![fallback, other, replacement]
+                && tab.presentation.pip() == original_relationship.as_ref()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "same-pane metadata change was not broadcast");
+    }
+    let persisted_restore = lyrel_core::core::machine::MachineStore::open(daemon.dir.path().join(
+        lyrel_core::core::machine::MACHINE_FILE)).machine();
+    assert_eq!(persisted_restore.workspaces[0].tabs[0].presentation.pip(), original_relationship.as_ref());
+    let mismatch = writer.request(ControlRequest::PaneSetPresentation {
+        workspace: ws, pane: other, pip: true, fallback: None, restore: original_relationship.clone(),
+    }).unwrap_err();
+    assert_eq!(mismatch.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(get(&writer).workspaces[0].tabs[0].presentation.pip(), original_relationship.as_ref());
+    let before_restore = panes.list().unwrap();
+    present(replacement, false, Some(fallback));
+    let restored = get(&writer);
+    let tab = &restored.workspaces[0].tabs[0];
+    assert!(tab.presentation.pip().is_none());
+    assert_eq!(tab.root, PaneNode::Split {
+        axis: Axis::Horizontal, ratio: 0.6,
+        a: Box::new(PaneNode::Split {
+            axis: Axis::Vertical, ratio: 0.3,
+            a: Box::new(PaneNode::Leaf { pane: replacement }),
+            b: Box::new(PaneNode::Leaf { pane: fallback }),
+        }),
+        b: Box::new(PaneNode::Leaf { pane: other }),
+    }, "only the restored pane moves next to the chosen current fallback");
+    assert_eq!(panes.list().unwrap().iter().map(|p| (p.pane_id, p.alive)).collect::<Vec<_>>(),
+        before_restore.iter().map(|p| (p.pane_id, p.alive)).collect::<Vec<_>>(),
+        "presentation changes never close or spawn a shell");
+    present(replacement, true, Some(fallback));
+    writer.close();
+    let reconnected = daemon.control("pip-reconnected");
+    let durable = get(&reconnected);
+    assert_eq!(durable.workspaces[0].tabs[0].presentation.pip().unwrap().pane(), replacement);
+    let persisted = lyrel_core::core::machine::MachineStore::open(daemon.dir.path().join(
+        lyrel_core::core::machine::MACHINE_FILE)).machine();
+    assert_eq!(persisted.workspaces[0].tabs[0].presentation, durable.workspaces[0].tabs[0].presentation);
+    reconnected.request(ControlRequest::PaneMove {
+        workspace: ws, pane: replacement, to: other, axis: Axis::Horizontal, first: false,
+    }).unwrap();
+    let moved = get(&reconnected);
+    assert_eq!(moved.workspaces[0].tabs[0].presentation.pip().unwrap().pane(), replacement);
+    assert_eq!(moved.workspaces[0].tabs[0].root.pane_ids(), vec![fallback, other, replacement]);
+    assert_eq!(moved.workspaces[0].tabs[0].visible_root().unwrap().pane_ids(), vec![fallback, other]);
+    reconnected.request(ControlRequest::PaneSetPresentation {
+        workspace: ws, pane: other, pip: false, fallback: Some(fallback),
+        restore: None,
+    }).unwrap();
+    assert_eq!(get(&reconnected).workspaces[0].tabs[0].presentation, moved.workspaces[0].tabs[0].presentation,
+        "a stale restore cannot dismiss another pane's PiP");
+    reconnected.request(ControlRequest::PaneClose { workspace: ws, pane: replacement }).unwrap();
+    let closed = get(&reconnected);
+    assert!(closed.workspaces[0].tabs[0].presentation.pip().is_none());
+    assert!(!closed.workspaces[0].tabs[0].root.contains(replacement));
+    assert_eq!(closed.workspaces[0].tabs[0].root.pane_ids(), vec![fallback, other]);
+    panes.send_input(original, if cfg!(windows) { b"echo STILL_%lyrel_pip_state%\r" } else { b"printf 'STILL_%s\\n' \"$lyrel_pip_state\"\r" }).unwrap();
+    assert!(collect_until(&mut captured, b"STILL_retained").1.is_none(), "replacing tree identity never replaces the old live PTY implicitly");
+    drop((captured, sibling_session, replacement_session, fallback_session, other_session));
+    for id in [original, sibling, replacement, fallback, other] {
+        panes.kill(id).unwrap();
+    }
+}
