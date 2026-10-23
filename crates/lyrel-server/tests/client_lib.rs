@@ -585,7 +585,7 @@ fn pip_restore_keeps_intervening_splits_without_adopting_a_later_move() {
     for pane in [a, b, c] { panes.kill(pane).unwrap(); }
 }
 
-fn parking_workspace(client: &ControlClient) -> lyrel_core::core::machine::WorkspaceId {
+fn parking_workspace(client: &ControlClient) -> lyrel_core::core::session::WorkspaceId {
     match client
         .request(ControlRequest::WorkspaceCreate {
             name: Some("parking".into()),
@@ -600,7 +600,7 @@ fn parking_workspace(client: &ControlClient) -> lyrel_core::core::machine::Works
 
 fn parking_tree(
     client: &ControlClient,
-    workspace: lyrel_core::core::machine::WorkspaceId,
+    workspace: lyrel_core::core::session::WorkspaceId,
 ) -> lyrel_core::core::machine::Workspace {
     match client
         .request(ControlRequest::WorkspaceTree { workspace })
@@ -613,7 +613,7 @@ fn parking_tree(
 
 fn parking_shell(
     daemon: &Daemon,
-    workspace: lyrel_core::core::machine::WorkspaceId,
+    workspace: lyrel_core::core::session::WorkspaceId,
 ) -> lyrel_core::client::PaneSession {
     let session = daemon
         .panes()
@@ -631,7 +631,7 @@ fn parking_shell(
 
 fn parking_wait_for_deck(
     watcher: &ControlClient,
-    workspace: lyrel_core::core::machine::WorkspaceId,
+    workspace: lyrel_core::core::session::WorkspaceId,
     expected: &[u64],
 ) {
     let deadline = Instant::now() + STREAM_WITHIN;
