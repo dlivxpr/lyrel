@@ -1613,6 +1613,12 @@ impl LyrelApp {
             // A modifier released over another window never reports here, so a
             // Ctrl+Tab panel would hang waiting for a commit that cannot come.
             this.switcher_release_hold(cx);
+            if !window.is_window_active()
+                && (crate::ui::pane_drag::lifted(&this.pane_drag).is_some()
+                    || this.tabs.get(this.active).is_some_and(|tab| tab.pip_interaction.has_gesture()))
+            {
+                this.cancel_pane_drag(window, cx);
+            }
             if window.is_window_active() {
                 WorkspaceStore::focus(cx, this.workspace);
                 this.refresh_git_status_all(cx);
@@ -5544,7 +5550,8 @@ impl LyrelApp {
             window.on_mouse_event(move |event: &gpui_kit::MouseMoveEvent, phase, window, cx| {
                 if phase.capture() && event.pressed_button != Some(gpui_kit::MouseButton::Left) {
                     let _ = movement.update(cx, |app, cx| {
-                        if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
+                        if crate::ui::pane_drag::lifted(&app.pane_drag).is_some()
+                            || app.tabs.get(app.active).is_some_and(|tab| tab.pip_interaction.has_gesture()) {
                             app.cancel_pane_drag(window, cx);
                         }
                     });
@@ -5554,19 +5561,9 @@ impl LyrelApp {
             window.on_mouse_event(move |_: &gpui_kit::MouseExitEvent, phase, window, cx| {
                 if !phase.capture() { return; }
                 let _ = exit.update(cx, |app, cx| {
-                    if app.dragged_parking_pane(cx).is_some() {
-                        app.cancel_pane_drag(window, cx);
-                    }
-                });
-            });
-            let keyboard = weak.clone();
-            window.on_key_event(move |event: &gpui_kit::KeyDownEvent, phase, window, cx| {
-                if !phase.capture() || event.keystroke.key != "escape" { return; }
-                let _ = keyboard.update(cx, |app, cx| {
-                    if app.dragged_parking_pane(cx).is_some()
+                    if crate::ui::pane_drag::lifted(&app.pane_drag).is_some()
                         || app.tabs.get(app.active).is_some_and(|tab| tab.pip_interaction.has_gesture()) {
                         app.cancel_pane_drag(window, cx);
-                        cx.stop_propagation();
                     }
                 });
             });
@@ -10506,6 +10503,17 @@ impl LyrelApp {
             .w_full()
             .flex()
             .flex_col()
+            // Keyboard capture follows focus ancestry, unlike the mouse capture
+            // canvas: it must enclose both terminal and handle focus targets.
+            .capture_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape"
+                    && (crate::ui::pane_drag::lifted(&this.pane_drag).is_some()
+                        || this.tabs.get(this.active).is_some_and(|tab| tab.pip_interaction.has_gesture()))
+                {
+                    this.cancel_pane_drag(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .child(self.render_window_title_bar(window, cx))
             .child(self.pane_drag_capture(cx))
             .child(
