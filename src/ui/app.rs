@@ -5011,7 +5011,8 @@ impl LyrelApp {
                     t(L10nKey::ParkDropTarget),
                     t(L10nKey::ParkedAlive),
                     t(L10nKey::ParkedExited),
-                ),
+                )
+                .with_more(t(L10nKey::ParkedMore), t(L10nKey::ParkedOverflowHint)),
                 cx,
             );
             deck.sync_cards(cards, window, cx);

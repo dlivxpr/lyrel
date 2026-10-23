@@ -2236,6 +2236,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ParkedExited => "已退出",
         L10nKey::ParkedEmpty => "所有窗格均已停放。可恢复卡片或新建窗格。",
         L10nKey::ParkDropTarget => "停放",
+        L10nKey::ParkedMore => "更多…",
+        L10nKey::ParkedOverflowHint => "↑↓ / Home / End 选择 · Enter 预览后恢复 · Esc 返回",
         L10nKey::PanePipMove => "移动画中画；拖至底部目标停放（方向键调整，Escape 取消）",
         L10nKey::PanePipResize => "调整画中画大小（方向键调整，Escape 返回终端）",
         L10nKey::PaneFindScrollback => "在滚动历史中查找…",

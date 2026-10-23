@@ -2433,6 +2433,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ParkedExited => "Exited",
         L10nKey::ParkedEmpty => "All panes are parked. Restore a card or create a pane.",
         L10nKey::ParkDropTarget => "Park",
+        L10nKey::ParkedMore => "More…",
+        L10nKey::ParkedOverflowHint => "↑↓ / Home / End: select · Enter: preview, then restore · Esc: back",
         L10nKey::PanePipMove => "Move picture-in-picture; drag to the bottom target to park (arrow keys; Escape cancels)",
         L10nKey::PanePipResize => "Resize picture-in-picture (arrow keys; Escape returns to terminal)",
         L10nKey::PaneFindScrollback => "Find in scrollback…",
