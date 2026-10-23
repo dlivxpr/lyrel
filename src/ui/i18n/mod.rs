@@ -1988,8 +1988,6 @@ l10n_keys! {
     ParkedEmpty,
     PanePipMove,
     PanePipResize,
-    PanePipClientLocalUnavailable,
-    PanePipClientLocalDetail,
     PaneFindScrollback,
     PaneOpenScrollback,
     PaneClearScreen,

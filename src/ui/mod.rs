@@ -30,6 +30,7 @@ pub(crate) mod notification_history;
 pub(crate) mod palette;
 pub mod pane;
 pub mod pane_drag;
+pub(crate) mod pane_sidecar;
 pub mod panel_github;
 pub mod panel_search;
 pub(crate) mod parked_deck;
