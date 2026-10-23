@@ -1023,6 +1023,11 @@ fn reconcile_presentation(
             restore,
         });
     }
+    if tab.presentation.set_pip_geometry(want.presentation.pip_geometry()) && desired.is_some() {
+        ops.push(ControlRequest::PaneSetPipGeometry {
+            workspace, pane, geometry: want.presentation.pip_geometry(),
+        });
+    }
 }
 
 fn materialize_splits(

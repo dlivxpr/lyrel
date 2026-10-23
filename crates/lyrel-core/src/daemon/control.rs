@@ -420,6 +420,11 @@ pub enum ControlRequest {
         #[serde(default)]
         restore: Option<crate::core::machine::PipPane>,
     },
+    PaneSetPipGeometry {
+        workspace: WorkspaceId,
+        pane: u64,
+        geometry: Option<crate::core::machine::PipGeometry>,
+    },
     PaneSetRatio {
         workspace: WorkspaceId,
         tab: TabId,
@@ -574,6 +579,7 @@ impl ControlRequest {
             | PaneSplit { .. }
             | PaneClose { .. }
             | PaneSetPresentation { .. }
+            | PaneSetPipGeometry { .. }
             | PaneSetRatio { .. }
             | PaneMove { .. }
             | PaneReplace { .. } => Duration::from_secs(10),

@@ -35,6 +35,9 @@ PiP 是呈现状态，不是新的 CLI pane 类型；当前没有独立的 CLI P
 control 客户端使用 `PaneSetPresentation { workspace, pane, pip, fallback, restore }` 修改它；
 普通操作传 `restore: None`，同步树重建时携带已保存的原关系 record，避免覆盖浮动前的恢复位置。
 与 daemon 的版本必须一致（control 16，pane 仍为 7）。
+几何通过独立的 `PaneSetPipGeometry { workspace, pane, geometry }` 提交；位置与尺寸保存为比例意图，
+各 GUI 按自己的内容区域与界面缩放解析并约束完整浮层。请求不包含焦点、hover 或指针捕获信息，
+不会改变 CLI 的输入、捕获与生命周期命令，也不会改动 pane 协议版本。
 
 <a id="exit-codes"></a>
 ## 退出码
