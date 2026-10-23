@@ -1989,8 +1989,6 @@ l10n_keys! {
     ParkDropTarget,
     PanePipMove,
     PanePipResize,
-    PanePipClientLocalUnavailable,
-    PanePipClientLocalDetail,
     PaneFindScrollback,
     PaneOpenScrollback,
     PaneClearScreen,

@@ -585,6 +585,89 @@ fn pip_restore_keeps_intervening_splits_without_adopting_a_later_move() {
     for pane in [a, b, c] { panes.kill(pane).unwrap(); }
 }
 
+#[test]
+fn mixed_owner_sidecar_survives_clients_without_colliding_or_overwriting_new_panes() {
+    use lyrel_core::core::machine::{Axis, Tab};
+    use lyrel_core::core::pane_sidecar::{ScopedPane, SidecarUpdate};
+    use lyrel_core::core::session::{RemoteRef, RemoteTarget, WorkspaceId};
+    let local = Daemon::start();
+    let remote = Daemon::start();
+    let local_panes = local.panes();
+    let remote_panes = remote.panes();
+    let first = local.control("sidecar-first");
+    let second = local.control("sidecar-second");
+    let mut native = local_panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    let mut remote_shell = remote_panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    native.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    remote_shell.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let local_id = native.pane_id();
+    let remote_id = remote_shell.pane_id();
+    assert_eq!(local_id, remote_id, "independent daemons can legitimately allocate the same integer");
+    let reference = RemoteRef::new(RemoteTarget::direct("me", "sidecar-host", 22), WorkspaceId::new());
+    let mut tab = Tab::leaf(ScopedPane::workspace(remote_id));
+    tab.root.split_leaf(ScopedPane::workspace(remote_id), ScopedPane::client_local(local_id), Axis::Horizontal, 0.5, false);
+    tab.set_pip(Some(ScopedPane::client_local(local_id)), Some(ScopedPane::workspace(remote_id)));
+    let apply = |client: &ControlClient, base, desired, seeds| {
+        match client.request(ControlRequest::WorkspaceSidecarApply {
+            remote: reference.clone(), updates: vec![SidecarUpdate::new(base, desired)], panes: seeds,
+        }).unwrap() {
+            ReplyOk::WorkspaceSidecar(Some(snapshot)) => snapshot.into_parts().0,
+            other => panic!("{other:?}"),
+        }
+    };
+    let saved = apply(&first, None, tab.clone(), vec![seed(local_id)]);
+    assert_eq!(saved.tabs[0].root.pane_ids(), vec![local_id], "the local daemon owns only the local projection");
+    let full = saved.foreign_view.as_ref().unwrap().tabs()[0].clone();
+    assert_eq!(full.root.pane_ids(), vec![ScopedPane::workspace(remote_id), ScopedPane::client_local(local_id)]);
+    local_panes.send_input(local_id, if cfg!(windows) { b"set SIDECAR_STATE=original\r" } else { b"SIDECAR_STATE=original\r" }).unwrap();
+    let added = local_panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    let mut with_added = full.clone();
+    with_added.root.split_leaf(ScopedPane::client_local(local_id), ScopedPane::client_local(added.pane_id()), Axis::Vertical, 0.4, false);
+    apply(&first, Some(full.clone()), with_added, vec![seed(added.pane_id())]);
+    let mut independently_restored = full.clone();
+    independently_restored.set_pip(None, Some(ScopedPane::workspace(remote_id)));
+    let merged = apply(&second, Some(full), independently_restored, Vec::new());
+    let merged_tab = &merged.foreign_view.as_ref().unwrap().tabs()[0];
+    assert!(merged_tab.root.contains(ScopedPane::client_local(added.pane_id())), "an older client operation cannot erase another client's newer pane");
+    assert!(merged_tab.presentation.pip().is_none());
+    first.close();
+    second.close();
+    let reopened = local.control("sidecar-reopened");
+    let fetched = match reopened.request(ControlRequest::WorkspaceSidecarGet { remote: reference.clone() }).unwrap() {
+        ReplyOk::WorkspaceSidecar(Some(snapshot)) => snapshot.into_parts().0,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(fetched.foreign_view.as_ref().unwrap().tabs()[0], *merged_tab);
+    let geometry = lyrel_core::core::machine::PipGeometry::new(0.2, 0.3, 0.6, 0.5).unwrap();
+    let mut parked = merged_tab.clone();
+    parked.park(ScopedPane::client_local(local_id));
+    parked.presentation.set_pip_geometry(Some(geometry));
+    let parked = apply(&reopened, Some(merged_tab.clone()), parked, Vec::new());
+    let parked = parked.foreign_view.as_ref().unwrap().tabs()[0].clone();
+    let mut stale_remote_promotion = merged_tab.clone();
+    stale_remote_promotion.set_pip(Some(ScopedPane::workspace(remote_id)), None);
+    let combined = apply(&reopened, Some(merged_tab.clone()), stale_remote_promotion, Vec::new());
+    let combined = &combined.foreign_view.as_ref().unwrap().tabs()[0];
+    assert!(combined.presentation.is_parked(ScopedPane::client_local(local_id)));
+    assert_eq!(combined.presentation.pip_geometry(), Some(geometry));
+    assert_eq!(combined.presentation.pip().unwrap().pane(), ScopedPane::workspace(remote_id));
+    let mut restored = parked.clone();
+    restored.restore_parked(ScopedPane::client_local(local_id), Some(ScopedPane::workspace(remote_id)));
+    let restored = apply(&reopened, Some(parked), restored, Vec::new());
+    let restored = &restored.foreign_view.as_ref().unwrap().tabs()[0];
+    assert!(!restored.presentation.is_parked(ScopedPane::client_local(local_id)));
+    assert_eq!(restored.presentation.pip().unwrap().pane(), ScopedPane::workspace(remote_id));
+    local_panes.send_input(local_id, if cfg!(windows) { b"echo SIDECAR_%SIDECAR_STATE%\r" } else { b"printf 'SIDECAR_%s\\n' \"$SIDECAR_STATE\"\r" }).unwrap();
+    assert!(collect_until(&mut native, b"SIDECAR_original").1.is_none(), "the same local shell survives reopening clients");
+    remote_panes.send_input(remote_id, b"echo REMOTE_ROUTE_UNCHANGED\r").unwrap();
+    assert!(collect_until(&mut remote_shell, b"REMOTE_ROUTE_UNCHANGED").1.is_none());
+    assert_eq!(local_panes.list().unwrap().iter().filter(|pane| pane.alive).count(), 2);
+    assert_eq!(remote_panes.list().unwrap().iter().filter(|pane| pane.alive).count(), 1);
+    drop((native, remote_shell, added));
+    for pane in [local_id, merged_tab.root.pane_ids().iter().find(|pane| pane.owner().is_client_local() && pane.pane() != local_id).unwrap().pane()] { local_panes.kill(pane).unwrap(); }
+    remote_panes.kill(remote_id).unwrap();
+}
+
 fn parking_workspace(client: &ControlClient) -> lyrel_core::core::session::WorkspaceId {
     match client
         .request(ControlRequest::WorkspaceCreate {

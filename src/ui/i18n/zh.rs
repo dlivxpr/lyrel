@@ -2238,8 +2238,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ParkDropTarget => "停放",
         L10nKey::PanePipMove => "移动画中画；拖至底部目标停放（方向键调整，Escape 取消）",
         L10nKey::PanePipResize => "调整画中画大小（方向键调整，Escape 返回终端）",
-        L10nKey::PanePipClientLocalUnavailable => "此客户端本地 SSH 窗格暂不支持画中画",
-        L10nKey::PanePipClientLocalDetail => "此 SSH 窗格由本机拥有，不在远端工作区的机器布局中。请在本地工作区打开它以使用持久画中画。",
         L10nKey::PaneFindScrollback => "在滚动历史中查找…",
         L10nKey::PaneOpenScrollback => "在编辑器中打开滚动历史",
         L10nKey::PaneClearScreen => "清屏",
