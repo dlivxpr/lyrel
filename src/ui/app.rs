@@ -10175,7 +10175,7 @@ impl LyrelApp {
                                     .flex().flex_col().items_center().justify_center().gap_3()
                                     .text_sm().text_color(cx.theme().muted_foreground)
                                     .child(t(L10nKey::ParkedEmpty))
-                                    .child(Button::new("parked-new-pane").label(t(L10nKey::AppMenuSplitRight))
+                                    .child(gpui_kit::component::button::Button::new("parked-new-pane").label(t(L10nKey::AppMenuSplitRight))
                                         .on_click(|_, window, cx| window.dispatch_action(Box::new(SplitRight), cx)))
                             )).into_any_element()
                     }

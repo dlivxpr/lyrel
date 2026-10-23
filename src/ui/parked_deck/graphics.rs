@@ -236,23 +236,28 @@ impl Frame {
         self
     }
 
-    /// Paint, semantic bounds and release hit testing share this frame's resolved content viewport.
-    pub fn park_target_bounds(&self) -> Bounds<Pixels> {
-        let scale = self.zoom.min(f32::from(self.viewport.size.width) / 360.)
-            .min(f32::from(self.viewport.size.height) / 170.).max(0.);
+    // Keep the approved rem-sized target and label; narrow content clips its outer arc,
+    // rather than shrinking the pill's text and pointer target along with the viewport.
+    fn park_target_geometry(&self) -> Bounds<Pixels> {
+        let scale = self.zoom.min(f32::from(self.viewport.size.height) / 170.).max(0.);
         let extent = size(px(360. * scale), px(170. * scale));
         Bounds::new(point(self.viewport.center().x - extent.width / 2., self.viewport.bottom() - extent.height), extent)
     }
 
+    /// Semantic bounds, release hits and paint share the same content clip.
+    pub fn park_target_bounds(&self) -> Bounds<Pixels> {
+        self.park_target_geometry().intersect(&self.viewport)
+    }
+
     pub fn park_pill_bounds(&self) -> Bounds<Pixels> {
-        let target = self.park_target_bounds();
+        let target = self.park_target_geometry();
         let scale = f32::from(target.size.width) / 360.;
-        Bounds::new(target.origin + point(px(140. * scale), px(12. * scale)), size(px(80. * scale), px(24. * scale)))
+        Bounds::new(target.origin + point(px(140. * scale), px(12. * scale)), size(px(80. * scale), px(24. * scale))).intersect(&self.viewport)
     }
 
     pub fn park_target_contains(&self, position: Point<Pixels>) -> bool {
-        let target = self.park_target_bounds();
-        if !target.contains(&position) || position.y >= self.viewport.bottom()
+        let target = self.park_target_geometry();
+        if !self.viewport.contains(&position) || !target.contains(&position) || position.y >= self.viewport.bottom()
             || target.size.width <= px(0.) || target.size.height <= px(0.) { return false; }
         let x = f32::from(position.x - target.center().x) / f32::from(target.size.width / 2.);
         let y = f32::from(position.y - target.bottom()) / f32::from(target.size.height);
@@ -350,7 +355,7 @@ impl Frame {
         } else {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="130"><path d="M1 130 A129 129 0 0 1 259 130" fill="white" fill-opacity=".07" stroke="white" stroke-opacity=".58"/></svg>"#
         };
-        let bounds = if park { self.park_target_bounds() } else {
+        let bounds = if park { self.park_target_geometry() } else {
             Bounds { origin: point(self.bounds.center().x - px(width * self.zoom / 2.), self.bounds.bottom() - px(height * self.zoom)), size: size(px(width * self.zoom), px(height * self.zoom)) }
         };
         let key = if park { if self.park_hover { "parked-deck/drop-hover" } else { "parked-deck/drop" } } else { "parked-deck/aura" };
