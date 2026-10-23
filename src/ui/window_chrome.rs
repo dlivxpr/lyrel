@@ -64,7 +64,7 @@ impl LyrelApp {
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_left_panel(cx);
-                    this.focus_active(window, cx);
+                    this.focus_previous_content(window, cx);
                 })),
             )
             .child(
@@ -132,7 +132,7 @@ impl LyrelApp {
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_right_panel(cx);
-                    this.focus_active(window, cx);
+                    this.focus_previous_content(window, cx);
                 })),
             );
         let strip = h_flex()
@@ -213,6 +213,126 @@ mod gpui_tests {
                 }
                 Err(error) => panic!("pane connection failed: {error}"),
             }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn sidebar_chrome_preserves_document_and_terminal_input(cx: &mut TestAppContext) {
+        let (app, mut vcx, mut streams) = harness_with_tabs(cx, 2);
+        vcx.simulate_resize(size(px(1600.), px(900.)));
+        vcx.dispatch_action(crate::core::actions::EditorNewFile);
+        settle(&mut vcx);
+        let editor = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.clone());
+        assert!(app.update_in(&mut vcx, |app, window, cx| {
+            app.document_dock_px(window, cx).is_some()
+        }));
+
+        for button in ["titlebar-left-panel", "titlebar-right-panel"] {
+            for _ in 0..2 {
+                let before = editor.read_with(&vcx, |editor, _| editor.value().to_string());
+                vcx.update(|window, cx| window.click(button, cx));
+                settle(&mut vcx);
+                vcx.simulate_keystrokes("d");
+                settle(&mut vcx);
+                assert_eq!(
+                    editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+                    format!("{before}d"),
+                    "{button} preserves the docked document's input on hide and show"
+                );
+                assert_eq!(input(&mut streams[0]), None);
+                assert_eq!(input(&mut streams[1]), None);
+            }
+        }
+
+        app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
+        settle(&mut vcx);
+        let before = editor.read_with(&vcx, |editor, _| editor.value().to_string());
+        for button in ["titlebar-left-panel", "titlebar-right-panel"] {
+            for _ in 0..2 {
+                vcx.update(|window, cx| window.click(button, cx));
+                settle(&mut vcx);
+                assert!(terminal_focused(&app, &mut vcx));
+                vcx.simulate_keystrokes("t");
+                settle(&mut vcx);
+                assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"t"[..]));
+                assert_eq!(input(&mut streams[0]), None, "one key is delivered once");
+                assert_eq!(input(&mut streams[1]), None);
+                assert_eq!(
+                    editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+                    before
+                );
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn changes_tab_count_tracks_real_scm_status_on_one_surface(cx: &mut TestAppContext) {
+        use crate::daemon::protocol::DaemonMsg;
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            &std::fs::canonicalize(dir.path()).unwrap(),
+        );
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(init.status.success());
+        let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        DaemonMsg::Cwd(root.clone()).encode(&mut streams[0]).unwrap();
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.right_panel_visible = true;
+            app.right_panel_tab = RightPanelTab::Scm;
+            cx.notify();
+        });
+        for expected in [0, 1, 3, 0] {
+            for name in ["a.txt", "b.txt", "c.txt"] {
+                let path = root.join(name);
+                if path.exists() {
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
+            for name in ["a.txt", "b.txt", "c.txt"].into_iter().take(expected) {
+                std::fs::write(root.join(name), "changed\n").unwrap();
+            }
+            for at_prompt in [false, true] {
+                DaemonMsg::Prompt {
+                    active: true,
+                    at_prompt,
+                    last_exit: Some(0),
+                }
+                .encode(&mut streams[0])
+                .unwrap();
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                vcx.executor().advance_clock(std::time::Duration::from_millis(300));
+                settle(&mut vcx);
+                let ready = app.read_with(&vcx, |app, cx| {
+                    app.scm.repo.as_ref().is_some_and(|repo| {
+                        crate::terminal::git_data::status_of(cx, repo.host, &repo.root)
+                            .is_some_and(|status| status.total_entries == expected)
+                    })
+                });
+                if ready {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "SCM count did not reach {expected}");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let counts = window.find_all("right-panel-change-count");
+                if expected == 0 {
+                    assert!(counts.is_empty(), "a clean working tree clears the count");
+                } else {
+                    assert_eq!(counts.len(), 1, "Changes owns the only count surface");
+                    let count = window.within("panel-title").find("right-panel-change-count");
+                    assert!(count.visible());
+                    assert_eq!(count.label(), Some(expected.to_string().as_str()));
+                }
+            });
         }
     }
 
