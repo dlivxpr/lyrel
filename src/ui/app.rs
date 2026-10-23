@@ -5513,6 +5513,10 @@ impl LyrelApp {
                         app.park_pane(source, window, cx);
                         cx.stop_active_drag(window);
                         cx.stop_propagation();
+                    } else if app.parked_deck.read(cx).is_drop_target_visible() {
+                        // Empty corners of the parking affordance must not unexpectedly split a pane.
+                        app.cancel_pane_drag(window, cx);
+                        cx.stop_propagation();
                     } else if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
                         // Re-read the release position; a stale highlighted frame cannot park or rearrange.
                         crate::ui::pane_drag::clear_landing(&app.pane_drag);
@@ -5580,7 +5584,7 @@ impl LyrelApp {
         let area = self.pane_area.get()?;
         let tab = self.tabs.get(self.active)?;
         if self.maximized.is_some() || tab.pip_slot(cx).is_some_and(|slot| slot.entity_id() == from)
-            || self.parked_deck.read(cx).drop_target_contains(window.mouse_position()) { return None; }
+            || self.parked_deck.read(cx).is_drop_target_visible() { return None; }
         let leaves = tab.pane.leaves();
         let slot = leaves.iter().find(|l| l.entity_id() == from)?;
         let bounds = pane_drag::leaf_bounds(&tab.pane, area);

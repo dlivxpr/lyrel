@@ -197,6 +197,7 @@ impl ParkedDeck {
         cx.notify();
     }
 
+    pub fn is_drop_target_visible(&self) -> bool { self.drop_target }
 
     pub fn drop_target_contains(&self, position: Point<Pixels>) -> bool {
         self.drop_target && self.frame.borrow().park_target_contains(position)
