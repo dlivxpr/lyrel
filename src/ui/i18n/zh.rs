@@ -1877,6 +1877,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::RemoteThisComputer => "本机",
         L10nKey::HostMetricsWaiting => "等待主机采样",
+        L10nKey::HostMetricsConnecting => "正在连接主机",
+        L10nKey::HostMetricsReconnecting => "正在重连主机",
         L10nKey::HostMetricsUnavailable => "主机指标不可用",
         L10nKey::HostMetricsDisconnected => "主机已断开",
         L10nKey::HostMetricsFailed => "主机采样失败：{reason}",
