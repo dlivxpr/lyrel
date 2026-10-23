@@ -41,6 +41,9 @@ daemon 的 `Tab.root` 始终保存完整逻辑树，`Tab.presentation` 保存独
 任意重排需要重建标签页树时，通过 `PaneSetPresentation.restore` 传回原 `PipPane` record，
 由共享 `Tab::set_pip_with_restore` 应用，不能在新树上重新捕获原关系。
 record 必须属于请求的目标 pane；仅原关系变化、PiP 目标不变时也会持久化并广播。
+几何与恢复关系分开保存：`PipGeometry` 只记录内容内的位置／尺寸比例意图，由 `PaneSetPipGeometry`
+提交到拥有工作区的 daemon。GUI 重开和另一客户端使用各自的窗口、侧栏及界面 rem 重新约束，
+不持久化鼠标捕获、键盘焦点、悬停或未提交的手势；终端尺寸继续沿同一 pane 连接的 Resize 路径发送。
 
 <Note>
   恢复会话需要安装智能体的钩子，因为会话 ID 来自这些钩子。[安装钩子 →](/agents/status)

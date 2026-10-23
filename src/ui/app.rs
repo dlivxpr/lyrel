@@ -520,6 +520,7 @@ pub struct Tab {
     /// is `Pane::Empty`. What is kept instead is what it takes to bring them
     /// back — see [`Asleep`].
     pub(crate) asleep: Option<Asleep>,
+    pub(crate) pip_interaction: Rc<crate::ui::pip_geometry::PipInteraction>,
 }
 
 /// A sleeping tab: nothing of it runs, and everything a wake needs is here.
@@ -563,6 +564,7 @@ impl Tab {
             last_used: std::cell::Cell::new(0),
             focus_origin: Default::default(),
             asleep: None,
+            pip_interaction: Default::default(),
         }
     }
 
@@ -588,6 +590,7 @@ impl Tab {
             last_used: std::cell::Cell::new(0),
             focus_origin: Default::default(),
             asleep: None,
+            pip_interaction: Default::default(),
         }
     }
 
@@ -612,6 +615,7 @@ impl Tab {
         cx: &mut App,
     ) -> gpui_kit::AnyElement {
         let pip = self.pip_slot(cx);
+        if pip.is_none() { self.pip_interaction.cancel(); }
         let tiled =
             self.pane
                 .render_without(pip.as_ref().map(PaneSlot::entity_id), chrome, window, cx);
@@ -623,35 +627,10 @@ impl Tab {
             .overflow_hidden()
             .child(tiled)
             .when_some(pip, |body, slot| {
-                let id = slot.entity_id();
-                let chrome = crate::ui::pane::PaneChrome {
-                    dim_inactive: false,
-                    rearrangeable: false,
-                    app: chrome.app.clone(),
-                    lifted: None,
-                    drag: chrome.drag.clone(),
-                };
-                body.child(
-                    div()
-                        .id(("pane-pip", id.as_u64() as usize))
-                        .test_support()
-                        .aria_label(t(L10nKey::PanePipTitle))
-                        .absolute()
-                        .right(gpui_kit::relative(0.02))
-                        .bottom(gpui_kit::relative(0.02))
-                        .w(gpui_kit::relative(0.42))
-                        .h(gpui_kit::relative(0.42))
-                        .max_w(gpui_kit::rems(40.))
-                        .max_h(gpui_kit::rems(26.))
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().background)
-                        .shadow_lg()
-                        .overflow_hidden()
-                        .occlude()
-                        .child(Pane::leaf(slot).render(&chrome, window, cx)),
-                )
+                body.child(crate::ui::pip_geometry::render(
+                    slot, self.tree_id.get(), self.presentation.pip_geometry(),
+                    self.pip_interaction.clone(), chrome, window, cx,
+                ))
             })
             .into_any_element()
     }
@@ -2263,6 +2242,7 @@ impl LyrelApp {
                 last_used: std::cell::Cell::new(0),
                 focus_origin: Default::default(),
                 asleep: None,
+                pip_interaction: Default::default(),
             },
         );
         self.active = insert_at;
@@ -5666,6 +5646,7 @@ impl LyrelApp {
             // split, close) still stand — those genuinely reshape what was
             // zoomed; merely looking at another tab does not.
             if let Some(outgoing) = self.tabs.get_mut(self.active) {
+                outgoing.pip_interaction.cancel();
                 outgoing.zoomed = self.maximized.take();
             }
             self.active = index;
@@ -11097,6 +11078,7 @@ fn tabs_from_session(
             last_used: std::cell::Cell::new(0),
             focus_origin: Default::default(),
             asleep: None,
+            pip_interaction: Default::default(),
         });
     }
     let active = session.active.min(tabs.len().saturating_sub(1));
@@ -16021,6 +16003,181 @@ mod pip_native_owned_gpui_tests {
                 app.tabs[0].pane.first_leaf().unwrap().entity_id(),
                 pane.entity_id()
             );
+        });
+    }
+}
+
+#[cfg(test)]
+mod pip_geometry_gpui_tests {
+    use super::*;
+    use gpui_kit::{MouseButton, TestAppContext, point};
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+
+    #[gpui_kit::test]
+    fn pip_move_resize_and_zoom_preserve_the_live_terminal_and_focus(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+        let pane = app.update_in(&mut vcx, |app, window, cx| {
+            let pane = app.tabs[0].pane.first_leaf().unwrap();
+            window.focus(&pane.focus_handle(cx), cx);
+            pane
+        });
+        vcx.dispatch_action(TogglePanePip);
+        vcx.run_until_parked();
+        let key = pane.entity_id().as_u64() as usize;
+        let before = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let bounds = window.find(("pane-pip", key)).bounds();
+            let start = window.find(("pip-move", key)).bounds().center();
+            window.pointer_down(start, MouseButton::Left, cx);
+            window.pointer_move(start - point(px(70.), px(55.)), Some(MouseButton::Left), cx);
+            window.pointer_up(start - point(px(70.), px(55.)), MouseButton::Left, cx);
+            bounds
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let moved = window.find(("pane-pip", key)).bounds();
+            assert!(moved.left() < before.left() && moved.top() < before.top());
+            assert!(pane.contains_focused(window, cx), "pointer geometry does not steal terminal focus");
+            let start = window.find(("pip-resize", key)).bounds().center();
+            window.pointer_down(start, MouseButton::Left, cx);
+            window.pointer_move(start + point(px(65.), px(35.)), Some(MouseButton::Left), cx);
+            window.pointer_up(start + point(px(65.), px(35.)), MouseButton::Left, cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("pane-pip", key)).bounds().size.width > before.size.width);
+            assert!(pane.contains_focused(window, cx));
+            assert_eq!(window.find_all(("pane-drag-handle", key)).len(), 1);
+        });
+        for size in [20., 14.] {
+            app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(size, cx));
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.render_frame(cx);
+                let pip = window.find(("pane-pip", key)).bounds();
+                let content = window.find("pane-presentations").bounds();
+                assert!(pip.left() >= content.left() && pip.right() <= content.right());
+                assert!(pip.top() >= content.top() && pip.bottom() <= content.bottom());
+            });
+        }
+        for width in [620., 1280.] {
+            vcx.simulate_resize(size(px(width), px(720.)));
+            for left in [true, false] {
+                if left { vcx.dispatch_action(ToggleLeftPanel); } else { vcx.dispatch_action(ToggleRightPanel); }
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    let pip = window.find(("pane-pip", key)).bounds();
+                    let content = window.find("pane-presentations").bounds();
+                    let margin = px((window.rem_size().as_f32() * 2.).min(content.size.width.as_f32() / 4.).min(content.size.height.as_f32() / 4.));
+                    assert!(pip.left() >= content.left() + margin);
+                    assert!(pip.right() <= content.right() - margin);
+                    assert!(pip.bottom() < window.find("workbench-status").bounds().top());
+                });
+            }
+        }
+        app.update_in(&mut vcx, |app, _, _| assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), pane.entity_id()));
+    }
+
+    #[gpui_kit::test]
+    fn pip_geometry_keeps_output_selection_scrolling_and_input_on_one_attachment(cx: &mut TestAppContext) {
+        use crate::daemon::protocol::{ClientMsg, DaemonMsg};
+        use std::time::{Duration, Instant};
+        let (app, mut vcx, mut stream) = test_window::harness_with_pane(cx);
+        let pane = app.update_in(&mut vcx, |app, window, cx| {
+            let pane = app.tabs[0].pane.first_leaf().unwrap();
+            window.focus(&pane.focus_handle(cx), cx);
+            pane
+        });
+        DaemonMsg::Output((0..100).map(|n| format!("pip_output_{n:03} abcdefghijklmnopqrstuvwxyz\r\n")).collect::<String>().into_bytes()).encode(&mut stream).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            if pane.terminal().unwrap().read_with(&vcx, |view, _| view.scrollback_text().contains("pip_output_099")) { break; }
+            assert!(Instant::now() < deadline, "live output reached the original terminal");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        vcx.dispatch_action(TogglePanePip);
+        vcx.run_until_parked();
+        let key = pane.entity_id().as_u64() as usize;
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let start = window.find(("pip-resize", key)).bounds().center();
+            window.pointer_down(start, MouseButton::Left, cx);
+            window.pointer_move(start + point(px(40.), px(30.)), Some(MouseButton::Left), cx);
+            window.pointer_up(start + point(px(40.), px(30.)), MouseButton::Left, cx);
+        });
+        vcx.run_until_parked();
+        pane.terminal().unwrap().update_in(&mut vcx, |view, _, cx| view.scroll(20, None, &gpui_kit::Modifiers::none(), cx));
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let bounds = window.find(("pane-pip", key)).bounds();
+            let start = bounds.origin + point(px(12.), window.rem_size() * 4.);
+            window.pointer_down(start, MouseButton::Left, cx);
+            window.pointer_move(start + point(px(70.), px(0.)), Some(MouseButton::Left), cx);
+            window.pointer_up(start + point(px(70.), px(0.)), MouseButton::Left, cx);
+        });
+        assert!(pane.terminal().unwrap().read_with(&vcx, |view, _| view.selection_text().is_some_and(|text| !text.is_empty())));
+        vcx.simulate_keystrokes("x");
+        stream.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        let mut sizes = Vec::new();
+        let mut input = Vec::new();
+        while let Ok(message) = ClientMsg::read(&mut stream) {
+            match message {
+                ClientMsg::Resize(size) => sizes.push((size.cols, size.rows)),
+                ClientMsg::Input(bytes) => input.extend(bytes),
+                _ => {},
+            }
+        }
+        assert!(sizes.len() >= 2 && sizes.first() != sizes.last(), "the original attachment receives the changed terminal dimensions");
+        assert!(input.contains(&b'x'), "keyboard input still reaches the same daemon stream");
+        assert!(pane.terminal().unwrap().read_with(&vcx, |view, _| view.scrollback_text().contains("pip_output_099")));
+    }
+
+    #[gpui_kit::test]
+    fn an_incoming_geometry_update_does_not_take_over_a_local_gesture_or_focus(cx: &mut TestAppContext) {
+        use lyrel_core::core::machine::{LayoutDelta, PipGeometry, Tab as TreeTab};
+        let (app, mut vcx, _stream) = test_window::harness_with_pane(cx);
+        let pane = app.update_in(&mut vcx, |app, window, cx| {
+            let pane = app.tabs[0].pane.first_leaf().unwrap();
+            window.focus(&pane.focus_handle(cx), cx);
+            pane
+        });
+        vcx.dispatch_action(TogglePanePip);
+        vcx.run_until_parked();
+        let key = pane.entity_id().as_u64() as usize;
+        let end = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let start = window.find(("pip-move", key)).bounds().center();
+            let end = start - point(px(60.), px(40.));
+            window.pointer_down(start, MouseButton::Left, cx);
+            window.pointer_move(end, Some(MouseButton::Left), cx);
+            end
+        });
+        vcx.run_until_parked();
+        let local = vcx.update(|window, cx| { window.render_frame(cx); window.find(("pane-pip", key)).bounds() });
+        app.update_in(&mut vcx, |app, window, cx| {
+            let mut remote = TreeTab::leaf(1);
+            remote.id = app.tabs[0].tree_id.get();
+            remote.set_pip(Some(1), None);
+            remote.presentation.set_pip_geometry(PipGeometry::new(0., 0., 0.7, 0.7));
+            assert!(app.apply_layout_delta(&LayoutDelta::TabRestructured { tab: remote, pane: None }, window, cx));
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find(("pane-pip", key)).bounds(), local);
+            assert!(pane.contains_focused(window, cx));
+            window.pointer_up(end, MouseButton::Left, cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find(("pane-pip", key)).bounds(), local);
+            assert!(pane.contains_focused(window, cx));
         });
     }
 }

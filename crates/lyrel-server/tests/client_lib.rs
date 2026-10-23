@@ -584,3 +584,51 @@ fn pip_restore_keeps_intervening_splits_without_adopting_a_later_move() {
     drop(sessions);
     for pane in [a, b, c] { panes.kill(pane).unwrap(); }
 }
+
+#[test]
+fn pip_geometry_follows_clients_without_replacing_the_live_terminal() {
+    use lyrel_core::core::machine::PipGeometry;
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let writer = daemon.control("geometry-writer");
+    let watcher = daemon.control("geometry-watcher");
+    let ws = match writer.request(ControlRequest::WorkspaceCreate {
+        name: Some("geometry".into()), workspace: None,
+    }).unwrap() {
+        ReplyOk::WorkspaceTree(ws) => ws.id,
+        other => panic!("{other:?}"),
+    };
+    let mut shell = panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap();
+    shell.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let pane = shell.pane_id();
+    writer.request(ControlRequest::TabCreate { workspace: ws, at: None, pane: seed(pane), tab: None }).unwrap();
+    writer.request(ControlRequest::PaneSetPresentation { workspace: ws, pane, pip: true, fallback: None, restore: None }).unwrap();
+    let geometry = PipGeometry::new(0.1, 0.2, 0.65, 0.6).unwrap();
+    writer.request(ControlRequest::PaneSetPipGeometry { workspace: ws, pane, geometry: Some(geometry) }).unwrap();
+    let observe = |client: &ControlClient| {
+        let ReplyOk::MachineTree(machine) = client.request(ControlRequest::MachineGet).unwrap() else { panic!("machine tree") };
+        let tab = &machine.workspaces[0].tabs[0];
+        assert_eq!(tab.presentation.pip().unwrap().pane(), pane);
+        assert_eq!(tab.presentation.pip_geometry(), Some(geometry));
+        assert!(tab.visible_root().is_none());
+    };
+    observe(&watcher);
+    drop(writer);
+    let reopened = daemon.control("geometry-reopened");
+    observe(&reopened);
+    shell.resize(WinSize { cols: 54, rows: 14, cell_w: 10, cell_h: 20 }).unwrap();
+    #[cfg(unix)]
+    {
+        shell.input(b"stty size\r").unwrap();
+        assert!(collect_until(&mut shell, b"14 54").1.is_none(), "the live PTY applies the new dimensions");
+    }
+    shell.input(b"echo geometry_shell_survived\r").unwrap();
+    assert!(collect_until(&mut shell, b"geometry_shell_survived").1.is_none());
+    assert_eq!(panes.list().unwrap().iter().filter(|entry| entry.alive).count(), 1);
+    shell.detach().unwrap();
+    let mut attached = panes.attach(pane, size()).unwrap();
+    attached.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    assert!(collect_until(&mut attached, b"geometry_shell_survived").1.is_none());
+    drop(attached);
+    panes.kill(pane).unwrap();
+}

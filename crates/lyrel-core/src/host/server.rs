@@ -973,6 +973,10 @@ fn run_request(
             conn.machine()?.pane_set_presentation(workspace, pane, pip, fallback, restore, conn.machine_origin)?;
             (ReplyOk::Unit, Vec::new())
         }
+        ControlRequest::PaneSetPipGeometry { workspace, pane, geometry } => {
+            conn.machine()?.pane_set_pip_geometry(workspace, pane, geometry, conn.machine_origin)?;
+            (ReplyOk::Unit, Vec::new())
+        }
         ControlRequest::PaneSetRatio {
             workspace,
             tab,

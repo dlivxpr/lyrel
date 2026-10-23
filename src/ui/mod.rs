@@ -37,6 +37,7 @@ pub mod pending_pane;
 pub mod perf;
 #[cfg(target_os = "macos")]
 pub mod platform;
+pub(crate) mod pip_geometry;
 pub mod prefill;
 pub mod presets;
 pub mod proc_usage;
