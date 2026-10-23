@@ -668,14 +668,12 @@ pub(crate) fn default_window_opacity(backdrop: WindowBackdrop, blur: bool) -> f3
     }
 }
 
-/// The fill for the workspace's large translucent surfaces (file sidebar,
-/// right panel, SFTP panel). While a material is active and the window is
-/// translucent, the surface paints on top of the already-alpha window
-/// background, so its own alpha stacks (src-over) and the material would
-/// show through far less than behind the terminal; a constant 0.15 keeps
-/// the backdrop ratio at ~85% of the terminal's at every opacity setting.
-/// `theme.sidebar` itself stays opaque — the settings theme picker paints
-/// with it on top of the opaque settings overlay and must stay legible.
+/// Tint above the shared workspace background, not another native material.
+/// Any translucent window needs translucent sidebars: that includes plain
+/// transparency, Windows Auto with an opacity override, and macOS native blur.
+/// A 0.15 src-over tint retains 85% of the terminal's native-background share.
+/// With an opaque window the original semantic surface remains fully opaque.
+/// `theme.sidebar` itself stays solid for components on the settings overlay.
 pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
     translucent_surface(cx.theme().sidebar, cx)
 }
@@ -696,14 +694,7 @@ fn translucent_surface(base: Hsla, cx: &App) -> Hsla {
     if !translucent {
         return base;
     }
-    let config = cx.global::<Config>();
-    let theme = presets::by_id(cx, &effective_preset_id(cx));
-    let blur = config.window_blur.unwrap_or(theme.blur);
-    if material_active(config.window_backdrop, blur) {
-        base.alpha(0.15)
-    } else {
-        base
-    }
+    base.alpha(0.15)
 }
 
 /// The backdrop presets offered in the settings dropdown: everything the
@@ -1446,6 +1437,76 @@ mod tests {
             cx.global_mut::<Config>().theme_follow_system = false;
             assert_eq!(effective_preset_id(cx), Config::default().theme_preset);
         });
+    }
+
+    #[gpui_kit::test]
+    fn workspace_surfaces_follow_window_opacity_not_the_material_picker(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            let theme = presets::builtins().remove(0);
+            cx.set_global(theme.surfaces());
+            cx.set_global(Config::default());
+            // Auto and Off can both carry an explicitly translucent window;
+            // macOS also uses Auto with its local blur switch. None may leave
+            // either large sidebar opaque over the shared window background.
+            for backdrop in [
+                WindowBackdrop::Auto,
+                WindowBackdrop::Off,
+                WindowBackdrop::Blur,
+                WindowBackdrop::Mica,
+                WindowBackdrop::MicaAlt,
+                WindowBackdrop::Acrylic,
+            ] {
+                for blur in [false, true] {
+                    let config = cx.global_mut::<Config>();
+                    config.window_backdrop = backdrop;
+                    config.window_blur = Some(blur);
+                    for opacity in [0.2, 0.82, 0.999] {
+                        cx.set_global(presets::ActiveBackground {
+                            fill: theme.background.clone(),
+                            opacity: Some(opacity),
+                            image: None,
+                        });
+                        for fill in [workspace_surface_color(cx), rail_surface_color(cx)] {
+                            assert!(
+                                (0.0..=0.2).contains(&fill.a),
+                                "{backdrop:?}, blur={blur}, opacity={opacity}: sidebar hides the native background"
+                            );
+                        }
+                    }
+                    for opacity in [None, Some(1.0)] {
+                        cx.set_global(presets::ActiveBackground {
+                            fill: theme.background.clone(),
+                            opacity,
+                            image: None,
+                        });
+                        assert_eq!(workspace_surface_color(cx).a, 1.0);
+                        assert_eq!(rail_surface_color(cx).a, 1.0);
+                    }
+                }
+            }
+            // These are workspace-only projections. Components over an opaque
+            // settings/overlay surface must retain their solid theme token.
+            assert_eq!(cx.theme().sidebar.a, 1.0);
+        });
+    }
+
+    #[test]
+    fn opacity_overrides_keep_their_precedence_when_material_changes() {
+        let mut theme = presets::builtins().remove(0);
+        theme.opacity = Some(0.61);
+        let mut config = Config::default();
+        for backdrop in [WindowBackdrop::Auto, WindowBackdrop::Off, WindowBackdrop::Mica] {
+            config.window_backdrop = backdrop;
+            for blur in [false, true] {
+                config.window_opacity = None;
+                assert_eq!(effective_window_opacity(&config, &theme, blur), 0.61);
+                config.window_opacity = Some(0.37);
+                assert_eq!(effective_window_opacity(&config, &theme, blur), 0.37);
+                config.window_opacity = Some(1.0);
+                assert_eq!(effective_window_opacity(&config, &theme, blur), 1.0);
+            }
+        }
     }
 
     #[test]
