@@ -44,7 +44,7 @@ jobs:
     steps:
       - name: Resolve immutable source and validate reusable production run
         id: source
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           INPUT_TAG: ${{ inputs.tag }}
           REUSE_RUN_ID: ${{ inputs.reuse_run_id }}
@@ -143,7 +143,7 @@ jobs:
 
       - name: Discover trusted independent CI server artifacts
         id: ci-server
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
         with:
