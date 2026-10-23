@@ -104,7 +104,16 @@ pub(crate) fn assert_metrics_status(vcx: &mut VisualTestContext, key: crate::ui:
 fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppContext) {
     let server = HostServer::new();
     let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
-    vcx.update(|_, cx| LocalLink::install_client_for_test(cx, server.client.clone()));
+    vcx.update(|window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.read(cx).workspace,
+            window.window_handle(),
+            app.downgrade(),
+        );
+        LocalLink::install_client_for_test(cx, server.client.clone());
+    });
     wait_sample(&mut vcx, true);
     let client = server.client.clone();
     let hostname = std::thread::spawn(move || client.host_metrics().unwrap().hostname().to_owned())
@@ -253,7 +262,16 @@ fn remote_workspace_metrics_never_relabel_another_hosts_sample(cx: &mut TestAppC
     };
     let server_a = RemoteServer::new(&target_a);
     let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
-    vcx.update(|_, cx| cx.set_global(LocalLink::default()));
+    vcx.update(|window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.read(cx).workspace,
+            window.window_handle(),
+            app.downgrade(),
+        );
+        cx.set_global(LocalLink::default());
+    });
     let local = app.read_with(&vcx, |app, _| app.workspace);
     let workspace_a = WindowView::on_remote(RemoteRef::new(target_a.clone(), WorkspaceId::new()));
     let workspace_b = WindowView::on_remote(RemoteRef::new(target_b.clone(), WorkspaceId::new()));
