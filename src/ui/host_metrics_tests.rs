@@ -6,21 +6,24 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, px, size};
-use lyrel_core::daemon::control::ControlHello;
+use lyrel_core::daemon::control::{ControlClient, ControlHello};
+use lyrel_core::host::Host as _;
 
 use crate::core::actions::{
     EditorNewFile, RestorePanePip, SelectNextTab, ToggleDocumentFill, TogglePanePip,
 };
-use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
+use crate::core::session::{
+    RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
+};
 use crate::ui::app::test_window::harness_with_tabs;
 
-struct HostServer {
-    client: Arc<ControlClient>,
+pub(crate) struct HostServer {
+    pub(crate) client: Arc<ControlClient>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl HostServer {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
@@ -67,7 +70,7 @@ fn has_sample(vcx: &mut VisualTestContext) -> bool {
     })
 }
 
-fn wait_sample(vcx: &mut VisualTestContext, wanted: bool) {
+pub(crate) fn wait_sample(vcx: &mut VisualTestContext, wanted: bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         vcx.executor().advance_clock(Duration::from_secs(1));
@@ -83,11 +86,23 @@ fn wait_sample(vcx: &mut VisualTestContext, wanted: bool) {
     }
 }
 
+pub(crate) fn assert_metrics_status(vcx: &mut VisualTestContext, key: crate::ui::i18n::L10nKey) {
+    vcx.update(|window, _| window.refresh());
+    settle(vcx);
+    vcx.update(|window, _| {
+        assert_eq!(
+            window.find("status-host-metrics").label(),
+            Some(crate::ui::i18n::t(key)),
+        );
+    });
+    assert!(!has_sample(vcx), "a pending link displayed an old host sample");
+}
+
 #[gpui_kit::test]
 fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppContext) {
     let server = HostServer::new();
     let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
-    vcx.update(|_, cx| cx.default_global::<LocalLink>().client = Some(server.client.clone()));
+    vcx.update(|_, cx| LocalLink::install_client_for_test(cx, server.client.clone()));
     wait_sample(&mut vcx, true);
     let client = server.client.clone();
     let hostname = std::thread::spawn(move || client.host_metrics().unwrap().hostname().to_owned())
@@ -180,7 +195,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     server.client.close();
     wait_sample(&mut vcx, false);
     let reconnected = HostServer::new();
-    vcx.update(|_, cx| cx.default_global::<LocalLink>().client = Some(reconnected.client.clone()));
+    vcx.update(|_, cx| LocalLink::install_client_for_test(cx, reconnected.client.clone()));
     wait_sample(&mut vcx, true);
 }
 
@@ -291,6 +306,74 @@ fn remote_workspace_metrics_never_relabel_another_hosts_sample(cx: &mut TestAppC
         "local workspace reused A despite no local daemon connection"
     );
     let local_server = HostServer::new();
-    vcx.update(|_, cx| cx.default_global::<LocalLink>().client = Some(local_server.client.clone()));
+    vcx.update(|_, cx| LocalLink::install_client_for_test(cx, local_server.client.clone()));
     wait_sample(&mut vcx, true);
+}
+
+#[gpui_kit::test]
+fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(cx: &mut TestAppContext) {
+    let local_a = HostServer::new();
+    let local_b = HostServer::new();
+    let target = RemoteTarget::Alias {
+        alias: "metrics-completion-route".into(),
+    };
+    let remote_a = RemoteServer::new(&target);
+    let remote_b = RemoteServer::new(&target);
+    let cases = [
+        (
+            HostId::LOCAL,
+            MetricsSource::Local(local_a.client.clone()),
+            MetricsSource::Local(local_b.client.clone()),
+        ),
+        (
+            remote_a.host.id(),
+            MetricsSource::Remote(remote_a.host.clone()),
+            MetricsSource::Remote(remote_b.host.clone()),
+        ),
+    ];
+    for (host, source, replacement) in cases {
+        let install = |route: &MetricsSource, cx: &mut App| match route {
+            MetricsSource::Local(client) => LocalLink::install_client_for_test(cx, client.clone()),
+            MetricsSource::Remote(host) => HostLinks::insert(cx, host.clone(), host.home()),
+        };
+        cx.update(|cx| install(&source, cx));
+        let query = source.clone();
+        let snapshot = std::thread::spawn(move || query.sample().unwrap())
+            .join()
+            .unwrap();
+        // Complete the old request only after its control route was replaced.
+        // Both real connections reach the same server process, not the same Arc.
+        assert_eq!(source.instance(), replacement.instance());
+        cx.update(|cx| install(&replacement, cx));
+        match &source {
+            MetricsSource::Local(client) => client.close(),
+            MetricsSource::Remote(host) => host.client().close(),
+        }
+        cx.update(|cx| {
+            assert!(matches!(
+                source.response_state(host, Ok(snapshot.clone()), cx),
+                State::Ready(accepted) if accepted == snapshot
+            ));
+            for kind in [std::io::ErrorKind::BrokenPipe, std::io::ErrorKind::Other] {
+                assert!(matches!(
+                    source.response_state(host, Err(std::io::Error::from(kind)), cx),
+                    State::Waiting
+                ), "an old connection's error contaminated the healthy replacement");
+            }
+            assert!(matches!(
+                replacement.response_state(host, Err(std::io::Error::other("sampling denied")), cx),
+                State::Failed(reason) if reason == "sampling denied"
+            ));
+            assert!(matches!(
+                replacement.response_state(host, Err(std::io::ErrorKind::Unsupported.into()), cx),
+                State::Unsupported
+            ));
+            let mut stale = serde_json::to_value(&snapshot).unwrap();
+            stale["instance"] = "previous-daemon-instance".into();
+            assert!(matches!(
+                source.response_state(host, Ok(serde_json::from_value(stale).unwrap()), cx),
+                State::Waiting
+            ), "a previous daemon's completion was accepted by its replacement");
+        });
+    }
 }

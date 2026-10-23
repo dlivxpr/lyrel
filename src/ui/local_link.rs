@@ -7,6 +7,14 @@ use lyrel_core::daemon::control::{ControlClient, ControlRequest, ReplyOk};
 use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::ui::remote_workspace::{Backoff, RemoteStatus};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LocalLinkStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Reconnecting,
+}
+
 #[derive(Default)]
 pub struct LocalLink {
     client: Option<Arc<ControlClient>>,
@@ -53,6 +61,35 @@ impl LocalLink {
     pub fn client(cx: &mut App) -> Option<Arc<ControlClient>> {
         let link = cx.default_global::<LocalLink>();
         link.client.as_ref().filter(|c| c.is_connected()).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_client_for_test(cx: &mut App, client: Arc<ControlClient>) {
+        let link = cx.default_global::<Self>();
+        link.instance = client.hello().instance.clone();
+        link.client = Some(client);
+    }
+
+    /// The pump owns connection progress, including its backoff. A remembered
+    /// daemon instance distinguishes first startup from reconnecting, even
+    /// after invalidate has dropped the old client and reset the retry timer.
+    pub(crate) fn status(cx: &App) -> LocalLinkStatus {
+        let Some(link) = cx.try_global::<LocalLink>() else {
+            return LocalLinkStatus::Disconnected;
+        };
+        if link
+            .client
+            .as_ref()
+            .is_some_and(|client| client.is_connected())
+        {
+            LocalLinkStatus::Connected
+        } else if !link.pumping {
+            LocalLinkStatus::Disconnected
+        } else if link.instance.is_empty() {
+            LocalLinkStatus::Connecting
+        } else {
+            LocalLinkStatus::Reconnecting
+        }
     }
 
     /// Whether the local daemon advertised `feature` on its control hello —
@@ -1012,5 +1049,88 @@ mod claims_tests {
 }
 
 #[cfg(test)]
-#[path = "host_metrics_tests.rs"]
-mod metrics_tests;
+mod metrics_lifecycle_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use gpui_kit::TestAppContext;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use crate::ui::host_metrics::tests::{HostServer, assert_metrics_status, wait_sample};
+
+    #[gpui_kit::test]
+    fn local_metrics_follow_daemon_connection_lifecycle(cx: &mut TestAppContext) {
+        use crate::ui::i18n::L10nKey;
+
+        let (_app, mut vcx, _pane_streams) = harness_with_tabs(cx, 1);
+        // Drive the existing LocalLink seam without starting the real daemon or
+        // its pump. These are the states before, during and after tick's connect.
+        vcx.update(|_, cx| {
+            cx.set_global(LocalLink {
+                pumping: true,
+                ..LocalLink::default()
+            });
+        });
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsConnecting);
+        vcx.update(|_, cx| cx.global_mut::<LocalLink>().attempting = true);
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsConnecting);
+
+        // A failed first attempt is still an initial connection during backoff.
+        vcx.update(|_, cx| {
+            let link = cx.global_mut::<LocalLink>();
+            link.attempting = false;
+            link.backoff.advance();
+            link.next_attempt = Some(Instant::now() + Duration::from_secs(30));
+        });
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsConnecting);
+
+        let server = HostServer::new();
+        vcx.update(|_, cx| {
+            let link = cx.global_mut::<LocalLink>();
+            link.instance = server.client.hello().instance.clone();
+            link.client = Some(server.client.clone());
+            link.backoff.reset();
+            link.next_attempt = None;
+        });
+        wait_sample(&mut vcx, true);
+
+        // The render guard must clear old values even before another poll, when
+        // the reader has noticed loss but tick has not yet removed the client.
+        server.client.close();
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+        vcx.update(|_, cx| LocalLink::invalidate(cx));
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+        vcx.update(|_, cx| {
+            let link = cx.global_mut::<LocalLink>();
+            link.backoff.advance();
+            link.next_attempt = Some(Instant::now() + Duration::from_secs(30));
+        });
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+        vcx.update(|_, cx| {
+            let link = cx.global_mut::<LocalLink>();
+            link.next_attempt = None;
+            link.attempting = true;
+        });
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsReconnecting);
+
+        let replacement = HostServer::new();
+        vcx.update(|_, cx| {
+            let link = cx.global_mut::<LocalLink>();
+            link.attempting = false;
+            link.instance = replacement.client.hello().instance.clone();
+            link.client = Some(replacement.client.clone());
+            link.backoff.reset();
+        });
+        wait_sample(&mut vcx, true);
+
+        // No installed connection service is genuinely disconnected, not a retry.
+        vcx.update(|_, cx| cx.set_global(LocalLink::default()));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsDisconnected);
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        assert_metrics_status(&mut vcx, L10nKey::HostMetricsDisconnected);
+    }
+}
