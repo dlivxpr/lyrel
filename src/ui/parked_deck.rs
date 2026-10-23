@@ -1,5 +1,6 @@
 //! 原生停放牌堆。App 持有一个 Entity，注入当前 tab 的真实卡片与本地化文案，订阅恢复意图。
 //! 此模块不访问 daemon、PTY、文件系统或会话生命周期；Restore 只请求改变展示。
+//! 所有 pane 参数都是不透明的客户端卡片 token，不是 daemon pane id；禁止持久化或传给 daemon。
 //! 将 view 放在 workbench-content 内的绝对定位 overlay；status bar 必须是 content 的兄弟。
 
 use gpui_kit::component::ActiveTheme;
@@ -12,7 +13,8 @@ mod keyboard_region;
 use keyboard_region::KeyboardRegion;
 use graphics::{Frame, FrameCard, Pose, Sprite, Tokens};
 
-/// 当前 tab 中的同一个 pane 身份；alive 只影响标签，不会禁止查看已退出会话的 scrollback。
+/// 当前 tab 中稳定的客户端卡片身份（如 PaneSlot.entity_id.as_u64()）。
+/// App 必须在本地/远端混合场景提供唯一 token；alive 只影响标签，不禁止查看已退出会话的 scrollback。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParkedCard {
     pane: u64,
@@ -26,6 +28,7 @@ impl ParkedCard {
         Self { pane, title: title.into(), path: path.into(), alive }
     }
 
+    /// 返回 App 提供的不透明客户端 token；恢复会话的 Host/daemon 身份由 App 查找对应 slot。
     pub fn pane(&self) -> u64 { self.pane }
     pub fn title(&self) -> &str { &self.title }
     pub fn path(&self) -> &str { &self.path }
@@ -50,7 +53,8 @@ impl ParkedDeckLabels {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParkedDeckEvent {
-    /// App 必须重新确认当前 tab 仍拥有此 parked pane；不得创建/重启一个不存在的会话。
+    /// 回传不透明客户端 token。App 查找对应 slot 并确认其仍属于当前 tab 的 parked 集合，
+    /// 再解析真实 Host/daemon 身份；不得直接把 token 传给 daemon 或创建/重启不存在的会话。
     Restore(u64),
     Dismiss,
 }
@@ -140,7 +144,7 @@ impl ParkedDeck {
         *self.frame.borrow_mut() = Rc::default();
     }
 
-    /// 相同输入不 notify；按 pane 身份重用资源和进行中的动画，重排不改变选中会话。
+    /// 相同输入不 notify；按客户端 token 重用资源和进行中的动画，重排不改变选中会话。
     pub fn sync_cards(&mut self, cards: Vec<ParkedCard>, window: &mut Window, cx: &mut Context<Self>) {
         if self.cards.len() == cards.len() && self.cards.iter().zip(&cards).all(|(old, new)| old.model == *new) { return; }
         let now = Instant::now();
