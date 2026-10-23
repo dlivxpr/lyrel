@@ -45,6 +45,11 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 画中画的移动／调整大小手柄支持窗口控件的 Tab 导航；聚焦后用方向键操作，Enter／Escape 返回原终端。
 终端自身的方向键与 Tab 不被几何控件截获；鼠标移动与调整大小不会改变键盘输入目标。
 
+停放命令 `ParkPane` 收起当前平铺或 PiP 窗格；`RestoreParkedPane` 打开当前标签页牌堆
+第一张卡片的键盘预览，再激活卡片的 **Restore** 恢复所选窗格。这两个操作没有默认快捷键，
+可从随处搜索运行或自行绑定。恢复只影响所选卡片，不恢复全部窗格；<kbd>Escape</kbd>
+关闭预览，不取消停放。预览不接收终端输入，停放也不改变 Shell 身份或 CLI 的 `%PANE`。
+
 
 <a id="view"></a>
 ## 视图
@@ -130,7 +135,7 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 分组 | 操作 |
 |---|---|
 | 标签页 | `RenameTab` · `NewWorktreeTab` · `MoveTabLeft` · `MoveTabRight` · `CloseOtherTabs` · `CloseTabsToTheRight` · `CopyWorkingDirectory` · `MarkTabUnread` · `HibernateTab` |
-| 窗格 | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` · `MovePaneToTab` · `TogglePanePip` · `RestorePanePip` · `OpenScrollbackInEditor` · `ClearPaneScreen` · `RestartPaneShell` |
+| 窗格 | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` · `MovePaneToTab` · `TogglePanePip` · `RestorePanePip` · `ParkPane` · `RestoreParkedPane` · `OpenScrollbackInEditor` · `ClearPaneScreen` · `RestartPaneShell` |
 | 工作区 | `SelectWorkspace1`…`SelectWorkspace9` · `RenameWorkspace` · `StopWorkspace` · `DeleteWorkspace` |
 | 智能体 | `ForkAgentSession`（加上 `Right` / `Left` / `Down` / `Up`）· `CopyAgentSessionId` · `LaunchAgent:<slug>`（每个智能体各有一个，例如 `LaunchAgent:omp`） |
 | Git | `ScmStageAll` · `ScmUnstageAll` · `ScmDiscardAll` · `ScmCommitAmend` · `ScmRefresh` · `ScmSync` · `ScmPush` · `ScmPull` · `ScmFetch` · `ScmCheckoutBranch` · `ScmCreateBranch` · `ScmToggleGraph` · `ToggleDiffViewMode` |

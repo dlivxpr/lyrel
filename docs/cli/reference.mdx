@@ -28,13 +28,21 @@ description: "各个命令、对应的标志，以及使用 --json 时输出的 
 在 lyrel shell 之外，需要指定目标地址的命令会失败，并显示：
 `not inside a lyrel shell — pass an explicit %pane/@tab/workspace`。
 
-画中画（PiP）窗格仍属于原工作区和标签页，保留同一 `%PANE` 与会话身份。
-`pane ls`／`tab ls`／`ws tree` 按完整逻辑树发现它，`send`、`capture`、`procs` 和 `wait`
-继续访问原窗格，不因退出平铺布局而关闭它，也不额外创建 Shell。
-PiP 是呈现状态，不是新的 CLI pane 类型；当前没有独立的 CLI PiP 子命令。
-control 客户端使用 `PaneSetPresentation { workspace, pane, pip, fallback, restore }` 修改它；
-普通操作传 `restore: None`，同步树重建时携带已保存的原关系 record，避免覆盖浮动前的恢复位置。
-与 daemon 的版本必须一致（control 16，pane 仍为 7）。
+画中画（PiP）与停放（Park）窗格仍属于原工作区和标签页，保留同一 `%PANE`、所有权与会话身份。
+`pane ls`／`tab ls`／`ws tree` 按完整逻辑树发现它们，`send`、`capture`、`procs` 和 `wait`
+继续访问原窗格；即使全部窗格都停放，也不会额外创建 Shell。停放不清除 Shell 环境变量或历史，
+恢复只改变显示位置，不是重新启动命令。`pane close %PANE` 仍明确关闭这个目标，不会关闭其他停放窗格。
+
+PiP 和停放是呈现状态，不是新的 CLI pane 类型；当前没有独立的 CLI PiP／Park 子命令。
+control 客户端使用 `PaneSetPresentation { workspace, pane, pip, fallback, restore }` 修改 PiP，
+使用 `PanePark { workspace, pane, restore }` 停放、`PaneRestore { workspace, pane, fallback }` 恢复。
+普通操作传 `restore: None`，同步树重建时携带已保存的原关系 record，避免覆盖隐藏前的恢复位置。
+恢复只针对所选窗格：优先原分屏关系，失效时回到当前有效窗格旁；没有平铺窗格时铺满。
+从 PiP 停放的窗格恢复为平铺，不自动重进 PiP。与 daemon 的版本必须一致（control 16，pane 仍为 7）。
+
+停放和恢复关系随所属机器布局持久化、广播；卡片预览、悬停和键盘焦点只在 GUI 本地存在，
+不会更换 CLI 目标。已退出的进程不会因 Restore 复活；已关闭 pane 的旧恢复请求会失败，
+不能把失效 ID 映射到另一个会话。daemon 重启后的进程恢复仍遵循既有规则，不保证原进程连续运行。
 几何通过独立的 `PaneSetPipGeometry { workspace, pane, geometry }` 提交；位置与尺寸保存为比例意图，
 各 GUI 按自己的内容区域与界面缩放解析并约束完整浮层。请求不包含焦点、hover 或指针捕获信息，
 不会改变 CLI 的输入、捕获与生命周期命令，也不会改动 pane 协议版本。

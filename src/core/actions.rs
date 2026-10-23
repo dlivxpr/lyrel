@@ -45,6 +45,8 @@ actions!(
         MovePaneToTab,
         TogglePanePip,
         RestorePanePip,
+        ParkPane,
+        RestoreParkedPane,
         OpenScrollbackInEditor,
         ClearPaneScreen,
         RestartPaneShell,
