@@ -1155,6 +1155,7 @@ pub struct LyrelApp {
     pub(crate) group_rename: Option<GroupRename>,
     window_title: std::cell::RefCell<String>,
     pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
+    pub(crate) status_metrics: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
     pub(crate) connect: Option<crate::ui::remote_workspace::ConnectFlow>,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
     pub(crate) host_snapshots: std::collections::HashMap<
@@ -1796,6 +1797,7 @@ impl LyrelApp {
             group_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
             status_clock: cx.new(crate::ui::status_bar::Clock::new),
+            status_metrics: None,
             connect: None,
             switcher: None,
             host_snapshots: std::collections::HashMap::new(),
@@ -10093,6 +10095,7 @@ impl Render for LyrelApp {
         // open or not — a port that appears while the panel is shut is exactly
         // the one worth forwarding unasked.
         self.sync_port_watch(window, cx);
+        self.sync_status_metrics(window, cx);
         if cx.has_active_drag() {
             crate::ui::reorder::clear_pending(&self.reorder);
             crate::ui::pane_drag::clear_landing(&self.pane_drag);

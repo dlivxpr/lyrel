@@ -140,6 +140,11 @@ impl Host for LocalHost {
         HostId::LOCAL
     }
 
+    fn host_metrics(&self) -> io::Result<crate::host::metrics::HostMetrics> {
+        guard_off_ui();
+        crate::host::metrics::sample_local()
+    }
+
     fn separator(&self) -> char {
         std::path::MAIN_SEPARATOR
     }

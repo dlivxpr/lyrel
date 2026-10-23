@@ -61,7 +61,7 @@ impl Render for Clock {
 impl LyrelApp {
     pub(crate) fn render_status_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let host = self.remote_machine_label(cx);
-        let document = self.code_panel_visible();
+        let document = self.status_document_context(window, cx).is_some();
         let path = if document {
             self.editor_active_location().map(|(host, path)| {
                 if host.is_local() {
@@ -174,6 +174,7 @@ impl LyrelApp {
                         }),
                 )
             })
+            .when(!document, |bar| bar.child(self.render_host_metrics(cx)))
             .child(self.status_clock.clone())
             .into_any_element()
     }
