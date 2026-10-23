@@ -892,6 +892,19 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
     });
     vcx.run_until_parked();
     vcx.update(|window, cx| {
+        window.press("home", cx);
+        for (ix, pane) in parked.iter().enumerate() {
+            if ix > 0 {
+                window.press("down", cx);
+            }
+            window.render_frame(cx);
+            assert!(
+                window.find(("parked-overflow-row", pane.entity_id().as_u64() as usize)).visible(),
+                "every original pane remains reachable, including virtualized rows"
+            );
+        }
+    });
+    vcx.update(|window, cx| {
         window.press("end", cx);
         window.render_frame(cx);
         assert!(
