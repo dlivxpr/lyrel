@@ -514,7 +514,7 @@ fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(cx
                 assert_eq!(leaves[1].entity_id(), right.entity_id(), "late split after {cancellation}");
                 assert!(app.tabs[0].presentation.parked().is_empty());
                 assert!(app.pane_drag.borrow().is_none());
-                assert!(app.parked_deck.read(cx).cards().is_empty());
+                assert!(app.parked_deck.read(cx).cards().next().is_none());
             });
         }
     }
