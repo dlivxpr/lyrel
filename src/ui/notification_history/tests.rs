@@ -5,7 +5,10 @@ use gpui_kit::{TestAppContext, VisualTestContext};
 
 fn settle(cx: &mut VisualTestContext) {
     cx.run_until_parked();
-    cx.update(|window, cx| window.render_frame(cx));
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        window.simulate_next_frame(cx);
+    });
     cx.run_until_parked();
 }
 
@@ -281,16 +284,15 @@ fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_sourc
         let view = cx.new(|cx| crate::ui::settings_window::SettingsWindow::new(&app, window, cx));
         gpui_kit::component::Root::new(view, window, cx)
     });
-    settings
-        .update(cx, |_, window, cx| {
-            crate::ui::host_ops::HostOps::notify_err(
-                window,
-                cx,
-                "settings save failed",
-                &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "settings fixture"),
-            );
-        })
-        .unwrap();
+    cx.update_window(settings.into(), |_, window, cx| {
+        crate::ui::host_ops::HostOps::notify_err(
+            window,
+            cx,
+            "settings save failed",
+            &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "settings fixture"),
+        );
+    })
+    .unwrap();
     settle(&mut main);
     let workspace = app.read_with(&main, |app, _| app.workspace);
     main.read(|cx| {
@@ -350,4 +352,51 @@ fn source_navigation_selects_the_other_window_without_touching_its_other_tabs(
     assert_eq!(second_app.read_with(&second, |app, _| app.tabs.len()), 2);
     assert_eq!(first_app.read_with(&first, |app, _| app.tabs.len()), 2);
     assert_eq!(messages(&second), ["other workspace first pane"]);
+}
+
+#[gpui_kit::test]
+fn parked_source_opens_its_preview_without_restoring_or_focusing_the_hidden_shell(
+    cx: &mut TestAppContext,
+) {
+    let (app, mut window, _streams) = harness_with_tabs(cx, 2);
+    let _dir = isolated(&mut window);
+    window.update(|_, cx| cx.set_reduce_motion(true));
+    let pane = app.update_in(&mut window, |app, window, cx| {
+        let pane = app.tabs[0].pane.first_leaf().unwrap();
+        window.focus(&pane.focus_handle(cx), cx);
+        let source = app.notification_source(window, cx);
+        window.notify_app(
+            Notification::info("parked task completed").source(source),
+            cx,
+        );
+        pane
+    });
+    window.dispatch_action(crate::core::actions::ParkPane);
+    settle(&mut window);
+    app.update_in(&mut window, |app, _, cx| {
+        app.active = 1;
+        cx.notify();
+    });
+    settle(&mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    let id = window.read(|cx| history(cx).read(cx).records().next().unwrap().id());
+    window.update(|window, cx| window.click(format!("notification-source-{id}"), cx));
+    settle(&mut window);
+    app.update_in(&mut window, |app, window, cx| {
+        assert_eq!(app.active, 0);
+        assert!(app.tabs[0].is_parked_slot(&pane, cx));
+        assert!(!pane.contains_focused(window, cx));
+    });
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("parked-preview").visible());
+        window.press("enter", cx);
+    });
+    settle(&mut window);
+    app.update_in(&mut window, |app, window, cx| {
+        assert!(!app.tabs[0].is_parked_slot(&pane, cx));
+        assert!(pane.contains_focused(window, cx));
+        assert_eq!(app.tabs.len(), 2);
+    });
 }

@@ -620,7 +620,11 @@ impl LyrelApp {
         if let Some((index, pane)) = self.notification_target(&source, cx) {
             self.active = index;
             if let Some(pane) = pane {
-                self.focus_pane_command_target(pane.entity_id(), window, cx);
+                if self.tabs[index].is_parked_slot(&pane, cx) {
+                    self.preview_parked_target(pane.entity_id(), window, cx);
+                } else {
+                    self.focus_pane_command_target(pane.entity_id(), window, cx);
+                }
             }
             cx.notify();
         } else {
