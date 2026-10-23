@@ -1023,8 +1023,21 @@ impl Pane<PaneSlot> {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui_kit::AnyElement {
+        self.render_without(None, chrome, window, cx)
+    }
+
+    /// Collapse hidden leaves only for painting. The owning tree and its split
+    /// ratios remain intact, so hiding a pane is never a lifecycle operation.
+    pub(crate) fn render_without(
+        &self,
+        hidden: Option<gpui_kit::EntityId>,
+        chrome: &PaneChrome,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui_kit::AnyElement {
         match self {
             Pane::Empty => div().into_any_element(),
+            Pane::Leaf(v) if hidden == Some(v.entity_id()) => div().into_any_element(),
             Pane::Leaf(v) => {
                 let id = v.entity_id();
                 let focused = v.contains_focused(window, cx);
@@ -1074,6 +1087,12 @@ impl Pane<PaneSlot> {
                 ratio,
                 dragging,
             } => {
+                if !a.has_visible_leaf(hidden) {
+                    return b.render_without(hidden, chrome, window, cx);
+                }
+                if !b.has_visible_leaf(hidden) {
+                    return a.render_without(hidden, chrome, window, cx);
+                }
                 let row = *axis == Axis::Horizontal;
                 let r = ratio.get().clamp(MIN_RATIO, MAX_RATIO);
 
@@ -1212,7 +1231,7 @@ impl Pane<PaneSlot> {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .min_h_0()
-                            .child(a.render(chrome, window, cx)),
+                            .child(a.render_without(hidden, chrome, window, cx)),
                     )
                     .child(divider)
                     .child(
@@ -1222,10 +1241,18 @@ impl Pane<PaneSlot> {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .min_h_0()
-                            .child(b.render(chrome, window, cx)),
+                            .child(b.render_without(hidden, chrome, window, cx)),
                     )
                     .into_any_element()
             }
+        }
+    }
+
+    fn has_visible_leaf(&self, hidden: Option<gpui_kit::EntityId>) -> bool {
+        match self {
+            Pane::Empty => false,
+            Pane::Leaf(slot) => hidden != Some(slot.entity_id()),
+            Pane::Split { a, b, .. } => a.has_visible_leaf(hidden) || b.has_visible_leaf(hidden),
         }
     }
 }

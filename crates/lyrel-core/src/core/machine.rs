@@ -295,13 +295,21 @@ impl Tab {
         if let Some(previous) = self.presentation.pip.take()
             && self.root.contains(previous.pane)
             && !previous.siblings.is_empty()
-            && !previous.siblings.iter().any(|id| self.root.contains(*id))
         {
-            let anchor = fallback.filter(|id| *id != previous.pane && self.root.contains(*id))
-                .or_else(|| self.root.first_other(previous.pane));
-            if let Some(anchor) = anchor {
-                self.root.remove_leaf(previous.pane);
-                self.root.split_leaf(anchor, previous.pane, previous.axis, previous.ratio, previous.first);
+            let current = self.root.pip_relationship(previous.pane);
+            let original = previous.siblings.iter().copied().find(|id| self.root.contains(*id));
+            let relationship_survives = current.axis == previous.axis
+                && current.first == previous.first
+                && previous.siblings.iter().any(|id| current.siblings.contains(id));
+            if !relationship_survives {
+                let anchor = original.or_else(|| {
+                    fallback.filter(|id| *id != previous.pane && self.root.contains(*id))
+                        .or_else(|| self.root.first_other(previous.pane))
+                });
+                if let Some(anchor) = anchor {
+                    self.root.remove_leaf(previous.pane);
+                    self.root.split_leaf(anchor, previous.pane, previous.axis, previous.ratio, previous.first);
+                }
             }
         }
         self.presentation.pip = pane.map(|pane| self.root.pip_relationship(pane));

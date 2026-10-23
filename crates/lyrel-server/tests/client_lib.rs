@@ -550,3 +550,37 @@ fn pip_keeps_the_live_shell_across_replacement_fallback_and_reconnect() {
         panes.kill(id).unwrap();
     }
 }
+
+#[test]
+fn pip_restore_keeps_intervening_splits_without_adopting_a_later_move() {
+    use lyrel_core::core::machine::{Axis, PaneNode};
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let control = daemon.control("pip-relationship");
+    let ws = match control.request(ControlRequest::WorkspaceCreate { name: None, workspace: None }).unwrap() {
+        ReplyOk::WorkspaceTree(ws) => ws.id,
+        other => panic!("{other:?}"),
+    };
+    let sessions = (0..3).map(|_| panes.spawn(None, size(), Some(interactive_shell()), None, None).unwrap()).collect::<Vec<_>>();
+    let (a, b, c) = (sessions[0].pane_id(), sessions[1].pane_id(), sessions[2].pane_id());
+    control.request(ControlRequest::TabCreate { workspace: ws, at: None, pane: seed(a), tab: None }).unwrap();
+    control.request(ControlRequest::PaneSplit { workspace: ws, pane: a, axis: Axis::Horizontal, ratio: 0.4, new: seed(b), first: false }).unwrap();
+    control.request(ControlRequest::PaneSetPresentation { workspace: ws, pane: b, pip: true, fallback: Some(a), restore: None }).unwrap();
+    control.request(ControlRequest::PaneSplit { workspace: ws, pane: a, axis: Axis::Vertical, ratio: 0.6, new: seed(c), first: false }).unwrap();
+    control.request(ControlRequest::PaneMove { workspace: ws, pane: b, to: c, axis: Axis::Vertical, first: false }).unwrap();
+    control.request(ControlRequest::PaneSetPresentation { workspace: ws, pane: b, pip: false, fallback: Some(c), restore: None }).unwrap();
+    let tree = match control.request(ControlRequest::WorkspaceTree { workspace: ws }).unwrap() {
+        ReplyOk::WorkspaceTree(ws) => ws,
+        other => panic!("{other:?}"),
+    };
+    let tab = &tree.tabs[0];
+    assert!(tab.presentation.pip().is_none());
+    assert_eq!(tab.root.pane_ids(), vec![a, b, c]);
+    assert!(matches!(&tab.root, PaneNode::Split { axis: Axis::Vertical, a: restored, b: untouched, .. }
+        if matches!(&**restored, PaneNode::Split { axis: Axis::Horizontal, a: original, b: returned, .. }
+            if original.contains(a) && returned.contains(b)) && untouched.contains(c)),
+        "restore rejoins the surviving original sibling without replaying its old subtree over the newer split");
+    assert_eq!(panes.list().unwrap().iter().filter(|pane| pane.alive).count(), 3);
+    drop(sessions);
+    for pane in [a, b, c] { panes.kill(pane).unwrap(); }
+}
