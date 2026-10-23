@@ -791,7 +791,7 @@ impl ParkedDeck {
                     .text_color(cx.theme().muted_foreground)
                     .child(self.labels.hint.clone()),
             )
-            .focus_trap("parked-overflow-focus-trap", &self.focus)
+            .focus_trap("parked-overflow", &self.focus)
             .into_any_element()
     }
 

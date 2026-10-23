@@ -1032,9 +1032,43 @@ impl Pane<PaneSlot> {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui_kit::AnyElement {
+        // Hidden siblings can leave an arbitrarily deep chain around one
+        // visible pane. Walk that chain without retaining element builders on
+        // the native stack; only actual visible splits need child results.
+        let mut node = self;
+        loop {
+            match node {
+                Pane::Empty => return div().into_any_element(),
+                Pane::Leaf(slot) if hidden.contains(&slot.entity_id()) => {
+                    return div().into_any_element();
+                }
+                Pane::Leaf(_) => return node.render_node(None, chrome, window, cx),
+                Pane::Split { a, b, .. } => {
+                    if !a.has_visible_leaf(hidden) {
+                        node = b;
+                    } else if !b.has_visible_leaf(hidden) {
+                        node = a;
+                    } else {
+                        let a = a.render_without(hidden, chrome, window, cx);
+                        let b = b.render_without(hidden, chrome, window, cx);
+                        return node.render_node(Some((a, b)), chrome, window, cx);
+                    }
+                }
+            }
+        }
+    }
+
+    // This builder is deliberately non-recursive. A debug build's fluent
+    // element construction has a large frame, independent of tree depth.
+    fn render_node(
+        &self,
+        children: Option<(gpui_kit::AnyElement, gpui_kit::AnyElement)>,
+        chrome: &PaneChrome,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui_kit::AnyElement {
         match self {
             Pane::Empty => div().into_any_element(),
-            Pane::Leaf(v) if hidden.contains(&v.entity_id()) => div().into_any_element(),
             Pane::Leaf(v) => {
                 let id = v.entity_id();
                 let focused = v.contains_focused(window, cx);
@@ -1078,17 +1112,11 @@ impl Pane<PaneSlot> {
             }
             Pane::Split {
                 axis,
-                a,
-                b,
                 ratio,
                 dragging,
+                ..
             } => {
-                if !a.has_visible_leaf(hidden) {
-                    return b.render_without(hidden, chrome, window, cx);
-                }
-                if !b.has_visible_leaf(hidden) {
-                    return a.render_without(hidden, chrome, window, cx);
-                }
+                let (a, b) = children.expect("visible splits render their children first");
                 let row = *axis == Axis::Horizontal;
                 let r = ratio.get().clamp(MIN_RATIO, MAX_RATIO);
 
@@ -1227,7 +1255,7 @@ impl Pane<PaneSlot> {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .min_h_0()
-                            .child(a.render_without(hidden, chrome, window, cx)),
+                            .child(a),
                     )
                     .child(divider)
                     .child(
@@ -1237,7 +1265,7 @@ impl Pane<PaneSlot> {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .min_h_0()
-                            .child(b.render_without(hidden, chrome, window, cx)),
+                            .child(b),
                     )
                     .into_any_element()
             }
