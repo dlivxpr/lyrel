@@ -43,11 +43,45 @@ impl MetricsSource {
         }
     }
 
-    fn is_current(&self, host: HostId, cx: &mut App) -> bool {
-        match (self, Self::get(host, cx)) {
-            (Self::Local(old), Some(Self::Local(current))) => Arc::ptr_eq(old, &current),
-            (Self::Remote(old), Some(Self::Remote(current))) => Arc::ptr_eq(old, &current),
+    fn same_connection(&self, current: &Self) -> bool {
+        match (self, current) {
+            (Self::Local(old), Self::Local(current)) => Arc::ptr_eq(old, current),
+            (Self::Remote(old), Self::Remote(current)) => Arc::ptr_eq(old, current),
             _ => false,
+        }
+    }
+
+    fn response_state(
+        &self,
+        host: HostId,
+        result: std::io::Result<HostMetrics>,
+        cx: &mut App,
+    ) -> State {
+        let Some(current) = Self::get(host, cx).filter(Self::is_connected) else {
+            return missing_source(host, cx);
+        };
+        match result {
+            // A replacement control connection to this same daemon does not
+            // invalidate a successful whole-host sample. The daemon instance,
+            // not the Arc allocation, owns the measurement.
+            Ok(snapshot) if snapshot.instance() == current.instance() => State::Ready(snapshot),
+            Ok(_) => State::Waiting,
+            // An old connection's error says nothing about its replacement,
+            // even when both connections speak to the same daemon instance.
+            Err(_) if !self.same_connection(&current) => State::Waiting,
+            Err(error) if error.kind() == std::io::ErrorKind::Unsupported => State::Unsupported,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::UnexpectedEof
+                ) =>
+            {
+                missing_source(host, cx)
+            }
+            Err(error) => State::Failed(error.to_string()),
         }
     }
 
@@ -134,37 +168,7 @@ impl HostMetricsView {
                             .background_executor()
                             .spawn(async move { query.sample() })
                             .await;
-                        if !cx.update(|cx| source.is_current(host, cx)) {
-                            if this
-                                .update(cx, |view, cx| {
-                                    view.state = missing_source(host, cx);
-                                    cx.notify();
-                                })
-                                .is_err()
-                            {
-                                break;
-                            }
-                            cx.background_executor().timer(Duration::from_secs(1)).await;
-                            continue;
-                        }
-                        match result {
-                            Ok(snapshot) => State::Ready(snapshot),
-                            Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
-                                State::Unsupported
-                            }
-                            Err(error)
-                                if matches!(
-                                    error.kind(),
-                                    std::io::ErrorKind::NotConnected
-                                        | std::io::ErrorKind::ConnectionReset
-                                        | std::io::ErrorKind::BrokenPipe
-                                        | std::io::ErrorKind::UnexpectedEof
-                                ) =>
-                            {
-                                cx.update(|cx| missing_source(host, cx))
-                            }
-                            Err(error) => State::Failed(error.to_string()),
-                        }
+                        cx.update(|cx| source.response_state(host, result, cx))
                     }
                     None => cx.update(|cx| missing_source(host, cx)),
                 };
@@ -365,3 +369,7 @@ impl LyrelApp {
         .into_any_element()
     }
 }
+
+#[cfg(test)]
+#[path = "host_metrics_tests.rs"]
+pub(crate) mod tests;
