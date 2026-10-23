@@ -4268,9 +4268,15 @@ mod close_gpui_tests {
             settle(&mut vcx);
             let editor = app.read_with(&vcx, |app, _| app.active_buffer().unwrap().input.clone());
             assert!(app.update_in(&mut vcx, |app, window, cx| app.document_dock_px(window, cx).is_some()));
-            for _ in 0..2 {
+            for docked in [false, true] {
                 vcx.dispatch_action(ToggleDocumentFill);
                 settle(&mut vcx);
+                assert_eq!(
+                    app.update_in(&mut vcx, |app, window, cx| {
+                        app.document_dock_px(window, cx).is_some()
+                    }),
+                    docked,
+                );
                 app.read_with(&vcx, |app, _| {
                     assert_eq!(app.active_buffer().unwrap().input.entity_id(), editor.entity_id());
                     assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), pane);
