@@ -2218,6 +2218,39 @@ mod tests {
     }
 
     #[test]
+    fn custom_workspace_surfaces_and_local_controls_keep_readable_ink() {
+        // Non-neutral light/dark backgrounds exercise the same semantic roles
+        // the workspace projects as translucent tints. This proves contrast
+        // on known solid surfaces, not on an arbitrary native desktop/image.
+        for (background, foreground, accent, dark) in [
+            (0x102c31, 0xe2f2ed, 0x9fd9cf, true),
+            (0xf3eadb, 0x403226, 0x2f6270, false),
+        ] {
+            let mut theme = builtins().remove(0);
+            theme.background = Fill::Solid(background);
+            theme.foreground = foreground;
+            theme.accent = accent;
+            theme.dark = dark;
+            let neutrals = theme.neutrals();
+            let surfaces = theme.surfaces();
+            for surface in [surfaces.sidebar, surfaces.rail] {
+                assert!(contrast(surface.text_resting, surface.base) >= TEXT_FLOOR);
+                assert!(contrast(neutrals.muted_foreground, surface.base) >= TEXT_FLOOR);
+                assert!(contrast(surface.text_selected, surface.selected) >= TEXT_FLOOR);
+            }
+            let controls = theme.interactions();
+            for fill in [
+                controls.primary.fill,
+                controls.primary_hover,
+                controls.primary_pressed,
+            ] {
+                assert!(contrast(controls.primary.on_fill, fill) >= TEXT_FLOOR - 0.01);
+            }
+            assert!(contrast(controls.choice_ink, controls.choice) >= TEXT_FLOOR);
+        }
+    }
+
+    #[test]
     fn sidebar_title_is_stepped_off_its_caption() {
         // The three rungs of a sidebar row — title, branch line, group
         // header — all sat at the same 4.5:1 grey once; this is the guard
