@@ -31,72 +31,25 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
 
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{
+    ActiveTheme as _,
+    button::{Button, ButtonVariants as _},
+    menu::DropdownMenu as _,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Animation, AnimationExt as _, App, AppContext, Bounds, Context, EntityId, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Point, Render, StatefulInteractiveElement, Styled, Window,
-    div, point, px, size,
+    App, AppContext, Bounds, Context, EntityId, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Point, Render, Styled, Window,
+    div, point, px, rems, size,
 };
 
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Dir, Pane};
 
-/// The grip a pane is picked up by, cut to the shape Ghostty gives its own: a
-/// target wide enough to aim at without looking, holding three dots small
-/// enough to forget.
-///
-/// The target is there for as long as the pane can be moved — only the dots
-/// come and go. Something the pointer can already grab before it can be seen
-/// is what makes the mark itself free to stay this quiet.
-const GRIP_TARGET: (f32, f32) = (80., 12.);
-const GRIP_DOTS: usize = 3;
-const GRIP_DOT: f32 = 3.;
-const GRIP_DOT_GAP: f32 = 3.;
-
-/// Where the dots sit in the target: up against its top edge, not centred in
-/// it. The rest of the target is reach, not mark.
-const GRIP_DOT_TOP: f32 = 2.;
-
-/// The dots with the pointer somewhere in the band, and with it on the grip
-/// itself. Nothing but the ink changes between the two: a grip that grew or
-/// moved as the pointer closed in would be aiming at where it used to be.
-const GRIP_IDLE: f32 = 0.3;
-const GRIP_LIVE: f32 = 0.8;
-
-/// Long enough to read as the dots arriving rather than as a flicker, short
-/// enough to be over before a pointer crossing the band has settled.
-const GRIP_FADE_MS: u64 = 150;
-
-/// The name the dots watch for the pointer under. One name for every pane:
-/// a group resolves to the nearest ancestor that carries it, which is always
-/// the grip the dots are inside.
-const GRIP_GROUP: &str = "pane-grip";
-
-/// How much of a pane, down from its top edge, asks for the grip.
-///
-/// The pointer only has to be *near* the top of a pane, not on the grip, for
-/// the dots to show — which is the whole reason a mark this quiet is findable.
-/// A share of the pane rather than a fixed strip, so a short pane answers over
-/// most of its top and a tall one over a slice, with a floor under it so the
-/// band can never be thinner than the grip it is meant to reveal.
-const REVEAL_SHARE: f32 = 0.2;
-const REVEAL_MIN: f32 = 24.;
-
-/// The strip a rearrangeable pane keeps clear above its grid for the grip.
-///
-/// Held open for as long as the tab has panes to rearrange, rather than only
-/// while the dots show: the grid is measured from this box, so opening the
-/// strip on hover would reflow the terminal every time the pointer crossed a
-/// pane. Better to spend it once, when the tab gains its second pane and is
-/// being reflowed anyway — which is also why it is sized to the *dots* and not
-/// to the target around them. The target's last few pixels hang over the top
-/// of the grid, where they cost a sliver of one row's clicks and cover
-/// nothing, rather than being paid for in blank space above every pane.
-pub(crate) const HANDLE_STRIP: f32 = GRIP_DOT_TOP + GRIP_DOT + 2.;
+/// Space reserved for the contextual control, in rems. Reserving it even for
+/// one pane keeps the menu reachable without covering terminal output.
+pub(crate) const HANDLE_STRIP: f32 = 2.5;
 
 /// How much of a pane, in from a side that is also the tab's own edge, still
 /// means "beside everything else" rather than "split this pane".
@@ -152,111 +105,65 @@ impl Render for DragPane {
     }
 }
 
-/// The grip along a pane's top edge. Dragging it picks the pane up.
-///
-/// Offered for as long as the pane can be moved; `revealed` says only whether
-/// the dots are drawn. A pointer that goes straight for the top of a pane can
-/// press the grip on the frame it arrives, without waiting to be told the
-/// thing it is already on is there.
+/// Kit owns click/keyboard activation and menu dismissal; GPUI's drag
+/// threshold owns movement. A completed drag never becomes a button click.
 pub(crate) fn handle(
-    pane: EntityId,
-    revealed: bool,
+    slot: &crate::ui::pane::PaneSlot,
+    rearrangeable: bool,
     state: &PaneDragState,
+    app: &gpui_kit::WeakEntity<crate::ui::app::LyrelApp>,
     cx: &App,
 ) -> gpui_kit::AnyElement {
+    let pane = slot.entity_id();
     let state = state.clone();
-    let ink = cx.theme().foreground;
+    let app = app.clone();
+    let focus = slot.focus_handle(cx);
+    let ink = cx.theme().muted_foreground;
     div()
         .absolute()
-        .top_0()
+        .top(rems(0.5))
         .left_0()
         .right_0()
         .flex()
         .justify_center()
         .child(
-            div()
-                .id(("pane-drag-handle", pane.as_u64() as usize))
-                .group(GRIP_GROUP)
-                .w(px(GRIP_TARGET.0))
-                .h(px(GRIP_TARGET.1))
-                .flex()
-                .items_start()
-                .justify_center()
-                .pt(px(GRIP_DOT_TOP))
-                .map(crate::ui::reorder::cursor_grab)
-                .tooltip(|window, cx| {
-                    Tooltip::new(t(L10nKey::PaneDragHandleTooltip)).build(window, cx)
+            Button::new(("pane-drag-handle", pane.as_u64() as usize))
+                .ghost()
+                .rounded_lg()
+                .w(rems(2.5))
+                .h(rems(1.5))
+                .p_0()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().popover)
+                .accessibility_label(t(L10nKey::PaneMenuTitle))
+                .tooltip(t(L10nKey::PaneDragHandleTooltip))
+                .when(rearrangeable, |button| {
+                    let mut button = crate::ui::reorder::cursor_grab(button);
+                    button.interactivity().on_drag(DragPane, move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        begin(&state, pane);
+                        cx.new(|_| DragPane)
+                    });
+                    button
                 })
-                // The grip owns the strip the pane keeps clear for it, but the
-                // press still has to be kept: without it the pane underneath
-                // reads a grab as the start of a text selection.
-                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation()
-                })
-                .on_drag(DragPane, move |_, _, _, cx| {
-                    cx.stop_propagation();
-                    begin(&state, pane);
-                    cx.new(|_| DragPane)
-                })
-                .when(revealed, |d| d.child(dots(pane, ink))),
+                .child(
+                    div().flex().flex_col().gap(rems(3. / 16.))
+                        .children((0..2).map(move |_| {
+                            div().flex().gap(rems(3. / 16.))
+                                .children((0..3).map(move |_| {
+                                    div().size(rems(3. / 16.)).rounded_full().bg(ink)
+                                }))
+                        })),
+                )
+                .dropdown_menu(move |menu, _, cx| {
+                    let menu = menu.action_context(focus.clone());
+                    match app.upgrade() {
+                        Some(app) => app.read(cx).pane_menu(pane, menu, &app, cx),
+                        None => menu,
+                    }
+                }),
         )
-        .into_any_element()
-}
-
-/// The mark itself, fading up as it arrives.
-///
-/// Only the ink answers the pointer, and it can do that from paint: a group
-/// hover that had to settle a *size* would need the element state an id buys,
-/// because the record of the group being hovered has to survive from one
-/// frame's paint into the next frame's layout.
-fn dots(pane: EntityId, ink: gpui_kit::Hsla) -> impl IntoElement {
-    div()
-        .flex()
-        .gap(px(GRIP_DOT_GAP))
-        .children((0..GRIP_DOTS).map(move |_| {
-            div()
-                .size(px(GRIP_DOT))
-                .rounded_full()
-                .bg(ink.opacity(GRIP_IDLE))
-                .group_hover(GRIP_GROUP, move |s| s.bg(ink.opacity(GRIP_LIVE)))
-        }))
-        .with_animation(
-            ("pane-grip-fade", pane.as_u64() as usize),
-            Animation::new(Duration::from_millis(GRIP_FADE_MS))
-                .with_easing(gpui_kit::ease_out_quint()),
-            |dots, delta| dots.opacity(delta),
-        )
-}
-
-/// The band across the top of a pane that reveals its grip.
-///
-/// It draws nothing and takes nothing: an ordinary hitbox does not stand in
-/// front of the ones beneath it, so the terminal under the band still reads
-/// its own presses, its own selection and its own links.
-pub(crate) fn reveal_band(
-    pane: EntityId,
-    hovered: &Rc<Cell<Option<EntityId>>>,
-) -> gpui_kit::AnyElement {
-    let hovered = hovered.clone();
-    div()
-        .id(("pane-grip-band", pane.as_u64() as usize))
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .h(gpui_kit::relative(REVEAL_SHARE))
-        .min_h(px(REVEAL_MIN))
-        .on_hover(move |over, window, _cx| {
-            let next = match (*over, hovered.get() == Some(pane)) {
-                (true, _) => Some(pane),
-                (false, true) => None,
-                // Left a band the pointer had already left: the enter of a
-                // neighbour's got here first.
-                (false, false) => return,
-            };
-            hovered.set(next);
-            window.refresh();
-        })
         .into_any_element()
 }
 

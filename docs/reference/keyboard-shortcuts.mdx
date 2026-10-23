@@ -34,6 +34,12 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 缩放窗格 | <kbd>⌘ ⇧ ⏎</kbd> | <kbd>Ctrl ⇧ ⏎</kbd> |
 | 进入全屏 | <kbd>⌘ ⏎</kbd> | <kbd>F11</kbd> |
 
+每个窗格顶部的圆角手柄也可用 <kbd>Tab</kbd> 聚焦、<kbd>Enter</kbd> 打开标准菜单，
+再用方向键选择。<kbd>Escape</kbd> 关闭菜单并返回对应窗格。菜单快捷键随当前绑定更新，
+窗格缩放不改变字体大小。[完整窗格命令](/window/tabs-and-splits#pane-menu)包括移动到新标签页、
+滚动历史编辑、清屏和带确认的 shell 重启。
+
+
 <a id="view"></a>
 ## 视图
 
@@ -116,7 +122,7 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 分组 | 操作 |
 |---|---|
 | 标签页 | `RenameTab` · `NewWorktreeTab` · `MoveTabLeft` · `MoveTabRight` · `CloseOtherTabs` · `CloseTabsToTheRight` · `CopyWorkingDirectory` · `MarkTabUnread` · `HibernateTab` · `ToggleTabSidebar` |
-| 窗格 | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` |
+| 窗格 | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` · `MovePaneToTab` · `OpenScrollbackInEditor` · `ClearPaneScreen` · `RestartPaneShell` |
 | 工作区 | `SelectWorkspace1`…`SelectWorkspace9` · `RenameWorkspace` · `StopWorkspace` · `DeleteWorkspace` |
 | 智能体 | `ForkAgentSession`（加上 `Right` / `Left` / `Down` / `Up`）· `CopyAgentSessionId` · `LaunchAgent:<slug>`（每个智能体各有一个，例如 `LaunchAgent:omp`） |
 | Git | `ScmStageAll` · `ScmUnstageAll` · `ScmDiscardAll` · `ScmCommitAmend` · `ScmRefresh` · `ScmSync` · `ScmPush` · `ScmPull` · `ScmFetch` · `ScmCheckoutBranch` · `ScmCreateBranch` · `ScmToggleGraph` · `ToggleDiffViewMode` |

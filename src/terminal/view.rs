@@ -4051,6 +4051,27 @@ impl TerminalView {
         );
     }
 
+    /// Plain text of the retained buffer, including history and soft-wrapped
+    /// Unicode graphemes. Reading it does not alter selection or scroll offset.
+    pub fn scrollback_text(&self) -> String {
+        let term = self.terminal.term.lock();
+        term.bounds_to_string(
+            Pos::new(term.topmost_line(), Column(0)),
+            Pos::new(term.bottommost_line(), term.last_column()),
+        )
+    }
+
+    /// Clear presentation without discarding retained history or restarting
+    /// the process. Ctrl+L is sent through this pane's own transport.
+    pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
+        use rio_vt::ansi::ClearMode;
+        use rio_vt::performer::handler::Handler as _;
+        self.cancel_scroll_anim();
+        self.terminal.term.lock().clear_screen(ClearMode::All);
+        self.terminal.write(vec![0x0c_u8]);
+        cx.notify();
+    }
+
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
         use rio_vt::ansi::ClearMode;
         use rio_vt::performer::handler::Handler as _;
@@ -4061,7 +4082,11 @@ impl TerminalView {
         // clamps the vi cursor back into the grid, which purging the history
         // behind the term's back would leave pointing at rows that no longer
         // exist.
-        self.terminal.term.lock().clear_screen(ClearMode::Saved);
+        {
+            let mut term = self.terminal.term.lock();
+            term.clear_screen(ClearMode::All);
+            term.clear_screen(ClearMode::Saved);
+        }
         // Image placements are anchored in absolute scrollback rows, so the
         // rows we just discarded moved every anchor. Drop them; the daemon does
         // not replay out-of-band image frames, so a browser redraws on its next
@@ -8016,7 +8041,7 @@ fn link_menu_label(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn menu_row_with_hint(
+pub(crate) fn menu_row_with_hint(
     label: &'static str,
     key: Option<&'static str>,
 ) -> impl Fn(&mut Window, &mut App) -> gpui_kit::AnyElement {

@@ -128,10 +128,7 @@ pub(crate) struct PaneChrome {
     /// Whether a pane can be picked up and put somewhere else. False for a tab
     /// holding one pane: there is nowhere to move it to.
     pub rearrangeable: bool,
-    /// The pane whose top edge the pointer is near. The leaves write it as the
-    /// pointer crosses their reveal bands and the same frame's siblings read
-    /// it, so at most one grip is ever drawn.
-    pub hovered: Rc<Cell<Option<gpui_kit::EntityId>>>,
+    pub app: gpui_kit::WeakEntity<crate::ui::app::LyrelApp>,
     /// The pane being dragged, drawn faded where it came from.
     pub lifted: Option<gpui_kit::EntityId>,
     pub drag: crate::ui::pane_drag::PaneDragState,
@@ -1032,7 +1029,7 @@ impl Pane<PaneSlot> {
                 let id = v.entity_id();
                 let focused = v.contains_focused(window, cx);
                 let lifted = chrome.lifted == Some(id);
-                let grip = chrome.rearrangeable && chrome.lifted.is_none();
+                let grip = chrome.lifted.is_none();
                 // The terminal renders itself at this opacity by blending its
                 // colours toward the window background (`TerminalView::dim`,
                 // whose field docs explain why that beats an element-opacity
@@ -1049,9 +1046,7 @@ impl Pane<PaneSlot> {
                     .size_full()
                     .relative()
                     .overflow_hidden()
-                    .when(chrome.rearrangeable, |d| {
-                        d.pt(px(crate::ui::pane_drag::HANDLE_STRIP))
-                    })
+                    .pt(gpui_kit::rems(crate::ui::pane_drag::HANDLE_STRIP))
                     .map(|d| match v {
                         PaneSlot::Ready(t) => {
                             t.update(cx, |v, _cx| v.set_dim(dim));
@@ -1062,13 +1057,13 @@ impl Pane<PaneSlot> {
                         }
                     })
                     .when(grip, |d| {
-                        d.child(crate::ui::pane_drag::reveal_band(id, &chrome.hovered))
-                            .child(crate::ui::pane_drag::handle(
-                                id,
-                                chrome.hovered.get() == Some(id),
-                                &chrome.drag,
-                                cx,
-                            ))
+                        d.child(crate::ui::pane_drag::handle(
+                            v,
+                            chrome.rearrangeable,
+                            &chrome.drag,
+                            &chrome.app,
+                            cx,
+                        ))
                     })
                     .into_any_element()
             }
