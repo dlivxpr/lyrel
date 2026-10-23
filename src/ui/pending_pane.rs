@@ -80,13 +80,20 @@ impl PendingPane {
         }
     }
 
-    pub(crate) fn with_attach_only(mut self, spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>) -> Self {
+    pub(crate) fn with_attach_only(
+        mut self,
+        spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+    ) -> Self {
         self.attach_only = true;
         self.attach_spec = spec;
         self
     }
-    pub(crate) fn is_attach_only(&self) -> bool { self.attach_only }
-    pub(crate) fn attach_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> { self.attach_spec.clone() }
+    pub(crate) fn is_attach_only(&self) -> bool {
+        self.attach_only
+    }
+    pub(crate) fn attach_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> {
+        self.attach_spec.clone()
+    }
 
     /// How long to wait before asking again on its own, or `None` once it has
     /// asked enough. Only a pane that stands in for one already running on its

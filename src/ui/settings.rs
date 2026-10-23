@@ -1,10 +1,10 @@
+use crate::ui::notification_history::Notification;
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::InteractiveElementExt as _;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState, TextareaState};
 use gpui_kit::component::link::Link;
 use gpui_kit::component::notification::NotificationType;
-use crate::ui::notification_history::Notification;
 use gpui_kit::component::{Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Background, Context, Div, ElementId, Entity, Focusable as _, FontWeight,
@@ -2869,7 +2869,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(changed, vec![L10nKey::SettingsNotifyThreshold]);
     }
-
 
     /// A shortcut is the first thing someone searching a settings window for a
     /// feature by name is after, and the Keybindings page was the one page the

@@ -26,10 +26,15 @@ impl PipInteraction {
     }
 
     pub(crate) fn dragged_pane(&self) -> Option<EntityId> {
-        self.gesture.get().filter(|gesture| !gesture.resize && gesture.dragged).map(|gesture| gesture.pane)
+        self.gesture
+            .get()
+            .filter(|gesture| !gesture.resize && gesture.dragged)
+            .map(|gesture| gesture.pane)
     }
 
-    pub(crate) fn has_gesture(&self) -> bool { self.gesture.get().is_some() }
+    pub(crate) fn has_gesture(&self) -> bool {
+        self.gesture.get().is_some()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -177,7 +182,12 @@ impl gpui_kit::Element for PipViewport {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui_kit::LayoutId, Self::RequestLayoutState) {
-        let mut container = div().absolute().top_0().left_0().size_full().into_any_element();
+        let mut container = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .into_any_element();
         let layout = container.request_layout(window, cx);
         (layout, container)
     }

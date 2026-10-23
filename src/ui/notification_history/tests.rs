@@ -400,3 +400,75 @@ fn parked_source_opens_its_preview_without_restoring_or_focusing_the_hidden_shel
         assert_eq!(app.tabs.len(), 2);
     });
 }
+
+#[gpui_kit::test]
+fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
+    cx: &mut TestAppContext,
+) {
+    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
+    let (app, mut window, _remote_stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    let dir = isolated(&mut window);
+    let route = RemoteRef::new(
+        RemoteTarget::direct("me", "notification-host", 22),
+        WorkspaceId::new(),
+    );
+    let view = WindowView::on_remote(route.clone());
+    let (remote, native, _native_stream) = app.update_in(&mut window, |app, window, cx| {
+        app.workspace = view.id;
+        WorkspaceStore::install_for_test(
+            cx,
+            WindowViews {
+                views: vec![view],
+                active: None,
+            },
+        );
+        let remote = app.tabs[0].pane.first_leaf().unwrap();
+        remote.terminal().unwrap().update(cx, |terminal, _| {
+            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+                workspace: route.workspace,
+                target: route.target.clone(),
+                spec: None,
+                label: None,
+                resize_echo: false,
+            }));
+        });
+        let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
+        app.tabs[0].pane.split_leaf(
+            remote.entity_id(),
+            gpui_kit::Axis::Horizontal,
+            false,
+            PaneSlot::Ready(native.clone()),
+        );
+        let focus = native.read(cx).focus_handle.clone();
+        window.focus(&focus, cx);
+        let source = app.notification_source(window, cx);
+        window.notify_app(Notification::info("focused native pane").source(source), cx);
+        window.notify_app(
+            Notification::info("asynchronous native pane").pane(
+                Some(app.workspace),
+                1,
+                &crate::terminal::PaneRoute::Local,
+            ),
+            cx,
+        );
+        (remote, native, stream)
+    });
+    settle(&mut window);
+    restart(&mut window, &dir);
+    let records: Vec<_> =
+        window.read(|cx| history(cx).read(cx).records().map(Record::id).collect());
+    for id in records {
+        window.update(|window, cx| window.focus(&remote.focus_handle(cx), cx));
+        window.update(|window, cx| window.click("status-notifications", cx));
+        settle(&mut window);
+        window.update(|window, cx| window.click(format!("notification-source-{id}"), cx));
+        settle(&mut window);
+        window.update(|window, cx| {
+            assert!(
+                native.read(cx).focus_handle.is_focused(window),
+                "a different daemon's equal pane number must not steal navigation"
+            );
+            assert!(!remote.contains_focused(window, cx));
+        });
+    }
+}

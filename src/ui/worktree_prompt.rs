@@ -1,6 +1,6 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _};
 use gpui_kit::{
     AnyElement, Context, Div, Entity, PromptLevel, Subscription, Window, div, prelude::*, px, rems,
 };

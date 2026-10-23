@@ -16,9 +16,7 @@ use crate::ui::right_panel::{ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, git_badge};
 use crate::ui::scm::status::{status_color, status_glyph};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, ExternalPaths, FocusHandle, KeyDownEvent, MouseButton,
@@ -2232,17 +2230,17 @@ impl LyrelApp {
                     }
                 }),
             );
-                menu = menu.item(
-                    PopupMenuItem::new(t(L10nKey::FileTreeContextPinAsGroup)).on_click({
-                        let app = app.clone();
-                        let p = p.clone();
-                        move |_, _window, cx| {
-                            let _ = app.update(cx, |this, cx| {
-                                this.pin_folder(p.clone(), cx);
-                            });
-                        }
-                    }),
-                );
+            menu = menu.item(
+                PopupMenuItem::new(t(L10nKey::FileTreeContextPinAsGroup)).on_click({
+                    let app = app.clone();
+                    let p = p.clone();
+                    move |_, _window, cx| {
+                        let _ = app.update(cx, |this, cx| {
+                            this.pin_folder(p.clone(), cx);
+                        });
+                    }
+                }),
+            );
         }
         menu = menu
             .item(

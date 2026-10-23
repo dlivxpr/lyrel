@@ -5484,13 +5484,18 @@ impl LyrelApp {
         let tab = self.tabs.get(self.active)?;
         let source = crate::ui::pane_drag::lifted(&self.pane_drag)
             .or_else(|| tab.pip_interaction.dragged_pane())?;
-        tab.pane.leaves().into_iter().find(|slot| slot.entity_id() == source && !tab.is_parked_slot(slot, cx))
+        tab.pane
+            .leaves()
+            .into_iter()
+            .find(|slot| slot.entity_id() == source && !tab.is_parked_slot(slot, cx))
             .map(|slot| slot.entity_id())
     }
 
     fn cancel_pane_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_drag.borrow_mut().take();
-        if let Some(tab) = self.tabs.get(self.active) { tab.pip_interaction.cancel(); }
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.pip_interaction.cancel();
+        }
         cx.stop_active_drag(window);
         window.release_pointer();
         self.parked_deck.update(cx, |deck, cx| {
@@ -5503,74 +5508,103 @@ impl LyrelApp {
     /// Escape, capture loss, tab switches and window deactivation only cancel.
     fn pane_drag_capture(&self, cx: &Context<Self>) -> gpui_kit::AnyElement {
         let weak = cx.entity().downgrade();
-        gpui_kit::canvas(|_, _, _| (), move |_, _, window, _| {
-            let release = weak.clone();
-            window.on_mouse_event(move |event: &gpui_kit::MouseUpEvent, phase, window, cx| {
-                if !phase.capture() || event.button != gpui_kit::MouseButton::Left { return; }
-                let _ = release.update(cx, |app, cx| {
-                    let Some(source) = app.dragged_parking_pane(cx) else { return; };
-                    if app.parked_deck.read(cx).drop_target_contains(event.position) {
-                        if let Some(tab) = app.tabs.get(app.active) { tab.pip_interaction.cancel(); }
-                        app.park_pane(source, window, cx);
-                        cx.stop_active_drag(window);
-                        cx.stop_propagation();
-                    } else if app.parked_deck.read(cx).is_drop_target_visible() {
-                        // Empty corners of the parking affordance must not unexpectedly split a pane.
-                        app.cancel_pane_drag(window, cx);
-                        cx.stop_propagation();
-                    } else if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
-                        // Re-read the release position; a stale highlighted frame cannot park or rearrange.
-                        crate::ui::pane_drag::clear_landing(&app.pane_drag);
-                        let _ = app.pane_landing(window, cx);
-                        let landing = crate::ui::pane_drag::take_landing(&app.pane_drag);
-                        let tiled = app.tabs.get(app.active).is_some_and(|tab| {
-                            !tab.pip_slot(cx).is_some_and(|slot| slot.entity_id() == source)
-                        });
-                        if tiled && let Some((at, _)) = app.detach_slot(window, cx) {
-                            app.detach_pane(source, at, window, cx);
-                        } else if let Some((from, zone)) = landing {
-                            app.drop_pane(from, zone, window, cx);
-                        }
-                        cx.stop_active_drag(window);
-                        cx.stop_propagation();
-                        cx.notify();
+        gpui_kit::canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                let release = weak.clone();
+                window.on_mouse_event(move |event: &gpui_kit::MouseUpEvent, phase, window, cx| {
+                    if !phase.capture() || event.button != gpui_kit::MouseButton::Left {
+                        return;
                     }
-                    app.parked_deck.update(cx, |deck, cx| {
-                        deck.set_drop_target(false, cx);
+                    let _ = release.update(cx, |app, cx| {
+                        let Some(source) = app.dragged_parking_pane(cx) else {
+                            return;
+                        };
+                        if app
+                            .parked_deck
+                            .read(cx)
+                            .drop_target_contains(event.position)
+                        {
+                            if let Some(tab) = app.tabs.get(app.active) {
+                                tab.pip_interaction.cancel();
+                            }
+                            app.park_pane(source, window, cx);
+                            cx.stop_active_drag(window);
+                            cx.stop_propagation();
+                        } else if app.parked_deck.read(cx).is_drop_target_visible() {
+                            // Empty corners of the parking affordance must not unexpectedly split a pane.
+                            app.cancel_pane_drag(window, cx);
+                            cx.stop_propagation();
+                        } else if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
+                            // Re-read the release position; a stale highlighted frame cannot park or rearrange.
+                            crate::ui::pane_drag::clear_landing(&app.pane_drag);
+                            let _ = app.pane_landing(window, cx);
+                            let landing = crate::ui::pane_drag::take_landing(&app.pane_drag);
+                            let tiled = app.tabs.get(app.active).is_some_and(|tab| {
+                                !tab.pip_slot(cx)
+                                    .is_some_and(|slot| slot.entity_id() == source)
+                            });
+                            if tiled && let Some((at, _)) = app.detach_slot(window, cx) {
+                                app.detach_pane(source, at, window, cx);
+                            } else if let Some((from, zone)) = landing {
+                                app.drop_pane(from, zone, window, cx);
+                            }
+                            cx.stop_active_drag(window);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                        app.parked_deck.update(cx, |deck, cx| {
+                            deck.set_drop_target(false, cx);
+                        });
                     });
                 });
-            });
-            let movement = weak.clone();
-            window.on_mouse_event(move |event: &gpui_kit::MouseMoveEvent, phase, window, cx| {
-                if phase.capture() && event.pressed_button != Some(gpui_kit::MouseButton::Left) {
-                    let _ = movement.update(cx, |app, cx| {
-                        if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
+                let movement = weak.clone();
+                window.on_mouse_event(
+                    move |event: &gpui_kit::MouseMoveEvent, phase, window, cx| {
+                        if phase.capture()
+                            && event.pressed_button != Some(gpui_kit::MouseButton::Left)
+                        {
+                            let _ = movement.update(cx, |app, cx| {
+                                if crate::ui::pane_drag::lifted(&app.pane_drag).is_some() {
+                                    app.cancel_pane_drag(window, cx);
+                                }
+                            });
+                        }
+                    },
+                );
+                let exit = weak.clone();
+                window.on_mouse_event(move |_: &gpui_kit::MouseExitEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    let _ = exit.update(cx, |app, cx| {
+                        if app.dragged_parking_pane(cx).is_some() {
                             app.cancel_pane_drag(window, cx);
                         }
                     });
-                }
-            });
-            let exit = weak.clone();
-            window.on_mouse_event(move |_: &gpui_kit::MouseExitEvent, phase, window, cx| {
-                if !phase.capture() { return; }
-                let _ = exit.update(cx, |app, cx| {
-                    if app.dragged_parking_pane(cx).is_some() {
-                        app.cancel_pane_drag(window, cx);
-                    }
                 });
-            });
-            let keyboard = weak.clone();
-            window.on_key_event(move |event: &gpui_kit::KeyDownEvent, phase, window, cx| {
-                if !phase.capture() || event.keystroke.key != "escape" { return; }
-                let _ = keyboard.update(cx, |app, cx| {
-                    if app.dragged_parking_pane(cx).is_some()
-                        || app.tabs.get(app.active).is_some_and(|tab| tab.pip_interaction.has_gesture()) {
-                        app.cancel_pane_drag(window, cx);
-                        cx.stop_propagation();
+                let keyboard = weak.clone();
+                window.on_key_event(move |event: &gpui_kit::KeyDownEvent, phase, window, cx| {
+                    if !phase.capture() || event.keystroke.key != "escape" {
+                        return;
                     }
+                    let _ = keyboard.update(cx, |app, cx| {
+                        if app.dragged_parking_pane(cx).is_some()
+                            || app
+                                .tabs
+                                .get(app.active)
+                                .is_some_and(|tab| tab.pip_interaction.has_gesture())
+                        {
+                            app.cancel_pane_drag(window, cx);
+                            cx.stop_propagation();
+                        }
+                    });
                 });
-            });
-        }).absolute().inset_0().into_any_element()
+            },
+        )
+        .absolute()
+        .inset_0()
+        .into_any_element()
     }
 
     /// The patch of the layout a pane being dragged would land on, lit up.
@@ -5584,8 +5618,14 @@ impl LyrelApp {
         let from = pane_drag::lifted(&self.pane_drag)?;
         let area = self.pane_area.get()?;
         let tab = self.tabs.get(self.active)?;
-        if self.maximized.is_some() || tab.pip_slot(cx).is_some_and(|slot| slot.entity_id() == from)
-            || self.parked_deck.read(cx).is_drop_target_visible() { return None; }
+        if self.maximized.is_some()
+            || tab
+                .pip_slot(cx)
+                .is_some_and(|slot| slot.entity_id() == from)
+            || self.parked_deck.read(cx).is_drop_target_visible()
+        {
+            return None;
+        }
         let leaves = tab.pane.leaves();
         let slot = leaves.iter().find(|l| l.entity_id() == from)?;
         let bounds = pane_drag::leaf_bounds(&tab.pane, area);
@@ -5768,7 +5808,11 @@ impl LyrelApp {
     fn detach_caret(&self, window: &Window, cx: &App) -> Option<gpui_kit::AnyElement> {
         let pane = crate::ui::pane_drag::lifted(&self.pane_drag)?;
         let tab = self.tabs.get(self.active)?;
-        if tab.pane.leaves().len() < 2 || tab.pip_slot(cx).is_some_and(|slot| slot.entity_id() == pane) {
+        if tab.pane.leaves().len() < 2
+            || tab
+                .pip_slot(cx)
+                .is_some_and(|slot| slot.entity_id() == pane)
+        {
             return None;
         }
         if !tab.pane.leaves().iter().any(|l| l.entity_id() == pane) {
@@ -10317,10 +10361,13 @@ impl LyrelApp {
     ) -> gpui_kit::AnyElement {
         self.sync_parked_deck(window, cx);
         let pointer = window.mouse_position();
-        let show_park_target = self.dragged_parking_pane(cx).is_some() && self.pane_area.get().is_some_and(|area| {
-            area.contains(&pointer) && pointer.y < area.bottom()
-                && pointer.y >= area.bottom() - (window.rem_size() * (170. / 16.)).min(area.size.height)
-        });
+        let show_park_target = self.dragged_parking_pane(cx).is_some()
+            && self.pane_area.get().is_some_and(|area| {
+                area.contains(&pointer)
+                    && pointer.y < area.bottom()
+                    && pointer.y
+                        >= area.bottom() - (window.rem_size() * (170. / 16.)).min(area.size.height)
+            });
         self.parked_deck.update(cx, |deck, cx| {
             deck.set_drop_target(show_park_target, cx);
         });
@@ -10546,10 +10593,16 @@ impl Render for LyrelApp {
         // the one worth forwarding unasked.
         self.sync_port_watch(window, cx);
         self.sync_status_metrics(window, cx);
-        if !window.is_window_active() || (crate::ui::pane_drag::lifted(&self.pane_drag).is_some()
-            && (!cx.has_active_drag() || self.dragged_parking_pane(cx).is_none())) {
+        if !window.is_window_active()
+            || (crate::ui::pane_drag::lifted(&self.pane_drag).is_some()
+                && (!cx.has_active_drag() || self.dragged_parking_pane(cx).is_none()))
+        {
             if crate::ui::pane_drag::lifted(&self.pane_drag).is_some()
-                || self.tabs.get(self.active).is_some_and(|tab| tab.pip_interaction.has_gesture()) {
+                || self
+                    .tabs
+                    .get(self.active)
+                    .is_some_and(|tab| tab.pip_interaction.has_gesture())
+            {
                 self.cancel_pane_drag(window, cx);
             }
         }

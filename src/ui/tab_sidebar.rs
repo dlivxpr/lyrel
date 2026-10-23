@@ -32,7 +32,6 @@ use crate::ui::tab_strip::{
 
 pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 180.;
 
-
 const ROW_GAP: f32 = 1.;
 
 /// What marks a kept group, and what the header button that keeps one reads.
@@ -60,8 +59,6 @@ const HEADER_HEIGHT: f32 = 22.;
 
 /// The group heading and the row's branch line: 11.5px at the default size.
 const META_REM: f32 = 11.5 / 16.;
-
-
 
 /// What sits between a group's branch and its diff counts.
 const META_SEP_TRIMMED: &str = "·";
@@ -305,7 +302,10 @@ impl LyrelApp {
             pos
         };
 
-        let visible_by_section: Vec<Vec<usize>> = sections.iter().map(|section| section.tabs.clone()).collect();
+        let visible_by_section: Vec<Vec<usize>> = sections
+            .iter()
+            .map(|section| section.tabs.clone())
+            .collect();
 
         let pointer = window.mouse_position();
         // The row text is measured against real glyphs before it is elided:
@@ -356,7 +356,8 @@ impl LyrelApp {
             cx.theme().muted_foreground,
             rail_fill,
         );
-        let rendered = |ix: &usize| !visible_by_section[*ix].is_empty() || sections[*ix].pinned().is_some();
+        let rendered =
+            |ix: &usize| !visible_by_section[*ix].is_empty() || sections[*ix].pinned().is_some();
         // Pinned headers reorder among themselves, by hand; that order is the
         // workspace's and is written back whole when a drag lands.
         let pinned_slots: Vec<usize> = (0..sections.len())
@@ -1662,7 +1663,6 @@ impl LyrelApp {
                     }
                 }),
         );
-
 
         let workspace_head = v_flex()
             .w(px(width - 1.))
@@ -3811,7 +3811,6 @@ mod fold_tests {
             );
         });
     }
-
 
     /// A fold hides every row the group has, the active one included. The
     /// alternative — leaving the active row on screen under a shut chevron,

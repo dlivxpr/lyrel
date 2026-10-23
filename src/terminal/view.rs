@@ -1,5 +1,5 @@
-use crate::ui::notification_history::NotificationWindowExt as _;
 use super::remote::PaneEvent;
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
@@ -1553,9 +1553,20 @@ impl TerminalView {
         owner: Option<crate::core::session::WorkspaceId>,
     ) -> anyhow::Result<ShellParts> {
         let terminal = RemoteTerminal::attach_on(
-            &crate::terminal::PaneRoute::Local, TermSize::new(80, 24), 8, 17, pane_id,
+            &crate::terminal::PaneRoute::Local,
+            TermSize::new(80, 24),
+            8,
+            17,
+            pane_id,
         )?;
-        Ok(ShellParts { terminal, pane_id, shell_spec: None, workspace: None, restored: true, owner })
+        Ok(ShellParts {
+            terminal,
+            pane_id,
+            shell_spec: None,
+            workspace: None,
+            restored: true,
+            owner,
+        })
     }
 
     pub fn spawn_shell_terminal_in(
@@ -2438,7 +2449,10 @@ impl TerminalView {
         self.ssh_spec.clone()
     }
 
-    pub(crate) fn set_restored_ssh_spec(&mut self, spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>) {
+    pub(crate) fn set_restored_ssh_spec(
+        &mut self,
+        spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+    ) {
         self.ssh_spec = spec;
     }
 
@@ -4036,7 +4050,8 @@ impl TerminalView {
             crate::ui::notification_history::Notification::info(crate::ui::i18n::t_fmt(
                 crate::ui::i18n::L10nKey::SftpPasteUploadFailed,
                 &[("name", &name), ("host", host), ("error", reason)],
-            )).pane(self.owner_workspace(), self.pane_id),
+            ))
+            .pane(self.owner_workspace(), self.pane_id, &self.pane_route()),
             cx,
         );
     }
@@ -4062,7 +4077,8 @@ impl TerminalView {
                     &[("path", path.as_str()), ("error", reason.as_str())],
                 ),
                 &reason,
-            ).pane(self.owner_workspace(), self.pane_id),
+            )
+            .pane(self.owner_workspace(), self.pane_id, &self.pane_route()),
             cx,
         );
     }
@@ -6679,7 +6695,14 @@ impl TerminalView {
             None if rooted => t_fmt(L10nKey::LinkFileMissing, &[("path", &candidate.path)]),
             None => t_fmt(L10nKey::LinkFileNoDirectory, &[("path", &candidate.path)]),
         };
-        window.notify_app(crate::ui::notification_history::Notification::info(message).pane(self.owner_workspace(), self.pane_id), cx);
+        window.notify_app(
+            crate::ui::notification_history::Notification::info(message).pane(
+                self.owner_workspace(),
+                self.pane_id,
+                &self.pane_route(),
+            ),
+            cx,
+        );
         true
     }
 
@@ -6688,7 +6711,14 @@ impl TerminalView {
             LoopbackOpen::Forwarded(url) => cx.open_url(&url),
             LoopbackOpen::NotLoopback => cx.open_url(url),
             LoopbackOpen::ForwardFailed(reason) => {
-                window.notify_app(crate::ui::notification_history::Notification::info(reason).pane(self.owner_workspace(), self.pane_id), cx);
+                window.notify_app(
+                    crate::ui::notification_history::Notification::info(reason).pane(
+                        self.owner_workspace(),
+                        self.pane_id,
+                        &self.pane_route(),
+                    ),
+                    cx,
+                );
             }
         }
     }

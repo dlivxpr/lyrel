@@ -147,11 +147,13 @@ pub(crate) fn handle(
                 .tooltip(t(L10nKey::PaneDragHandleTooltip))
                 .map(|button| {
                     let mut button = crate::ui::reorder::cursor_grab(button);
-                    button.interactivity().on_drag(DragPane, move |_, _, _, cx| {
-                        cx.stop_propagation();
-                        begin(&state, pane);
-                        cx.new(|_| DragPane)
-                    });
+                    button
+                        .interactivity()
+                        .on_drag(DragPane, move |_, _, _, cx| {
+                            cx.stop_propagation();
+                            begin(&state, pane);
+                            cx.new(|_| DragPane)
+                        });
                     button
                 })
                 .child(

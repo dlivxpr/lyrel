@@ -1496,7 +1496,11 @@ mod tests {
         let mut theme = presets::builtins().remove(0);
         theme.opacity = Some(0.61);
         let mut config = Config::default();
-        for backdrop in [WindowBackdrop::Auto, WindowBackdrop::Off, WindowBackdrop::Mica] {
+        for backdrop in [
+            WindowBackdrop::Auto,
+            WindowBackdrop::Off,
+            WindowBackdrop::Mica,
+        ] {
             config.window_backdrop = backdrop;
             for blur in [false, true] {
                 config.window_opacity = None;

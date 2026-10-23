@@ -309,7 +309,10 @@ pub trait Host: Send + Sync + 'static {
     /// the GUI's machine. Blocking calls belong on the Host executor.
     fn host_metrics(&self) -> io::Result<metrics::HostMetrics> {
         guard_off_ui();
-        Err(io::Error::new(io::ErrorKind::Unsupported, "host metrics are unavailable on this transport"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "host metrics are unavailable on this transport",
+        ))
     }
 
     /// How far away this host is: the round trip to it, measured now.

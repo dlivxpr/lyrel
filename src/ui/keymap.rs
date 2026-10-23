@@ -835,14 +835,35 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             t(L10nKey::CmdSplitDown).to_string(),
         ),
         "ToggleMaximizePane" => (CommandGroup::TabsPanes, t(L10nKey::CmdZoomPane).to_string()),
-        "MovePaneToTab" => (CommandGroup::TabsPanes, t(L10nKey::PaneMoveToTab).to_string()),
-        "TogglePanePip" => (CommandGroup::TabsPanes, t(L10nKey::PaneTogglePip).to_string()),
-        "RestorePanePip" => (CommandGroup::TabsPanes, t(L10nKey::PaneRestorePip).to_string()),
+        "MovePaneToTab" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneMoveToTab).to_string(),
+        ),
+        "TogglePanePip" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneTogglePip).to_string(),
+        ),
+        "RestorePanePip" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneRestorePip).to_string(),
+        ),
         "ParkPane" => (CommandGroup::TabsPanes, t(L10nKey::PanePark).to_string()),
-        "RestoreParkedPane" => (CommandGroup::TabsPanes, t(L10nKey::PaneRestoreParked).to_string()),
-        "OpenScrollbackInEditor" => (CommandGroup::Terminal, t(L10nKey::PaneOpenScrollback).to_string()),
-        "ClearPaneScreen" => (CommandGroup::Terminal, t(L10nKey::PaneClearScreen).to_string()),
-        "RestartPaneShell" => (CommandGroup::Terminal, t(L10nKey::PaneRestartShell).to_string()),
+        "RestoreParkedPane" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneRestoreParked).to_string(),
+        ),
+        "OpenScrollbackInEditor" => (
+            CommandGroup::Terminal,
+            t(L10nKey::PaneOpenScrollback).to_string(),
+        ),
+        "ClearPaneScreen" => (
+            CommandGroup::Terminal,
+            t(L10nKey::PaneClearScreen).to_string(),
+        ),
+        "RestartPaneShell" => (
+            CommandGroup::Terminal,
+            t(L10nKey::PaneRestartShell).to_string(),
+        ),
         "FocusNextPane" => (CommandGroup::TabsPanes, t(L10nKey::CmdNextPane).to_string()),
         "FocusPrevPane" => (
             CommandGroup::TabsPanes,

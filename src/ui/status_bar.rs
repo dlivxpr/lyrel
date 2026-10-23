@@ -72,7 +72,8 @@ impl LyrelApp {
                 this.status_document_focus = Some((tab.tree_id.get(), true));
                 cx.notify();
             }
-        }).detach();
+        })
+        .detach();
     }
 
     pub(crate) fn status_document_context(
@@ -85,12 +86,23 @@ impl LyrelApp {
             return Some(front);
         }
         let tab = self.tabs.get(self.active)?;
-        if tab.pane.leaves().iter().any(|leaf| leaf.contains_focused(window, cx)) {
+        if tab
+            .pane
+            .leaves()
+            .iter()
+            .any(|leaf| leaf.contains_focused(window, cx))
+        {
             return None;
         }
         let document = self.editor_panel_has_focus(window, cx)
-            || tab.diff_overlay.as_ref().is_some_and(|diff| diff.focus_handle.contains_focused(window, cx))
-            || self.status_document_focus.filter(|(id, _)| *id == tab.tree_id.get()).is_none_or(|(_, document)| document);
+            || tab
+                .diff_overlay
+                .as_ref()
+                .is_some_and(|diff| diff.focus_handle.contains_focused(window, cx))
+            || self
+                .status_document_focus
+                .filter(|(id, _)| *id == tab.tree_id.get())
+                .is_none_or(|(_, document)| document);
         document.then_some(front)
     }
 
@@ -99,26 +111,44 @@ impl LyrelApp {
         let document = document_context.is_some();
         let location = match document_context {
             Some(crate::ui::app::OverlayTop::Code) => self.editor_active_location(),
-            Some(crate::ui::app::OverlayTop::Diff) => self.tabs.get(self.active)
+            Some(crate::ui::app::OverlayTop::Diff) => self
+                .tabs
+                .get(self.active)
                 .and_then(|tab| tab.diff_overlay.as_ref())
                 .map(|diff| (diff.host_id, diff.cwd.as_path())),
             None => None,
         };
-        let host = location.map_or_else(|| self.remote_machine_label(cx), |(id, _)| {
-            if id.is_local() {
-                return t(L10nKey::RemoteThisComputer).to_string();
-            }
-            crate::core::session::WorkspaceStore::all(cx).views.iter()
-                .filter_map(|workspace| workspace.host.as_ref())
-                .find(|host| host.host_id() == id)
-                .map(|host| crate::ui::remote_connect::route_label(cx, host))
-                .or_else(|| self.host_snapshots.get(&id).map(|snapshot| snapshot.target.to_string()))
-                .unwrap_or_else(|| crate::ui::i18n::t_fmt(L10nKey::StatusRemoteHost, &[("id", &format!("{:016x}", id.0))]))
-        });
+        let host = location.map_or_else(
+            || self.remote_machine_label(cx),
+            |(id, _)| {
+                if id.is_local() {
+                    return t(L10nKey::RemoteThisComputer).to_string();
+                }
+                crate::core::session::WorkspaceStore::all(cx)
+                    .views
+                    .iter()
+                    .filter_map(|workspace| workspace.host.as_ref())
+                    .find(|host| host.host_id() == id)
+                    .map(|host| crate::ui::remote_connect::route_label(cx, host))
+                    .or_else(|| {
+                        self.host_snapshots
+                            .get(&id)
+                            .map(|snapshot| snapshot.target.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        crate::ui::i18n::t_fmt(
+                            L10nKey::StatusRemoteHost,
+                            &[("id", &format!("{:016x}", id.0))],
+                        )
+                    })
+            },
+        );
         let path = if document {
             location.map(|(host, path)| {
                 if host.is_local() {
-                    crate::ui::path_display::native_separators(path).display().to_string()
+                    crate::ui::path_display::native_separators(path)
+                        .display()
+                        .to_string()
                 } else {
                     path.display().to_string()
                 }
@@ -226,9 +256,10 @@ impl LyrelApp {
                 )
             })
             .when(!document, |bar| bar.child(self.render_host_metrics(cx)))
-            .when(document_context == Some(crate::ui::app::OverlayTop::Code), |bar| {
-                bar.child(self.render_document_status(cx))
-            })
+            .when(
+                document_context == Some(crate::ui::app::OverlayTop::Code),
+                |bar| bar.child(self.render_document_status(cx)),
+            )
             .child(self.status_clock.clone())
             .child(self.notification_bell.clone())
             .into_any_element()

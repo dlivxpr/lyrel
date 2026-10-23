@@ -791,10 +791,18 @@ fn run_request(
             ReplyOk::WorkspaceSidecar(conn.machine()?.sidecar_snapshot(&remote).map(Box::new)),
             Vec::new(),
         ),
-        ControlRequest::WorkspaceSidecarApply { remote, updates, panes } => {
-            conn.machine()?.sidecar_apply(remote.clone(), updates, panes, conn.machine_origin)?;
-            (ReplyOk::WorkspaceSidecar(conn.machine()?.sidecar_snapshot(&remote).map(Box::new)), Vec::new())
-        },
+        ControlRequest::WorkspaceSidecarApply {
+            remote,
+            updates,
+            panes,
+        } => {
+            conn.machine()?
+                .sidecar_apply(remote.clone(), updates, panes, conn.machine_origin)?;
+            (
+                ReplyOk::WorkspaceSidecar(conn.machine()?.sidecar_snapshot(&remote).map(Box::new)),
+                Vec::new(),
+            )
+        }
         ControlRequest::WorkspaceCreate { name, workspace } => (
             ReplyOk::WorkspaceTree(Box::new(conn.machine()?.workspace_create(
                 workspace,
@@ -977,20 +985,52 @@ fn run_request(
             ),
             Vec::new(),
         ),
-        ControlRequest::PaneSetPresentation { workspace, pane, pip, fallback, restore } => {
-            conn.machine()?.pane_set_presentation(workspace, pane, pip, fallback, restore, conn.machine_origin)?;
+        ControlRequest::PaneSetPresentation {
+            workspace,
+            pane,
+            pip,
+            fallback,
+            restore,
+        } => {
+            conn.machine()?.pane_set_presentation(
+                workspace,
+                pane,
+                pip,
+                fallback,
+                restore,
+                conn.machine_origin,
+            )?;
             (ReplyOk::Unit, Vec::new())
         }
-        ControlRequest::PanePark { workspace, pane, restore } => {
-            conn.machine()?.pane_park(workspace, pane, restore, conn.machine_origin)?;
+        ControlRequest::PanePark {
+            workspace,
+            pane,
+            restore,
+        } => {
+            conn.machine()?
+                .pane_park(workspace, pane, restore, conn.machine_origin)?;
             (ReplyOk::Unit, Vec::new())
         }
-        ControlRequest::PaneRestore { workspace, pane, fallback } => {
-            conn.machine()?.pane_restore(workspace, pane, fallback, conn.machine_origin)?;
+        ControlRequest::PaneRestore {
+            workspace,
+            pane,
+            fallback,
+        } => {
+            conn.machine()?
+                .pane_restore(workspace, pane, fallback, conn.machine_origin)?;
             (ReplyOk::Unit, Vec::new())
         }
-        ControlRequest::PaneSetPipGeometry { workspace, pane, geometry } => {
-            conn.machine()?.pane_set_pip_geometry(workspace, pane, geometry, conn.machine_origin)?;
+        ControlRequest::PaneSetPipGeometry {
+            workspace,
+            pane,
+            geometry,
+        } => {
+            conn.machine()?.pane_set_pip_geometry(
+                workspace,
+                pane,
+                geometry,
+                conn.machine_origin,
+            )?;
             (ReplyOk::Unit, Vec::new())
         }
         ControlRequest::PaneSetRatio {

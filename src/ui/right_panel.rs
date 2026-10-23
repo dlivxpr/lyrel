@@ -2,10 +2,7 @@ use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _,
-    h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, Window, div, prelude::*, px, rems};
 use std::path::PathBuf;
 

@@ -8,10 +8,10 @@ mod daemon;
 mod terminal;
 mod ui;
 
-use crate::ui::notification_history::NotificationWindowExt as _;
 use crate::core::config::Config;
 use crate::ui::assets::Assets;
 use crate::ui::keymap;
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::*;
 
 fn register_bundled_fonts(cx: &mut App) {

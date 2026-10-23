@@ -639,7 +639,6 @@ pub enum NewTabPosition {
     End,
 }
 
-
 /// Native window backdrop material for the Windows GUI. Other platforms retain
 /// the value for config synchronization but do not use it for rendering.
 /// `Auto` keeps the legacy behavior where theme blur decides between blurred
@@ -925,17 +924,26 @@ fn migrate_left_navigation(path: &Path, text: String) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(strip_bom(&text)) else {
         return text;
     };
-    let Some(object) = value.as_object_mut() else { return text; };
+    let Some(object) = value.as_object_mut() else {
+        return text;
+    };
     let removed_layout = object.remove("tab_bar_position").is_some();
     let removed_hover = object.remove("auto_hide_titlebar_buttons").is_some();
-    if !removed_layout && !removed_hover { return text; }
-    match serde_json::to_string_pretty(&value).map_err(std::io::Error::other).and_then(|updated| {
-        write_atomic(path, updated.as_bytes())?;
-        Ok(updated)
-    }) {
+    if !removed_layout && !removed_hover {
+        return text;
+    }
+    match serde_json::to_string_pretty(&value)
+        .map_err(std::io::Error::other)
+        .and_then(|updated| {
+            write_atomic(path, updated.as_bytes())?;
+            Ok(updated)
+        }) {
         Ok(updated) => updated,
         Err(error) => {
-            log::warn!("could not migrate retired navigation settings at {}: {error}", path.display());
+            log::warn!(
+                "could not migrate retired navigation settings at {}: {error}",
+                path.display()
+            );
             text
         }
     }
@@ -1968,7 +1976,6 @@ mod tests {
         assert!(!back.dim_inactive_panes);
     }
 
-
     #[test]
     fn theme_follow_system_defaults_and_round_trips() {
         let cfg: Config = serde_json::from_str(r#"{"theme_preset":"dracula"}"#).unwrap();
@@ -2308,12 +2315,22 @@ mod tests {
             assert!(loaded.sidebar_collapsed);
             let mut expected = original;
             expected.as_object_mut().unwrap().remove("tab_bar_position");
-            expected.as_object_mut().unwrap().remove("auto_hide_titlebar_buttons");
+            expected
+                .as_object_mut()
+                .unwrap()
+                .remove("auto_hide_titlebar_buttons");
             let migrated = std::fs::read(&path).unwrap();
-            assert_eq!(serde_json::from_slice::<serde_json::Value>(&migrated).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&migrated).unwrap(),
+                expected
+            );
             let (_, outcome) = Config::load_from(&path);
             assert_eq!(outcome, LoadOutcome::Parsed);
-            assert_eq!(std::fs::read(&path).unwrap(), migrated, "migration is idempotent");
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                migrated,
+                "migration is idempotent"
+            );
             assert_eq!(std::fs::read(&unrelated).unwrap(), b"untouched");
         }
     }

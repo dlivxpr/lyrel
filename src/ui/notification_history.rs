@@ -11,6 +11,7 @@ use gpui_kit::component::notification::{Notification as Toast, NotificationType}
 use gpui_kit::{
     App, AppContext as _, ClickEvent, Context, ElementId, Entity, Global, SharedString, Window,
 };
+use lyrel_core::core::pane_sidecar::{PaneOwner, ScopedPane};
 use serde::{Deserialize, Serialize};
 
 use crate::core::session::{WorkspaceId, WorkspaceStore};
@@ -52,6 +53,8 @@ pub(crate) struct Source {
     host: u64,
     tab: Option<lyrel_core::core::machine::TabId>,
     pane: Option<u64>,
+    #[serde(default)]
+    pane_owner: Option<PaneOwner>,
     label: String,
 }
 
@@ -94,7 +97,7 @@ pub(crate) struct Notification {
     title: SharedString,
     message: SharedString,
     source: Option<Source>,
-    origin_pane: Option<(WorkspaceId, u64)>,
+    origin_pane: Option<(WorkspaceId, ScopedPane)>,
 }
 
 impl Notification {
@@ -171,7 +174,17 @@ impl Notification {
         self.source = Some(source);
         self
     }
-    pub(crate) fn pane(mut self, workspace: Option<WorkspaceId>, pane: u64) -> Self {
+    pub(crate) fn pane(
+        mut self,
+        workspace: Option<WorkspaceId>,
+        pane: u64,
+        route: &crate::terminal::PaneRoute,
+    ) -> Self {
+        let pane = if route.is_local() {
+            ScopedPane::client_local(pane)
+        } else {
+            ScopedPane::workspace(pane)
+        };
         self.origin_pane = workspace.map(|workspace| (workspace, pane));
         self
     }
@@ -525,22 +538,22 @@ impl LyrelApp {
 
     fn notification_source_for_pane(
         &self,
-        origin: Option<u64>,
+        origin: Option<ScopedPane>,
         window: &Window,
         cx: &App,
     ) -> Source {
         let tab = match origin {
             Some(pane) => self.tabs.iter().find(|tab| {
-                tab.pane.leaves().iter().any(|slot| match slot {
-                    PaneSlot::Ready(view) => view.read(cx).pane_id == pane,
-                    PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane == Some(pane),
-                })
+                tab.pane
+                    .leaves()
+                    .iter()
+                    .any(|slot| crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(pane))
             }),
             None => self.tabs.get(self.active),
         };
         let pane = origin.or_else(|| {
             tab.and_then(|tab| tab.pane.focused_or_first(window, cx))
-                .map(|pane| pane.read(cx).pane_id)
+                .and_then(|pane| crate::ui::pane_sidecar::scoped_pane(&PaneSlot::Ready(pane), cx))
         });
         let mut source = self.notification_workspace_source(cx);
         if let Some(tab) = tab {
@@ -551,10 +564,11 @@ impl LyrelApp {
             }
         }
         if let Some(pane) = pane {
-            source.label.push_str(&format!(" · #{pane}"));
+            source.label.push_str(&format!(" · #{}", pane.pane()));
         }
         source.tab = tab.map(|tab| tab.tree_id.get());
-        source.pane = pane;
+        source.pane = pane.map(ScopedPane::pane);
+        source.pane_owner = pane.map(ScopedPane::owner);
         source
     }
 
@@ -569,6 +583,7 @@ impl LyrelApp {
             host: WorkspaceStore::host_of(cx, self.workspace).0,
             tab: None,
             pane: None,
+            pane_owner: None,
             label: format!("{} · {workspace}", self.remote_machine_label(cx)),
         }
     }
@@ -579,31 +594,30 @@ impl LyrelApp {
         {
             return None;
         }
-        if let Some(want) = source.tab {
-            let (index, tab) = self
+        if let Some(id) = source.pane {
+            let mut matches = self
                 .tabs
                 .iter()
                 .enumerate()
-                .find(|(_, tab)| tab.tree_id.get() == want)?;
-            let pane = match source.pane {
-                Some(id) => Some(tab.pane.leaves().into_iter().find(|pane| match pane {
-                    PaneSlot::Ready(view) => view.read(cx).pane_id == id,
-                    PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane == Some(id),
-                })?),
-                None => None,
-            };
-            Some((index, pane))
-        } else if let Some(id) = source.pane {
-            self.tabs.iter().enumerate().find_map(|(index, tab)| {
-                tab.pane
-                    .leaves()
-                    .into_iter()
-                    .find(|slot| match slot {
-                        PaneSlot::Ready(view) => view.read(cx).pane_id == id,
-                        PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane == Some(id),
+                .filter(|(_, tab)| source.tab.is_none_or(|want| tab.tree_id.get() == want))
+                .flat_map(|(index, tab)| {
+                    tab.pane.leaves().into_iter().map(move |pane| (index, pane))
+                })
+                .filter(|(_, pane)| {
+                    crate::ui::pane_sidecar::scoped_pane(pane, cx).is_some_and(|pane| {
+                        pane.pane() == id
+                            && source.pane_owner.is_none_or(|owner| pane.owner() == owner)
                     })
-                    .map(|slot| (index, Some(slot)))
-            })
+                });
+            let (index, pane) = matches.next()?;
+            // Records without owner metadata must resolve uniquely; never focus
+            // another daemon's session merely because it has the same number.
+            matches.next().is_none().then_some((index, Some(pane)))
+        } else if let Some(want) = source.tab {
+            self.tabs
+                .iter()
+                .position(|tab| tab.tree_id.get() == want)
+                .map(|index| (index, None))
         } else {
             Some((self.active, None))
         }
@@ -645,6 +659,33 @@ fn open_app(source: &Source, window: &Window, cx: &App) -> Option<Entity<LyrelAp
 }
 
 fn stored_source_exists(source: &Source, cx: &App) -> bool {
+    if let Some(remote) = WorkspaceStore::remote_ref(cx, source.workspace) {
+        let sidecar = crate::ui::machine_mirror::MachineMirrors::machine(cx, HostId::LOCAL)
+            .and_then(|machine| {
+                machine
+                    .workspaces
+                    .iter()
+                    .filter_map(|workspace| workspace.foreign_view.as_ref())
+                    .find(|foreign| foreign.remote() == &remote)
+            });
+        if let Some(sidecar) = sidecar {
+            let mut panes = sidecar
+                .tabs()
+                .iter()
+                .filter(|tab| source.tab.is_none_or(|want| tab.id == want))
+                .flat_map(|tab| tab.root.pane_ids())
+                .filter(|pane| {
+                    source.pane.is_none_or(|id| pane.pane() == id)
+                        && source.pane_owner.is_none_or(|owner| pane.owner() == owner)
+                });
+            if panes.next().is_some() && (source.pane.is_none() || panes.next().is_none()) {
+                return true;
+            }
+        }
+        if source.pane_owner == Some(PaneOwner::ClientLocal) {
+            return false;
+        }
+    }
     let Some(machine) = crate::ui::machine_mirror::MachineMirrors::machine(cx, HostId(source.host))
     else {
         return false;

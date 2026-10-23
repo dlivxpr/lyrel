@@ -1455,14 +1455,25 @@ impl ControlClient {
     pub fn host_metrics(&self) -> io::Result<crate::host::metrics::HostMetrics> {
         crate::host::guard_off_ui();
         if !self.is_connected() {
-            return Err(io::Error::new(io::ErrorKind::NotConnected, "host metrics daemon is disconnected"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "host metrics daemon is disconnected",
+            ));
         }
         if !self.hello().has_feature(feature::HOST_METRICS) {
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "daemon does not support whole-host metrics"));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "daemon does not support whole-host metrics",
+            ));
         }
         match self.call(ControlRequest::HostMetrics)? {
-            ReplyOk::HostMetrics(metrics) if metrics.instance() == self.hello().instance => Ok(metrics),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "host metrics came from an unexpected daemon")),
+            ReplyOk::HostMetrics(metrics) if metrics.instance() == self.hello().instance => {
+                Ok(metrics)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "host metrics came from an unexpected daemon",
+            )),
         }
     }
 

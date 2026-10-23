@@ -5,7 +5,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",
         L10nKey::NotificationScope => "Received app notifications on this computer · latest 500",
-        L10nKey::NotificationEmpty => "No notifications. New application notifications will appear here.",
+        L10nKey::NotificationEmpty => {
+            "No notifications. New application notifications will appear here."
+        }
         L10nKey::NotificationSourceUnavailable => "Source unavailable",
         L10nKey::NotificationUnread => "Unread",
         L10nKey::NotificationSuccess => "Success",
@@ -2434,15 +2436,23 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ParkedEmpty => "All panes are parked. Restore a card or create a pane.",
         L10nKey::ParkDropTarget => "Park",
         L10nKey::ParkedMore => "More…",
-        L10nKey::ParkedOverflowHint => "↑↓ / Home / End: select · Enter: preview, then restore · Esc: back",
-        L10nKey::PanePipMove => "Move picture-in-picture; drag to the bottom target to park (arrow keys; Escape cancels)",
-        L10nKey::PanePipResize => "Resize picture-in-picture (arrow keys; Escape returns to terminal)",
+        L10nKey::ParkedOverflowHint => {
+            "↑↓ / Home / End: select · Enter: preview, then restore · Esc: back"
+        }
+        L10nKey::PanePipMove => {
+            "Move picture-in-picture; drag to the bottom target to park (arrow keys; Escape cancels)"
+        }
+        L10nKey::PanePipResize => {
+            "Resize picture-in-picture (arrow keys; Escape returns to terminal)"
+        }
         L10nKey::PaneFindScrollback => "Find in scrollback…",
         L10nKey::PaneOpenScrollback => "Open scrollback in editor",
         L10nKey::PaneClearScreen => "Clear screen",
         L10nKey::PaneClearAll => "Clear screen and scrollback",
         L10nKey::PaneRestartShell => "Restart shell…",
-        L10nKey::PaneRestartShellDetail => "This stops the program running in this pane and starts a new shell on the same machine. Other panes are not restarted.",
+        L10nKey::PaneRestartShellDetail => {
+            "This stops the program running in this pane and starts a new shell on the same machine. Other panes are not restarted."
+        }
         L10nKey::PaneRestartFailed => "Could not restart the shell: {error}",
         L10nKey::PaneClose => "Close pane",
         L10nKey::AppWorktreeRemoved => "Removed worktree \"{branch}\"",

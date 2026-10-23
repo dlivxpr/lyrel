@@ -2245,7 +2245,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::PaneClearScreen => "清屏",
         L10nKey::PaneClearAll => "清屏和滚动历史",
         L10nKey::PaneRestartShell => "重启 shell…",
-        L10nKey::PaneRestartShellDetail => "这会终止此窗格中正在运行的程序，并在同一台机器上启动新 shell。其他窗格不会重启。",
+        L10nKey::PaneRestartShellDetail => {
+            "这会终止此窗格中正在运行的程序，并在同一台机器上启动新 shell。其他窗格不会重启。"
+        }
         L10nKey::PaneRestartFailed => "无法重启 shell：{error}",
         L10nKey::PaneClose => "关闭窗格",
         L10nKey::AppWorktreeRemoved => "已删除 worktree“{branch}”",
@@ -2752,4 +2754,3 @@ pub fn translate_variant_zh(key: L10nKey, branch: &'static str) -> Option<&'stat
     };
     Some(res)
 }
-

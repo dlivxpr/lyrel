@@ -8,9 +8,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::input::EditorState;
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, RopeExt as _, Sizable as _, h_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, RopeExt as _, Sizable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Entity, WeakEntity, Window, div, px};
 use lsp_types::Position;
@@ -323,10 +321,7 @@ impl LyrelApp {
                 Ok(None) => {}
                 Err(e) => {
                     let context = t_fmt(L10nKey::LspRenameFailed, &[("name", &old_name)]);
-                    window.notify_app(
-                        crate::ui::host_ops::failure(context, &format!("{e:#}")),
-                        cx,
-                    );
+                    window.notify_app(crate::ui::host_ops::failure(context, &format!("{e:#}")), cx);
                 }
             });
         })
