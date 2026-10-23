@@ -4829,7 +4829,8 @@ impl LyrelApp {
         self.parked_deck.update(cx, |deck, cx| {
             deck.set_tab(tab_id, cx);
             deck.set_labels(ParkedDeckLabels::new(t(L10nKey::ParkedDeckTitle), t(L10nKey::ParkedRestore),
-                t(L10nKey::PanePark), t(L10nKey::ParkedAlive), t(L10nKey::ParkedExited)), cx);
+                t(L10nKey::PanePark), t(L10nKey::ParkedAlive), t(L10nKey::ParkedExited))
+                .with_more(t(L10nKey::ParkedMore), t(L10nKey::ParkedOverflowHint)), cx);
             deck.sync_cards(cards, window, cx);
         });
     }

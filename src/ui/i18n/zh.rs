@@ -2235,6 +2235,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ParkedAlive => "运行中",
         L10nKey::ParkedExited => "已退出",
         L10nKey::ParkedEmpty => "所有窗格均已停放。可恢复卡片或新建窗格。",
+        L10nKey::ParkedMore => "更多…",
+        L10nKey::ParkedOverflowHint => "↑↓ / Home / End 选择 · Enter 预览后恢复 · Esc 返回",
         L10nKey::PanePipMove => "移动画中画（方向键调整，Escape 返回终端）",
         L10nKey::PanePipResize => "调整画中画大小（方向键调整，Escape 返回终端）",
         L10nKey::PanePipClientLocalUnavailable => "此客户端本地 SSH 窗格暂不支持画中画",

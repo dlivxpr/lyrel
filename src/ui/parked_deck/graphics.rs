@@ -179,7 +179,7 @@ struct CardFrame {
 
 #[derive(Clone, Default, Debug)]
 pub(super) struct Frame {
-    bounds: Bounds<Pixels>, viewport: Bounds<Pixels>, cards: Vec<CardFrame>,
+    bounds: Bounds<Pixels>, deck_bounds: Bounds<Pixels>, viewport: Bounds<Pixels>, cards: Vec<CardFrame>,
     zoom: f32, fan: f32, park: bool, park_ink: Option<Sprite>,
 }
 
@@ -196,8 +196,8 @@ pub(super) fn park_label(label: &str, font: &str) -> Sprite {
 }
 
 impl Frame {
-    pub fn new(bounds: Bounds<Pixels>, viewport: Bounds<Pixels>, zoom: f32, cards: Vec<FrameCard>, fan: f32, park: bool, park_ink: Sprite) -> Self {
-        let mut result = Self { bounds, viewport, cards: Vec::with_capacity(cards.len()), zoom, fan, park, park_ink: Some(park_ink) };
+    pub fn new(bounds: Bounds<Pixels>, viewport: Bounds<Pixels>, zoom: f32, cards: Vec<FrameCard>, fan: f32, park: bool, park_ink: Sprite, deck_bounds: Bounds<Pixels>) -> Self {
+        let mut result = Self { bounds, deck_bounds, viewport, cards: Vec::with_capacity(cards.len()), zoom, fan, park, park_ink: Some(park_ink) };
         let target_x = cards.iter().find(|c| c.selected || c.highlighted).map(|c| c.pose.x).unwrap_or(0.);
         let half_width = (f32::from(viewport.size.width) / zoom / 2. - 105.).max(0.);
         let shift = target_x - target_x.clamp(-half_width, half_width);
@@ -205,7 +205,7 @@ impl Frame {
             let pose = card.pose;
             let radians = pose.angle.to_radians();
             let (a, b, c, d) = (radians.cos() * pose.scale * zoom, -radians.sin() * pose.scale * zoom, radians.sin() * pose.scale * zoom, radians.cos() * pose.scale * zoom);
-            let mut anchor_x = f32::from(bounds.center().x) + (pose.x - shift) * zoom;
+            let mut anchor_x = f32::from(deck_bounds.center().x) + (pose.x - shift) * zoom;
             let mut anchor_y = f32::from(bounds.bottom()) + pose.y * zoom;
             if card.selected {
                 // 不把恢复操作放到 content 顶边外；极小区域仍由共同 viewport 裁切。
@@ -234,7 +234,7 @@ impl Frame {
     pub fn keyboard_bounds(&self) -> Bounds<Pixels> {
         let width = self.viewport.size.width.min(px(360. * self.zoom));
         let height = self.viewport.size.height.min(px(154. * self.zoom));
-        Bounds { origin: point(self.viewport.center().x - width / 2., self.viewport.bottom() - height), size: size(width, height) }
+        Bounds { origin: point(self.deck_bounds.center().x - width / 2., self.viewport.bottom() - height), size: size(width, height) }.intersect(&self.viewport)
     }
 
     pub fn semantic_cards(&self) -> impl Iterator<Item = (&ParkedCard, Bounds<Pixels>, bool, Option<Bounds<Pixels>>)> + '_ {
@@ -255,7 +255,7 @@ impl Frame {
 
     pub fn deck_contains(&self, position: Point<Pixels>) -> bool {
         self.viewport.contains(&position)
-            && (f32::from(position.x) - f32::from(self.bounds.center().x)).abs() <= 180. * self.zoom
+            && (f32::from(position.x) - f32::from(self.deck_bounds.center().x)).abs() <= 180. * self.zoom
             && f32::from(position.y) >= f32::from(self.bounds.bottom()) - 154. * self.zoom
     }
 
@@ -318,7 +318,8 @@ impl Frame {
         } else {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="130"><path d="M1 130 A129 129 0 0 1 259 130" fill="white" fill-opacity=".07" stroke="white" stroke-opacity=".58"/></svg>"#
         };
-        let bounds = Bounds { origin: point(self.bounds.center().x - px(width * self.zoom / 2.), self.bounds.bottom() - px(height * self.zoom)), size: size(px(width * self.zoom), px(height * self.zoom)) };
+        let center = if park { self.bounds.center().x } else { self.deck_bounds.center().x };
+        let bounds = Bounds { origin: point(center - px(width * self.zoom / 2.), self.bounds.bottom() - px(height * self.zoom)), size: size(px(width * self.zoom), px(height * self.zoom)) };
         window.paint_layer(self.viewport, |window| window.paint_svg(bounds, if park { "parked-deck/drop" } else { "parked-deck/aura" }.into(), Some(data.as_bytes()), TransformationMatrix::unit(), tokens.warm, cx))
             .map_err(|error| error.to_string())?;
         if park && let Some(ink) = &self.park_ink {

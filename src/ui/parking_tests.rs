@@ -273,3 +273,219 @@ fn restore_after_an_intervening_split_and_sibling_close_keeps_the_new_terminal(c
         assert!(app.tabs[0].presentation.parked().is_empty());
     });
 }
+
+#[gpui_kit::test]
+fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 22);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    let (parked, current) = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let mut parked = Vec::new();
+        while app.tabs.len() > 2 {
+            let pane = app.tabs.remove(1).pane.first_leaf().unwrap();
+            pane.terminal().unwrap().update(cx, |view, cx| {
+                view.title = format!("构建终端与长标题 · shell {}", parked.len() + 1).into();
+                cx.notify();
+            });
+            app.tabs[0].pane.split_leaf(current.entity_id(), Axis::Horizontal, false, pane.clone());
+            app.park_pane(pane.entity_id(), window, cx);
+            parked.push(pane);
+        }
+        window.focus(&current.focus_handle(cx), cx);
+        (parked, current)
+    });
+    vcx.run_until_parked();
+    let last = parked.last().unwrap();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(("parked-card", last.entity_id().as_u64() as usize)).is_none());
+        window.click("parked-more", cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.press("end", cx);
+        window.render_frame(cx);
+        assert!(window.find(("parked-overflow-row", last.entity_id().as_u64() as usize)).visible());
+        window.press("enter", cx);
+    });
+    vcx.run_until_parked();
+    let replacement = app.update_in(&mut vcx, |app, window, cx| {
+        use lyrel_core::core::machine::{Axis as LogicalAxis, LayoutDelta, Tab as LogicalTab};
+        let replacement = app.tabs.remove(1).pane.first_leaf().unwrap();
+        let replacement_id = replacement.terminal().unwrap().read(cx).pane_id;
+        // Another client replaces the original sibling and changes the split
+        // while this client's overflow preview remains selected.
+        app.tabs[0].pane.split_leaf(current.entity_id(), Axis::Vertical, false, replacement.clone());
+        let mut shared = LogicalTab::leaf(replacement_id);
+        shared.id = app.tabs[0].tree_id.get();
+        for pane in &parked {
+            let id = pane.terminal().unwrap().read(cx).pane_id;
+            shared.root.split_leaf(replacement_id, id, LogicalAxis::Vertical, 0.7, false);
+        }
+        shared.presentation = app.tabs[0].presentation.clone();
+        assert!(app.apply_layout_delta(&LayoutDelta::TabRestructured { tab: shared, pane: None }, window, cx));
+        replacement
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("parked-preview").visible());
+        window.press("enter", cx);
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert_eq!(app.tabs[0].pane.leaves().len(), 21);
+        assert_eq!(app.tabs[0].presentation.parked().len(), 19);
+        assert!(!app.tabs[0].is_parked_slot(last, cx));
+        assert!(parked[..19].iter().all(|pane| app.tabs[0].is_parked_slot(pane, cx)));
+        assert!(last.contains_focused(window, cx));
+        assert!(!current.contains_focused(window, cx));
+        assert!(app.tabs[0].pane.leaves().iter().any(|pane| pane.entity_id() == replacement.entity_id()));
+        assert!(!app.tabs[0].pane.leaves().iter().any(|pane| pane.entity_id() == current.entity_id()));
+    });
+}
+
+#[gpui_kit::test]
+fn overflow_uses_content_width_and_zoom_without_shrinking_targets_or_losing_entries(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 4);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    let parked = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let mut panes = Vec::new();
+        while app.tabs.len() > 1 {
+            let pane = app.tabs.remove(1).pane.first_leaf().unwrap();
+            app.tabs[0].pane.split_leaf(current.entity_id(), Axis::Horizontal, false, pane.clone());
+            app.park_pane(pane.entity_id(), window, cx);
+            panes.push(pane);
+        }
+        panes
+    });
+    vcx.simulate_resize(size(px(1440.), px(720.)));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("parked-more").is_none(), "a comfortable small fan has no overflow");
+    });
+    vcx.simulate_resize(size(px(620.), px(540.)));
+    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(24., cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.run_until_parked();
+    for step in 0..3 {
+        match step {
+            1 => vcx.dispatch_action(ToggleLeftPanel),
+            2 => vcx.dispatch_action(ToggleRightPanel),
+            _ => {}
+        }
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let list = window.find("parked-overflow").bounds();
+            let content = window.find("workbench-content").bounds();
+            let status = window.find("workbench-status").bounds();
+            assert!(list.left() >= content.left() && list.right() <= content.right());
+            assert!(list.top() >= content.top() && list.bottom() <= content.bottom());
+            assert!(list.bottom() <= status.top());
+            window.press("end", cx);
+            window.render_frame(cx);
+            let row = window.find(("parked-overflow-row", parked[2].entity_id().as_u64() as usize)).bounds();
+            assert!(row.size.height >= window.rem_size() * 3.);
+        });
+    }
+    vcx.update(|window, cx| window.press("enter", cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.press("escape", cx);
+        window.render_frame(cx);
+        assert!(window.find("parked-overflow").visible(), "Escape first returns from preview to list");
+    });
+    vcx.simulate_resize(size(px(1440.), px(720.)));
+    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(16., cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.press("escape", cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("parked-overflow").is_none());
+        assert!(window.try_find("parked-more").is_none());
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert_eq!(app.tabs[0].presentation.parked().len(), 3);
+        assert!(parked.iter().all(|pane| app.tabs[0].is_parked_slot(pane, cx)));
+        assert!(app.parked_deck.read(cx).focus_handle(cx).contains_focused(window, cx), "a vanished More returns to the still-valid deck");
+    });
+}
+
+#[gpui_kit::test]
+fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_restore(cx: &mut TestAppContext) {
+    use lyrel_core::core::machine::{Axis as LogicalAxis, LayoutDelta, Tab as LogicalTab};
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 5);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    let (current, parked) = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let mut parked = Vec::new();
+        while app.tabs.len() > 1 {
+            let pane = app.tabs.remove(1).pane.first_leaf().unwrap();
+            app.tabs[0].pane.split_leaf(current.entity_id(), Axis::Horizontal, false, pane.clone());
+            app.park_pane(pane.entity_id(), window, cx);
+            parked.push(pane);
+        }
+        (current, parked)
+    });
+    vcx.simulate_resize(size(px(620.), px(540.)));
+    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(20., cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.press("end", cx);
+        window.press("enter", cx);
+    });
+    vcx.run_until_parked();
+    let mut shared = app.update_in(&mut vcx, |app, window, cx| {
+        let current_id = current.terminal().unwrap().read(cx).pane_id;
+        let mut shared = LogicalTab::leaf(current_id);
+        shared.id = app.tabs[0].tree_id.get();
+        for pane in &parked {
+            shared.root.split_leaf(current_id, pane.terminal().unwrap().read(cx).pane_id, LogicalAxis::Vertical, 0.6, false);
+        }
+        shared.presentation = app.tabs[0].presentation.clone();
+        assert!(shared.park(current_id), "a second client adds another parked pane");
+        assert!(app.apply_layout_delta(&LayoutDelta::TabRestructured { tab: shared.clone(), pane: None }, window, cx));
+        shared
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert_eq!(app.parked_deck.read(cx).selected_pane(), Some(parked[3].entity_id().as_u64()));
+        let deleted = parked[3].terminal().unwrap().read(cx).pane_id;
+        assert!(shared.root.remove_leaf(deleted).is_some());
+        shared.presentation.remap_panes(|id| (id != deleted).then_some(id));
+        assert!(app.apply_layout_delta(&LayoutDelta::TabRestructured { tab: shared, pane: None }, window, cx));
+        app.restore_parked(parked[3].entity_id(), window, cx);
+        assert_eq!(app.tabs[0].pane.leaves().len(), 4, "a stale request cannot recreate the closed session");
+        assert_eq!(app.tabs[0].presentation.parked().len(), 4);
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, _, cx| {
+        assert_eq!(app.parked_deck.read(cx).selected_pane(), None);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("parked-preview").is_none());
+        assert!(window.try_find("parked-overflow").is_none());
+        window.click("parked-more", cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.press("end", cx);
+        window.press("enter", cx);
+        window.press("enter", cx);
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(!app.tabs[0].is_parked_slot(&current, cx));
+        assert!(current.contains_focused(window, cx));
+        assert!(parked[..3].iter().all(|pane| app.tabs[0].is_parked_slot(pane, cx)));
+        assert!(!app.tabs[0].pane.leaves().iter().any(|pane| pane.entity_id() == parked[3].entity_id()));
+    });
+}
