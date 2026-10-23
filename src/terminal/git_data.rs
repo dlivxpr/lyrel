@@ -1087,7 +1087,9 @@ impl LyrelApp {
                     // like a push that finished instantly.
                     crate::ui::notification_history::NotificationWindowExt::notify_app(
                         window,
-                        crate::ui::notification_history::Notification::info(crate::ui::i18n::t(crate::ui::i18n::L10nKey::ScmNetworkBusy)).pane(self.owner_workspace(), self.pane_id),
+                        crate::ui::notification_history::Notification::info(crate::ui::i18n::t(
+                            crate::ui::i18n::L10nKey::ScmNetworkBusy,
+                        )),
                         cx,
                     );
                     return;
@@ -1174,8 +1176,7 @@ impl LyrelApp {
         // repository` — it read as a stderr dump that had escaped onto the
         // screen, with nothing to mark it as a failure at all.
         let note = crate::ui::notification_history::Notification::error(git_reason(&err.message))
-            .title(t_fmt(L10nKey::GitOpFailed, &[("op", err.op)]))
-            .pane(self.owner_workspace(), self.pane_id);
+            .title(t_fmt(L10nKey::GitOpFailed, &[("op", err.op)]));
         crate::ui::notification_history::NotificationWindowExt::notify_app(window, note, cx);
         if err.kind == GitOpErrorKind::AuthRequired {
             log::info!(

@@ -1,7 +1,6 @@
 //! The pages that are rows and nothing else: General, the text and window
 //! halves of Appearance, Terminal, Keyboard & Mouse, and About.
 
-use crate::ui::notification_history::NotificationWindowExt as _;
 use std::rc::Rc;
 
 use super::kit::{self, BtnKind, Stepper, Tk, fs};

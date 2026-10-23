@@ -16,7 +16,13 @@ fn isolated(cx: &mut VisualTestContext) -> tempfile::TempDir {
 }
 
 fn messages(cx: &VisualTestContext) -> Vec<String> {
-    cx.read(|cx| history(cx).read(cx).records().map(|record| record.message().to_string()).collect())
+    cx.read(|cx| {
+        history(cx)
+            .read(cx)
+            .records()
+            .map(|record| record.message().to_string())
+            .collect()
+    })
 }
 
 fn restart(cx: &mut VisualTestContext, dir: &tempfile::TempDir) {
@@ -39,17 +45,31 @@ fn all_toast_severities_are_received_with_content_and_persisted_unread(cx: &mut 
     settle(&mut window);
     window.read(|cx| {
         let inbox = history(cx).read(cx);
-        let received: Vec<_> = inbox.records().map(|r| (r.severity(), r.message(), r.is_unread())).collect();
-        assert_eq!(received, vec![
-            (Severity::Success, "project — saved", true),
-            (Severity::Info, "connected", true),
-            (Severity::Warning, "disk low", true),
-            (Severity::Error, "permission denied", true),
-        ]);
+        let received: Vec<_> = inbox
+            .records()
+            .map(|r| (r.severity(), r.message(), r.is_unread()))
+            .collect();
+        assert_eq!(
+            received,
+            vec![
+                (Severity::Success, "project — saved", true),
+                (Severity::Info, "connected", true),
+                (Severity::Warning, "disk low", true),
+                (Severity::Error, "permission denied", true),
+            ]
+        );
         assert!(inbox.records().all(|r| r.timestamp() > 1_700_000_000));
     });
     restart(&mut window, &dir);
-    assert_eq!(messages(&window), ["project — saved", "connected", "disk low", "permission denied"]);
+    assert_eq!(
+        messages(&window),
+        [
+            "project — saved",
+            "connected",
+            "disk low",
+            "permission denied"
+        ]
+    );
     assert_eq!(window.read(|cx| history(cx).read(cx).unread_count()), 4);
 }
 
@@ -68,7 +88,11 @@ fn two_windows_share_workspaces_read_state_clear_and_reopen(cx: &mut TestAppCont
     assert_eq!(messages(&first), ["first workspace", "second workspace"]);
     assert_eq!(messages(&second), ["first workspace", "second workspace"]);
     first.read(|cx| {
-        let sources: Vec<_> = history(cx).read(cx).records().map(|r| r.source().unwrap().workspace).collect();
+        let sources: Vec<_> = history(cx)
+            .read(cx)
+            .records()
+            .map(|r| r.source().unwrap().workspace)
+            .collect();
         assert_eq!(sources, [first_workspace, second_workspace]);
     });
     first.update(|window, cx| window.click("status-notifications", cx));
@@ -85,7 +109,7 @@ fn two_windows_share_workspaces_read_state_clear_and_reopen(cx: &mut TestAppCont
     assert!(messages(&second).is_empty());
     assert_eq!(second.read(|cx| history(cx).read(cx).unread_count()), 0);
     // Clear has no confirmation and generates no success notification.
-    first.update(|window, cx| assert!(window.find("notification-inbox-empty").visible()));
+    first.update(|window, _| assert!(window.find("notification-inbox-empty").visible()));
     restart(&mut second, &dir);
     assert!(messages(&second).is_empty());
     first.simulate_keystrokes("escape");
@@ -175,7 +199,16 @@ fn retained_source_navigates_but_removed_source_never_recreates_a_session(cx: &m
     });
     assert_eq!(app.read_with(&window, |app, _| app.tabs.len()), 1);
     assert_eq!(messages(&window), ["from first tab"]);
-    assert_eq!(window.read(|cx| history(cx).read(cx).records().next().unwrap().source().cloned()), record.source().cloned());
+    assert_eq!(
+        window.read(|cx| history(cx)
+            .read(cx)
+            .records()
+            .next()
+            .unwrap()
+            .source()
+            .cloned()),
+        record.source().cloned()
+    );
 }
 
 #[gpui_kit::test]
@@ -212,7 +245,10 @@ fn a_fresh_application_restores_received_records_read_state_and_clear(cx: &mut T
     let (_, mut final_window) = harness(cx);
     final_window.update(|_, cx| install(cx, dir.path().join("notifications.json")));
     assert_eq!(messages(&final_window), ["received before GUI exit"]);
-    assert_eq!(final_window.read(|cx| history(cx).read(cx).unread_count()), 0);
+    assert_eq!(
+        final_window.read(|cx| history(cx).read(cx).unread_count()),
+        0
+    );
     settle(&mut final_window);
     final_window.update(|window, cx| window.click("status-notifications", cx));
     settle(&mut final_window);
@@ -223,11 +259,16 @@ fn a_fresh_application_restores_received_records_read_state_and_clear(cx: &mut T
     let (_, mut after_clear) = harness(&mut after_clear_context);
     after_clear.update(|_, cx| install(cx, dir.path().join("notifications.json")));
     assert!(messages(&after_clear).is_empty());
-    assert_eq!(after_clear.read(|cx| history(cx).read(cx).unread_count()), 0);
+    assert_eq!(
+        after_clear.read(|cx| history(cx).read(cx).unread_count()),
+        0
+    );
 }
 
 #[gpui_kit::test]
-fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_source(cx: &mut TestAppContext) {
+fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_source(
+    cx: &mut TestAppContext,
+) {
     let (app, mut main) = harness(cx);
     let _dir = isolated(&mut main);
     main.dispatch_action(crate::core::actions::OpenSettings);
@@ -236,9 +277,16 @@ fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_sourc
         let view = cx.new(|cx| crate::ui::settings_window::SettingsWindow::new(&app, window, cx));
         gpui_kit::component::Root::new(view, window, cx)
     });
-    settings.update(cx, |_, window, cx| {
-        crate::ui::host_ops::HostOps::notify_err(window, cx, "settings save failed", &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "settings fixture"));
-    }).unwrap();
+    settings
+        .update(cx, |_, window, cx| {
+            crate::ui::host_ops::HostOps::notify_err(
+                window,
+                cx,
+                "settings save failed",
+                &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "settings fixture"),
+            );
+        })
+        .unwrap();
     settle(&mut main);
     let workspace = app.read_with(&main, |app, _| app.workspace);
     main.read(|cx| {
@@ -252,22 +300,37 @@ fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_sourc
 }
 
 #[gpui_kit::test]
-fn source_navigation_selects_the_other_window_without_touching_its_other_tabs(cx: &mut TestAppContext) {
+fn source_navigation_selects_the_other_window_without_touching_its_other_tabs(
+    cx: &mut TestAppContext,
+) {
     let (first_app, mut first, _first_streams) = harness_with_tabs(cx, 2);
     let _dir = isolated(&mut first);
     let (second_app, mut second, _second_streams) = harness_with_tabs(cx, 2);
     first.update(|window, cx| {
         crate::ui::windows::WindowRegistry::init(cx);
         let workspace = first_app.read(cx).workspace;
-        crate::ui::windows::WindowRegistry::register(cx, workspace, window.window_handle(), first_app.downgrade());
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            workspace,
+            window.window_handle(),
+            first_app.downgrade(),
+        );
     });
     second.update(|window, cx| {
         let workspace = second_app.read(cx).workspace;
-        crate::ui::windows::WindowRegistry::register(cx, workspace, window.window_handle(), second_app.downgrade());
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            workspace,
+            window.window_handle(),
+            second_app.downgrade(),
+        );
     });
     second_app.update_in(&mut second, |app, window, cx| {
         let source = app.notification_source(window, cx);
-        window.notify_app(Notification::info("other workspace first pane").source(source), cx);
+        window.notify_app(
+            Notification::info("other workspace first pane").source(source),
+            cx,
+        );
         app.active = 1;
         cx.notify();
     });

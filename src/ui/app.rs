@@ -348,7 +348,6 @@ pub(crate) const TILE_SIZE_XS: f32 = 18.;
 pub(crate) const TILE_GLYPH_XS: f32 = 11.;
 
 pub(crate) const TILE_PAD: f32 = (TILE_SIZE - TILE_GLYPH) / 2.;
-pub(crate) const TILE_PAD_SM: f32 = (TILE_SIZE_SM - TILE_GLYPH_SM) / 2.;
 
 const DOCS_URL: &str = "https://github.com/dlivxpr/lyrel#readme";
 const PROJECT_URL: &str = "https://github.com/dlivxpr/lyrel";
@@ -367,8 +366,6 @@ pub(crate) const TITLE_BAR_LEAD: f32 = if cfg!(target_os = "macos") {
 } else {
     12.
 };
-
-pub(crate) const WINDOW_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 0. } else { 102. };
 
 /// 保存窗口可见内容的边界，供下次启动恢复位置与尺寸。
 /// Windows/macOS 后端的 `inner_window_bounds` 默认与窗口边界一致。
@@ -1340,14 +1337,6 @@ struct FullscreenHint;
 /// traffic lights, and the system hides them itself.
 pub(crate) fn window_controls_drawn(fullscreen: bool) -> bool {
     !cfg!(target_os = "macos") && !fullscreen
-}
-
-/// How much of the title bar's trailing end the window buttons take.
-pub(crate) fn window_controls_w(fullscreen: bool) -> f32 {
-    match window_controls_drawn(fullscreen) {
-        true => WINDOW_CONTROLS_W,
-        false => 0.,
-    }
 }
 
 impl LyrelApp {
@@ -12235,14 +12224,14 @@ mod tests {
     use super::close_reason;
     use super::{
         CloseReason, DOCUMENT_MIN_W, Dir, OpenedFrom, Pane, Rename, TERMINAL_MIN_W,
-        TITLE_BAR_BORDER, TITLE_BAR_HEIGHT, Tab, TabAgentSession, clear_window_override_values,
-        close_prompt, document_column_px, inherited_start_dir, join_shell_args,
-        leaf_shares_the_window_daemon, mru_order, native_ssh_pane_alive, one_slot_move,
-        pane_free_for, parse_ssh_connect_input, parse_ssh_option_words, rename_outcome,
-        side_panel_max, split_machine_held, split_shell_args, step_in_order, title_strip_centre,
-        title_strip_content_centre, title_strip_rule_and_pad, wd_path_saveable,
+        TITLE_BAR_BORDER, Tab, TabAgentSession, clear_window_override_values, close_prompt,
+        document_column_px, inherited_start_dir, join_shell_args, leaf_shares_the_window_daemon,
+        mru_order, native_ssh_pane_alive, one_slot_move, pane_free_for, parse_ssh_connect_input,
+        parse_ssh_option_words, rename_outcome, side_panel_max, split_machine_held,
+        split_shell_args, step_in_order, title_strip_centre, title_strip_content_centre,
+        title_strip_rule_and_pad, wd_path_saveable,
     };
-    use gpui_kit::{point, px, size};
+    use gpui_kit::px;
 
     /// A title-bar row spends [`TITLE_BAR_BORDER`] of its height below its
     /// contents, and there are two ways it does that: it carries the whole point
@@ -12350,20 +12339,6 @@ mod tests {
         tab.remember_focus_origin(id(1), id(2), Dir::Right, &[id(1), id(2)]);
         assert_eq!(tab.focus_origin(id(2), Dir::Right), None);
         assert_eq!(tab.focus_origin(id(2), Dir::Left), Some(id(1)));
-    }
-
-    /// Fullscreen takes the window buttons and nothing else: the strip keeps
-    /// its row, and the room reserved for the buttons at its end comes back.
-    /// macOS never had any to take.
-    #[test]
-    fn fullscreen_drops_the_window_buttons_but_not_their_row() {
-        assert!(!super::window_controls_drawn(true));
-        assert_eq!(super::window_controls_w(true), 0.);
-        assert_eq!(
-            super::window_controls_drawn(false),
-            !cfg!(target_os = "macos")
-        );
-        assert_eq!(super::window_controls_w(false), super::WINDOW_CONTROLS_W);
     }
 
     /// Two panels that each cap themselves at half the window leave the
@@ -15843,7 +15818,7 @@ mod pip_gpui_tests {
 mod pip_menu_gpui_tests {
     use super::*;
     use gpui_kit::TestAppContext;
-    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt as _};
 
     #[gpui_kit::test]
     fn pip_menu_acts_on_its_captured_terminal_not_the_previously_focused_one(
