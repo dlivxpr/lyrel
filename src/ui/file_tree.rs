@@ -2208,12 +2208,6 @@ impl LyrelApp {
         cx: &App,
     ) -> PopupMenu {
         let danger = cx.theme().danger;
-        // Whether "Pin as Group" has a sidebar to put the group in: with the
-        // tabs along the top there is nowhere to show one. Offered on a remote
-        // workspace too, unlike the file manager above — the tree and a pinned
-        // folder are both on the workspace's own host.
-        let groups_shown = cx.global::<crate::core::config::Config>().tab_bar_position
-            == crate::core::config::TabBarPosition::Left;
         let mut menu = menu.min_w(px(200.));
         let p = path.to_path_buf();
 
@@ -2238,7 +2232,6 @@ impl LyrelApp {
                     }
                 }),
             );
-            if groups_shown {
                 menu = menu.item(
                     PopupMenuItem::new(t(L10nKey::FileTreeContextPinAsGroup)).on_click({
                         let app = app.clone();
@@ -2250,7 +2243,6 @@ impl LyrelApp {
                         }
                     }),
                 );
-            }
         }
         menu = menu
             .item(

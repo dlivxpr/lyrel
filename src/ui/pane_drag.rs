@@ -39,17 +39,12 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext, Bounds, Context, EntityId, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Point, Render, Styled, Window,
-    div, point, px, rems, size,
+    App, AppContext, Bounds, Context, EntityId, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Point, Render, Styled, Window, div, point, px, rems, size,
 };
 
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Dir, Pane};
-
-/// Space reserved for the contextual control, in rems. Reserving it even for
-/// one pane keeps the menu reachable without covering terminal output.
-pub(crate) const HANDLE_STRIP: f32 = 2.5;
 
 /// How much of a pane, in from a side that is also the tab's own edge, still
 /// means "beside everything else" rather than "split this pane".
@@ -112,16 +107,23 @@ pub(crate) fn handle(
     rearrangeable: bool,
     state: &PaneDragState,
     app: &gpui_kit::WeakEntity<crate::ui::app::LyrelApp>,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> gpui_kit::AnyElement {
     let pane = slot.entity_id();
     let state = state.clone();
     let app = app.clone();
     let focus = slot.focus_handle(cx);
+    let menu_open =
+        window.use_keyed_state(("pane-menu-open", pane.as_u64() as usize), cx, |_, _| false);
+    let open = *menu_open.read(cx);
     let ink = cx.theme().muted_foreground;
     div()
         .absolute()
-        .top(rems(0.5))
+        .top_0()
+        .h(rems(2.25))
+        .pt(rems(0.5))
+        .group("pane-handle-reveal")
         .left_0()
         .right_0()
         .flex()
@@ -136,24 +138,36 @@ pub(crate) fn handle(
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().popover)
+                .when(!open, |button| {
+                    button
+                        .opacity(0.)
+                        .group_hover("pane-handle-reveal", |style| style.opacity(1.))
+                        .focus(|style| style.opacity(1.))
+                })
                 .accessibility_label(t(L10nKey::PaneMenuTitle))
                 .tooltip(t(L10nKey::PaneDragHandleTooltip))
                 .when(rearrangeable, |button| {
                     let mut button = crate::ui::reorder::cursor_grab(button);
-                    button.interactivity().on_drag(DragPane, move |_, _, _, cx| {
-                        cx.stop_propagation();
-                        begin(&state, pane);
-                        cx.new(|_| DragPane)
-                    });
+                    button
+                        .interactivity()
+                        .on_drag(DragPane, move |_, _, _, cx| {
+                            cx.stop_propagation();
+                            begin(&state, pane);
+                            cx.new(|_| DragPane)
+                        });
                     button
                 })
                 .child(
-                    div().flex().flex_col().gap(rems(3. / 16.))
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(rems(3. / 16.))
                         .children((0..2).map(move |_| {
-                            div().flex().gap(rems(3. / 16.))
-                                .children((0..3).map(move |_| {
+                            div().flex().gap(rems(3. / 16.)).children(
+                                (0..3).map(move |_| {
                                     div().size(rems(3. / 16.)).rounded_full().bg(ink)
-                                }))
+                                }),
+                            )
                         })),
                 )
                 .dropdown_menu(move |menu, _, cx| {
@@ -162,6 +176,12 @@ pub(crate) fn handle(
                         Some(app) => app.read(cx).pane_menu(pane, menu, &app, cx),
                         None => menu,
                     }
+                })
+                .on_open_change(move |open, _, cx| {
+                    menu_open.update(cx, |state, cx| {
+                        *state = *open;
+                        cx.notify();
+                    });
                 }),
         )
         .into_any_element()

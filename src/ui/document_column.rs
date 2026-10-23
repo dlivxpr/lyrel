@@ -978,55 +978,6 @@ mod gpui_tests {
         );
     }
 
-    /// A docked column takes width off the tab strip too, and the strip has to
-    /// be told. Where the header is hoisted — Windows, Linux — it is drawn over
-    /// the trailing end of the spanning title bar with no fill of its own, so a
-    /// chip left under it shows through the file name and stays clickable
-    /// through it. On macOS the strip sits inside the terminal column, and
-    /// sizing it to the window rather than to that column is what pushed the
-    /// New Tab button off the end before the detail panel got the same
-    /// reservation.
-    #[gpui_kit::test]
-    fn the_tab_chips_stop_where_the_document_column_starts(cx: &mut TestAppContext) {
-        let (app, mut vcx) = window_with(cx, 1200., 10);
-        // Chips only exist with the bar along the top; with the rail up the
-        // strip is the sidebar's and has nothing in this row to collide with.
-        vcx.update(|_, cx| {
-            cx.global_mut::<Config>().tab_bar_position = crate::core::config::TabBarPosition::Top;
-        });
-        app.update_in(&mut vcx, |app, window, cx| {
-            for (i, tab) in app.tabs.iter_mut().enumerate() {
-                tab.name = Some(format!("a tab with a long enough name {i}"));
-            }
-            app.active = 0;
-            app.toggle_code_panel(window, cx);
-        });
-        vcx.run_until_parked();
-
-        let (viewport, panel, docked) = app.update_in(&mut vcx, |app, window, cx| {
-            (
-                window.viewport_size().width.as_f32(),
-                if app.right_panel_open(cx) {
-                    app.right_panel_px(window, cx)
-                } else {
-                    0.
-                },
-                app.document_dock_px(window, cx)
-                    .expect("a 1200 window seats both"),
-            )
-        });
-        let column_left = viewport - panel - docked;
-        let chips = app.update_in(&mut vcx, |app, _, _| app.strip_slots.borrow().clone());
-        let far = chips
-            .iter()
-            .map(|b| (b.origin.x + b.size.width).as_f32())
-            .fold(0., f32::max);
-        assert!(far > 0., "the strip has to have drawn chips to measure");
-        assert!(
-            far <= column_left + 0.5,
-            "a chip reached {far}, past the column's left edge at {column_left}"
-        );
-    }
 
     /// The palette row has to name what running it will do. Fill is per tab, so
     /// a tab told to fill must be offered "Dock" — even though the config, which

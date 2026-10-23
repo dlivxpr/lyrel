@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Editor, EditorState, Input, InputEvent, InputState, Position, RopeExt as _, TabSize,
 };
@@ -12,6 +12,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::*;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::{
     AnyElement, Context, Entity, EntityInputHandler as _, Focusable as _, MouseButton, PromptLevel,
     SharedString, Subscription, Window, div, px, rems,
@@ -1377,6 +1378,7 @@ impl LyrelApp {
                 .context_menu(false)
                 .default_value(text)
         });
+        self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
         let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
         let id = input.entity_id();
         let git_gutter = gutter::BufferGutter::default();
@@ -1588,6 +1590,27 @@ impl LyrelApp {
     fn focus_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(f) = self.active_buffer() {
             f.input.update(cx, |input, cx| input.focus(window, cx));
+        }
+    }
+
+    /// Settings borrows focus, not the terminal's place in the workbench.
+    /// Keep explicit terminal commands on `focus_active`; only an overlay's
+    /// return path restores the foreground document or the last docked shell.
+    pub(crate) fn focus_previous_content(&self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.status_document_context(window, cx) {
+            Some(crate::ui::app::OverlayTop::Code) => {
+                if self.active_buffer().is_some_and(|file| !file.preview) {
+                    self.focus_editor(window, cx);
+                } else {
+                    self.editor.empty_focus.focus(window, cx);
+                }
+            }
+            Some(crate::ui::app::OverlayTop::Diff) => {
+                if let Some(diff) = self.tabs.get(self.active).and_then(|tab| tab.diff_overlay.as_ref()) {
+                    window.focus(&diff.focus_handle, cx);
+                }
+            }
+            None => self.focus_active(window, cx),
         }
     }
 
@@ -3313,6 +3336,16 @@ impl LyrelApp {
         let shell = self.editor_split_command_sync(shell, cx);
         Some(
             shell
+                .track_focus(&self.editor.empty_focus)
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    if !this.editor_panel_has_focus(window, cx) {
+                        this.editor.empty_focus.focus(window, cx);
+                    }
+                    if let Some(tab) = this.tabs.get(this.active) {
+                        this.status_document_focus = Some((tab.tree_id.get(), true));
+                    }
+                    cx.notify();
+                }))
                 .on_key_down(
                     cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
                         if ev.keystroke.key != "escape" {
@@ -3333,7 +3366,6 @@ impl LyrelApp {
                     }),
                 )
                 .child(h_flex().flex_1().min_h_0().w_full().child(editor_col))
-                .child(self.render_code_status_bar(window, cx))
                 .into_any_element(),
         )
     }
@@ -3696,9 +3728,7 @@ impl LyrelApp {
         )
     }
 
-    fn render_code_status_bar(&self, window: &Window, cx: &mut Context<Self>) -> gpui_kit::Div {
-        // No path here: the breadcrumbs over the text show where the file is.
-        let muted = cx.theme().muted_foreground;
+    pub(crate) fn render_document_status(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.active_buffer();
         let cursor: Option<SharedString> = active.map(|f| {
             let input = f.input.read(cx);
@@ -3726,55 +3756,32 @@ impl LyrelApp {
         let line_ending: Option<&'static str> = active.map(|f| f.format.line_ending.label());
         let encoding: Option<SharedString> = active.map(|f| f.format.encoding_label().into());
         let language: Option<&'static str> = active.and_then(|f| language_label(f.language()));
-        let (lsp_lead, lsp_tail) = match self.render_lsp_status(cx) {
-            Some((el, true)) => (Some(el), None),
-            Some((el, false)) => (None, Some(el)),
-            None => (None, None),
-        };
+        let lsp = self.render_lsp_status(cx).map(|(element, _)| element);
 
-        // Metadata, not a toolbar: caption ink on the plane's own fill, set
-        // off by a hairline in the divider tone rather than a control border.
-        // The readouts that do something answer the pointer with a soft fill
-        // and body ink; the rest are plain text in the same row.
-        let fg = cx.theme().foreground;
-        let hover = cx.theme().muted;
         let item = |id: &'static str, label: SharedString| {
-            div()
-                .id(id)
-                .flex_none()
-                .h(px(20.))
-                .px(px(4.))
-                .mx(px(-4.))
-                .flex()
-                .items_center()
-                .rounded(px(4.))
-                .cursor_pointer()
-                .hover(move |s| s.bg(hover).text_color(fg))
-                .child(label)
+            Button::new(id).ghost().xsmall().flex_none().label(label)
         };
         h_flex()
-            .flex_none()
-            .w_full()
-            .h(px(28.))
-            .items_center()
-            .gap(px(14.))
-            .px(px(crate::ui::app::CONTENT_INSET))
-            .border_t(crate::ui::theme::hairline(window))
-            .border_color(cx.theme().sidebar_border)
-            .text_size(gpui_kit::rems(11.5 / 16.))
-            .text_color(muted)
+            .id("document-status")
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .gap_1()
+            .overflow_x_scroll()
             .whitespace_nowrap()
-            .children(lsp_lead)
-            .child(div().flex_1())
-            // The counts open the Problems list.
-            .children(lsp_tail.map(|status| {
-                div()
-                    .id("status-problems")
+            .child(
+                Button::new("status-problems")
+                    .ghost()
+                    .xsmall()
                     .flex_none()
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_editor_problems(cx)))
-                    .child(status)
-            }))
+                    .accessibility_label(t(L10nKey::EditorProblemsToggle))
+                    .tooltip(t(L10nKey::EditorProblemsToggle))
+                    .child(lsp.unwrap_or_else(|| div().child(t(L10nKey::EditorProblemsTitle)).into_any_element()))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_editor_problems(cx);
+                        this.focus_editor(window, cx);
+                    })),
+            )
             .when(is_markdown, |this| {
                 let label = if preview {
                     t(L10nKey::EditorEdit)
@@ -3783,7 +3790,10 @@ impl LyrelApp {
                 };
                 this.child(
                     item("status-md-preview", label.into())
-                        .on_click(cx.listener(|this, _, _w, cx| this.toggle_document_preview(cx))),
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_document_preview(cx);
+                            this.focus_editor(window, cx);
+                        })),
                 )
             })
             .when_some(wrap, |this, wrap| {
@@ -3793,7 +3803,10 @@ impl LyrelApp {
                     t(L10nKey::EditorWrapOff)
                 };
                 this.child(item("status-wrap", label.into()).on_click(
-                    cx.listener(|this, _, window, cx| this.toggle_document_wrap(window, cx)),
+                    cx.listener(|this, _, window, cx| {
+                        this.toggle_document_wrap(window, cx);
+                        this.focus_editor(window, cx);
+                    }),
                 ))
             })
             // Tabular figures, so the position does not jitter sideways as
@@ -3813,15 +3826,19 @@ impl LyrelApp {
             .when_some(line_ending, |this, eol| {
                 this.child(
                     item("status-eol", eol.into())
-                        .on_click(cx.listener(|this, _, _w, cx| this.toggle_line_ending(cx))),
+                        .tooltip(t(L10nKey::EditorToggleLineEnding))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_line_ending(cx);
+                            this.focus_editor(window, cx);
+                        })),
                 )
             })
             .when_some(language, |this, l| this.child(div().flex_none().child(l)))
+            .into_any_element()
     }
 
     fn render_editor_empty(&self, cx: &Context<Self>) -> gpui_kit::Div {
         v_flex()
-            .track_focus(&self.editor.empty_focus)
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.editor.empty_focus.focus(window, cx)),
@@ -4287,14 +4304,13 @@ mod close_gpui_tests {
         use crate::core::actions::{
             ActivateTab1, ActivateTab2, EditorNewFile, ToggleCodePanel, ToggleDocumentFill,
         };
-        use crate::core::config::{Config, TabBarPosition};
         use gpui_kit::size;
 
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
         vcx.simulate_resize(size(px(1600.), px(900.)));
-        for position in [TabBarPosition::Top, TabBarPosition::Left] {
+        for collapsed in [false, true] {
             app.update_in(&mut vcx, |app, window, cx| {
-                cx.global_mut::<Config>().tab_bar_position = position;
+                app.sidebar_collapsed = collapsed;
                 app.right_panel_visible = true;
                 app.focus_active(window, cx);
                 cx.notify();
@@ -4345,6 +4361,159 @@ mod close_gpui_tests {
             settle(&mut vcx);
         }
     }
+
+    #[gpui_kit::test]
+    fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppContext) {
+        use crate::core::actions::{EditorNewFile, EditorSaveAs, ToggleDocumentFill};
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
+        vcx.dispatch_action(EditorNewFile);
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.input("one\ntwo\nthree", cx));
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("status-cursor", cx));
+        settle(&mut vcx);
+        vcx.update(|window, cx| {
+            window.press("secondary-a", cx);
+            window.input("2:2", cx);
+            window.press("enter", cx);
+        });
+        settle(&mut vcx);
+        app.read_with(&vcx, |app, cx| {
+            let pos = app.active_buffer().unwrap().input.read(cx).cursor_position();
+            assert_eq!((pos.line, pos.character), (1, 1));
+        });
+        vcx.update(|window, cx| window.click("status-cursor", cx));
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("escape");
+        settle(&mut vcx);
+        assert!(app.update_in(&mut vcx, |app, window, cx| {
+            app.code_panel_visible() && app.editor_has_focus(window, cx)
+        }));
+        for _ in 0..2 {
+            vcx.dispatch_action(ToggleDocumentFill);
+            settle(&mut vcx);
+            vcx.update(|window, cx| {
+                let cursor = window.find("status-cursor").bounds();
+                let global = window.find("workbench-status").bounds();
+                assert!(cursor.top() >= global.top() && cursor.bottom() <= global.bottom());
+                assert_eq!(window.find_all("status-cursor").len(), 1);
+                window.click("status-wrap", cx);
+            });
+            settle(&mut vcx);
+            assert!(app.update_in(&mut vcx, |app, window, cx| app.editor_has_focus(window, cx)));
+        }
+        // The line-ending control changes the real save output, not just its label.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.txt");
+        vcx.update(|window, cx| window.click("status-eol", cx));
+        settle(&mut vcx);
+        vcx.dispatch_action(EditorSaveAs);
+        settle(&mut vcx);
+        vcx.update(|window, cx| {
+            window.press("secondary-a", cx);
+            window.input(&path.to_string_lossy(), cx);
+            window.press("enter", cx);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !path.exists() || app.read_with(&vcx, |app, _| app.active_buffer().unwrap().saving) {
+            assert!(std::time::Instant::now() < deadline, "the document save did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            settle(&mut vcx);
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"one\r\ntwo\r\nthree");
+    }
+
+    #[gpui_kit::test]
+    fn docked_status_follows_terminal_focus_and_recovers_document_actions(cx: &mut TestAppContext) {
+        use crate::core::actions::EditorNewFile;
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
+        vcx.dispatch_action(EditorNewFile);
+        settle(&mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let handle = app.tabs[0].pane.first_leaf().unwrap().focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, _| assert!(window.try_find("status-cursor").is_none()));
+        app.update_in(&mut vcx, |app, window, cx| app.focus_editor(window, cx));
+        settle(&mut vcx);
+        vcx.update(|window, cx| {
+            assert!(window.find("status-cursor").visible());
+            window.click("status-problems", cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, _| assert!(window.find("editor-problems").visible()));
+        vcx.update(|window, cx| window.click("editor-panel-close", cx));
+        settle(&mut vcx);
+        assert!(terminal_focused(&app, &mut vcx));
+        vcx.update(|window, _| assert!(window.try_find("status-cursor").is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn diff_status_uses_its_host_path_not_the_covered_document(cx: &mut TestAppContext) {
+        use crate::core::actions::{EditorNewFile, ToggleCodePanel};
+        use crate::terminal::git_diff::{DiffSnapshot, DiffSource};
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
+        vcx.dispatch_action(EditorNewFile);
+        settle(&mut vcx);
+        let remote = HostId::from_connection_key("status-remote-host");
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_supplied_diff(remote, Arc::new(DiffSnapshot {
+                root: PathBuf::from("/srv/项目 with spaces/repository"),
+                source: DiffSource::Patch { id: "status-context".into(), label: None },
+                ..Default::default()
+            }), None, window, cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, cx| {
+            assert!(window.try_find("status-cursor").is_none());
+            window.click("status-path", cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("/srv/项目 with spaces/repository"));
+        });
+        // Raising the still-open editor restores its own position controls.
+        vcx.dispatch_action(ToggleCodePanel);
+        settle(&mut vcx);
+        vcx.update(|window, _| assert!(window.find("status-cursor").visible()));
+    }
+
+    #[gpui_kit::test]
+    fn settings_escape_restores_the_current_document_or_docked_terminal(cx: &mut TestAppContext) {
+        use crate::core::actions::{EditorNewFile, ToggleDocumentFill};
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
+        vcx.dispatch_action(EditorNewFile);
+        settle(&mut vcx);
+        // Both dock and fill must return typing to the document, not its shell.
+        for text in ["docked", "filled"] {
+            if text == "filled" {
+                vcx.dispatch_action(ToggleDocumentFill);
+                settle(&mut vcx);
+            }
+            vcx.update(|window, cx| window.click("status-settings", cx));
+            settle(&mut vcx);
+            assert!(app.read_with(&vcx, |app, _| app.active_settings().is_some()));
+            vcx.simulate_keystrokes("escape");
+            settle(&mut vcx);
+            assert!(app.update_in(&mut vcx, |app, window, cx| app.editor_has_focus(window, cx)));
+            vcx.update(|window, cx| window.input(text, cx));
+            settle(&mut vcx);
+        }
+        assert_eq!(app.read_with(&vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string()), "dockedfilled");
+        vcx.dispatch_action(ToggleDocumentFill);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let handle = app.tabs[0].pane.first_leaf().unwrap().focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        settle(&mut vcx);
+        vcx.update(|window, cx| window.click("status-settings", cx));
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("escape");
+        settle(&mut vcx);
+        assert!(terminal_focused(&app, &mut vcx));
+    }
 }
 
 #[cfg(test)]
@@ -4365,7 +4534,8 @@ mod pane_scrollback_tests {
             );
             rio_vt::performer::handler::Processor::default()
                 .advance(&mut *terminal.lock(), output.as_bytes());
-            window.focus(&pane.read(cx).focus_handle, cx);
+            let focus = pane.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
             pane
         });
         vcx.dispatch_action(crate::core::actions::OpenScrollbackInEditor);
