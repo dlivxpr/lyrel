@@ -7,7 +7,9 @@ use lyrel_core::core::session::WorkspaceId;
 use uuid::Uuid;
 
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
-use crate::core::config::{Config, RightPanelTab};
+#[cfg(test)]
+use crate::core::config::Config;
+use crate::core::config::RightPanelTab;
 use crate::ui::i18n::{L10nKey, alias_translations, t, t_fmt};
 
 /// Everything a row can do once it is picked. `LyrelApp::run_command` is the

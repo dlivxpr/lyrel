@@ -277,6 +277,9 @@ fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_sourc
         let view = cx.new(|cx| crate::ui::settings_window::SettingsWindow::new(&app, window, cx));
         gpui_kit::component::Root::new(view, window, cx)
     });
+    app.update_in(&mut main, |app, window, _| {
+        app.settings_window = Some((settings.into(), window.window_handle()));
+    });
     settings
         .update(cx, |_, window, cx| {
             crate::ui::host_ops::HostOps::notify_err(
