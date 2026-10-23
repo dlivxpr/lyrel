@@ -52,22 +52,6 @@ fn logical_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<PaneNode> 
     }
 }
 
-fn pane_matches_node(pane: &Pane, node: &PaneNode, cx: &App) -> bool {
-    match (pane, node) {
-        (Pane::Leaf(slot), PaneNode::Leaf { pane }) => slot_pane_id(slot, cx) == Some(*pane),
-        (Pane::Split { axis, ratio, a, b, .. }, PaneNode::Split {
-            axis: tree_axis, ratio: tree_ratio, a: tree_a, b: tree_b,
-        }) => {
-            let axis = match axis {
-                gpui_kit::Axis::Horizontal => TreeAxis::Horizontal,
-                gpui_kit::Axis::Vertical => TreeAxis::Vertical,
-            };
-            axis == *tree_axis && ratio.get() == *tree_ratio
-                && pane_matches_node(a, tree_a, cx) && pane_matches_node(b, tree_b, cx)
-        }
-        _ => false,
-    }
-}
 
 fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
     match node {
@@ -90,25 +74,34 @@ pub(crate) fn toggle_pip_for_tab(
     tab: &mut crate::ui::app::Tab,
     pane: gpui_kit::EntityId,
     fallback: Option<gpui_kit::EntityId>,
+    workspace: WorkspaceId,
     cx: &App,
 ) -> bool {
     let leaves = tab.pane.leaves();
-    let Some(target) = leaves.iter().find(|slot| slot.entity_id() == pane)
-        .and_then(|slot| slot_pane_id(slot, cx)) else {
+    let remote = WorkspaceStore::all(cx).get(workspace).is_some_and(|w| w.is_remote());
+    let Some(target_slot) = leaves.iter().find(|slot| slot.entity_id() == pane) else { return false; };
+    if remote && matches!(target_slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local()) {
         return false;
-    };
-    let Some(root) = logical_node(&tab.pane, false, cx) else {
+    }
+    let Some(target) = slot_pane_id(target_slot, cx) else { return false; };
+    let Some(root) = logical_node(&tab.pane, remote, cx) else {
         return false;
     };
     // An unassigned connecting leaf must not disappear when a restore reshapes.
     let mut slots = HashMap::with_capacity(leaves.len());
+    let mut client_local = Vec::new();
     for slot in &leaves {
+        if remote && matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local()) {
+            client_local.push(slot.clone());
+            continue;
+        }
         let Some(id) = slot_pane_id(slot, cx) else { return false; };
         if slots.insert(id, slot.clone()).is_some() {
             return false;
         }
     }
     let fallback = fallback.and_then(|id| leaves.iter().find(|slot| slot.entity_id() == id))
+        .filter(|slot| !remote || !matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local()))
         .and_then(|slot| slot_pane_id(slot, cx));
     let mut logical = TreeTab {
         root,
@@ -124,11 +117,13 @@ pub(crate) fn toggle_pip_for_tab(
     if !logical.set_pip(promote, fallback) {
         return false;
     }
-    if !pane_matches_node(&tab.pane, &logical.root, cx) {
+    if logical_node(&tab.pane, remote, cx).as_ref() != Some(&logical.root) {
         let Some(pane) = pane_from_existing(&logical.root, &mut slots) else {
             return false;
         };
-        tab.pane = pane;
+        tab.pane = client_local.into_iter().fold(pane, |tree, slot| {
+            Pane::split_node(gpui_kit::Axis::Horizontal, 0.5, tree, Pane::Leaf(slot))
+        });
     }
     tab.presentation = logical.presentation;
     true
@@ -3550,17 +3545,7 @@ impl LyrelApp {
         let remote = WorkspaceStore::all(cx)
             .get(self.workspace)
             .is_some_and(|w| w.is_remote());
-        let client_local_pip = remote && self.tabs[index].presentation.pip().is_some_and(|pip| {
-            self.tabs[index].pane.leaves().iter().any(|slot| {
-                matches!(slot, PaneSlot::Ready(view)
-                    if view.read(cx).pane_id == pip.pane() && view.read(cx).ssh_spec().is_some())
-            })
-        });
-        let presentation = if client_local_pip {
-            self.tabs[index].presentation.clone()
-        } else {
-            tab.presentation.clone()
-        };
+        let presentation = tab.presentation.clone();
         if logical_node(&self.tabs[index].pane, remote, cx).as_ref() == Some(&tab.root) {
             let gui = &mut self.tabs[index];
             gui.presentation = presentation;

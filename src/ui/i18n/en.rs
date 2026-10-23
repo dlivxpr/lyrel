@@ -2422,6 +2422,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PaneRestorePip => "Restore picture-in-picture to tiled layout",
         L10nKey::PaneTogglePip => "Toggle pane picture-in-picture",
         L10nKey::PanePipTitle => "Picture-in-picture terminal",
+        L10nKey::PanePipClientLocalUnavailable => "PiP unavailable for this client-local SSH pane",
+        L10nKey::PanePipClientLocalDetail => "This SSH pane belongs to this computer, not the remote workspace's machine tree. Open it in a local workspace to use durable picture-in-picture.",
         L10nKey::PaneFindScrollback => "Find in scrollback…",
         L10nKey::PaneOpenScrollback => "Open scrollback in editor",
         L10nKey::PaneClearScreen => "Clear screen",

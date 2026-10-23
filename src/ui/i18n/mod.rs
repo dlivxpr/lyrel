@@ -1971,6 +1971,8 @@ l10n_keys! {
     PaneRestorePip,
     PaneTogglePip,
     PanePipTitle,
+    PanePipClientLocalUnavailable,
+    PanePipClientLocalDetail,
     PaneFindScrollback,
     PaneOpenScrollback,
     PaneClearScreen,

@@ -677,10 +677,16 @@ impl Tab {
 
     pub(crate) fn pip_slot(&self, cx: &App) -> Option<PaneSlot> {
         let pane = self.presentation.pip()?.pane();
-        self.pane.leaves().into_iter().find(|slot| match slot {
+        let leaves = self.pane.leaves();
+        let matches = |slot: &&PaneSlot| match slot {
             PaneSlot::Ready(view) => view.read(cx).pane_id == pane,
             PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane == Some(pane),
-        })
+        };
+        // A remote workspace may also contain client-local native SSH panes.
+        // Their daemon IDs are not identities in the owning machine's tree.
+        leaves.iter().filter(matches).find(|slot| {
+            !matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
+        }).cloned().or_else(|| leaves.iter().find(matches).cloned())
     }
 
     fn render_panes(
@@ -4317,12 +4323,14 @@ impl LyrelApp {
     }
 
     fn replace_pane_slot(&mut self, old: gpui_kit::EntityId, new: PaneSlot, cx: &App) {
+        let remote = WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote());
         if let Some(tab) = self.tabs.iter_mut().find(|tab| {
             tab.pane.leaves().iter().any(|slot| slot.entity_id() == old)
         }) {
             let old_id = tab.pane.leaves().into_iter()
                 .find(|slot| slot.entity_id() == old)
                 .and_then(|slot| match slot {
+                    PaneSlot::Ready(view) if remote && view.read(cx).pane_route().is_local() => None,
                     PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
                     PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane,
                 });
@@ -4637,11 +4645,13 @@ impl LyrelApp {
         let multiple = tab.pane.leaves().len() > 1;
         let zoomed = self.maximized.as_ref().is_some_and(|view| view.entity_id() == pane);
         let pip = tab.pip_slot(cx).is_some_and(|slot| slot.entity_id() == pane);
+        let client_local = WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote())
+            && terminal.as_ref().is_some_and(|view| view.read(cx).pane_route().is_local());
         let entries: [(L10nKey, Option<Box<dyn gpui_kit::Action>>, bool, bool); 14] = [
             (L10nKey::AppMenuPaste, Some(Box::new(crate::terminal::view::PasteText)), !live, false),
             (L10nKey::AppMenuSplitRight, Some(Box::new(SplitRight)), !ready, false),
             (L10nKey::AppMenuSplitDown, Some(Box::new(SplitDown)), !ready, false),
-            (if pip { L10nKey::PaneRestorePip } else { L10nKey::PaneEnterPip }, Some(Box::new(TogglePanePip)), !live, pip),
+            (if client_local { L10nKey::PanePipClientLocalUnavailable } else if pip { L10nKey::PaneRestorePip } else { L10nKey::PaneEnterPip }, Some(Box::new(TogglePanePip)), !live || client_local, pip),
             (L10nKey::CmdZoomPane, Some(Box::new(ToggleMaximizePane)), !ready || !multiple, zoomed),
             (L10nKey::PaneMoveToTab, Some(Box::new(MovePaneToTab)), !multiple, false),
             (L10nKey::PaneMenuTitle, None, false, false),
@@ -4679,8 +4689,14 @@ impl LyrelApp {
     }
 
     fn toggle_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let remote = WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote());
         let Some(tab) = self.tabs.get_mut(self.active) else { return; };
         let Some(target) = tab.pane.focused_leaf(window, cx).or_else(|| tab.focus_target()) else { return; };
+        if remote && matches!(&target, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local()) {
+            window.push_notification(gpui_kit::component::notification::Notification::warning(
+                t(L10nKey::PanePipClientLocalDetail)), cx);
+            return;
+        }
         let restoring = tab.pip_slot(cx).is_some_and(|pip| pip.entity_id() == target.entity_id());
         let fallback = if restoring {
             tab.pane.leaves().into_iter().find(|slot| slot.entity_id() != target.entity_id())
@@ -4688,7 +4704,7 @@ impl LyrelApp {
         } else {
             Some(target.entity_id())
         };
-        if !crate::ui::tree_sync::toggle_pip_for_tab(tab, target.entity_id(), fallback, cx) { return; }
+        if !crate::ui::tree_sync::toggle_pip_for_tab(tab, target.entity_id(), fallback, self.workspace, cx) { return; }
         self.maximized = None;
         self.pane_drag.borrow_mut().take();
         self.focus_leaf(&target, window, cx);
@@ -4703,7 +4719,7 @@ impl LyrelApp {
             .filter(|slot| slot.entity_id() != pip.entity_id())
             .or_else(|| tab.pane.leaves().into_iter().find(|slot| slot.entity_id() != pip.entity_id()))
             .map(|slot| slot.entity_id());
-        if !crate::ui::tree_sync::toggle_pip_for_tab(tab, pip.entity_id(), fallback, cx) { return; }
+        if !crate::ui::tree_sync::toggle_pip_for_tab(tab, pip.entity_id(), fallback, self.workspace, cx) { return; }
         self.maximized = None;
         self.pane_drag.borrow_mut().take();
         self.focus_leaf(&pip, window, cx);
@@ -11313,7 +11329,7 @@ fn session_to_pane(
                     // report, so it is where the redialled shell starts.
                     match new_terminal_native(font_size, cwd.clone(), resolved, window, cx) {
                         Ok(view) => {
-                            remap_presentation_slot(presentation, *pane_id, &PaneSlot::Ready(view.clone()), cx);
+                            if same_daemon { remap_presentation_slot(presentation, *pane_id, &PaneSlot::Ready(view.clone()), cx); }
                             return Some(Pane::leaf(PaneSlot::Ready(view)));
                         }
                         Err(e) => log::error!("restoring native SSH pane failed: {e}"),
@@ -11368,7 +11384,7 @@ fn session_to_pane(
                     });
                 }
             }
-            remap_presentation_slot(presentation, *pane_id, &view, cx);
+            if same_daemon { remap_presentation_slot(presentation, *pane_id, &view, cx); }
             Some(Pane::leaf(view))
         }
         SessionPane::Split { axis, ratio, a, b } => {
@@ -15814,6 +15830,102 @@ mod pip_menu_gpui_tests {
             window.render_frame(cx);
             assert!(window.try_find(right_id).is_none());
             assert!(right.contains_focused(window, cx), "restore focuses the recovered terminal");
+        });
+    }
+}
+
+#[cfg(test)]
+mod pip_remote_identity_gpui_tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+    use gpui_kit::test::TestWindowExt as _;
+    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
+
+    #[gpui_kit::test]
+    fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(cx: &mut TestAppContext) {
+        let (app, mut vcx, _remote_stream) = test_window::harness_with_pane(cx);
+        let remote = WindowView::on_remote(RemoteRef::new(
+            RemoteTarget::Alias { alias: "pip-remote".into() }, WorkspaceId::new(),
+        ));
+        let remote_id = remote.id;
+        let (target, ssh, _ssh_stream) = app.update_in(&mut vcx, |app, window, cx| {
+            WorkspaceStore::install_for_test(cx, WindowViews { views: vec![remote], active: None });
+            app.workspace = remote_id;
+            let target = app.tabs[0].pane.first_leaf().unwrap();
+            target.terminal().unwrap().update(cx, |view, _| {
+                view.set_workspace(Some(crate::terminal::PaneWorkspace {
+                    workspace: WorkspaceId::new(),
+                    target: RemoteTarget::direct("me", "pip-remote", 22),
+                    spec: None,
+                    label: None,
+                    resize_echo: false,
+                }));
+            });
+            let (ssh, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
+            app.tabs[0].pane.split_leaf(target.entity_id(), Axis::Horizontal, false, PaneSlot::Ready(ssh.clone()));
+            window.focus(&target.focus_handle(cx), cx);
+            cx.notify();
+            (target, ssh, stream)
+        });
+        vcx.dispatch_action(TogglePanePip);
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("pane-pip", target.entity_id().as_u64() as usize)).visible());
+            assert!(window.try_find(("pane-pip", ssh.entity_id().as_u64() as usize)).is_none());
+        });
+        vcx.dispatch_action(RestorePanePip);
+        app.update_in(&mut vcx, |app, _, _| {
+            let leaves = app.tabs[0].pane.leaves();
+            assert_eq!(leaves.len(), 2);
+            assert!(leaves.iter().any(|slot| slot.entity_id() == ssh.entity_id()));
+            assert!(leaves.iter().any(|slot| slot.entity_id() == target.entity_id()));
+        });
+        app.update_in(&mut vcx, |_, window, cx| {
+            let focus = ssh.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
+        });
+        vcx.dispatch_action(TogglePanePip);
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find(("pane-pip", target.entity_id().as_u64() as usize)).is_none());
+            assert!(window.try_find(("pane-pip", ssh.entity_id().as_u64() as usize)).is_none());
+        });
+        app.update_in(&mut vcx, |app, window, cx| {
+            assert_eq!(app.tabs[0].pane.leaves().len(), 2, "a foreign-owned command must never target a colliding remote ID");
+            assert!(ssh.read(cx).focus_handle.contains_focused(window, cx));
+        });
+    }
+}
+
+#[cfg(test)]
+mod pip_native_owned_gpui_tests {
+    use super::*;
+    use gpui_kit::TestAppContext;
+    use gpui_kit::test::TestWindowExt as _;
+
+    #[gpui_kit::test]
+    fn native_ssh_on_the_local_workspace_uses_the_same_live_view(cx: &mut TestAppContext) {
+        let (app, mut vcx) = test_window::harness(cx);
+        let (pane, _stream) = app.update_in(&mut vcx, |app, window, cx| {
+            let (pane, stream) = crate::terminal::view::quiet_test_ssh_pane(41, window, cx);
+            app.tabs.push(Tab::new(Pane::Leaf(PaneSlot::Ready(pane.clone()))));
+            app.active = 0;
+            let focus = pane.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
+            cx.notify();
+            (pane, stream)
+        });
+        vcx.dispatch_action(TogglePanePip);
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("pane-pip", pane.entity_id().as_u64() as usize)).visible());
+        });
+        vcx.dispatch_action(RestorePanePip);
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), pane.entity_id());
         });
     }
 }
