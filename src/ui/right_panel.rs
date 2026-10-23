@@ -36,7 +36,7 @@ pub(crate) const MIN_WIDTH: f32 = 240.;
 /// its 2px gaps, and the panel toggle at the trailing end.
 fn right_panel_tabs_floor(window: &Window, cx: &gpui_kit::App) -> f32 {
     let chrome = match cfg!(target_os = "macos") {
-        true => crate::ui::tab_strip::trailing_chrome_tiles_w(),
+        true => crate::ui::window_chrome::trailing_chrome_tiles_w(),
         false => tile_trailing_inset(),
     };
     (TAB_ROW_LEAD + crate::ui::tab_strip::right_panel_tab_labels_w(window, cx) + chrome).ceil()

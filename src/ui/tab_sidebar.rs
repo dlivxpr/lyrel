@@ -19,7 +19,7 @@ use crate::core::group_key::{
     place,
 };
 use crate::terminal::git_status::GitStatusCache;
-use crate::ui::app::{LyrelApp, TITLE_BAR_BORDER, Tab, TitleStripRow as _};
+use crate::ui::app::{LyrelApp, Tab};
 use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
@@ -31,7 +31,6 @@ use crate::ui::tab_strip::{
 
 pub(crate) const MIN_SIDEBAR_WIDTH: f32 = 180.;
 
-const GRAB_HANDLE_W: f32 = 48.;
 
 const ROW_GAP: f32 = 1.;
 
@@ -62,7 +61,7 @@ const HEADER_HEIGHT: f32 = 22.;
 const META_REM: f32 = 11.5 / 16.;
 
 /// The rail's side inset, for its header tiles, controls and rows alike.
-const RAIL_INSET: f32 = 12.;
+pub(crate) const RAIL_INSET: f32 = 12.;
 
 /// The workspace chip and the search field under the rail's header.
 const HEAD_CONTROL_HEIGHT: f32 = 28.;
@@ -255,6 +254,7 @@ impl LyrelApp {
 
     pub(crate) fn tab_sidebar(
         &self,
+        header: AnyElement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -1731,55 +1731,6 @@ impl LyrelApp {
             );
         }
 
-        // On screen at rest unless the Appearance switch says otherwise; then
-        // these two tiles wait for the pointer to reach the rail. The mark
-        // stays either way — it names the window rather than doing anything.
-        let auto_hide_chrome = cx.global::<Config>().auto_hide_titlebar_buttons;
-        let chrome_shown = crate::ui::app::titlebar_chrome_shown(
-            auto_hide_chrome,
-            self.sidebar_chrome_hover.get(),
-        );
-        let controls = h_flex()
-            .flex_shrink_0()
-            .title_strip_row(px(TITLE_BAR_BORDER), cx.theme().transparent)
-            .justify_end()
-            .gap(px(2.))
-            .pr(px(RAIL_INSET))
-            .when_some(crate::ui::app::window_mark(), |row, mark| {
-                row.child(
-                    div()
-                        .flex_shrink_0()
-                        .pl(px(crate::ui::app::CONTENT_INSET))
-                        .child(mark),
-                )
-                .child(div().flex_1().min_w(px(GRAB_HANDLE_W)))
-            })
-            .child(
-                crate::ui::app::resting_chrome(div().occlude().flex_shrink_0(), chrome_shown)
-                    // These are the same controls as the collapsed title bar's
-                    // pair. Keep their hit targets and glyphs unchanged when
-                    // the sidebar opens, rather than switching to row-sized tiles.
-                    .child(self.new_tab_button("sidebar-add", cx)),
-            )
-            .child(
-                crate::ui::app::resting_chrome(div().occlude().flex_shrink_0(), chrome_shown)
-                    .child(
-                        crate::ui::tab_strip::chrome_tile(
-                            Button::new("sidebar-collapse")
-                                .icon(Icon::empty().path("icons/panel-left.svg")),
-                            false,
-                            cx,
-                        )
-                        .rounded_lg()
-                        .accessibility_label(t(L10nKey::TabTooltipHideSidebar))
-                        .tooltip_with_action(
-                            t(L10nKey::TabTooltipHideSidebar),
-                            &crate::core::actions::ToggleLeftPanel,
-                            None,
-                        )
-                        .on_click(cx.listener(|this, _, _window, cx| this.toggle_left_panel(cx))),
-                    ),
-            );
         // The tile inside asks for `w_full`, and a percentage is only a width
         // while some box above it has a real one. This row used to have none of
         // its own and borrowed the column's by cross-axis stretch, which did not
@@ -1824,6 +1775,7 @@ impl LyrelApp {
             .child(self.workspace_head(cx))
             .child(search);
 
+        let auto_hide_chrome = cx.global::<Config>().auto_hide_titlebar_buttons;
         let container: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
         // Read while there is still a `cx` to read it from: the drag handler
         // below only ever sees a `Window`, and the cap it clamps against has to
@@ -1933,12 +1885,7 @@ impl LyrelApp {
                 v_flex()
                     .w(px(width - 1.))
                     .h_full()
-                    .child(crate::ui::app::title_bar_drag(
-                        controls.id("sidebar-titlebar-drag"),
-                        "sidebar-titlebar-drag",
-                        window,
-                        cx,
-                    ))
+                    .child(header)
                     .child(workspace_head)
                     .child(crate::ui::scrollbar::with_vertical_scrollbar(
                         "tab-sidebar-scrollbar",
