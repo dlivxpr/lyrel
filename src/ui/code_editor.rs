@@ -276,7 +276,7 @@ pub(crate) enum AfterUnsaved {
     /// Take these files out of that tab's strip — Close Others and Close to
     /// the Right.
     CloseFiles(TabId, Vec<BufferId>),
-    ClosePane,
+    ClosePane(gpui_kit::EntityId),
     CloseWindow,
     Quit,
 }
@@ -1495,6 +1495,42 @@ impl LyrelApp {
             window,
             cx,
         );
+        self.editor_show_in_tab(tab, id, true, window, cx);
+    }
+
+    /// A scrollback export is an unsaved document, never a filesystem path on
+    /// the pane's host. Saving uses the ordinary Save As and close safeguards.
+    pub(crate) fn editor_open_scrollback(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(self.active).map(|t| t.tree_id.get()) else {
+            return;
+        };
+        let host: SharedHost = lyrel_core::host::local::LocalHost::new();
+        let n = self.editor.next_untitled;
+        self.editor.next_untitled += 1;
+        let indent = editor_text::detect_indent(&text, "text");
+        let dirty = !text.is_empty();
+        let id = self.editor_new_buffer(
+            host,
+            PathBuf::new(),
+            Some(n),
+            text,
+            TextFormat::default(),
+            EditorConfig::default(),
+            indent,
+            None,
+            window,
+            cx,
+        );
+        if let Some(file) = self.buffer_mut(id) {
+            file.saved = Fingerprint::of_str("");
+            file.dirty = dirty;
+        }
+        self.raise_code_overlay();
         self.editor_show_in_tab(tab, id, true, window, cx);
     }
 
@@ -2751,7 +2787,7 @@ impl LyrelApp {
                     }
                 }
             }
-            AfterUnsaved::ClosePane => self.close_pane_after_unsaved(window, cx),
+            AfterUnsaved::ClosePane(pane) => self.close_pane_after_unsaved(pane, window, cx),
             AfterUnsaved::CloseWindow => self.close_window_after_unsaved(window, cx),
             AfterUnsaved::Quit => self.quit_after_unsaved(window, cx),
         }
@@ -4243,5 +4279,41 @@ mod close_gpui_tests {
             app.editor_close_active_if_focused(window, cx)
         }));
         assert_eq!(panel(&app, &mut vcx), (true, 0));
+    }
+}
+
+#[cfg(test)]
+mod pane_scrollback_tests {
+    use gpui_kit::TestAppContext;
+
+    #[gpui_kit::test]
+    fn scrollback_action_opens_a_saveable_unicode_draft_without_changing_the_pane(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+        let pane = app.update_in(&mut vcx, |app, window, cx| {
+            let pane = app.tabs[0].pane.terminals()[0].clone();
+            let terminal = pane.read(cx).terminal.term.clone();
+            let output = format!(
+                "\x1b[31m历史 e\u{301} 🎉\x1b[0m\r\nsecond line\r\n{}",
+                "retained history\r\n".repeat(40),
+            );
+            rio_vt::performer::handler::Processor::default()
+                .advance(&mut *terminal.lock(), output.as_bytes());
+            window.focus(&pane.read(cx).focus_handle, cx);
+            pane
+        });
+        vcx.dispatch_action(crate::core::actions::OpenScrollbackInEditor);
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
+            let file = app.active_buffer().expect("scrollback opens a real editor buffer");
+            let text = file.input.read(cx).text().to_string();
+            assert!(text.starts_with("历史 e\u{301} 🎉\nsecond line"), "{text:?}");
+            assert!(!text.contains('\x1b'));
+            assert!(file.untitled.is_some());
+            assert!(file.dirty, "closing the draft must offer Save As instead of losing it");
+            assert!(app.editor_has_focus(window, cx));
+            assert_eq!(app.tabs[0].pane.terminals()[0], pane);
+        });
     }
 }
