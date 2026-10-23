@@ -140,7 +140,7 @@ pub(crate) fn note_primary_tab(tab: &mut Tab, primary: &TreeTab, cx: &App) {
         logical.presentation.set_pip_geometry(primary.presentation.pip_geometry());
     }
     let current = logical.presentation.pip().map(|pip| pip.pane());
-    if before != after {
+    if before != after || primary.presentation.pip() != tab.presentation.pip() {
         if let Some(after) = after {
             let restore = primary.presentation.pip().and_then(|entry| entry.map_panes(|pane| Some(ScopedPane::workspace(pane))));
             logical.set_pip_with_restore(Some(ScopedPane::workspace(after)), fallback, restore);
