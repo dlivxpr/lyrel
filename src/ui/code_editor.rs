@@ -4364,7 +4364,8 @@ mod pane_scrollback_tests {
             );
             rio_vt::performer::handler::Processor::default()
                 .advance(&mut *terminal.lock(), output.as_bytes());
-            window.focus(&pane.read(cx).focus_handle, cx);
+            let focus = pane.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
             pane
         });
         vcx.dispatch_action(crate::core::actions::OpenScrollbackInEditor);
