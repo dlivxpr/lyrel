@@ -2056,6 +2056,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::RemoteThisComputer => "this computer",
         L10nKey::HostMetricsWaiting => "Waiting for host sample",
+        L10nKey::HostMetricsConnecting => "Connecting to host",
+        L10nKey::HostMetricsReconnecting => "Reconnecting to host",
         L10nKey::HostMetricsUnavailable => "Host metrics unavailable",
         L10nKey::HostMetricsDisconnected => "Host disconnected",
         L10nKey::HostMetricsFailed => "Host sampling failed: {reason}",

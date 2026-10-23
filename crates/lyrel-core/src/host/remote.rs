@@ -143,6 +143,11 @@ impl Host for RemoteHost {
         self.id
     }
 
+    fn host_metrics(&self) -> io::Result<crate::host::metrics::HostMetrics> {
+        guard_off_ui();
+        self.client.host_metrics()
+    }
+
     fn separator(&self) -> char {
         self.separator
     }

@@ -8,7 +8,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 use lyrel_core::daemon::control::ControlHello;
 
-use crate::core::actions::{EditorNewFile, SelectNextTab, ToggleDocumentFill};
+use crate::core::actions::{EditorNewFile, RestorePanePip, SelectNextTab, ToggleDocumentFill, TogglePanePip};
 use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
 use crate::ui::app::test_window::harness_with_tabs;
 
@@ -77,6 +77,16 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     vcx.update(|window, _| {
         assert!(window.find("status-host-metrics").label().unwrap().contains(&hostname));
     });
+    vcx.dispatch_action(TogglePanePip);
+    settle(&mut vcx);
+    assert!(app.read_with(&vcx, |app, cx| app.tabs[app.active].pip_slot(cx).is_some()));
+    vcx.update(|window, _| {
+        assert!(window.find("status-host-metrics").label().unwrap().contains(&hostname));
+    });
+    assert!(has_sample(&mut vcx));
+    vcx.dispatch_action(RestorePanePip);
+    settle(&mut vcx);
+    assert!(app.read_with(&vcx, |app, cx| app.tabs[app.active].pip_slot(cx).is_none()));
     for (width, font) in [(1440., 16.), (720., 20.)] {
         vcx.simulate_resize(size(px(width), px(720.)));
         app.update_in(&mut vcx, |_, _, cx| {
@@ -123,5 +133,84 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     wait_sample(&mut vcx, false);
     let reconnected = HostServer::new();
     vcx.update(|_, cx| cx.default_global::<LocalLink>().client = Some(reconnected.client.clone()));
+    wait_sample(&mut vcx, true);
+}
+
+struct RemoteServer {
+    host: Arc<lyrel_core::host::remote::RemoteHost>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl RemoteServer {
+    fn new(target: &RemoteTarget) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let thread = std::thread::spawn(move || {
+            lyrel_core::host::server::serve(server, lyrel_core::host::local::LocalHost::new()).unwrap();
+        });
+        let host = lyrel_core::host::remote::RemoteHost::over_tcp(stream, &target.connection_key(),
+            &ControlHello::host_rpc("remote-metrics-window", "consumer")).unwrap();
+        Self { host, thread: Some(thread) }
+    }
+
+    fn install(&self, vcx: &mut VisualTestContext) {
+        vcx.update(|_, cx| crate::ui::remote_connect::HostLinks::insert(cx,
+            self.host.clone(), self.host.home()));
+    }
+}
+
+impl Drop for RemoteServer {
+    fn drop(&mut self) {
+        self.host.client().close();
+        if let Some(thread) = self.thread.take() { thread.join().unwrap(); }
+    }
+}
+
+#[gpui_kit::test]
+fn remote_workspace_metrics_never_relabel_another_hosts_sample(cx: &mut TestAppContext) {
+    let target_a = RemoteTarget::Alias { alias: "metrics-route-a".into() };
+    let target_b = RemoteTarget::Alias { alias: "metrics-route-b".into() };
+    let server_a = RemoteServer::new(&target_a);
+    let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
+    vcx.update(|_, cx| cx.set_global(LocalLink::default()));
+    let local = app.read_with(&vcx, |app, _| app.workspace);
+    let workspace_a = WindowView::on_remote(RemoteRef::new(target_a.clone(), WorkspaceId::new()));
+    let workspace_b = WindowView::on_remote(RemoteRef::new(target_b.clone(), WorkspaceId::new()));
+    let a = workspace_a.id;
+    let b = workspace_b.id;
+    app.update_in(&mut vcx, |_, _, cx| {
+        let mut views = WorkspaceStore::all(cx).clone();
+        views.views.extend([workspace_a, workspace_b]);
+        WorkspaceStore::install_for_test(cx, views);
+    });
+    server_a.install(&mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| app.switch_workspace(Some(a), window, cx));
+    wait_sample(&mut vcx, true);
+    // No local client exists: these numbers can only have arrived over A's Host.
+    assert!(vcx.update(|_, cx| LocalLink::client(cx).is_none()));
+
+    app.update_in(&mut vcx, |app, window, cx| app.switch_workspace(Some(b), window, cx));
+    settle(&mut vcx);
+    assert!(!has_sample(&mut vcx), "B briefly displayed A's old numbers");
+    let server_b = RemoteServer::new(&target_b);
+    server_b.install(&mut vcx);
+    wait_sample(&mut vcx, true);
+    server_a.host.client().close();
+    settle(&mut vcx);
+    assert!(has_sample(&mut vcx), "A's disconnect cleared B's measurement");
+
+    app.update_in(&mut vcx, |app, window, cx| app.switch_workspace(Some(a), window, cx));
+    settle(&mut vcx);
+    assert!(!has_sample(&mut vcx), "a disconnected A retained B's sample");
+    let reconnected_a = RemoteServer::new(&target_a);
+    reconnected_a.install(&mut vcx);
+    wait_sample(&mut vcx, true);
+
+    app.update_in(&mut vcx, |app, window, cx| app.switch_workspace(Some(local), window, cx));
+    settle(&mut vcx);
+    assert!(!has_sample(&mut vcx), "local workspace reused A despite no local daemon connection");
+    let local_server = HostServer::new();
+    vcx.update(|_, cx| cx.default_global::<LocalLink>().client = Some(local_server.client.clone()));
     wait_sample(&mut vcx, true);
 }

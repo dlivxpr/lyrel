@@ -1697,6 +1697,8 @@ l10n_keys! {
     RemoteNoConnectionDetails,
     RemoteThisComputer,
     HostMetricsWaiting,
+    HostMetricsConnecting,
+    HostMetricsReconnecting,
     HostMetricsUnavailable,
     HostMetricsDisconnected,
     HostMetricsFailed,
