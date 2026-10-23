@@ -2,6 +2,16 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::NotificationInbox => "通知",
+        L10nKey::NotificationClearHistory => "清空通知历史",
+        L10nKey::NotificationScope => "本机已收到的应用通知 · 最近 500 条",
+        L10nKey::NotificationEmpty => "暂无通知。新的应用通知会显示在这里。",
+        L10nKey::NotificationSourceUnavailable => "来源已不可用",
+        L10nKey::NotificationUnread => "未读",
+        L10nKey::NotificationSuccess => "成功",
+        L10nKey::NotificationInfo => "信息",
+        L10nKey::NotificationWarning => "警告",
+        L10nKey::NotificationError => "错误",
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
             "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 或 skills.sh 发现候选，审查共享安装、检查更新、保留本地改动并安全移除精确关联链接。"
@@ -1876,6 +1886,14 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "此窗口是 {machine} 上的工作区，但 lyrel 没有它的连接信息了——检查其 SSH 配置或 ~/.ssh/config 条目是否还在。"
         }
         L10nKey::RemoteThisComputer => "本机",
+        L10nKey::HostMetricsWaiting => "等待主机采样",
+        L10nKey::HostMetricsConnecting => "正在连接主机",
+        L10nKey::HostMetricsReconnecting => "正在重连主机",
+        L10nKey::HostMetricsUnavailable => "主机指标不可用",
+        L10nKey::HostMetricsDisconnected => "主机已断开",
+        L10nKey::HostMetricsFailed => "主机采样失败：{reason}",
+        L10nKey::HostMetricsError => "主机采样失败",
+        L10nKey::HostMetricsSample => "{host} · 整机 CPU · 内存 {used} / {total} GiB",
         L10nKey::RemoteProfileGone => "已删除的配置",
         L10nKey::RemoteRestartTitle => "重启“{machine}”上的 lyrel server？",
         L10nKey::RemoteRestartBody => {
@@ -2217,6 +2235,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ParkedAlive => "运行中",
         L10nKey::ParkedExited => "已退出",
         L10nKey::ParkedEmpty => "所有窗格均已停放。可恢复卡片或新建窗格。",
+        L10nKey::PanePipMove => "移动画中画（方向键调整，Escape 返回终端）",
+        L10nKey::PanePipResize => "调整画中画大小（方向键调整，Escape 返回终端）",
         L10nKey::PanePipClientLocalUnavailable => "此客户端本地 SSH 窗格暂不支持画中画",
         L10nKey::PanePipClientLocalDetail => "此 SSH 窗格由本机拥有，不在远端工作区的机器布局中。请在本地工作区打开它以使用持久画中画。",
         L10nKey::PaneFindScrollback => "在滚动历史中查找…",

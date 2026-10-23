@@ -18,6 +18,9 @@ serde = { workspace = true }
 serde_json.workspace = true
 yaml_serde.workspace = true
 chrono = { version = "0.4.45", features = ["serde"] }
+# Whole-host CPU/RAM only; no process, disk or network refreshes. Already locked
+# through the desktop stack; shared here so headless daemons use the same APIs.
+sysinfo = { version = "=0.31.4", default-features = false, features = ["system"] }
 
 # SSH connection-manager data layer (`core::ssh_profile` / `core::keychain`) and
 # workspace identity (`core::session`). `uuid` mints stable ids (v4) and

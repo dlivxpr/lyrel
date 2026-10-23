@@ -1,3 +1,4 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use crate::ui::scm::status::{status_color, status_glyph};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -1110,7 +1111,7 @@ impl LyrelApp {
                 // (#542): say so with the same words a failed file link uses.
                 if let Err(e) = crate::terminal::view::open_file_path(path) {
                     log::warn!("failed to open {}: {e}", path.display());
-                    window.push_notification(
+                    window.notify_app(
                         crate::ui::host_ops::failure(
                             t_fmt(
                                 L10nKey::LinkFileOpenFailed,
@@ -1125,7 +1126,7 @@ impl LyrelApp {
                     );
                 }
             } else {
-                window.push_notification(
+                window.notify_app(
                     t_fmt(
                         L10nKey::LinkDirOutsideTree,
                         &[("path", &path.display().to_string())],
@@ -1423,7 +1424,7 @@ impl LyrelApp {
                 )
             },
             move |_app, result: std::io::Result<PathBuf>, window, cx| match result {
-                Ok(local) => window.push_notification(
+                Ok(local) => window.notify_app(
                     t_fmt(
                         L10nKey::FileTreeDownloaded,
                         &[(

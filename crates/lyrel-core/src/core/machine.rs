@@ -405,6 +405,8 @@ pub struct TabPresentation {
     pip: Option<PipPane>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     parked: Vec<PipPane>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pip_geometry: Option<PipGeometry>,
 }
 
 impl TabPresentation {
@@ -422,6 +424,16 @@ impl TabPresentation {
 
     pub fn is_hidden(&self, pane: u64) -> bool {
         self.is_parked(pane) || self.pip().is_some_and(|entry| entry.pane == pane)
+    }
+
+    pub fn pip_geometry(&self) -> Option<PipGeometry> {
+        self.pip_geometry
+    }
+
+    pub fn set_pip_geometry(&mut self, geometry: Option<PipGeometry>) -> bool {
+        if self.pip_geometry == geometry { return false; }
+        self.pip_geometry = geometry;
+        true
     }
 
     /// Rebinds restored identities without discarding the original relationship.
@@ -445,6 +457,33 @@ impl TabPresentation {
         }
         self.parked.retain_mut(|entry| remap(entry, &map));
     }
+}
+
+/// Shared placement intent, not a client window rectangle. Position is a
+/// fraction of available travel; size is a fraction of the content viewport.
+/// Each client resolves terminal minima and shadow clearance at its own scale.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PipGeometry {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl Default for PipGeometry {
+    fn default() -> Self { Self { x: 1., y: 1., width: 0.42, height: 0.42 } }
+}
+
+impl PipGeometry {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Option<Self> {
+        let valid = [x, y, width, height].into_iter().all(|v| v.is_finite() && (0. ..=1.).contains(&v));
+        (valid && width > 0. && height > 0.).then_some(Self { x, y, width, height })
+    }
+    pub fn x(self) -> f32 { self.x }
+    pub fn y(self) -> f32 { self.y }
+    pub fn width(self) -> f32 { self.width }
+    pub fn height(self) -> f32 { self.height }
+    pub fn is_valid(self) -> bool { Self::new(self.x, self.y, self.width, self.height).is_some() }
 }
 
 /// One live pane presented outside the tiled projection, with its original
@@ -1508,6 +1547,27 @@ impl MachineStore {
             } else {
                 Vec::new()
             };
+            Ok(((), deltas))
+        })
+    }
+
+    pub fn pane_set_pip_geometry(
+        &self,
+        workspace: WorkspaceId,
+        pane: u64,
+        geometry: Option<PipGeometry>,
+        origin: Option<SubscriberId>,
+    ) -> io::Result<()> {
+        if geometry.is_some_and(|geometry| !geometry.is_valid()) {
+            return Err(refuse("invalid PiP geometry"));
+        }
+        self.mutate(origin, |m| {
+            let ws = find_workspace(m, workspace)?;
+            let tab = ws.tabs.iter_mut().find(|tab| tab.presentation.pip().is_some_and(|pip| pip.pane() == pane))
+                .ok_or_else(|| not_found(format!("workspace {workspace} has no PiP pane {pane}")))?;
+            let deltas = if tab.presentation.set_pip_geometry(geometry) {
+                vec![(workspace, LayoutDelta::TabRestructured { tab: tab.clone(), pane: None })]
+            } else { Vec::new() };
             Ok(((), deltas))
         })
     }

@@ -1,8 +1,8 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, Global};
 use lyrel_core::core::machine::{
     AgentFacts, Axis as TreeAxis, LayoutDelta, Machine, PaneNode, PaneRecord, PaneSeed, Side,
@@ -1064,6 +1064,11 @@ fn reconcile_presentation(
             pip: desired.is_some(),
             fallback,
             restore,
+        });
+    }
+    if tab.presentation.set_pip_geometry(want.presentation.pip_geometry()) && desired.is_some() {
+        ops.push(ControlRequest::PaneSetPipGeometry {
+            workspace, pane, geometry: want.presentation.pip_geometry(),
         });
     }
 }
@@ -2714,7 +2719,7 @@ fn say_why_the_window_is_empty(cx: &mut App, client_ws: WorkspaceId) {
         return;
     };
     let _ = handle.update(cx, |_, window, cx| {
-        window.push_notification(t(L10nKey::TreeWindowOpenedEmpty), cx);
+        window.notify_app(t(L10nKey::TreeWindowOpenedEmpty), cx);
     });
 }
 

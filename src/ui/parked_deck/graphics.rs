@@ -133,7 +133,7 @@ fn text(value: &str, font: &str, x: f32, y: f32, size: f32, width: f32, bold: bo
 pub(super) fn card_sprites(card: &ParkedCard, labels: &ParkedDeckLabels, font: &str) -> Vec<Sprite> {
     let front = [0., 0., 56., 74.];
     let back = [0., 0., 120., 112.];
-    let status = if card.alive { &labels.alive } else { &labels.exited };
+    let status = card.status(labels);
     let icon = r#"<g fill="none" stroke="white" stroke-width="1.8"><rect x="20" y="13" width="16" height="16" rx="2"/><path d="M23 17l3 3-3 3m6 1h4"/></g>"#;
     let mut result = vec![
         sprite(Layer::Shadow, None, [-50., -40., 156., 180.], r#"<defs><filter id="s" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="14"/></filter></defs><rect x="0" y="10" width="56" height="74" rx="10" fill="white" filter="url(#s)"/>"#),

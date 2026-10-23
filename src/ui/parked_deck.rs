@@ -21,11 +21,21 @@ pub struct ParkedCard {
     title: SharedString,
     path: SharedString,
     alive: bool,
+    status: Option<SharedString>,
 }
 
 impl ParkedCard {
     pub fn new(pane: u64, title: impl Into<SharedString>, path: impl Into<SharedString>, alive: bool) -> Self {
-        Self { pane, title: title.into(), path: path.into(), alive }
+        Self { pane, title: title.into(), path: path.into(), alive, status: None }
+    }
+
+    pub fn with_status(mut self, status: impl Into<SharedString>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+
+    fn status<'a>(&'a self, labels: &'a ParkedDeckLabels) -> &'a str {
+        self.status.as_deref().unwrap_or(if self.alive { &labels.alive } else { &labels.exited })
     }
 
     /// 返回 App 提供的不透明客户端 token；恢复会话的 Host/daemon 身份由 App 查找对应 slot。
@@ -406,7 +416,7 @@ impl Render for ParkedDeck {
                 for (model, bounds, selected, restore) in scene.semantic_cards() {
                     if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) { continue; }
                     let pane = model.pane;
-                    let status = if model.alive { &labels.alive } else { &labels.exited };
+                    let status = model.status(&labels);
                     let card_weak = prepaint_weak.clone();
                     let mut card = div().id(("parked-card", pane as usize)).test_support().absolute()
                         .left(bounds.left() - group_bounds.left()).top(bounds.top() - group_bounds.top())
