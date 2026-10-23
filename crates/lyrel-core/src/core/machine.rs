@@ -295,7 +295,8 @@ impl<K: Copy + Eq> Tab<K> {
 
     /// Projects tiled panes without changing ownership, including an empty tile area.
     pub fn visible_root(&self) -> Option<PaneNode<K>> {
-        self.root.project_visible(&|pane| !self.presentation.is_hidden(pane))
+        self.root
+            .project_visible(&|pane| !self.presentation.is_hidden(pane))
     }
 
     /// Changes the one PiP pane, restoring its predecessor before promotion.
@@ -324,7 +325,12 @@ impl<K: Copy + Eq> Tab<K> {
         if !self.root.contains(pane) || restore.as_ref().is_some_and(|entry| entry.pane != pane) {
             return false;
         }
-        if let Some(index) = self.presentation.parked.iter().position(|entry| entry.pane == pane) {
+        if let Some(index) = self
+            .presentation
+            .parked
+            .iter()
+            .position(|entry| entry.pane == pane)
+        {
             if let Some(restore) = restore
                 && self.presentation.parked[index] != restore
             {
@@ -333,18 +339,31 @@ impl<K: Copy + Eq> Tab<K> {
             }
             return false;
         }
-        let previous = if self.presentation.pip().is_some_and(|entry| entry.pane == pane) {
+        let previous = if self
+            .presentation
+            .pip()
+            .is_some_and(|entry| entry.pane == pane)
+        {
             self.presentation.pip.take()
         } else {
             None
         };
-        self.presentation.parked.push(restore.or(previous).unwrap_or_else(|| self.root.pip_relationship(pane)));
+        self.presentation.parked.push(
+            restore
+                .or(previous)
+                .unwrap_or_else(|| self.root.pip_relationship(pane)),
+        );
         true
     }
 
     /// Restores exactly one parked pane. Session creation is never a restore effect.
     pub fn restore_parked(&mut self, pane: K, fallback: Option<K>) -> bool {
-        let Some(index) = self.presentation.parked.iter().position(|entry| entry.pane == pane) else {
+        let Some(index) = self
+            .presentation
+            .parked
+            .iter()
+            .position(|entry| entry.pane == pane)
+        else {
             return false;
         };
         let restore = self.presentation.parked.remove(index);
@@ -353,25 +372,49 @@ impl<K: Copy + Eq> Tab<K> {
     }
 
     fn restore_relationship(&mut self, previous: &PipPane<K>, fallback: Option<K>) {
-        if !self.root.contains(previous.pane) {
+        // A formerly standalone pane has no split relationship to recover.
+        // Keep any splits created while it was hidden instead of rebuilding
+        // them from the singleton's placeholder axis and ratio.
+        if !self.root.contains(previous.pane) || previous.siblings.is_empty() {
             return;
         }
         let current = self.root.pip_relationship(previous.pane);
-        let original = previous.siblings.iter().copied().find(|id| self.root.contains(*id));
+        let original = previous
+            .siblings
+            .iter()
+            .copied()
+            .find(|id| self.root.contains(*id));
         let relationship_survives = current.axis == previous.axis
             && current.first == previous.first
-            && previous.siblings.iter().any(|id| current.siblings.contains(id));
+            && previous
+                .siblings
+                .iter()
+                .any(|id| current.siblings.contains(id));
         if relationship_survives {
             return;
         }
         let anchor = original.or_else(|| {
-            fallback.filter(|id| *id != previous.pane && self.root.contains(*id) && !self.presentation.is_hidden(*id))
-                .or_else(|| self.visible_root().and_then(|root| root.first_other(previous.pane)))
+            fallback
+                .filter(|id| {
+                    *id != previous.pane
+                        && self.root.contains(*id)
+                        && !self.presentation.is_hidden(*id)
+                })
+                .or_else(|| {
+                    self.visible_root()
+                        .and_then(|root| root.first_other(previous.pane))
+                })
                 .or_else(|| self.root.first_other(previous.pane))
         });
         if let Some(anchor) = anchor {
             self.root.remove_leaf(previous.pane);
-            self.root.split_leaf(anchor, previous.pane, previous.axis, previous.ratio, previous.first);
+            self.root.split_leaf(
+                anchor,
+                previous.pane,
+                previous.axis,
+                previous.ratio,
+                previous.first,
+            );
         }
     }
 
@@ -411,7 +454,8 @@ impl<K: Copy + Eq> Tab<K> {
 
     fn replace_pane(&mut self, old: K, new: K) {
         self.root.replace_leaf(old, new);
-        self.presentation.remap_panes(|pane| Some(if pane == old { new } else { pane }));
+        self.presentation
+            .remap_panes(|pane| Some(if pane == old { new } else { pane }));
     }
 }
 
@@ -428,7 +472,13 @@ pub struct TabPresentation<K = u64> {
 }
 
 impl<K> Default for TabPresentation<K> {
-    fn default() -> Self { Self { pip: None, parked: Vec::new(), pip_geometry: None } }
+    fn default() -> Self {
+        Self {
+            pip: None,
+            parked: Vec::new(),
+            pip_geometry: None,
+        }
+    }
 }
 
 impl<K: Copy + Eq> TabPresentation<K> {
@@ -439,7 +489,11 @@ impl<K: Copy + Eq> TabPresentation<K> {
     pub fn map_panes<J: Copy + Eq>(&self, map: impl Fn(K) -> Option<J>) -> TabPresentation<J> {
         TabPresentation {
             pip: self.pip.as_ref().and_then(|pip| pip.map_panes(&map)),
-            parked: self.parked.iter().filter_map(|entry| entry.map_panes(&map)).collect(),
+            parked: self
+                .parked
+                .iter()
+                .filter_map(|entry| entry.map_panes(&map))
+                .collect(),
             pip_geometry: self.pip_geometry,
         }
     }
@@ -461,7 +515,9 @@ impl<K: Copy + Eq> TabPresentation<K> {
     }
 
     pub fn set_pip_geometry(&mut self, geometry: Option<PipGeometry>) -> bool {
-        if self.pip_geometry == geometry { return false; }
+        if self.pip_geometry == geometry {
+            return false;
+        }
         self.pip_geometry = geometry;
         true
     }
@@ -471,7 +527,9 @@ impl<K: Copy + Eq> TabPresentation<K> {
     /// old, absent IDs so restoration can detect that every sibling was lost.
     pub fn remap_panes(&mut self, map: impl Fn(K) -> Option<K>) {
         fn remap<K: Copy>(entry: &mut PipPane<K>, map: &impl Fn(K) -> Option<K>) -> bool {
-            let Some(pane) = map(entry.pane) else { return false; };
+            let Some(pane) = map(entry.pane) else {
+                return false;
+            };
             entry.pane = pane;
             for sibling in &mut entry.siblings {
                 if let Some(pane) = map(*sibling) {
@@ -501,19 +559,43 @@ pub struct PipGeometry {
 }
 
 impl Default for PipGeometry {
-    fn default() -> Self { Self { x: 1., y: 1., width: 0.42, height: 0.42 } }
+    fn default() -> Self {
+        Self {
+            x: 1.,
+            y: 1.,
+            width: 0.42,
+            height: 0.42,
+        }
+    }
 }
 
 impl PipGeometry {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Option<Self> {
-        let valid = [x, y, width, height].into_iter().all(|v| v.is_finite() && (0. ..=1.).contains(&v));
-        (valid && width > 0. && height > 0.).then_some(Self { x, y, width, height })
+        let valid = [x, y, width, height]
+            .into_iter()
+            .all(|v| v.is_finite() && (0. ..=1.).contains(&v));
+        (valid && width > 0. && height > 0.).then_some(Self {
+            x,
+            y,
+            width,
+            height,
+        })
     }
-    pub fn x(self) -> f32 { self.x }
-    pub fn y(self) -> f32 { self.y }
-    pub fn width(self) -> f32 { self.width }
-    pub fn height(self) -> f32 { self.height }
-    pub fn is_valid(self) -> bool { Self::new(self.x, self.y, self.width, self.height).is_some() }
+    pub fn x(self) -> f32 {
+        self.x
+    }
+    pub fn y(self) -> f32 {
+        self.y
+    }
+    pub fn width(self) -> f32 {
+        self.width
+    }
+    pub fn height(self) -> f32 {
+        self.height
+    }
+    pub fn is_valid(self) -> bool {
+        Self::new(self.x, self.y, self.width, self.height).is_some()
+    }
 }
 
 /// One live pane presented outside the tiled projection, with its original
@@ -533,10 +615,18 @@ impl<K: Copy> PipPane<K> {
         self.pane
     }
 
-    pub fn siblings(&self) -> &[K] { &self.siblings }
-    pub fn axis(&self) -> Axis { self.axis }
-    pub fn ratio(&self) -> f32 { self.ratio }
-    pub fn first(&self) -> bool { self.first }
+    pub fn siblings(&self) -> &[K] {
+        &self.siblings
+    }
+    pub fn axis(&self) -> Axis {
+        self.axis
+    }
+    pub fn ratio(&self) -> f32 {
+        self.ratio
+    }
+    pub fn first(&self) -> bool {
+        self.first
+    }
 
     pub fn map_panes<J: Copy>(&self, map: impl Fn(K) -> Option<J>) -> Option<PipPane<J>> {
         Some(PipPane {
@@ -569,15 +659,23 @@ fn default_ratio() -> f32 {
 }
 
 impl<K: Copy + Eq> PaneNode<K> {
-    pub fn filter_map_panes<J: Copy + Eq>(&self, map: &impl Fn(K) -> Option<J>) -> Option<PaneNode<J>> {
+    pub fn filter_map_panes<J: Copy + Eq>(
+        &self,
+        map: &impl Fn(K) -> Option<J>,
+    ) -> Option<PaneNode<J>> {
         match self {
             Self::Leaf { pane } => map(*pane).map(|pane| PaneNode::Leaf { pane }),
-            Self::Split { axis, ratio, a, b } => match (a.filter_map_panes(map), b.filter_map_panes(map)) {
-                (Some(a), Some(b)) => Some(PaneNode::Split {
-                    axis: *axis, ratio: *ratio, a: Box::new(a), b: Box::new(b),
-                }),
-                (a, b) => a.or(b),
-            },
+            Self::Split { axis, ratio, a, b } => {
+                match (a.filter_map_panes(map), b.filter_map_panes(map)) {
+                    (Some(a), Some(b)) => Some(PaneNode::Split {
+                        axis: *axis,
+                        ratio: *ratio,
+                        a: Box::new(a),
+                        b: Box::new(b),
+                    }),
+                    (a, b) => a.or(b),
+                }
+            }
         }
     }
 
@@ -588,12 +686,17 @@ impl<K: Copy + Eq> PaneNode<K> {
     fn project_visible(&self, visible: &impl Fn(K) -> bool) -> Option<Self> {
         match self {
             Self::Leaf { pane } => visible(*pane).then_some(Self::Leaf { pane: *pane }),
-            Self::Split { axis, ratio, a, b } => match (a.project_visible(visible), b.project_visible(visible)) {
-                (Some(a), Some(b)) => Some(Self::Split {
-                    axis: *axis, ratio: *ratio, a: Box::new(a), b: Box::new(b),
-                }),
-                (a, b) => a.or(b),
-            },
+            Self::Split { axis, ratio, a, b } => {
+                match (a.project_visible(visible), b.project_visible(visible)) {
+                    (Some(a), Some(b)) => Some(Self::Split {
+                        axis: *axis,
+                        ratio: *ratio,
+                        a: Box::new(a),
+                        b: Box::new(b),
+                    }),
+                    (a, b) => a.or(b),
+                }
+            }
         }
     }
 
@@ -607,15 +710,29 @@ impl<K: Copy + Eq> PaneNode<K> {
     fn pip_relationship(&self, pane: K) -> PipPane<K> {
         match self {
             Self::Split { axis, ratio, a, b } => {
-                let (target, sibling, first) = if a.contains(pane) { (a, b, true) } else { (b, a, false) };
+                let (target, sibling, first) = if a.contains(pane) {
+                    (a, b, true)
+                } else {
+                    (b, a, false)
+                };
                 if matches!(&**target, Self::Leaf { .. }) {
-                    PipPane { pane, siblings: sibling.pane_ids(), axis: *axis, ratio: *ratio, first }
+                    PipPane {
+                        pane,
+                        siblings: sibling.pane_ids(),
+                        axis: *axis,
+                        ratio: *ratio,
+                        first,
+                    }
                 } else {
                     target.pip_relationship(pane)
                 }
             }
             Self::Leaf { .. } => PipPane {
-                pane, siblings: Vec::new(), axis: Axis::Horizontal, ratio: 0.5, first: false,
+                pane,
+                siblings: Vec::new(),
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                first: false,
             },
         }
     }
@@ -957,16 +1074,36 @@ fn not_found(msg: impl Into<String>) -> io::Error {
 }
 
 impl MachineStore {
-    pub fn sidecar_snapshot(&self, remote: &crate::core::session::RemoteRef) -> Option<crate::core::pane_sidecar::SidecarSnapshot> {
+    pub fn sidecar_snapshot(
+        &self,
+        remote: &crate::core::session::RemoteRef,
+    ) -> Option<crate::core::pane_sidecar::SidecarSnapshot> {
         let machine = self.locked();
-        let workspace = machine.workspaces.iter().find(|workspace| {
-            workspace.foreign_view.as_ref().is_some_and(|view| view.remote() == remote)
-        })?.clone();
-        let ids: Vec<u64> = workspace.tabs.iter().flat_map(|tab| tab.root.pane_ids()).collect();
-        let panes = machine.panes.iter().filter(|pane| ids.contains(&pane.id)).cloned().collect();
-        Some(crate::core::pane_sidecar::SidecarSnapshot::new(workspace, panes))
+        let workspace = machine
+            .workspaces
+            .iter()
+            .find(|workspace| {
+                workspace
+                    .foreign_view
+                    .as_ref()
+                    .is_some_and(|view| view.remote() == remote)
+            })?
+            .clone();
+        let ids: Vec<u64> = workspace
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.root.pane_ids())
+            .collect();
+        let panes = machine
+            .panes
+            .iter()
+            .filter(|pane| ids.contains(&pane.id))
+            .cloned()
+            .collect();
+        Some(crate::core::pane_sidecar::SidecarSnapshot::new(
+            workspace, panes,
+        ))
     }
-
 
     pub fn sidecar_apply(
         &self,
@@ -978,35 +1115,69 @@ impl MachineStore {
         use crate::core::pane_sidecar::ForeignWorkspace;
         self.mutate(origin, |machine| {
             let existing = machine.workspaces.iter().position(|workspace| {
-                workspace.foreign_view.as_ref().is_some_and(|view| view.remote() == &remote)
+                workspace
+                    .foreign_view
+                    .as_ref()
+                    .is_some_and(|view| view.remote() == &remote)
             });
-            let mut workspace = existing.map(|at| machine.workspaces[at].clone()).unwrap_or_else(|| Workspace {
-                foreign_view: Some(ForeignWorkspace::new(remote)),
-                ..Workspace::default()
-            });
-            let foreign = workspace.foreign_view.as_mut().expect("sidecar owns a foreign view");
-            if !foreign.apply(&updates)? { return Ok((workspace, Vec::new())); }
-            let local_tabs: Vec<Tab> = foreign.tabs().iter().filter_map(|tab| {
-                tab.map_panes(|pane| pane.owner().is_client_local().then_some(pane.pane()))
-            }).collect();
-            let owned: Vec<u64> = local_tabs.iter().flat_map(|tab| tab.root.pane_ids()).collect();
+            let mut workspace = existing
+                .map(|at| machine.workspaces[at].clone())
+                .unwrap_or_else(|| Workspace {
+                    foreign_view: Some(ForeignWorkspace::new(remote)),
+                    ..Workspace::default()
+                });
+            let foreign = workspace
+                .foreign_view
+                .as_mut()
+                .expect("sidecar owns a foreign view");
+            if !foreign.apply(&updates)? {
+                return Ok((workspace, Vec::new()));
+            }
+            let local_tabs: Vec<Tab> = foreign
+                .tabs()
+                .iter()
+                .filter_map(|tab| {
+                    tab.map_panes(|pane| pane.owner().is_client_local().then_some(pane.pane()))
+                })
+                .collect();
+            let owned: Vec<u64> = local_tabs
+                .iter()
+                .flat_map(|tab| tab.root.pane_ids())
+                .collect();
             for pane in &owned {
-                if machine.workspaces.iter().any(|other| other.id != workspace.id
-                    && other.tabs.iter().any(|tab| tab.root.contains(*pane))) {
-                    return Err(refuse(format!("pane {pane} is already owned by another local workspace")));
+                if machine.workspaces.iter().any(|other| {
+                    other.id != workspace.id
+                        && other.tabs.iter().any(|tab| tab.root.contains(*pane))
+                }) {
+                    return Err(refuse(format!(
+                        "pane {pane} is already owned by another local workspace"
+                    )));
                 }
                 if !machine.panes.iter().any(|record| record.id == *pane) {
-                    let seed = seeds.iter().find(|seed| seed.pane == *pane).cloned()
-                        .ok_or_else(|| not_found(format!("no local pane record for sidecar pane {pane}")))?;
-                    if !self.seed_is_live(*pane) { return Err(not_found(format!("sidecar pane {pane} has exited"))); }
+                    let seed = seeds
+                        .iter()
+                        .find(|seed| seed.pane == *pane)
+                        .cloned()
+                        .ok_or_else(|| {
+                            not_found(format!("no local pane record for sidecar pane {pane}"))
+                        })?;
+                    if !self.seed_is_live(*pane) {
+                        return Err(not_found(format!("sidecar pane {pane} has exited")));
+                    }
                     machine.panes.push(seed.into_record(true));
                 }
             }
             workspace.tabs = local_tabs;
             workspace.active_tab = workspace.tabs.first().map(|tab| tab.id);
-            if let Some(at) = existing { machine.workspaces[at] = workspace.clone(); }
-            else { machine.workspaces.push(workspace.clone()); }
-            Ok((workspace.clone(), vec![(workspace.id, LayoutDelta::WorkspaceCreated { workspace })]))
+            if let Some(at) = existing {
+                machine.workspaces[at] = workspace.clone();
+            } else {
+                machine.workspaces.push(workspace.clone());
+            }
+            Ok((
+                workspace.clone(),
+                vec![(workspace.id, LayoutDelta::WorkspaceCreated { workspace })],
+            ))
         })
     }
 
@@ -1603,18 +1774,36 @@ impl MachineStore {
     ) -> io::Result<()> {
         self.mutate(origin, |m| {
             let ws = find_workspace(m, workspace)?;
-            let tab = ws.tabs.iter_mut().find(|tab| tab.root.contains(pane))
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.root.contains(pane))
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
-            if pip && restore.as_ref().is_some_and(|restore| restore.pane() != pane) {
+            if pip
+                && restore
+                    .as_ref()
+                    .is_some_and(|restore| restore.pane() != pane)
+            {
                 return Err(refuse("PiP restore metadata names a different pane"));
             }
             // A stale restore for another pane cannot dismiss the current PiP.
-            if !pip && tab.presentation.pip().is_none_or(|current| current.pane() != pane) {
+            if !pip
+                && tab
+                    .presentation
+                    .pip()
+                    .is_none_or(|current| current.pane() != pane)
+            {
                 return Ok(((), Vec::new()));
             }
             let changed = tab.set_pip_with_restore(pip.then_some(pane), fallback, restore);
             let deltas = if changed {
-                vec![(workspace, LayoutDelta::TabRestructured { tab: tab.clone(), pane: None })]
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
             } else {
                 Vec::new()
             };
@@ -1631,14 +1820,23 @@ impl MachineStore {
     ) -> io::Result<()> {
         self.mutate(origin, |machine| {
             let ws = find_workspace(machine, workspace)?;
-            let tab = ws.tabs.iter_mut().find(|tab| tab.root.contains(pane))
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.root.contains(pane))
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
             if restore.as_ref().is_some_and(|entry| entry.pane() != pane) {
                 return Err(refuse("Park restore metadata names a different pane"));
             }
             let changed = tab.park_with_restore(pane, restore);
             let deltas = if changed {
-                vec![(workspace, LayoutDelta::TabRestructured { tab: tab.clone(), pane: None })]
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
             } else {
                 Vec::new()
             };
@@ -1655,11 +1853,20 @@ impl MachineStore {
     ) -> io::Result<()> {
         self.mutate(origin, |machine| {
             let ws = find_workspace(machine, workspace)?;
-            let tab = ws.tabs.iter_mut().find(|tab| tab.root.contains(pane))
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.root.contains(pane))
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
             let changed = tab.restore_parked(pane, fallback);
             let deltas = if changed {
-                vec![(workspace, LayoutDelta::TabRestructured { tab: tab.clone(), pane: None })]
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
             } else {
                 Vec::new()
             };
@@ -1679,11 +1886,24 @@ impl MachineStore {
         }
         self.mutate(origin, |m| {
             let ws = find_workspace(m, workspace)?;
-            let tab = ws.tabs.iter_mut().find(|tab| tab.presentation.pip().is_some_and(|pip| pip.pane() == pane))
-                .ok_or_else(|| not_found(format!("workspace {workspace} has no PiP pane {pane}")))?;
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.presentation.pip().is_some_and(|pip| pip.pane() == pane))
+                .ok_or_else(|| {
+                    not_found(format!("workspace {workspace} has no PiP pane {pane}"))
+                })?;
             let deltas = if tab.presentation.set_pip_geometry(geometry) {
-                vec![(workspace, LayoutDelta::TabRestructured { tab: tab.clone(), pane: None })]
-            } else { Vec::new() };
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
             Ok(((), deltas))
         })
     }
