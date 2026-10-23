@@ -1990,8 +1990,6 @@ l10n_keys! {
     ParkedOverflowHint,
     PanePipMove,
     PanePipResize,
-    PanePipClientLocalUnavailable,
-    PanePipClientLocalDetail,
     PaneFindScrollback,
     PaneOpenScrollback,
     PaneClearScreen,

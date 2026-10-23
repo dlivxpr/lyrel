@@ -318,6 +318,15 @@ pub enum ControlRequest {
     WorkspaceTree {
         workspace: WorkspaceId,
     },
+    WorkspaceSidecarGet {
+        remote: crate::core::session::RemoteRef,
+    },
+    WorkspaceSidecarApply {
+        remote: crate::core::session::RemoteRef,
+        updates: Vec<crate::core::pane_sidecar::SidecarUpdate>,
+        #[serde(default)]
+        panes: Vec<PaneSeed>,
+    },
     WorkspaceCreate {
         name: Option<String>,
         #[serde(default)]
@@ -575,6 +584,8 @@ impl ControlRequest {
             GuiOpen { .. } => Duration::from_secs(5),
             MachineGet
             | WorkspaceTree { .. }
+            | WorkspaceSidecarGet { .. }
+            | WorkspaceSidecarApply { .. }
             | WorkspaceCreate { .. }
             | WorkspaceRename { .. }
             | WorkspaceRemove { .. }
@@ -688,6 +699,7 @@ pub enum ReplyOk {
     },
     MachineTree(Box<Machine>),
     WorkspaceTree(Box<crate::core::machine::Workspace>),
+    WorkspaceSidecar(Option<Box<crate::core::pane_sidecar::SidecarSnapshot>>),
     TabTree(Box<Tab>),
     /// The answer to [`ControlRequest::TabReopen`]; `None` when the workspace
     /// has nothing left to reopen.

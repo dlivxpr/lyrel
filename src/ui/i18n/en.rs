@@ -2436,8 +2436,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ParkedOverflowHint => "↑↓ / Home / End: select · Enter: preview, then restore · Esc: back",
         L10nKey::PanePipMove => "Move picture-in-picture (arrow keys; Escape returns to terminal)",
         L10nKey::PanePipResize => "Resize picture-in-picture (arrow keys; Escape returns to terminal)",
-        L10nKey::PanePipClientLocalUnavailable => "PiP unavailable for this client-local SSH pane",
-        L10nKey::PanePipClientLocalDetail => "This SSH pane belongs to this computer, not the remote workspace's machine tree. Open it in a local workspace to use durable picture-in-picture.",
         L10nKey::PaneFindScrollback => "Find in scrollback…",
         L10nKey::PaneOpenScrollback => "Open scrollback in editor",
         L10nKey::PaneClearScreen => "Clear screen",

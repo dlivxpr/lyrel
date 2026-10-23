@@ -14,6 +14,7 @@ pub mod keychain;
 pub mod kitty_graphics;
 pub mod logfile;
 pub mod machine;
+pub mod pane_sidecar;
 pub mod osc;
 pub mod paste;
 pub mod path_spelling;

@@ -100,6 +100,9 @@ pub(crate) fn commit(
         {
             return;
         }
+        if let Some(presentation) = &mut tab.foreign_presentation {
+            presentation.set_pip_geometry(Some(geometry));
+        }
         if tab.presentation.set_pip_geometry(Some(geometry)) {
             app.save_session(cx);
             cx.notify();
@@ -168,7 +171,7 @@ impl gpui_kit::Element for PipViewport {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui_kit::LayoutId, Self::RequestLayoutState) {
-        let mut container = div().absolute().size_full().into_any_element();
+        let mut container = div().absolute().top_0().left_0().size_full().into_any_element();
         let layout = container.request_layout(window, cx);
         (layout, container)
     }

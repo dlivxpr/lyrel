@@ -35,6 +35,7 @@ pub fn two_workspace_machine() -> Machine {
         attachment: None,
         groups: Default::default(),
         closed: Vec::new(),
+        foreign_view: None,
     };
     let web = Workspace {
         id: WorkspaceId::new(),
@@ -53,6 +54,7 @@ pub fn two_workspace_machine() -> Machine {
         attachment: None,
         groups: Default::default(),
         closed: Vec::new(),
+        foreign_view: None,
     };
     let record = |id: u64, cwd: &str| PaneRecord {
         id,
