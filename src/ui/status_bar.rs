@@ -50,6 +50,8 @@ impl Clock {
 impl Render for Clock {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .id("status-clock")
+            .test_support()
             .flex_none()
             .px_2()
             .text_xs()
@@ -171,12 +173,17 @@ impl LyrelApp {
             .then(|| self.tabs.get(self.active).and_then(|tab| tab.agent_row(cx)))
             .flatten();
         let context = h_flex()
+            .flex_1()
             .min_w_0()
             .gap_1()
             .child(
                 Button::new("status-host")
                     .ghost()
                     .xsmall()
+                    // Button defaults to shrink=0; instance styles are applied
+                    // last, and its native label already owns ellipsis.
+                    .flex_shrink_1()
+                    .min_w(rems(1.5))
                     .max_w(rems(10.))
                     .label(host.clone())
                     .tooltip(host)
@@ -188,7 +195,8 @@ impl LyrelApp {
                     Button::new("status-path")
                         .ghost()
                         .xsmall()
-                        .min_w_0()
+                        .flex_shrink_1()
+                        .min_w(rems(1.5))
                         .max_w(rems(26.))
                         .label(path.clone())
                         .tooltip(path)
@@ -237,7 +245,6 @@ impl LyrelApp {
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
             )
             .child(context)
-            .child(div().flex_1().min_w_0())
             .when_some(agent, |bar, (agent, status)| {
                 let label = match crate::ui::tab_strip::agent_status_label(Some(status)) {
                     Some(state) => format!("{} · {state}", agent.display_name()),
@@ -247,6 +254,8 @@ impl LyrelApp {
                     Button::new("status-agent")
                         .ghost()
                         .xsmall()
+                        .flex_1()
+                        .min_w(rems(1.5))
                         .max_w(rems(12.))
                         .label(label.clone())
                         .tooltip(label)
@@ -255,13 +264,20 @@ impl LyrelApp {
                         }),
                 )
             })
-            .when(!document, |bar| bar.child(self.render_host_metrics(cx)))
             .when(
                 document_context == Some(crate::ui::app::OverlayTop::Code),
                 |bar| bar.child(self.render_document_status(cx)),
             )
-            .child(self.status_clock.clone())
-            .child(self.notification_bell.clone())
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .when(!document, |controls| {
+                        controls.child(self.render_host_metrics(cx))
+                    })
+                    .child(self.status_clock.clone())
+                    .child(self.notification_bell.clone()),
+            )
             .into_any_element()
     }
 }
@@ -280,10 +296,127 @@ mod tests {
         cx.run_until_parked();
     }
 
+    fn assert_global_controls_in_bounds(window: &gpui_kit::Window) {
+        let bar = window.find("workbench-status").bounds();
+        assert!(bar.right() <= window.viewport_size().width);
+        for id in ["status-settings", "status-clock", "status-notifications"] {
+            let control = window.find(id);
+            let bounds = control.bounds();
+            assert!(control.visible(), "{id} must remain visible");
+            assert!(
+                bounds.size.width >= window.rem_size() * 1.25,
+                "{id} must retain its standard compact target width"
+            );
+            assert!(
+                bounds.left() >= bar.left() && bounds.right() <= bar.right(),
+                "{id} must remain horizontally inside the status bar"
+            );
+            assert!(
+                bounds.top() >= bar.top() && bounds.bottom() <= bar.bottom(),
+                "{id} must remain vertically inside the status bar"
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn long_host_and_cjk_path_yield_to_global_controls_at_narrow_zoom(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::core::session::{
+            RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
+        };
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
+        let hostname = "构建主机很长的机器名称-build-host.example.internal";
+        let path = "/srv/项目目录/具有很长名称的工作区/多语言测试与生产环境/源码目录/工作台状态栏回归";
+        let remote = WindowView::on_remote(RemoteRef::new(
+            RemoteTarget::direct("developer", hostname, 22),
+            WorkspaceId::new(),
+        ));
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.workspace = remote.id;
+            let mut views = WorkspaceStore::all(cx).clone();
+            views.views.push(remote);
+            WorkspaceStore::install_for_test(
+                cx,
+                WindowViews {
+                    views: views.views,
+                    active: None,
+                },
+            );
+            let workspace = app.window_workspace(cx);
+            app.tabs[app.active].pane.terminals()[0].update(cx, |pane, _| {
+                pane.set_workspace(workspace);
+                pane.terminal.seed_cwd(Some(path.into()));
+            });
+            app.sidebar_collapsed = true;
+            app.right_panel_visible = false;
+            cx.notify();
+        });
+        let mut wide_path = None;
+        for (width, font) in [(1440., 16.), (1440., 24.), (720., 20.), (720., 24.)] {
+            vcx.simulate_resize(size(px(width), px(720.)));
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<Config>().ui_font_size = font;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font));
+                cx.notify();
+            });
+            settle(&mut vcx);
+            vcx.update(|window, cx| {
+                assert_global_controls_in_bounds(window);
+                let bar = window.find("workbench-status").bounds();
+                let metrics = window.find("status-host-metrics").bounds();
+                let clock = window.find("status-clock").bounds();
+                for id in ["status-host-metrics", "status-cpu", "status-memory"] {
+                    let control = window.find(id);
+                    assert!(control.visible(), "{id} must remain visible");
+                    assert!(control.bounds().left() >= bar.left());
+                    assert!(control.bounds().right() <= clock.left());
+                }
+                let host = window.find("status-host");
+                assert!(host.label().unwrap().contains(hostname));
+                assert!(host.visible());
+                let path_bounds = window.find("status-path").bounds();
+                assert!(path_bounds.left() >= host.bounds().right());
+                assert!(path_bounds.right() <= metrics.left());
+                assert!(path_bounds.size.width >= window.rem_size() * 1.25);
+                if font == 24. {
+                    if width == 1440. {
+                        wide_path = Some(path_bounds.size.width);
+                    } else {
+                        assert!(
+                            path_bounds.size.width < wide_path.unwrap(),
+                            "the path must truncate before global controls leave the window"
+                        );
+                    }
+                }
+                window.click("status-path", cx);
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().as_deref(),
+                    Some(path)
+                );
+                window.click("status-host", cx);
+            });
+            settle(&mut vcx);
+            assert!(app.read_with(&vcx, |app, _| app.switcher.is_some()));
+            vcx.simulate_keystrokes("escape");
+            settle(&mut vcx);
+            vcx.update(|window, cx| window.click("status-notifications", cx));
+            settle(&mut vcx);
+            vcx.update(|window, _| assert!(window.find("notification-inbox").visible()));
+            vcx.simulate_keystrokes("escape");
+            settle(&mut vcx);
+            vcx.update(|window, cx| window.click("status-settings", cx));
+            settle(&mut vcx);
+            assert!(app.read_with(&vcx, |app, _| app.active_settings().is_some()));
+            vcx.simulate_keystrokes("escape");
+            settle(&mut vcx);
+        }
+    }
+
     #[gpui_kit::test]
     fn settings_remains_reachable_below_terminal_and_filled_document(cx: &mut TestAppContext) {
         let (app, mut vcx, _stream) = harness_with_pane(cx);
-        for (width, font) in [(1440., 16.), (720., 20.)] {
+        for (width, font) in [(1440., 16.), (720., 20.), (720., 24.)] {
             vcx.simulate_resize(size(px(width), px(720.)));
             app.update_in(&mut vcx, |app, _, cx| {
                 cx.global_mut::<Config>().ui_font_size = font;
@@ -308,6 +441,27 @@ mod tests {
                 vcx.update(|window, cx| {
                     let status = window.find("workbench-status").bounds();
                     let content = window.find("workbench-content").bounds();
+                    assert_global_controls_in_bounds(window);
+                    if filled && width == 720. {
+                        let document = window.find("document-status").bounds();
+                        let clock = window.find("status-clock").bounds();
+                        assert!(document.right() <= clock.left());
+                        let eol_before = window.find("status-eol").bounds();
+                        window.scroll(
+                            "document-status",
+                            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-4000.), px(0.))),
+                            cx,
+                        );
+                        let eol = window.find("status-eol");
+                        assert!(eol.visible());
+                        assert!(eol.bounds().right() <= document.right());
+                        assert!(eol.bounds().left() < eol_before.left(),
+                            "only document status must scroll, not global controls");
+                        assert_global_controls_in_bounds(window);
+                        let label = eol.label().unwrap().to_owned();
+                        window.click("status-eol", cx);
+                        assert_ne!(window.find("status-eol").label(), Some(label.as_str()));
+                    }
                     assert!(content.bottom() <= status.top());
                     assert!(status.bottom() <= window.viewport_size().height);
                     assert!(window.find("status-settings").visible());
