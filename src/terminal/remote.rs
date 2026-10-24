@@ -10,6 +10,7 @@ use rio_vt::clipboard::ClipboardType;
 use rio_vt::config::colors::ColorRgb;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::Mode;
+use rio_vt::crosswords::grid::Dimensions as _;
 use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::{Handler as _, Processor};
 
@@ -2084,7 +2085,8 @@ impl RemoteTerminal {
         term.selection = None;
         term.scroll_display(rio_vt::crosswords::grid::Scroll::Bottom);
         let history_origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
-        self.images.clear_presentation(history, rows, history_origin);
+        self.images
+            .clear_presentation(history, rows, history_origin);
         *self.proxy.parse_state.paint_cursor.lock().unwrap() = None;
         false
     }
@@ -3533,7 +3535,6 @@ fn apply_config(term: &mut Crosswords<EventProxy>, user_config: &crate::core::co
 #[cfg(test)]
 mod chunking_tests {
     use super::*;
-    use rio_vt::crosswords::grid::Dimensions as _;
     use rio_vt::crosswords::pos::{Column, Line};
     use rio_vt::event::VoidListener;
 
@@ -7809,7 +7810,6 @@ mod osc_tests {
 #[cfg(test)]
 mod live_history_config_tests {
     use super::*;
-    use rio_vt::crosswords::grid::Dimensions as _;
     use rio_vt::crosswords::pos::{Column, Line, Pos};
 
     fn wait_for(term: &RemoteTerminal, ready: impl Fn(&Crosswords<EventProxy>) -> bool) {

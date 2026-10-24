@@ -140,7 +140,10 @@ impl GraphicsState {
         affected.dedup();
         for resource in affected {
             if self.resources.get(&resource).is_some_and(|r| r.id == 0)
-                && !self.placements.values().any(|p| p.placement.resource == resource)
+                && !self
+                    .placements
+                    .values()
+                    .any(|p| p.placement.resource == resource)
             {
                 self.free_resource(resource);
             }
@@ -158,7 +161,9 @@ impl GraphicsState {
         for (key, p) in &mut self.placements {
             let p = &mut p.placement;
             if !p.virtual_placement && p.screen == screen {
-                let top = p.clip_top.max((oldest - p.anchor_row).clamp(0, i64::from(p.clip_bottom)) as u32);
+                let top = p
+                    .clip_top
+                    .max((oldest - p.anchor_row).clamp(0, i64::from(p.clip_bottom)) as u32);
                 if top != p.clip_top {
                     p.clip_top = top;
                     self.dirty.insert(*key);
@@ -206,10 +211,7 @@ impl GraphicsState {
         }
         super::super::terminal_resize::resize(
             &mut self.term,
-            CrosswordsSize::new(
-                usize::from(size.cols.max(1)),
-                usize::from(size.rows.max(1)),
-            ),
+            CrosswordsSize::new(usize::from(size.cols.max(1)), usize::from(size.rows.max(1))),
             self.resize_mode,
         );
         let active = std::mem::take(&mut self.term.graphics.atlas_placements);

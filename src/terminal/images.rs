@@ -306,7 +306,11 @@ impl ImageStore {
                         || p.anchor_row + i64::from(p.clip_bottom) <= base
                         || p.anchor_row + i64::from(p.clip_top) >= end))
         });
-        let retained: BTreeSet<_> = inner.placements.values().map(|p| p.placement.resource).collect();
+        let retained: BTreeSet<_> = inner
+            .placements
+            .values()
+            .map(|p| p.placement.resource)
+            .collect();
         let resources = std::mem::take(&mut inner.resources);
         for (key, resource) in resources {
             if retained.contains(&key) {

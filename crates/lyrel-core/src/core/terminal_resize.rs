@@ -13,11 +13,7 @@ pub enum ResizeMode {
 }
 
 /// Resize both terminal mirrors using the row model of their actual PTY.
-pub fn resize<T: EventListener>(
-    term: &mut Crosswords<T>,
-    size: impl Dimensions,
-    mode: ResizeMode,
-) {
+pub fn resize<T: EventListener>(term: &mut Crosswords<T>, size: impl Dimensions, mode: ResizeMode) {
     if mode == ResizeMode::Raw {
         term.resize(size);
         return;

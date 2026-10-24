@@ -17,10 +17,12 @@
 - 接入 Kitty 终端布局与屏幕生命周期（#42）：daemon 权威文本锚点计入历史丢弃，复用 VT 网格的行重排，处理页边距滚动及永久裁切、主／备用屏隔离、精确清屏／reset／历史清理，并按实际设备像素统一回答 `CSI 14t`／`CSI 16t`。隐藏窗格保留图片状态但不触发无谓整窗重绘；清理命令仅允许控制器。真实 daemon 与 GPUI 几何／状态回归已在 Windows 通过；最终 GPU 裁剪／透明／z 合成、字体与 Windows/macOS 显示缩放原生验收按用户安排延后，测试窗口无 `HeadlessRenderer`，不以缓存或绘制标记冒充像素通过。
 - 接入 Kitty Unicode 占位符（#43）：`U=1` 仅创建不可见 prototype，真实 Rio 单元的 indexed／true-color 身份、行列／高位 diacritics 和规范左至右继承决定显示切片；无效引用不造像素、不绘制 PUA 字形。共享投影同时供 daemon 资源引用和桌面 viewport 使用，直接／虚拟放置共用资源与预算，删除语义分开，文字移动／擦除、屏幕与几何沿用现有路径。共享真实 PTY fixture、独立 daemon 到 rooted GPUI production paint 的单链路回归及独立 CLI／ConPTY 协议冒烟已在 Windows 通过；原生 GPU 像素仍待验收，不承诺 tmux/screen。
 - pane 会话开启前强制双向版本协商（从协议 `10` 开始）：本地、路由及原生 SSH 的新建／附着／观察连接在发送会话请求前确认版本；旧客户端在创建 shell 或订阅图片前明确拒绝，新客户端遇到旧 server 显示版本与更新要求。独立诊断探测保留，不把 EOF 当作版本判断。
+- 验证正式 `omp/18.12.6` 的公开图片选项：保持 `TERM_PROGRAM=lyrel`，`PI_FORCE_IMAGE_PROTOCOL=kitty` 配合 `PI_KITTY_PLACEHOLDERS=0/1`，真实交互 TUI 在 Windows ConPTY 中发送 SVG 栅格 PNG 与合成 toolResult PNG，独立 daemon／生产 `PaneClient` 收到对应资源和直接／虚拟放置。隔离会话未提交新 prompt，`/exit` 正常退出；此结果不替代原生像素、真实桌面截图、GUI 关开或 SSH 验收。
 
 ### 修复
 
-- 修复 #42 审查发现的五项图片布局／清理边界：本地 ConPTY 的 daemon 镜像与桌面共用高度调整，远端标准 PTY 保持独立模式；部分裁切／过期图片按保留切片重排；匿名图片失去最后放置后释放容量；`DECCOLM` set／unset 同步恢复全屏滚动区域；退出／断链保留窗格的用户清理改为真正本地清理，活连接仍只走 daemon 权威路径。补充真实 daemon-session 与生产 GPUI 消费者回归；本次修复尚未执行检查，不增加原生像素或跨平台通过声明。
+- 修复 #42 审查发现的五项图片布局／清理边界：本地 ConPTY 的 daemon 镜像与桌面共用高度调整，远端标准 PTY 保持独立模式；部分裁切／过期图片按保留切片重排；匿名图片失去最后放置后释放容量；`DECCOLM` set／unset 同步恢复全屏滚动区域；退出／断链保留窗格的用户清理改为真正本地清理，活连接仍只走 daemon 权威路径。Windows 核心、8 项真实 daemon 布局、16 项生产 GPUI graphics consumer 与 14 项 prompt reflow 回归通过；不增加原生像素或其他平台的通过声明。
+- 真实 GPUI daemon fixture 显式固定初始视口并等待有序 resize，重绘时使用实际 grid 尺寸而非旧 requested size；macOS 的生产责任归属 re-exec 标记放在 libtest 参数分隔符后，避免被当作未知选项。实际 test runner 的旧参数失败／新参数通过已验证，macOS 端到端结果仍以新的 CI 为准。
 
 ### 维护
 
