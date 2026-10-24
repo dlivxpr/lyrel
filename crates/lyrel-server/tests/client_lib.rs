@@ -2839,19 +2839,22 @@ mod kitty_graphics {
         let daemon = Daemon::start();
         let _control = daemon.control("graphics-order");
         let mut pane = Consumer::spawn(&daemon);
-        // The first placement moves down two rows and right two columns.
+        // A two-row placement moves down rows - 1 and right two columns.
         // The second must see that movement exactly once, before the sender
         // prints its barrier. No consumer-local selector calculation is used.
         pane.send(
-            b"\x1b[3;4H\x1b_Ga=T,i=5,f=32,s=1,v=1,c=2,r=2,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=6,f=32,s=1,v=1,c=1,r=1,C=1,q=2;/wAA/w==\x1b\\",
+            b"\x1b[3;4H\x1b_Ga=T,i=5,f=32,s=1,v=1,c=2,r=2,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=6,f=32,s=1,v=1,c=1,r=1,C=1,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=7,f=32,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=10,f=32,s=1,v=1,c=1,r=1,C=1,q=2;/wAA/w==\x1b\\",
             0,
         );
         let moved = pane.placements.values().find(|p| p.image_id == 6).unwrap().clone();
         let stationary = pane.placements.values().find(|p| p.image_id == 5).unwrap().clone();
-        pane.command("a=d,d=p,x=6,y=5");
+        let same_row = pane.placements.values().find(|p| p.image_id == 10).unwrap().clone();
+        pane.command("a=d,d=p,x=6,y=4");
         assert!(!pane.placements.contains_key(&moved.key), "placement sees movement exactly once");
         assert!(pane.placements.contains_key(&stationary.key));
         assert_eq!(pane.pixel(&stationary), [255, 0, 0, 255]);
+        pane.command("a=d,d=p,x=7,y=4");
+        assert!(!pane.placements.contains_key(&same_row.key), "a one-row placement moves right without moving down");
 
         pane.session.resize(WinSize { cell_w: 1, cell_h: 1, ..size() }).unwrap();
         pane.send(
@@ -2870,7 +2873,9 @@ mod kitty_graphics {
         attached.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
         loop {
             if let DaemonMsg::Snapshot(bytes) = attached.recv().unwrap() {
-                assert!(windows_contain(&bytes, b"\x1b[2B\x1b[2C"), "cursor effect is ordinary replay output");
+                assert!(windows_contain(&bytes, b"\x1b[2C"), "horizontal cursor effect is ordinary replay output");
+                assert!(windows_contain(&bytes, b"\x1b[1B"), "vertical cursor effect is ordinary replay output");
+                assert!(!windows_contain(&bytes, b"\x1b[0B"), "zero vertical movement must not become CSI 0 B");
                 assert!(!windows_contain(&bytes, b"/wAA/wD/AP8="));
                 break;
             }
