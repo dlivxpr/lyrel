@@ -7,7 +7,9 @@ use lyrel_core::core::session::WorkspaceId;
 use uuid::Uuid;
 
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
-use crate::core::config::{Config, RightPanelTab, TabBarPosition};
+#[cfg(test)]
+use crate::core::config::Config;
+use crate::core::config::RightPanelTab;
 use crate::ui::i18n::{L10nKey, alias_translations, t, t_fmt};
 
 /// Everything a row can do once it is picked. `LyrelApp::run_command` is the
@@ -24,6 +26,14 @@ pub enum CommandKind {
     CloseWindow,
     SplitRight,
     SplitDown,
+    MovePaneToTab,
+    TogglePanePip,
+    RestorePanePip,
+    ParkPane,
+    RestoreParkedPane,
+    OpenScrollbackInEditor,
+    ClearPaneScreen,
+    RestartPaneShell,
     ClosePane,
     RenameTab,
     NewWorktreeTab,
@@ -57,7 +67,6 @@ pub enum CommandKind {
     MoveTabRight,
     ToggleMaximizePane,
     ToggleFullscreen,
-    ToggleTabSidebar,
     ToggleLeftPanel,
     ToggleRightPanel,
     ShowRightPanel(RightPanelTab),
@@ -204,6 +213,14 @@ impl CommandKind {
             CloseWindow => "close-window",
             SplitRight => "split-right",
             SplitDown => "split-down",
+            MovePaneToTab => "move-pane-to-tab",
+            TogglePanePip => "toggle-pane-pip",
+            RestorePanePip => "restore-pane-pip",
+            ParkPane => "park-pane",
+            RestoreParkedPane => "restore-parked-pane",
+            OpenScrollbackInEditor => "open-scrollback-in-editor",
+            ClearPaneScreen => "clear-pane-screen",
+            RestartPaneShell => "restart-pane-shell",
             ClosePane => "close-pane",
             RenameTab => "rename-tab",
             NewWorktreeTab => "new-worktree-tab",
@@ -236,7 +253,6 @@ impl CommandKind {
             MoveTabRight => "move-tab-right",
             ToggleMaximizePane => "zoom-pane",
             ToggleFullscreen => "full-screen",
-            ToggleTabSidebar => "tab-bar-position",
             ToggleLeftPanel => "left-sidebar",
             ToggleRightPanel => "right-panel",
             ShowRightPanel(RightPanelTab::Info) => "right-panel-info",
@@ -353,6 +369,14 @@ impl CommandKind {
             CloseWindow => "CloseWindow",
             SplitRight => "SplitRight",
             SplitDown => "SplitDown",
+            MovePaneToTab => "MovePaneToTab",
+            TogglePanePip => "TogglePanePip",
+            RestorePanePip => "RestorePanePip",
+            ParkPane => "ParkPane",
+            RestoreParkedPane => "RestoreParkedPane",
+            OpenScrollbackInEditor => "OpenScrollbackInEditor",
+            ClearPaneScreen => "ClearPaneScreen",
+            RestartPaneShell => "RestartPaneShell",
             ClosePane => "CloseActiveTab",
             RenameTab => "RenameTab",
             NewWorktreeTab => "NewWorktreeTab",
@@ -385,7 +409,6 @@ impl CommandKind {
             MoveTabRight => "MoveTabRight",
             ToggleMaximizePane => "ToggleMaximizePane",
             ToggleFullscreen => "ToggleFullscreen",
-            ToggleTabSidebar => "ToggleTabSidebar",
             ToggleLeftPanel => "ToggleLeftPanel",
             ToggleRightPanel => "ToggleRightPanel",
             ShowRightPanel(tab) => match tab {
@@ -623,11 +646,9 @@ impl Item {
 
     /// The actions every window offers, in group order. The window adds the
     /// ones only it can judge (`LyrelApp::search_catalog`).
-    pub fn actions(cx: &App, chrome: ChromeState) -> Vec<Item> {
+    pub fn actions(chrome: ChromeState) -> Vec<Item> {
         use CommandKind::*;
-        let cfg = cx.global::<Config>();
-        let tab_bar_left = cfg.tab_bar_position == TabBarPosition::Left;
-        let sidebar_hidden = chrome.rail_collapsed || !tab_bar_left;
+        let sidebar_hidden = chrome.rail_collapsed;
         let right_panel_open = chrome.right_panel_visible;
         let document_filled = chrome.document_filled;
 
@@ -639,6 +660,7 @@ impl Item {
             Item::localized(L10nKey::CmdSplitRight, SplitRight),
             Item::localized(L10nKey::CmdSplitDown, SplitDown),
             Item::localized(L10nKey::CmdZoomPane, ToggleMaximizePane),
+            Item::localized(L10nKey::PaneMoveToTab, MovePaneToTab),
             Item::localized(L10nKey::CmdNextPane, NextPane),
             Item::localized(L10nKey::CmdPreviousPane, PrevPane),
             Item::localized(L10nKey::CmdFocusPaneLeft, FocusPaneLeft),
@@ -712,14 +734,6 @@ impl Item {
             Item::localized(L10nKey::CmdToggleDocumentPreview, ToggleDocumentPreview),
             Item::localized(L10nKey::CmdToggleDocumentWrap, ToggleDocumentWrap),
             Item::localized(
-                if tab_bar_left {
-                    L10nKey::CmdTabBarMoveToTop
-                } else {
-                    L10nKey::CmdTabBarMoveToLeftSidebar
-                },
-                ToggleTabSidebar,
-            ),
-            Item::localized(
                 L10nKey::CmdRightPanelInfo,
                 ShowRightPanel(RightPanelTab::Info),
             ),
@@ -763,7 +777,14 @@ impl Item {
         ];
 
         let terminal = [
+            Item::localized(L10nKey::PaneTogglePip, TogglePanePip),
+            Item::localized(L10nKey::PaneRestorePip, RestorePanePip),
+            Item::localized(L10nKey::PanePark, ParkPane),
+            Item::localized(L10nKey::PaneRestoreParked, RestoreParkedPane),
             Item::localized(L10nKey::CmdClearScrollback, ClearTerminal),
+            Item::localized(L10nKey::PaneClearScreen, ClearPaneScreen),
+            Item::localized(L10nKey::PaneOpenScrollback, OpenScrollbackInEditor),
+            Item::localized(L10nKey::PaneRestartShell, RestartPaneShell),
             Item::localized(L10nKey::CmdFindInTerminal, FindInTerminal),
             Item::localized(L10nKey::CmdToggleComposer, ToggleComposer),
             Item::localized(L10nKey::CmdFindNext, FindNext),
@@ -1013,7 +1034,7 @@ mod gpui_tests {
                 remote_server: None,
             };
             let mut seen = std::collections::HashSet::new();
-            for cmd in Item::actions(cx, chrome) {
+            for cmd in Item::actions(chrome) {
                 // Frecency is keyed by this string. A command without one is
                 // never learned, so it never rises in the list no matter how
                 // often it is run.
@@ -1038,7 +1059,7 @@ mod gpui_tests {
                 document_filled: false,
                 remote_server: None,
             };
-            let cmds = Item::actions(cx, chrome);
+            let cmds = Item::actions(chrome);
             let git = cmds
                 .iter()
                 .filter(|c| c.group == Some(CommandGroup::Git))
@@ -1068,7 +1089,7 @@ mod gpui_tests {
             cx.set_global(Config::default());
             crate::ui::i18n::set_locale("en");
 
-            let local = Item::actions(cx, chrome(None));
+            let local = Item::actions(chrome(None));
             assert!(
                 local
                     .iter()
@@ -1081,7 +1102,7 @@ mod gpui_tests {
                 "a local window has no remote server to update"
             );
 
-            let remote = Item::actions(cx, chrome(Some("build-box")));
+            let remote = Item::actions(chrome(Some("build-box")));
             let update = remote
                 .iter()
                 .find(|c| c.kind == CommandKind::UpdateRemoteServer)

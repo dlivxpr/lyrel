@@ -1,8 +1,8 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::{Context, PromptLevel, Window};
 use lyrel_core::host::HostId;
 use lyrel_core::host::remote::RemoteHost;
@@ -419,7 +419,7 @@ impl LyrelApp {
             Some(ws) if ws.route_header().is_ok() => true,
             _ => {
                 let machine = self.remote_machine_label(cx);
-                window.push_notification(
+                window.notify_app(
                     t_fmt(L10nKey::RemoteNoConnectionDetails, &[("machine", &machine)]),
                     cx,
                 );
@@ -1018,7 +1018,7 @@ impl LyrelApp {
         if !crate::daemon::spawn::local_daemon_supports(
             crate::daemon::protocol::FEATURE_UPDATE_SERVER,
         ) {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(
                     L10nKey::RemoteUpdateNeedsLocalServer,
                     &[("machine", &label)],

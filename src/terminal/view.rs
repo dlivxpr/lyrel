@@ -1,8 +1,10 @@
 use super::remote::PaneEvent;
+use crate::ui::notification_history::NotificationWindowExt as _;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, WindowExt as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
     App, ClipboardEntry, ClipboardItem, Context, EntityId, ExternalPaths, FocusHandle, Focusable,
     Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollDelta,
@@ -1546,6 +1548,24 @@ fn apply_fallback_chain(
 }
 
 impl TerminalView {
+    /// Attaches an existing owned session without ever spawning a substitute.
+    pub(crate) fn attach_owned_terminal(
+        workspace: Option<crate::terminal::PaneWorkspace>,
+        pane_id: u64,
+        owner: Option<crate::core::session::WorkspaceId>,
+    ) -> anyhow::Result<ShellParts> {
+        let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
+        let terminal = RemoteTerminal::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
+        Ok(ShellParts {
+            terminal,
+            pane_id,
+            shell_spec: None,
+            workspace,
+            restored: true,
+            owner,
+        })
+    }
+
     pub fn spawn_shell_terminal_in(
         workspace: Option<crate::terminal::PaneWorkspace>,
         working_directory: Option<std::path::PathBuf>,
@@ -2424,6 +2444,13 @@ impl TerminalView {
 
     pub fn ssh_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> {
         self.ssh_spec.clone()
+    }
+
+    pub(crate) fn set_restored_ssh_spec(
+        &mut self,
+        spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+    ) {
+        self.ssh_spec = spec;
     }
 
     pub fn ssh_phase(&self) -> Option<crate::daemon::protocol::SshPhase> {
@@ -4016,11 +4043,12 @@ impl TerminalView {
         let name = local
             .file_name()
             .map_or_else(|| local.to_string_lossy(), |n| n.to_string_lossy());
-        window.push_notification(
-            crate::ui::i18n::t_fmt(
+        window.notify_app(
+            crate::ui::notification_history::Notification::info(crate::ui::i18n::t_fmt(
                 crate::ui::i18n::L10nKey::SftpPasteUploadFailed,
                 &[("name", &name), ("host", host), ("error", reason)],
-            ),
+            ))
+            .pane(self.owner_workspace(), self.pane_id, &self.pane_route()),
             cx,
         );
     }
@@ -4039,16 +4067,38 @@ impl TerminalView {
         log::warn!("failed to open file link {}: {reason}", path.display());
         let path = path.display().to_string();
         let reason = reason.to_string();
-        window.push_notification(
+        window.notify_app(
             crate::ui::host_ops::failure(
                 crate::ui::i18n::t_fmt(
                     crate::ui::i18n::L10nKey::LinkFileOpenFailed,
                     &[("path", path.as_str()), ("error", reason.as_str())],
                 ),
                 &reason,
-            ),
+            )
+            .pane(self.owner_workspace(), self.pane_id, &self.pane_route()),
             cx,
         );
+    }
+
+    /// Plain text of the retained buffer, including history and soft-wrapped
+    /// Unicode graphemes. Reading it does not alter selection or scroll offset.
+    pub fn scrollback_text(&self) -> String {
+        let term = self.terminal.term.lock();
+        term.bounds_to_string(
+            Pos::new(term.topmost_line(), Column(0)),
+            Pos::new(term.bottommost_line(), term.last_column()),
+        )
+    }
+
+    /// Clear presentation without discarding retained history or restarting
+    /// the process. Ctrl+L is sent through this pane's own transport.
+    pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
+        use rio_vt::ansi::ClearMode;
+        use rio_vt::performer::handler::Handler as _;
+        self.cancel_scroll_anim();
+        self.terminal.term.lock().clear_screen(ClearMode::All);
+        self.terminal.write(vec![0x0c_u8]);
+        cx.notify();
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
@@ -4061,7 +4111,11 @@ impl TerminalView {
         // clamps the vi cursor back into the grid, which purging the history
         // behind the term's back would leave pointing at rows that no longer
         // exist.
-        self.terminal.term.lock().clear_screen(ClearMode::Saved);
+        {
+            let mut term = self.terminal.term.lock();
+            term.clear_screen(ClearMode::All);
+            term.clear_screen(ClearMode::Saved);
+        }
         // Image placements are anchored in absolute scrollback rows, so the
         // rows we just discarded moved every anchor. Drop them; the daemon does
         // not replay out-of-band image frames, so a browser redraws on its next
@@ -6638,7 +6692,14 @@ impl TerminalView {
             None if rooted => t_fmt(L10nKey::LinkFileMissing, &[("path", &candidate.path)]),
             None => t_fmt(L10nKey::LinkFileNoDirectory, &[("path", &candidate.path)]),
         };
-        window.push_notification(message, cx);
+        window.notify_app(
+            crate::ui::notification_history::Notification::info(message).pane(
+                self.owner_workspace(),
+                self.pane_id,
+                &self.pane_route(),
+            ),
+            cx,
+        );
         true
     }
 
@@ -6647,7 +6708,14 @@ impl TerminalView {
             LoopbackOpen::Forwarded(url) => cx.open_url(&url),
             LoopbackOpen::NotLoopback => cx.open_url(url),
             LoopbackOpen::ForwardFailed(reason) => {
-                window.push_notification(reason, cx);
+                window.notify_app(
+                    crate::ui::notification_history::Notification::info(reason).pane(
+                        self.owner_workspace(),
+                        self.pane_id,
+                        &self.pane_route(),
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -7732,6 +7800,7 @@ impl Render for TerminalView {
 
         div()
             .id("terminal-surface")
+            .test_support()
             // The surface, not the grid inside it, is what carries the role:
             // a11y focus is only ever reported for a `div` that tracks a focus
             // handle *and* has a node of its own, so a terminal with no role
@@ -8016,7 +8085,7 @@ fn link_menu_label(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn menu_row_with_hint(
+pub(crate) fn menu_row_with_hint(
     label: &'static str,
     key: Option<&'static str>,
 ) -> impl Fn(&mut Window, &mut App) -> gpui_kit::AnyElement {

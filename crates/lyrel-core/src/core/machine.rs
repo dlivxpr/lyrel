@@ -106,6 +106,17 @@ pub struct Machine {
     pub panes: Vec<PaneRecord>,
 }
 
+impl Machine {
+    /// Workspaces users can list, open, or navigate independently. A foreign
+    /// view is an internal owning-daemon projection, not another workspace.
+    /// Pane ownership and sidecar consumers must still read the complete tree.
+    pub fn user_workspaces(&self) -> impl Iterator<Item = &Workspace> {
+        self.workspaces
+            .iter()
+            .filter(|workspace| workspace.foreign_view.is_none())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attachment {
     /// Proof that a connection is the one holding the workspace, so it stays
@@ -168,6 +179,9 @@ pub struct Workspace {
     /// this way reads the same to a build that predates the list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub closed: Vec<ClosedTab>,
+    /// A local owning-daemon projection of a mixed remote workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_view: Option<crate::core::pane_sidecar::ForeignWorkspace>,
 }
 
 /// A tab closed from a workspace, as the machine keeps it for reopening.
@@ -220,12 +234,14 @@ impl Default for Workspace {
             attachment: None,
             groups: WorkspaceGroups::default(),
             closed: Vec::new(),
+            foreign_view: None,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Tab {
+#[serde(bound(deserialize = "K: Deserialize<'de>"))]
+pub struct Tab<K = u64> {
     #[serde(default)]
     pub id: TabId,
     #[serde(default)]
@@ -244,7 +260,10 @@ pub struct Tab {
     /// it. It never outranks `group`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_auto: Option<AutoKey>,
-    pub root: PaneNode,
+    pub root: PaneNode<K>,
+    /// Presentation never removes a pane from the logical tree.
+    #[serde(default)]
+    pub presentation: TabPresentation<K>,
     /// The tab was put to sleep: its panes were stopped to give their memory
     /// back, and it stays in the workspace to be woken later (#762).
     ///
@@ -260,30 +279,389 @@ pub struct Tab {
     pub hibernated: bool,
 }
 
-impl Tab {
-    pub fn leaf(pane: u64) -> Tab {
+impl<K: Copy + Eq> Tab<K> {
+    pub fn leaf(pane: K) -> Tab<K> {
         Tab {
             id: TabId::new(),
             name: None,
             group: None,
             last_auto: None,
             root: PaneNode::Leaf { pane },
+            presentation: TabPresentation::default(),
             hibernated: false,
+        }
+    }
+
+    pub fn map_panes<J: Copy + Eq>(&self, map: impl Fn(K) -> Option<J>) -> Option<Tab<J>> {
+        Some(Tab {
+            id: self.id,
+            name: self.name.clone(),
+            group: self.group,
+            last_auto: self.last_auto.clone(),
+            root: self.root.filter_map_panes(&map)?,
+            presentation: self.presentation.map_panes(&map),
+            hibernated: self.hibernated,
+        })
+    }
+
+    /// Projects tiled panes without changing ownership, including an empty tile area.
+    pub fn visible_root(&self) -> Option<PaneNode<K>> {
+        self.root
+            .project_visible(&|pane| !self.presentation.is_hidden(pane))
+    }
+
+    /// Changes the one PiP pane, restoring its predecessor before promotion.
+    /// An invalid promotion is a no-op; `false` means nothing changed.
+    pub fn set_pip(&mut self, pane: Option<K>, fallback: Option<K>) -> bool {
+        if pane.is_some_and(|id| !self.root.contains(id) || self.presentation.is_parked(id))
+            || self.presentation.pip().map(PipPane::pane) == pane
+        {
+            return false;
+        }
+        if let Some(previous) = self.presentation.pip.take() {
+            self.restore_relationship(&previous, fallback);
+        }
+        self.presentation.pip = pane.map(|pane| self.root.pip_relationship(pane));
+        true
+    }
+
+    /// Hides a live pane while retaining its original tiled relationship.
+    pub fn park(&mut self, pane: K) -> bool {
+        self.park_with_restore(pane, None)
+    }
+
+    /// Replays durable parking after rebuilding a logical tree, without
+    /// capturing an intervening layout as the original recovery position.
+    pub fn park_with_restore(&mut self, pane: K, restore: Option<PipPane<K>>) -> bool {
+        if !self.root.contains(pane) || restore.as_ref().is_some_and(|entry| entry.pane != pane) {
+            return false;
+        }
+        if let Some(index) = self
+            .presentation
+            .parked
+            .iter()
+            .position(|entry| entry.pane == pane)
+        {
+            if let Some(restore) = restore
+                && self.presentation.parked[index] != restore
+            {
+                self.presentation.parked[index] = restore;
+                return true;
+            }
+            return false;
+        }
+        let previous = if self
+            .presentation
+            .pip()
+            .is_some_and(|entry| entry.pane == pane)
+        {
+            self.presentation.pip.take()
+        } else {
+            None
+        };
+        self.presentation.parked.push(
+            restore
+                .or(previous)
+                .unwrap_or_else(|| self.root.pip_relationship(pane)),
+        );
+        true
+    }
+
+    /// Restores exactly one parked pane. Session creation is never a restore effect.
+    pub fn restore_parked(&mut self, pane: K, fallback: Option<K>) -> bool {
+        let Some(index) = self
+            .presentation
+            .parked
+            .iter()
+            .position(|entry| entry.pane == pane)
+        else {
+            return false;
+        };
+        let restore = self.presentation.parked.remove(index);
+        self.restore_relationship(&restore, fallback);
+        true
+    }
+
+    fn restore_relationship(&mut self, previous: &PipPane<K>, fallback: Option<K>) {
+        // A formerly standalone pane has no split relationship to recover.
+        // Keep any splits created while it was hidden instead of rebuilding
+        // them from the singleton's placeholder axis and ratio.
+        if !self.root.contains(previous.pane) || previous.siblings.is_empty() {
+            return;
+        }
+        let current = self.root.pip_relationship(previous.pane);
+        let original = previous
+            .siblings
+            .iter()
+            .copied()
+            .find(|id| self.root.contains(*id));
+        let relationship_survives = current.axis == previous.axis
+            && current.first == previous.first
+            && previous
+                .siblings
+                .iter()
+                .any(|id| current.siblings.contains(id));
+        if relationship_survives {
+            return;
+        }
+        let anchor = original.or_else(|| {
+            fallback
+                .filter(|id| {
+                    *id != previous.pane
+                        && self.root.contains(*id)
+                        && !self.presentation.is_hidden(*id)
+                })
+                .or_else(|| {
+                    self.visible_root()
+                        .and_then(|root| root.first_other(previous.pane))
+                })
+                .or_else(|| self.root.first_other(previous.pane))
+        });
+        if let Some(anchor) = anchor {
+            self.root.remove_leaf(previous.pane);
+            self.root.split_leaf(
+                anchor,
+                previous.pane,
+                previous.axis,
+                previous.ratio,
+                previous.first,
+            );
+        }
+    }
+
+    /// Applies synchronized presentation without recapturing its original
+    /// sibling relationship after a logical-tree rebuild.
+    pub fn set_pip_with_restore(
+        &mut self,
+        pane: Option<K>,
+        fallback: Option<K>,
+        restore: Option<PipPane<K>>,
+    ) -> bool {
+        if pane.is_some_and(|pane| !self.root.contains(pane) || self.presentation.is_parked(pane))
+            || pane.is_some_and(|pane| restore.as_ref().is_some_and(|pip| pip.pane != pane))
+        {
+            return false;
+        }
+        if let (Some(pane), Some(restore)) = (pane, restore) {
+            if self.presentation.pip().is_none_or(|pip| pip.pane() != pane) {
+                self.set_pip(None, fallback);
+            }
+            if self.presentation.pip.as_ref() == Some(&restore) {
+                return false;
+            }
+            self.presentation.pip = Some(restore);
+            true
+        } else {
+            self.set_pip(pane, fallback)
+        }
+    }
+
+    pub(super) fn forget_presentation(&mut self, pane: K) {
+        if self.presentation.pip().is_some_and(|pip| pip.pane == pane) {
+            self.presentation.pip = None;
+        }
+        self.presentation.parked.retain(|entry| entry.pane != pane);
+    }
+
+    fn replace_pane(&mut self, old: K, new: K) {
+        self.root.replace_leaf(old, new);
+        self.presentation
+            .remap_panes(|pane| Some(if pane == old { new } else { pane }));
+    }
+}
+
+/// Durable tab presentation, independent of the complete logical pane tree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "K: Deserialize<'de>"))]
+pub struct TabPresentation<K = u64> {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pip: Option<PipPane<K>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parked: Vec<PipPane<K>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pip_geometry: Option<PipGeometry>,
+}
+
+impl<K> Default for TabPresentation<K> {
+    fn default() -> Self {
+        Self {
+            pip: None,
+            parked: Vec::new(),
+            pip_geometry: None,
         }
     }
 }
 
+impl<K: Copy + Eq> TabPresentation<K> {
+    pub fn pip(&self) -> Option<&PipPane<K>> {
+        self.pip.as_ref()
+    }
+
+    pub fn map_panes<J: Copy + Eq>(&self, map: impl Fn(K) -> Option<J>) -> TabPresentation<J> {
+        TabPresentation {
+            pip: self.pip.as_ref().and_then(|pip| pip.map_panes(&map)),
+            parked: self
+                .parked
+                .iter()
+                .filter_map(|entry| entry.map_panes(&map))
+                .collect(),
+            pip_geometry: self.pip_geometry,
+        }
+    }
+
+    pub fn parked(&self) -> &[PipPane<K>] {
+        &self.parked
+    }
+
+    pub fn is_parked(&self, pane: K) -> bool {
+        self.parked.iter().any(|entry| entry.pane == pane)
+    }
+
+    pub fn is_hidden(&self, pane: K) -> bool {
+        self.is_parked(pane) || self.pip().is_some_and(|entry| entry.pane == pane)
+    }
+
+    pub fn pip_geometry(&self) -> Option<PipGeometry> {
+        self.pip_geometry
+    }
+
+    pub fn set_pip_geometry(&mut self, geometry: Option<PipGeometry>) -> bool {
+        if self.pip_geometry == geometry {
+            return false;
+        }
+        self.pip_geometry = geometry;
+        true
+    }
+
+    /// Rebinds restored identities without discarding the original relationship.
+    /// A missing PiP target clears presentation. Missing siblings retain their
+    /// old, absent IDs so restoration can detect that every sibling was lost.
+    pub fn remap_panes(&mut self, map: impl Fn(K) -> Option<K>) {
+        fn remap<K: Copy>(entry: &mut PipPane<K>, map: &impl Fn(K) -> Option<K>) -> bool {
+            let Some(pane) = map(entry.pane) else {
+                return false;
+            };
+            entry.pane = pane;
+            for sibling in &mut entry.siblings {
+                if let Some(pane) = map(*sibling) {
+                    *sibling = pane;
+                }
+            }
+            true
+        }
+        if let Some(pip) = &mut self.pip
+            && !remap(pip, &map)
+        {
+            self.pip = None;
+        }
+        self.parked.retain_mut(|entry| remap(entry, &map));
+    }
+}
+
+/// Shared placement intent, not a client window rectangle. Position is a
+/// fraction of available travel; size is a fraction of the content viewport.
+/// Each client resolves terminal minima and shadow clearance at its own scale.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PipGeometry {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl Default for PipGeometry {
+    fn default() -> Self {
+        Self {
+            x: 1.,
+            y: 1.,
+            width: 0.42,
+            height: 0.42,
+        }
+    }
+}
+
+impl PipGeometry {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Option<Self> {
+        let valid = [x, y, width, height]
+            .into_iter()
+            .all(|v| v.is_finite() && (0. ..=1.).contains(&v));
+        (valid && width > 0. && height > 0.).then_some(Self {
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+    pub fn x(self) -> f32 {
+        self.x
+    }
+    pub fn y(self) -> f32 {
+        self.y
+    }
+    pub fn width(self) -> f32 {
+        self.width
+    }
+    pub fn height(self) -> f32 {
+        self.height
+    }
+    pub fn is_valid(self) -> bool {
+        Self::new(self.x, self.y, self.width, self.height).is_some()
+    }
+}
+
+/// One live pane presented outside the tiled projection, with its original
+/// sibling relationship rather than an obsolete snapshot of the whole tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum PaneNode {
+#[serde(bound(deserialize = "K: Deserialize<'de>"))]
+pub struct PipPane<K = u64> {
+    pane: K,
+    siblings: Vec<K>,
+    axis: Axis,
+    ratio: f32,
+    first: bool,
+}
+
+impl<K: Copy> PipPane<K> {
+    pub fn pane(&self) -> K {
+        self.pane
+    }
+
+    pub fn siblings(&self) -> &[K] {
+        &self.siblings
+    }
+    pub fn axis(&self) -> Axis {
+        self.axis
+    }
+    pub fn ratio(&self) -> f32 {
+        self.ratio
+    }
+    pub fn first(&self) -> bool {
+        self.first
+    }
+
+    pub fn map_panes<J: Copy>(&self, map: impl Fn(K) -> Option<J>) -> Option<PipPane<J>> {
+        Some(PipPane {
+            pane: map(self.pane)?,
+            siblings: self.siblings.iter().filter_map(|pane| map(*pane)).collect(),
+            axis: self.axis,
+            ratio: self.ratio,
+            first: self.first,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "K: Deserialize<'de>"))]
+pub enum PaneNode<K = u64> {
     Leaf {
-        pane: u64,
+        pane: K,
     },
     Split {
         axis: Axis,
         #[serde(default = "default_ratio")]
         ratio: f32,
-        a: Box<PaneNode>,
-        b: Box<PaneNode>,
+        a: Box<PaneNode<K>>,
+        b: Box<PaneNode<K>>,
     },
 }
 
@@ -291,14 +669,91 @@ fn default_ratio() -> f32 {
     0.5
 }
 
-impl PaneNode {
-    pub fn pane_ids(&self) -> Vec<u64> {
+impl<K: Copy + Eq> PaneNode<K> {
+    pub fn filter_map_panes<J: Copy + Eq>(
+        &self,
+        map: &impl Fn(K) -> Option<J>,
+    ) -> Option<PaneNode<J>> {
+        match self {
+            Self::Leaf { pane } => map(*pane).map(|pane| PaneNode::Leaf { pane }),
+            Self::Split { axis, ratio, a, b } => {
+                match (a.filter_map_panes(map), b.filter_map_panes(map)) {
+                    (Some(a), Some(b)) => Some(PaneNode::Split {
+                        axis: *axis,
+                        ratio: *ratio,
+                        a: Box::new(a),
+                        b: Box::new(b),
+                    }),
+                    (a, b) => a.or(b),
+                }
+            }
+        }
+    }
+
+    pub fn relationship(&self, pane: K) -> Option<PipPane<K>> {
+        self.contains(pane).then(|| self.pip_relationship(pane))
+    }
+
+    fn project_visible(&self, visible: &impl Fn(K) -> bool) -> Option<Self> {
+        match self {
+            Self::Leaf { pane } => visible(*pane).then_some(Self::Leaf { pane: *pane }),
+            Self::Split { axis, ratio, a, b } => {
+                match (a.project_visible(visible), b.project_visible(visible)) {
+                    (Some(a), Some(b)) => Some(Self::Split {
+                        axis: *axis,
+                        ratio: *ratio,
+                        a: Box::new(a),
+                        b: Box::new(b),
+                    }),
+                    (a, b) => a.or(b),
+                }
+            }
+        }
+    }
+
+    fn first_other(&self, excluded: K) -> Option<K> {
+        match self {
+            Self::Leaf { pane } => (*pane != excluded).then_some(*pane),
+            Self::Split { a, b, .. } => a.first_other(excluded).or_else(|| b.first_other(excluded)),
+        }
+    }
+
+    fn pip_relationship(&self, pane: K) -> PipPane<K> {
+        match self {
+            Self::Split { axis, ratio, a, b } => {
+                let (target, sibling, first) = if a.contains(pane) {
+                    (a, b, true)
+                } else {
+                    (b, a, false)
+                };
+                if matches!(&**target, Self::Leaf { .. }) {
+                    PipPane {
+                        pane,
+                        siblings: sibling.pane_ids(),
+                        axis: *axis,
+                        ratio: *ratio,
+                        first,
+                    }
+                } else {
+                    target.pip_relationship(pane)
+                }
+            }
+            Self::Leaf { .. } => PipPane {
+                pane,
+                siblings: Vec::new(),
+                axis: Axis::Horizontal,
+                ratio: 0.5,
+                first: false,
+            },
+        }
+    }
+    pub fn pane_ids(&self) -> Vec<K> {
         let mut out = Vec::new();
         self.collect_panes(&mut out);
         out
     }
 
-    fn collect_panes(&self, out: &mut Vec<u64>) {
+    fn collect_panes(&self, out: &mut Vec<K>) {
         match self {
             PaneNode::Leaf { pane } => out.push(*pane),
             PaneNode::Split { a, b, .. } => {
@@ -308,14 +763,14 @@ impl PaneNode {
         }
     }
 
-    pub fn contains(&self, pane: u64) -> bool {
+    pub fn contains(&self, pane: K) -> bool {
         match self {
             PaneNode::Leaf { pane: p } => *p == pane,
             PaneNode::Split { a, b, .. } => a.contains(pane) || b.contains(pane),
         }
     }
 
-    pub fn descend_mut(&mut self, path: &[Side]) -> Option<&mut PaneNode> {
+    pub fn descend_mut(&mut self, path: &[Side]) -> Option<&mut PaneNode<K>> {
         match path.split_first() {
             None => Some(self),
             Some((side, rest)) => match self {
@@ -328,7 +783,7 @@ impl PaneNode {
         }
     }
 
-    pub fn split_leaf(&mut self, pane: u64, new: u64, axis: Axis, ratio: f32, first: bool) -> bool {
+    pub fn split_leaf(&mut self, pane: K, new: K, axis: Axis, ratio: f32, first: bool) -> bool {
         match self {
             PaneNode::Leaf { pane: p } if *p == pane => {
                 let old = PaneNode::Leaf { pane };
@@ -350,7 +805,7 @@ impl PaneNode {
         }
     }
 
-    pub fn remove_leaf(&mut self, pane: u64) -> Option<bool> {
+    pub fn remove_leaf(&mut self, pane: K) -> Option<bool> {
         match self {
             PaneNode::Leaf { pane: p } => {
                 if *p == pane {
@@ -377,7 +832,7 @@ impl PaneNode {
         }
     }
 
-    pub fn replace_leaf(&mut self, old: u64, new: u64) -> bool {
+    pub fn replace_leaf(&mut self, old: K, new: K) -> bool {
         match self {
             PaneNode::Leaf { pane } if *pane == old => {
                 *pane = new;
@@ -526,6 +981,13 @@ impl PaneSeed {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabCloseReason {
+    Explicit,
+    Emptied,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutDelta {
@@ -548,6 +1010,7 @@ pub enum LayoutDelta {
     },
     TabClosed {
         tab: TabId,
+        reason: TabCloseReason,
     },
     TabRenamed {
         tab: TabId,
@@ -630,6 +1093,124 @@ fn not_found(msg: impl Into<String>) -> io::Error {
 }
 
 impl MachineStore {
+    pub fn sidecar_snapshot(
+        &self,
+        remote: &crate::core::session::RemoteRef,
+    ) -> Option<crate::core::pane_sidecar::SidecarSnapshot> {
+        let machine = self.locked();
+        let workspace = machine
+            .workspaces
+            .iter()
+            .find(|workspace| {
+                workspace
+                    .foreign_view
+                    .as_ref()
+                    .is_some_and(|view| view.remote() == remote)
+            })?
+            .clone();
+        let ids: Vec<u64> = workspace
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.root.pane_ids())
+            .collect();
+        let panes = machine
+            .panes
+            .iter()
+            .filter(|pane| ids.contains(&pane.id))
+            .cloned()
+            .collect();
+        Some(crate::core::pane_sidecar::SidecarSnapshot::new(
+            workspace, panes,
+        ))
+    }
+
+    pub fn sidecar_apply(
+        &self,
+        remote: crate::core::session::RemoteRef,
+        updates: Vec<crate::core::pane_sidecar::SidecarUpdate>,
+        seeds: Vec<PaneSeed>,
+        origin: Option<SubscriberId>,
+    ) -> io::Result<Vec<u64>> {
+        use crate::core::pane_sidecar::ForeignWorkspace;
+        self.mutate(origin, |machine| {
+            let existing = machine.workspaces.iter().position(|workspace| {
+                workspace
+                    .foreign_view
+                    .as_ref()
+                    .is_some_and(|view| view.remote() == &remote)
+            });
+            let mut workspace = existing
+                .map(|at| machine.workspaces[at].clone())
+                .unwrap_or_else(|| Workspace {
+                    foreign_view: Some(ForeignWorkspace::new(remote)),
+                    ..Workspace::default()
+                });
+            let foreign = workspace
+                .foreign_view
+                .as_mut()
+                .expect("sidecar owns a foreign view");
+            let applied = foreign.apply(&updates)?;
+            if !applied.changed {
+                return Ok((Vec::new(), Vec::new()));
+            }
+            let local_tabs: Vec<Tab> = foreign
+                .tabs()
+                .iter()
+                .filter_map(|tab| {
+                    tab.map_panes(|pane| pane.owner().is_client_local().then_some(pane.pane()))
+                })
+                .collect();
+            let owned: Vec<u64> = local_tabs
+                .iter()
+                .flat_map(|tab| tab.root.pane_ids())
+                .collect();
+            for pane in &owned {
+                if machine.workspaces.iter().any(|other| {
+                    other.id != workspace.id
+                        && other.tabs.iter().any(|tab| tab.root.contains(*pane))
+                }) {
+                    return Err(refuse(format!(
+                        "pane {pane} is already owned by another local workspace"
+                    )));
+                }
+                if !machine.panes.iter().any(|record| record.id == *pane) {
+                    let seed = seeds
+                        .iter()
+                        .find(|seed| seed.pane == *pane)
+                        .cloned()
+                        .ok_or_else(|| {
+                            not_found(format!("no local pane record for sidecar pane {pane}"))
+                        })?;
+                    if !self.seed_is_live(*pane) {
+                        return Err(not_found(format!("sidecar pane {pane} has exited")));
+                    }
+                    machine.panes.push(seed.into_record(true));
+                }
+            }
+            workspace.tabs = local_tabs;
+            workspace.active_tab = workspace.tabs.first().map(|tab| tab.id);
+            if let Some(at) = existing {
+                machine.workspaces[at] = workspace.clone();
+            } else {
+                machine.workspaces.push(workspace.clone());
+            }
+            let mut closed: Vec<u64> = applied
+                .closed
+                .into_iter()
+                .filter(|pane| pane.owner().is_client_local())
+                .map(|pane| pane.pane())
+                .filter(|pane| !references(machine, *pane))
+                .collect();
+            closed.sort_unstable();
+            closed.dedup();
+            machine.panes.retain(|pane| !closed.contains(&pane.id));
+            Ok((
+                closed,
+                vec![(workspace.id, LayoutDelta::WorkspaceCreated { workspace })],
+            ))
+        })
+    }
+
     pub fn open(path: impl Into<PathBuf>) -> Arc<MachineStore> {
         let path = path.into();
         let machine = load_machine(&path);
@@ -838,7 +1419,13 @@ impl MachineStore {
                 .position(|t| t.id == tab)
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no tab {tab}")))?;
             ws.tabs.remove(index);
-            let mut deltas = vec![(workspace, LayoutDelta::TabClosed { tab })];
+            let mut deltas = vec![(
+                workspace,
+                LayoutDelta::TabClosed {
+                    tab,
+                    reason: TabCloseReason::Explicit,
+                },
+            )];
             if let Some(active) = heal_active_tab(ws, index) {
                 deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
             }
@@ -859,9 +1446,7 @@ impl MachineStore {
     /// [`CLOSED_TAB_TTL`] in the same mutation, measured from `now` (seconds
     /// since the epoch) so the rule can be tested without a clock.
     ///
-    /// Other windows hear the same `TabClosed` a plain close raises: to them
-    /// the tab is gone either way, and a client that predates the list decodes
-    /// nothing new.
+    /// Other windows hear the same explicit `TabClosed` a plain close raises.
     pub fn tab_close_remembered(
         &self,
         workspace: WorkspaceId,
@@ -886,7 +1471,13 @@ impl MachineStore {
                 tab: closed,
                 closed_at: now,
             });
-            let mut deltas = vec![(workspace, LayoutDelta::TabClosed { tab })];
+            let mut deltas = vec![(
+                workspace,
+                LayoutDelta::TabClosed {
+                    tab,
+                    reason: TabCloseReason::Explicit,
+                },
+            )];
             if let Some(active) = heal_active_tab(ws, index) {
                 deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
             }
@@ -1187,11 +1778,37 @@ impl MachineStore {
                 .iter()
                 .position(|t| t.root.contains(pane))
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
+            if let Some(foreign) = ws.foreign_view.as_mut() {
+                foreign.remove_pane(crate::core::pane_sidecar::ScopedPane::client_local(pane));
+                ws.tabs = foreign
+                    .tabs()
+                    .iter()
+                    .filter_map(|tab| {
+                        tab.map_panes(|pane| pane.owner().is_client_local().then_some(pane.pane()))
+                    })
+                    .collect();
+                if !ws.tabs.iter().any(|tab| Some(tab.id) == ws.active_tab) {
+                    ws.active_tab = ws.tabs.first().map(|tab| tab.id);
+                }
+                let delta = LayoutDelta::WorkspaceCreated {
+                    workspace: ws.clone(),
+                };
+                let orphans = collect_orphan_panes(m);
+                m.panes.retain(|record| !orphans.contains(&record.id));
+                return Ok((orphans, vec![(workspace, delta)]));
+            }
             let mut deltas = Vec::new();
+            ws.tabs[index].forget_presentation(pane);
             match ws.tabs[index].root.remove_leaf(pane) {
                 None => {
                     let closed = ws.tabs.remove(index);
-                    deltas.push((workspace, LayoutDelta::TabClosed { tab: closed.id }));
+                    deltas.push((
+                        workspace,
+                        LayoutDelta::TabClosed {
+                            tab: closed.id,
+                            reason: TabCloseReason::Emptied,
+                        },
+                    ));
                     if let Some(active) = heal_active_tab(ws, index) {
                         deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
                     }
@@ -1208,6 +1825,151 @@ impl MachineStore {
             let orphans = collect_orphan_panes(m);
             m.panes.retain(|p| !orphans.contains(&p.id));
             Ok((orphans, deltas))
+        })
+    }
+
+    pub fn pane_set_presentation(
+        &self,
+        workspace: WorkspaceId,
+        pane: u64,
+        pip: bool,
+        fallback: Option<u64>,
+        restore: Option<PipPane>,
+        origin: Option<SubscriberId>,
+    ) -> io::Result<()> {
+        self.mutate(origin, |m| {
+            let ws = find_workspace(m, workspace)?;
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.root.contains(pane))
+                .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
+            if pip
+                && restore
+                    .as_ref()
+                    .is_some_and(|restore| restore.pane() != pane)
+            {
+                return Err(refuse("PiP restore metadata names a different pane"));
+            }
+            // A stale restore for another pane cannot dismiss the current PiP.
+            if !pip
+                && tab
+                    .presentation
+                    .pip()
+                    .is_none_or(|current| current.pane() != pane)
+            {
+                return Ok(((), Vec::new()));
+            }
+            let changed = tab.set_pip_with_restore(pip.then_some(pane), fallback, restore);
+            let deltas = if changed {
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
+            Ok(((), deltas))
+        })
+    }
+
+    pub fn pane_park(
+        &self,
+        workspace: WorkspaceId,
+        pane: u64,
+        restore: Option<PipPane>,
+        origin: Option<SubscriberId>,
+    ) -> io::Result<()> {
+        self.mutate(origin, |machine| {
+            let ws = find_workspace(machine, workspace)?;
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.root.contains(pane))
+                .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
+            if restore.as_ref().is_some_and(|entry| entry.pane() != pane) {
+                return Err(refuse("Park restore metadata names a different pane"));
+            }
+            let changed = tab.park_with_restore(pane, restore);
+            let deltas = if changed {
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
+            Ok(((), deltas))
+        })
+    }
+
+    pub fn pane_restore(
+        &self,
+        workspace: WorkspaceId,
+        pane: u64,
+        fallback: Option<u64>,
+        origin: Option<SubscriberId>,
+    ) -> io::Result<()> {
+        self.mutate(origin, |machine| {
+            let ws = find_workspace(machine, workspace)?;
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.root.contains(pane))
+                .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
+            let changed = tab.restore_parked(pane, fallback);
+            let deltas = if changed {
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
+            Ok(((), deltas))
+        })
+    }
+
+    pub fn pane_set_pip_geometry(
+        &self,
+        workspace: WorkspaceId,
+        pane: u64,
+        geometry: Option<PipGeometry>,
+        origin: Option<SubscriberId>,
+    ) -> io::Result<()> {
+        if geometry.is_some_and(|geometry| !geometry.is_valid()) {
+            return Err(refuse("invalid PiP geometry"));
+        }
+        self.mutate(origin, |m| {
+            let ws = find_workspace(m, workspace)?;
+            let tab = ws
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.presentation.pip().is_some_and(|pip| pip.pane() == pane))
+                .ok_or_else(|| {
+                    not_found(format!("workspace {workspace} has no PiP pane {pane}"))
+                })?;
+            let deltas = if tab.presentation.set_pip_geometry(geometry) {
+                vec![(
+                    workspace,
+                    LayoutDelta::TabRestructured {
+                        tab: tab.clone(),
+                        pane: None,
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
+            Ok(((), deltas))
         })
     }
 
@@ -1263,18 +2025,27 @@ impl MachineStore {
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {to}")))?;
 
             let mut deltas: Vec<(WorkspaceId, LayoutDelta)> = Vec::new();
+            if from != dest {
+                ws.tabs[from].forget_presentation(pane);
+            }
             match ws.tabs[from].root.remove_leaf(pane) {
                 None => {
                     if from == dest {
                         return Err(refuse("a pane cannot be moved next to itself".to_string()));
                     }
                     let closed = ws.tabs.remove(from);
-                    deltas.push((workspace, LayoutDelta::TabClosed { tab: closed.id }));
+                    deltas.push((
+                        workspace,
+                        LayoutDelta::TabClosed {
+                            tab: closed.id,
+                            reason: TabCloseReason::Emptied,
+                        },
+                    ));
                     if let Some(active) = heal_active_tab(ws, from) {
                         deltas.push((workspace, LayoutDelta::ActiveTabChanged { tab: active }));
                     }
                 }
-                Some(true) => {
+                Some(true) if from != dest => {
                     deltas.push((
                         workspace,
                         LayoutDelta::TabRestructured {
@@ -1283,6 +2054,7 @@ impl MachineStore {
                         },
                     ));
                 }
+                Some(true) => {}
                 Some(false) => unreachable!("the tab was chosen because it contains the pane"),
             }
             let dest_tab = ws
@@ -1324,7 +2096,7 @@ impl MachineStore {
                 .iter_mut()
                 .find(|t| t.root.contains(old))
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {old}")))?;
-            tab.root.replace_leaf(old, new.pane);
+            tab.replace_pane(old, new.pane);
             let delta = LayoutDelta::TabRestructured {
                 tab: tab.clone(),
                 pane: Some(record),
@@ -2443,7 +3215,7 @@ mod tests {
             matches!(
                 heard.lock().unwrap().as_slice(),
                 [
-                    (_, LayoutDelta::TabClosed { tab }),
+                    (_, LayoutDelta::TabClosed { tab, reason: TabCloseReason::Explicit }),
                     (_, LayoutDelta::ActiveTabChanged { tab: active })
                 ] if *tab == second.id && *active == first.id
             ),
@@ -2569,7 +3341,7 @@ mod tests {
         assert!(store.workspace(ws).unwrap().tabs.is_empty());
         assert!(matches!(
             heard.lock().unwrap()[0].1,
-            LayoutDelta::TabClosed { tab: id } if id == tab.id
+            LayoutDelta::TabClosed { tab: id, reason: TabCloseReason::Emptied } if id == tab.id
         ));
     }
 
@@ -2619,6 +3391,7 @@ mod tests {
             .tab_create(ws, None, seed(2, "/b"), None, None)
             .unwrap();
 
+        let (_sub, heard) = recorded(&store);
         store
             .pane_move(ws, 2, 1, Axis::Vertical, false, None)
             .unwrap();
@@ -2631,6 +3404,9 @@ mod tests {
             "the source tab is gone"
         );
         assert!(store.pane(2).is_some(), "the pane moved; it did not die");
+        assert!(
+            matches!(heard.lock().unwrap()[0].1, LayoutDelta::TabClosed { tab, reason: TabCloseReason::Emptied } if tab == second.id)
+        );
 
         let err = store
             .pane_move(ws, 2, 2, Axis::Vertical, false, None)
@@ -3400,7 +4176,9 @@ mod tests {
             "a stopped pane's record must not read as running to `lyrel wait`"
         );
         let heard = heard.lock().unwrap();
-        assert!(matches!(&heard[0].1, LayoutDelta::TabClosed { tab: t } if *t == tab.id));
+        assert!(
+            matches!(&heard[0].1, LayoutDelta::TabClosed { tab: t, reason: TabCloseReason::Explicit } if *t == tab.id)
+        );
     }
 
     /// A pane the window held but never got into the tree has no entry to

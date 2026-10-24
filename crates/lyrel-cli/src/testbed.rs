@@ -13,6 +13,7 @@ pub fn two_workspace_machine() -> Machine {
                 group: None,
                 last_auto: None,
                 root: PaneNode::Leaf { pane: 1 },
+                presentation: Default::default(),
                 hibernated: false,
             },
             Tab {
@@ -26,6 +27,7 @@ pub fn two_workspace_machine() -> Machine {
                     a: Box::new(PaneNode::Leaf { pane: 2 }),
                     b: Box::new(PaneNode::Leaf { pane: 3 }),
                 },
+                presentation: Default::default(),
                 hibernated: false,
             },
         ],
@@ -33,6 +35,7 @@ pub fn two_workspace_machine() -> Machine {
         attachment: None,
         groups: Default::default(),
         closed: Vec::new(),
+        foreign_view: None,
     };
     let web = Workspace {
         id: WorkspaceId::new(),
@@ -44,12 +47,14 @@ pub fn two_workspace_machine() -> Machine {
             group: None,
             last_auto: None,
             root: PaneNode::Leaf { pane: 5 },
+            presentation: Default::default(),
             hibernated: false,
         }],
         active_tab: None,
         attachment: None,
         groups: Default::default(),
         closed: Vec::new(),
+        foreign_view: None,
     };
     let record = |id: u64, cwd: &str| PaneRecord {
         id,
@@ -70,4 +75,54 @@ pub fn two_workspace_machine() -> Machine {
             record(5, "C:\\web"),
         ],
     }
+}
+
+/// The owning daemon keeps only the local native SSH leaf in its ordinary tree.
+pub fn mixed_sidecar_projection() -> (Workspace, PaneRecord) {
+    use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
+    use lyrel_core::core::session::{RemoteRef, RemoteTarget};
+
+    let remote = RemoteRef::new(
+        RemoteTarget::Alias {
+            alias: "remote-workbench".into(),
+        },
+        WorkspaceId::new(),
+    );
+    let mut mixed = Tab::leaf(ScopedPane::workspace(1));
+    mixed.root = PaneNode::Split {
+        axis: Axis::Horizontal,
+        ratio: 0.5,
+        a: Box::new(PaneNode::Leaf {
+            pane: ScopedPane::workspace(1),
+        }),
+        b: Box::new(PaneNode::Leaf {
+            pane: ScopedPane::client_local(77),
+        }),
+    };
+    let projection = mixed
+        .map_panes(|pane| pane.owner().is_client_local().then_some(pane.pane()))
+        .unwrap();
+    let mut foreign = ForeignWorkspace::new(remote);
+    foreign.apply(&[SidecarUpdate::new(None, mixed)]).unwrap();
+    (
+        Workspace {
+            name: Some("internal-projection".into()),
+            tabs: vec![projection],
+            foreign_view: Some(foreign),
+            ..Workspace::default()
+        },
+        PaneRecord {
+            live: true,
+            ssh_spec: Some(
+                serde_json::from_value(serde_json::json!({
+                    "host": "native-box",
+                    "port": 22,
+                    "user": "developer",
+                    "auth_mode": "agent"
+                }))
+                .unwrap(),
+            ),
+            ..PaneRecord::new(77)
+        },
+    )
 }

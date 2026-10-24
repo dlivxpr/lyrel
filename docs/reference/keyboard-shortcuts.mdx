@@ -34,6 +34,23 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 缩放窗格 | <kbd>⌘ ⇧ ⏎</kbd> | <kbd>Ctrl ⇧ ⏎</kbd> |
 | 进入全屏 | <kbd>⌘ ⏎</kbd> | <kbd>F11</kbd> |
 
+焦点位于窗口控件时，可用 <kbd>Tab</kbd> 到达窗格顶部的圆角手柄，再按 <kbd>Enter</kbd>
+打开标准菜单。手柄在键盘聚焦时显现，不要求鼠标悬停；方向键选择，<kbd>Escape</kbd>
+关闭菜单并返回对应窗格。终端聚焦时，<kbd>Tab</kbd> 仍发送给 shell，用于补全；
+可通过随处搜索执行[完整窗格命令](/window/tabs-and-splits#pane-menu)，不必先把焦点移到手柄。
+菜单快捷键随当前绑定更新，窗格缩放不改变字体大小。
+
+画中画命令 `TogglePanePip`（切换当前窗格）与 `RestorePanePip`（恢复当前标签页的画中画）
+没有默认快捷键，可从全局搜索运行或自行绑定。它们不会改变 shell 身份、界面字号或原有分屏快捷键。
+画中画的移动／调整大小手柄支持窗口控件的 Tab 导航；聚焦后用方向键操作，Enter／Escape 返回原终端。
+终端自身的方向键与 Tab 不被几何控件截获；鼠标移动与调整大小不会改变键盘输入目标。
+
+停放命令 `ParkPane` 收起当前平铺或 PiP 窗格；`RestoreParkedPane` 打开当前标签页牌堆
+第一张卡片的键盘预览，再激活卡片的 **Restore** 恢复所选窗格。这两个操作没有默认快捷键，
+可从随处搜索运行或自行绑定。恢复只影响所选卡片，不恢复全部窗格；<kbd>Escape</kbd>
+关闭预览，不取消停放。预览不接收终端输入，停放也不改变 Shell 身份或 CLI 的 `%PANE`。
+
+
 <a id="view"></a>
 ## 视图
 
@@ -45,6 +62,8 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 切换代码面板 | <kbd>⌘ ⇧ E</kbd> | <kbd>Ctrl ⇧ E</kbd> |
 | 增大字号 · 减小字号 · 重置字号 | <kbd>⌘ +</kbd> · <kbd>⌘ −</kbd> · <kbd>⌘ 0</kbd> | <kbd>Ctrl +</kbd> · <kbd>Ctrl −</kbd> · <kbd>Ctrl 0</kbd> |
 | 缩放字体 | <kbd>⌘</kbd> + 滚轮 | <kbd>Ctrl</kbd> + 滚轮 |
+
+左上角的侧栏、随处搜索、新建标签页与右上角的向右分屏、向下分屏、右面板按钮，在侧栏收起和文档铺满时仍可用。按钮提示显示当前平台及自定义键位的实际快捷键；不再提供 `ToggleTabSidebar` 横向布局命令。<kbd>Escape</kbd> 关闭随处搜索后，输入返回之前的终端或文档。
 
 <a id="terminal"></a>
 ## 终端
@@ -115,8 +134,8 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 
 | 分组 | 操作 |
 |---|---|
-| 标签页 | `RenameTab` · `NewWorktreeTab` · `MoveTabLeft` · `MoveTabRight` · `CloseOtherTabs` · `CloseTabsToTheRight` · `CopyWorkingDirectory` · `MarkTabUnread` · `HibernateTab` · `ToggleTabSidebar` |
-| 窗格 | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` |
+| 标签页 | `RenameTab` · `NewWorktreeTab` · `MoveTabLeft` · `MoveTabRight` · `CloseOtherTabs` · `CloseTabsToTheRight` · `CopyWorkingDirectory` · `MarkTabUnread` · `HibernateTab` |
+| 窗格 | `ResizePaneLeft/Right/Up/Down` · `SwapPaneNext` · `SwapPanePrev` · `MovePaneToTab` · `TogglePanePip` · `RestorePanePip` · `ParkPane` · `RestoreParkedPane` · `OpenScrollbackInEditor` · `ClearPaneScreen` · `RestartPaneShell` |
 | 工作区 | `SelectWorkspace1`…`SelectWorkspace9` · `RenameWorkspace` · `StopWorkspace` · `DeleteWorkspace` |
 | 智能体 | `ForkAgentSession`（加上 `Right` / `Left` / `Down` / `Up`）· `CopyAgentSessionId` · `LaunchAgent:<slug>`（每个智能体各有一个，例如 `LaunchAgent:omp`） |
 | Git | `ScmStageAll` · `ScmUnstageAll` · `ScmDiscardAll` · `ScmCommitAmend` · `ScmRefresh` · `ScmSync` · `ScmPush` · `ScmPull` · `ScmFetch` · `ScmCheckoutBranch` · `ScmCreateBranch` · `ScmToggleGraph` · `ToggleDiffViewMode` |
@@ -124,6 +143,11 @@ description: "所有默认快捷键，以及用于重新绑定的操作名称。
 | 文档 | `ToggleDocumentFill` · `DocumentWidthThird` · `DocumentWidthHalf` · `DocumentWidthTwoThirds` · `ToggleDocumentPreview` · `ToggleDocumentWrap` |
 | SSH | `ToggleSftp` · `ShowSshForwards` · `OpenSshProfiles` |
 | 应用 | `CloseWindow` · `About` · `CheckForUpdates` · `OpenDocumentation` · `OpenProject`（打开[项目主页](https://github.com/dlivxpr/lyrel)）· `ReportIssue` · `ShowAll` · `ZoomWindow` |
+
+停放牌堆没有默认全局快捷键，可用 `RestoreParkedPane` 打开键盘预览。牌堆及「更多…」列表均支持
+方向键、<kbd>Home</kbd>／<kbd>End</kbd>；列表另支持 <kbd>Page Up</kbd>／<kbd>Page Down</kbd>。
+<kbd>Enter</kbd> 先预览，再恢复当前窗格。列表预览的 <kbd>Escape</kbd> 先返回列表，
+再关闭列表并归还焦点；这些按键只在牌堆／列表取得焦点时处理，不截获 Shell 输入。
 
 <a id="rebinding-syntax"></a>
 ## 重新绑定语法

@@ -1,3 +1,4 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -15,9 +16,7 @@ use crate::ui::right_panel::{ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, git_badge};
 use crate::ui::scm::status::{status_color, status_glyph};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, ExternalPaths, FocusHandle, KeyDownEvent, MouseButton,
@@ -1110,7 +1109,7 @@ impl LyrelApp {
                 // (#542): say so with the same words a failed file link uses.
                 if let Err(e) = crate::terminal::view::open_file_path(path) {
                     log::warn!("failed to open {}: {e}", path.display());
-                    window.push_notification(
+                    window.notify_app(
                         crate::ui::host_ops::failure(
                             t_fmt(
                                 L10nKey::LinkFileOpenFailed,
@@ -1125,7 +1124,7 @@ impl LyrelApp {
                     );
                 }
             } else {
-                window.push_notification(
+                window.notify_app(
                     t_fmt(
                         L10nKey::LinkDirOutsideTree,
                         &[("path", &path.display().to_string())],
@@ -1423,7 +1422,7 @@ impl LyrelApp {
                 )
             },
             move |_app, result: std::io::Result<PathBuf>, window, cx| match result {
-                Ok(local) => window.push_notification(
+                Ok(local) => window.notify_app(
                     t_fmt(
                         L10nKey::FileTreeDownloaded,
                         &[(
@@ -2207,12 +2206,6 @@ impl LyrelApp {
         cx: &App,
     ) -> PopupMenu {
         let danger = cx.theme().danger;
-        // Whether "Pin as Group" has a sidebar to put the group in: with the
-        // tabs along the top there is nowhere to show one. Offered on a remote
-        // workspace too, unlike the file manager above — the tree and a pinned
-        // folder are both on the workspace's own host.
-        let groups_shown = cx.global::<crate::core::config::Config>().tab_bar_position
-            == crate::core::config::TabBarPosition::Left;
         let mut menu = menu.min_w(px(200.));
         let p = path.to_path_buf();
 
@@ -2237,19 +2230,17 @@ impl LyrelApp {
                     }
                 }),
             );
-            if groups_shown {
-                menu = menu.item(
-                    PopupMenuItem::new(t(L10nKey::FileTreeContextPinAsGroup)).on_click({
-                        let app = app.clone();
-                        let p = p.clone();
-                        move |_, _window, cx| {
-                            let _ = app.update(cx, |this, cx| {
-                                this.pin_folder(p.clone(), cx);
-                            });
-                        }
-                    }),
-                );
-            }
+            menu = menu.item(
+                PopupMenuItem::new(t(L10nKey::FileTreeContextPinAsGroup)).on_click({
+                    let app = app.clone();
+                    let p = p.clone();
+                    move |_, _window, cx| {
+                        let _ = app.update(cx, |this, cx| {
+                            this.pin_folder(p.clone(), cx);
+                        });
+                    }
+                }),
+            );
         }
         menu = menu
             .item(

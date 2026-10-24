@@ -125,13 +125,7 @@ impl Dir {
 pub(crate) struct PaneChrome {
     /// Fade every pane but the focused one.
     pub dim_inactive: bool,
-    /// Whether a pane can be picked up and put somewhere else. False for a tab
-    /// holding one pane: there is nowhere to move it to.
-    pub rearrangeable: bool,
-    /// The pane whose top edge the pointer is near. The leaves write it as the
-    /// pointer crosses their reveal bands and the same frame's siblings read
-    /// it, so at most one grip is ever drawn.
-    pub hovered: Rc<Cell<Option<gpui_kit::EntityId>>>,
+    pub app: gpui_kit::WeakEntity<crate::ui::app::LyrelApp>,
     /// The pane being dragged, drawn faded where it came from.
     pub lifted: Option<gpui_kit::EntityId>,
     pub drag: crate::ui::pane_drag::PaneDragState,
@@ -220,13 +214,6 @@ impl<L: Clone> Pane<L> {
     pub fn zoom_hides_siblings(&self, pred: impl Fn(&L) -> bool) -> bool {
         let leaves = self.leaves();
         leaves.len() > 1 && leaves.iter().any(pred)
-    }
-
-    pub fn leaf_matching_or_first(&self, pred: impl Fn(&L) -> bool) -> Option<L> {
-        self.leaves()
-            .into_iter()
-            .find(|l| pred(l))
-            .or_else(|| self.first_leaf())
     }
 
     fn split_leaf_where(
@@ -1026,13 +1013,74 @@ impl Pane<PaneSlot> {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui_kit::AnyElement {
+        self.render_without(&[], chrome, window, cx)
+    }
+
+    /// Collapse hidden leaves only for painting. The owning tree and its split
+    /// ratios remain intact, so hiding a pane is never a lifecycle operation.
+    pub(crate) fn render_without(
+        &self,
+        hidden: &[gpui_kit::EntityId],
+        chrome: &PaneChrome,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui_kit::AnyElement {
+        // Post-order traversal visits every node once. Even an entirely hidden
+        // subtree must not recurse or repeatedly scan for a visible descendant.
+        enum Pending<'a> {
+            Right(&'a Pane<PaneSlot>, &'a Pane<PaneSlot>),
+            Join(&'a Pane<PaneSlot>, Option<gpui_kit::AnyElement>),
+        }
+        let mut pending = Vec::new();
+        let mut node = self;
+        'visit: loop {
+            let mut rendered = match node {
+                Pane::Empty => None,
+                Pane::Leaf(slot) if hidden.contains(&slot.entity_id()) => None,
+                Pane::Leaf(_) => Some(node.render_node(None, chrome, window, cx)),
+                Pane::Split { a, b, .. } => {
+                    pending.push(Pending::Right(node, b));
+                    node = a;
+                    continue;
+                }
+            };
+            while let Some(next) = pending.pop() {
+                match next {
+                    Pending::Right(split, right) => {
+                        pending.push(Pending::Join(split, rendered));
+                        node = right;
+                        continue 'visit;
+                    }
+                    Pending::Join(split, left) => {
+                        rendered = match (left, rendered) {
+                            (Some(a), Some(b)) => {
+                                Some(split.render_node(Some((a, b)), chrome, window, cx))
+                            }
+                            (left, right) => left.or(right),
+                        };
+                    }
+                }
+            }
+            return rendered.unwrap_or_else(|| div().into_any_element());
+        }
+    }
+
+    // This builder is deliberately non-recursive. A debug build's fluent
+    // element construction has a large frame, independent of tree depth.
+    fn render_node(
+        &self,
+        children: Option<(gpui_kit::AnyElement, gpui_kit::AnyElement)>,
+        chrome: &PaneChrome,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui_kit::AnyElement {
         match self {
             Pane::Empty => div().into_any_element(),
             Pane::Leaf(v) => {
                 let id = v.entity_id();
                 let focused = v.contains_focused(window, cx);
                 let lifted = chrome.lifted == Some(id);
-                let grip = chrome.rearrangeable && chrome.lifted.is_none();
+                let grip = chrome.lifted.is_none();
                 // The terminal renders itself at this opacity by blending its
                 // colours toward the window background (`TerminalView::dim`,
                 // whose field docs explain why that beats an element-opacity
@@ -1049,9 +1097,6 @@ impl Pane<PaneSlot> {
                     .size_full()
                     .relative()
                     .overflow_hidden()
-                    .when(chrome.rearrangeable, |d| {
-                        d.pt(px(crate::ui::pane_drag::HANDLE_STRIP))
-                    })
                     .map(|d| match v {
                         PaneSlot::Ready(t) => {
                             t.update(cx, |v, _cx| v.set_dim(dim));
@@ -1062,23 +1107,23 @@ impl Pane<PaneSlot> {
                         }
                     })
                     .when(grip, |d| {
-                        d.child(crate::ui::pane_drag::reveal_band(id, &chrome.hovered))
-                            .child(crate::ui::pane_drag::handle(
-                                id,
-                                chrome.hovered.get() == Some(id),
-                                &chrome.drag,
-                                cx,
-                            ))
+                        d.child(crate::ui::pane_drag::handle(
+                            v,
+                            &chrome.drag,
+                            &chrome.app,
+                            window,
+                            cx,
+                        ))
                     })
                     .into_any_element()
             }
             Pane::Split {
                 axis,
-                a,
-                b,
                 ratio,
                 dragging,
+                ..
             } => {
+                let (a, b) = children.expect("visible splits render their children first");
                 let row = *axis == Axis::Horizontal;
                 let r = ratio.get().clamp(MIN_RATIO, MAX_RATIO);
 
@@ -1217,7 +1262,7 @@ impl Pane<PaneSlot> {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .min_h_0()
-                            .child(a.render(chrome, window, cx)),
+                            .child(a),
                     )
                     .child(divider)
                     .child(
@@ -1227,7 +1272,7 @@ impl Pane<PaneSlot> {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .min_h_0()
-                            .child(b.render(chrome, window, cx)),
+                            .child(b),
                     )
                     .into_any_element()
             }
@@ -1371,19 +1416,6 @@ mod tests {
         split(&mut pane, 0, Axis::Vertical, 3);
         assert_eq!(pane.leaves(), vec![0, 3, 1, 2]);
         assert_eq!(pane.first_leaf(), Some(0));
-    }
-
-    #[test]
-    fn leaf_matching_or_first_prefers_the_match_then_falls_back_to_first() {
-        let mut pane = TestPane::leaf(0);
-        split(&mut pane, 0, Axis::Horizontal, 1);
-        split(&mut pane, 1, Axis::Vertical, 2);
-        assert_eq!(pane.leaves(), vec![0, 1, 2]);
-
-        assert_eq!(pane.leaf_matching_or_first(is(2)), Some(2));
-        assert_eq!(pane.leaf_matching_or_first(is(1)), Some(1));
-        assert_eq!(pane.leaf_matching_or_first(is(99)), Some(0));
-        assert_eq!(TestPane::Empty.leaf_matching_or_first(is(0)), None);
     }
 
     #[test]

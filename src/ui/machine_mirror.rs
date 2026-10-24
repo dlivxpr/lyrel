@@ -367,7 +367,7 @@ fn apply(machine: &mut Machine, workspace: WorkspaceId, delta: &LayoutDelta) -> 
             ws.tabs.insert(at, tab.clone());
             true
         }
-        LayoutDelta::TabClosed { tab } => {
+        LayoutDelta::TabClosed { tab, .. } => {
             let before = ws.tabs.len();
             ws.tabs.retain(|t| t.id != *tab);
             if ws.tabs.is_empty() {
@@ -440,7 +440,7 @@ fn view_of<'a>(
 ) -> Option<(&'a Workspace, &'a [PaneRecord])> {
     let machine = MachineMirrors::machine(cx, entry.host_id())?;
     let machine_ws = entry.host.as_ref().map(|r| r.workspace).unwrap_or(entry.id);
-    let ws = machine.workspaces.iter().find(|w| w.id == machine_ws)?;
+    let ws = machine.user_workspaces().find(|w| w.id == machine_ws)?;
     Some((ws, &machine.panes))
 }
 
@@ -543,7 +543,7 @@ pub fn tab_views_for(cx: &App, client_ws: WorkspaceId) -> Option<(Vec<TabView>, 
 
 fn local_view_of(cx: &App, id: WorkspaceId) -> Option<(&Workspace, &[PaneRecord])> {
     let machine = MachineMirrors::machine(cx, HostId::LOCAL)?;
-    let ws = machine.workspaces.iter().find(|w| w.id == id)?;
+    let ws = machine.user_workspaces().find(|w| w.id == id)?;
     Some((ws, &machine.panes))
 }
 
@@ -572,8 +572,7 @@ pub fn unclaimed_local_workspaces(cx: &App) -> Vec<UnclaimedWorkspace> {
     };
     let views = crate::core::session::WorkspaceStore::all(cx);
     machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .filter(|ws| views.get(ws.id).is_none())
         .map(|ws| UnclaimedWorkspace {
             id: ws.id,
@@ -992,6 +991,115 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_stale_machine_get_cannot_undo_local_pip_or_its_restore(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            let id = WorkspaceId::new();
+            let mut tab = leaf_tab(1);
+            tab.root.split_leaf(1, 2, Axis::Horizontal, 0.4, false);
+            let original = tab.clone();
+            let snapshot = |tab: Tab| {
+                machine_with(Workspace {
+                    id,
+                    tabs: vec![tab],
+                    ..Workspace::default()
+                })
+            };
+            MachineMirrors::install(cx, HostId::LOCAL, snapshot(original.clone()));
+            assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
+            assert!(tab.set_pip(Some(2), Some(1)));
+            MachineMirrors::note_synced_workspace(
+                cx,
+                HostId::LOCAL,
+                id,
+                vec![tab.clone()],
+                Some(tab.id),
+            );
+            MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(original)));
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL)
+                .unwrap()
+                .workspaces[0]
+                .tabs[0];
+            assert_eq!(mirrored.presentation.pip().map(|pip| pip.pane()), Some(2));
+            assert_eq!(mirrored.root.pane_ids(), vec![1, 2]);
+            assert_eq!(
+                mirrored.visible_root(),
+                Some(lyrel_core::core::machine::PaneNode::Leaf { pane: 1 })
+            );
+
+            let promoted = tab.clone();
+            assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
+            assert!(tab.set_pip(None, Some(1)));
+            MachineMirrors::note_synced_workspace(
+                cx,
+                HostId::LOCAL,
+                id,
+                vec![tab.clone()],
+                Some(tab.id),
+            );
+            MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(promoted)));
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL)
+                .unwrap()
+                .workspaces[0]
+                .tabs[0];
+            assert_eq!(mirrored, &tab);
+            assert!(mirrored.presentation.pip().is_none());
+            assert_eq!(mirrored.root.pane_ids(), vec![1, 2]);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn stale_snapshot_cannot_erase_a_park_or_a_chosen_restore(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            let id = WorkspaceId::new();
+            let mut tab = leaf_tab(1);
+            tab.root.split_leaf(1, 2, Axis::Horizontal, 0.4, false);
+            let snapshot = |tab: Tab| {
+                machine_with(Workspace {
+                    id,
+                    tabs: vec![tab],
+                    ..Workspace::default()
+                })
+            };
+            let original = tab.clone();
+            MachineMirrors::install(cx, HostId::LOCAL, snapshot(original.clone()));
+            assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
+            assert!(tab.park(1));
+            assert!(tab.park(2));
+            MachineMirrors::note_synced_workspace(
+                cx,
+                HostId::LOCAL,
+                id,
+                vec![tab.clone()],
+                Some(tab.id),
+            );
+            MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(original)));
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL)
+                .unwrap()
+                .workspaces[0]
+                .tabs[0];
+            assert!(mirrored.visible_root().is_none());
+            assert_eq!(mirrored.root.pane_ids(), vec![1, 2]);
+            let parked = tab.clone();
+            assert!(MachineMirrors::start_pull(cx, HostId::LOCAL));
+            assert!(tab.restore_parked(2, None));
+            MachineMirrors::note_synced_workspace(
+                cx,
+                HostId::LOCAL,
+                id,
+                vec![tab.clone()],
+                Some(tab.id),
+            );
+            MachineMirrors::finish_pull(cx, HostId::LOCAL, Some(snapshot(parked)));
+            let mirrored = &MachineMirrors::machine(cx, HostId::LOCAL)
+                .unwrap()
+                .workspaces[0]
+                .tabs[0];
+            assert_eq!(mirrored.visible_root().unwrap().pane_ids(), vec![2]);
+            assert!(mirrored.presentation.is_parked(1));
+        });
+    }
+
+    #[gpui_kit::test]
     fn a_workspace_the_store_never_saw_is_still_listed_and_still_readable(
         cx: &mut gpui_kit::TestAppContext,
     ) {
@@ -1016,6 +1124,19 @@ mod tests {
                 ..Workspace::default()
             };
             let cli_made = theirs.id;
+            let projection = Workspace {
+                tabs: vec![leaf_tab(77)],
+                foreign_view: Some(lyrel_core::core::pane_sidecar::ForeignWorkspace::new(
+                    crate::core::session::RemoteRef::new(
+                        crate::core::session::RemoteTarget::Alias {
+                            alias: "remote-workbench".into(),
+                        },
+                        WorkspaceId::new(),
+                    ),
+                )),
+                ..Workspace::default()
+            };
+            let projection_id = projection.id;
             MachineMirrors::install(
                 cx,
                 HostId::LOCAL,
@@ -1027,6 +1148,7 @@ mod tests {
                             ..Workspace::default()
                         },
                         theirs,
+                        projection,
                     ],
                     panes: vec![PaneRecord {
                         cwd: Some("/repo/demo".into()),
@@ -1050,6 +1172,16 @@ mod tests {
             let (tabs, _) = tab_views_for(cx, cli_made).expect("readable without a store entry");
             assert_eq!(tabs.len(), 1);
             assert_eq!(tabs[0].cwd.as_deref(), Some("/repo/demo"));
+            assert!(tab_views_for(cx, projection_id).is_none());
+            assert!(!machine_holds_tabs(cx, projection_id));
+            assert!(
+                MachineMirrors::machine(cx, HostId::LOCAL)
+                    .unwrap()
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.id == projection_id),
+                "the owner projection remains in the mirror for pane routing"
+            );
 
             assert!(!machine_holds_tabs(cx, WorkspaceId::new()));
         });
@@ -1093,6 +1225,7 @@ mod tests {
                 a: Box::new(PaneNode::Leaf { pane: 1 }),
                 b: Box::new(PaneNode::Leaf { pane: 2 }),
             },
+            presentation: Default::default(),
             hibernated: false,
         };
         assert!(apply(

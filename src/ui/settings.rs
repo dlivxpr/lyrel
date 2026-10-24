@@ -1,8 +1,10 @@
+use crate::ui::notification_history::Notification;
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::InteractiveElementExt as _;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState, TextareaState};
 use gpui_kit::component::link::Link;
-use gpui_kit::component::notification::{Notification, NotificationType};
+use gpui_kit::component::notification::NotificationType;
 use gpui_kit::component::{Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Background, Context, Div, ElementId, Entity, Focusable as _, FontWeight,
@@ -15,7 +17,7 @@ use uuid::Uuid;
 
 use crate::core::config::{
     BellMode, Config, ConfirmClose, CursorStyle, LinkFileOpen, MouseZoomModifier, NewTabPosition,
-    NotifyMode, PromptCursorStyle, TabBarPosition, UI_FONT_SIZE_DEFAULT, WindowBackdrop,
+    NotifyMode, PromptCursorStyle, UI_FONT_SIZE_DEFAULT, WindowBackdrop,
 };
 use crate::core::keychain::{
     CredentialRef, CredentialStore as _, OsCredentialStore, key_account_from_contents,
@@ -389,11 +391,6 @@ fn settings_search_entries() -> &'static [SearchEntry] {
         },
         SearchEntry {
             section: Appearance,
-            title: SettingsAutoHideTitlebarButtons,
-            keywords: SettingsSearchAutoHideTitlebarButtonsKeywords,
-        },
-        SearchEntry {
-            section: Appearance,
             title: SettingsFontSize,
             keywords: SettingsSearchFontSizeKeywords,
         },
@@ -631,11 +628,6 @@ fn settings_search_entries() -> &'static [SearchEntry] {
         },
         SearchEntry {
             section: General,
-            title: SettingsTabBarPosition,
-            keywords: SettingsSearchTabBarPositionKeywords,
-        },
-        SearchEntry {
-            section: General,
             title: SettingsConfirmClose,
             keywords: SettingsSearchConfirmCloseKeywords,
         },
@@ -738,14 +730,12 @@ impl SearchEntry {
     fn config_key(&self) -> &'static str {
         match self.title {
             L10nKey::SettingsDimInactivePanes => "dim_inactive_panes",
-            L10nKey::SettingsAutoHideTitlebarButtons => "auto_hide_titlebar_buttons",
             L10nKey::SettingsCursorBlink => "cursor_blink",
             L10nKey::SettingsCursorShape => "cursor_style",
             L10nKey::SettingsPromptCursorShape => "prompt_cursor_style",
             L10nKey::SettingsScrollback => "scrollback_limit",
             L10nKey::SettingsNewTabPosition => "new_tab_position",
             L10nKey::SettingsConfirmClose => "confirm_close",
-            L10nKey::SettingsTabBarPosition => "tab_bar_position",
             L10nKey::SettingsSidebarGrouping => "sidebar_auto_grouping",
             L10nKey::SettingsEditorGitGutter => "editor_git_gutter",
             L10nKey::SettingsEditorLsp => "editor_lsp",
@@ -822,9 +812,6 @@ impl SearchEntry {
             L10nKey::SettingsBlur => t(L10nKey::SettingsBlurDesc),
             L10nKey::SettingsBackdrop => t(L10nKey::SettingsBackdropDesc),
             L10nKey::SettingsDimInactivePanes => t(L10nKey::SettingsDimInactivePanesDesc),
-            L10nKey::SettingsAutoHideTitlebarButtons => {
-                t(L10nKey::SettingsAutoHideTitlebarButtonsDesc)
-            }
             L10nKey::SettingsFontSize => t(L10nKey::SettingsFontSizeDesc),
             L10nKey::SettingsUiFontFamily => t(L10nKey::SettingsUiFontFamilyDesc),
             L10nKey::SettingsLineHeight => t(L10nKey::SettingsLineHeightDesc),
@@ -862,7 +849,6 @@ impl SearchEntry {
             L10nKey::SettingsShowTrayIcon => t(L10nKey::SettingsShowTrayIconDesc),
             L10nKey::SettingsNewTabPosition => t(L10nKey::SettingsNewTabPositionDesc),
             L10nKey::SettingsConfirmClose => t(L10nKey::SettingsConfirmCloseDesc),
-            L10nKey::SettingsTabBarPosition => t(L10nKey::SettingsTabBarPositionDesc),
             L10nKey::SettingsSidebarGrouping => t(L10nKey::SettingsSidebarGroupingDesc),
             L10nKey::SettingsEditorGitGutter => t(L10nKey::SettingsEditorGitGutterDesc),
             L10nKey::SettingsEditorLsp => t(L10nKey::SettingsEditorLspDesc),
@@ -901,9 +887,6 @@ impl SearchEntry {
             L10nKey::SettingsDimInactivePanes => {
                 cfg.dim_inactive_panes != defaults.dim_inactive_panes
             }
-            L10nKey::SettingsAutoHideTitlebarButtons => {
-                cfg.auto_hide_titlebar_buttons != defaults.auto_hide_titlebar_buttons
-            }
             L10nKey::SettingsCursorBlink => cfg.cursor_blink != defaults.cursor_blink,
             L10nKey::SettingsCursorShape => cfg.cursor_style != defaults.cursor_style,
             L10nKey::SettingsPromptCursorShape => {
@@ -912,7 +895,6 @@ impl SearchEntry {
             L10nKey::SettingsScrollback => cfg.scrollback_limit != defaults.scrollback_limit,
             L10nKey::SettingsNewTabPosition => cfg.new_tab_position != defaults.new_tab_position,
             L10nKey::SettingsConfirmClose => cfg.confirm_close != defaults.confirm_close,
-            L10nKey::SettingsTabBarPosition => cfg.tab_bar_position != defaults.tab_bar_position,
             L10nKey::SettingsSidebarGrouping => {
                 cfg.sidebar_auto_grouping != defaults.sidebar_auto_grouping
             }
@@ -2496,7 +2478,7 @@ impl LyrelApp {
         }
 
         for line in failures {
-            window.push_notification(line, cx);
+            window.notify_app(line, cx);
         }
 
         // What the form would now read back, so a save leaves it clean.
@@ -2693,7 +2675,7 @@ impl LyrelApp {
         let source = report.source.display().to_string();
 
         if !report.source_read {
-            window.push_notification(
+            window.notify_app(
                 Notification::error(t_fmt(
                     L10nKey::SettingsImportUnreadable,
                     &[("path", &source)],
@@ -2704,7 +2686,7 @@ impl LyrelApp {
             return;
         }
         if report.profiles.is_empty() {
-            window.push_notification(
+            window.notify_app(
                 Notification::warning(t_fmt(L10nKey::SettingsImportNoHosts, &[("path", &source)]))
                     .id1::<Self>(NOTIFICATION),
                 cx,
@@ -2768,7 +2750,7 @@ impl LyrelApp {
                 // either. The counts alone still fade on their own.
                 .autohide(false);
         }
-        window.push_notification(notification, cx);
+        window.notify_app(notification, cx);
     }
 }
 
@@ -2886,40 +2868,6 @@ mod tests {
             .map(|e| e.title)
             .collect::<Vec<_>>();
         assert_eq!(changed, vec![L10nKey::SettingsNotifyThreshold]);
-    }
-
-    /// The title-bar switch is found under Appearance by its config key and by
-    /// its own name in every language, and flipping it marks that row — and
-    /// only that row — as changed, so its reset link resets the right thing.
-    #[test]
-    fn the_titlebar_buttons_switch_is_found_by_key_and_name_and_marks_only_itself() {
-        let entry = settings_search_entries()
-            .iter()
-            .find(|e| e.title == L10nKey::SettingsAutoHideTitlebarButtons)
-            .unwrap();
-        assert!(entry.section == SettingsSection::Appearance);
-        for locale in ["en", "zh-CN"] {
-            crate::ui::i18n::set_locale(locale);
-            let name = t(L10nKey::SettingsAutoHideTitlebarButtons);
-            for query in ["auto_hide_titlebar_buttons", name] {
-                assert!(entry_matches(entry, query), "{locale}: {query}");
-                assert_eq!(
-                    best_matching_section(query).unwrap().profile_label(),
-                    SettingsSection::Appearance.profile_label(),
-                    "{locale}: {query}"
-                );
-            }
-        }
-        crate::ui::i18n::set_locale("en");
-
-        let mut cfg = Config::default();
-        cfg.auto_hide_titlebar_buttons = true;
-        let changed = settings_search_entries()
-            .iter()
-            .filter(|e| e.modified(&cfg))
-            .map(|e| e.title)
-            .collect::<Vec<_>>();
-        assert_eq!(changed, vec![L10nKey::SettingsAutoHideTitlebarButtons]);
     }
 
     /// A shortcut is the first thing someone searching a settings window for a
