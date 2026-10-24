@@ -102,6 +102,8 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 `GraphicsOffer` 的零像素形式只申请资源或放置的元数据，不分配 source／GPU 票；`a=T` 在改变权威内容或回复成功前须同时获得资源与首次放置的授权，任一失败都会取消此前授权。GUI session 的独立输入 pump 优先处理授权及压力请求，普通输入待处理队列最多 64 条、每条最多 1 MiB；超限明确断连而不静默丢弃。这一普通输入边界不属于上述图片分配池合计。
 
+本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
+
 #41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、既有 GPUI consumer 的真实 PNG／raw 解码与 paint 回归，以及受控退休 worker 与继任连接回归已在 Windows 集成分支运行通过。Windows/macOS 原生窗口仍需分别观察有效图片、无效／超限拒收后已有图片、文字与交互输入继续可用，并验证裁剪、透明、替换、删除及隐藏窗格表现；真实 SSH→Linux 路径及正式 omp 的原生 SVG／真实截图呈现也尚待分别验收。没有发起前台权限审批；仅收到 frame 或观察到派生状态不等同于原生像素验收。
 
 #### 当前实现：终端布局与屏幕生命周期（#42）

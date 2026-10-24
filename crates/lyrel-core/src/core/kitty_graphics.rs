@@ -941,10 +941,8 @@ impl MediumTransfer {
     /// the name resolves on this host. Returns `None` if the name is unusable or
     /// the object can't be read.
     ///
-    /// The pixels come back *uncompressed* unless the sender set `o=z`: a sender
-    /// that reaches for shared memory does so precisely to avoid the zlib the
-    /// inline path forces, so this is the fast path that skips the client-side
-    /// inflate entirely.
+    /// The result keeps the sender's wire format and compression flag; image
+    /// validation and desktop decoding still use the ordinary bounded path.
     #[cfg(unix)]
     pub fn resolve(&self) -> Option<Image> {
         let data = match self.medium {
@@ -967,24 +965,33 @@ impl MediumTransfer {
         None
     }
 
+    #[cfg(unix)]
+    fn bounded_region(&self, object_len: u64) -> Option<std::ops::Range<usize>> {
+        if object_len > MAX_IMAGE_BYTES as u64 {
+            return None;
+        }
+        let start = self.offset as usize;
+        let available = (object_len as usize).checked_sub(start)?;
+        let len = if self.size == 0 {
+            available
+        } else {
+            available.min(self.size as usize)
+        };
+        Some(start..start + len)
+    }
+
     /// Read only the requested bounded region. Descriptor reads, unlike mmap,
     /// fail safely if an untrusted sender truncates an object concurrently.
     #[cfg(unix)]
     fn read_region(&self, mut file: std::fs::File) -> Option<Vec<u8>> {
         use std::io::{Read as _, Seek as _, SeekFrom};
         let meta = file.metadata().ok()?;
-        if !meta.is_file() || meta.len() > MAX_IMAGE_BYTES as u64 {
+        if !meta.is_file() {
             return None;
         }
-        let start = u64::from(self.offset);
-        let available = meta.len().checked_sub(start)?;
-        let len = if self.size == 0 {
-            available
-        } else {
-            available.min(u64::from(self.size))
-        };
-        file.seek(SeekFrom::Start(start)).ok()?;
-        let mut out = vec![0; len as usize];
+        let region = self.bounded_region(meta.len())?;
+        file.seek(SeekFrom::Start(region.start as u64)).ok()?;
+        let mut out = vec![0; region.len()];
         file.read_exact(&mut out).ok()?;
         Some(out)
     }
@@ -1035,8 +1042,53 @@ impl MediumTransfer {
         Some(out)
     }
 
-    /// Consume one POSIX shm handoff. A bounded descriptor read avoids SIGBUS
-    /// if the producer truncates the object after its size has been checked.
+    /// Darwin shm descriptors have no read operation or regular-file mode.
+    /// Unlike Linux/files, XNU permits only the initial ftruncate for a shm
+    /// object, so its checked size cannot shrink underneath this mapping.
+    #[cfg(target_os = "macos")]
+    fn read_shared_mapped(&self, file: std::fs::File) -> Option<Vec<u8>> {
+        use std::os::fd::AsRawFd as _;
+        let region = self.bounded_region(file.metadata().ok()?.len())?;
+        if region.is_empty() {
+            return Some(Vec::new());
+        }
+        // Map from zero so arbitrary byte offsets do not need page alignment.
+        // Both this prefix and the owned copy stay within MAX_IMAGE_BYTES;
+        // the parser reserves their combined peak before resolving the name.
+        let mut out = Vec::with_capacity(region.len());
+        // SAFETY: file comes only from shm_open; the kernel keeps the allocated
+        // object alive through this descriptor and rejects subsequent truncates
+        // (xnu/bsd/kern/posix_shm.c::pshm_truncate). The extent is bounded above.
+        let mapped = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                region.end,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if mapped == libc::MAP_FAILED {
+            return None;
+        }
+        // SAFETY: the source range lies inside the stable shm mapping, the
+        // destination has enough capacity, and the two allocations do not
+        // overlap. No fallible operation occurs before releasing the mapping.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                mapped.cast::<u8>().add(region.start),
+                out.as_mut_ptr(),
+                region.len(),
+            );
+            out.set_len(region.len());
+            libc::munmap(mapped, region.end);
+        }
+        Some(out)
+    }
+
+    /// Consume one host-local POSIX shm handoff. Mutable objects use bounded
+    /// descriptor reads; Darwin's immutable allocations require a shared map.
     #[cfg(unix)]
     fn read_shared(&self) -> Option<Vec<u8>> {
         use std::os::fd::FromRawFd as _;
@@ -1057,7 +1109,11 @@ impl MediumTransfer {
             if fd < 0 {
                 return None;
             }
-            let out = self.read_region(std::fs::File::from_raw_fd(fd));
+            let file = std::fs::File::from_raw_fd(fd);
+            #[cfg(target_os = "macos")]
+            let out = self.read_shared_mapped(file);
+            #[cfg(not(target_os = "macos"))]
+            let out = self.read_region(file);
             // One-shot: the sender expects us to reclaim the object.
             libc::shm_unlink(cname.as_ptr());
             out
@@ -1095,9 +1151,9 @@ fn path_is_in_temp_dir(path: &std::path::Path) -> bool {
 /// by one non-empty component with no further separators and no `.`/`..`.
 #[cfg(unix)]
 fn shm_name_is_wellformed(name: &[u8]) -> bool {
-    // POSIX caps the name at NAME_MAX; 255 is the floor every platform we build
-    // for meets, and no real sender comes close.
-    if name.len() < 2 || name.len() > 255 || name[0] != b'/' {
+    // Darwin's POSIX shm namespace is shorter than Linux NAME_MAX.
+    let max_len = if cfg!(target_os = "macos") { 31 } else { 255 };
+    if name.len() < 2 || name.len() > max_len || name[0] != b'/' {
         return false;
     }
     let rest = &name[1..];
@@ -1362,10 +1418,11 @@ impl GraphicsParser {
             return None;
         }
         let retained = self.pending.as_ref().map_or(0, |p| p.data.capacity());
-        let resolved = if first.medium == Medium::Direct {
-            0
-        } else {
-            MAX_IMAGE_BYTES
+        let resolved = match first.medium {
+            Medium::Direct => 0,
+            // Darwin needs a bounded shm map plus the owned wire-byte copy.
+            Medium::Shared if cfg!(target_os = "macos") => 2 * MAX_IMAGE_BYTES,
+            _ => MAX_IMAGE_BYTES,
         };
         if !self
             .work
@@ -1711,8 +1768,7 @@ mod tests {
         transfer.name = fifo.into_os_string().into_encoded_bytes();
         assert!(transfer.resolve().is_none());
 
-        use std::io::Write as _;
-        use std::os::fd::FromRawFd as _;
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
         // Darwin limits POSIX shared-memory names to 31 bytes, including this prefix.
         let shm = std::ffi::CString::new(format!(
             "/lyrel-kitty-{:016x}",
@@ -1731,10 +1787,34 @@ mod tests {
             "shm_open failed: {}",
             std::io::Error::last_os_error()
         );
-        let mut object = unsafe { std::fs::File::from_raw_fd(fd) };
-        object.write_all(&[1, 2, 3, 4]).unwrap();
+        let object = unsafe { std::fs::File::from_raw_fd(fd) };
+        // POSIX shm on Darwin supports ftruncate/mmap, not descriptor writes.
+        // A non-page-aligned payload also exercises the receiver's offset.
+        object.set_len(17).unwrap();
+        let mapped = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                17,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                object.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(
+            mapped,
+            libc::MAP_FAILED,
+            "shm mmap failed: {}",
+            std::io::Error::last_os_error()
+        );
+        unsafe {
+            std::ptr::copy_nonoverlapping([1_u8, 2, 3, 4].as_ptr(), mapped.cast::<u8>().add(13), 4);
+            assert_eq!(libc::munmap(mapped, 17), 0);
+        }
         transfer.medium = Medium::Shared;
         transfer.name = shm.as_bytes().to_vec();
+        transfer.offset = 13;
+        transfer.size = 4;
         assert_eq!(
             transfer.resolve().unwrap().to_rgba8().unwrap(),
             [1, 2, 3, 4]
