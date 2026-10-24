@@ -43,7 +43,7 @@ pub use super::graphics_state::{GraphicsEffect, GraphicsState, GraphicsUpdate, P
 /// [`ApcTokenizer::push_graphics`] logs whatever it has to drop.
 const MAX_APC_PAYLOAD: usize = MAX_TRANSMISSION_BASE64;
 
-/// Cap on the reassembled base64 of one chunked transmission.
+/// Cap on the total base64 bytes received for one chunked transmission.
 ///
 /// The decoded transfer must leave room for GraphicsUpdate's metadata within
 /// the pane frame. A 48 MiB base64 limit admits an uncompressed 4K RGBA image
@@ -128,8 +128,23 @@ impl ApcTokenizer {
     pub fn feed(
         &mut self,
         bytes: &[u8],
-        mut on_passthrough: impl FnMut(&[u8]),
+        on_passthrough: impl FnMut(&[u8]),
         mut on_command: impl FnMut(&[u8]),
+    ) {
+        self.tokenize(bytes, on_passthrough, |command, aborted| {
+            if !aborted {
+                on_command(command);
+            }
+        });
+    }
+
+    // Aborts must reach the reassembler in the same ordered stream as complete
+    // commands, including oversize/interruption across different PTY reads.
+    fn tokenize(
+        &mut self,
+        bytes: &[u8],
+        mut on_passthrough: impl FnMut(&[u8]),
+        mut on_command: impl FnMut(&[u8], bool),
     ) {
         let mut i = 0;
         while i < bytes.len() {
@@ -160,19 +175,27 @@ impl ApcTokenizer {
                         return;
                     }
                 },
-                State::ApcDrop => match memchr::memchr(0x1b, &bytes[i..]) {
+                State::ApcDrop => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
                     Some(off) => {
-                        self.state = State::ApcDropEsc;
+                        self.state = if bytes[i + off] == 0x1b { State::ApcDropEsc } else { State::Ground };
                         i += off + 1;
                     }
                     None => return,
                 },
-                State::ApcGraphics => match memchr::memchr(0x1b, &bytes[i..]) {
+                State::ApcGraphics => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
                     Some(off) => {
                         if self.push_graphics(&bytes[i..i + off]) {
-                            self.state = State::ApcGraphicsEsc;
+                            if bytes[i + off] == 0x1b {
+                                self.state = State::ApcGraphicsEsc;
+                            } else {
+                                on_command(&self.buf, true);
+                                self.buf.clear();
+                                self.state = State::Ground;
+                            }
                             i += off + 1;
                         } else {
+                            on_command(&self.buf, true);
+                            self.buf.clear();
                             // Oversized: abandon and let the drop state consume
                             // the terminator we just found (leave `i` on the ESC).
                             self.state = State::ApcDrop;
@@ -181,6 +204,8 @@ impl ApcTokenizer {
                     }
                     None => {
                         if !self.push_graphics(&bytes[i..]) {
+                            on_command(&self.buf, true);
+                            self.buf.clear();
                             self.state = State::ApcDrop;
                         }
                         return;
@@ -220,7 +245,7 @@ impl ApcTokenizer {
                 }
                 State::ApcGraphicsEsc => match bytes[i] {
                     b'\\' => {
-                        on_command(&self.buf);
+                        on_command(&self.buf, false);
                         self.buf.clear();
                         self.state = State::Ground;
                         i += 1;
@@ -228,6 +253,7 @@ impl ApcTokenizer {
                     0x1b => i += 1, // a run of ESCs; stay poised for `\`
                     // A bare `ESC _` re-opens: the next byte decides graphics again.
                     b'_' => {
+                        on_command(&self.buf, true);
                         self.buf.clear();
                         self.state = State::ApcStart;
                         i += 1;
@@ -239,6 +265,7 @@ impl ApcTokenizer {
                     // both. Swallowing them would turn a `\x1b[31m` that follows
                     // an unterminated graphics command into literal `31m`.
                     _ => {
+                        on_command(&self.buf, true);
                         self.buf.clear();
                         on_passthrough(b"\x1b");
                         self.state = State::Ground;
@@ -292,16 +319,23 @@ impl ApcTokenizer {
         }
     }
 
-    /// Append a run to the graphics buffer; returns `false` (and clears the
-    /// buffer) if it would exceed [`MAX_APC_PAYLOAD`], signalling the caller to
-    /// abandon the command.
+    /// Append within the cap; keep a bounded header prefix on failure so the
+    /// ordered abort can correlate an error before the caller clears it.
     fn push_graphics(&mut self, run: &[u8]) -> bool {
-        if self.buf.len() + run.len() > MAX_APC_PAYLOAD {
+        if run.len() > MAX_APC_PAYLOAD.saturating_sub(self.buf.len()) {
             log::debug!(
                 "kitty graphics: dropping a command whose payload passed {MAX_APC_PAYLOAD} bytes"
             );
-            self.buf.clear();
+            if self.buf.len() < 4096 {
+                let prefix = run.len().min(4096 - self.buf.len());
+                self.buf.extend_from_slice(&run[..prefix]);
+            }
             return false;
+        }
+        let required = self.buf.len() + run.len();
+        if required > self.buf.capacity() {
+            let capacity = required.max(self.buf.capacity().saturating_mul(2)).min(MAX_APC_PAYLOAD);
+            self.buf.reserve_exact(capacity - self.buf.len());
         }
         self.buf.extend_from_slice(run);
         true
@@ -353,8 +387,8 @@ impl GraphicsSniffer {
     pub fn feed(&mut self, bytes: &[u8], on_passthrough: impl FnMut(&[u8])) -> Vec<Event> {
         let Self { tokenizer, parser } = self;
         let mut events = Vec::new();
-        tokenizer.feed(bytes, on_passthrough, |cmd| {
-            if let Some(ev) = parser.feed(cmd) {
+        tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted| {
+            if let Some(ev) = if aborted { parser.abort(cmd) } else { parser.feed(cmd) } {
                 events.push(ev);
             }
         });
@@ -390,7 +424,7 @@ impl GraphicsSniffer {
         // lets the passthrough and command sinks share it without either taking
         // a lasting mutable borrow the borrow checker would reject.
         let segments: std::cell::RefCell<Vec<Segment>> = std::cell::RefCell::new(Vec::new());
-        tokenizer.feed(
+        tokenizer.tokenize(
             bytes,
             |run| {
                 // Coalesce adjacent passthrough runs into one output segment so
@@ -402,8 +436,8 @@ impl GraphicsSniffer {
                     segs.push(Segment::Output(run.to_vec()));
                 }
             },
-            |cmd| {
-                if let Some(ev) = parser.feed(cmd) {
+            |cmd, aborted| {
+                if let Some(ev) = if aborted { parser.abort(cmd) } else { parser.feed(cmd) } {
                     segments.borrow_mut().push(Segment::from(ev));
                 }
             },
@@ -577,6 +611,8 @@ impl Control {
             None => rest, // no payload section (e.g. `a=d`)
         };
         let mut c = Control::default();
+        let mut has_id = false;
+        let mut has_number = false;
         for pair in control.split(|&b| b == b',') {
             if pair.is_empty() {
                 continue;
@@ -623,15 +659,21 @@ impl Control {
                     c.compressed = val == b"z";
                     c.unsupported |= val != b"z";
                 }
-                b"i" => c.id = num(),
-                b"I" => c.number = num(),
+                b"i" => { has_id = true; c.id = num(); }
+                b"I" => { has_number = true; c.number = num(); }
                 b"p" => c.placement = num(),
                 b"s" => c.width = num(),
                 b"v" => c.height = num(),
                 b"c" => c.cols = num(),
                 b"r" => c.rows = num(),
-                b"m" => c.more = val == b"1",
-                b"d" => c.delete = val.first().copied().unwrap_or(0),
+                b"m" => {
+                    c.more = val == b"1";
+                    c.invalid |= val != b"0" && val != b"1";
+                }
+                b"d" => {
+                    c.delete = val.first().copied().unwrap_or(0);
+                    c.invalid |= val.len() != 1;
+                }
                 // Clamp rather than truncate: `q=256` must not wrap to 0 and
                 // turn a request for silence into a request for chatter.
                 b"q" => c.quiet = num().min(u8::MAX as u32) as u8,
@@ -670,6 +712,7 @@ impl Control {
                     | b"Y"
                     | b"O"
                     | b"S"
+                    | b"q"
             ) && std::str::from_utf8(val)
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())
@@ -678,7 +721,7 @@ impl Control {
                 c.invalid = true;
             }
         }
-        c.invalid |= c.id != 0 && c.number != 0;
+        c.invalid |= has_id && has_number;
         Some(c)
     }
 }
@@ -704,11 +747,10 @@ fn payload_data(command: &[u8]) -> &[u8] {
 
 /// A reassembled image transmission, base64-decoded but *not yet* inflated.
 ///
-/// The daemon does only the base64 decode (cheap, and it strips the 33% text
-/// inflation) and forwards this over the socket; the client calls [`to_rgba8`]
-/// to inflate and normalize to RGBA8. Keeping [`data`] compressed on the wire is
-/// what makes a *remote* pane viable — inflating daemon-side would push tens of
-/// MB per frame back through the SSH tunnel.
+/// The parser strips base64 inflation. GraphicsState validates raw expansion
+/// and PNG pixels before retaining a resource. Raw zlib stays compressed on the
+/// socket; an outer PNG zlib wrapper is removed while the PNG itself remains
+/// encoded. The desktop worker normalizes the retained content into RGBA8.
 ///
 /// [`data`]: Image::data
 /// [`to_rgba8`]: Image::to_rgba8
@@ -789,6 +831,14 @@ impl Image {
     /// `width * height * bytes_per_pixel` for the wire format. `None` on overflow
     /// or a zero-sized/PNG image, which have no fixed raw length.
     fn decoded_len(&self) -> Option<usize> {
+        // RGB expansion must be admitted by its RGBA allocation, not its smaller
+        // wire payload. These helpers also defend desktop frames independently.
+        if self.width > super::graphics_state::MAX_IMAGE_DIMENSION
+            || self.height > super::graphics_state::MAX_IMAGE_DIMENSION
+            || (self.width as usize).checked_mul(self.height as usize)?.checked_mul(4)? > MAX_IMAGE_BYTES
+        {
+            return None;
+        }
         let bpp = match self.format {
             WireFormat::Rgb => 3usize,
             WireFormat::Rgba => 4usize,
@@ -802,11 +852,9 @@ impl Image {
 }
 
 impl MediumTransfer {
-    /// Resolve the referenced bytes into an [`Image`] by reading the file or
-    /// `mmap`ing the POSIX shm object this transfer names, then unlinking it (a
-    /// [`Medium::TempFile`] and any shm object are one-shot handoffs the sender
-    /// expects the terminal to consume and remove; a plain [`Medium::File`] is
-    /// left in place). Runs on the daemon reader thread of a *local* pane, where
+    /// Resolve the referenced bytes by reading the file or POSIX shm object,
+    /// then unlinking an eligible temporary file or consumed shm object. Plain
+    /// files remain the sender's property. Runs on a local daemon reader where
     /// the name resolves on this host. Returns `None` if the name is unusable or
     /// the object can't be read.
     ///
@@ -836,27 +884,27 @@ impl MediumTransfer {
         None
     }
 
-    /// The `offset..offset+size` slice of `buf` (or `offset..` when `size == 0`),
-    /// copied out. `None` if `offset` itself falls outside the object; an `S=`
-    /// that runs past the end is *truncated* to what's there rather than
-    /// discarding the frame, which is what kitty does.
+    /// Read only the requested bounded region. Descriptor reads, unlike mmap,
+    /// fail safely if an untrusted sender truncates an object concurrently.
     #[cfg(unix)]
-    fn slice_region(&self, buf: &[u8]) -> Option<Vec<u8>> {
-        let start = self.offset as usize;
-        if start > buf.len() {
+    fn read_region(&self, mut file: std::fs::File) -> Option<Vec<u8>> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        let meta = file.metadata().ok()?;
+        if !meta.is_file() || meta.len() > MAX_IMAGE_BYTES as u64 {
             return None;
         }
-        let end = if self.size == 0 {
-            buf.len()
-        } else {
-            start.saturating_add(self.size as usize).min(buf.len())
-        };
-        buf.get(start..end).map(<[u8]>::to_vec)
+        let start = u64::from(self.offset);
+        let available = meta.len().checked_sub(start)?;
+        let len = if self.size == 0 { available } else { available.min(u64::from(self.size)) };
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut out = vec![0; len as usize];
+        file.read_exact(&mut out).ok()?;
+        Some(out)
     }
 
     #[cfg(unix)]
     fn read_file(&self) -> Option<Vec<u8>> {
-        use std::io::Read as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
         use std::os::unix::ffi::OsStringExt;
         let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(self.name.clone()));
 
@@ -866,20 +914,15 @@ impl MediumTransfer {
         // thread, which would wedge the pane's whole output path. Refusing
         // anything that isn't a regular file also keeps us off fifos and
         // devices, where the open itself can block.
-        let file = std::fs::File::open(&path).ok()?;
-        let meta = file.metadata().ok()?;
-        if !meta.is_file() || meta.len() as usize > MAX_IMAGE_BYTES {
+        let meta = std::fs::metadata(&path).ok()?;
+        if !meta.is_file() {
             return None;
         }
-        let mut bytes = Vec::with_capacity(meta.len() as usize);
-        file.take(MAX_IMAGE_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        if bytes.len() > MAX_IMAGE_BYTES {
-            return None;
-        }
-
-        let out = self.slice_region(&bytes)?;
+        // A path can change after metadata: nonblocking open plus a second
+        // descriptor-based check also closes the FIFO replacement race.
+        let file = std::fs::OpenOptions::new().read(true)
+            .custom_flags(libc::O_NONBLOCK).open(&path).ok()?;
+        let out = self.read_region(file)?;
         // A temp file is the sender's one-shot handoff: remove it after reading
         // so the browser's per-frame temp files don't pile up. A named `t=f`
         // file is the sender's to manage; leave it.
@@ -889,18 +932,21 @@ impl MediumTransfer {
         // one — so an unqualified `remove_file` here would delete anything the
         // user can, `~/.ssh/id_ed25519` included. The spec requires this check
         // for exactly that reason.
-        if self.medium == Medium::TempFile && path_is_in_temp_dir(&path) {
+        if self.medium == Medium::TempFile
+            && path_is_in_temp_dir(&path)
+            && path.as_os_str().as_encoded_bytes().windows(b"tty-graphics-protocol".len())
+                .any(|part| part == b"tty-graphics-protocol")
+        {
             let _ = std::fs::remove_file(&path);
         }
         Some(out)
     }
 
-    /// `shm_open` + `mmap` the object, copy out the requested region, then
-    /// `shm_unlink` it (the sender allocates a fresh object per frame and
-    /// expects the terminal to reclaim it — matching kitty/ghostty).
+    /// Consume one POSIX shm handoff. A bounded descriptor read avoids SIGBUS
+    /// if the producer truncates the object after its size has been checked.
     #[cfg(unix)]
     fn read_shared(&self) -> Option<Vec<u8>> {
-        use std::os::raw::c_void;
+        use std::os::fd::FromRawFd as _;
         // A POSIX shm name is a single `/`-prefixed component — no embedded
         // separators, no `..`. Some platforms resolve `shm_open` against the
         // filesystem, where a name like `/../../etc/passwd` would escape the shm
@@ -910,44 +956,15 @@ impl MediumTransfer {
         }
         // The name must be a C string; kitty shm names look like `/px-…`.
         let cname = std::ffi::CString::new(self.name.clone()).ok()?;
-        // SAFETY: FFI. `shm_open` with O_RDONLY on a name the sender created;
-        // we only ever read, mmap read-only, and always munmap/close/unlink on
-        // every exit path below.
+        // SAFETY: shm_open returns an owned descriptor, immediately transferred
+        // to File. The object name is a validated CString and is unlinked on
+        // every path after a successful open.
         unsafe {
             let fd = libc::shm_open(cname.as_ptr(), libc::O_RDONLY, 0);
             if fd < 0 {
                 return None;
             }
-            // Size the mapping from the object itself; the sender may not send
-            // `S=`, and mapping past the end would fault on access.
-            // Refuse an object bigger than a frame can carry rather than mapping
-            // and copying it out only for the send to fail downstream.
-            let mut st: libc::stat = std::mem::zeroed();
-            if libc::fstat(fd, &mut st) != 0
-                || st.st_size <= 0
-                || st.st_size as u64 > MAX_IMAGE_BYTES as u64
-            {
-                libc::close(fd);
-                libc::shm_unlink(cname.as_ptr());
-                return None;
-            }
-            let len = st.st_size as usize;
-            let addr = libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_READ,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            );
-            libc::close(fd);
-            if addr == libc::MAP_FAILED {
-                libc::shm_unlink(cname.as_ptr());
-                return None;
-            }
-            let mapped = std::slice::from_raw_parts(addr as *const u8, len);
-            let out = self.slice_region(mapped);
-            libc::munmap(addr as *mut c_void, len);
+            let out = self.read_region(std::fs::File::from_raw_fd(fd));
             // One-shot: the sender expects us to reclaim the object.
             libc::shm_unlink(cname.as_ptr());
             out
@@ -1030,8 +1047,10 @@ pub struct MediumTransfer {
 #[derive(Default)]
 struct Pending {
     control: Control,
-    /// Accumulated *base64* text across chunks (decoded once, at the end).
-    base64: Vec<u8>,
+    /// Decode each base64 chunk before retaining it. This also accepts senders
+    /// that pad each chunk independently without retaining two full encodings.
+    data: Vec<u8>,
+    encoded_bytes: usize,
 }
 
 /// Reassembles and decodes kitty graphics commands emitted by [`ApcTokenizer`].
@@ -1060,12 +1079,37 @@ impl GraphicsParser {
         }
     }
 
+    fn abort(&mut self, command: &[u8]) -> Option<Event> {
+        let control = self.pending.take().map(|pending| pending.control)
+            .or_else(|| Control::parse(command))?;
+        response(&control, control.id, "EINVAL:Interrupted or excessive image command").map(Event::Reply)
+    }
+
     pub fn feed(&mut self, command: &[u8]) -> Option<Event> {
         let control = Control::parse(command)?;
         let data = payload_data(command);
         // A delete aborts a partial upload. Other complete commands must not be
         // accidentally swallowed as base64 continuation bytes.
         if control.action == Action::Delete {
+            self.pending = None;
+        }
+        if self.pending.is_some() {
+            let header = command.split(|b| *b == b';').next().unwrap_or(command);
+            let continuation = header
+                .strip_prefix(b"G")
+                .unwrap_or(header)
+                .split(|b| *b == b',')
+                .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
+            if continuation {
+                if header.split(|b| *b == b',').any(|pair| pair.starts_with(b"q=")) {
+                    self.pending.as_mut().unwrap().control.quiet = control.quiet;
+                }
+                if control.invalid {
+                    let first = self.pending.take().unwrap().control;
+                    return response(&first, first.id, "EINVAL:Invalid continuation control").map(Event::Reply);
+                }
+                return self.accept_chunk(control, data);
+            }
             self.pending = None;
         }
         if control.invalid || control.unsupported || control.action == Action::Other {
@@ -1076,18 +1120,6 @@ impl GraphicsParser {
                 "ENOTSUPPORTED:Unsupported operation"
             };
             return response(&control, control.id, status).map(Event::Reply);
-        }
-        if self.pending.is_some() {
-            let header = command.split(|b| *b == b';').next().unwrap_or(command);
-            let continuation = header
-                .strip_prefix(b"G")
-                .unwrap_or(header)
-                .split(|b| *b == b',')
-                .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
-            if continuation {
-                return self.accept_chunk(control, data);
-            }
-            self.pending = None;
         }
         match control.action {
             Action::Transmit | Action::TransmitAndDisplay | Action::Query => {
@@ -1109,32 +1141,72 @@ impl GraphicsParser {
     }
 
     fn accept_chunk(&mut self, control: Control, data: &[u8]) -> Option<Event> {
-        let pending = self.pending.get_or_insert_with(|| Pending {
-            control,
-            base64: Vec::new(),
-        });
-        if data.len() > MAX_TRANSMISSION_BASE64.saturating_sub(pending.base64.len()) {
-            let first = pending.control;
+        let first = self.pending.as_ref().map_or(control, |p| p.control);
+        let fail = |status| response(&first, first.id, status).map(Event::Reply);
+        if first.medium != Medium::Direct && !(self.local && cfg!(unix)) {
             self.pending = None;
-            return response(&first, first.id, "ENOSPC:Transfer too large").map(Event::Reply);
+            return fail("ENOTSUPPORTED:Host-local transfer unavailable");
         }
-        pending.base64.extend_from_slice(data);
+        let encoded_bytes = self.pending.as_ref().map_or(0, |p| p.encoded_bytes);
+        if data.len() > MAX_TRANSMISSION_BASE64.saturating_sub(encoded_bytes) {
+            self.pending = None;
+            return fail("ENOSPC:Transfer too large");
+        }
+        let raw_len = if first.format != WireFormat::Png {
+            let image = Image {
+                width: first.width, height: first.height, format: first.format,
+                compressed: first.compressed, data: Vec::new(),
+            };
+            match image.decoded_len() {
+                Some(len) => Some(len),
+                None => {
+                    self.pending = None;
+                    return fail("ENOSPC:Decoded image dimensions exceed limit");
+                }
+            }
+        } else { None };
+        // Non-final blocks are independent, complete base64 quanta. Decode
+        // directly into the accumulator with exact reservation, avoiding both
+        // an accumulated base64 copy. Capacity growth is geometric but never
+        // exceeds the transfer bound (plus the final base64 quantum).
+        let decoded_capacity = data.len().checked_add(3)?.checked_div(4)?.checked_mul(3)?;
+        let buffered = self.pending.as_ref().map_or(0, |p| p.data.len());
+        let payload_limit = if first.medium != Medium::Direct {
+            4096
+        } else if !first.compressed {
+            raw_len.unwrap_or(MAX_TRANSMISSION_BASE64 / 4 * 3)
+        } else { MAX_TRANSMISSION_BASE64 / 4 * 3 };
+        if decoded_capacity > payload_limit.saturating_add(2).saturating_sub(buffered) {
+            self.pending = None;
+            return fail("EINVAL:Payload exceeds declared image size");
+        }
+        let pending = self.pending.get_or_insert_with(|| Pending {
+            control, data: Vec::new(), encoded_bytes: 0,
+        });
+        let start = pending.data.len();
+        let required = start + decoded_capacity;
+        if required > pending.data.capacity() {
+            let capacity = required.max(pending.data.capacity().saturating_mul(2))
+                .min(payload_limit.saturating_add(3));
+            pending.data.reserve_exact(capacity - start);
+        }
+        pending.data.resize(required, 0);
+        let decoded = BASE64.decode_slice(data, &mut pending.data[start..]);
+        let Ok(decoded) = decoded else {
+            self.pending = None;
+            return fail("EINVAL:Invalid base64 payload");
+        };
+        pending.data.truncate(start + decoded);
+        pending.encoded_bytes += data.len();
         if control.more {
             return None;
         }
-        let Pending { control, base64 } = self.pending.take()?;
-        self.finalize(control, &base64)
+        let Pending { control, data, .. } = self.pending.take()?;
+        self.finalize(control, data)
     }
 
-    fn finalize(&self, control: Control, base64: &[u8]) -> Option<Event> {
+    fn finalize(&self, control: Control, data: Vec<u8>) -> Option<Event> {
         let fail = |status| response(&control, control.id, status).map(Event::Reply);
-        if control.medium != Medium::Direct && !(self.local && cfg!(unix)) {
-            return fail("ENOTSUPPORTED:Host-local transfer unavailable");
-        }
-        let data = match BASE64.decode(base64) {
-            Ok(data) => data,
-            Err(_) => return fail("EINVAL:Invalid base64 payload"),
-        };
         let image = if control.medium == Medium::Direct {
             Image {
                 width: control.width,
@@ -1176,7 +1248,7 @@ pub(crate) fn response(control: &Control, image_id: u32, status: &str) -> Option
     if success && control.action == Action::Delete {
         return None;
     }
-    if control.id == 0 && control.number == 0 && control.action != Action::Query {
+    if control.id == 0 && control.number == 0 {
         return None;
     }
     let mut keys = Vec::with_capacity(3);
@@ -1417,7 +1489,7 @@ mod tests {
     #[cfg(unix)]
     fn indirect_media_are_host_local_bounded_and_temp_deletion_is_scoped() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("image.rgba");
+        let path = dir.path().join("tty-graphics-protocol-image.rgba");
         std::fs::write(&path, [1, 2, 3, 4]).unwrap();
         let mut transfer = MediumTransfer {
             medium: Medium::File,
@@ -1434,12 +1506,37 @@ mod tests {
         transfer.medium = Medium::TempFile;
         assert_eq!(transfer.resolve().unwrap().data, [1, 2, 3, 4]);
         assert!(!path.exists());
+        let unmarked = dir.path().join("sender-owned.rgba");
+        std::fs::write(&unmarked, [1, 2, 3, 4]).unwrap();
+        transfer.name = unmarked.clone().into_os_string().into_encoded_bytes();
+        assert_eq!(transfer.resolve().unwrap().data, [1, 2, 3, 4]);
+        assert!(unmarked.exists(), "t=t may unlink only marked temporary paths");
         assert!(!path_is_in_temp_dir(std::path::Path::new(
             "/tmp/../etc/hosts"
         )));
         assert!(!path_is_in_temp_dir(&std::env::temp_dir()));
         transfer.name = b"/dev/zero".to_vec();
         assert!(transfer.resolve().is_none());
+        let fifo = dir.path().join("image.fifo");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // A special-file path must fail before open, even with no FIFO writer.
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        transfer.medium = Medium::File;
+        transfer.name = fifo.into_os_string().into_encoded_bytes();
+        assert!(transfer.resolve().is_none());
+
+        use std::io::Write as _;
+        use std::os::fd::FromRawFd as _;
+        let shm = std::ffi::CString::new(format!("/lyrel-kitty-{}", uuid::Uuid::new_v4())).unwrap();
+        let fd = unsafe { libc::shm_open(shm.as_ptr(), libc::O_CREAT | libc::O_EXCL | libc::O_RDWR, 0o600) };
+        assert!(fd >= 0);
+        let mut object = unsafe { std::fs::File::from_raw_fd(fd) };
+        object.write_all(&[1, 2, 3, 4]).unwrap();
+        transfer.medium = Medium::Shared;
+        transfer.name = shm.as_bytes().to_vec();
+        assert_eq!(transfer.resolve().unwrap().to_rgba8().unwrap(), [1, 2, 3, 4]);
+        assert!(unsafe { libc::shm_open(shm.as_ptr(), libc::O_RDONLY, 0) } < 0,
+            "a consumed shm handoff must be unlinked");
         for name in [
             b"/../../etc/passwd".as_slice(),
             b"/sub/dir",

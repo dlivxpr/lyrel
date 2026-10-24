@@ -1355,6 +1355,7 @@ impl RemoteTerminal {
     /// touching the grid again.
     fn stop_reader(&mut self) {
         self.reader_quit.store(true, Ordering::SeqCst);
+        self.images.retire_reader();
         // The sender owns the socket now, and closing it is its job: `close`
         // gives whatever is queued a brief moment to go out and then shuts the
         // socket down regardless, which is also what wakes the reader.
@@ -1379,6 +1380,14 @@ impl RemoteTerminal {
         quit: Arc<AtomicBool>,
         signals: ReaderSignals,
     ) -> JoinHandle<()> {
+        // Establish the decoder generation before scheduling the reader. An old
+        // thread starting late must not become the successor's image authority.
+        let image_decoder = {
+            let wake = proxy.clone();
+            crate::terminal::images::DecodeWorker::spawn(signals.images.clone(), move || {
+                wake.send(PaneEvent::Wakeup);
+            })
+        };
         std::thread::Builder::new()
             .name("lyrel-remote-reader".to_string())
             .spawn(move || {
@@ -1396,7 +1405,7 @@ impl RemoteTerminal {
                     running_command,
                     auth,
                     phase,
-                    images,
+                    images: _,
                     clipboard_writes,
                     osc_notes,
                     clipboard_write_busy,
@@ -1439,15 +1448,6 @@ impl RemoteTerminal {
                 // is a modes Snapshot plus one per ring segment.
                 let mut report_scheme = false;
                 let mut pending: Vec<u8> = buffered;
-                // A single worker decodes each retained resource version once.
-                // Placement anchors are captured here in stream order, never
-                // after an asynchronous decode has moved the cursor.
-                let image_decoder = {
-                    let proxy = proxy.clone();
-                    crate::terminal::images::DecodeWorker::spawn(images.clone(), move || {
-                        proxy.send(PaneEvent::Wakeup);
-                    })
-                };
                 let mut scratch = vec![0u8; 256 * 1024];
 
                 let trace = std::env::var("LYREL_TRACE").is_ok_and(|v| !v.is_empty() && v != "0");
@@ -4723,6 +4723,71 @@ mod windows_tests {
             !term.exited_flag.load(Ordering::SeqCst),
             "the abandoned link must not tear the adopted pane down"
         );
+    }
+
+    #[test]
+    fn adopted_reader_still_places_and_deletes_after_retired_reader_finishes() {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement, WireFormat};
+        crate::core::config::pin_test_config_dir();
+        let (old_client, mut old_daemon) = tcp_pair();
+        let (new_client, mut new_daemon) = tcp_pair();
+        let mut term = RemoteTerminal::from_stream(old_client, TermSize::new(80, 24)).unwrap();
+        // Keep the real retired reader handle solely to establish its completed
+        // teardown boundary. Decode scheduling itself is synchronized by the
+        // focused real-decoder generation regression in images.rs.
+        let old_reader = term.reader_thread.take().unwrap();
+        term.adopt_relink(new_client, Vec::new(), &PaneRoute::Local,
+            TermSize::new(80, 24), 8, 16).unwrap();
+        let send_image = |stream: &mut Stream, key, red| {
+            DaemonMsg::Graphics(GraphicsUpdate::Resource {
+                key, image: Arc::new(Image {
+                    width: 1, height: 1, format: WireFormat::Rgba,
+                    compressed: false, data: vec![red, 20, 30, 128],
+                }),
+            }.encode_frame()).encode(stream).unwrap();
+            let mut placement = Placement::default();
+            placement.key = key;
+            placement.resource = key;
+            placement.w = 1;
+            placement.h = 1;
+            DaemonMsg::Graphics(GraphicsUpdate::Place(placement).encode_frame())
+                .encode(stream).unwrap();
+        };
+        let wait_pixel = |term: &RemoteTerminal, red| {
+            for _ in 0..200 {
+                let images = term.images.snapshot();
+                if images.len() == 1 && images[0].data.as_bytes(0).unwrap() == [30, 20, red, 128] {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("adopted link did not decode its real image");
+        };
+        send_image(&mut new_daemon, 11, 90);
+        wait_pixel(&term, 90);
+        let _ = DaemonMsg::Graphics(GraphicsUpdate::Remove {
+            placements: vec![11], resources: vec![11],
+        }.encode_frame()).encode(&mut old_daemon);
+        drop(old_daemon);
+        old_reader.join().unwrap();
+        wait_pixel(&term, 90);
+        send_image(&mut new_daemon, 12, 100);
+        DaemonMsg::Graphics(GraphicsUpdate::Remove {
+            placements: vec![11], resources: vec![11],
+        }.encode_frame()).encode(&mut new_daemon).unwrap();
+        wait_pixel(&term, 100);
+        DaemonMsg::Graphics(GraphicsUpdate::Remove {
+            placements: vec![12], resources: vec![12],
+        }.encode_frame()).encode(&mut new_daemon).unwrap();
+        DaemonMsg::Output(b"after_graphics_relink".to_vec()).encode(&mut new_daemon).unwrap();
+        for _ in 0..200 {
+            if term.term.lock().grid.cursor.pos.col.0 == 21 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(term.images.snapshot().is_empty(), "new link deletion remains active");
+        assert_eq!(term.term.lock().grid.cursor.pos.col.0, 21);
     }
 
     /// What the daemon replays into a pane restored from a stored screen, in

@@ -263,6 +263,11 @@ impl GraphicsState {
                 let decoded_bytes = match validate_image(&mut image) {
                     Ok(bytes) => bytes,
                     Err(status) => {
+                        let status = if control.medium == super::kitty_graphics::Medium::Direct {
+                            status
+                        } else {
+                            "EBADF:Failed to read image file"
+                        };
                         Self::reply(&mut effects, &control, control.id, status);
                         return effects;
                     }
@@ -601,8 +606,13 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
         return Err("ENOSPC:Image payload too large");
     }
     if image.format == WireFormat::Png {
-        if image.compressed
-            || image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
+        if image.compressed {
+            image.data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+                &image.data, MAX_IMAGE_BYTES,
+            ).map_err(|_| "EINVAL:Invalid or excessive compressed PNG")?;
+            image.compressed = false;
+        }
+        if image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
             || image.data.get(12..16) != Some(b"IHDR")
         {
             return Err("EINVAL:Invalid PNG header");
@@ -632,15 +642,54 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
         .and_then(|n| n.checked_mul(4))
         .filter(|bytes| *bytes > 0 && *bytes <= MAX_IMAGE_BYTES)
         .ok_or("ENOSPC:Decoded image dimensions exceed limit")?;
-    if image.format != WireFormat::Png && !image.compressed {
-        let expected = if image.format == WireFormat::Rgb {
-            bytes / 4 * 3
-        } else {
-            bytes
-        };
-        if image.data.len() != expected {
+    if image.format == WireFormat::Png {
+        // Header dimensions are checked above, before the PNG library can
+        // allocate. Validation discards each decoded row instead of allocating
+        // a full second image in the daemon. Ignore ancillary metadata that is
+        // irrelevant to terminal pixels and independently cap decoder scratch.
+        let mut decoder = png::Decoder::new_with_limits(
+            std::io::Cursor::new(&image.data),
+            png::Limits { bytes: 4 << 20 },
+        );
+        decoder.set_ignore_text_chunk(true);
+        decoder.set_ignore_iccp_chunk(true);
+        decoder.ignore_checksums(false);
+        let mut reader = decoder.read_info().map_err(|_| "EINVAL:Invalid PNG data")?;
+        while reader.next_row().map_err(|_| "EINVAL:Invalid PNG pixels")?.is_some() {}
+        reader.finish().map_err(|_| "EINVAL:Invalid PNG end")?;
+    } else {
+        let expected = if image.format == WireFormat::Rgb { bytes / 4 * 3 } else { bytes };
+        if image.compressed {
+            validate_zlib_pixels(&image.data, expected)?;
+        } else if image.data.len() != expected {
             return Err("EINVAL:Pixel payload does not match dimensions");
         }
     }
     Ok(bytes)
+}
+
+fn validate_zlib_pixels(data: &[u8], expected: usize) -> Result<(), &'static str> {
+    use miniz_oxide::inflate::stream::{InflateState, inflate};
+    use miniz_oxide::{DataFormat, MZFlush, MZStatus};
+
+    // Count validated output without a second full pixel allocation in the
+    // daemon. One extra byte detects expansion beyond the declared raw length.
+    let mut state = InflateState::new_boxed(DataFormat::Zlib);
+    let mut scratch = [0; 64 << 10];
+    let mut consumed = 0;
+    let mut decoded = 0;
+    loop {
+        let len = scratch.len().min(expected - decoded + 1);
+        let result = inflate(&mut state, &data[consumed..], &mut scratch[..len], MZFlush::None);
+        consumed += result.bytes_consumed;
+        decoded += result.bytes_written;
+        if decoded > expected {
+            return Err("EINVAL:Compressed pixels exceed declared dimensions");
+        }
+        match result.status {
+            Ok(MZStatus::StreamEnd) if decoded == expected && consumed == data.len() => return Ok(()),
+            Ok(MZStatus::Ok) if result.bytes_consumed != 0 || result.bytes_written != 0 => {}
+            _ => return Err("EINVAL:Invalid compressed pixel data or byte count"),
+        }
+    }
 }

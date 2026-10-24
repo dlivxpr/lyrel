@@ -2549,12 +2549,31 @@ mod kitty_graphics {
             }
             let line = String::from_utf8(line).unwrap();
             let mut fields = line.split_whitespace();
-            assert_eq!(fields.next(), Some("SEND"));
+            let operation = fields.next().unwrap();
             let serial = fields.next().unwrap();
             let replies: usize = fields.next().unwrap().parse().unwrap();
             let bytes = unhex(fields.next().unwrap());
-            output.write_all(&bytes).unwrap();
-            output.flush().unwrap();
+            let fragment: usize = fields.next().unwrap_or("0").parse().unwrap();
+            match operation {
+                "SEND" => {
+                    for part in bytes.chunks(if fragment == 0 { bytes.len().max(1) } else { fragment }) {
+                        output.write_all(part).unwrap();
+                        output.flush().unwrap();
+                    }
+                }
+                "FLOOD" => {
+                    output.write_all(b"\x1b_Ga=T,i=720,s=1,v=1;").unwrap();
+                    // 49 MiB exceeds the 48 MiB APC cap without allocating a
+                    // 98 MiB hex request or relying on an external sender.
+                    let block = [b'A'; 8192];
+                    for _ in 0..(49 * 1024 * 1024 / block.len()) {
+                        output.write_all(&block).unwrap();
+                    }
+                    output.write_all(b"\x1b\\after_oversize").unwrap();
+                    output.flush().unwrap();
+                }
+                other => panic!("unexpected PTY operation {other}"),
+            }
             for _ in 0..replies {
                 let mut reply = Vec::new();
                 while !reply.ends_with(b"\x1b\\") {
@@ -2575,6 +2594,7 @@ mod kitty_graphics {
         placements: BTreeMap<u64, Placement>,
         serial: usize,
         updates: Vec<GraphicsUpdate>,
+        last_output: Vec<u8>,
     }
 
     impl Consumer {
@@ -2603,6 +2623,7 @@ mod kitty_graphics {
                 placements: BTreeMap::new(),
                 serial: 0,
                 updates: Vec::new(),
+                last_output: Vec::new(),
             }
         }
 
@@ -2640,9 +2661,13 @@ mod kitty_graphics {
         }
 
         fn send(&mut self, bytes: &[u8], replies: usize) -> Vec<Vec<u8>> {
+            self.exchange("SEND", &hex(bytes), replies, 0)
+        }
+
+        fn exchange(&mut self, operation: &str, payload: &str, replies: usize, fragment: usize) -> Vec<Vec<u8>> {
             self.serial += 1;
             self.updates.clear();
-            let request = format!("SEND {} {replies} {}\n", self.serial, hex(bytes));
+            let request = format!("{operation} {} {replies} {payload} {fragment}\n", self.serial);
             self.session.input(request.as_bytes()).unwrap();
             let marker = format!("KITTY_DONE_{}\r", self.serial);
             let mut plain = Vec::new();
@@ -2668,6 +2693,7 @@ mod kitty_graphics {
                     _ => {}
                 }
             }
+            self.last_output = plain.clone();
             String::from_utf8(plain)
                 .unwrap()
                 .lines()
@@ -3098,5 +3124,128 @@ mod kitty_graphics {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn daemon_graphics_streamed_formats_queries_and_recovery_keep_shell_usable() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-transfer");
+        let mut pane = Consumer::spawn(&daemon);
+        // Literal PNG: one straight-alpha red pixel, generated with a PNG
+        // encoder, not by the decoder being exercised.
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DQAAAEgQGALFXOsAAAAABJRU5ErkJggg==";
+        let compressed_png = "eJzrDPBz5+WS4mJgYOD19HAJYmBgYARhDjYGBgZ50SOdYAkXx5CKOck/zh+4wMDA0sjYoBN6bgMDAwODp6ufyzqnhCYAzeMQYw==";
+        for (index, format, compression, payload, expected) in [
+            (0, 32, "", "/wAAgA==", vec![255, 0, 0, 128]),
+            (1, 24, "", "/wAA", vec![255, 0, 0, 255]),
+            (2, 32, ",o=z", "eJz7z8DQAAAEgAGA", vec![255, 0, 0, 128]),
+            (3, 24, ",o=z", "eJz7z8AAAAMAAQA=", vec![255, 0, 0, 255]),
+            (4, 100, "", png, vec![255, 0, 0, 128]),
+            (5, 100, ",o=z", compressed_png, vec![255, 0, 0, 128]),
+        ] {
+            let id = 700 + index;
+            let request = format!(
+                "\x1b_Ga=T,i={id},p=4,f={format},s=1,v=1,C=1{compression},m=1;{}\x1b\\between_chunks\x1b_Gm=0;{}\x1b\\after_image",
+                &payload[..4], &payload[4..]
+            );
+            assert_eq!(pane.exchange("SEND", &hex(request.as_bytes()), 1, 1), [format!("\x1b_Gi={id},p=4;OK\x1b\\").into_bytes()]);
+            assert!(windows_contain(&pane.last_output, b"between_chunks"));
+            assert!(windows_contain(&pane.last_output, b"after_image"));
+            let placement = pane.placements.values().find(|p| p.image_id == id).unwrap();
+            let image = &pane.resources[&placement.resource];
+            assert_eq!((image.width, image.height), (1, 1));
+            if format != 100 {
+                assert_eq!(pane.pixel(placement), expected);
+            } else {
+                assert!(!image.compressed, "PNG compression is normalized before admission");
+                assert_eq!(&image.data[..8], b"\x89PNG\r\n\x1a\n");
+            }
+        }
+        let retained = pane.placements.clone();
+        for (header, payload, error) in [
+            ("f=32,s=1,v=1", "!", "EINVAL"),
+            ("f=32,s=1,v=1", "AAAA", "EINVAL"),
+            ("f=32,s=1,v=1,o=z", "eJz7z8AAAAMAAQA=", "EINVAL"),
+            ("f=32,s=1,v=1,o=z", "eJztwQENAAAAwqD3T20PBxQAAADQuQEQAAAB", "EINVAL"),
+            ("f=32,s=4294967295,v=4294967295", "AAAA", "ENOSPC"),
+            ("f=100", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB", "EINVAL"),
+            ("f=100", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DQAAAEgQGALVXOsAAAAABJRU5ErkJggg==", "EINVAL"),
+            ("f=100", "iVBORw0KGgoAAAANSUhEUgAAIAEAAAABCAYAAACZiUteAAAADUlEQVR4nGP4z8DQAAAEgQGALFXOsAAAAABJRU5ErkJggg==", "ENOSPC"),
+            ("f=100,o=z", "AAAA", "EINVAL"),
+            ("f=1,s=1,v=1", "AAAA", "ENOTSUPPORTED"),
+            ("f=32,t=x,s=1,v=1", "AAAA", "ENOTSUPPORTED"),
+        ] {
+            let reply = pane.send(format!("before\x1b_Ga=T,i=710,p=8,{header};{payload}\x1b\\after").as_bytes(), 1);
+            assert!(reply[0].starts_with(format!("\x1b_Gi=710,p=8;{error}:").as_bytes()));
+            assert_eq!(pane.placements, retained, "rejection preserves unrelated images");
+            assert!(windows_contain(&pane.last_output, b"beforeafter"));
+        }
+        let query = pane.send(b"\x1b_Ga=q,i=711,p=9,f=32,s=1,v=1,m=1;/wAA\x1b\\\x1b_Gm=0;gA==\x1b\\", 1);
+        assert_eq!(query, [b"\x1b_Gi=711,p=9;OK\x1b\\".to_vec()]);
+        assert_eq!(pane.placements, retained, "query never stores or displays");
+        // Quiet and anonymous commands must not leave a reply queued in stdin:
+        // the following SEND is parsed by the actual child, not a mock echo.
+        pane.send(b"\x1b_Ga=q,q=2,i=712,f=32,s=1,v=1;!\x1b\\\x1b_Ga=t,f=32,s=1,v=1;/wAAgA==\x1b\\", 0);
+        pane.send(b"\x1b_Ga=t,i=713,s=1,v=1,m=1;/wAA\x1b\\\x1b_Ga=d,d=I,i=713\x1b\\", 0);
+        assert!(pane.placements.values().all(|p| p.image_id != 713));
+        pane.red("a=T,i=714,C=1");
+        assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 714).unwrap()), [255, 0, 0, 255]);
+        pane.send(b"subsequent_input_and_text_survive", 0);
+        assert!(windows_contain(&pane.last_output, b"subsequent_input_and_text_survive"));
+        let oversized = pane.exchange("FLOOD", "00", 1, 0);
+        assert!(oversized[0].starts_with(b"\x1b_Gi=720;EINVAL:"));
+        assert!(windows_contain(&pane.last_output, b"after_oversize"));
+        pane.red("a=T,i=721,C=1");
+        assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 721).unwrap()), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn daemon_graphics_capabilities_quiet_and_interrupted_control_are_truthful() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-capabilities");
+        let mut pane = Consumer::spawn(&daemon);
+        assert_eq!(pane.send(b"\x1b_Ga=q,i=730,p=3,f=24,s=1,v=1;AAAA\x1b\\", 1),
+            [b"\x1b_Gi=730,p=3;OK\x1b\\".to_vec()]);
+        assert!(pane.resources.is_empty(), "query cannot retain its fixture");
+        for medium in ["f", "t", "s"] {
+            let replies = pane.send(format!("\x1b_Ga=q,i=731,p=4,f=24,s=1,v=1,t={medium};L2RvZXMtbm90LWV4aXN0\x1b\\").as_bytes(), 1);
+            let error = if cfg!(unix) { "EBADF" } else { "ENOTSUPPORTED" };
+            assert!(replies[0].starts_with(format!("\x1b_Gi=731,p=4;{error}:").as_bytes()),
+                "host-local capability must actually attempt to read the named object");
+        }
+        for command in [
+            "a=q,i=732,p=5,f=1,s=1,v=1;AAAA",
+            "a=q,i=732,p=5,f=32,s=1,v=1,o=x;AAAA",
+            "a=f,i=732,p=5;AAAA",
+        ] {
+            let reply = pane.send(format!("\x1b_G{command}\x1b\\").as_bytes(), 1);
+            assert!(reply[0].starts_with(b"\x1b_Gi=732,p=5;ENOTSUPPORTED:"));
+        }
+        let invalid_ids = pane.send(b"\x1b_Ga=q,i=733,I=8,p=6,f=24,s=1,v=1;AAAA\x1b\\", 1);
+        assert!(invalid_ids[0].starts_with(b"\x1b_Gi=733,I=8,p=6;EINVAL:"));
+        // Every silent request is followed by another command read by the PTY
+        // child; unsolicited bytes would corrupt that next SEND and fail it.
+        for command in [
+            "a=q,f=24,s=1,v=1;AAAA",
+            "a=q,i=734,q=1,f=24,s=1,v=1;AAAA",
+            "a=q,i=734,q=2,f=24,s=1,v=1;!",
+            "a=q,i=734,I=8,q=2,f=24,s=1,v=1;AAAA",
+        ] {
+            assert!(pane.send(format!("\x1b_G{command}\x1b\\").as_bytes(), 0).is_empty());
+        }
+        for interruption in ["\x18", "\x1a", "\x1b[31m", "\x1b_Ga=d,d=i,i=735\x1b\\"] {
+            let request = format!("\x1b_Ga=T,i=735,s=1,v=1,m=1;/wAA\x1b\\\x1b_Gm=0;bad{interruption}\x1b_Ga=T,i=736,s=1,v=1,C=1,q=2;/wAAgA==\x1b\\recovered");
+            let replies = pane.send(request.as_bytes(), 1);
+            assert!(replies[0].starts_with(b"\x1b_Gi=735;EINVAL:"));
+            assert!(pane.placements.values().all(|p| p.image_id != 735));
+            assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 736).unwrap()), [255, 0, 0, 128]);
+            assert!(windows_contain(&pane.last_output, b"recovered"));
+        }
+        pane.send(b"\x1b_Ga=T,i=737,s=1,v=1,m=1;/wAA\x1b\\between\x1b_Ga=d,d=i,i=736\x1b\\\x1b_Gm=0;gA==\x1b\\after_delete", 0);
+        assert!(pane.placements.values().all(|p| p.image_id != 736 && p.image_id != 737));
+        assert!(windows_contain(&pane.last_output, b"between"));
+        assert!(windows_contain(&pane.last_output, b"after_delete"));
+        pane.red("a=T,i=738,C=1");
+        assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 738).unwrap()), [255, 0, 0, 255]);
     }
 }

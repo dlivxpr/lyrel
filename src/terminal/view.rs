@@ -11891,6 +11891,87 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
+    fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{
+            GraphicsEffect, GraphicsSniffer, GraphicsState, Segment, Sniffed,
+        };
+        let (window, view, mut daemon) = rooted_harness(cx);
+        let mut state = GraphicsState::new(crate::daemon::protocol::WinSize {
+            cols: 80, rows: 24, cell_w: 10, cell_h: 20,
+        });
+        let mut sniffer = GraphicsSniffer::new();
+        // Use the production parser and admission path for source bytes. The
+        // existing GPUI seam receives real resource frames, never fake pixels.
+        let mut deliver = |bytes: &[u8]| {
+            for byte in bytes.chunks(1) {
+                let segments = match sniffer.sniff(byte) {
+                    Sniffed::Plain(output) => vec![Segment::Output(output.to_vec())],
+                    Sniffed::Segments(segments) => segments,
+                };
+                for segment in segments {
+                    match segment {
+                        Segment::Output(output) => {
+                            state.output(&output);
+                            DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+                        }
+                        Segment::Command { control, image } => {
+                            for effect in state.apply(control, image) {
+                                match effect {
+                                    GraphicsEffect::Update(update) => send_graphics(&mut daemon, update),
+                                    GraphicsEffect::Output(output) => {
+                                        state.output(&output);
+                                        DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+                                    }
+                                    GraphicsEffect::Reply(_) => panic!("q=2 must suppress replies"),
+                                }
+                            }
+                        }
+                        Segment::Reply(_) => panic!("q=2 must suppress malformed replies"),
+                    }
+                }
+            }
+        };
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DQAAAEgQGALFXOsAAAAABJRU5ErkJggg==";
+        let compressed_png = "eJzrDPBz5+WS4mJgYOD19HAJYmBgYARhDjYGBgZ50SOdYAkXx5CKOck/zh+4wMDA0sjYoBN6bgMDAwODp6ufyzqnhCYAzeMQYw==";
+        for (id, format, compression, payload) in [
+            (810, 100, "", png),
+            (811, 100, ",o=z", compressed_png),
+            (812, 32, ",o=z", "eJz7z8DQAAAEgAGA"),
+        ] {
+            deliver(format!("\x1b[3;4H\x1b_Ga=T,i={id},f={format},s=1,v=1,C=1,q=2{compression},m=1;{}\x1b\\\x1b_Gm=0;{}\x1b\\", &payload[..4], &payload[4..]).as_bytes());
+        }
+        // Invalid retransmissions cannot remove any accepted placement or move
+        // the cursor. The final marker observes the real reader's text order.
+        deliver(b"\x1b[7;9H\x1b_Ga=T,i=810,f=100,q=2;iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB\x1b\\\x1b_Ga=T,i=811,s=4294967295,v=4294967295,q=2;AAAA\x1b\\safe");
+        for _ in 0..200 {
+            if view.read_with(cx, |view, _| {
+                view.terminal.images().snapshot().len() == 3
+                    && view.terminal.term.lock().grid.cursor.pos.col.0 == 12
+            }) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.executor().advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let images = view.terminal.images().snapshot();
+            assert_eq!(images.len(), 3);
+            for image in images {
+                assert_eq!(image.data.as_bytes(0).unwrap(), &[0, 0, 255, 128]);
+                assert_eq!((image.anchor_row, image.anchor_col), (2, 3));
+                assert!(image.painted.load(std::sync::atomic::Ordering::Acquire),
+                    "validated PNG/raw pixels reach the terminal paint path");
+            }
+            let term = view.terminal.term.lock();
+            assert_eq!((term.grid.cursor.pos.row.0, term.grid.cursor.pos.col.0), (6, 12));
+        });
+    }
+
+    #[gpui_kit::test]
     fn graphics_consumer_upload_places_shared_cropped_bgra_at_ordered_cursor(
         cx: &mut TestAppContext,
     ) {
