@@ -1594,7 +1594,12 @@ mod tests {
 
         use std::io::Write as _;
         use std::os::fd::FromRawFd as _;
-        let shm = std::ffi::CString::new(format!("/lyrel-kitty-{}", uuid::Uuid::new_v4())).unwrap();
+        // Darwin limits POSIX shared-memory names to 31 bytes, including this prefix.
+        let shm = std::ffi::CString::new(format!(
+            "/lyrel-kitty-{:016x}",
+            uuid::Uuid::new_v4().as_u128() as u64
+        ))
+        .unwrap();
         let fd = unsafe {
             libc::shm_open(
                 shm.as_ptr(),
@@ -1602,7 +1607,11 @@ mod tests {
                 0o600,
             )
         };
-        assert!(fd >= 0);
+        assert!(
+            fd >= 0,
+            "shm_open failed: {}",
+            std::io::Error::last_os_error()
+        );
         let mut object = unsafe { std::fs::File::from_raw_fd(fd) };
         object.write_all(&[1, 2, 3, 4]).unwrap();
         transfer.medium = Medium::Shared;
