@@ -313,8 +313,8 @@ impl ApcTokenizer {
 /// This is the one type the PTY reader loop touches. Feed it raw output and a
 /// passthrough sink; it strips every kitty graphics sequence, funnels the
 /// passthrough bytes to the sink (for the replay ring and the client), and
-/// returns the decoded graphics [`Event`]s — query replies to write back to the
-/// PTY, and images to forward out-of-band.
+/// returns complete graphics requests for the pane-owned GraphicsState, or
+/// immediate malformed-transfer replies to write back to the PTY.
 #[derive(Default)]
 pub struct GraphicsSniffer {
     tokenizer: ApcTokenizer,
@@ -345,7 +345,7 @@ impl GraphicsSniffer {
 
     /// Feed one chunk of raw PTY output. `on_passthrough` receives the byte
     /// stream with all graphics sequences removed; the returned events are the
-    /// queries/images/deletes that completed within this chunk, in order.
+    /// complete requests and malformed-transfer replies, in order.
     ///
     /// This drops the *relative order* of passthrough vs. events; for the daemon
     /// loop, prefer [`sniff`](Self::sniff), which preserves it. Retained as the
@@ -972,10 +972,9 @@ struct Pending {
 
 /// Reassembles and decodes kitty graphics commands emitted by [`ApcTokenizer`].
 ///
-/// Feed it each `_G` command payload; it returns zero or more [`Event`]s. It
-/// owns the chunk-reassembly buffer and the base64/zlib decode, so the daemon
-/// pane just forwards the resulting [`Image`] out-of-band and writes any
-/// [`Event::Query`] reply to the PTY.
+/// The parser owns bounded chunk reassembly, base64 decoding and host-local
+/// medium resolution. GraphicsState validates resources and decides all
+/// identities and placement lifetimes; desktop decoding stays asynchronous.
 #[derive(Default)]
 pub struct GraphicsParser {
     pending: Option<Pending>,
