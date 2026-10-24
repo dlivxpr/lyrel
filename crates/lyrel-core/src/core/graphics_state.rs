@@ -95,6 +95,7 @@ use super::kitty_graphics::{Action, Control, MAX_IMAGE_BYTES, response};
 
 pub const MAX_PANE_ENCODED_BYTES: usize = 128 << 20;
 pub const MAX_PANE_DECODED_BYTES: usize = 256 << 20;
+pub const MAX_IMAGE_DIMENSION: u32 = 8192;
 pub const MAX_RESOURCES: usize = 1024;
 pub const MAX_PLACEMENTS: usize = 4096;
 
@@ -360,6 +361,9 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
         }
         image.width = u32::from_be_bytes(image.data.get(16..20).ok_or("EINVAL:Invalid PNG header")?.try_into().unwrap());
         image.height = u32::from_be_bytes(image.data.get(20..24).ok_or("EINVAL:Invalid PNG header")?.try_into().unwrap());
+    }
+    if image.width > MAX_IMAGE_DIMENSION || image.height > MAX_IMAGE_DIMENSION {
+        return Err("ENOSPC:Image dimensions exceed limit");
     }
     let bytes = (image.width as usize).checked_mul(image.height as usize).and_then(|n| n.checked_mul(4))
         .filter(|bytes| *bytes > 0 && *bytes <= MAX_IMAGE_BYTES).ok_or("ENOSPC:Decoded image dimensions exceed limit")?;
