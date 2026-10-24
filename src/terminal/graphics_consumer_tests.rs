@@ -241,6 +241,11 @@ fn graphics_send_fixture_with_replies(
             std::time::Instant::now() < deadline,
             "PTY round trip did not finish: {serial}"
         );
+        // Admission may await a painted texture's real window-owned atlas
+        // release. Keep the production UI tasks and their 300 ms timer alive
+        // while the background daemon/reader complete this PTY round trip.
+        cx.executor().advance_clock(std::time::Duration::from_millis(5));
+        cx.run_until_parked();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -544,7 +549,7 @@ fn graphics_consumer_real_daemon_budget_notices_share_direct_and_placeholder_his
     }
     graphics_send_fixture(&view, cx, 2, &b"\r\n".repeat(80));
     graphics_send_fixture(&view, cx, 3, b"\x1b[10;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
-    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Top));
+    view.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
     window.update(cx, |_, window, _| window.refresh()).unwrap();
     cx.executor().advance_clock(std::time::Duration::from_millis(400));
     cx.run_until_parked();
@@ -558,15 +563,17 @@ fn graphics_consumer_real_daemon_budget_notices_share_direct_and_placeholder_his
         assert!(!images.iter().find(|image| image.placement.image_id == 8).unwrap().evicted, "newer placeholder history remains resident first");
         assert!(!view.scrollback_text().contains("Image evicted") && !view.scrollback_text().contains("图片已淘汰"), "notice is paint-only, never terminal text");
     });
-    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Bottom));
+    view.update(cx, |view, cx| view.scroll(-10_000, None, &Modifiers::default(), cx));
     graphics_send_fixture(&view, cx, 4, b"\x1b[12;5H\x1b_Ga=T,i=10,p=4,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/////w==\x1b\\");
-    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Top));
+    view.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+    graphics_assert_production_paint(window.into(), &view, cx);
     view.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
         let placeholder = images.iter().find(|image| image.placement.image_id == 8).unwrap();
         assert!(placeholder.evicted && placeholder.data.is_none(), "the same retention rule projects a notice through real placeholder cells");
+        assert!(placeholder.painted.load(std::sync::atomic::Ordering::Acquire), "the real placeholder cells must paint the localized notice");
     });
-    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Bottom));
+    view.update(cx, |view, cx| view.scroll(-10_000, None, &Modifiers::default(), cx));
     // Both retained pixels are now live; refused data cannot manufacture a
     // placement or replace those pixels, even when success/error replies mute.
     let cursor = view.read_with(cx, |view, _| {
@@ -583,9 +590,9 @@ fn graphics_consumer_real_daemon_budget_notices_share_direct_and_placeholder_his
     graphics_send_fixture(&view, cx, 6, b"shell_still_usable");
     assert!(view.read_with(cx, |view, _| view.scrollback_text().contains("shell_still_usable")));
     graphics_send_fixture(&view, cx, 7, b"\x1b_Ga=d,d=I,i=7\x1b\\\x1b_Ga=d,d=I,i=8\x1b\\");
-    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Top));
+    view.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
     assert!(!view.read_with(cx, |view, _| graphics_visible_images(view).iter().any(|image| [7, 8].contains(&image.placement.image_id))), "intentional deletion removes both notices without changing placeholder text");
-    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Bottom));
+    view.update(cx, |view, cx| view.scroll(-10_000, None, &Modifiers::default(), cx));
     graphics_send_fixture(&view, cx, 8, b"\x1b[2J\x1b[3J");
     assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "clear leaves no replacement notice");
     daemon.panes().kill(pane).unwrap();
@@ -869,7 +876,11 @@ fn graphics_consumer_large_text_replay_then_large_pixels_keeps_admitted_source(c
     let pane = daemon.spawn();
     cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
     let (prior, prior_window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
-    graphics_send_fixture(&prior, cx, 1, &vec![b'X'; 768 << 10]);
+    // Each hex-encoded request stays below the production 1 MiB Input limit;
+    // the unchanged aggregate text still becomes one large replay Snapshot.
+    for serial in 1..=4 {
+        graphics_send_fixture(&prior, cx, serial, &vec![b'X'; 192 << 10]);
+    }
     prior.update(cx, |view, _| view.terminal.detach_link());
     prior_window.update(cx, |_, window, _| window.remove_window()).unwrap();
     drop(prior);
@@ -879,7 +890,7 @@ fn graphics_consumer_large_text_replay_then_large_pixels_keeps_admitted_source(c
     let pixels = [255, 0, 0, 255].repeat(192 * 128);
     let encoded = base64::engine::general_purpose::STANDARD.encode(&pixels);
     let command = format!("\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=3001,c=2,r=1,C=1,f=32,s=192,v=128;{encoded}\x1b\\");
-    graphics_send_fixture_with_replies(&view, cx, 2, command.as_bytes(), 1);
+    graphics_send_fixture_with_replies(&view, cx, 5, command.as_bytes(), 1);
     graphics_layout_wait_image(&view, cx, 3001);
     graphics_assert_production_paint(window, &view, cx);
     view.read_with(cx, |view, _| {
