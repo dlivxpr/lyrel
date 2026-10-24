@@ -8,8 +8,8 @@ pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 /// A frame is a little-endian `u32` length, a one-byte kind, then the payload.
 const HEADER: usize = 5;
 
-/// v7 removes the mobile-only size-lease request and holder notification.
-pub const PROTOCOL_VERSION: u32 = 7;
+/// v8 replaces image/delete frames with authoritative graphics resource updates.
+pub const PROTOCOL_VERSION: u32 = 8;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -984,18 +984,10 @@ pub enum DaemonMsg {
     Size(WinSize),
     Snapshot(Vec<u8>),
     Output(Vec<u8>),
-    /// A kitty graphics image lifted out of the PTY stream daemon-side (issue
-    /// #213). Carried out-of-band as a compact binary frame
-    /// ([`crate::core::kitty_graphics::Image::encode_frame`]) so the base64 text
-    /// never rides the socket and the client's VT parser never sees it. The
-    /// pixel payload stays *compressed* on the wire — the client inflates — so a
-    /// remote pane's frames don't balloon across the SSH tunnel.
-    Image(Vec<u8>),
-    /// A kitty graphics delete (`a=d`) lifted out of the PTY stream daemon-side.
-    /// Payload is a compact selector frame
-    /// ([`crate::core::kitty_graphics::ImageDelete::encode`]) telling the client
-    /// which stored image(s)/placement(s) to drop.
-    DeleteImage(Vec<u8>),
+    /// An authoritative pane-local graphics resource/placement update.
+    /// [`crate::core::kitty_graphics::GraphicsUpdate`] carries compact metadata
+    /// and unexpanded resource bytes outside terminal output and replay.
+    Graphics(Vec<u8>),
     /// A completed OSC 5522 clipboard write. The daemon strips the control
     /// sequence from replay; the GUI decides whether it may touch the clipboard.
     ClipboardWrite(Vec<u8>),
@@ -1096,13 +1088,8 @@ mod kind {
     pub const VERSION_REPLY: u8 = 40;
     pub const PROCS: u8 = 50;
     pub const INPUT_ACK: u8 = 51;
-    /// `Image` — a kitty graphics frame lifted out of the PTY stream (issue
-    /// #213). 60 sits clear of every range above; the payload is the compact
-    /// binary encoding, not JSON, so it stays outside the `to_json` arms.
-    pub const IMAGE: u8 = 60;
-    /// `DeleteImage` — a kitty graphics `a=d` delete lifted out of the stream
-    /// (issue #213). Compact binary selector, like `IMAGE`.
-    pub const DELETE_IMAGE: u8 = 61;
+    /// Authoritative graphics updates, encoded outside the JSON message arms.
+    pub const GRAPHICS: u8 = 60;
     pub const CLIPBOARD_WRITE: u8 = 62;
 }
 
@@ -1533,8 +1520,7 @@ impl DaemonMsg {
             DaemonMsg::Size(size) => write_frame(w, kind::SIZE, &to_json(size)?),
             DaemonMsg::Snapshot(bytes) => write_frame(w, kind::SNAPSHOT, bytes),
             DaemonMsg::Output(bytes) => write_frame(w, kind::OUTPUT, bytes),
-            DaemonMsg::Image(frame) => write_frame(w, kind::IMAGE, frame),
-            DaemonMsg::DeleteImage(sel) => write_frame(w, kind::DELETE_IMAGE, sel),
+            DaemonMsg::Graphics(frame) => write_frame(w, kind::GRAPHICS, frame),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
@@ -1590,8 +1576,7 @@ impl DaemonMsg {
             kind::SIZE => DaemonMsg::Size(from_json(&payload)?),
             kind::SNAPSHOT => DaemonMsg::Snapshot(payload),
             kind::OUTPUT => DaemonMsg::Output(payload),
-            kind::IMAGE => DaemonMsg::Image(payload),
-            kind::DELETE_IMAGE => DaemonMsg::DeleteImage(payload),
+            kind::GRAPHICS => DaemonMsg::Graphics(payload),
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
