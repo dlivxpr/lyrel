@@ -3,7 +3,7 @@
 
 use super::*;
 use rio_unicode::UnicodeWidthChar as _;
-use rio_vt::ansi::mode::{Mode, PrivateMode};
+use rio_vt::ansi::mode::{Mode, NamedPrivateMode, PrivateMode};
 use rio_vt::ansi::{ClearMode, LineClearMode, TabulationClearMode};
 use rio_vt::config::colors::ColorRgb;
 use rio_vt::crosswords::attr::Attr;
@@ -125,15 +125,26 @@ impl GraphicsState {
     }
 
     fn discard_placements(&mut self, mut selected: impl FnMut(&Placement) -> bool) {
+        let mut affected = Vec::new();
         self.placements.retain(|key, p| {
             if selected(&p.placement) {
                 self.removed.push(*key);
+                affected.push(p.placement.resource);
                 self.dirty.remove(key);
                 false
             } else {
                 true
             }
         });
+        affected.sort_unstable();
+        affected.dedup();
+        for resource in affected {
+            if self.resources.get(&resource).is_some_and(|r| r.id == 0)
+                && !self.placements.values().any(|p| p.placement.resource == resource)
+            {
+                self.free_resource(resource);
+            }
+        }
     }
 
     pub(super) fn expire_history(&mut self) {
@@ -144,6 +155,16 @@ impl GraphicsState {
                 && p.screen == screen
                 && p.anchor_row + i64::from(p.clip_bottom) <= oldest
         });
+        for (key, p) in &mut self.placements {
+            let p = &mut p.placement;
+            if !p.virtual_placement && p.screen == screen {
+                let top = p.clip_top.max((oldest - p.anchor_row).clamp(0, i64::from(p.clip_bottom)) as u32);
+                if top != p.clip_top {
+                    p.clip_top = top;
+                    self.dirty.insert(*key);
+                }
+            }
+        }
     }
 
     pub(super) fn resize_layout(&mut self, size: WinSize) {
@@ -160,10 +181,10 @@ impl GraphicsState {
         {
             let marker = AtlasPlacement {
                 image_key: p.key,
-                abs_row: p.anchor_row,
+                abs_row: p.anchor_row + i64::from(p.clip_top),
                 col: p.anchor_col as usize,
                 columns: 1,
-                rows: 1,
+                rows: (p.clip_bottom - p.clip_top) as usize,
                 src_x: 0,
                 src_y: 0,
                 src_width: 1,
@@ -183,17 +204,21 @@ impl GraphicsState {
                     .push(marker);
             }
         }
-        self.term.resize(CrosswordsSize::new(
-            usize::from(size.cols.max(1)),
-            usize::from(size.rows.max(1)),
-        ));
+        super::super::terminal_resize::resize(
+            &mut self.term,
+            CrosswordsSize::new(
+                usize::from(size.cols.max(1)),
+                usize::from(size.rows.max(1)),
+            ),
+            self.resize_mode,
+        );
         let active = std::mem::take(&mut self.term.graphics.atlas_placements);
         let inactive =
             std::mem::take(&mut self.term.graphics.kitty_inactive_screen.atlas_placements);
         let mut retained = BTreeSet::new();
         for marker in active.into_iter().chain(inactive) {
             if let Some(p) = self.placements.get_mut(&marker.image_key) {
-                p.placement.anchor_row = marker.abs_row;
+                p.placement.anchor_row = marker.abs_row - i64::from(p.placement.clip_top);
                 retained.insert(marker.image_key);
                 self.dirty.insert(marker.image_key);
             }
@@ -239,6 +264,7 @@ impl GraphicsState {
             p.offset_y = p.offset_y.min(u32::from(size.cell_h.max(1)) - 1);
             self.dirty.insert(key);
         }
+        self.discard_placements(|p| p.clip_top >= p.clip_bottom);
         self.expire_history();
     }
 
@@ -297,6 +323,14 @@ impl GraphicsState {
         self.scroll_graphics(self.region.start, self.region.end, delta, base);
     }
 
+    fn free_resource(&mut self, key: u64) {
+        if let Some(resource) = self.resources.remove(&key) {
+            self.encoded_bytes -= resource.image.data.len();
+            self.decoded_bytes -= resource.decoded_bytes;
+            self.freed.push(key);
+        }
+    }
+
     fn discard_resources(&mut self, screen: Option<u64>) {
         let keys: Vec<_> = self
             .resources
@@ -308,11 +342,7 @@ impl GraphicsState {
             })
             .collect();
         for key in keys {
-            if let Some(r) = self.resources.remove(&key) {
-                self.encoded_bytes -= r.image.data.len();
-                self.decoded_bytes -= r.decoded_bytes;
-                self.freed.push(key);
-            }
+            self.free_resource(key);
         }
     }
 
@@ -486,10 +516,16 @@ impl Handler for GraphicsState {
     }
     fn set_private_mode(&mut self, mode: PrivateMode) {
         self.term.set_private_mode(mode);
+        if mode == PrivateMode::Named(NamedPrivateMode::ColumnMode) {
+            self.region = 0..i32::from(self.size.rows.max(1));
+        }
         self.sync_screen();
     }
     fn unset_private_mode(&mut self, mode: PrivateMode) {
         self.term.unset_private_mode(mode);
+        if mode == PrivateMode::Named(NamedPrivateMode::ColumnMode) {
+            self.region = 0..i32::from(self.size.rows.max(1));
+        }
         self.sync_screen();
     }
     fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>) {

@@ -2060,8 +2060,33 @@ impl RemoteTerminal {
         }
     }
 
-    pub fn clear_presentation(&self, history: bool) {
-        self.link.send(ClientMsg::ClearPresentation { history });
+    /// Live panes clear only through the daemon's ordered output stream. Once
+    /// the reader has observed exit/EOF, the retained presentation belongs to
+    /// this client and must remain clearable without a functioning transport.
+    /// Returns whether the caller should ask the live child to redraw.
+    pub fn clear_presentation(&mut self, history: bool) -> bool {
+        self.poll_exited();
+        if !self.exited && !self.child_exited() {
+            self.link.send(ClientMsg::ClearPresentation { history });
+            return true;
+        }
+
+        // A writer may notice failure before the reader. Retire it before
+        // touching either cache, so buffered frames and late decode completions
+        // cannot restore a presentation the user has just cleared.
+        self.stop_reader();
+        let mut term = self.term.lock();
+        let rows = term.screen_lines();
+        term.clear_screen(rio_vt::ansi::ClearMode::All);
+        if history {
+            term.clear_screen(rio_vt::ansi::ClearMode::Saved);
+        }
+        term.selection = None;
+        term.scroll_display(rio_vt::crosswords::grid::Scroll::Bottom);
+        let history_origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
+        self.images.clear_presentation(history, rows, history_origin);
+        *self.proxy.parse_state.paint_cursor.lock().unwrap() = None;
+        false
     }
 
     pub fn resize(&mut self, size: TermSize, cell_w: u16, cell_h: u16) {

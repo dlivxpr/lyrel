@@ -18,6 +18,10 @@
 - 接入 Kitty Unicode 占位符（#43）：`U=1` 仅创建不可见 prototype，真实 Rio 单元的 indexed／true-color 身份、行列／高位 diacritics 和规范左至右继承决定显示切片；无效引用不造像素、不绘制 PUA 字形。共享投影同时供 daemon 资源引用和桌面 viewport 使用，直接／虚拟放置共用资源与预算，删除语义分开，文字移动／擦除、屏幕与几何沿用现有路径。共享真实 PTY fixture、独立 daemon 到 rooted GPUI production paint 的单链路回归及独立 CLI／ConPTY 协议冒烟已在 Windows 通过；原生 GPU 像素仍待验收，不承诺 tmux/screen。
 - pane 会话开启前强制双向版本协商（从协议 `10` 开始）：本地、路由及原生 SSH 的新建／附着／观察连接在发送会话请求前确认版本；旧客户端在创建 shell 或订阅图片前明确拒绝，新客户端遇到旧 server 显示版本与更新要求。独立诊断探测保留，不把 EOF 当作版本判断。
 
+### 修复
+
+- 修复 #42 审查发现的五项图片布局／清理边界：本地 ConPTY 的 daemon 镜像与桌面共用高度调整，远端标准 PTY 保持独立模式；部分裁切／过期图片按保留切片重排；匿名图片失去最后放置后释放容量；`DECCOLM` set／unset 同步恢复全屏滚动区域；退出／断链保留窗格的用户清理改为真正本地清理，活连接仍只走 daemon 权威路径。补充真实 daemon-session 与生产 GPUI 消费者回归；本次修复尚未执行检查，不增加原生像素或跨平台通过声明。
+
 ### 维护
 
 - x86_64 musl 的 CI 与 Release C++ 构建统一使用上游 `SIMDUTF_IMPLEMENTATION_ICELAKE=0` 配置，避开正式 `simdutf 0.7.0` 可选 Ice Lake backend 的 `evex512` 编译错误；保留 Zig `0.16.0` 与 AVX2／SSE／scalar 运行时分派，不修改第三方源码或提高远端 CPU 要求。

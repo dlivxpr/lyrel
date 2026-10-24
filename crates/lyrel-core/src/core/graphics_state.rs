@@ -176,6 +176,7 @@ use rio_vt::event::{VoidListener, WindowId};
 use rio_vt::performer::handler::Processor;
 
 use super::kitty_graphics::{Action, Control, MAX_IMAGE_BYTES, response};
+use super::terminal_resize::ResizeMode;
 use crate::daemon::protocol::WinSize;
 
 #[path = "graphics_terminal.rs"]
@@ -220,6 +221,7 @@ pub struct GraphicsState {
     encoded_bytes: usize,
     decoded_bytes: usize,
     size: WinSize,
+    resize_mode: ResizeMode,
     term: Crosswords<VoidListener>,
     processor: Processor,
     screen: u64,
@@ -231,7 +233,13 @@ pub struct GraphicsState {
 }
 
 impl GraphicsState {
+    /// Standard stream PTY semantics, including native SSH on Windows.
     pub fn new(size: WinSize) -> Self {
+        Self::with_resize_mode(size, ResizeMode::Raw)
+    }
+
+    /// The source PTY determines row anchoring, including for remote displays.
+    pub fn with_resize_mode(size: WinSize, resize_mode: ResizeMode) -> Self {
         Self {
             resources: BTreeMap::new(),
             placements: BTreeMap::new(),
@@ -240,6 +248,7 @@ impl GraphicsState {
             encoded_bytes: 0,
             decoded_bytes: 0,
             size,
+            resize_mode,
             term: Crosswords::new(
                 CrosswordsSize::new(usize::from(size.cols.max(1)), usize::from(size.rows.max(1))),
                 CursorShape::Block,

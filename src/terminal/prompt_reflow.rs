@@ -35,13 +35,15 @@ use rio_vt::crosswords::pos::{Column, Line, Pos};
 use rio_vt::event::EventListener;
 use rio_vt::performer::handler::Handler as _;
 
+use lyrel_core::core::terminal_resize::{self, ResizeMode};
+
 use super::size::{MIN_COLUMNS, TermSize};
 
 /// Resizes `term` to `size`. `shell_redraws` says the pane is at a shell
 /// prompt that will repaint itself for the new width — the caller's shell
 /// integration state; `conpty` says a conhost stands behind the pty, which
 /// repaints nothing and keeps addressing the buffer it re-anchored — see
-/// [`resize_conpty`]. Anything else resizes exactly as `Crosswords::resize`.
+/// [`terminal_resize`]. Anything else resizes exactly as `Crosswords::resize`.
 pub(super) fn resize<T: EventListener>(
     term: &mut Crosswords<T>,
     size: TermSize,
@@ -54,7 +56,7 @@ pub(super) fn resize<T: EventListener>(
     if conpty {
         // A conhost repaint re-addresses the prompt itself, so the prompt
         // handback would only move the cursor off the row conhost named.
-        resize_conpty(term, size);
+        terminal_resize::resize(term, size, ResizeMode::LocalConpty);
         return;
     }
     if !shell_redraws || !reflows || term.mode().contains(Mode::ALT_SCREEN) {
@@ -80,84 +82,6 @@ pub(super) fn resize<T: EventListener>(
     }
     let last = Column(term.columns() - 1);
     term.grid.cursor.pos.col = cursor.col.min(last);
-}
-
-/// Resize with ConPTY's row semantics, compensated on top of the public grid
-/// API (#415).
-///
-/// Windows ConPTY emits no repaint after a resize; conhost silently
-/// re-anchors its viewport and keeps painting with absolute cursor addresses
-/// computed against that layout. A grid that resizes any other way ends up
-/// with its rows offset from every subsequent paint. Conhost's model, as
-/// measured against a live ConPTY:
-///
-/// - Growing the screen adds blank rows at the bottom; nothing is restored
-///   from scrollback and the cursor row does not move.
-/// - Shrinking scrolls the *last written* row (not just the cursor row —
-///   e.g. PSReadLine keeps a continuation hint on the row below the prompt)
-///   to the new bottom, pushing the rows above out into history.
-///
-/// `Crosswords::resize` pulls history during growth and anchors shrinking to
-/// the cursor. Keep the row and column steps separate: content below the
-/// cursor must be scrolled into view before Rio can discard it, and cursor
-/// anchors must be restored before any column reflow.
-fn resize_conpty<T: EventListener>(term: &mut Crosswords<T>, size: TermSize) {
-    let old_rows = term.grid.screen_lines();
-    let new_rows = size.rows.max(super::size::MIN_SCREEN_LINES);
-    // Column-only changes reflow identically under both models.
-    if new_rows == old_rows || term.mode().contains(Mode::ALT_SCREEN) {
-        term.resize(size);
-        return;
-    }
-
-    let old_cols = term.columns();
-    let history_before = term.grid.history_size();
-    let display_offset = term.grid.display_offset();
-    let cursor_row = term.grid.cursor.pos.row.0 as usize;
-    let saved_row = term.grid.saved_cursor.pos.row;
-    let extra = if new_rows < old_rows {
-        let last_written = (0..old_rows)
-            .rev()
-            .find(|&line| !term.grid[Line(line as i32)].is_clear())
-            .unwrap_or(0)
-            .max(cursor_row);
-        let vanilla = (cursor_row + 1).saturating_sub(new_rows);
-        let by_content = (last_written + 1).saturating_sub(new_rows);
-        vanilla.max(by_content.min(cursor_row)) - vanilla
-    } else {
-        0
-    };
-    if extra > 0 {
-        term.grid
-            .scroll_up(&(Line(0)..Line(old_rows as i32)), extra);
-    }
-
-    term.resize(TermSize::new(old_cols, new_rows));
-
-    if new_rows > old_rows {
-        let pulled = history_before.min(new_rows - old_rows);
-        if pulled > 0 {
-            term.grid
-                .scroll_up(&(Line(0)..Line(new_rows as i32)), pulled);
-        }
-        term.grid.cursor.pos.row = Line(cursor_row as i32);
-        term.grid.saved_cursor.pos.row = saved_row;
-        term.grid
-            .scroll_display(rio_vt::crosswords::grid::Scroll::Bottom);
-        term.grid
-            .scroll_display(rio_vt::crosswords::grid::Scroll::Delta(
-                display_offset.saturating_sub(new_rows - old_rows) as i32,
-            ));
-    } else {
-        term.grid.cursor.pos.row -= extra;
-        let scrolled = (cursor_row + 1).saturating_sub(new_rows) + extra;
-        term.grid.saved_cursor.pos.row = Line(
-            (saved_row.0 as usize)
-                .saturating_sub(scrolled)
-                .min(new_rows - 1) as i32,
-        );
-    }
-    term.resize(size);
 }
 
 /// The two prompt marks the shell brackets its prompt with.

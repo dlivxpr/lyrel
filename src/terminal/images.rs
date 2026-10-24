@@ -1,10 +1,10 @@
-//! Pane-local derived graphics cache. The daemon alone owns resource and placement
+//! Pane-local derived graphics cache. The live daemon owns resource and placement
 //! lifetime; a Resource never implies a display. One worker decodes each retained
 //! resource version once, and every placement shares its pixels and atlas marker.
-//! Coordinates and screen membership arrive from the daemon; the cache never
-//! infers placement lifetime or anchors from its local text grid.
+//! Coordinates and screen membership arrive from the daemon. Only an explicitly
+//! retired reader permits local user clear of the retained presentation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -287,6 +287,35 @@ impl ImageStore {
         for resource in resources.into_values() {
             retire(resource, &mut inner.retired);
         }
+    }
+
+    /// Clear the retained active screen after its reader has been retired.
+    /// Test visibility against the old daemon origin: Rio's ED2 can move the
+    /// cleared text into history before the new origin is supplied here.
+    pub(super) fn clear_presentation(&self, history: bool, rows: usize, history_origin: i64) {
+        let mut inner = self.0.state.lock().unwrap();
+        debug_assert!(inner.closed);
+        let screen = inner.screen;
+        let base = inner.history_origin;
+        let end = base.saturating_add(rows as i64);
+        inner.placements.retain(|_, anchored| {
+            let p = &anchored.placement;
+            p.screen != screen
+                || (!history
+                    && (p.virtual_placement
+                        || p.anchor_row + i64::from(p.clip_bottom) <= base
+                        || p.anchor_row + i64::from(p.clip_top) >= end))
+        });
+        let retained: BTreeSet<_> = inner.placements.values().map(|p| p.placement.resource).collect();
+        let resources = std::mem::take(&mut inner.resources);
+        for (key, resource) in resources {
+            if retained.contains(&key) {
+                inner.resources.insert(key, resource);
+            } else {
+                retire(resource, &mut inner.retired);
+            }
+        }
+        inner.history_origin = history_origin;
     }
 
     /// Invalidate the old reader synchronously before resetting/relinking the
