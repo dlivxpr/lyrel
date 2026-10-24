@@ -11886,6 +11886,8 @@ mod gpui_tests {
             .unwrap();
     }
 
+    include!("graphics_consumer_tests.rs");
+
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
         cx: &mut TestAppContext,

@@ -9,7 +9,8 @@ pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 const HEADER: usize = 5;
 
 /// v10 requires mutual version negotiation before opening a pane session.
-pub const PROTOCOL_VERSION: u32 = 10;
+/// v11 distinguishes invisible virtual prototypes from direct placements.
+pub const PROTOCOL_VERSION: u32 = 11;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
