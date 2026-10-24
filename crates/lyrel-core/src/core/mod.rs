@@ -8,6 +8,7 @@ pub mod crash;
 pub mod git;
 pub mod github;
 pub mod gitignore;
+pub mod graphics_state;
 pub mod group_key;
 #[allow(dead_code)]
 pub mod keychain;

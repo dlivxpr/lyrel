@@ -33,6 +33,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
+pub use super::graphics_state::{GraphicsUpdate, Placement};
+
 /// Cap on a single APC payload (one chunk) we'll buffer before abandoning it.
 /// `terminal-browser` chunks direct transmissions into 4 KiB base64 pieces, but
 /// the spec only *recommends* chunking — a sender is free to put a whole frame
