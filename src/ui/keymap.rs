@@ -480,6 +480,14 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         ("ResizePaneDown", ""),
         ("SwapPaneNext", ""),
         ("SwapPanePrev", ""),
+        ("MovePaneToTab", ""),
+        ("TogglePanePip", ""),
+        ("RestorePanePip", ""),
+        ("ParkPane", ""),
+        ("RestoreParkedPane", ""),
+        ("OpenScrollbackInEditor", ""),
+        ("ClearPaneScreen", ""),
+        ("RestartPaneShell", ""),
         // Ctrl+Tab opens the most-recently-used switcher (a quick tap lands
         // on the tab you were just in); these step to the neighbouring tab
         // in strip order with no popup (#867). ⌘⇧] / ⌘⇧[ is iTerm2's and
@@ -549,7 +557,6 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         // config away from being retired. See
         // `f11_is_the_only_default_on_a_bare_function_key`.
         ("ToggleFullscreen", per_platform("secondary-enter", "f11")),
-        ("ToggleTabSidebar", ""),
         (
             "ToggleLeftPanel",
             per_platform("secondary-b", "secondary-shift-b"),
@@ -828,6 +835,35 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
             t(L10nKey::CmdSplitDown).to_string(),
         ),
         "ToggleMaximizePane" => (CommandGroup::TabsPanes, t(L10nKey::CmdZoomPane).to_string()),
+        "MovePaneToTab" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneMoveToTab).to_string(),
+        ),
+        "TogglePanePip" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneTogglePip).to_string(),
+        ),
+        "RestorePanePip" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneRestorePip).to_string(),
+        ),
+        "ParkPane" => (CommandGroup::TabsPanes, t(L10nKey::PanePark).to_string()),
+        "RestoreParkedPane" => (
+            CommandGroup::TabsPanes,
+            t(L10nKey::PaneRestoreParked).to_string(),
+        ),
+        "OpenScrollbackInEditor" => (
+            CommandGroup::Terminal,
+            t(L10nKey::PaneOpenScrollback).to_string(),
+        ),
+        "ClearPaneScreen" => (
+            CommandGroup::Terminal,
+            t(L10nKey::PaneClearScreen).to_string(),
+        ),
+        "RestartPaneShell" => (
+            CommandGroup::Terminal,
+            t(L10nKey::PaneRestartShell).to_string(),
+        ),
         "FocusNextPane" => (CommandGroup::TabsPanes, t(L10nKey::CmdNextPane).to_string()),
         "FocusPrevPane" => (
             CommandGroup::TabsPanes,
@@ -930,10 +966,6 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
         "ToggleFullscreen" => (
             CommandGroup::View,
             t(L10nKey::CmdEnterFullScreen).to_string(),
-        ),
-        "ToggleTabSidebar" => (
-            CommandGroup::View,
-            t(L10nKey::AppMenuTabBarPosition).to_string(),
         ),
         "ToggleLeftPanel" => (
             CommandGroup::View,
@@ -1743,6 +1775,14 @@ fn make_binding(action: &str, keystroke: &str) -> Option<KeyBinding> {
         "NewAgentTab" => KeyBinding::new(keystroke, NewAgentTab, None),
         "SplitRight" => KeyBinding::new(keystroke, SplitRight, None),
         "SplitDown" => KeyBinding::new(keystroke, SplitDown, None),
+        "MovePaneToTab" => KeyBinding::new(keystroke, MovePaneToTab, None),
+        "TogglePanePip" => KeyBinding::new(keystroke, TogglePanePip, None),
+        "RestorePanePip" => KeyBinding::new(keystroke, RestorePanePip, None),
+        "ParkPane" => KeyBinding::new(keystroke, ParkPane, None),
+        "RestoreParkedPane" => KeyBinding::new(keystroke, RestoreParkedPane, None),
+        "OpenScrollbackInEditor" => KeyBinding::new(keystroke, OpenScrollbackInEditor, None),
+        "ClearPaneScreen" => KeyBinding::new(keystroke, ClearPaneScreen, None),
+        "RestartPaneShell" => KeyBinding::new(keystroke, RestartPaneShell, None),
         "FocusNextPane" => KeyBinding::new(keystroke, FocusNextPane, None),
         "FocusPrevPane" => KeyBinding::new(keystroke, FocusPrevPane, None),
         "FocusPaneLeft" => KeyBinding::new(keystroke, FocusPaneLeft, None),
@@ -1787,7 +1827,6 @@ fn make_binding(action: &str, keystroke: &str) -> Option<KeyBinding> {
         "ReopenClosedTab" => KeyBinding::new(keystroke, ReopenClosedTab, None),
         "ToggleMaximizePane" => KeyBinding::new(keystroke, ToggleMaximizePane, None),
         "ToggleFullscreen" => KeyBinding::new(keystroke, ToggleFullscreen, None),
-        "ToggleTabSidebar" => KeyBinding::new(keystroke, ToggleTabSidebar, None),
         "ToggleLeftPanel" => KeyBinding::new(keystroke, ToggleLeftPanel, None),
         "ToggleRightPanel" => KeyBinding::new(keystroke, ToggleRightPanel, None),
         "ShowRightPanelInfo" => KeyBinding::new(keystroke, ShowRightPanelInfo, None),

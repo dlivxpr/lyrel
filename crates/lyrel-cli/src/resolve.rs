@@ -13,7 +13,7 @@ pub struct TabEntry {
 pub fn tab_index(machine: &Machine) -> Vec<TabEntry> {
     let mut entries = Vec::new();
     let mut ordinal = 0;
-    for ws in &machine.workspaces {
+    for ws in machine.user_workspaces() {
         for tab in &ws.tabs {
             ordinal += 1;
             entries.push(TabEntry {
@@ -36,14 +36,12 @@ pub fn ordinal_of(machine: &Machine, tab: TabId) -> Option<u64> {
 pub fn workspace<'m>(machine: &'m Machine, addr: &WorkspaceAddress) -> Result<&'m Workspace> {
     match addr {
         WorkspaceAddress::Id(id) => machine
-            .workspaces
-            .iter()
+            .user_workspaces()
             .find(|ws| ws.id == *id)
             .ok_or_else(|| anyhow::anyhow!("no workspace with id {id} on this machine")),
         WorkspaceAddress::Named(text) => {
             let by_name: Vec<_> = machine
-                .workspaces
-                .iter()
+                .user_workspaces()
                 .filter(|ws| ws.name.as_deref() == Some(text))
                 .collect();
             match by_name.as_slice() {
@@ -59,8 +57,7 @@ pub fn workspace<'m>(machine: &'m Machine, addr: &WorkspaceAddress) -> Result<&'
                 ),
             }
             let by_prefix: Vec<_> = machine
-                .workspaces
-                .iter()
+                .user_workspaces()
                 .filter(|ws| ws.id.to_string().starts_with(text.as_str()))
                 .collect();
             match by_prefix.as_slice() {
@@ -83,7 +80,7 @@ pub fn tab(machine: &Machine, addr: &TabAddress) -> Result<(WorkspaceId, TabId)>
             .map(|e| (e.workspace, e.tab))
             .ok_or_else(|| anyhow::anyhow!("no tab @{n} — `lyrel ls` shows the @ numbers")),
         TabAddress::Id(text) => {
-            for ws in &machine.workspaces {
+            for ws in machine.user_workspaces() {
                 for tab in &ws.tabs {
                     if tab.id.to_string() == *text {
                         return Ok((ws.id, tab.id));
@@ -114,6 +111,33 @@ mod tests {
     use super::*;
     use crate::address::parse_workspace;
     use crate::testbed::two_workspace_machine;
+
+    #[test]
+    fn sidecar_projection_is_not_workspace_or_tab_navigation_but_still_owns_its_pane() {
+        let mut machine = two_workspace_machine();
+        let (mut projection, native) = crate::testbed::mixed_sidecar_projection();
+        let id = projection.id;
+        let tab = projection.tabs[0].id;
+        projection.name = Some("api".into());
+        let api = machine.workspaces[0].id;
+        let web_tab = machine.workspaces[1].tabs[0].id;
+        machine.workspaces.insert(0, projection);
+        machine.panes.push(native);
+
+        assert_eq!(
+            workspace(&machine, &parse_workspace("api")).unwrap().id,
+            api
+        );
+        assert!(workspace(&machine, &parse_workspace(&id.to_string())).is_err());
+        assert!(workspace(&machine, &parse_workspace(&short_id(&id))).is_err());
+        assert_eq!(tab_index(&machine).len(), 3);
+        assert_eq!(
+            super::tab(&machine, &TabAddress::Ordinal(3)).unwrap().1,
+            web_tab
+        );
+        assert!(super::tab(&machine, &TabAddress::Id(tab.to_string())).is_err());
+        assert_eq!(workspace_of_pane(&machine, 77).unwrap().id, id);
+    }
 
     #[test]
     fn tab_ordinals_number_the_machine_in_tree_order() {

@@ -46,6 +46,8 @@ pub struct PendingPane {
     /// Retries made without anyone pressing Try Again. See
     /// [`PendingPane::next_auto_retry`].
     auto_retries: u32,
+    attach_only: bool,
+    attach_spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
 }
 
 /// How many times a pane standing in for one that may still be running asks
@@ -73,7 +75,24 @@ impl PendingPane {
             spawn,
             created_session: false,
             auto_retries: 0,
+            attach_only: false,
+            attach_spec: None,
         }
+    }
+
+    pub(crate) fn with_attach_only(
+        mut self,
+        spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
+    ) -> Self {
+        self.attach_only = true;
+        self.attach_spec = spec;
+        self
+    }
+    pub(crate) fn is_attach_only(&self) -> bool {
+        self.attach_only
+    }
+    pub(crate) fn attach_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> {
+        self.attach_spec.clone()
     }
 
     /// How long to wait before asking again on its own, or `None` once it has

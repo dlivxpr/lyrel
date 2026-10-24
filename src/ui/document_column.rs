@@ -31,54 +31,20 @@ use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
 
 /// Which wrapper a document surface is being asked to paint itself in.
 ///
-/// The *content* of the code panel and of the diff overlay is the same in all
-/// three; only the box around it changes, and with it where the header sits and
-/// what its gestures mean.
+/// The document content is identical in both layouts; each keeps its own
+/// header below the independent window chrome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DocumentChrome {
     /// The historical full-workspace overlay.
     Fill,
     /// A column beside the terminal, carrying its own header as its first row.
-    /// macOS only: there the title bar lives inside the terminal column, so the
-    /// document column runs to the top of the window and its header lands in
-    /// the title strip by itself.
     Dock,
-    /// A column beside the terminal whose header has been lifted into the
-    /// spanning title bar above it.
-    ///
-    /// Windows and Linux put the window controls at the right end of a title
-    /// bar that spans the workspace, which leaves the strip directly above the
-    /// document column empty — a title bar's height of nothing, with the file
-    /// name one row below it. The header goes there instead, and the column
-    /// renders its body alone.
-    DockHoisted,
 }
 
 impl DocumentChrome {
-    /// Whether this is one of the two column layouts.
+    /// Whether the document is a column beside the terminal.
     pub(crate) fn is_dock(self) -> bool {
         !matches!(self, DocumentChrome::Fill)
-    }
-
-    /// Whether the surface draws its own header, or has had it lifted away.
-    pub(crate) fn renders_own_header(self) -> bool {
-        !matches!(self, DocumentChrome::DockHoisted)
-    }
-
-    /// Whether the header is the strip along the top of the window, and so has
-    /// to behave like a title bar — dragging the window, zooming on a
-    /// double-click.
-    ///
-    /// True for the overlay, whose header stands in for the title bar. True for
-    /// a hoisted header, which is drawn *into* the title bar. True for a docked
-    /// column only on macOS, where the column reaches the top of the window
-    /// anyway. False for a plain docked header, which sits inside the workspace
-    /// and would be a second, fake title bar if it moved the window.
-    pub(crate) fn header_is_title_strip(self) -> bool {
-        match self {
-            DocumentChrome::Fill | DocumentChrome::DockHoisted => true,
-            DocumentChrome::Dock => cfg!(target_os = "macos"),
-        }
     }
 }
 
@@ -536,24 +502,6 @@ impl LyrelApp {
 
     /// The column itself: the surface `overlay_top` selects, sized, bordered,
     /// and given the divider on its left edge.
-    /// The header on its own, for the strip above the column — see
-    /// [`DocumentChrome::DockHoisted`]. Returns `None` for the layouts that
-    /// keep their header inside the surface.
-    pub(crate) fn render_document_header(
-        &mut self,
-        chrome: DocumentChrome,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if chrome.renders_own_header() {
-            return None;
-        }
-        match self.document_front()? {
-            OverlayTop::Code => Some(self.render_editor_header_only(chrome, window, cx)),
-            OverlayTop::Diff => self.render_diff_header_only(chrome, window, cx),
-        }
-    }
-
     pub(crate) fn render_document_column(
         &mut self,
         width: f32,
@@ -726,31 +674,12 @@ pub(crate) fn next_ratio_stop(current: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DocumentChrome, dragged_ratio, layout_switch_cell, next_ratio_stop};
+    use super::{dragged_ratio, next_ratio_stop};
     use crate::core::config::{
         DOCUMENT_RATIO_HALF, DOCUMENT_RATIO_MAX, DOCUMENT_RATIO_MIN, DOCUMENT_RATIO_THIRD,
-        DOCUMENT_RATIO_TWO_THIRDS, DocumentLayout,
+        DOCUMENT_RATIO_TWO_THIRDS,
     };
     use crate::ui::app::{DOCUMENT_MIN_W, TERMINAL_MIN_W, document_column_px};
-
-    /// Both document headers raise the cell that matches what is on screen, so
-    /// the narrow-window fallback — where a tab asked to dock is drawn filled —
-    /// cannot leave the switch pointing at a box the surface is not in.
-    #[test]
-    fn the_layout_switch_raises_the_box_the_document_is_actually_in() {
-        assert_eq!(
-            layout_switch_cell(DocumentChrome::Fill),
-            DocumentLayout::Fill,
-            "the overlay is the whole workspace"
-        );
-        for column in [DocumentChrome::Dock, DocumentChrome::DockHoisted] {
-            assert_eq!(
-                layout_switch_cell(column),
-                DocumentLayout::Dock,
-                "a column is a column, hoisted header or not"
-            );
-        }
-    }
 
     /// Nothing the divider can write is something the next launch moves.
     /// `Config::sanitize` clamps `document_ratio` into a band, so a drag that
@@ -975,56 +904,6 @@ mod gpui_tests {
         assert!(
             dock_px(&app, &mut vcx).is_some(),
             "a fresh tab starts from the config, not from what tab 1 chose"
-        );
-    }
-
-    /// A docked column takes width off the tab strip too, and the strip has to
-    /// be told. Where the header is hoisted — Windows, Linux — it is drawn over
-    /// the trailing end of the spanning title bar with no fill of its own, so a
-    /// chip left under it shows through the file name and stays clickable
-    /// through it. On macOS the strip sits inside the terminal column, and
-    /// sizing it to the window rather than to that column is what pushed the
-    /// New Tab button off the end before the detail panel got the same
-    /// reservation.
-    #[gpui_kit::test]
-    fn the_tab_chips_stop_where_the_document_column_starts(cx: &mut TestAppContext) {
-        let (app, mut vcx) = window_with(cx, 1200., 10);
-        // Chips only exist with the bar along the top; with the rail up the
-        // strip is the sidebar's and has nothing in this row to collide with.
-        vcx.update(|_, cx| {
-            cx.global_mut::<Config>().tab_bar_position = crate::core::config::TabBarPosition::Top;
-        });
-        app.update_in(&mut vcx, |app, window, cx| {
-            for (i, tab) in app.tabs.iter_mut().enumerate() {
-                tab.name = Some(format!("a tab with a long enough name {i}"));
-            }
-            app.active = 0;
-            app.toggle_code_panel(window, cx);
-        });
-        vcx.run_until_parked();
-
-        let (viewport, panel, docked) = app.update_in(&mut vcx, |app, window, cx| {
-            (
-                window.viewport_size().width.as_f32(),
-                if app.right_panel_open(cx) {
-                    app.right_panel_px(window, cx)
-                } else {
-                    0.
-                },
-                app.document_dock_px(window, cx)
-                    .expect("a 1200 window seats both"),
-            )
-        });
-        let column_left = viewport - panel - docked;
-        let chips = app.update_in(&mut vcx, |app, _, _| app.strip_slots.borrow().clone());
-        let far = chips
-            .iter()
-            .map(|b| (b.origin.x + b.size.width).as_f32())
-            .fold(0., f32::max);
-        assert!(far > 0., "the strip has to have drawn chips to measure");
-        assert!(
-            far <= column_left + 0.5,
-            "a chip reached {far}, past the column's left edge at {column_left}"
         );
     }
 

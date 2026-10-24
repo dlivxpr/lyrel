@@ -2,6 +2,18 @@ use super::L10nKey;
 
 pub fn translate_en(key: L10nKey) -> &'static str {
     match key {
+        L10nKey::NotificationInbox => "Notifications",
+        L10nKey::NotificationClearHistory => "Clear notification history",
+        L10nKey::NotificationScope => "Received app notifications on this computer · latest 500",
+        L10nKey::NotificationEmpty => {
+            "No notifications. New application notifications will appear here."
+        }
+        L10nKey::NotificationSourceUnavailable => "Source unavailable",
+        L10nKey::NotificationUnread => "Unread",
+        L10nKey::NotificationSuccess => "Success",
+        L10nKey::NotificationInfo => "Information",
+        L10nKey::NotificationWarning => "Warning",
+        L10nKey::NotificationError => "Error",
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
             "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."
@@ -482,7 +494,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSaveChanges => "Save changes",
         L10nKey::SettingsThemeDraft => "Theme changes are previewed until you save.",
 
-        L10nKey::SearchTabs => "Search tabs…",
         L10nKey::SearchFiles => "Search files…",
         L10nKey::PanelSearchPlaceholder => "Search in files…",
         L10nKey::PanelSearchWholeWord => "Match whole word",
@@ -873,10 +884,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsDimInactivePanes => "Dim inactive panes",
         L10nKey::SettingsDimInactivePanesDesc => {
             "Fade unfocused panes so the active one stands out."
-        }
-        L10nKey::SettingsAutoHideTitlebarButtons => "Show title bar buttons on hover",
-        L10nKey::SettingsAutoHideTitlebarButtonsDesc => {
-            "Keep the new tab and sidebar buttons out of sight until the pointer is over the title bar."
         }
         L10nKey::SettingsOpenThemesFolder => "Open themes folder",
         L10nKey::SettingsChangeThemeImage => "Change…",
@@ -1281,8 +1288,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ConfirmCloseNever => "Never",
         L10nKey::ConfirmCloseWhenBusy => "When busy",
         L10nKey::ConfirmCloseAlways => "Always",
-        L10nKey::SettingsTabBarPosition => "Tab bar position",
-        L10nKey::SettingsTabBarPositionDesc => "A strip on top or a sidebar on the left.",
         L10nKey::SettingsSidebarGrouping => "Auto grouping",
         L10nKey::SettingsSidebarGroupingDesc => {
             "Group unpinned tabs by git repository, SSH tabs by host."
@@ -1308,8 +1313,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsStartupFullscreen => "Fullscreen",
         L10nKey::SettingsAfterCurrent => "After current",
         L10nKey::SettingsAtEnd => "At end",
-        L10nKey::SettingsTop => "Top",
-        L10nKey::SettingsLeft => "Left",
         L10nKey::SettingsPreset => "Preset",
         L10nKey::SettingsPresetDesc => "tmux maps pane and tab actions to prefix keys (Ctrl-B C).",
         L10nKey::SettingsPrefix => "Prefix",
@@ -1465,9 +1468,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSearchDimInactivePanesKeywords => {
             "fade unfocused inactive split pane focus opacity highlight active dimming"
         }
-        L10nKey::SettingsSearchAutoHideTitlebarButtonsKeywords => {
-            "auto hide autohide title bar titlebar buttons chrome hover pointer minimal clean new tab sidebar toggle"
-        }
         L10nKey::SettingsSearchFocusFollowsMouseKeywords => "pane hover activate",
         L10nKey::SettingsSearchFontFamilyKeywords => "typeface monospace typography",
         L10nKey::SettingsSearchFontLigaturesKeywords => "typography glyph fira",
@@ -1566,9 +1566,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::SettingsSearchPromptEditorKeywords => {
             "prompt editor native shell input line editor zle readline fish keybindings ime paste"
-        }
-        L10nKey::SettingsSearchTabBarPositionKeywords => {
-            "tabs vertical sidebar left top layout rail"
         }
         L10nKey::SettingsSearchTabCompletionKeywords => {
             "complete completion menu suggestions tab prompt"
@@ -1718,6 +1715,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorStripCloseOthers => "Close others",
         L10nKey::EditorBackToTerminal => "Back to Terminal (Esc)",
         L10nKey::EditorLnCol => "Ln {line}, Col {column}",
+        L10nKey::EditorToggleLineEnding => "Switch line endings between LF and CRLF",
+        L10nKey::StatusRemoteHost => "Remote host {id}",
         L10nKey::EditorEdit => "Edit",
         L10nKey::EditorPreview => "Preview",
         L10nKey::EditorWrapOn => "Wrap: on",
@@ -2058,6 +2057,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "This window is a workspace on {machine}, but lyrel has no connection details for it — check its SSH profile or ~/.ssh/config entry still exists."
         }
         L10nKey::RemoteThisComputer => "this computer",
+        L10nKey::HostMetricsWaiting => "Waiting for host sample",
+        L10nKey::HostMetricsConnecting => "Connecting to host",
+        L10nKey::HostMetricsReconnecting => "Reconnecting to host",
+        L10nKey::HostMetricsUnavailable => "Host metrics unavailable",
+        L10nKey::HostMetricsDisconnected => "Host disconnected",
+        L10nKey::HostMetricsFailed => "Host sampling failed: {reason}",
+        L10nKey::HostMetricsError => "Host sampling failed",
+        L10nKey::HostMetricsSample => "{host} · Whole-host CPU · RAM {used} / {total} GiB",
         L10nKey::RemoteProfileGone => "deleted profile",
         L10nKey::RemoteRestartTitle => "Restart lyrel's server on \"{machine}\"?",
         L10nKey::RemoteRestartBody => {
@@ -2276,8 +2283,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdHideRightPanel => "Hide Right Panel",
         L10nKey::CmdShowRightPanel => "Show Right Panel",
         L10nKey::CmdShowCodePanel => "Show Code Panel",
-        L10nKey::CmdTabBarMoveToTop => "Tab Bar: Move to Top",
-        L10nKey::CmdTabBarMoveToLeftSidebar => "Tab Bar: Move to Left Sidebar",
         L10nKey::CmdRightPanelInfo => "Right Panel: Info",
         L10nKey::CmdRightPanelChanges => "Right Panel: Changes",
         L10nKey::CmdRightPanelFiles => "Right Panel: Files",
@@ -2415,7 +2420,41 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppSshConnectionFailed => "SSH connection failed: {error}",
         L10nKey::AppSshReconnectFailed => "SSH reconnect failed: {error}",
         L10nKey::AppSplitPaneFailed => "Could not split the pane: {error}",
-        L10nKey::PaneDragHandleTooltip => "Drag to move this pane",
+        L10nKey::PaneDragHandleTooltip => "Drag to move or park; click for pane commands",
+        L10nKey::PaneMenuTitle => "Pane commands",
+        L10nKey::PaneMoveToTab => "Move pane to new tab",
+        L10nKey::PaneEnterPip => "Move pane to picture-in-picture",
+        L10nKey::PaneRestorePip => "Restore picture-in-picture to tiled layout",
+        L10nKey::PaneTogglePip => "Toggle pane picture-in-picture",
+        L10nKey::PanePipTitle => "Picture-in-picture terminal",
+        L10nKey::PanePark => "Park pane",
+        L10nKey::PaneRestoreParked => "Restore parked pane…",
+        L10nKey::ParkedDeckTitle => "Parked panes",
+        L10nKey::ParkedRestore => "Restore",
+        L10nKey::ParkedAlive => "Running",
+        L10nKey::ParkedExited => "Exited",
+        L10nKey::ParkedEmpty => "All panes are parked. Restore a card or create a pane.",
+        L10nKey::ParkDropTarget => "Park",
+        L10nKey::ParkedMore => "More…",
+        L10nKey::ParkedOverflowHint => {
+            "↑↓ / Home / End: select · Enter: preview, then restore · Esc: back"
+        }
+        L10nKey::PanePipMove => {
+            "Move picture-in-picture; drag to the bottom target to park (arrow keys; Escape cancels)"
+        }
+        L10nKey::PanePipResize => {
+            "Resize picture-in-picture (arrow keys; Escape returns to terminal)"
+        }
+        L10nKey::PaneFindScrollback => "Find in scrollback…",
+        L10nKey::PaneOpenScrollback => "Open scrollback in editor",
+        L10nKey::PaneClearScreen => "Clear screen",
+        L10nKey::PaneClearAll => "Clear screen and scrollback",
+        L10nKey::PaneRestartShell => "Restart shell…",
+        L10nKey::PaneRestartShellDetail => {
+            "This stops the program running in this pane and starts a new shell on the same machine. Other panes are not restarted."
+        }
+        L10nKey::PaneRestartFailed => "Could not restart the shell: {error}",
+        L10nKey::PaneClose => "Close pane",
         L10nKey::AppWorktreeRemoved => "Removed worktree \"{branch}\"",
         L10nKey::AppWorktreeRemoveFailed => "Worktree removal failed: {error}",
         L10nKey::WorktreePromptAgent => "Start",
@@ -2637,7 +2676,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppMenuLeftSidebar => "Left Sidebar",
         L10nKey::AppMenuRightPanel => "Right Panel",
         L10nKey::AppMenuCodePanel => "Code Panel",
-        L10nKey::AppMenuTabBarPosition => "Tab Bar Position",
         L10nKey::AppMenuFocusNextPane => "Focus Next Pane",
         L10nKey::AppMenuFocusPreviousPane => "Focus Previous Pane",
         L10nKey::AppMenuZoomPane => "Zoom Pane",
@@ -2977,11 +3015,9 @@ mod tests {
 
     #[test]
     fn english_is_the_complete_table() {
-        assert_eq!(translate_en(L10nKey::SearchTabs), "Search tabs…");
         assert_eq!(
             translate_variant_en(L10nKey::SettingsAliasesLinked, "one"),
             Some("1 alias linked.")
         );
-        assert_eq!(translate_variant_en(L10nKey::SearchTabs, "one"), None);
     }
 }

@@ -11,6 +11,7 @@
 //! inlay-ish suggestions that would bury the real problems.
 use std::path::{Path, PathBuf};
 
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
@@ -319,6 +320,7 @@ impl LyrelApp {
         Some(
             v_flex()
                 .id("editor-problems")
+                .test_support()
                 .flex_none()
                 .h(px(PANE_HEIGHT))
                 .w_full()

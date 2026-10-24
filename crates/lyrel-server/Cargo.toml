@@ -30,5 +30,14 @@ tempfile = "3"
 # a pid needs `kill(2)`, which `Child` cannot express once ownership has moved
 # to the thread collecting the exit.
 libc = "0.2.191"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [lints]
 workspace = true
