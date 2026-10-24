@@ -1095,9 +1095,8 @@ impl GraphicsParser {
         }
         if self.pending.is_some() {
             let header = command.split(|b| *b == b';').next().unwrap_or(command);
+            let header = header.strip_prefix(b"G").unwrap_or(header);
             let continuation = header
-                .strip_prefix(b"G")
-                .unwrap_or(header)
                 .split(|b| *b == b',')
                 .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
             if continuation {

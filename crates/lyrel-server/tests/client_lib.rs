@@ -3248,4 +3248,29 @@ mod kitty_graphics {
         pane.red("a=T,i=738,C=1");
         assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 738).unwrap()), [255, 0, 0, 255]);
     }
+
+    #[test]
+    fn daemon_graphics_continuation_quiet_is_independent_of_key_order() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-continuation-quiet");
+        let mut pane = Consumer::spawn(&daemon);
+        for (initial_quiet, continuation, payload, replies) in [
+            (0, "q=1,m=0", "gA==", 0),
+            (0, "q=2,m=0", "!", 0),
+            (0, "m=0,q=2", "!", 0),
+            (0, "q=1,m=0", "!", 1),
+            (2, "q=0,m=0", "!", 1),
+        ] {
+            let request = format!("\x1b_Ga=q,i=739,p=7,s=1,v=1,q={initial_quiet},m=1;/wAA\x1b\\\x1b_G{continuation};{payload}\x1b\\after_continuation");
+            let actual = pane.send(request.as_bytes(), replies);
+            assert_eq!(actual.len(), replies);
+            if replies != 0 {
+                assert!(actual[0].starts_with(b"\x1b_Gi=739,p=7;EINVAL:"));
+            }
+            assert!(pane.resources.is_empty(), "queries must not retain resources");
+            assert!(windows_contain(&pane.last_output, b"after_continuation"));
+        }
+        pane.send(b"input_after_quiet_continuation", 0);
+        assert!(windows_contain(&pane.last_output, b"input_after_quiet_continuation"));
+    }
 }
