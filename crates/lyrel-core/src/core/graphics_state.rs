@@ -141,7 +141,7 @@ impl GraphicsState {
             next_key: 0, next_image_id: 0, encoded_bytes: 0, decoded_bytes: 0,
             size,
             term: Crosswords::new(CrosswordsSize::new(usize::from(size.cols.max(1)), usize::from(size.rows.max(1))),
-                CursorShape::Block, VoidListener, WindowId::from(0), 10_000, 0),
+                CursorShape::Block, VoidListener, WindowId::from(0), 0, 10_000),
             processor: Processor::default(),
         }
     }

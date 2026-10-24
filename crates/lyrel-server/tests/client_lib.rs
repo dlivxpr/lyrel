@@ -2677,6 +2677,39 @@ mod kitty_graphics {
     }
 
     #[test]
+    fn daemon_graphics_refuses_resource_pressure_without_replacing_accepted_pixels() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-pressure");
+        let mut pane = Consumer::spawn(&daemon);
+        pane.red("a=T,i=1,p=1,C=1");
+        let current = pane.placements.values().next().unwrap().clone();
+        // Exercise the published 1,024-resource ceiling through the real PTY,
+        // in bounded batches rather than a test-only configurable state.
+        for start in (2..=1024).step_by(64) {
+            let mut upload = String::new();
+            for id in start..=(start + 63).min(1024) {
+                use std::fmt::Write as _;
+                write!(upload, "\x1b_Ga=t,i={id},f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").unwrap();
+            }
+            assert!(pane.send(upload.as_bytes(), 0).is_empty());
+        }
+        let refused = pane.send(b"\x1b_Ga=t,i=2000,f=32,s=1,v=1;/wAA/w==\x1b\\", 1);
+        assert!(refused[0].starts_with(b"\x1b_Gi=2000;ENOSPC:"));
+        assert_eq!(pane.placements[&current.key], current);
+        assert_eq!(pane.pixel(&current), [255, 0, 0, 255]);
+        let missing = pane.send(b"\x1b_Ga=p,i=2000,p=8,C=1\x1b\\", 1);
+        assert!(missing[0].starts_with(b"\x1b_Gi=2000,p=8;ENOENT:"));
+        // An uppercase resource delete frees capacity even without a placement.
+        pane.command("a=d,d=I,i=2");
+        let accepted = pane.send(b"\x1b_Ga=t,i=2000,f=32,s=1,v=1;/wAA/w==\x1b\\", 1);
+        assert_eq!(accepted, [b"\x1b_Gi=2000;OK\x1b\\".to_vec()]);
+        pane.command("a=p,i=2000,p=8,C=1");
+        let newly_placed = pane.placements.values().find(|p| p.image_id == 2000).unwrap();
+        assert_eq!(pane.pixel(newly_placed), [255, 0, 0, 255]);
+        assert_eq!(pane.pixel(&current), [255, 0, 0, 255]);
+    }
+
+    #[test]
     fn daemon_graphics_transmit_place_identity_and_retransmission_lifecycle() {
         let daemon = Daemon::start();
         let control = daemon.control("graphics-lifecycle");
