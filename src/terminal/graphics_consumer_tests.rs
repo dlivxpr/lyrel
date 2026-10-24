@@ -74,7 +74,9 @@ impl GraphicsDaemonProcess {
 
     fn stream(&self, pane: u64) -> Stream {
         let mut stream = crate::daemon::transport::connect_endpoint_at(&self.endpoint("daemon")).unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
         crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+        stream.set_read_timeout(None).unwrap();
         ClientMsg::Attach { pane_id: pane, size: crate::daemon::protocol::WinSize { cols: 80, rows: 24, cell_w: 10, cell_h: 20 }, allow_remote_clipboard_write: false }.encode(&mut stream).unwrap();
         stream
     }
@@ -260,6 +262,15 @@ fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direc
         assert_eq!(crop.origin.x, px(135.), "Rio reflow moves column 49 to column 9, not the prototype anchor");
         assert_eq!(crop.size, gpui_kit::size(px(30.), px(15.)));
         assert_eq!(full.size, gpui_kit::size(px(30.), px(30.)), "new logical cell geometry scales the same retained texture");
+    });
+    let prior = view.read_with(cx, |view, _| graphics_visible_images(view).remove(0));
+    graphics_send_fixture(&view, cx, 20, "\x1b[2J\x1b[3J\x1b_Ga=p,i=42,p=66051,U=1,c=2,r=2,q=2\x1b\\\x1b[6;5H\x1b[38;5;42;58;2;1;2;3m\u{10eeee}\u{30d}\u{305}\u{10eeee}\x1b[0m".as_bytes());
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].placement.placement_id, 66051, "true-color underline selects the exact prototype, not the lowest id");
+        assert_eq!(images[0].placement.resource, prior.placement.resource);
+        assert!(std::sync::Arc::ptr_eq(&images[0].data, &prior.data), "multiple prototypes do not decode or copy their shared resource again");
     });
     daemon.panes().kill(pane).unwrap();
 }
