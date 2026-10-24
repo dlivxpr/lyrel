@@ -431,6 +431,13 @@ impl ImageStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    #[cfg(test)]
+    pub(super) fn release_probe(&self) -> impl Fn() -> bool + use<> {
+        let store = Arc::downgrade(&self.0);
+        move || store.upgrade().is_none()
+    }
+
     pub fn graphics_capacity(&self) -> (u64, u64) {
         (PANE_SOURCE_BYTES as u64, PANE_DECODED_CAPACITY)
     }
