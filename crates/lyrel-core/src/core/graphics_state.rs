@@ -34,6 +34,8 @@ pub struct Placement {
     /// Retained vertical slice, in cell rows relative to the original anchor.
     pub clip_top: u32,
     pub clip_bottom: u32,
+    /// Invisible prototype; grid cells, not this anchor, select its display.
+    pub virtual_placement: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,6 +180,10 @@ use crate::daemon::protocol::WinSize;
 
 #[path = "graphics_terminal.rs"]
 mod terminal;
+
+#[path = "graphics_placeholder.rs"]
+mod placeholder;
+pub use placeholder::{PlaceholderSlice, placeholder_prototype, placeholder_row};
 
 pub const MAX_PANE_ENCODED_BYTES: usize = 128 << 20;
 pub const MAX_PANE_DECODED_BYTES: usize = 256 << 20;
@@ -504,6 +510,7 @@ impl GraphicsState {
             span_rows,
             clip_top: 0,
             clip_bottom: span_rows,
+            virtual_placement: control.virtual_placement,
         };
         self.placements.insert(
             key,
@@ -516,7 +523,7 @@ impl GraphicsState {
             screen: self.screen,
             history_origin: self.history_origin(),
         }));
-        if !control.no_move {
+        if !control.no_move && !control.virtual_placement {
             // Kitty leaves the cursor on the placement's last row. Do not
             // encode a zero CUD: terminals interpret CSI 0 B as one row.
             let down = span_rows
@@ -589,7 +596,7 @@ impl GraphicsState {
         let mut removed = Vec::new();
         self.placements.retain(|key, p| {
             let p = &p.placement;
-            if p.screen != self.screen {
+            if p.screen != self.screen || (p.virtual_placement && !matches!(target, b'i' | b'n' | b'r')) {
                 return true;
             }
             let row = if target == b'c' {

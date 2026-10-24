@@ -297,6 +297,14 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
             .map(|extra| extra.zerowidth.as_slice())
             .filter(|marks| !marks.is_empty())
             .map(Box::from);
+        // Placeholder identity is terminal data, not a font glyph. Even a
+        // missing/deleted prototype leaves its cell background but no PUA ink.
+        if rendered.c == '\u{10eeee}' {
+            rendered.c = ' ';
+            rendered.marks = None;
+            rendered.underline = UnderlineKind::None;
+            rendered.strikeout = false;
+        }
         rendered.selected = self
             .selection
             .is_some_and(|selection| selection.contains(position));
@@ -1856,6 +1864,7 @@ pub(super) struct GridSnapshot {
     /// anchor_row - history_size + display_offset.
     display_offset: i32,
     history_size: usize,
+    placeholders: Vec<(i32, Vec<lyrel_core::core::kitty_graphics::PlaceholderSlice>)>,
 }
 
 impl GridSnapshot {
@@ -1901,6 +1910,7 @@ impl TerminalElement {
         let mut any_selected = false;
         let display_offset;
         let history_size;
+        let mut placeholders = Vec::new();
         let prompt_shape = self.prompt_cursor_shape(cx);
         {
             let mut palette = self.view.read(cx).terminal.palette;
@@ -1960,6 +1970,8 @@ impl TerminalElement {
             for row in 0..rendered_rows {
                 let line = Line(row as i32 - display_offset);
                 let source = &term.grid[line][..];
+                let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
+                if !slices.is_empty() { placeholders.push((row as i32, slices)); }
                 let source_cols = rendered_cols.min(source.len());
                 for (col, cell) in source.iter().copied().take(source_cols).enumerate() {
                     let position = Pos::new(line, Column(col));
@@ -1993,6 +2005,8 @@ impl TerminalElement {
 
             if want_sliver && (display_offset as usize) < term.grid.history_size() {
                 let line = Line(-display_offset - 1);
+                let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
+                if !slices.is_empty() { placeholders.push((-1, slices)); }
                 let mut row_buf = vec![RenderCell::default(); cols];
                 for (col, (slot, &cell)) in row_buf
                     .iter_mut()
@@ -2045,6 +2059,7 @@ impl TerminalElement {
             any_current,
             display_offset,
             history_size,
+            placeholders,
         })
     }
 
@@ -2483,7 +2498,7 @@ impl Element for TerminalElement {
         // immediately — so the frame would paint and then vanish. In this order
         // the worst case is evicting one paint late, which is invisible.
         let retired_images = image_store.take_retired();
-        let images = image_store.snapshot();
+        let images = image_store.snapshot_with_placeholders(&snap.placeholders);
         let paint_images = |window: &mut Window, z: std::ops::Range<i64>| {
             // Separate crop/full-texture bounds select atlas UVs; no placement
             // owns a copied pixel buffer. The enclosing pane mask still applies.
@@ -4765,7 +4780,7 @@ mod tests {
         let (rows, cols) = {
             let mut term = terminal.lock();
             rio_vt::performer::handler::Processor::default()
-                .advance(&mut *term, "\x1b[H\x1b[31mA\u{301}".as_bytes());
+                .advance(&mut *term, "\x1b[H\x1b[31mA\u{301}\x1b[4;58;5;9m\u{10eeee}\u{305}\u{305}".as_bytes());
             (term.screen_lines(), term.columns())
         };
         let element = TerminalElement::new(view);
@@ -4793,6 +4808,9 @@ mod tests {
         build(&mut buf, cx);
         assert_eq!(buf[0].c, 'A');
         assert_eq!(buf[0].marks.as_deref(), Some(&['\u{301}'][..]));
+        assert_eq!(buf[1].c, ' ', "unresolved image placeholders never render PUA glyphs");
+        assert!(buf[1].marks.is_none());
+        assert_eq!(buf[1].underline, UnderlineKind::None);
         // Simulate content left by a formerly wider/taller source grid.
         let old = buf[0].clone();
         buf[cols] = old.clone();

@@ -25,6 +25,39 @@ impl GraphicsState {
     pub fn placements(&self) -> impl Iterator<Item = &Placement> {
         self.placements.values().map(|p| &p.placement)
     }
+
+    /// Resource keys referenced by actual placeholder text on the active grid.
+    /// Retention callers choose live rows or retained history; no pixels or
+    /// second placement model are allocated. Inactive-screen resources remain
+    /// screen-owned and must be protected separately while their grid is hidden.
+    pub fn placeholder_resources(&self, history: bool) -> BTreeSet<u64> {
+        let mut resources = BTreeSet::new();
+        if !self.placements().any(|p| p.virtual_placement && p.screen == self.screen) {
+            return resources;
+        }
+        let start = if history { -(self.term.grid.history_size() as i32) } else { 0 };
+        for row in start..i32::from(self.size.rows.max(1)) {
+            for slice in placeholder_row(&self.term.grid, Line(row)) {
+                if let Some(prototype) = placeholder_prototype(self.placements(), self.screen, &slice.run)
+                    && slice.run.row < prototype.span_rows && slice.run.col < prototype.span_cols
+                {
+                    let image = &self.resources[&prototype.resource].image;
+                    let mut run = slice.run;
+                    run.width = run.width.min(prototype.span_cols - run.col);
+                    if rio_vt::ansi::kitty_virtual::compute_run_geometry(
+                        &run, prototype.span_cols, prototype.span_rows,
+                        image.width, image.height,
+                        (prototype.x, prototype.y, prototype.w, prototype.h),
+                        f32::from(self.size.cell_w.max(1)), f32::from(self.size.cell_h.max(1)),
+                        0., 0., 0, slice.column,
+                    ).is_some() {
+                        resources.insert(prototype.resource);
+                    }
+                }
+            }
+        }
+        resources
+    }
     /// Explicit user clear also releases the active screen's retained uploads
     /// when history is discarded; a plain ED2 retains upload identity.
     pub fn clear_presentation(&mut self, history: bool) -> Vec<GraphicsEffect> {
@@ -89,7 +122,7 @@ impl GraphicsState {
         let screen = self.screen;
         let oldest = self.term.grid.lines_evicted() as i64;
         self.discard_placements(|p| {
-            p.screen == screen && p.anchor_row + i64::from(p.clip_bottom) <= oldest
+            !p.virtual_placement && p.screen == screen && p.anchor_row + i64::from(p.clip_bottom) <= oldest
         });
     }
 
@@ -99,7 +132,7 @@ impl GraphicsState {
         // Temporary, pixel-free adapter records ask Rio's public resize path
         // to retain its exact reflow map for both grids. They exist only during
         // resize: resources, ordering and retained placements stay here.
-        for p in self.placements.values().map(|p| &p.placement) {
+        for p in self.placements.values().map(|p| &p.placement).filter(|p| !p.virtual_placement) {
             let marker = AtlasPlacement {
                 image_key: p.key,
                 abs_row: p.anchor_row,
@@ -140,7 +173,7 @@ impl GraphicsState {
                 self.dirty.insert(marker.image_key);
             }
         }
-        self.discard_placements(|p| !retained.contains(&p.key));
+        self.discard_placements(|p| !p.virtual_placement && !retained.contains(&p.key));
         self.size = size;
         if grid_changed {
             self.region = 0..i32::from(size.rows.max(1));
@@ -203,7 +236,7 @@ impl GraphicsState {
         }
         for (key, p) in &mut self.placements {
             let p = &mut p.placement;
-            if p.screen != self.screen {
+            if p.screen != self.screen || p.virtual_placement {
                 continue;
             }
             let pt = p.anchor_row + i64::from(p.clip_top);
@@ -397,14 +430,14 @@ impl Handler for GraphicsState {
         let end = base + i64::from(self.size.rows.max(1));
         match mode {
             ClearMode::All => self.discard_placements(|p| {
-                p.screen == screen
+                !p.virtual_placement && p.screen == screen
                     && p.anchor_row + i64::from(p.clip_bottom) > base
                     && p.anchor_row + i64::from(p.clip_top) < end
             }),
             ClearMode::Saved => {
                 for (key, p) in &mut self.placements {
                     let p = &mut p.placement;
-                    if p.screen == screen && p.anchor_row + i64::from(p.clip_top) < base {
+                    if !p.virtual_placement && p.screen == screen && p.anchor_row + i64::from(p.clip_top) < base {
                         p.clip_top = (base - p.anchor_row).max(0).min(i64::from(u32::MAX)) as u32;
                         self.dirty.insert(*key);
                     }

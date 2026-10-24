@@ -33,7 +33,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
-pub use super::graphics_state::{GraphicsEffect, GraphicsState, GraphicsUpdate, Placement};
+pub use super::graphics_state::{
+    GraphicsEffect, GraphicsState, GraphicsUpdate, Placement, PlaceholderSlice,
+    placeholder_prototype, placeholder_row,
+};
 
 /// Cap on a single APC payload (one chunk) we'll buffer before abandoning it.
 /// `terminal-browser` chunks direct transmissions into 4 KiB base64 pieces, but
@@ -574,6 +577,8 @@ pub struct Control {
     pub offset_y: u32,
     pub z: i32,
     pub no_move: bool,
+    /// `U=1` creates an invisible prototype referenced by Unicode grid cells.
+    pub virtual_placement: bool,
     pub invalid: bool,
     pub unsupported: bool,
 }
@@ -606,6 +611,7 @@ impl Default for Control {
             offset_y: 0,
             z: 0,
             no_move: false,
+            virtual_placement: false,
             invalid: false,
             unsupported: false,
         }
@@ -713,7 +719,11 @@ impl Control {
                     c.no_move = val == b"1";
                     c.invalid |= val != b"0" && val != b"1";
                 }
-                b"U" | b"P" | b"Q" | b"H" | b"V" => c.unsupported |= val != b"0",
+                b"U" => {
+                    c.virtual_placement = val == b"1";
+                    c.invalid |= val != b"0" && val != b"1";
+                }
+                b"P" | b"Q" | b"H" | b"V" => c.unsupported |= val != b"0",
                 _ => {} // unknown key: ignore
             }
             if matches!(
