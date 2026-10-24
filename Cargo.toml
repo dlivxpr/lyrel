@@ -163,7 +163,7 @@ tray-icon = "0.26.1"
 # PATH comes back mangled. 0.61 is already in the tree (tray-icon pulls it), so
 # this pins no new code.
 [target.'cfg(windows)'.dependencies]
-aes-gcm = { version = "=0.11.0", features = ["zeroize"] }
+aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
 base64 = "0.23.1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
