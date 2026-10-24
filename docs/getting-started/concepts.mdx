@@ -106,7 +106,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 回收优先级为无引用、非可见历史、受保护内容；同级按原有准入顺序确定。可见历史不是“实时屏幕之外”的同义词：渲染连接通过 `GraphicsViewport { screen, epoch, top, rows, cols }` 报告真实滚动视口，`top` 是绝对文本行锚点，`None` 跟随实时屏，`rows=0` 撤销隐藏窗格的视口保护。`GraphicsUpdate::Screen` 携带对应 `epoch`；resize 行重排、主备屏切换、reset 和历史清理使旧代次失效。daemon 直接在自身资源／网格上核验 direct 放置与实际 placeholder 单元，不复制资源模型；同批新输出推进实时原点时，用户仍在看的历史锚点不随相对 offset 漂移。detach、控制器抢占及 observer 移除同步撤销相应连接事实；桌面跨 pane／跨 daemon 压力选择同样读取真实视口，最终仍由负责 daemon 决定能否回收。普通文字输出的准入屏障只访问当前 pane 已有资源，不扫描全 daemon 注册表。
 
-上述审查修复补充了真实 daemon 到 rooted GPUI 的大文字恢复后大图、direct／placeholder 历史回滚与并发输出、隐藏撤销、控制器抢占及跨 daemon 压力回归。修复版本的 build／tests／lint／formatter 交由集成阶段统一运行；已编写回归不代表运行通过，macOS fixture re-exec 与原生窗口／GPU／SSH 验收仍须分别取证。
+上述审查修复的 Windows 集成验证已通过：core 图片回归 21 项（含 7 项真实 daemon 保留用例）、server Kitty 回归 17 项、rooted GPUI graphics consumer 23 项、decoder 4 项、reader 48 项及 CLI E2E 24 项。core／server 的 ignored 项是父用例按需启动的私有子进程入口，不代表缺少运行时而跳过验收。`cargo fmt --check`、压力脚本语法检查及 Host 边界检查也通过。macOS fixture re-exec、原生窗口／GPU／SSH 与完整 #45 恢复验收仍须分别取证；测试窗口的 paint claim 不等同于最终 GPU 像素。
 
 本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
 
@@ -166,7 +166,7 @@ Windows 协议冒烟使用完全临时的 home／profile／overlay 与合成 ver
 - 多窗格共用聚合池。跨窗格回收只锁预算注册表和资源 slot，再通过合并唤醒让各 pane 按原输出顺序公布变更，不在持有某个 pane 锁时反向锁其他 pane。跨 daemon 桌面压力通过资源所属连接请求权威回收，daemon 必须重新核验 direct／placeholder 可见性及 screen；客户端不能要求删除受保护图。若保护内容已耗尽任一适用预算，新图按 `ENOSPC` 及 `q=1/2` 规则拒收，不替换旧图、不改变文字或光标。
 - 只有预算回收留下无像素元数据。重访仍保留的原位置时，用界面语言在原区域内绘制 `Image evicted`／“图片已淘汰”；颜色使用 `muted_foreground`，保持原裁切。它不是终端文本，不进入选择内容，不插入行、不写 PTY、不发 toast。应用删除、clear／reset、历史过期会删除相应位置，不留下回收提示；拒收且未创建放置的新图不获得假位置。
 - 删除、替换、回收、连接退休及 pane 关闭都会使旧 completion 失效；CPU／GPU 信用在实际持有者释放后才归还。隐藏窗格经已有窗口拥有的后台 UI 更新回收退休 atlas，不必等它重新 paint。为避免旧大 page 被后续小 tile 长期钉住，必要时对同一窗口的终端 atlas 做实际 compaction：保留当前 CPU 图片，批量释放旧 tile 后安排重绘，再归还退休 GPU 票；这次重绘对应真实 GPU 失效，不是普通隐藏输出的无谓通知。daemon 不保留像素的隐藏备份以伪装可恢复。
-- 已添加真实 daemon-session 与生产 GPUI consumer 的确定性小预算回归；本次实现阶段未运行 build／lint／tests／formatter，不能写为通过。原生压力下的 Shell 可用性、Windows／macOS 进程／GPU 实测峰值、真实 SSH→Linux 与正式 omp 图片仍待各自验收。
+- 真实 daemon-session 与生产 GPUI consumer 的确定性小预算回归已在 Windows 集成分支运行通过，覆盖可见保护、跨 pane／daemon 压力、回收提示、容量拒收及关闭后再次准入。另有下述 daemon CPU 冒烟；原生压力下的 Shell、Windows／macOS 桌面／GPU 峰值、真实 SSH→Linux 与正式 omp 原生图片仍待各自验收。
 
 ##### 可执行压力夹具与待测证据
 
@@ -181,7 +181,15 @@ node scripts/kitty-pressure.mjs --images 12 --width 3840 --height 2160 --path di
 
 记录每次夹具参数、GUI／daemon 进程身份、空闲基线、连续输出和清理后的工作集／私有字节峰值，以及平台可观测的 GPU memory。Windows 可对隔离实例的 PID 使用 `Get-Process -Id <GUI_PID>,<DAEMON_PID> | Select-Object Id,WorkingSet64,PrivateMemorySize64,PeakWorkingSet64`；macOS 可用 `ps -o pid,rss,vsz,command -p <GUI_PID>,<DAEMON_PID>`，并通过各平台原生 GPU 工具补充观测。单次快照不是峰值采样；须持续记录，且不能拿夹具自身的 Node 内存充当 GUI／daemon 会计。当前没有这些压力峰值或原生截图证据，默认值不能标为“已按实测调优”。
 
-**已有的代表性基线，不是 #44 验收：**预算接入前的 pane `11`／Windows Debug，使用隔离生产 CLI → ConPTY 分块上传两张 4K raw RGBA（各 33,177,600 bytes）和一张同尺寸 PNG（37,493 bytes）。三份编码共 66,392,693 bytes，RGBA 权重 99,532,800 bytes；daemon `WorkingSet64` 从就绪时 13,443,072 bytes 升至确认保留时 85,790,720 bytes，内核记录的 `PeakWorkingSet64` 为 152,981,504 bytes。通过真实 `lyrel send` 恢复输入并正常结束 pane 后，工作集为 19,632,128 bytes、私有字节为 3,989,504 bytes；发送器、CLI 与 daemon 均正常退出。该测量支持将 partial、校验与传输副本单独计入预算，也说明不能用 37,493 bytes 的 PNG 编码大小代替 4K 解码成本。它不含桌面、atlas／GPU 或本次预算代码；#44 接入后的同路径重测和原生窗口压力仍未完成。
+**pane `13` 的 Windows daemon CPU 实测，不是原生压力验收：**在当前预算代码上，以独立临时配置和生产 CLI → ConPTY 分块上传两张 `3840 × 2160` raw RGBA（各 33,177,600 bytes）与一张同尺寸 PNG（37,493 bytes），三份均收到关联 `i=901/902/903;OK`。编码合计 66,392,693 bytes，RGBA 准入权重 99,532,800 bytes；本次只上传、不放置，不启动桌面消费者。对同一 daemon PID 使用 Windows `Get-Process` 读取进程计数，单位为 bytes：
+
+| 阶段 | WorkingSet64 | PeakWorkingSet64 | PrivateMemorySize64 |
+| --- | ---: | ---: | ---: |
+| daemon 就绪，尚未创建 pane | 13,275,136 | 13,275,136 | 3,424,256 |
+| 三份资源已确认保留，发送器暂停 | 152,096,768 | 153,255,936 | 139,501,568 |
+| pane 正常退出后 | 19,349,504 | 153,255,936 | 3,809,280 |
+
+`PeakWorkingSet64` 是该进程启动以来的内核高水位，不是仅针对图片的分配计数。实际 `lyrel send %1 q` 到达仍在运行的发送器并输出 `RETENTION_PROFILE_INPUT_ALIVE`；CLI／发送器及私有 daemon 均正常退出，临时配置清理。这支持将 partial、校验与传输副本另计，也说明 PNG 编码字节不能代替解码权重；但它不包含桌面、atlas／GPU、持续多窗格压力或原生呈现，不代表 #44 全部验收。原生窗口与各平台 GPU 峰值仍待分别取证。
 
 
 
