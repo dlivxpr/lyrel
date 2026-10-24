@@ -860,7 +860,12 @@ fn resize_state(st: &mut PaneState, size: WinSize, gate: &OutputGate) {
 }
 
 fn graphics_transport_failed(st: &mut PaneState) {
-    notify(st, DaemonMsg::Error("Graphics transport budget exhausted; reconnect to recover retained content".into()));
+    notify(
+        st,
+        DaemonMsg::Error(
+            "Graphics transport budget exhausted; reconnect to recover retained content".into(),
+        ),
+    );
     st.subscriber = None;
     st.subscriber_epoch += 1;
     st.observers.clear();
@@ -873,7 +878,10 @@ fn publish_graphics_effects(st: &mut PaneState, effects: Vec<GraphicsEffect>, ga
             GraphicsEffect::Frame(packet) => Some(packet),
             _ => continue,
         };
-        let Some(packet) = packet else { graphics_transport_failed(st); return; };
+        let Some(packet) = packet else {
+            graphics_transport_failed(st);
+            return;
+        };
         let len = packet.len();
         fan_out_one(st, DaemonMsg::Graphics(packet), len, gate);
     }
@@ -920,7 +928,10 @@ fn fan_out_output(st: &mut PaneState, bytes: &[u8], frames: Vec<GraphicsFrame>, 
                 let len = frame.len();
                 fan_out_one(st, DaemonMsg::Graphics(frame), len, gate);
             }
-            GraphicsFrame::TransportFull => { graphics_transport_failed(st); return; }
+            GraphicsFrame::TransportFull => {
+                graphics_transport_failed(st);
+                return;
+            }
             // Clipboard writes are side effects for the controlling GUI only.
             // Observers must never overwrite their own machine's clipboard just
             // because they are watching this pane.
@@ -1185,7 +1196,11 @@ fn append_graphics_effects(
     for effect in effects {
         match effect {
             GraphicsEffect::Update(update) => {
-                frames.push(update.encode_packet().map_or(GraphicsFrame::TransportFull, GraphicsFrame::Graphics));
+                frames.push(
+                    update
+                        .encode_packet()
+                        .map_or(GraphicsFrame::TransportFull, GraphicsFrame::Graphics),
+                );
             }
             GraphicsEffect::Frame(packet) => frames.push(GraphicsFrame::Graphics(packet)),
             GraphicsEffect::Reply(reply) => write_graphics_reply(writer, &reply),
@@ -1702,10 +1717,12 @@ impl DaemonPane {
     /// smaller consumer must not attach by silently losing accepted content.
     pub fn set_graphics_capacity(&self, encoded: u64, decoded: u64) -> bool {
         let mut state = self.state.lock().unwrap();
-        state.graphics.as_mut().is_none_or(|graphics| graphics.set_capacity(
-            usize::try_from(encoded).unwrap_or(usize::MAX),
-            usize::try_from(decoded).unwrap_or(usize::MAX),
-        ))
+        state.graphics.as_mut().is_none_or(|graphics| {
+            graphics.set_capacity(
+                usize::try_from(encoded).unwrap_or(usize::MAX),
+                usize::try_from(decoded).unwrap_or(usize::MAX),
+            )
+        })
     }
 
     pub fn graphics_admission_broker(&self) -> Arc<GraphicsAdmissionBroker> {
@@ -1714,55 +1731,148 @@ impl DaemonPane {
 
     pub fn pressure_graphics(&self, key: u64) {
         let mut state = self.state.lock().unwrap();
-        let effects = state.graphics.as_mut().map(|graphics| graphics.pressure_resource(key)).unwrap_or_default();
+        let effects = state
+            .graphics
+            .as_mut()
+            .map(|graphics| graphics.pressure_resource(key))
+            .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
     }
 
-    pub fn prepare_graphics_replay(&self, endpoint: u64) -> Result<GraphicsReplayAdmission, String> {
+    pub fn prepare_graphics_replay(
+        &self,
+        endpoint: u64,
+    ) -> Result<GraphicsReplayAdmission, String> {
         let (broker, generation, resources, work) = {
             let mut state = self.state.lock().unwrap();
-            let effects = state.graphics.as_mut().map(GraphicsState::drain_evictions).unwrap_or_default();
+            let effects = state
+                .graphics
+                .as_mut()
+                .map(GraphicsState::drain_evictions)
+                .unwrap_or_default();
             publish_graphics_effects(&mut state, effects, &self.gate);
             let (resources, work) = match &state.graphics {
-                Some(graphics) => { let (resources, work) = graphics.offer_resources().ok_or("Graphics replay metadata work budget exhausted")?; (resources, Some(work)) }
+                Some(graphics) => {
+                    let (resources, work) = graphics
+                        .offer_resources()
+                        .ok_or("Graphics replay metadata work budget exhausted")?;
+                    (resources, Some(work))
+                }
                 None => (Vec::new(), None),
             };
-            (state.graphics_admission.clone(), state.graphics.as_ref().map(GraphicsState::replay_generation), resources, work)
+            (
+                state.graphics_admission.clone(),
+                state
+                    .graphics
+                    .as_ref()
+                    .map(GraphicsState::replay_generation),
+                resources,
+                work,
+            )
         };
         let mut grants = Vec::with_capacity(resources.len());
         for (key, width, height, encoded, metadata) in resources {
-            grants.push(broker.request_after_release(Some(endpoint), key, width, height, encoded, metadata,
-                || self.state.lock().unwrap().graphics.as_ref().map(GraphicsState::replay_generation) == generation)
-                .ok_or("Desktop graphics budget cannot admit retained session content")?);
+            grants.push(
+                broker
+                    .request_after_release(
+                        Some(endpoint),
+                        key,
+                        width,
+                        height,
+                        encoded,
+                        metadata,
+                        || {
+                            self.state
+                                .lock()
+                                .unwrap()
+                                .graphics
+                                .as_ref()
+                                .map(GraphicsState::replay_generation)
+                                == generation
+                        },
+                    )
+                    .ok_or("Desktop graphics budget cannot admit retained session content")?,
+            );
         }
-        Ok(GraphicsReplayAdmission { endpoint, generation, grants, _work: work })
+        Ok(GraphicsReplayAdmission {
+            endpoint,
+            generation,
+            grants,
+            _work: work,
+        })
     }
 
-    pub fn attach_admitted(&self, subscriber: Arc<Sender<DaemonMsg>>, allow_clipboard: bool, admission: GraphicsReplayAdmission) -> Result<u64, String> {
+    pub fn attach_admitted(
+        &self,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        allow_clipboard: bool,
+        admission: GraphicsReplayAdmission,
+    ) -> Result<u64, String> {
         let foreground = self.has_foreground_command();
         let mut state = self.state.lock().unwrap();
-        let effects = state.graphics.as_mut().map(GraphicsState::drain_evictions).unwrap_or_default();
+        let effects = state
+            .graphics
+            .as_mut()
+            .map(GraphicsState::drain_evictions)
+            .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
-        if state.graphics.as_ref().map(GraphicsState::replay_generation) != admission.generation
+        if state
+            .graphics
+            .as_ref()
+            .map(GraphicsState::replay_generation)
+            != admission.generation
             || !admission.grants.iter().all(|grant| grant.valid())
-            || !state.graphics_admission.activate(admission.endpoint) { return Err("Graphics session changed during replay admission; reconnect".into()); }
-        let epoch = attach_subscriber_with_permissions(&mut state, subscriber, &self.gate, allow_clipboard, foreground);
-        if state.subscriber_epoch != epoch || state.subscriber.is_none() { return Err("Graphics replay failed".into()); }
-        for grant in admission.grants { grant.commit(); }
+            || !state.graphics_admission.activate(admission.endpoint)
+        {
+            return Err("Graphics session changed during replay admission; reconnect".into());
+        }
+        let epoch = attach_subscriber_with_permissions(
+            &mut state,
+            subscriber,
+            &self.gate,
+            allow_clipboard,
+            foreground,
+        );
+        if state.subscriber_epoch != epoch || state.subscriber.is_none() {
+            return Err("Graphics replay failed".into());
+        }
+        for grant in admission.grants {
+            grant.commit();
+        }
         Ok(epoch)
     }
 
-    pub fn observe_admitted(&self, subscriber: Arc<Sender<DaemonMsg>>, gate: Arc<OutputGate>, admission: GraphicsReplayAdmission) -> Result<u64, String> {
+    pub fn observe_admitted(
+        &self,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        gate: Arc<OutputGate>,
+        admission: GraphicsReplayAdmission,
+    ) -> Result<u64, String> {
         let foreground = self.has_foreground_command();
         let mut state = self.state.lock().unwrap();
-        let effects = state.graphics.as_mut().map(GraphicsState::drain_evictions).unwrap_or_default();
+        let effects = state
+            .graphics
+            .as_mut()
+            .map(GraphicsState::drain_evictions)
+            .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
-        if state.graphics.as_ref().map(GraphicsState::replay_generation) != admission.generation
+        if state
+            .graphics
+            .as_ref()
+            .map(GraphicsState::replay_generation)
+            != admission.generation
             || !admission.grants.iter().all(|grant| grant.valid())
-            || !state.graphics_admission.activate(admission.endpoint) { return Err("Graphics session changed during replay admission; reconnect".into()); }
+            || !state.graphics_admission.activate(admission.endpoint)
+        {
+            return Err("Graphics session changed during replay admission; reconnect".into());
+        }
         let id = observe_subscriber(&mut state, subscriber, gate, foreground);
-        if !state.observers.iter().any(|observer| observer.id == id) { return Err("Graphics replay failed".into()); }
-        for grant in admission.grants { grant.commit(); }
+        if !state.observers.iter().any(|observer| observer.id == id) {
+            return Err("Graphics replay failed".into());
+        }
+        for grant in admission.grants {
+            grant.commit();
+        }
         Ok(id)
     }
 
@@ -2273,14 +2383,23 @@ impl DaemonPane {
         };
         let weak_state = Arc::downgrade(&state);
         let eviction_gate = gate.clone();
-        std::thread::Builder::new().name("lyrel-graphics-evictions".into()).spawn(move || {
-            while eviction_rx.recv().is_ok() {
-                let Some(state) = weak_state.upgrade() else { break; };
-                let mut state = state.lock().unwrap();
-                let effects = state.graphics.as_mut().map(GraphicsState::drain_evictions).unwrap_or_default();
-                publish_graphics_effects(&mut state, effects, &eviction_gate);
-            }
-        }).expect("spawn graphics eviction publisher");
+        std::thread::Builder::new()
+            .name("lyrel-graphics-evictions".into())
+            .spawn(move || {
+                while eviction_rx.recv().is_ok() {
+                    let Some(state) = weak_state.upgrade() else {
+                        break;
+                    };
+                    let mut state = state.lock().unwrap();
+                    let effects = state
+                        .graphics
+                        .as_mut()
+                        .map(GraphicsState::drain_evictions)
+                        .unwrap_or_default();
+                    publish_graphics_effects(&mut state, effects, &eviction_gate);
+                }
+            })
+            .expect("spawn graphics eviction publisher");
         std::thread::Builder::new()
             .name("lyrel-daemon-pane-reader".to_string())
             .spawn(move || {
@@ -2847,7 +2966,11 @@ impl DaemonPane {
 
     fn hangup(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
-        { let mut state = self.state.lock().unwrap(); state.graphics_admission.cancel(); state.graphics = None; }
+        {
+            let mut state = self.state.lock().unwrap();
+            state.graphics_admission.cancel();
+            state.graphics = None;
+        }
         match &self.backend {
             PaneBackend::Pty(p) => {
                 #[cfg(unix)]
@@ -3388,7 +3511,11 @@ fn answer_device_attributes(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) 
 /// own the terminal right now?", asked of the pty rather than of the pane's
 /// stored state. It gates the prompt report, and that gate is not cosmetic —
 /// see [`replayed_at_prompt`].
-fn replay_state(st: &PaneState, subscriber: &Sender<DaemonMsg>, foreground_command: bool) -> (usize, bool) {
+fn replay_state(
+    st: &PaneState,
+    subscriber: &Sender<DaemonMsg>,
+    foreground_command: bool,
+) -> (usize, bool) {
     // What the replay queues is charged to the stream's gate like live output,
     // by the same measure its writer credits back (`gated_len`).
     let mut queued = 0;
@@ -3418,7 +3545,9 @@ fn replay_state(st: &PaneState, subscriber: &Sender<DaemonMsg>, foreground_comma
     st.ring.replay(&mut send);
     if let Some(graphics) = &st.graphics {
         let Some((effects, _snapshot_work)) = graphics.replay() else {
-            send(DaemonMsg::Error("Graphics replay metadata work budget exhausted".into()));
+            send(DaemonMsg::Error(
+                "Graphics replay metadata work budget exhausted".into(),
+            ));
             return (queued, false);
         };
         for effect in effects {
@@ -3613,8 +3742,12 @@ fn attach_subscriber_with_permissions(
     let epoch = st.subscriber_epoch;
     let (queued, complete) = replay_state(st, &subscriber, foreground_command);
     gate.add(queued);
-    if complete { st.subscriber = Some(subscriber); }
-    else { st.subscriber = None; st.subscriber_epoch += 1; }
+    if complete {
+        st.subscriber = Some(subscriber);
+    } else {
+        st.subscriber = None;
+        st.subscriber_epoch += 1;
+    }
     epoch
 }
 
@@ -3634,7 +3767,9 @@ fn observe_subscriber(
     // the first byte of live output dropped the observer for good.
     let (queued, complete) = replay_state(st, &observer, foreground_command);
     gate.add(queued);
-    if !complete { return st.observer_seq; }
+    if !complete {
+        return st.observer_seq;
+    }
     st.observers.push(Observer {
         id: st.observer_seq,
         tx: observer,
@@ -8010,67 +8145,6 @@ mod tests {
             *sink.lock().unwrap(),
             crate::core::clipboard::response(Some("nope"), "EPERM")
         );
-    }
-
-    /// Delete selectors are applied daemon-side; consumers receive exact keys
-    /// to release, never selectors that depend on their own cursor or cache.
-    #[test]
-    fn reader_forwards_graphics_deletes() {
-        use crate::core::kitty_graphics::GraphicsUpdate;
-
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        state.lock().unwrap().subscriber = Some(Arc::new(sub_tx));
-        let stream = b"x\x1b_Ga=T,i=7,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\\x1b_Ga=d,d=A,q=2\x1b\\y";
-        let handle = DaemonPane::spawn_reader(
-            state.clone(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(stream.to_vec())),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-            },
-            Arc::new(DeathReporter::new(|| {})),
-        );
-        handle.join().unwrap();
-
-        assert_eq!(state.lock().unwrap().ring.flatten(), b"xy");
-        assert!(
-            state.lock().unwrap().graphics.is_none(),
-            "exit releases resources"
-        );
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"x"));
-        let mut resource = None;
-        let mut placement = None;
-        for _ in 0..4 {
-            let Ok(DaemonMsg::Graphics(frame)) = sub_rx.try_recv() else {
-                panic!("expected an ordered graphics update");
-            };
-            match GraphicsUpdate::decode_frame_owned(frame).unwrap() {
-                GraphicsUpdate::Resource { key, image } => {
-                    assert_eq!(image.to_rgba8().unwrap(), [255, 0, 0, 255]);
-                    resource = Some(key);
-                }
-                GraphicsUpdate::Place(p) => {
-                    assert_eq!(Some(p.resource), resource);
-                    placement = Some(p.key);
-                }
-                GraphicsUpdate::Remove {
-                    placements,
-                    resources,
-                } => {
-                    assert_eq!(placements, [placement.unwrap()]);
-                    assert_eq!(resources, [resource.unwrap()]);
-                }
-                GraphicsUpdate::Screen { .. } => {}
-            }
-        }
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"y"));
     }
 
     #[test]

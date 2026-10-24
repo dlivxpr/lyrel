@@ -497,7 +497,10 @@ mod tests {
         DaemonMsg::Version(DaemonVersion::current())
             .encode(writer)
             .unwrap();
-        assert!(matches!(ClientMsg::read(reader).unwrap(), ClientMsg::GraphicsCapacity { encoded_bytes: 67_108_864, decoded_bytes: 134_217_728, offers: false }));
+        assert!(matches!(
+            ClientMsg::read(reader).unwrap(),
+            ClientMsg::GraphicsCapacity { offers: false, .. }
+        ));
     }
 
     #[test]

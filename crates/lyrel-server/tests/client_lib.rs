@@ -2613,7 +2613,10 @@ mod kitty_graphics {
                     self.evicted.insert(*key, (*width, *height));
                 }
                 GraphicsUpdate::Place(placement) => {
-                    assert!(self.resources.contains_key(&placement.resource) || self.evicted.contains_key(&placement.resource));
+                    assert!(
+                        self.resources.contains_key(&placement.resource)
+                            || self.evicted.contains_key(&placement.resource)
+                    );
                     self.placements.insert(placement.key, placement.clone());
                 }
                 GraphicsUpdate::Screen {
@@ -2637,7 +2640,8 @@ mod kitty_graphics {
                     assert!(
                         self.placements
                             .values()
-                            .all(|p| self.resources.contains_key(&p.resource) || self.evicted.contains_key(&p.resource))
+                            .all(|p| self.resources.contains_key(&p.resource)
+                                || self.evicted.contains_key(&p.resource))
                     );
                 }
             }
@@ -3093,7 +3097,11 @@ mod kitty_graphics {
             let mut upload = String::new();
             for id in start..=(start + 63).min(1024) {
                 use std::fmt::Write as _;
-                write!(upload, "\x1b_Ga=T,i={id},C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").unwrap();
+                write!(
+                    upload,
+                    "\x1b_Ga=T,i={id},C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\"
+                )
+                .unwrap();
             }
             assert!(pane.send(upload.as_bytes(), 0).is_empty());
         }

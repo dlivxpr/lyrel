@@ -10,7 +10,8 @@ pub const MAX_DAEMON_GRAPHICS_QUEUE_BYTES: usize = 256 << 20;
 pub const GRAPHICS_METADATA_ENTRY_BYTES: usize = 512;
 pub const MAX_PANE_GRAPHICS_METADATA_BYTES: usize = 4 << 20;
 pub const MAX_AGGREGATE_GRAPHICS_METADATA_BYTES: usize = 16 << 20;
-static GRAPHICS_QUEUE_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static GRAPHICS_QUEUE_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[derive(Debug)]
 struct GraphicsQueueReservation(usize);
@@ -36,13 +37,22 @@ pub struct GraphicsPacket(std::sync::Arc<GraphicsPacketInner>);
 impl GraphicsPacket {
     pub(crate) fn try_encode(bytes: usize, encode: impl FnOnce() -> Vec<u8>) -> Option<Self> {
         use std::sync::atomic::Ordering;
-        GRAPHICS_QUEUE_BYTES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-            used.checked_add(bytes).filter(|next| *next <= MAX_DAEMON_GRAPHICS_QUEUE_BYTES)
-        }).ok()?;
+        GRAPHICS_QUEUE_BYTES
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes)
+                    .filter(|next| *next <= MAX_DAEMON_GRAPHICS_QUEUE_BYTES)
+            })
+            .ok()?;
         let reservation = GraphicsQueueReservation(bytes);
         let data = encode();
-        assert!(data.capacity() <= bytes, "graphics packet exceeded its preallocation reservation");
-        Some(Self(std::sync::Arc::new(GraphicsPacketInner { bytes: data, _reservation: Some(reservation) })))
+        assert!(
+            data.capacity() <= bytes,
+            "graphics packet exceeded its preallocation reservation"
+        );
+        Some(Self(std::sync::Arc::new(GraphicsPacketInner {
+            bytes: data,
+            _reservation: Some(reservation),
+        })))
     }
 
     pub fn into_vec(self) -> Vec<u8> {
@@ -55,17 +65,24 @@ impl GraphicsPacket {
 
 impl From<Vec<u8>> for GraphicsPacket {
     fn from(bytes: Vec<u8>) -> Self {
-        Self(std::sync::Arc::new(GraphicsPacketInner { bytes, _reservation: None }))
+        Self(std::sync::Arc::new(GraphicsPacketInner {
+            bytes,
+            _reservation: None,
+        }))
     }
 }
 
 impl std::ops::Deref for GraphicsPacket {
     type Target = [u8];
-    fn deref(&self) -> &[u8] { &self.0.bytes }
+    fn deref(&self) -> &[u8] {
+        &self.0.bytes
+    }
 }
 
 impl PartialEq for GraphicsPacket {
-    fn eq(&self, other: &Self) -> bool { self.0.bytes == other.0.bytes }
+    fn eq(&self, other: &Self) -> bool {
+        self.0.bytes == other.0.bytes
+    }
 }
 impl Eq for GraphicsPacket {}
 
@@ -169,7 +186,8 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
                 encoded_bytes: 64 << 20,
                 decoded_bytes: 128 << 20,
                 offers: false,
-            }.encode(stream)?;
+            }
+            .encode(stream)?;
             stream.flush()?;
             Ok(version)
         }
@@ -1239,7 +1257,6 @@ mod kind {
     pub const CLIPBOARD_WRITE: u8 = 62;
 }
 
-
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
     let len = payload.len();
     if len > MAX_FRAME {
@@ -1443,13 +1460,21 @@ impl ClientMsg {
             ClientMsg::Observe { pane_id, size } => {
                 write_frame(w, kind::OBSERVE, &to_json(&(pane_id, size))?)
             }
-            ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers } => {
-                write_frame(w, kind::GRAPHICS_CAPACITY, &to_json(&(encoded_bytes, decoded_bytes, offers))?)
-            }
+            ClientMsg::GraphicsCapacity {
+                encoded_bytes,
+                decoded_bytes,
+                offers,
+            } => write_frame(
+                w,
+                kind::GRAPHICS_CAPACITY,
+                &to_json(&(encoded_bytes, decoded_bytes, offers))?,
+            ),
             ClientMsg::GraphicsGrant { token, accepted } => {
                 write_frame(w, kind::GRAPHICS_GRANT, &to_json(&(token, accepted))?)
             }
-            ClientMsg::GraphicsPressure { key } => write_frame(w, kind::GRAPHICS_PRESSURE, &to_json(key)?),
+            ClientMsg::GraphicsPressure { key } => {
+                write_frame(w, kind::GRAPHICS_PRESSURE, &to_json(key)?)
+            }
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
             ClientMsg::ClearPresentation { history } => {
                 write_frame(w, kind::CLEAR_PRESENTATION, &to_json(history)?)
@@ -1592,13 +1617,19 @@ impl ClientMsg {
             }
             kind::GRAPHICS_CAPACITY => {
                 let (encoded_bytes, decoded_bytes, offers) = from_json(&payload)?;
-                ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers }
+                ClientMsg::GraphicsCapacity {
+                    encoded_bytes,
+                    decoded_bytes,
+                    offers,
+                }
             }
             kind::GRAPHICS_GRANT => {
                 let (token, accepted) = from_json(&payload)?;
                 ClientMsg::GraphicsGrant { token, accepted }
             }
-            kind::GRAPHICS_PRESSURE => ClientMsg::GraphicsPressure { key: from_json(&payload)? },
+            kind::GRAPHICS_PRESSURE => ClientMsg::GraphicsPressure {
+                key: from_json(&payload)?,
+            },
             kind::INPUT => ClientMsg::Input(payload),
             kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation {
                 history: from_json(&payload)?,
@@ -1707,10 +1738,21 @@ impl DaemonMsg {
             DaemonMsg::Snapshot(bytes) => write_frame(w, kind::SNAPSHOT, bytes),
             DaemonMsg::Output(bytes) => write_frame(w, kind::OUTPUT, bytes),
             DaemonMsg::Graphics(frame) => write_frame(w, kind::GRAPHICS, frame),
-            DaemonMsg::GraphicsOffer { token, key, width, height, encoded_bytes, metadata_bytes } => {
-                write_frame(w, kind::GRAPHICS_OFFER, &to_json(&(token, key, width, height, encoded_bytes, metadata_bytes))?)
+            DaemonMsg::GraphicsOffer {
+                token,
+                key,
+                width,
+                height,
+                encoded_bytes,
+                metadata_bytes,
+            } => write_frame(
+                w,
+                kind::GRAPHICS_OFFER,
+                &to_json(&(token, key, width, height, encoded_bytes, metadata_bytes))?,
+            ),
+            DaemonMsg::GraphicsCancel { token } => {
+                write_frame(w, kind::GRAPHICS_CANCEL, &to_json(token)?)
             }
-            DaemonMsg::GraphicsCancel { token } => write_frame(w, kind::GRAPHICS_CANCEL, &to_json(token)?),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
@@ -1768,10 +1810,20 @@ impl DaemonMsg {
             kind::OUTPUT => DaemonMsg::Output(payload),
             kind::GRAPHICS => DaemonMsg::Graphics(payload.into()),
             kind::GRAPHICS_OFFER => {
-                let (token, key, width, height, encoded_bytes, metadata_bytes) = from_json(&payload)?;
-                DaemonMsg::GraphicsOffer { token, key, width, height, encoded_bytes, metadata_bytes }
+                let (token, key, width, height, encoded_bytes, metadata_bytes) =
+                    from_json(&payload)?;
+                DaemonMsg::GraphicsOffer {
+                    token,
+                    key,
+                    width,
+                    height,
+                    encoded_bytes,
+                    metadata_bytes,
+                }
             }
-            kind::GRAPHICS_CANCEL => DaemonMsg::GraphicsCancel { token: from_json(&payload)? },
+            kind::GRAPHICS_CANCEL => DaemonMsg::GraphicsCancel {
+                token: from_json(&payload)?,
+            },
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {

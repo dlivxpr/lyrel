@@ -4,38 +4,63 @@ use crate::daemon::pane::{GraphicsAdmissionBroker, OutputGate};
 use std::sync::mpsc::{Sender, sync_channel};
 use std::thread::JoinHandle;
 
-enum Attached { Controller(u64), Observer(u64) }
+enum Attached {
+    Controller(u64),
+    Observer(u64),
+}
 struct Session {
-    pane: Arc<DaemonPane>, broker: Arc<GraphicsAdmissionBroker>, endpoint: u64,
-    sender: Option<Arc<Sender<DaemonMsg>>>, messages: Option<Receiver<ClientMsg>>,
-    shutdown: Stream, writer: Option<JoinHandle<()>>, reader: Option<JoinHandle<()>>,
+    pane: Arc<DaemonPane>,
+    broker: Arc<GraphicsAdmissionBroker>,
+    endpoint: u64,
+    sender: Option<Arc<Sender<DaemonMsg>>>,
+    messages: Option<Receiver<ClientMsg>>,
+    shutdown: Stream,
+    writer: Option<JoinHandle<()>>,
+    reader: Option<JoinHandle<()>>,
     attached: Option<Attached>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
         self.broker.unregister(self.endpoint);
         match self.attached.take() {
-            Some(Attached::Controller(epoch)) => { self.pane.detach(epoch); }
+            Some(Attached::Controller(epoch)) => {
+                self.pane.detach(epoch);
+            }
             Some(Attached::Observer(id)) => self.pane.unobserve(id),
             None => {}
         }
         self.sender = None;
         self.messages = None;
         let _ = self.shutdown.shutdown(std::net::Shutdown::Read);
-        if let Some(reader) = self.reader.take() { let _ = reader.join(); }
-        if let Some(writer) = self.writer.take() { let _ = writer.join(); }
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
+        }
     }
 }
 
-pub(super) fn run(pane: Arc<DaemonPane>, mut read_stream: Stream, write_stream: Stream,
-    registry: Arc<Registry>, endpoint: u64, observer: bool, allow_clipboard: bool,
-    ready: Option<DaemonMsg>, mut claim: Option<UnclaimedSpawn>,
+pub(super) fn run(
+    pane: Arc<DaemonPane>,
+    mut read_stream: Stream,
+    write_stream: Stream,
+    registry: Arc<Registry>,
+    endpoint: u64,
+    observer: bool,
+    allow_clipboard: bool,
+    ready: Option<DaemonMsg>,
+    mut claim: Option<UnclaimedSpawn>,
 ) -> anyhow::Result<()> {
     let broker = pane.graphics_admission_broker();
     let (tx, output) = mpsc::channel();
     let sender = Arc::new(tx);
     broker.register(endpoint, &sender);
-    let gate = if observer { Arc::new(OutputGate::new()) } else { pane.gate() };
+    let gate = if observer {
+        Arc::new(OutputGate::new())
+    } else {
+        pane.gate()
+    };
     let shutdown = read_stream.try_clone()?;
     let (input, messages) = sync_channel(64);
     let input_broker = broker.clone();
@@ -64,24 +89,59 @@ pub(super) fn run(pane: Arc<DaemonPane>, mut read_stream: Stream, write_stream: 
         input_broker.unregister(endpoint);
     })?;
     let writer = spawn_writer(output, write_stream, gate.clone());
-    let mut session = Session { pane: pane.clone(), broker, endpoint, sender: Some(sender), messages: Some(messages), shutdown,
-        writer: Some(writer), reader: Some(reader), attached: None };
+    let mut session = Session {
+        pane: pane.clone(),
+        broker,
+        endpoint,
+        sender: Some(sender),
+        messages: Some(messages),
+        shutdown,
+        writer: Some(writer),
+        reader: Some(reader),
+        attached: None,
+    };
     let admission = match pane.prepare_graphics_replay(endpoint) {
         Ok(admission) => admission,
-        Err(error) => { let _ = session.sender.as_ref().unwrap().send(DaemonMsg::Error(error)); return Ok(()); }
+        Err(error) => {
+            let _ = session
+                .sender
+                .as_ref()
+                .unwrap()
+                .send(DaemonMsg::Error(error));
+            return Ok(());
+        }
     };
-    if claim.is_some() && pane.alive() { registry.insert(pane.clone()); }
-    if let Some(ready) = ready { let _ = session.sender.as_ref().unwrap().send(ready); }
+    if claim.is_some() && pane.alive() {
+        registry.insert(pane.clone());
+    }
+    if let Some(ready) = ready {
+        let _ = session.sender.as_ref().unwrap().send(ready);
+    }
     let admitted = if observer {
-        pane.observe_admitted(session.sender.as_ref().unwrap().clone(), gate, admission).map(Attached::Observer)
+        pane.observe_admitted(session.sender.as_ref().unwrap().clone(), gate, admission)
+            .map(Attached::Observer)
     } else {
-        pane.attach_admitted(session.sender.as_ref().unwrap().clone(), allow_clipboard, admission).map(Attached::Controller)
+        pane.attach_admitted(
+            session.sender.as_ref().unwrap().clone(),
+            allow_clipboard,
+            admission,
+        )
+        .map(Attached::Controller)
     };
     let attached = match admitted {
         Ok(attached) => attached,
-        Err(error) => { let _ = session.sender.as_ref().unwrap().send(DaemonMsg::Error(error)); return Ok(()); }
+        Err(error) => {
+            let _ = session
+                .sender
+                .as_ref()
+                .unwrap()
+                .send(DaemonMsg::Error(error));
+            return Ok(());
+        }
     };
-    if let Some(claim) = &mut claim { claim.claimed = true; }
+    if let Some(claim) = &mut claim {
+        claim.claimed = true;
+    }
     session.attached = Some(attached);
     // The pane is now the sender's only strong owner. Takeover/observer expiry
     // closes the writer naturally; broker records are weak and cannot pin it.
@@ -90,20 +150,39 @@ pub(super) fn run(pane: Arc<DaemonPane>, mut read_stream: Stream, write_stream: 
         match session.attached.as_ref().unwrap() {
             Attached::Observer(id) => match message {
                 ClientMsg::Detach => break,
-                ClientMsg::Input(_) | ClientMsg::Resize(_) | ClientMsg::ClearPresentation { .. } => {
-                    if !pane.tell_observer(*id, DaemonMsg::Error("this connection is a read-only observer; attach to write".into())) { break; }
+                ClientMsg::Input(_)
+                | ClientMsg::Resize(_)
+                | ClientMsg::ClearPresentation { .. } => {
+                    if !pane.tell_observer(
+                        *id,
+                        DaemonMsg::Error(
+                            "this connection is a read-only observer; attach to write".into(),
+                        ),
+                    ) {
+                        break;
+                    }
                 }
                 _ => {}
             },
             Attached::Controller(epoch) => {
-                if !pane.controls(*epoch) { break; }
+                if !pane.controls(*epoch) {
+                    break;
+                }
                 match message {
                     ClientMsg::Input(bytes) => pane.write_input(&bytes),
                     ClientMsg::Resize(size) => pane.resize(size),
                     ClientMsg::ClearPresentation { history } => pane.clear_presentation(history),
-                    ClientMsg::AuthResponse { request_id, response } => pane.deliver_auth_response(request_id, response),
+                    ClientMsg::AuthResponse {
+                        request_id,
+                        response,
+                    } => pane.deliver_auth_response(request_id, response),
                     ClientMsg::Detach => break,
-                    ClientMsg::Kill { pane_id } => { kill_pane(&registry, pane_id); if pane_id == pane.id { break; } }
+                    ClientMsg::Kill { pane_id } => {
+                        kill_pane(&registry, pane_id);
+                        if pane_id == pane.id {
+                            break;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -114,6 +193,8 @@ pub(super) fn run(pane: Arc<DaemonPane>, mut read_stream: Stream, write_stream: 
         _ => false,
     };
     drop(session);
-    if reclaimable { registry.remove(pane.id); }
+    if reclaimable {
+        registry.remove(pane.id);
+    }
     Ok(())
 }

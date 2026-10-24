@@ -145,11 +145,15 @@ const PANE_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const DESKTOP_SOURCE_BYTES: usize = 256 * 1024 * 1024;
 const PANE_DECODED_CAPACITY: u64 = 128 * 1024 * 1024;
 const PANE_METADATA_BYTES: usize = lyrel_core::daemon::protocol::MAX_PANE_GRAPHICS_METADATA_BYTES;
-const DESKTOP_METADATA_BYTES: usize = lyrel_core::daemon::protocol::MAX_AGGREGATE_GRAPHICS_METADATA_BYTES;
-const OWNER_METADATA_BYTES: u64 = lyrel_core::daemon::protocol::GRAPHICS_METADATA_ENTRY_BYTES as u64;
+const DESKTOP_METADATA_BYTES: usize =
+    lyrel_core::daemon::protocol::MAX_AGGREGATE_GRAPHICS_METADATA_BYTES;
+const OWNER_METADATA_BYTES: u64 =
+    lyrel_core::daemon::protocol::GRAPHICS_METADATA_ENTRY_BYTES as u64;
 
 fn gpu_page_bytes(width: u32, height: u32) -> Option<usize> {
-    (width.max(1024) as usize).checked_mul(height.max(1024) as usize)?.checked_mul(4)
+    (width.max(1024) as usize)
+        .checked_mul(height.max(1024) as usize)?
+        .checked_mul(4)
 }
 
 type InspectPressure = dyn Fn(&ImageStore) -> Option<(u64, u64, bool)> + Send + Sync;
@@ -159,7 +163,8 @@ struct PressureConsumer {
     send: Box<dyn Fn(u64) + Send + Sync>,
 }
 
-static PRESSURE_CONSUMERS: LazyLock<Mutex<Vec<Weak<PressureConsumer>>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+static PRESSURE_CONSUMERS: LazyLock<Mutex<Vec<Weak<PressureConsumer>>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Budget {
@@ -169,13 +174,18 @@ struct Budget {
 
 impl Budget {
     fn new(limit: usize) -> Self {
-        Self { used: AtomicUsize::new(0), limit }
+        Self {
+            used: AtomicUsize::new(0),
+            limit,
+        }
     }
 
     fn reserve(&self, bytes: usize) -> bool {
-        self.used.fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-            used.checked_add(bytes).filter(|next| *next <= self.limit)
-        }).is_ok()
+        self.used
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes).filter(|next| *next <= self.limit)
+            })
+            .is_ok()
     }
 }
 
@@ -194,19 +204,32 @@ pub(super) fn with_test_cache_limits<T>(pane: usize, aggregate: usize, f: impl F
             TEST_CACHE_LIMITS.with(|limits| *limits.borrow_mut() = self.0.take());
         }
     }
-    let _reset = Reset(TEST_CACHE_LIMITS.with(|limits| limits.replace(Some((pane, Arc::new(Budget::new(aggregate)), Arc::new(Budget::new(DESKTOP_SOURCE_BYTES)))))));
+    let _reset = Reset(TEST_CACHE_LIMITS.with(|limits| {
+        limits.replace(Some((
+            pane,
+            Arc::new(Budget::new(aggregate)),
+            Arc::new(Budget::new(DESKTOP_SOURCE_BYTES)),
+        )))
+    }));
     f()
 }
 
 #[cfg(test)]
-pub(super) fn with_test_metadata_limits<T>(pane: usize, aggregate: usize, f: impl FnOnce() -> T) -> T {
+pub(super) fn with_test_metadata_limits<T>(
+    pane: usize,
+    aggregate: usize,
+    f: impl FnOnce() -> T,
+) -> T {
     struct Reset(Option<(usize, Arc<Budget>)>);
     impl Drop for Reset {
         fn drop(&mut self) {
             TEST_METADATA_LIMITS.with(|limits| *limits.borrow_mut() = self.0.take());
         }
     }
-    let _reset = Reset(TEST_METADATA_LIMITS.with(|limits| limits.replace(Some((pane, Arc::new(Budget::new(aggregate)))))));
+    let _reset = Reset(
+        TEST_METADATA_LIMITS
+            .with(|limits| limits.replace(Some((pane, Arc::new(Budget::new(aggregate)))))),
+    );
     f()
 }
 
@@ -218,12 +241,18 @@ struct Reservation {
 
 impl Reservation {
     fn new(pane: &Arc<Budget>, aggregate: &Arc<Budget>, bytes: usize) -> Option<Self> {
-        if !pane.reserve(bytes) { return None; }
+        if !pane.reserve(bytes) {
+            return None;
+        }
         if !aggregate.reserve(bytes) {
             pane.used.fetch_sub(bytes, Ordering::AcqRel);
             return None;
         }
-        Some(Self { pane: pane.clone(), aggregate: aggregate.clone(), bytes })
+        Some(Self {
+            pane: pane.clone(),
+            aggregate: aggregate.clone(),
+            bytes,
+        })
     }
 
     fn shrink(&mut self, bytes: usize) {
@@ -235,7 +264,11 @@ impl Reservation {
 
     fn split(&mut self, bytes: usize) -> Self {
         self.bytes -= bytes;
-        Self { pane: self.pane.clone(), aggregate: self.aggregate.clone(), bytes }
+        Self {
+            pane: self.pane.clone(),
+            aggregate: self.aggregate.clone(),
+            bytes,
+        }
     }
 }
 
@@ -316,29 +349,52 @@ struct SharedStore {
 
 impl Default for SharedStore {
     fn default() -> Self {
-        static AGGREGATE: LazyLock<Arc<Budget>> = LazyLock::new(|| Arc::new(Budget::new(DESKTOP_CACHE_BYTES)));
-        static METADATA: LazyLock<Arc<Budget>> = LazyLock::new(|| Arc::new(Budget::new(DESKTOP_METADATA_BYTES)));
+        static AGGREGATE: LazyLock<Arc<Budget>> =
+            LazyLock::new(|| Arc::new(Budget::new(DESKTOP_CACHE_BYTES)));
+        static METADATA: LazyLock<Arc<Budget>> =
+            LazyLock::new(|| Arc::new(Budget::new(DESKTOP_METADATA_BYTES)));
         #[cfg(not(test))]
-        static SOURCES: LazyLock<Arc<Budget>> = LazyLock::new(|| Arc::new(Budget::new(DESKTOP_SOURCE_BYTES)));
+        static SOURCES: LazyLock<Arc<Budget>> =
+            LazyLock::new(|| Arc::new(Budget::new(DESKTOP_SOURCE_BYTES)));
         let pane_budget = Arc::new(Budget::new(PANE_CACHE_BYTES));
         let aggregate_budget = AGGREGATE.clone();
         #[cfg(not(test))]
         let sources = SOURCES.clone();
         #[cfg(test)]
         let (pane_budget, aggregate_budget, sources) = TEST_CACHE_LIMITS.with(|limits| {
-            limits.borrow().as_ref().map(|(pane, aggregate, sources)| (Arc::new(Budget::new(*pane)), aggregate.clone(), sources.clone()))
+            limits
+                .borrow()
+                .as_ref()
+                .map(|(pane, aggregate, sources)| {
+                    (
+                        Arc::new(Budget::new(*pane)),
+                        aggregate.clone(),
+                        sources.clone(),
+                    )
+                })
                 .unwrap_or_else(|| (pane_budget, aggregate_budget, TEST_SOURCES.with(Arc::clone)))
         });
         let pane_metadata = Arc::new(Budget::new(PANE_METADATA_BYTES));
         let aggregate_metadata = METADATA.clone();
         #[cfg(test)]
         let (pane_metadata, aggregate_metadata) = TEST_METADATA_LIMITS.with(|limits| {
-            limits.borrow().as_ref().map(|(pane, aggregate)| (Arc::new(Budget::new(*pane)), aggregate.clone()))
+            limits
+                .borrow()
+                .as_ref()
+                .map(|(pane, aggregate)| (Arc::new(Budget::new(*pane)), aggregate.clone()))
                 .unwrap_or((pane_metadata, aggregate_metadata))
         });
-        Self { state: Mutex::default(), ready: Condvar::new(), pane_budget, aggregate_budget,
-            pane_source: Arc::new(Budget::new(PANE_SOURCE_BYTES)), aggregate_source: sources, pressure: Mutex::default(),
-            pane_metadata, aggregate_metadata }
+        Self {
+            state: Mutex::default(),
+            ready: Condvar::new(),
+            pane_budget,
+            aggregate_budget,
+            pane_source: Arc::new(Budget::new(PANE_SOURCE_BYTES)),
+            aggregate_source: sources,
+            pressure: Mutex::default(),
+            pane_metadata,
+            aggregate_metadata,
+        }
     }
 }
 
@@ -353,9 +409,17 @@ fn retire(resource: Resource, retired: &mut Vec<Arc<Residency>>) {
     }
 }
 
-fn take_metadata_offer(inner: &mut StoreInner, generation: u64, key: u64) -> Option<Arc<Reservation>> {
+fn take_metadata_offer(
+    inner: &mut StoreInner,
+    generation: u64,
+    key: u64,
+) -> Option<Arc<Reservation>> {
     let token = inner.offers.iter().find_map(|(&token, offer)| {
-        (offer.key == key && offer.generation == Some(generation) && offer.width == 0 && offer.height == 0).then_some(token)
+        (offer.key == key
+            && offer.generation == Some(generation)
+            && offer.width == 0
+            && offer.height == 0)
+            .then_some(token)
     })?;
     inner.offers.remove(&token)?.metadata
 }
@@ -369,14 +433,32 @@ impl ImageStore {
     }
 
     /// Atomically admit the actual resource footprint before its protocol ACK.
-    pub fn offer(&self, token: u64, key: u64, width: u32, height: u32, encoded_bytes: u64, metadata_bytes: u64) -> bool {
-        self.offer_for_generation(None, token, key, width, height, encoded_bytes, metadata_bytes)
+    pub fn offer(
+        &self,
+        token: u64,
+        key: u64,
+        width: u32,
+        height: u32,
+        encoded_bytes: u64,
+        metadata_bytes: u64,
+    ) -> bool {
+        self.offer_for_generation(
+            None,
+            token,
+            key,
+            width,
+            height,
+            encoded_bytes,
+            metadata_bytes,
+        )
     }
 
     #[cfg(test)]
     pub(super) fn admit_test_resource(&self, update: &GraphicsUpdate, packet_bytes: usize) -> bool {
         let (key, width, height, encoded_bytes) = match update {
-            GraphicsUpdate::Resource { key, image } => (*key, image.width, image.height, packet_bytes as u64),
+            GraphicsUpdate::Resource { key, image } => {
+                (*key, image.width, image.height, packet_bytes as u64)
+            }
             GraphicsUpdate::Place(placement) => (placement.key, 0, 0, 0),
             GraphicsUpdate::Evicted { key, .. } => (*key, 0, 0, 0),
             _ => return true,
@@ -387,26 +469,76 @@ impl ImageStore {
             let inner = self.0.state.lock().unwrap();
             let existing = match update {
                 GraphicsUpdate::Place(placement) => inner.placements.contains_key(&placement.key),
-                GraphicsUpdate::Resource { key, .. } | GraphicsUpdate::Evicted { key, .. } => inner.resources.contains_key(key),
+                GraphicsUpdate::Resource { key, .. } | GraphicsUpdate::Evicted { key, .. } => {
+                    inner.resources.contains_key(key)
+                }
                 _ => false,
             };
             (inner.reader_generation, existing)
         };
-        if existing && width == 0 { return true; }
-        self.offer_for_generation(Some(generation), token, key, width, height, encoded_bytes, if existing { 0 } else { OWNER_METADATA_BYTES })
+        if existing && width == 0 {
+            return true;
+        }
+        self.offer_for_generation(
+            Some(generation),
+            token,
+            key,
+            width,
+            height,
+            encoded_bytes,
+            if existing { 0 } else { OWNER_METADATA_BYTES },
+        )
     }
 
-    fn offer_for_generation(&self, generation: Option<u64>, token: u64, key: u64, width: u32, height: u32, encoded_bytes: u64, metadata_bytes: u64) -> bool {
+    fn offer_for_generation(
+        &self,
+        generation: Option<u64>,
+        token: u64,
+        key: u64,
+        width: u32,
+        height: u32,
+        encoded_bytes: u64,
+        metadata_bytes: u64,
+    ) -> bool {
         let mut inner = self.0.state.lock().unwrap();
-        if generation.is_some_and(|generation| inner.closed || inner.reader_generation != generation)
-            || inner.offers.contains_key(&token) || inner.offers.values().any(|offer| offer.key == key && (offer.width == 0) == (width == 0)) { return false; }
-        if metadata_bytes != 0 && metadata_bytes != OWNER_METADATA_BYTES { return false; }
-        if metadata_bytes == 0 && !inner.resources.contains_key(&key) && !inner.placements.contains_key(&key) { return false; }
-        let Some(mut offered) = self.reserve_resource(key, width, height, encoded_bytes, metadata_bytes) else {
+        if generation
+            .is_some_and(|generation| inner.closed || inner.reader_generation != generation)
+            || inner.offers.contains_key(&token)
+            || inner
+                .offers
+                .values()
+                .any(|offer| offer.key == key && (offer.width == 0) == (width == 0))
+        {
+            return false;
+        }
+        if metadata_bytes != 0 && metadata_bytes != OWNER_METADATA_BYTES {
+            return false;
+        }
+        if metadata_bytes == 0
+            && !inner.resources.contains_key(&key)
+            && !inner.placements.contains_key(&key)
+        {
+            return false;
+        }
+        let Some(mut offered) =
+            self.reserve_resource(key, width, height, encoded_bytes, metadata_bytes)
+        else {
             drop(inner);
-            let metadata_fits = metadata_bytes as usize <= self.0.pane_metadata.limit.saturating_sub(self.0.pane_metadata.used.load(Ordering::Acquire))
-                && metadata_bytes as usize <= self.0.aggregate_metadata.limit.saturating_sub(self.0.aggregate_metadata.used.load(Ordering::Acquire));
-            if width != 0 && height != 0 && metadata_fits { self.request_pressure(width, height, encoded_bytes); }
+            let metadata_fits = metadata_bytes as usize
+                <= self
+                    .0
+                    .pane_metadata
+                    .limit
+                    .saturating_sub(self.0.pane_metadata.used.load(Ordering::Acquire))
+                && metadata_bytes as usize
+                    <= self
+                        .0
+                        .aggregate_metadata
+                        .limit
+                        .saturating_sub(self.0.aggregate_metadata.used.load(Ordering::Acquire));
+            if width != 0 && height != 0 && metadata_fits {
+                self.request_pressure(width, height, encoded_bytes);
+            }
             return false;
         };
         offered.generation = generation;
@@ -414,23 +546,66 @@ impl ImageStore {
         true
     }
 
-    fn reserve_resource(&self, key: u64, width: u32, height: u32, encoded_bytes: u64, metadata_bytes: u64) -> Option<OfferedResource> {
+    fn reserve_resource(
+        &self,
+        key: u64,
+        width: u32,
+        height: u32,
+        encoded_bytes: u64,
+        metadata_bytes: u64,
+    ) -> Option<OfferedResource> {
         use lyrel_core::core::graphics_state::{MAX_IMAGE_DECODED_BYTES, MAX_IMAGE_DIMENSION};
         let encoded_bytes = usize::try_from(encoded_bytes).ok()?;
-        let metadata = if metadata_bytes == 0 { None } else {
-            Some(Arc::new(Reservation::new(&self.0.pane_metadata, &self.0.aggregate_metadata, metadata_bytes as usize)?))
+        let metadata = if metadata_bytes == 0 {
+            None
+        } else {
+            Some(Arc::new(Reservation::new(
+                &self.0.pane_metadata,
+                &self.0.aggregate_metadata,
+                metadata_bytes as usize,
+            )?))
         };
         if width == 0 && height == 0 && encoded_bytes == 0 {
-            return Some(OfferedResource { key, width, height, encoded_bytes, peak: None, source: None, metadata, generation: None });
+            return Some(OfferedResource {
+                key,
+                width,
+                height,
+                encoded_bytes,
+                peak: None,
+                source: None,
+                metadata,
+                generation: None,
+            });
         }
-        let pixels = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
-        if width == 0 || height == 0 || width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION
-            || pixels > MAX_IMAGE_DECODED_BYTES || encoded_bytes > lyrel_core::daemon::protocol::MAX_FRAME { return None; }
+        let pixels = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        if width == 0
+            || height == 0
+            || width > MAX_IMAGE_DIMENSION
+            || height > MAX_IMAGE_DIMENSION
+            || pixels > MAX_IMAGE_DECODED_BYTES
+            || encoded_bytes > lyrel_core::daemon::protocol::MAX_FRAME
+        {
+            return None;
+        }
         let source_bytes = encoded_bytes.checked_mul(2)?.checked_add(256 * 1024)?;
         let source = Reservation::new(&self.0.pane_source, &self.0.aggregate_source, source_bytes)?;
-        let bytes = pixels.checked_mul(4)?.checked_add(encoded_bytes)?.checked_add(gpu_page_bytes(width, height)?)?;
+        let bytes = pixels
+            .checked_mul(4)?
+            .checked_add(encoded_bytes)?
+            .checked_add(gpu_page_bytes(width, height)?)?;
         let peak = Reservation::new(&self.0.pane_budget, &self.0.aggregate_budget, bytes)?;
-        Some(OfferedResource { key, width, height, encoded_bytes, peak: Some(peak), source: Some(source), metadata, generation: None })
+        Some(OfferedResource {
+            key,
+            width,
+            height,
+            encoded_bytes,
+            peak: Some(peak),
+            source: Some(source),
+            metadata,
+            generation: None,
+        })
     }
 
     pub fn cancel_offer(&self, token: u64) {
@@ -438,16 +613,30 @@ impl ImageStore {
     }
 
     pub fn cancel_unclaimed_offers(&self) {
-        self.0.state.lock().unwrap().offers.retain(|_, offer| offer.generation.is_some());
+        self.0
+            .state
+            .lock()
+            .unwrap()
+            .offers
+            .retain(|_, offer| offer.generation.is_some());
     }
 
     pub fn set_cell_metrics(&self, width: u16, height: u16) {
         let mut inner = self.0.state.lock().unwrap();
-        inner.cell_width = width.max(1); inner.cell_height = height.max(1);
+        inner.cell_width = width.max(1);
+        inner.cell_height = height.max(1);
     }
 
-    pub fn register_pressure(&self, inspect: impl Fn(&ImageStore) -> Option<(u64, u64, bool)> + Send + Sync + 'static, send: impl Fn(u64) + Send + Sync + 'static) {
-        let entry = Arc::new(PressureConsumer { store: Arc::downgrade(&self.0), inspect: Box::new(inspect), send: Box::new(send) });
+    pub fn register_pressure(
+        &self,
+        inspect: impl Fn(&ImageStore) -> Option<(u64, u64, bool)> + Send + Sync + 'static,
+        send: impl Fn(u64) + Send + Sync + 'static,
+    ) {
+        let entry = Arc::new(PressureConsumer {
+            store: Arc::downgrade(&self.0),
+            inspect: Box::new(inspect),
+            send: Box::new(send),
+        });
         *self.0.pressure.lock().unwrap() = Some(entry.clone());
         let mut registry = PRESSURE_CONSUMERS.lock().unwrap();
         registry.retain(|entry| entry.strong_count() > 0);
@@ -456,13 +645,33 @@ impl ImageStore {
 
     fn request_pressure(&self, width: u32, height: u32, encoded_bytes: u64) {
         let encoded = usize::try_from(encoded_bytes).unwrap_or(usize::MAX);
-        let pixels = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+        let pixels = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
         let source = encoded.saturating_mul(2).saturating_add(256 * 1024);
-        let peak = pixels.saturating_mul(4).saturating_add(encoded).saturating_add(gpu_page_bytes(width, height).unwrap_or(usize::MAX));
-        if source > self.0.pane_source.limit || peak > self.0.pane_budget.limit
-            || source > self.0.aggregate_source.limit || peak > self.0.aggregate_budget.limit { return; }
-        let local_only = source > self.0.pane_source.limit.saturating_sub(self.0.pane_source.used.load(Ordering::Acquire))
-            || peak > self.0.pane_budget.limit.saturating_sub(self.0.pane_budget.used.load(Ordering::Acquire));
+        let peak = pixels
+            .saturating_mul(4)
+            .saturating_add(encoded)
+            .saturating_add(gpu_page_bytes(width, height).unwrap_or(usize::MAX));
+        if source > self.0.pane_source.limit
+            || peak > self.0.pane_budget.limit
+            || source > self.0.aggregate_source.limit
+            || peak > self.0.aggregate_budget.limit
+        {
+            return;
+        }
+        let local_only = source
+            > self
+                .0
+                .pane_source
+                .limit
+                .saturating_sub(self.0.pane_source.used.load(Ordering::Acquire))
+            || peak
+                > self
+                    .0
+                    .pane_budget
+                    .limit
+                    .saturating_sub(self.0.pane_budget.used.load(Ordering::Acquire));
         let entries: Vec<_> = {
             let mut registry = PRESSURE_CONSUMERS.lock().unwrap();
             registry.retain(|entry| entry.strong_count() > 0);
@@ -470,11 +679,20 @@ impl ImageStore {
         };
         let mut oldest = None;
         for entry in entries {
-            let Some(store) = entry.store.upgrade().map(ImageStore) else { continue; };
-            if local_only && !Arc::ptr_eq(&store.0, &self.0) { continue; }
+            let Some(store) = entry.store.upgrade().map(ImageStore) else {
+                continue;
+            };
+            if local_only && !Arc::ptr_eq(&store.0, &self.0) {
+                continue;
+            }
             if !Arc::ptr_eq(&store.0.aggregate_budget, &self.0.aggregate_budget)
-                && !Arc::ptr_eq(&store.0.aggregate_source, &self.0.aggregate_source) { continue; }
-            let Some((key, received, unreferenced)) = (entry.inspect)(&store) else { continue; };
+                && !Arc::ptr_eq(&store.0.aggregate_source, &self.0.aggregate_source)
+            {
+                continue;
+            }
+            let Some((key, received, unreferenced)) = (entry.inspect)(&store) else {
+                continue;
+            };
             let order = (!unreferenced, received);
             if oldest.as_ref().is_none_or(|(best, _, _, _)| order < *best) {
                 oldest = Some((order, key, store, entry));
@@ -483,55 +701,104 @@ impl ImageStore {
         if let Some(((_, received), key, store, entry)) = oldest {
             let requested = {
                 let mut inner = store.0.state.lock().unwrap();
-                if inner.closed { return; }
+                if inner.closed {
+                    return;
+                }
                 inner.resources.get_mut(&key).is_some_and(|resource| {
-                    if resource.received != received || resource.pressure_requested { return false; }
+                    if resource.received != received || resource.pressure_requested {
+                        return false;
+                    }
                     resource.pressure_requested = true;
                     true
                 })
             };
-            if requested { (entry.send)(key); }
+            if requested {
+                (entry.send)(key);
+            }
         }
     }
 
     /// The caller holds the live terminal grid while deriving rows, then enters
     /// this store. No registry/store lock is held while acquiring another grid.
-    pub fn oldest_reclaimable(&self, live_rows: usize, live_cols: usize, rows: &[(i32, Vec<PlaceholderSlice>)]) -> Option<(u64, u64, bool)> {
+    pub fn oldest_reclaimable(
+        &self,
+        live_rows: usize,
+        live_cols: usize,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+    ) -> Option<(u64, u64, bool)> {
         let mut inner = self.0.state.lock().unwrap();
-        if inner.closed { return None; }
-        let referenced: BTreeSet<_> = inner.placements.values().map(|p| p.placement.resource).collect();
+        if inner.closed {
+            return None;
+        }
+        let referenced: BTreeSet<_> = inner
+            .placements
+            .values()
+            .map(|p| p.placement.resource)
+            .collect();
         let mut protected = BTreeSet::new();
         for anchored in inner.placements.values() {
             let placement = &anchored.placement;
             let row = placement.anchor_row - inner.history_origin;
-            if placement.screen != inner.screen || (!placement.virtual_placement
-                && placement.anchor_col < live_cols as u32
-                && row + i64::from(placement.clip_top) < live_rows as i64
-                && row + i64::from(placement.clip_bottom) > 0) {
+            if placement.screen != inner.screen
+                || (!placement.virtual_placement
+                    && placement.anchor_col < live_cols as u32
+                    && row + i64::from(placement.clip_top) < live_rows as i64
+                    && row + i64::from(placement.clip_bottom) > 0)
+            {
                 protected.insert(placement.resource);
             }
         }
         for (_, slices) in rows {
             for slice in slices {
-                let Some(prototype) = placeholder_prototype(inner.placements.values().map(|p| &p.placement), inner.screen, &slice.run) else { continue; };
-                let Some(resource) = inner.resources.get(&prototype.resource) else { continue; };
-                if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols { continue; }
+                let Some(prototype) = placeholder_prototype(
+                    inner.placements.values().map(|p| &p.placement),
+                    inner.screen,
+                    &slice.run,
+                ) else {
+                    continue;
+                };
+                let Some(resource) = inner.resources.get(&prototype.resource) else {
+                    continue;
+                };
+                if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols {
+                    continue;
+                }
                 let mut run = slice.run.clone();
                 run.width = run.width.min(prototype.span_cols - run.col);
-                if rio_vt::ansi::kitty_virtual::compute_run_geometry(&run,
-                    prototype.span_cols, prototype.span_rows, resource.width, resource.height,
+                if rio_vt::ansi::kitty_virtual::compute_run_geometry(
+                    &run,
+                    prototype.span_cols,
+                    prototype.span_rows,
+                    resource.width,
+                    resource.height,
                     (prototype.x, prototype.y, prototype.w, prototype.h),
-                    f32::from(inner.cell_width.max(1)), f32::from(inner.cell_height.max(1)),
-                    0., 0., 0, slice.column).is_some() {
+                    f32::from(inner.cell_width.max(1)),
+                    f32::from(inner.cell_height.max(1)),
+                    0.,
+                    0.,
+                    0,
+                    slice.column,
+                )
+                .is_some()
+                {
                     protected.insert(prototype.resource);
                 }
             }
         }
-        inner.resources.iter_mut().filter_map(|(&key, resource)| {
-            if protected.contains(&key) { resource.pressure_requested = false; return None; }
-            if resource.evicted || resource.pressure_requested { return None; }
-            Some((key, resource.received, !referenced.contains(&key)))
-        }).min_by_key(|(_, received, unreferenced)| (!*unreferenced, *received))
+        inner
+            .resources
+            .iter_mut()
+            .filter_map(|(&key, resource)| {
+                if protected.contains(&key) {
+                    resource.pressure_requested = false;
+                    return None;
+                }
+                if resource.evicted || resource.pressure_requested {
+                    return None;
+                }
+                Some((key, resource.received, !referenced.contains(&key)))
+            })
+            .min_by_key(|(_, received, unreferenced)| (!*unreferenced, *received))
     }
 
     pub fn snapshot(&self) -> Vec<RenderPlacement> {
@@ -547,19 +814,29 @@ impl ImageStore {
         let inner = self.0.state.lock().unwrap();
         let render = |anchored: &AnchoredPlacement, placeholder| {
             let resource = inner.resources.get(&anchored.placement.resource)?;
-            if resource.decoded.is_none() && !resource.evicted { return None; }
+            if resource.decoded.is_none() && !resource.evicted {
+                return None;
+            }
             Some(RenderPlacement {
-                data: resource.decoded.as_ref().map(|decoded| decoded.residency.data.clone()),
+                data: resource
+                    .decoded
+                    .as_ref()
+                    .map(|decoded| decoded.residency.data.clone()),
                 evicted: resource.evicted,
                 painted: resource.painted.clone(),
                 placement: anchored.placement.clone(),
                 anchor_row: anchored.placement.anchor_row,
                 anchor_col: anchored.placement.anchor_col as usize,
-                width_px: resource.width, height_px: resource.height,
-                revision: anchored.revision, history_origin: inner.history_origin,
+                width_px: resource.width,
+                height_px: resource.height,
+                revision: anchored.revision,
+                history_origin: inner.history_origin,
                 resource_revision: resource.revision,
                 placeholder,
-                _residency: resource.decoded.as_ref().map(|decoded| decoded.residency.clone()),
+                _residency: resource
+                    .decoded
+                    .as_ref()
+                    .map(|decoded| decoded.residency.clone()),
                 _metadata: (resource.metadata.clone(), anchored.metadata.clone()),
             })
         };
@@ -618,8 +895,13 @@ impl ImageStore {
                     if image.evicted {
                         resource.evicted && resource.revision == image.resource_revision
                     } else {
-                        resource.decoded.as_ref().zip(image.data.as_ref())
-                            .is_some_and(|(decoded, data)| Arc::ptr_eq(&decoded.residency.data, data))
+                        resource
+                            .decoded
+                            .as_ref()
+                            .zip(image.data.as_ref())
+                            .is_some_and(|(decoded, data)| {
+                                Arc::ptr_eq(&decoded.residency.data, data)
+                            })
                     }
                 });
         if current {
@@ -644,7 +926,9 @@ impl ImageStore {
     /// Keep reservations until GPUI has removed each retired atlas image.
     pub fn release_retired(&self, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
         let retired = self.take_retired();
-        if retired.is_empty() { return; }
+        if retired.is_empty() {
+            return;
+        }
         // A small surviving tile can pin a page created for an older large
         // image. Actually remove every terminal tile before returning the old
         // page's ticket; current CPU images re-upload on the refreshed frame.
@@ -652,8 +936,12 @@ impl ImageStore {
             let mut windows = windows.borrow_mut();
             if let Some(images) = windows.get_mut(&window.window_handle().window_id()) {
                 images.retain(|image| {
-                    let Some(image) = image.upgrade() else { return false; };
-                    if image.gpu.lock().unwrap().is_none() { return false; }
+                    let Some(image) = image.upgrade() else {
+                        return false;
+                    };
+                    if image.gpu.lock().unwrap().is_none() {
+                        return false;
+                    }
                     cx.drop_image(image.data.clone(), Some(window));
                     true
                 });
@@ -664,21 +952,37 @@ impl ImageStore {
             cx.drop_image(retired.data.clone(), Some(window));
             retired.gpu.lock().unwrap().take();
         }
-        WINDOW_IMAGES.with(|windows| windows.borrow_mut().retain(|_, images| {
-            images.retain(|image| image.upgrade().is_some_and(|image| image.gpu.lock().unwrap().is_some()));
-            !images.is_empty()
-        }));
+        WINDOW_IMAGES.with(|windows| {
+            windows.borrow_mut().retain(|_, images| {
+                images.retain(|image| {
+                    image
+                        .upgrade()
+                        .is_some_and(|image| image.gpu.lock().unwrap().is_some())
+                });
+                !images.is_empty()
+            })
+        });
         window.refresh();
         self.0.ready.notify_all();
     }
 
     pub fn register_for_paint(&self, image: &RenderPlacement, window: &gpui_kit::Window) {
-        let Some(residency) = &image._residency else { return; };
-        if residency.registered.swap(true, Ordering::AcqRel) { return; }
+        let Some(residency) = &image._residency else {
+            return;
+        };
+        if residency.registered.swap(true, Ordering::AcqRel) {
+            return;
+        }
         WINDOW_IMAGES.with(|windows| {
             let mut windows = windows.borrow_mut();
-            windows.retain(|_, images| { images.retain(|image| image.strong_count() > 0); !images.is_empty() });
-            windows.entry(window.window_handle().window_id()).or_default().push(Arc::downgrade(residency));
+            windows.retain(|_, images| {
+                images.retain(|image| image.strong_count() > 0);
+                !images.is_empty()
+            });
+            windows
+                .entry(window.window_handle().window_id())
+                .or_default()
+                .push(Arc::downgrade(residency));
         });
     }
 
@@ -700,7 +1004,9 @@ impl ImageStore {
     fn clear_resources(&self, preserve_unclaimed: bool) {
         let mut inner = self.0.state.lock().unwrap();
         inner.placements.clear();
-        inner.offers.retain(|_, offer| preserve_unclaimed && offer.generation.is_none());
+        inner
+            .offers
+            .retain(|_, offer| preserve_unclaimed && offer.generation.is_none());
         let resources = std::mem::take(&mut inner.resources);
         for resource in resources.into_values() {
             retire(resource, &mut inner.retired);
@@ -752,7 +1058,9 @@ impl ImageStore {
         inner.closed = true;
         inner.offers.retain(|_, offer| offer.generation.is_none());
         for resource in inner.resources.values_mut() {
-            resource.pending.take(); resource.peak.take(); resource.source.take();
+            resource.pending.take();
+            resource.peak.take();
+            resource.source.take();
         }
         drop(inner);
         self.0.ready.notify_all();
@@ -765,22 +1073,57 @@ impl ImageStore {
         }
         match update {
             GraphicsUpdate::Resource { key, image } => {
-                let token = inner.offers.iter().find_map(|(&token, offer)| (offer.key == key && offer.width > 0 && offer.generation == Some(generation)).then_some(token));
+                let token = inner.offers.iter().find_map(|(&token, offer)| {
+                    (offer.key == key && offer.width > 0 && offer.generation == Some(generation))
+                        .then_some(token)
+                });
                 let offered = token.and_then(|token| inner.offers.remove(&token));
-                let Some(mut offered) = offered else { return false; };
-                if offered.width != image.width || offered.height != image.height || offered.encoded_bytes < image.data.len() { return false; }
-                let Some(mut source) = offered.source.take().filter(|source| source.bytes >= image.data.capacity()) else { return false; };
-                let Some(peak) = offered.peak.take() else { return false; };
-                let metadata = inner.resources.get(&key).map(|resource| resource.metadata.clone()).or(offered.metadata.take());
-                let Some(metadata) = metadata else { return false; };
+                let Some(mut offered) = offered else {
+                    return false;
+                };
+                if offered.width != image.width
+                    || offered.height != image.height
+                    || offered.encoded_bytes < image.data.len()
+                {
+                    return false;
+                }
+                let Some(mut source) = offered
+                    .source
+                    .take()
+                    .filter(|source| source.bytes >= image.data.capacity())
+                else {
+                    return false;
+                };
+                let Some(peak) = offered.peak.take() else {
+                    return false;
+                };
+                let metadata = inner
+                    .resources
+                    .get(&key)
+                    .map(|resource| resource.metadata.clone())
+                    .or(offered.metadata.take());
+                let Some(metadata) = metadata else {
+                    return false;
+                };
                 source.shrink(image.data.capacity());
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
                 let resource = Resource {
-                    width: image.width, height: image.height, pending: Some(image), decoded: None,
-                    revision, evicted: false, painted: Arc::new(AtomicBool::new(false)),
-                    peak: Some(peak), source: Some(source), metadata,
-                    received: RECEIVE_SEQUENCE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |sequence| sequence.checked_add(1)).expect("graphics receive sequence exhausted"),
+                    width: image.width,
+                    height: image.height,
+                    pending: Some(image),
+                    decoded: None,
+                    revision,
+                    evicted: false,
+                    painted: Arc::new(AtomicBool::new(false)),
+                    peak: Some(peak),
+                    source: Some(source),
+                    metadata,
+                    received: RECEIVE_SEQUENCE
+                        .try_update(Ordering::AcqRel, Ordering::Acquire, |sequence| {
+                            sequence.checked_add(1)
+                        })
+                        .expect("graphics receive sequence exhausted"),
                     pressure_requested: false,
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
@@ -792,15 +1135,28 @@ impl ImageStore {
             }
             GraphicsUpdate::Evicted { key, width, height } => {
                 let offered_metadata = take_metadata_offer(&mut inner, generation, key);
-                let metadata = inner.resources.get(&key).map(|resource| resource.metadata.clone()).or(offered_metadata);
-                let Some(metadata) = metadata else { return false; };
+                let metadata = inner
+                    .resources
+                    .get(&key)
+                    .map(|resource| resource.metadata.clone())
+                    .or(offered_metadata);
+                let Some(metadata) = metadata else {
+                    return false;
+                };
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
                 let resource = Resource {
-                    pending: None, decoded: None, width, height, evicted: true, revision,
+                    pending: None,
+                    decoded: None,
+                    width,
+                    height,
+                    evicted: true,
+                    revision,
                     painted: Arc::new(AtomicBool::new(false)),
-                    peak: None, source: None,
-                    received: 0, pressure_requested: false,
+                    peak: None,
+                    source: None,
+                    received: 0,
+                    pressure_requested: false,
                     metadata,
                 };
                 if let Some(old) = inner.resources.insert(key, resource) {
@@ -810,8 +1166,14 @@ impl ImageStore {
             }
             GraphicsUpdate::Place(placement) => {
                 let offered_metadata = take_metadata_offer(&mut inner, generation, placement.key);
-                let metadata = inner.placements.get(&placement.key).map(|placement| placement.metadata.clone()).or(offered_metadata);
-                let Some(metadata) = metadata else { return false; };
+                let metadata = inner
+                    .placements
+                    .get(&placement.key)
+                    .map(|placement| placement.metadata.clone())
+                    .or(offered_metadata);
+                let Some(metadata) = metadata else {
+                    return false;
+                };
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
                 inner.placements.insert(
@@ -880,7 +1242,9 @@ impl DecodeWorker {
             inner.closed = false;
             let generation = inner.reader_generation;
             for offer in inner.offers.values_mut() {
-                if offer.generation.is_none() { offer.generation = Some(generation); }
+                if offer.generation.is_none() {
+                    offer.generation = Some(generation);
+                }
             }
             inner.reader_generation
         };
@@ -903,30 +1267,59 @@ impl DecodeWorker {
 
     pub fn has_resource_grant(&self, update: &GraphicsUpdate) -> bool {
         let inner = self.store.0.state.lock().unwrap();
-        if inner.closed || inner.reader_generation != self.generation { return false; }
+        if inner.closed || inner.reader_generation != self.generation {
+            return false;
+        }
         let (key, pixel_offer) = match update {
             GraphicsUpdate::Resource { key, .. } => (*key, true),
-            GraphicsUpdate::Place(placement) if !inner.placements.contains_key(&placement.key) => (placement.key, false),
-            GraphicsUpdate::Evicted { key, .. } if !inner.resources.contains_key(key) => (*key, false),
+            GraphicsUpdate::Place(placement) if !inner.placements.contains_key(&placement.key) => {
+                (placement.key, false)
+            }
+            GraphicsUpdate::Evicted { key, .. } if !inner.resources.contains_key(key) => {
+                (*key, false)
+            }
             _ => return true,
         };
-        inner.offers.values().any(|offer| offer.key == key && (offer.width > 0) == pixel_offer && offer.generation == Some(self.generation))
+        inner.offers.values().any(|offer| {
+            offer.key == key
+                && (offer.width > 0) == pixel_offer
+                && offer.generation == Some(self.generation)
+        })
     }
 
     pub fn store_metrics(&self, width: u16, height: u16) {
         let mut inner = self.store.0.state.lock().unwrap();
         if inner.reader_generation == self.generation && !inner.closed {
-            inner.cell_width = width.max(1); inner.cell_height = height.max(1);
+            inner.cell_width = width.max(1);
+            inner.cell_height = height.max(1);
         }
     }
 
-    pub fn offer(&self, token: u64, key: u64, width: u32, height: u32, encoded_bytes: u64, metadata_bytes: u64) -> bool {
-        self.store.offer_for_generation(Some(self.generation), token, key, width, height, encoded_bytes, metadata_bytes)
+    pub fn offer(
+        &self,
+        token: u64,
+        key: u64,
+        width: u32,
+        height: u32,
+        encoded_bytes: u64,
+        metadata_bytes: u64,
+    ) -> bool {
+        self.store.offer_for_generation(
+            Some(self.generation),
+            token,
+            key,
+            width,
+            height,
+            encoded_bytes,
+            metadata_bytes,
+        )
     }
 
     pub fn cancel_offer(&self, token: u64) {
         let mut inner = self.store.0.state.lock().unwrap();
-        if inner.reader_generation == self.generation { inner.offers.remove(&token); }
+        if inner.reader_generation == self.generation {
+            inner.offers.remove(&token);
+        }
     }
 
     fn run(
@@ -943,10 +1336,20 @@ impl DecodeWorker {
                         return;
                     }
                     let next = inner.resources.iter_mut().find_map(|(&key, resource)| {
-                        if resource.pending.is_none() { return None; }
-                        Some((key, resource.revision, resource.pending.take().unwrap(), resource.peak.take().unwrap(), resource.source.take()))
+                        if resource.pending.is_none() {
+                            return None;
+                        }
+                        Some((
+                            key,
+                            resource.revision,
+                            resource.pending.take().unwrap(),
+                            resource.peak.take().unwrap(),
+                            resource.source.take(),
+                        ))
                     });
-                    if let Some(next) = next { break next; }
+                    if let Some(next) = next {
+                        break next;
+                    }
                     inner = store.0.ready.wait(inner).unwrap();
                 }
             };
@@ -963,11 +1366,18 @@ impl DecodeWorker {
                     .resources
                     .get_mut(&key)
                     .filter(|resource| resource.revision == revision);
-                if let (Some(resource), Some((data, width, height, allocated_bytes))) = (current, decoded) {
+                if let (Some(resource), Some((data, width, height, allocated_bytes))) =
+                    (current, decoded)
+                {
                     let gpu = reservation.split(gpu_page_bytes(width, height).unwrap());
                     reservation.shrink(allocated_bytes);
                     resource.decoded = Some(DecodedResource {
-                        residency: Arc::new(Residency { data, _cpu: reservation, gpu: Mutex::new(Some(gpu)), registered: AtomicBool::new(false) }),
+                        residency: Arc::new(Residency {
+                            data,
+                            _cpu: reservation,
+                            gpu: Mutex::new(Some(gpu)),
+                            registered: AtomicBool::new(false),
+                        }),
                     });
                     inner
                         .placements
@@ -992,7 +1402,9 @@ impl Drop for DecodeWorker {
                 inner.closed = true;
                 inner.offers.retain(|_, offer| offer.generation.is_none());
                 for resource in inner.resources.values_mut() {
-                    resource.pending.take(); resource.peak.take(); resource.source.take();
+                    resource.pending.take();
+                    resource.peak.take();
+                    resource.source.take();
                 }
             }
         }
@@ -1070,14 +1482,23 @@ mod tests {
                 let inner = worker.store.0.state.lock().unwrap();
                 !inner.placements.contains_key(&placement.key)
             };
-            if metadata { worker.offer(placement.key, placement.key, 0, 0, 0, OWNER_METADATA_BYTES); }
+            if metadata {
+                worker.offer(placement.key, placement.key, 0, 0, 0, OWNER_METADATA_BYTES);
+            }
         }
         worker.apply(update);
     }
 
     fn apply_resource(worker: &DecodeWorker, key: u64, red: u8) {
         let update = resource(key, red);
-        worker.offer(key, key, 1, 1, update.encode_frame().len() as u64, OWNER_METADATA_BYTES);
+        worker.offer(
+            key,
+            key,
+            1,
+            1,
+            update.encode_frame().len() as u64,
+            OWNER_METADATA_BYTES,
+        );
         worker.apply(update);
     }
 
@@ -1157,7 +1578,10 @@ mod tests {
         wait_for(&store, |images| images.len() == 1);
         let images = store.snapshot();
         assert_eq!((images[0].anchor_row, images[0].anchor_col), (40, 8));
-        assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[30, 20, 90, 128]);
+        assert_eq!(
+            images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+            &[30, 20, 90, 128]
+        );
         drop(worker);
         assert_eq!(
             wakes.load(Ordering::SeqCst),
@@ -1222,7 +1646,8 @@ mod tests {
                 .find(|image| image.placement.key == 20)
                 .unwrap()
                 .data
-                .as_ref().unwrap()
+                .as_ref()
+                .unwrap()
                 .as_bytes(0)
                 .unwrap(),
             &[30, 20, 2, 128]
@@ -1255,7 +1680,10 @@ mod tests {
         apply_placement(&new, placement(2, 2, 4, 5));
         wait_for(&store, |images| images.len() == 1);
         let current = store.snapshot();
-        assert_eq!(current[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[30, 20, 90, 128]);
+        assert_eq!(
+            current[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+            &[30, 20, 90, 128]
+        );
         assert!(store.claim_for_paint(&current[0]));
         assert!(
             !old.apply(GraphicsUpdate::Remove {
@@ -1298,7 +1726,10 @@ mod tests {
         apply_placement(&worker, placement(11, 1, 2, 0));
         wait_for(&store, |images| images.len() == 2);
         let images = store.snapshot();
-        assert!(Arc::ptr_eq(images[0].data.as_ref().unwrap(), images[1].data.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            images[0].data.as_ref().unwrap(),
+            images[1].data.as_ref().unwrap()
+        ));
         assert!(Arc::ptr_eq(&images[0].painted, &images[1].painted));
         assert!(store.claim_for_paint(&images[0]));
         apply_placement(&worker, placement(10, 1, 9, 0));
@@ -1319,7 +1750,10 @@ mod tests {
         assert!(!store.claim_for_paint(&images[1]));
         let retired = store.take_retired();
         assert_eq!(retired.len(), 1);
-        assert!(Arc::ptr_eq(&retired[0].data, images[0].data.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            &retired[0].data,
+            images[0].data.as_ref().unwrap()
+        ));
         assert!(store.take_for_release().is_empty());
         apply_resource(&worker, 2, 100);
         apply_placement(&worker, placement(20, 2, 0, 0));
@@ -1335,7 +1769,10 @@ mod tests {
             1,
             "pane release evicts each shared atlas resource once"
         );
-        assert!(Arc::ptr_eq(&released[0].data, current[0].data.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            &released[0].data,
+            current[0].data.as_ref().unwrap()
+        ));
         assert!(store.snapshot().is_empty());
         assert!(store.take_for_release().is_empty());
     }

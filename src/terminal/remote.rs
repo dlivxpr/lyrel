@@ -554,23 +554,35 @@ impl LinkSender {
         Self::enqueue(&self.queue, &self.loss, msg);
     }
 
-    fn enqueue(queue: &Arc<(Mutex<SendQueue>, std::sync::Condvar)>, loss: &InputLoss, msg: ClientMsg) {
+    fn enqueue(
+        queue: &Arc<(Mutex<SendQueue>, std::sync::Condvar)>,
+        loss: &InputLoss,
+        msg: ClientMsg,
+    ) {
         let mut frame = Vec::new();
         if let Err(error) = msg.encode(&mut frame) {
             log::warn!("could not encode a frame for this pane's link: {error}");
             return;
         }
         let (lock, wake) = &**queue;
-        let Ok(mut q) = lock.lock() else { return; };
-        if q.closing { return; }
+        let Ok(mut q) = lock.lock() else {
+            return;
+        };
+        if q.closing {
+            return;
+        }
         let oversize = frame.len() > MAX_BACKLOG && q.bytes == 0;
         if !oversize && q.bytes + frame.len() > MAX_BACKLOG + q.oversize {
             drop(q);
-            loss.note(&std::io::Error::new(std::io::ErrorKind::WouldBlock,
-                format!("nothing has drained this pane's link for {MAX_BACKLOG} bytes of input")));
+            loss.note(&std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                format!("nothing has drained this pane's link for {MAX_BACKLOG} bytes of input"),
+            ));
             return;
         }
-        if oversize { q.oversize = frame.len(); }
+        if oversize {
+            q.oversize = frame.len();
+        }
         q.bytes += frame.len();
         q.frames.push_back(frame);
         q.drained = false;
@@ -603,7 +615,10 @@ impl LinkWriter {
     }
 
     fn sender(&self) -> LinkSender {
-        LinkSender { queue: self.queue.clone(), loss: self.loss.clone() }
+        LinkSender {
+            queue: self.queue.clone(),
+            loss: self.loss.clone(),
+        }
     }
 
     /// Retires the sender and cuts the link. Gives what is queued `DRAIN_GRACE`
@@ -973,7 +988,14 @@ impl RemoteTerminal {
             }
         };
 
-        let mut term = Self::from_stream_parts(stream, size, Vec::new(), PtySource::for_route(route), false, images)?;
+        let mut term = Self::from_stream_parts(
+            stream,
+            size,
+            Vec::new(),
+            PtySource::for_route(route),
+            false,
+            images,
+        )?;
         term.route = route.clone();
         term.spawn_claim = await_claim.then_some((pane_id, win));
         term.seed_cwd(spawned_in);
@@ -990,9 +1012,17 @@ impl RemoteTerminal {
         result?;
         Ok(())
     }
-    fn send_graphics_capacity(stream: &mut Stream, images: &crate::terminal::images::ImageStore) -> anyhow::Result<()> {
+    fn send_graphics_capacity(
+        stream: &mut Stream,
+        images: &crate::terminal::images::ImageStore,
+    ) -> anyhow::Result<()> {
         let (encoded_bytes, decoded_bytes) = images.graphics_capacity();
-        ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers: true }.encode(stream)?;
+        ClientMsg::GraphicsCapacity {
+            encoded_bytes,
+            decoded_bytes,
+            offers: true,
+        }
+        .encode(stream)?;
         Ok(())
     }
 
@@ -1040,7 +1070,12 @@ impl RemoteTerminal {
             allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
         }
         .encode(&mut stream)?;
-        let buffered = match attach_reply_prefix_with_images(&mut stream, pane_id, attach_reply_wait(route), &images) {
+        let buffered = match attach_reply_prefix_with_images(
+            &mut stream,
+            pane_id,
+            attach_reply_wait(route),
+            &images,
+        ) {
             Ok(buffered) => buffered,
             Err(e) if route.is_local() && attach_unanswered(&e) => {
                 // Silence on the attach socket has two readings, and only one
@@ -1070,7 +1105,14 @@ impl RemoteTerminal {
             }
             Err(e) => return Err(e),
         };
-        let mut term = Self::from_stream_parts(stream, size, buffered, PtySource::for_route(route), true, images)?;
+        let mut term = Self::from_stream_parts(
+            stream,
+            size,
+            buffered,
+            PtySource::for_route(route),
+            true,
+            images,
+        )?;
         term.route = route.clone();
         Ok(term)
     }
@@ -1098,7 +1140,12 @@ impl RemoteTerminal {
             allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
         }
         .encode(&mut stream)?;
-        let buffered = attach_reply_prefix_with_images(&mut stream, pane_id, attach_reply_wait(route), &images)?;
+        let buffered = attach_reply_prefix_with_images(
+            &mut stream,
+            pane_id,
+            attach_reply_wait(route),
+            &images,
+        )?;
         Ok((stream, buffered))
     }
 
@@ -1149,7 +1196,10 @@ impl RemoteTerminal {
         self.images.clear_for_relink();
 
         let quit = Arc::new(AtomicBool::new(false));
-        let link = LinkWriter::new(stream, InputLoss::new(quit.clone(), self.exited_flag.clone(), self.proxy.clone()))?;
+        let link = LinkWriter::new(
+            stream,
+            InputLoss::new(quit.clone(), self.exited_flag.clone(), self.proxy.clone()),
+        )?;
         let reader = Self::spawn_reader(
             self.term.clone(),
             self.proxy.clone(),
@@ -1231,7 +1281,14 @@ impl RemoteTerminal {
         buffered: Vec<u8>,
         pty: PtySource,
     ) -> anyhow::Result<Self> {
-        Self::from_stream_parts(stream, size, buffered, pty, false, crate::terminal::images::ImageStore::new())
+        Self::from_stream_parts(
+            stream,
+            size,
+            buffered,
+            pty,
+            false,
+            crate::terminal::images::ImageStore::new(),
+        )
     }
 
     /// `awaiting_replay` says this link is an attach rather than a spawn, and
@@ -1318,7 +1375,6 @@ impl RemoteTerminal {
             },
             link.sender(),
         );
-
 
         Ok(Self {
             term,
@@ -1416,17 +1472,22 @@ impl RemoteTerminal {
     ) -> JoinHandle<()> {
         let pressure_term = Arc::downgrade(&term);
         let pressure_writer = writer.clone();
-        signals.images.register_pressure(move |store| {
-            use rio_vt::crosswords::grid::Dimensions as _;
-            use lyrel_core::core::kitty_graphics::placeholder_row;
-            let term = pressure_term.upgrade()?;
-            let term = term.lock();
-            let rows: Vec<_> = (0..term.screen_lines()).filter_map(|row| {
-                let slices = placeholder_row(&term.grid, rio_vt::crosswords::pos::Line(row as i32));
-                (!slices.is_empty()).then_some((row as i32, slices))
-            }).collect();
-            store.oldest_reclaimable(term.screen_lines(), term.columns(), &rows)
-        }, move |key| pressure_writer.send(ClientMsg::GraphicsPressure { key }));
+        signals.images.register_pressure(
+            move |store| {
+                use lyrel_core::core::kitty_graphics::placeholder_row;
+                let term = pressure_term.upgrade()?;
+                let term = term.lock();
+                let rows: Vec<_> = (0..term.screen_lines())
+                    .filter_map(|row| {
+                        let slices =
+                            placeholder_row(&term.grid, rio_vt::crosswords::pos::Line(row as i32));
+                        (!slices.is_empty()).then_some((row as i32, slices))
+                    })
+                    .collect();
+                store.oldest_reclaimable(term.screen_lines(), term.columns(), &rows)
+            },
+            move |key| pressure_writer.send(ClientMsg::GraphicsPressure { key }),
+        );
         // Establish the decoder generation before scheduling the reader. An old
         // thread starting late must not become the successor's image authority.
         let image_decoder = {
@@ -2448,7 +2509,8 @@ impl RemoteTerminal {
         // The local daemon dialled this one, but it opened no pty for it: the
         // pane is an ssh channel bridged straight through, so the bytes are the
         // far host's raw pty and no conhost ever sees them.
-        let mut term = Self::from_stream_parts(stream, size, Vec::new(), PtySource::Raw, false, images)?;
+        let mut term =
+            Self::from_stream_parts(stream, size, Vec::new(), PtySource::Raw, false, images)?;
         term.ssh_endpoint = Some(endpoint);
         term.ssh_user = Some(user);
         term.auto_supplied_password = auto_supplied_password;
@@ -2718,9 +2780,20 @@ fn attach_reply_wait(route: &PaneRoute) -> std::time::Duration {
     }
 }
 
-fn graphics_admission_reply(message: DaemonMsg, stream: &mut Stream, images: &crate::terminal::images::ImageStore) -> std::io::Result<Option<DaemonMsg>> {
+fn graphics_admission_reply(
+    message: DaemonMsg,
+    stream: &mut Stream,
+    images: &crate::terminal::images::ImageStore,
+) -> std::io::Result<Option<DaemonMsg>> {
     match message {
-        DaemonMsg::GraphicsOffer { token, key, width, height, encoded_bytes, metadata_bytes } => {
+        DaemonMsg::GraphicsOffer {
+            token,
+            key,
+            width,
+            height,
+            encoded_bytes,
+            metadata_bytes,
+        } => {
             let accepted = images.offer(token, key, width, height, encoded_bytes, metadata_bytes);
             if let Err(error) = (ClientMsg::GraphicsGrant { token, accepted }).encode(stream) {
                 images.cancel_offer(token);
@@ -2728,14 +2801,24 @@ fn graphics_admission_reply(message: DaemonMsg, stream: &mut Stream, images: &cr
             }
             Ok(None)
         }
-        DaemonMsg::GraphicsCancel { token } => { images.cancel_offer(token); Ok(None) }
+        DaemonMsg::GraphicsCancel { token } => {
+            images.cancel_offer(token);
+            Ok(None)
+        }
         message => Ok(Some(message)),
     }
 }
 
 #[cfg(test)]
-fn cancellable_spawn_reply(stream: &mut Stream, cancellation: &SpawnCancellation) -> anyhow::Result<DaemonMsg> {
-    cancellable_spawn_reply_with_images(stream, cancellation, &crate::terminal::images::ImageStore::new())
+fn cancellable_spawn_reply(
+    stream: &mut Stream,
+    cancellation: &SpawnCancellation,
+) -> anyhow::Result<DaemonMsg> {
+    cancellable_spawn_reply_with_images(
+        stream,
+        cancellation,
+        &crate::terminal::images::ImageStore::new(),
+    )
 }
 
 /// Polling only bounds cancellation latency, not pane creation. Read's caller
@@ -2764,7 +2847,10 @@ fn cancellable_spawn_reply_with_images(
     }
     stream.set_read_timeout(Some(std::time::Duration::from_millis(100)))?;
     let reply = loop {
-        let message = DaemonMsg::read(&mut Reader { stream: &mut *stream, cancellation });
+        let message = DaemonMsg::read(&mut Reader {
+            stream: &mut *stream,
+            cancellation,
+        });
         match message.and_then(|message| graphics_admission_reply(message, stream, images)) {
             Ok(Some(message)) => break Ok(message),
             Ok(None) => continue,
@@ -2778,7 +2864,9 @@ fn cancellable_spawn_reply_with_images(
         anyhow::bail!("pane spawn cancelled");
     }
     reset?;
-    if reply.is_err() { images.cancel_unclaimed_offers(); }
+    if reply.is_err() {
+        images.cancel_unclaimed_offers();
+    }
     reply.map_err(|error| anyhow::Error::new(error).context("reading the daemon's answer to Spawn"))
 }
 
@@ -2793,14 +2881,18 @@ fn spawn_reply(
 ) -> anyhow::Result<DaemonMsg> {
     let _ = stream.set_read_timeout(Some(wait));
     let reply = loop {
-        match DaemonMsg::read(stream).and_then(|message| graphics_admission_reply(message, stream, images)) {
+        match DaemonMsg::read(stream)
+            .and_then(|message| graphics_admission_reply(message, stream, images))
+        {
             Ok(Some(message)) => break Ok(message),
             Ok(None) => continue,
             Err(error) => break Err(error),
         }
     };
     let _ = stream.set_read_timeout(None);
-    if reply.is_err() { images.cancel_unclaimed_offers(); }
+    if reply.is_err() {
+        images.cancel_unclaimed_offers();
+    }
     match reply {
         Ok(msg) => Ok(msg),
         Err(e) if would_block(&e) => {
@@ -2880,11 +2972,25 @@ pub fn attach_refused(err: &anyhow::Error) -> bool {
 /// nothing (#673). Taken for the failure it is, the caller spawns fresh and
 /// asks for the old screen back.
 #[cfg(test)]
-fn attach_reply_prefix(stream: &mut Stream, pane_id: u64, wait: std::time::Duration) -> anyhow::Result<Vec<u8>> {
-    attach_reply_prefix_with_images(stream, pane_id, wait, &crate::terminal::images::ImageStore::new())
+fn attach_reply_prefix(
+    stream: &mut Stream,
+    pane_id: u64,
+    wait: std::time::Duration,
+) -> anyhow::Result<Vec<u8>> {
+    attach_reply_prefix_with_images(
+        stream,
+        pane_id,
+        wait,
+        &crate::terminal::images::ImageStore::new(),
+    )
 }
 
-fn attach_reply_prefix_with_images(stream: &mut Stream, pane_id: u64, wait: std::time::Duration, images: &crate::terminal::images::ImageStore) -> anyhow::Result<Vec<u8>> {
+fn attach_reply_prefix_with_images(
+    stream: &mut Stream,
+    pane_id: u64,
+    wait: std::time::Duration,
+    images: &crate::terminal::images::ImageStore,
+) -> anyhow::Result<Vec<u8>> {
     let result = attach_reply_prefix_inner(stream, pane_id, wait, images);
     if result.is_err() {
         images.cancel_unclaimed_offers();
@@ -2924,7 +3030,11 @@ fn attach_reply_prefix_inner(
         }
         kind = crate::daemon::protocol::peek_frame_kind(&buffered);
         while kind.is_some_and(crate::daemon::protocol::is_graphics_admission_kind) {
-            let Some((frame_kind, payload)) = crate::daemon::protocol::take_frame(&mut buffered)? else { kind = None; break; };
+            let Some((frame_kind, payload)) = crate::daemon::protocol::take_frame(&mut buffered)?
+            else {
+                kind = None;
+                break;
+            };
             let message = DaemonMsg::from_frame(frame_kind, payload)?;
             graphics_admission_reply(message, stream, images)?;
             kind = crate::daemon::protocol::peek_frame_kind(&buffered);
@@ -4898,8 +5008,11 @@ mod windows_tests {
             let update = GraphicsUpdate::Resource {
                 key,
                 image: Arc::new(Image {
-                    width: 1, height: 1, format: WireFormat::Rgba,
-                    compressed: false, data: vec![red, 20, 30, 128],
+                    width: 1,
+                    height: 1,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![red, 20, 30, 128],
                 }),
             };
             let frame = update.encode_frame();
@@ -4922,7 +5035,9 @@ mod windows_tests {
         let wait_pixel = |term: &RemoteTerminal, red| {
             for _ in 0..200 {
                 let images = term.images.snapshot();
-                if images.len() == 1 && images[0].data.as_ref().unwrap().as_bytes(0).unwrap() == [30, 20, red, 128] {
+                if images.len() == 1
+                    && images[0].data.as_ref().unwrap().as_bytes(0).unwrap() == [30, 20, red, 128]
+                {
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
@@ -4936,7 +5051,8 @@ mod windows_tests {
                 placements: vec![11],
                 resources: vec![11],
             }
-            .encode_frame().into(),
+            .encode_frame()
+            .into(),
         )
         .encode(&mut old_daemon);
         drop(old_daemon);
@@ -4948,7 +5064,8 @@ mod windows_tests {
                 placements: vec![11],
                 resources: vec![11],
             }
-            .encode_frame().into(),
+            .encode_frame()
+            .into(),
         )
         .encode(&mut new_daemon)
         .unwrap();
@@ -4958,7 +5075,8 @@ mod windows_tests {
                 placements: vec![12],
                 resources: vec![12],
             }
-            .encode_frame().into(),
+            .encode_frame()
+            .into(),
         )
         .encode(&mut new_daemon)
         .unwrap();

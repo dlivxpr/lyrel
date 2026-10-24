@@ -114,7 +114,10 @@ impl ApcTokenizer {
         Self {
             buf: Vec::new(),
             state: State::Ground,
-            work: { let retention = super::graphics_state::retention::Retention::shared(); retention.work(retention.owner()) },
+            work: {
+                let retention = super::graphics_state::retention::Retention::shared();
+                retention.work(retention.owner())
+            },
         }
     }
 
@@ -242,7 +245,11 @@ impl ApcTokenizer {
                 State::ApcStart => {
                     if bytes[i] == b'G' {
                         self.clear_buffer();
-                        if !self.push_graphics(b"G") { self.state = State::ApcDrop; i += 1; continue; }
+                        if !self.push_graphics(b"G") {
+                            self.state = State::ApcDrop;
+                            i += 1;
+                            continue;
+                        }
                         self.state = State::ApcGraphics;
                         i += 1;
                     } else {
@@ -344,7 +351,8 @@ impl ApcTokenizer {
                 let prefix = run.len().min(4096 - self.buf.len());
                 let required = self.buf.len() + prefix;
                 if self.work.resize(required + self.buf.capacity()) {
-                    self.buf.reserve_exact(required.saturating_sub(self.buf.len()));
+                    self.buf
+                        .reserve_exact(required.saturating_sub(self.buf.len()));
                     self.work.resize(self.buf.capacity());
                     self.buf.extend_from_slice(&run[..prefix]);
                 }
@@ -356,7 +364,9 @@ impl ApcTokenizer {
             let capacity = required
                 .max(self.buf.capacity().saturating_mul(2))
                 .min(MAX_APC_PAYLOAD);
-            if !self.work.resize(capacity + self.buf.capacity()) { return false; }
+            if !self.work.resize(capacity + self.buf.capacity()) {
+                return false;
+            }
             self.buf.reserve_exact(capacity - self.buf.len());
             self.work.resize(self.buf.capacity());
         }
@@ -403,7 +413,12 @@ impl GraphicsSniffer {
     pub(crate) fn begin_read(&mut self) {
         self.parser.completed_bytes = 0;
         if let Some(work) = &mut self.parser.work {
-            work.resize(self.parser.pending.as_ref().map_or(0, |p| p.data.capacity()));
+            work.resize(
+                self.parser
+                    .pending
+                    .as_ref()
+                    .map_or(0, |p| p.data.capacity()),
+            );
         }
     }
 
@@ -1161,7 +1176,9 @@ impl GraphicsParser {
 
     fn cancel_pending(&mut self) {
         self.pending = None;
-        if let Some(work) = &mut self.work { work.resize(self.completed_bytes); }
+        if let Some(work) = &mut self.work {
+            work.resize(self.completed_bytes);
+        }
     }
 
     fn abort(&mut self, command: &[u8], exhausted: bool) -> Option<Event> {
@@ -1174,7 +1191,11 @@ impl GraphicsParser {
         response(
             &control,
             control.id,
-            if exhausted { "ENOSPC:Graphics transfer budget exhausted" } else { "EINVAL:Interrupted image command" },
+            if exhausted {
+                "ENOSPC:Graphics transfer budget exhausted"
+            } else {
+                "EINVAL:Interrupted image command"
+            },
         )
         .map(Event::Reply)
     }
@@ -1283,18 +1304,35 @@ impl GraphicsParser {
         };
         if decoded_capacity > payload_limit.saturating_add(2).saturating_sub(buffered) {
             self.cancel_pending();
-            return fail(if first.compressed || first.format == WireFormat::Png { "ENOSPC:Transfer too large" } else { "EINVAL:Payload exceeds declared image size" });
+            return fail(if first.compressed || first.format == WireFormat::Png {
+                "ENOSPC:Transfer too large"
+            } else {
+                "EINVAL:Payload exceeds declared image size"
+            });
         }
         let old_capacity = self.pending.as_ref().map_or(0, |p| p.data.capacity());
         let capacity = if buffered + decoded_capacity > old_capacity {
-            (buffered + decoded_capacity).max(old_capacity.saturating_mul(2)).min(payload_limit.saturating_add(3))
-        } else { old_capacity };
+            (buffered + decoded_capacity)
+                .max(old_capacity.saturating_mul(2))
+                .min(payload_limit.saturating_add(3))
+        } else {
+            old_capacity
+        };
         if self.work.is_none() {
             let retention = super::graphics_state::retention::Retention::shared();
             self.work = Some(retention.work(retention.owner()));
         }
-        let transient = if capacity > old_capacity { capacity + old_capacity } else { capacity };
-        if !self.work.as_mut().unwrap().resize(self.completed_bytes + transient) {
+        let transient = if capacity > old_capacity {
+            capacity + old_capacity
+        } else {
+            capacity
+        };
+        if !self
+            .work
+            .as_mut()
+            .unwrap()
+            .resize(self.completed_bytes + transient)
+        {
             self.cancel_pending();
             return fail("ENOSPC:Graphics transfer budget exhausted");
         }
@@ -1308,7 +1346,10 @@ impl GraphicsParser {
         if required > pending.data.capacity() {
             pending.data.reserve_exact(capacity - start);
         }
-        self.work.as_mut().unwrap().resize(self.completed_bytes + pending.data.capacity());
+        self.work
+            .as_mut()
+            .unwrap()
+            .resize(self.completed_bytes + pending.data.capacity());
         pending.data.resize(required, 0);
         let decoded = BASE64.decode_slice(data, &mut pending.data[start..]);
         let Ok(decoded) = decoded else {
@@ -1321,15 +1362,26 @@ impl GraphicsParser {
             return None;
         }
         let retained = self.pending.as_ref().map_or(0, |p| p.data.capacity());
-        let resolved = if first.medium == Medium::Direct { 0 } else { MAX_IMAGE_BYTES };
-        if !self.work.as_mut().unwrap().resize(self.completed_bytes + retained + resolved) {
+        let resolved = if first.medium == Medium::Direct {
+            0
+        } else {
+            MAX_IMAGE_BYTES
+        };
+        if !self
+            .work
+            .as_mut()
+            .unwrap()
+            .resize(self.completed_bytes + retained + resolved)
+        {
             self.cancel_pending();
             return fail("ENOSPC:Graphics transfer budget exhausted");
         }
         let Pending { control, data, .. } = self.pending.take()?;
         let event = self.finalize(control, data);
         self.completed_bytes += match &event {
-            Some(Event::Command { image: Some(image), .. }) => image.data.capacity(),
+            Some(Event::Command {
+                image: Some(image), ..
+            }) => image.data.capacity(),
             _ => 0,
         };
         self.work.as_mut().unwrap().resize(self.completed_bytes);

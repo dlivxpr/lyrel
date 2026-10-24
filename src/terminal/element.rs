@@ -2500,12 +2500,17 @@ impl Element for TerminalElement {
         let notice = images.iter().any(|image| image.evicted).then(|| {
             let text = SharedString::new_static(t(L10nKey::TerminalImageEvicted));
             window.text_system().shape_line(
-                text.clone(), font_size,
+                text.clone(),
+                font_size,
                 &[TextRun {
-                    len: text.len(), font: base_font.clone(),
+                    len: text.len(),
+                    font: base_font.clone(),
                     color: cx.theme().muted_foreground,
-                    background_color: None, underline: None, strikethrough: None,
-                }], None,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
             )
         });
         let paint_images = |window: &mut Window, cx: &mut App, z: std::ops::Range<i64>| {
@@ -2534,11 +2539,23 @@ impl Element for TerminalElement {
                 window.paint_layer(visible, |window| {
                     if let Some(data) = &img.data {
                         let _ = window.paint_image(
-                            bounds, image_bounds, Corners::default(), data.clone(), 0, false,
+                            bounds,
+                            image_bounds,
+                            Corners::default(),
+                            data.clone(),
+                            0,
+                            false,
                         );
                     } else if let Some(notice) = notice.as_ref().filter(|_| img.evicted) {
                         window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
-                            let _ = notice.paint(visible.origin, geom.line_height, TextAlign::Left, None, window, cx);
+                            let _ = notice.paint(
+                                visible.origin,
+                                geom.line_height,
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
                         });
                     }
                     if dim < 1. {

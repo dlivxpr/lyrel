@@ -27,23 +27,35 @@ struct GraphicsCapacityLease {
 type GraphicsCapacities = HashMap<(u64, u64), (u64, u64)>;
 
 fn graphics_capacities() -> &'static Mutex<GraphicsCapacities> {
-    static CAPACITIES: std::sync::LazyLock<Mutex<GraphicsCapacities>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    static CAPACITIES: std::sync::LazyLock<Mutex<GraphicsCapacities>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
     &CAPACITIES
 }
 
 impl GraphicsCapacityLease {
-    fn reserve(pane: &Arc<DaemonPane>, capacity: (u64, u64), mut reply: &Stream) -> anyhow::Result<Option<Self>> {
+    fn reserve(
+        pane: &Arc<DaemonPane>,
+        capacity: (u64, u64),
+        mut reply: &Stream,
+    ) -> anyhow::Result<Option<Self>> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let token = NEXT.fetch_add(1, Ordering::Relaxed);
         let mut capacities = graphics_capacities().lock().unwrap();
-        let effective = capacities.iter().filter(|((id, _), _)| *id == pane.id)
-            .fold(capacity, |limit, (_, other)| (limit.0.min(other.0), limit.1.min(other.1)));
+        let effective = capacities
+            .iter()
+            .filter(|((id, _), _)| *id == pane.id)
+            .fold(capacity, |limit, (_, other)| {
+                (limit.0.min(other.0), limit.1.min(other.1))
+            });
         if !pane.set_graphics_capacity(effective.0, effective.1) {
             DaemonMsg::Error("graphics capacity cannot hold this pane's retained images; existing session content was preserved".into()).encode(&mut reply)?;
             return Ok(None);
         }
         capacities.insert((pane.id, token), capacity);
-        Ok(Some(Self { pane: pane.clone(), token }))
+        Ok(Some(Self {
+            pane: pane.clone(),
+            token,
+        }))
     }
 }
 
@@ -51,8 +63,12 @@ impl Drop for GraphicsCapacityLease {
     fn drop(&mut self) {
         let mut capacities = graphics_capacities().lock().unwrap();
         capacities.remove(&(self.pane.id, self.token));
-        let effective = capacities.iter().filter(|((id, _), _)| *id == self.pane.id)
-            .fold((u64::MAX, u64::MAX), |limit, (_, other)| (limit.0.min(other.0), limit.1.min(other.1)));
+        let effective = capacities
+            .iter()
+            .filter(|((id, _), _)| *id == self.pane.id)
+            .fold((u64::MAX, u64::MAX), |limit, (_, other)| {
+                (limit.0.min(other.0), limit.1.min(other.1))
+            });
         // The authority clamps to its finite pane defaults after the last
         // consumer leaves. Releasing a lease never revives evicted content.
         let _ = self.pane.set_graphics_capacity(effective.0, effective.1);
@@ -887,9 +903,15 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         false
     };
     let mut graphics_capacity = None;
-    while let ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers } = first {
+    while let ClientMsg::GraphicsCapacity {
+        encoded_bytes,
+        decoded_bytes,
+        offers,
+    } = first
+    {
         if !negotiated {
-            DaemonMsg::Error("pane protocol handshake required before graphics capacity".into()).encode(&mut &write_stream)?;
+            DaemonMsg::Error("pane protocol handshake required before graphics capacity".into())
+                .encode(&mut &write_stream)?;
             return Ok(());
         }
         graphics_capacity = Some((encoded_bytes, decoded_bytes, offers));
@@ -897,10 +919,17 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
     }
     let graphics_offers = graphics_capacity.is_some_and(|capacity| capacity.2);
     let graphics_capacity = graphics_capacity.map(|capacity| (capacity.0, capacity.1));
-    if matches!(&first, ClientMsg::Spawn { .. } | ClientMsg::SpawnNativeSsh { .. } | ClientMsg::Attach { .. } | ClientMsg::Observe { .. })
-        && negotiated && graphics_capacity.is_none()
+    if matches!(
+        &first,
+        ClientMsg::Spawn { .. }
+            | ClientMsg::SpawnNativeSsh { .. }
+            | ClientMsg::Attach { .. }
+            | ClientMsg::Observe { .. }
+    ) && negotiated
+        && graphics_capacity.is_none()
     {
-        DaemonMsg::Error("finite graphics capacity required before opening a pane session".into()).encode(&mut &write_stream)?;
+        DaemonMsg::Error("finite graphics capacity required before opening a pane session".into())
+            .encode(&mut &write_stream)?;
         return Ok(());
     }
     if !negotiated
@@ -978,7 +1007,9 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     return Err(e);
                 }
             };
-            let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else {
+            let Some(_graphics_lease) =
+                GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)?
+            else {
                 pane.kill();
                 return Ok(());
             };
@@ -1025,7 +1056,9 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     return Err(e);
                 }
             };
-            let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else {
+            let Some(_graphics_lease) =
+                GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)?
+            else {
                 pane.kill();
                 return Ok(());
             };
@@ -1052,10 +1085,22 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             allow_remote_clipboard_write,
         } => match registry.get(pane_id) {
             Some(pane) => {
-                let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else { return Ok(()); };
+                let Some(_graphics_lease) = GraphicsCapacityLease::reserve(
+                    &pane,
+                    graphics_capacity.unwrap(),
+                    &write_stream,
+                )?
+                else {
+                    return Ok(());
+                };
                 stream_pane_with_attach(
-                    pane, pane_id, read_stream, write_stream, registry,
-                    allow_remote_clipboard_write, graphics_offers.then_some(_graphics_lease.token),
+                    pane,
+                    pane_id,
+                    read_stream,
+                    write_stream,
+                    registry,
+                    allow_remote_clipboard_write,
+                    graphics_offers.then_some(_graphics_lease.token),
                 )
             }
             None => {
@@ -1072,8 +1117,21 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         // not need another message kind.
         ClientMsg::Observe { pane_id, size: _ } => match registry.get(pane_id) {
             Some(pane) => {
-                let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else { return Ok(()); };
-                stream_observer(pane, read_stream, write_stream, registry, graphics_offers.then_some(_graphics_lease.token))
+                let Some(_graphics_lease) = GraphicsCapacityLease::reserve(
+                    &pane,
+                    graphics_capacity.unwrap(),
+                    &write_stream,
+                )?
+                else {
+                    return Ok(());
+                };
+                stream_observer(
+                    pane,
+                    read_stream,
+                    write_stream,
+                    registry,
+                    graphics_offers.then_some(_graphics_lease.token),
+                )
             }
             None => {
                 let mut w = write_stream;
@@ -1403,8 +1461,17 @@ fn publish_spawn(
         }
     }
     if let Some(endpoint) = graphics_endpoint {
-        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, false,
-            allow_remote_clipboard_write, (!await_claim).then_some(DaemonMsg::Spawned { pane_id: id }), Some(claim));
+        return graphics_session::run(
+            pane,
+            read_stream,
+            write_stream,
+            registry,
+            endpoint,
+            false,
+            allow_remote_clipboard_write,
+            (!await_claim).then_some(DaemonMsg::Spawned { pane_id: id }),
+            Some(claim),
+        );
     }
     // Attach the subscriber before publishing. If a short-lived child already
     // exited, replay still carries its final output/code, but it must not be
@@ -1434,7 +1501,17 @@ fn stream_pane_with_attach(
     graphics_endpoint: Option<u64>,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
-        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, false, allow_remote_clipboard_write, None, None);
+        return graphics_session::run(
+            pane,
+            read_stream,
+            write_stream,
+            registry,
+            endpoint,
+            false,
+            allow_remote_clipboard_write,
+            None,
+            None,
+        );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
@@ -1451,7 +1528,17 @@ fn stream_pane(
     graphics_endpoint: Option<u64>,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
-        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, false, allow_remote_clipboard_write, None, None);
+        return graphics_session::run(
+            pane,
+            read_stream,
+            write_stream,
+            registry,
+            endpoint,
+            false,
+            allow_remote_clipboard_write,
+            None,
+            None,
+        );
     }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
@@ -1466,7 +1553,17 @@ fn stream_observer(
     graphics_endpoint: Option<u64>,
 ) -> anyhow::Result<()> {
     if let Some(endpoint) = graphics_endpoint {
-        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, true, false, None, None);
+        return graphics_session::run(
+            pane,
+            read_stream,
+            write_stream,
+            registry,
+            endpoint,
+            true,
+            false,
+            None,
+            None,
+        );
     }
     // The pane holds the channel's only sender, and refusals go through it,
     // so an observer the pane drops at its budget loses its stream: the writer

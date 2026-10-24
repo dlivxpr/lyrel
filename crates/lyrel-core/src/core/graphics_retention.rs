@@ -12,8 +12,8 @@ pub const MAX_PANE_WORK_BYTES: usize = 128 << 20;
 pub const MAX_DAEMON_WORK_BYTES: usize = 256 << 20;
 pub use crate::daemon::protocol::{
     GRAPHICS_METADATA_ENTRY_BYTES as GRAPHICS_METADATA_BYTES,
-    MAX_PANE_GRAPHICS_METADATA_BYTES as MAX_PANE_METADATA_BYTES,
     MAX_AGGREGATE_GRAPHICS_METADATA_BYTES as MAX_DAEMON_METADATA_BYTES,
+    MAX_PANE_GRAPHICS_METADATA_BYTES as MAX_PANE_METADATA_BYTES,
 };
 
 #[derive(Clone, Copy)]
@@ -69,84 +69,163 @@ pub(crate) struct Retention {
 static RETENTION: OnceLock<Arc<Retention>> = OnceLock::new();
 impl Retention {
     pub(crate) fn shared() -> Arc<Self> {
-        RETENTION.get_or_init(|| Arc::new(Self {
-            limits: Limits::default(), registry: Mutex::new(Registry::default()),
-        })).clone()
+        RETENTION
+            .get_or_init(|| {
+                Arc::new(Self {
+                    limits: Limits::default(),
+                    registry: Mutex::new(Registry::default()),
+                })
+            })
+            .clone()
     }
     pub(super) fn protect(&self, owner: u64) {
         let registry = self.registry.lock().unwrap();
-        for entry in registry.entries.values().filter(|entry| entry.owner == owner) {
-            if let Some(resident) = entry.resident.upgrade() { resident.lock().unwrap().priority = 2; }
+        for entry in registry
+            .entries
+            .values()
+            .filter(|entry| entry.owner == owner)
+        {
+            if let Some(resident) = entry.resident.upgrade() {
+                resident.lock().unwrap().priority = 2;
+            }
         }
     }
     pub(crate) fn owner(&self) -> u64 {
         let mut registry = self.registry.lock().unwrap();
-        registry.sequence = registry.sequence.checked_add(1).expect("graphics sequence exhausted");
+        registry.sequence = registry
+            .sequence
+            .checked_add(1)
+            .expect("graphics sequence exhausted");
         registry.sequence
     }
     pub(super) fn reclaim_specific(&self, slot: &Arc<Mutex<Resident>>) -> bool {
         let _registry = self.registry.lock().unwrap();
         let mut resident = slot.lock().unwrap();
-        if resident.priority >= 2 || resident.image.is_none() { return false; }
+        if resident.priority >= 2 || resident.image.is_none() {
+            return false;
+        }
         resident.image = None;
         resident.packet = None;
-        if let Some(wake) = &resident.wake { let _ = wake.try_send(()); }
+        if let Some(wake) = &resident.wake {
+            let _ = wake.try_send(());
+        }
         true
     }
-    pub(super) fn admit(&self, owner: u64, image: Arc<Image>, decoded: usize,
-        replacement: Option<&Arc<Mutex<Resident>>>, wake: Option<SyncSender<()>>, capacity: (usize, usize),
+    pub(super) fn admit(
+        &self,
+        owner: u64,
+        image: Arc<Image>,
+        decoded: usize,
+        replacement: Option<&Arc<Mutex<Resident>>>,
+        wake: Option<SyncSender<()>>,
+        capacity: (usize, usize),
         packet: crate::daemon::protocol::GraphicsPacket,
     ) -> Option<Arc<Mutex<Resident>>> {
         let mut registry = self.registry.lock().unwrap();
-        registry.entries.retain(|_, entry| entry.resident.strong_count() != 0);
+        registry
+            .entries
+            .retain(|_, entry| entry.resident.strong_count() != 0);
         let mut total = (image.data.capacity(), decoded);
         let mut pane = total;
         let mut candidates = Vec::new();
         for (&sequence, entry) in &registry.entries {
-            let Some(slot) = entry.resident.upgrade() else { continue };
-            if replacement.is_some_and(|old| Arc::ptr_eq(old, &slot)) { continue; }
+            let Some(slot) = entry.resident.upgrade() else {
+                continue;
+            };
+            if replacement.is_some_and(|old| Arc::ptr_eq(old, &slot)) {
+                continue;
+            }
             let resident = slot.lock().unwrap();
             if let Some(image) = &resident.image {
-                total.0 += image.data.capacity(); total.1 += resident.decoded;
-                if entry.owner == owner { pane.0 += image.data.capacity(); pane.1 += resident.decoded; }
+                total.0 += image.data.capacity();
+                total.1 += resident.decoded;
+                if entry.owner == owner {
+                    pane.0 += image.data.capacity();
+                    pane.1 += resident.decoded;
+                }
                 if resident.priority < 2 {
-                    candidates.push((resident.priority, sequence, entry.owner, image.data.capacity(), resident.decoded, slot.clone()));
+                    candidates.push((
+                        resident.priority,
+                        sequence,
+                        entry.owner,
+                        image.data.capacity(),
+                        resident.decoded,
+                        slot.clone(),
+                    ));
                 }
             }
         }
         candidates.sort_by_key(|c| (c.0, c.1));
         let fits = |pane: (usize, usize), total: (usize, usize)| {
-            pane.0 <= capacity.0.min(self.limits.pane_encoded) && pane.1 <= capacity.1.min(self.limits.pane_decoded)
-                && total.0 <= self.limits.daemon_encoded && total.1 <= self.limits.daemon_decoded
+            pane.0 <= capacity.0.min(self.limits.pane_encoded)
+                && pane.1 <= capacity.1.min(self.limits.pane_decoded)
+                && total.0 <= self.limits.daemon_encoded
+                && total.1 <= self.limits.daemon_decoded
         };
         let mut victims = Vec::new();
         let mut selected = std::collections::BTreeSet::new();
         for (_, sequence, candidate_owner, encoded, decoded, slot) in &candidates {
-            if pane.0 <= capacity.0.min(self.limits.pane_encoded) && pane.1 <= capacity.1.min(self.limits.pane_decoded) { break; }
-            if *candidate_owner != owner { continue; }
-            pane.0 -= *encoded; pane.1 -= *decoded;
-            total.0 -= *encoded; total.1 -= *decoded;
+            if pane.0 <= capacity.0.min(self.limits.pane_encoded)
+                && pane.1 <= capacity.1.min(self.limits.pane_decoded)
+            {
+                break;
+            }
+            if *candidate_owner != owner {
+                continue;
+            }
+            pane.0 -= *encoded;
+            pane.1 -= *decoded;
+            total.0 -= *encoded;
+            total.1 -= *decoded;
             selected.insert(*sequence);
             victims.push(slot.clone());
         }
         for (_, sequence, candidate_owner, encoded, decoded, slot) in candidates {
-            if fits(pane, total) { break; }
-            if selected.contains(&sequence) { continue; }
-            total.0 -= encoded; total.1 -= decoded;
-            if candidate_owner == owner { pane.0 -= encoded; pane.1 -= decoded; }
+            if fits(pane, total) {
+                break;
+            }
+            if selected.contains(&sequence) {
+                continue;
+            }
+            total.0 -= encoded;
+            total.1 -= decoded;
+            if candidate_owner == owner {
+                pane.0 -= encoded;
+                pane.1 -= decoded;
+            }
             victims.push(slot);
         }
-        if !fits(pane, total) { return None; }
+        if !fits(pane, total) {
+            return None;
+        }
         for slot in victims {
             let mut resident = slot.lock().unwrap();
             resident.image = None;
             resident.packet = None;
-            if let Some(wake) = &resident.wake { let _ = wake.try_send(()); }
+            if let Some(wake) = &resident.wake {
+                let _ = wake.try_send(());
+            }
         }
-        registry.sequence = registry.sequence.checked_add(1).expect("graphics sequence exhausted");
+        registry.sequence = registry
+            .sequence
+            .checked_add(1)
+            .expect("graphics sequence exhausted");
         let sequence = registry.sequence;
-        let slot = Arc::new(Mutex::new(Resident { image: Some(image), packet: Some(packet), decoded, priority: 2, announced: false, wake }));
-        registry.entries.insert(sequence, Entry { owner, resident: Arc::downgrade(&slot) });
+        let slot = Arc::new(Mutex::new(Resident {
+            image: Some(image),
+            packet: Some(packet),
+            decoded,
+            priority: 2,
+            announced: false,
+            wake,
+        }));
+        registry.entries.insert(
+            sequence,
+            Entry {
+                owner,
+                resident: Arc::downgrade(&slot),
+            },
+        );
         Some(slot)
     }
     pub(super) fn metadata(self: &Arc<Self>, owner: u64) -> Option<MetadataTicket> {
@@ -154,43 +233,85 @@ impl Retention {
         let pane = registry.metadata.get(&owner).copied().unwrap_or(0);
         let total: usize = registry.metadata.values().sum();
         if pane + GRAPHICS_METADATA_BYTES > self.limits.pane_metadata
-            || total + GRAPHICS_METADATA_BYTES > self.limits.daemon_metadata { return None; }
-        registry.metadata.insert(owner, pane + GRAPHICS_METADATA_BYTES);
-        Some(Arc::new(MetadataLease { retention: self.clone(), owner }))
+            || total + GRAPHICS_METADATA_BYTES > self.limits.daemon_metadata
+        {
+            return None;
+        }
+        registry
+            .metadata
+            .insert(owner, pane + GRAPHICS_METADATA_BYTES);
+        Some(Arc::new(MetadataLease {
+            retention: self.clone(),
+            owner,
+        }))
     }
     pub(crate) fn work(self: &Arc<Self>, owner: u64) -> Work {
-        Work { retention: self.clone(), owner, bytes: 0 }
+        Work {
+            retention: self.clone(),
+            owner,
+            bytes: 0,
+        }
     }
 }
 
-pub(crate) struct Work { retention: Arc<Retention>, owner: u64, bytes: usize }
+pub(crate) struct Work {
+    retention: Arc<Retention>,
+    owner: u64,
+    bytes: usize,
+}
 impl Work {
     pub(crate) fn resize(&mut self, bytes: usize) -> bool {
         let mut registry = self.retention.registry.lock().unwrap();
         let pane = registry.work.get(&self.owner).copied().unwrap_or(0);
         let total: usize = registry.work.values().sum();
         if pane - self.bytes + bytes > self.retention.limits.pane_work
-            || total - self.bytes + bytes > self.retention.limits.daemon_work { return false; }
+            || total - self.bytes + bytes > self.retention.limits.daemon_work
+        {
+            return false;
+        }
         let pane = pane - self.bytes + bytes;
-        if pane == 0 { registry.work.remove(&self.owner); } else { registry.work.insert(self.owner, pane); }
+        if pane == 0 {
+            registry.work.remove(&self.owner);
+        } else {
+            registry.work.insert(self.owner, pane);
+        }
         self.bytes = bytes;
         true
     }
 }
-impl Drop for Work { fn drop(&mut self) { self.resize(0); } }
+impl Drop for Work {
+    fn drop(&mut self) {
+        self.resize(0);
+    }
+}
 
 pub(super) type MetadataTicket = Arc<MetadataLease>;
-pub(super) struct MetadataLease { retention: Arc<Retention>, owner: u64 }
+pub(super) struct MetadataLease {
+    retention: Arc<Retention>,
+    owner: u64,
+}
 impl Drop for MetadataLease {
     fn drop(&mut self) {
         let mut registry = self.retention.registry.lock().unwrap();
-        let bytes = registry.metadata.get_mut(&self.owner).expect("live metadata lease owns its charge");
+        let bytes = registry
+            .metadata
+            .get_mut(&self.owner)
+            .expect("live metadata lease owns its charge");
         *bytes -= GRAPHICS_METADATA_BYTES;
-        if *bytes == 0 { registry.metadata.remove(&self.owner); }
+        if *bytes == 0 {
+            registry.metadata.remove(&self.owner);
+        }
     }
 }
 
 #[cfg(test)]
 pub(crate) fn inject_limits(limits: Limits) {
-    assert!(RETENTION.set(Arc::new(Retention { limits, registry: Mutex::new(Registry::default()) })).is_ok());
+    assert!(
+        RETENTION
+            .set(Arc::new(Retention {
+                limits,
+                registry: Mutex::new(Registry::default())
+            }))
+            .is_ok()
+    );
 }
