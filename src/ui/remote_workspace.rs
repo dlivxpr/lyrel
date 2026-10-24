@@ -2215,6 +2215,7 @@ fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
             view.mark_relinking();
             view.relink_plan()
         });
+        let images = view.read(cx).terminal.images();
         let opening = route.clone();
         let adopting = route.clone();
         cx.spawn(async move |cx| {
@@ -2222,7 +2223,7 @@ fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
                 .background_executor()
                 .spawn(async move {
                     crate::terminal::RemoteTerminal::open_relink(
-                        &opening, pane_id, size, cell_w, cell_h,
+                        &opening, pane_id, size, cell_w, cell_h, images,
                     )
                     .map_err(|e| e.to_string())
                 })
@@ -2342,17 +2343,17 @@ fn relink_dead_panes(
                 view.mark_relinking();
                 view.relink_plan()
             });
-            (view.clone(), plan)
+            (view.clone(), plan, view.read(cx).terminal.images())
         })
         .collect();
     cx.spawn(async move |cx| {
         let attempts: Vec<_> = plans
             .into_iter()
-            .map(|(view, (pane_id, size, cell_w, cell_h))| {
+            .map(|(view, (pane_id, size, cell_w, cell_h), images)| {
                 let opening = route.clone();
                 let opened = cx.background_executor().spawn(async move {
                     crate::terminal::RemoteTerminal::open_relink(
-                        &opening, pane_id, size, cell_w, cell_h,
+                        &opening, pane_id, size, cell_w, cell_h, images,
                     )
                 });
                 (view, opened, pane_id, size, cell_w, cell_h)

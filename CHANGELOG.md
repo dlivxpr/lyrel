@@ -9,14 +9,18 @@
 
 ### 新增
 
-- 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。单图每边 8,192 像素、编码与 RGBA 预留各 63 MiB；每窗格编码 128 MiB、RGBA 预留 256 MiB、1,024 资源／4,096 次放置，超限拒收。当前 pane 协议为 `11`，control 保持 `16`，旧 daemon／远端 server 需要更新。
-- #40–#42 的核心、真实 daemon-session、GPUI 消费者及 reader／decoder 代次回归已在 Windows 集成分支运行通过。Windows/macOS 原生像素、真实 SSH→Linux、正式 omp 出图验收仍待完成；存活会话恢复（#45）、聚合资源会计与最终历史回收策略仍由后续工单交付，不据此宣称 #39 已完成。
+- 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。当前数值预算见下述 #44；pane 协议为 `12`，control 保持 `16`，旧 daemon／远端 server 需要更新。
+- #40–#42 的核心、真实 daemon-session、GPUI 消费者及 reader／decoder 代次回归已在 Windows 集成分支运行通过。Windows/macOS 原生像素、真实 SSH→Linux、正式 omp 出图验收仍待完成；完整存活会话恢复顺序（#45）与最终实测仍由后续工单交付，不据此宣称 #39 已完成。
 - 加固 Kitty 流式传输与拒收（#41）：支持 PNG 的外层 `o=z`，分块逐次解码并限制 partial／APC 分配；对 PNG 做有界逐行真实校验，对 raw／zlib 检查尺寸、精确字节数及展开上限后才应答、保留或创建放置。查询不保存资源，文件／共享内存能力按负责主机与实际读取结果应答；临时文件删除要求标记路径，POSIX shm 改为有界 descriptor read。中断、取消、删除与下一条完整命令保持有序，匿名／quiet 请求不污染后续输入。
-- 隔离异步图片 reader／decoder 的代次：退休连接不能应用迟到帧或解码完成，也不能在延迟退出时关闭新连接的图片队列。新增真实 daemon 的格式、压缩、拒收、49 MiB 超限与输入存活回归，GPUI 实际 decoder／paint 回归，以及生产 decoder 的受控代次竞态回归；#44 的可见性感知历史回收与最终聚合默认值未提前交付。
+- 隔离异步图片 reader／decoder 的代次：退休连接不能应用迟到帧或解码完成，也不能在延迟退出时关闭新连接的图片队列。新增真实 daemon 的格式、压缩、拒收、49 MiB 超限与输入存活回归，GPUI 实际 decoder／paint 回归，以及生产 decoder 的受控代次竞态回归。
 - 修正分块续传首个键为 `q` 时 quiet 模式被忽略的问题；`q=1/2` 与 `m` 的排列顺序不再改变应答，真实 daemon 的成功／失败静默、恢复应答及后续输入回归已通过。
 - 接入 Kitty 终端布局与屏幕生命周期（#42）：daemon 权威文本锚点计入历史丢弃，复用 VT 网格的行重排，处理页边距滚动及永久裁切、主／备用屏隔离、精确清屏／reset／历史清理，并按实际设备像素统一回答 `CSI 14t`／`CSI 16t`。隐藏窗格保留图片状态但不触发无谓整窗重绘；清理命令仅允许控制器。真实 daemon 与 GPUI 几何／状态回归已在 Windows 通过；最终 GPU 裁剪／透明／z 合成、字体与 Windows/macOS 显示缩放原生验收按用户安排延后，测试窗口无 `HeadlessRenderer`，不以缓存或绘制标记冒充像素通过。
 - 接入 Kitty Unicode 占位符（#43）：`U=1` 仅创建不可见 prototype，真实 Rio 单元的 indexed／true-color 身份、行列／高位 diacritics 和规范左至右继承决定显示切片；无效引用不造像素、不绘制 PUA 字形。共享投影同时供 daemon 资源引用和桌面 viewport 使用，直接／虚拟放置共用资源与预算，删除语义分开，文字移动／擦除、屏幕与几何沿用现有路径。新增共享真实 PTY fixture 及独立 daemon 到 rooted GPUI production paint 的单链路回归，实施阶段未运行，交由集成验证；原生 GPU 像素仍待验收，不承诺 tmux/screen。
 - pane 会话开启前强制双向版本协商（从协议 `10` 开始）：本地、路由及原生 SSH 的新建／附着／观察连接在发送会话请求前确认版本；旧客户端在创建 shell 或订阅图片前明确拒绝，新客户端遇到旧 server 显示版本与更新要求。独立诊断探测保留，不把 EOF 当作版本判断。
+- 加入图片保留预算与历史回收（#44）：按 daemon 全局准入序号先回收无引用资源，再回收最旧非可见历史；direct 与 Unicode placeholder 共用可见性。保护内容耗尽预算时拒新图，历史原位置仅绘制双语 muted 回收提示，不改终端文本／选择／光标／PTY，不为主动删除或 clear／reset 留提示。隐藏／detached pane 仍受预算与元数据配额限制，异步退休资源实际释放前继续占账。
+- 图片预算默认：单图编码／RGBA 权重各 32 MiB（容纳约 31.64 MiB 的常规 4K RGBA 截图）；daemon 每 pane 编码 64／RGBA 权重 128／工作 128 MiB，全 daemon 分别 128／256／256 MiB，图形 packet 聚合另限 256 MiB。桌面 source 字节池合计 256 MiB，派生 CPU／GPU／解码工作合计 1,024 MiB；按实际图片与至少 `1024×1024` 的 atlas page rounding 预留，空 pane 不占整额 lease，小图没有“两张”或“四个窗格”的计数限制。pane `12` 的资源 offer／grant 在成功准入前获取真实 source／decode／GPU 额度；不持 pane 锁等待，新桌面装不下保留图片时明确拒绝附着而不丢权威内容。
+- 图片及无像素回收提示的元数据也持有真实 byte ticket：每 owner 512 B，每 pane 4 MiB，daemon／桌面各自 aggregate 16 MiB；像素回收不释放 notice 票，snapshot 实际释放前继续占账。新独立放置及 replay notice 通过零像素 offer 准入，`a=T` 的资源与放置授权全部成功后才修改内容。
+- 添加真实 daemon-session／GPUI consumer 小预算回归与 `scripts/kitty-pressure.mjs` 原生压力夹具；本轮实现未运行检查，原生 Shell／GPU、Windows/macOS 与真实 SSH 峰值也未测。文档公布每进程会计和组合范围，不把桌面 1,296 MiB 会计或 daemon 656 MiB 会计当作 RSS／驱动峰值实测，不提前关闭 #44／#39。
 
 ### 维护
 

@@ -20,6 +20,7 @@ use rio_vt::selection::SelectionRange;
 
 use super::view::{TerminalView, should_show_context_menu};
 use crate::core::config::Config;
+use crate::ui::i18n::{L10nKey, t};
 
 mod osc8_underline;
 
@@ -2491,15 +2492,19 @@ impl Element for TerminalElement {
         // map that back to a screen row with the snapshot's scroll state and
         // drop anything scrolled out of the viewport.
         let image_store = self.view.read(cx).terminal.images();
-        // Take the retired list *before* the snapshot. The decode worker runs on
-        // its own thread and can retire a frame between the two calls; taking
-        // retired second would hand us a list containing an image the snapshot
-        // still says to paint, and `sprite_atlas.remove` takes effect
-        // immediately — so the frame would paint and then vanish. In this order
-        // the worst case is evicting one paint late, which is invisible.
-        let retired_images = image_store.take_retired();
         let images = image_store.snapshot_with_placeholders(&snap.placeholders);
-        let paint_images = |window: &mut Window, z: std::ops::Range<i64>| {
+        let notice = images.iter().any(|image| image.evicted).then(|| {
+            let text = SharedString::new_static(t(L10nKey::TerminalImageEvicted));
+            window.text_system().shape_line(
+                text.clone(), font_size,
+                &[TextRun {
+                    len: text.len(), font: base_font.clone(),
+                    color: cx.theme().muted_foreground,
+                    background_color: None, underline: None, strikethrough: None,
+                }], None,
+            )
+        });
+        let paint_images = |window: &mut Window, cx: &mut App, z: std::ops::Range<i64>| {
             // Separate crop/full-texture bounds select atlas UVs; no placement
             // owns a copied pixel buffer. The enclosing pane mask still applies.
             for img in images
@@ -2521,15 +2526,17 @@ impl Element for TerminalElement {
                 {
                     continue;
                 }
+                image_store.register_for_paint(img, window);
                 window.paint_layer(visible, |window| {
-                    let _ = window.paint_image(
-                        bounds,
-                        image_bounds,
-                        Corners::default(),
-                        img.data.clone(),
-                        0,
-                        false,
-                    );
+                    if let Some(data) = &img.data {
+                        let _ = window.paint_image(
+                            bounds, image_bounds, Corners::default(), data.clone(), 0, false,
+                        );
+                    } else if let Some(notice) = notice.as_ref().filter(|_| img.evicted) {
+                        window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
+                            let _ = notice.paint(visible.origin, geom.line_height, TextAlign::Left, None, window, cx);
+                        });
+                    }
                     if dim < 1. {
                         let mut c: Hsla = under.into();
                         c.a = 1. - dim;
@@ -2551,7 +2558,7 @@ impl Element for TerminalElement {
         });
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            paint_images(window, i64::from(i32::MIN)..below_background);
+            paint_images(window, cx, i64::from(i32::MIN)..below_background);
             paint_backgrounds(window, &geom, &buf);
             if snap.any_selected {
                 paint_cell_runs(window, &geom, &buf, colors.selection_bg, |c| c.selected);
@@ -2577,7 +2584,7 @@ impl Element for TerminalElement {
                     paint_cell_runs(window, sg, row, colors.selection_bg, |c| c.selected);
                 }
             }
-            paint_images(window, below_background..0);
+            paint_images(window, cx, below_background..0);
             paint_glyphs(
                 window,
                 cx,
@@ -2603,13 +2610,7 @@ impl Element for TerminalElement {
                 );
                 paint_special_underlines(window, sg, row, scale);
             }
-            paint_images(window, 0..i64::from(i32::MAX) + 1);
-            // Evict superseded / deleted frames from the sprite atlas. Without
-            // this a browser re-transmitting at 60fps would leak one GPU tile per
-            // frame, growing the atlas without bound until the compositor stalls.
-            for retired in &retired_images {
-                let _ = window.drop_image(retired.clone());
-            }
+            paint_images(window, cx, 0..i64::from(i32::MAX) + 1);
             if !editor_active {
                 paint_cursor(
                     window,

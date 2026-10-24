@@ -73,9 +73,14 @@ impl GraphicsDaemonProcess {
     }
 
     fn stream(&self, pane: u64) -> Stream {
+        self.stream_with_capacity(pane, 64 << 20, 128 << 20)
+    }
+
+    fn stream_with_capacity(&self, pane: u64, encoded_bytes: u64, decoded_bytes: u64) -> Stream {
         let mut stream = crate::daemon::transport::connect_endpoint_at(&self.endpoint("daemon")).unwrap();
         stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
         crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+        ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers: true }.encode(&mut stream).unwrap();
         stream.set_read_timeout(None).unwrap();
         ClientMsg::Attach { pane_id: pane, size: crate::daemon::protocol::WinSize { cols: 80, rows: 24, cell_w: 10, cell_h: 20 }, allow_remote_clipboard_write: false }.encode(&mut stream).unwrap();
         stream
@@ -153,7 +158,7 @@ fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direc
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].placement.image_id, 16777223);
         assert_eq!(images[0].placement.placement_id, 9);
-        assert_eq!(images[0].data.as_bytes(0).unwrap(), &[0,0,255,255,0,255,0,255,255,0,0,255,255,255,255,255]);
+        assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[0,0,255,255,0,255,0,255,255,0,0,255,255,255,255]);
         let (crop, full) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
         assert_eq!(crop, Bounds::new(point(px(40.), px(50.)), gpui_kit::size(px(40.), px(10.))));
         assert_eq!(crop, full);
@@ -165,7 +170,7 @@ fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direc
     view.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
         assert_eq!(images.len(), 2);
-        assert!(std::sync::Arc::ptr_eq(&images[0].data, &images[1].data));
+        assert!(std::sync::Arc::ptr_eq(images[0].data.as_ref().unwrap(), images[1].data.as_ref().unwrap()));
     });
     graphics_send_fixture(&view, cx, 4, b"\x1b_Ga=d,d=A\x1b\\\x1b[6;6H\x1b[X");
     view.read_with(cx, |view, _| {
@@ -217,7 +222,7 @@ fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direc
         let images = graphics_visible_images(view);
         let ids: std::collections::BTreeSet<_> = images.iter().map(|image| image.placement.image_id).collect();
         assert_eq!(ids, [7, 16777223].into_iter().collect(), "nonconsecutive explicit column resets high-byte inheritance");
-        assert!(images.iter().any(|image| image.data.as_bytes(0).unwrap() == [255, 0, 0, 255]));
+        assert!(images.iter().any(|image| image.data.as_ref().unwrap().as_bytes(0).unwrap() == [255, 0, 0, 255]));
         assert_eq!(images.len(), 2, "invalid combining mark must not alias row/column zero");
     });
     graphics_send_fixture(&view, cx, 12, b"\x1b[5;9r\x1b[9;1H\n");
@@ -270,7 +275,279 @@ fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direc
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].placement.placement_id, 66051, "true-color underline selects the exact prototype, not the lowest id");
         assert_eq!(images[0].placement.resource, prior.placement.resource);
-        assert!(std::sync::Arc::ptr_eq(&images[0].data, &prior.data), "multiple prototypes do not decode or copy their shared resource again");
+        assert!(std::sync::Arc::ptr_eq(images[0].data.as_ref().unwrap(), prior.data.as_ref().unwrap()), "multiple prototypes do not decode or copy their shared resource again");
     });
     daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_real_daemon_budget_notices_share_direct_and_placeholder_history(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    // Two RGBA pixels fit. The third must reclaim history, not the live image.
+    let stream = daemon.stream_with_capacity(pane, 8, 8);
+    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    let built = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let out = built.clone();
+    let window = cx.add_window(move |window, cx| {
+        let terminal = RemoteTerminal::from_stream_with(stream, TermSize::new(80, 24), Vec::new(), if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw }).unwrap();
+        let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+        *out.borrow_mut() = Some(view.clone());
+        gpui_kit::component::Root::new(view, window, cx)
+    });
+    let view = built.borrow_mut().take().unwrap();
+    window.update(cx, |_, window, _| window.activate_window()).unwrap();
+    graphics_send_fixture(&view, cx, 1, "\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=8,p=2,U=1,c=2,r=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\\x1b[8;5H\x1b[38;5;8;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while view.read_with(cx, |view, _| graphics_visible_images(view).len()) != 2 {
+        assert!(std::time::Instant::now() < deadline, "both production placement paths must decode");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    graphics_send_fixture(&view, cx, 2, &b"\r\n".repeat(80));
+    graphics_send_fixture(&view, cx, 3, b"\x1b[10;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Top));
+    window.update(cx, |_, window, _| window.refresh()).unwrap();
+    cx.executor().advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        let old = images.iter().find(|image| image.placement.image_id == 7).unwrap();
+        assert!(old.evicted && old.data.is_none(), "oldest direct history becomes pixel-free metadata");
+        assert!(old.painted.load(std::sync::atomic::Ordering::Acquire), "the real TerminalElement claims the localized notice in the retained area");
+        let (area, _) = old.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, view.terminal.term.lock().display_offset() as i32, 1.);
+        assert!(area.size.width > px(0.) && area.size.height > px(0.), "notice reuses the original image area");
+        assert!(!images.iter().find(|image| image.placement.image_id == 8).unwrap().evicted, "newer placeholder history remains resident first");
+        assert!(!view.scrollback_text().contains("Image evicted") && !view.scrollback_text().contains("图片已淘汰"), "notice is paint-only, never terminal text");
+    });
+    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Bottom));
+    graphics_send_fixture(&view, cx, 4, b"\x1b[12;5H\x1b_Ga=T,i=10,p=4,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/////w==\x1b\\");
+    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Top));
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        let placeholder = images.iter().find(|image| image.placement.image_id == 8).unwrap();
+        assert!(placeholder.evicted && placeholder.data.is_none(), "the same retention rule projects a notice through real placeholder cells");
+    });
+    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Bottom));
+    // Both retained pixels are now live; refused data cannot manufacture a
+    // placement or replace those pixels, even when success/error replies mute.
+    let cursor = view.read_with(cx, |view, _| {
+        let term = view.terminal.term.lock();
+        (term.grid.cursor.pos.row.0, term.grid.cursor.pos.col.0)
+    });
+    graphics_send_fixture(&view, cx, 5, b"\x1b_Ga=T,i=11,p=5,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert!(!images.iter().any(|image| image.placement.image_id == 11));
+        let term = view.terminal.term.lock();
+        assert_eq!((term.grid.cursor.pos.row.0, term.grid.cursor.pos.col.0), cursor, "refusal does not apply the default placement cursor movement");
+    });
+    graphics_send_fixture(&view, cx, 6, b"shell_still_usable");
+    assert!(view.read_with(cx, |view, _| view.scrollback_text().contains("shell_still_usable")));
+    graphics_send_fixture(&view, cx, 7, b"\x1b_Ga=d,d=I,i=7\x1b\\\x1b_Ga=d,d=I,i=8\x1b\\");
+    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Top));
+    assert!(!view.read_with(cx, |view, _| graphics_visible_images(view).iter().any(|image| [7, 8].contains(&image.placement.image_id))), "intentional deletion removes both notices without changing placeholder text");
+    view.update(cx, |view, _| view.terminal.term.lock().scroll_display(Scroll::Bottom));
+    graphics_send_fixture(&view, cx, 8, b"\x1b[2J\x1b[3J");
+    assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "clear leaves no replacement notice");
+    daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_releases_on_close(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    // Real atlas pages round a one-pixel image up to 1024² BGRA pixels.
+    const GPU_PAGE: usize = 4 << 20;
+    crate::terminal::images::with_test_cache_limits(2 * GPU_PAGE + 1024, 2 * GPU_PAGE + 1024, || {
+        let daemons: Vec<_> = (0..3).map(|_| GraphicsDaemonProcess::start()).collect();
+        cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+        let mut terminals = Vec::new();
+        for serial in 0..3 {
+            let daemon = &daemons[serial];
+            let pane = daemon.spawn();
+            let stream = daemon.stream_with_capacity(pane, 4, 4);
+            let built = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let out = built.clone();
+            let window = cx.add_window(move |window, cx| {
+                let terminal = RemoteTerminal::from_stream_with(stream, TermSize::new(80, 24), Vec::new(), if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw }).unwrap();
+                let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+                *out.borrow_mut() = Some(view.clone());
+                gpui_kit::component::Root::new(view, window, cx)
+            });
+            let view = built.borrow_mut().take().unwrap();
+            graphics_send_fixture(&view, cx, serial + 1, b"\x1b[5;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+            if serial < 2 {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                while view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
+                    assert!(std::time::Instant::now() < deadline, "accepted image must use the real decoder");
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+            terminals.push((window, view, pane, serial));
+        }
+        assert!(terminals[2].1.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "aggregate admission rejects a third resource before accepting pixels, not an unfinishable decode queue");
+        for (_, view, _, _) in &terminals[..2] {
+            view.read_with(cx, |view, _| {
+                let images = graphics_visible_images(view);
+                assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 255]);
+                assert!(!images[0].evicted, "cache pressure cannot replace a visible accepted image with a notice");
+            });
+        }
+        // Only the oldest pane moves into history. It belongs to a different
+        // daemon from the new offer, but both compete for the desktop pool.
+        graphics_send_fixture(&terminals[0].1, cx, 4, &b"\r\n".repeat(80));
+        graphics_send_fixture(&terminals[2].1, cx, 5, b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while terminals[2].1.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
+            assert!(std::time::Instant::now() < deadline, "cross-source pressure must reclaim eligible history before refusing usable capacity");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        terminals[0].1.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert!(images[0].evicted && images[0].data.is_none(), "the other daemon must authoritatively announce historical eviction");
+        });
+        graphics_send_fixture(&terminals[2].1, cx, 6, b"\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+        terminals[2].1.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 255], "refused replacement keeps the current red resource intact");
+        });
+        let (closed_window, closed_view, closed_pane, source) = terminals.remove(1);
+        daemons[source].panes().kill(closed_pane).unwrap();
+        drop(closed_view);
+        closed_window.update(cx, |_, window, _| window.remove_window()).unwrap();
+        cx.run_until_parked();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut serial = 7;
+        loop {
+            cx.executor().advance_clock(std::time::Duration::from_millis(350));
+            cx.run_until_parked();
+            graphics_send_fixture(&terminals[1].1, cx, serial, b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+            serial += 1;
+            if terminals[1].1.read_with(cx, |view, _| graphics_visible_images(view).iter().any(|image| image.data.as_ref().is_some_and(|data| data.as_bytes(0).unwrap() == [0, 255, 0, 255]))) { break; }
+            assert!(std::time::Instant::now() < deadline, "closing a pane must release actual residency so subsequent source admission succeeds");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        terminals[1].1.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 255, 0, 255]);
+        });
+        for (_, _, pane, source) in terminals { daemons[source].panes().kill(pane).unwrap(); }
+    });
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_five_idle_panes_do_not_starve_three_visible_small_images(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    crate::terminal::images::with_test_cache_limits(320 << 20, 1024 << 20, || {
+        let daemon = GraphicsDaemonProcess::start();
+        cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+        let mut terminals = Vec::new();
+        for _ in 0..5 {
+            let pane = daemon.spawn();
+            let stream = daemon.stream(pane);
+            let built = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let out = built.clone();
+            let window = cx.add_window(move |window, cx| {
+                let terminal = RemoteTerminal::from_stream_with(stream, TermSize::new(80, 24), Vec::new(), if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw }).unwrap();
+                let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+                *out.borrow_mut() = Some(view.clone());
+                gpui_kit::component::Root::new(view, window, cx)
+            });
+            terminals.push((window, built.borrow_mut().take().unwrap(), pane));
+        }
+        // All five live consumers exist before any source is offered. An idle
+        // pane must not permanently reserve a full pane's source allowance.
+        graphics_send_fixture(&terminals[4].1, cx, 1, "\x1b[2J\x1b[3J\x1b[5;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b[7;5H\x1b_Ga=T,i=8,p=2,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\\x1b_Ga=T,i=9,p=3,U=1,c=2,r=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\\x1b[9;5H\x1b[38;5;9;58;5;3m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while terminals[4].1.read_with(cx, |view, _| graphics_visible_images(view).len()) != 3 {
+            assert!(std::time::Instant::now() < deadline, "a fifth pane must paint its first output and more than two visible small resources");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        terminals[4].0.update(cx, |_, window, _| { window.activate_window(); window.refresh(); }).unwrap();
+        cx.executor().advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        terminals[4].1.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert!(images.iter().all(|image| !image.evicted && image.data.is_some()));
+            assert!(images.iter().all(|image| image.painted.load(std::sync::atomic::Ordering::Acquire)), "production TerminalElement must claim all three actual textures, not just receive resources");
+            let pixels: Vec<_> = images.iter().map(|image| image.data.as_ref().unwrap().as_bytes(0).unwrap().to_vec()).collect();
+            assert_eq!(pixels, [vec![0, 0, 255, 255], vec![0, 255, 0, 255], vec![255, 0, 0, 255]]);
+        });
+        for (serial, (_, view, _)) in terminals[..4].iter().enumerate() {
+            graphics_send_fixture(view, cx, serial + 2, b"\x1b[5;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
+                assert!(std::time::Instant::now() < deadline, "every previously idle pane can receive a small image within actual byte budgets");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        for (_, _, pane) in terminals { daemon.panes().kill(pane).unwrap(); }
+    });
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_metadata_grants_bound_places_and_live_snapshots_without_pixel_eviction(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    crate::terminal::images::with_test_metadata_limits(1024, 1024, || {
+        let daemon = GraphicsDaemonProcess::start();
+        let pane = daemon.spawn();
+        let stream = daemon.stream(pane);
+        cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+        let built = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let out = built.clone();
+        let window = cx.add_window(move |window, cx| {
+            let terminal = RemoteTerminal::from_stream_with(stream, TermSize::new(80, 24), Vec::new(), if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw }).unwrap();
+            let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
+            *out.borrow_mut() = Some(view.clone());
+            gpui_kit::component::Root::new(view, window, cx)
+        });
+        let view = built.borrow_mut().take().unwrap();
+        window.update(cx, |_, window, _| window.activate_window()).unwrap();
+        graphics_send_fixture(&view, cx, 1, b"\x1b[5;5H\x1b_Ga=t,i=7,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+        assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "one resource owner consumes metadata without inventing a placement");
+        graphics_send_fixture(&view, cx, 2, b"\x1b_Ga=p,i=7,p=1,c=2,r=1,C=1,q=2\x1b\\");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let retained_snapshot = view.read_with(cx, |view, _| graphics_visible_images(view).remove(0));
+        let cursor = view.read_with(cx, |view, _| {
+            let term = view.terminal.term.lock();
+            (term.grid.cursor.pos.row.0, term.grid.cursor.pos.col.0)
+        });
+        graphics_send_fixture(&view, cx, 3, b"\x1b_Ga=p,i=7,p=2,c=2,r=1,q=2\x1b\\\x1b_Ga=T,i=8,p=3,c=2,r=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert_eq!(images.len(), 1, "metadata-only placement and new transmit-and-display are both refused atomically");
+            assert_eq!(images[0].placement.placement_id, 1);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 255]);
+            assert!(!images[0].evicted, "metadata shortage cannot create a useless pixel eviction notice");
+            let term = view.terminal.term.lock();
+            assert_eq!((term.grid.cursor.pos.row.0, term.grid.cursor.pos.col.0), cursor);
+        });
+        graphics_send_fixture(&view, cx, 4, b"\x1b_Ga=d,d=i,i=7,p=1\x1b\\\x1b_Ga=p,i=7,p=2,c=2,r=1,C=1,q=2\x1b\\");
+        assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "a removed placement's live snapshot retains its metadata credit until actual drop");
+        drop(retained_snapshot);
+        graphics_send_fixture(&view, cx, 5, b"\x1b_Ga=p,i=7,p=2,c=2,r=1,C=1,q=2\x1b\\");
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].placement.placement_id, 2);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 255]);
+        });
+        graphics_send_fixture(&view, cx, 6, b"\x1b_Ga=d,d=I,i=7\x1b\\\x1b_Ga=T,i=8,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
+            assert!(std::time::Instant::now() < deadline, "explicit resource deletion releases both metadata owners");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        graphics_send_fixture(&view, cx, 7, b"\x1bc");
+        assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "reset removes metadata without notices");
+        daemon.panes().kill(pane).unwrap();
+    });
 }

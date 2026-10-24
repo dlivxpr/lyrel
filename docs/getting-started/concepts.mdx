@@ -67,7 +67,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 一份**图片资源**可以对应多次**图片放置**：前者是图片内容，后者是它在终端中的一次显示及其裁剪范围。传输资源不等于立即显示；删除某次放置也不必删除图片资源。
 
 <Note>
-  图片功能按 [#40–#47](https://github.com/dlivxpr/lyrel/issues/40) 分阶段实现。#40／#41 已接入资源、独立放置及有界传输校验，#42 已接入终端布局与屏幕生命周期，#43 已接入真实网格的 Unicode 占位符投影；完整设计与原生验收仍未全部交付。存活会话恢复（#45）及最终资源回收策略仍由后续工单完成，不能将本节当作已通过的完整兼容性声明。
+  图片功能按 [#40–#47](https://github.com/dlivxpr/lyrel/issues/40) 分阶段实现。#40／#41 已接入资源、独立放置及有界传输校验，#42 接入终端布局与屏幕生命周期，#43 接入真实网格的 Unicode 占位符投影，#44 加入聚合预算、历史回收与原区域提示。完整恢复顺序（#45）及跨平台原生验收仍未全部交付，不能将本节当作已通过的完整兼容性声明。
 </Note>
 
 完整实现规格与测试契约见 [GitHub Issue #39](https://github.com/dlivxpr/lyrel/issues/39)。
@@ -78,21 +78,29 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 - 同一资源的多次放置共享解码像素。`x/y/w/h` 指定源裁剪，`c/r` 指定显示区域；只指定一轴时按比例推导，指定两轴时保持比例放入区域。`X/Y` 为单元内像素偏移，`C=1` 禁止本次放置移动光标。
 - 图片 ID 在窗格内独立。非零图片 ID 与非零放置 ID 的组合替换同次放置；省略 `p` 或 `p=0` 时，每次放置独立。`I` 分配新的图片 ID，并让后续按编号的命令选择该编号最新的资源；同一命令不能同时指定 `i` 与 `I`。重新传输同一个 `i` 会移除其旧资源与全部旧放置，不会让旧位置显示新内容。
 - 静态删除支持 `a/i/n/c/p/q/r/x/y/z` 及大写形式。`d=p` 是按 `x/y` 指定的单元删除，不是按放置 ID 删除；定位单次放置使用 `d=i,i=…,p=…`。小写保留可复用资源；大写只在资源没有其他放置引用时回收数据。缺资源、非法放置和不支持的操作返回带身份的错误，并遵守 `q=1/2`。
-- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `11`（#43 区分虚拟 prototype 与直接放置），control 仍为 `16`；新连接先在实际 pane endpoint 双向协商版本，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
+- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `12`（加入无像素回收元数据及消费者容量租约），control 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及 POSIX shared memory 只在发送方确实共享负责 daemon 的 Unix 主机时接受，Windows 或跨主机上下文明确拒绝，不把远端路径解析到桌面。文件必须是 regular file，临时文件仅在临时目录且路径包含 `tty-graphics-protocol` 时允许协议删除；shared memory 使用有界 descriptor read，避免发送方并发截断导致映射故障。
 - 应答关联 `i/I/p` 并写回 PTY，不作为终端文本显示；`q=1` 只保留失败，`q=2` 全部静默，没有图片身份的请求不注入应答。删除中止未完成上传；损坏或取消的 APC 不会与后续命令拼成图片。拒收不创建放置、不移动光标，也不删除其他已接受资源。
 
-当前上限是保守的实现参数，不是已经测得的完整系统峰值：
+当前默认值是保守的实现参数，单位为 MiB（`1 MiB = 1,048,576 bytes`），不是已经测得的完整系统峰值：
 
-| 范围 | 当前上限与核算 |
+| 范围 | 默认上限与核算 |
 | --- | --- |
-| 单次直接传输 | 一个未完成传输；全部 Base64 合计最多 48 MiB，逐块解码后的 partial buffer 最多约 36 MiB（另加最终 quantum 的 3 字节预留）；单个 APC buffer 最多 48 MiB，不同时保留重组后的 Base64 副本 |
-| 单图 | 每边最多 8,192 像素；编码字节和 RGBA 解码预留分别最多 63 MiB，为 64 MiB pane frame 留出元数据空间 |
-| 单窗格资源 | 编码内容合计 128 MiB、RGBA 解码预留合计 256 MiB，最多 1,024 个资源、4,096 次放置；先检查再保留，超限拒收，不无限增长 |
-| 解码与中间分配 | daemon 先校验尺寸／RGBA 字节数；raw zlib 用固定 64 KiB 输出 scratch 加 miniz 状态逐段计数，不分配完整 raw 副本。PNG 逐行真实解码并检查校验和，不分配完整 RGBA 副本，PNG decoder scratch 限 4 MiB；外层 zlib 展开的 PNG 编码最多 63 MiB。桌面 PNG decoder 的分配预算为 126 MiB，另计格式转换的最多 63 MiB RGBA 输出；这不是整进程峰值 |
-| 桌面缓存与待解码工作 | pending 与资源表共用同一个版本引用，仍受窗格 128 MiB 编码、1,024 资源上限约束，不以小队列丢弃中间放置所需版本；每个 reader worker 同时只解码一份资源，退休代次的帧／完成／Drop 不得修改继任代次。已删除的在途资源在完成前仍可暂占单图工作空间；多次放置共享像素与 atlas 生命周期 |
+| 单次直接传输 | 一个未完成传输；全部 Base64 合计最多 48 MiB，逐块解码后的 partial buffer 最多约 36 MiB，另加最终 quantum 的 3 字节预留；APC、partial、增长期旧／新分配及同批待处理内容纳入工作空间会计 |
+| 单图 | 每边最多 8,192 像素；编码内容及 RGBA 解码权重各最多 32 MiB。常规 `3840 × 2160 × 4 = 33,177,600 bytes`（约 31.64 MiB）的 4K 截图可落在单图限制内；PNG 压缩体小不豁免解码后限制 |
+| daemon 每窗格 | 实际编码分配合计 64 MiB、RGBA 权重 128 MiB、临时工作空间 128 MiB；最多 1,024 个资源元数据、4,096 个直接放置与虚拟 prototype，回收提示也占元数据配额 |
+| daemon 聚合 | 所有窗格实际编码分配合计 128 MiB、RGBA 权重 256 MiB、临时工作空间 256 MiB。RGBA 权重用于准入，不代表 daemon 另存整份 RGBA。raw zlib 用 64 KiB 输出 scratch、预留 256 KiB 校验空间；PNG 逐行校验 scratch 限 4 MiB。外层 zlib 的 PNG 逻辑展开限 32 MiB，校验按 100 MiB 预留几何增长期旧／新分配、裁紧及 4 MiB decoder scratch，不仅计算最后的展开长度 |
+| daemon 图形传输 | 已编码资源与在队列中的图形 packet 共享同份数据与租约，单独受 256 MiB 聚合池约束；资源被删除或回收后，仍在 writer 中的 packet 在最后引用释放前继续占账，不能提前归还信用 |
+| 桌面源内容 | 每窗格实际源内容及接收工作最多 64 MiB，整个桌面进程合计 256 MiB；本地与多个远端 daemon 共用同一池。空窗格不预留整份额度，也没有“四个图形窗格”的固定限制。每次 `GraphicsOffer` 按实际 packet 分配先预留 `2 × encoded bytes + 256 KiB` 接收峰值，提取帧后缩至实际源分配，decoder 输入释放后归还 |
+| 桌面派生缓存 | 每窗格 384 MiB，整个桌面进程 1,024 MiB。每份资源在接收前预留 `4 × RGBA bytes + encoded bytes + GPU page bytes`，完成后保留实际 CPU 分配与 GPU page 票。queued／in-flight／decoded／painted-retired 与 snapshot 均持有相应租约。GPU 票按当前图片实际 page rounding 上界计算：`4 × max(width, 1024) × max(height, 1024)`；正式 Windows DirectX／macOS Metal 路径的 image tile padding 为零，一个小图最多按独占 4 MiB page 预留，不把所有图当作最坏 64 MiB。Linux 只有 headless daemon，不将未支持的 Linux 桌面 wgpu 当作本产品的已交付渲染路径 |
+| 桌面消费者准入 | 每窗格 daemon 编码上限 64 MiB、RGBA 权重 128 MiB，仍同时受桌面的实际 source／derived 字节池限制。daemon 接受新资源及回复成功前，渲染消费者必须对 `GraphicsOffer` 返回实际字节预留的 `GraphicsGrant`；拒绝、取消、超时与断连释放未完成预留。不设两个驻留资源槽，小图可在真实字节预算内继续接收 |
+| 保留元数据 | 每个资源或 placement 按 512 bytes 保守覆盖实际 owner、BTree／Arc 开销；daemon 与桌面分别使用独立的每 pane 4 MiB、aggregate 16 MiB 票池。无像素 notice 仍占票，旧 snapshot 也延续持票直到真正释放。新资源、新放置及 replay notice 分别准入，已有同 key 更新复用原票；元数据满额会拒绝新内容，不为无法释放元数据的历史位置做无效像素回收 |
 
-上述 daemon 编码预算、APC／partial buffer、桌面派生缓存、在途解码及 GPU 会同时占用内存，不能把任一预算当作整机上限。全 daemon／桌面聚合会计、GPU 峰值测量、非可见历史优先回收和“图片已回收”提示仍由 #44 交付，不能据上述边界宣称最终回收政策已完成。
+同一桌面的 source、derived 与 metadata 三个池的会计上限合计为 1,296 MiB；一个 daemon 的权威编码内容、临时工作空间、图形传输及 metadata 合计为 656 MiB。一个桌面连接一个 daemon 的这部分组合上限为 1,952 MiB；连接四个独立 daemon 时为 3,920 MiB，且远端 daemon 的内存在各自所属主机。这里没有将 daemon 的 RGBA 准入权重重复算作实际像素副本。这些是各分配阶段的保守会计范围，不是整进程 RSS、整机或 GPU 驱动峰值承诺：终端文字、其他界面、allocator、系统管道／socket buffer、驱动与平台缓存仍须另测。
+
+容量不是可以忽略的提示。所有生产 pane 客户端声明有限上限；渲染消费者另按每份资源的真实成本授权，同一 pane 多消费者均须满足准入。等待授权不持有 `PaneState` 锁，删除、resize、清理与退出仍可取消旧工作；无 GUI 或 detached 时仍按 daemon 自身预算接收输出。新桌面不能容纳已经保留的图片时，附着会明确失败并保留 daemon 权威内容，不以静默漏图或虚构回收提示冒充恢复成功。旧 reader 及在途解码退出前不提前归还它们仍持有的信用。
+
+`GraphicsOffer` 的零像素形式只申请资源或放置的元数据，不分配 source／GPU 票；`a=T` 在改变权威内容或回复成功前须同时获得资源与首次放置的授权，任一失败都会取消此前授权。GUI session 的独立输入 pump 优先处理授权及压力请求，普通输入待处理队列最多 64 条、每条最多 1 MiB；超限明确断连而不静默丢弃。这一普通输入边界不属于上述图片分配池合计。
 
 #41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、既有 GPUI consumer 的真实 PNG／raw 解码与 paint 回归，以及受控退休 worker 与继任连接回归已在 Windows 集成分支运行通过。Windows/macOS 原生窗口仍需分别观察有效图片、无效／超限拒收后已有图片、文字与交互输入继续可用，并验证裁剪、透明、替换、删除及隐藏窗格表现；真实 SSH→Linux 路径及正式 omp 的 SVG／截图输出也尚待分别验收。没有发起前台权限审批；仅收到 frame 或观察到派生状态不等同于原生像素验收。
 
@@ -116,6 +124,30 @@ GPUI 测试窗口当前没有配置 `HeadlessRenderer`，不能读取最终 GPU 
 - daemon 的资源引用查询与桌面视口使用共享行投影及 prototype 解析，不维护第二套占位符身份规则。桌面只投影当前 viewport 的真实行；隐藏窗格继续保留既有通知门控。当前 4,096 次放置上限合计计算直接放置和虚拟 prototype，不按显示单元扩增资源数。
 - 新增共享确定性 PTY fixture 的真实独立 daemon → `RemoteTerminal` → rooted `TerminalView`／production decoder／paint 回归，覆盖身份、继承、源切片、混合路径、单元擦除／移动和屏幕切换；实现阶段按要求未运行构建或测试，交由集成验证。测试窗口仍无 `HeadlessRenderer`，绘制 claim 不是最终 GPU 像素。Windows/macOS 原生窗口、正式 omp、真实 SSH→Linux 及重连恢复保持各自未验收边界；实现占位符不构成 tmux/screen 中转兼容承诺。
 
+#### 当前实现：预算与历史回收（#44）
+
+- **最旧**在同一 daemon 内按资源准入单调序号确定，不按 GUI 最近访问时间、图片 ID 或墙钟排序；替换后是一个新版本。跨 daemon 的共享桌面池按资源首次成功接收的进程内单调序号排序，不假设远端主机共享墙钟。先回收无引用资源，再按对应范围的序号回收非可见历史。direct 的真实保留片段和 placeholder 的共享文本投影合并判定；活动屏 live rows 及必须保留的非活动主／备用屏内容受保护，隐藏或无 GUI 不会绕过预算。
+- 多窗格共用聚合池。跨窗格回收只锁预算注册表和资源 slot，再通过合并唤醒让各 pane 按原输出顺序公布变更，不在持有某个 pane 锁时反向锁其他 pane。跨 daemon 桌面压力通过资源所属连接请求权威回收，daemon 必须重新核验 direct／placeholder 可见性及 screen；客户端不能要求删除受保护图。若保护内容已耗尽任一适用预算，新图按 `ENOSPC` 及 `q=1/2` 规则拒收，不替换旧图、不改变文字或光标。
+- 只有预算回收留下无像素元数据。重访仍保留的原位置时，用界面语言在原区域内绘制 `Image evicted`／“图片已淘汰”；颜色使用 `muted_foreground`，保持原裁切。它不是终端文本，不进入选择内容，不插入行、不写 PTY、不发 toast。应用删除、clear／reset、历史过期会删除相应位置，不留下回收提示；拒收且未创建放置的新图不获得假位置。
+- 删除、替换、回收、连接退休及 pane 关闭都会使旧 completion 失效；CPU／GPU 信用在实际持有者释放后才归还。隐藏窗格经已有窗口拥有的后台 UI 更新回收退休 atlas，不必等它重新 paint。为避免旧大 page 被后续小 tile 长期钉住，必要时对同一窗口的终端 atlas 做实际 compaction：保留当前 CPU 图片，批量释放旧 tile 后安排重绘，再归还退休 GPU 票；这次重绘对应真实 GPU 失效，不是普通隐藏输出的无谓通知。daemon 不保留像素的隐藏备份以伪装可恢复。
+- 已添加真实 daemon-session 与生产 GPUI consumer 的确定性小预算回归；本次实现阶段未运行 build／lint／tests／formatter，不能写为通过。原生压力下的 Shell 可用性、Windows／macOS 进程／GPU 实测峰值、真实 SSH→Linux 与正式 omp 图片仍待各自验收。
+
+##### 可执行压力夹具与待测证据
+
+在隔离 lyrel 原生窗格中运行下列夹具（需要 Node.js，不读取用户文件，不写图片缓存；仅向当前终端发送测试图）：
+
+```sh
+node scripts/kitty-pressure.mjs --images 24 --width 3840 --height 2160 --path mixed --mode history --delay 100
+node scripts/kitty-pressure.mjs --images 12 --width 3840 --height 2160 --path direct --mode visible --delay 100
+```
+
+`history` 在 direct／placeholder 两条路径交替输出渐变、棋盘与半透明像素，然后退出；向上浏览可检查最旧历史提示及原位置裁切。`visible` 在同一区域重复创建不同资源，使保护图片先占满配额，后续新图片应被拒收而不替换已接受图。所有图片命令使用 `q=2`，不把协议应答留给退出后的 shell；看到 `KITTY_PRESSURE_DONE` 后输入普通 shell 命令验证交互。以多窗格并发及隐藏／重新显示工作区补充聚合压力，另做删除、清理、关闭后的资源释放观察。
+
+记录每次夹具参数、GUI／daemon 进程身份、空闲基线、连续输出和清理后的工作集／私有字节峰值，以及平台可观测的 GPU memory。Windows 可对隔离实例的 PID 使用 `Get-Process -Id <GUI_PID>,<DAEMON_PID> | Select-Object Id,WorkingSet64,PrivateMemorySize64,PeakWorkingSet64`；macOS 可用 `ps -o pid,rss,vsz,command -p <GUI_PID>,<DAEMON_PID>`，并通过各平台原生 GPU 工具补充观测。单次快照不是峰值采样；须持续记录，且不能拿夹具自身的 Node 内存充当 GUI／daemon 会计。当前没有这些压力峰值或原生截图证据，默认值不能标为“已按实测调优”。
+
+**已有的代表性基线，不是 #44 验收：**预算接入前的 pane `11`／Windows Debug，使用隔离生产 CLI → ConPTY 分块上传两张 4K raw RGBA（各 33,177,600 bytes）和一张同尺寸 PNG（37,493 bytes）。三份编码共 66,392,693 bytes，RGBA 权重 99,532,800 bytes；daemon `WorkingSet64` 从就绪时 13,443,072 bytes 升至确认保留时 85,790,720 bytes，内核记录的 `PeakWorkingSet64` 为 152,981,504 bytes。通过真实 `lyrel send` 恢复输入并正常结束 pane 后，工作集为 19,632,128 bytes、私有字节为 3,989,504 bytes；发送器、CLI 与 daemon 均正常退出。该测量支持将 partial、校验与传输副本单独计入预算，也说明不能用 37,493 bytes 的 PNG 编码大小代替 4K 解码成本。它不含桌面、atlas／GPU 或本次预算代码；#44 接入后的同路径重测和原生窗口压力仍未完成。
+
+
 
 
 #### 完整功能的已确认能力边界
@@ -129,7 +161,7 @@ GPUI 测试窗口当前没有配置 `HeadlessRenderer`，不能读取最终 GPU 
 - 以 [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/) 为支持协议，覆盖传输与独立放置、重复放置、裁剪、删除、Unicode 占位符，以及已有的传输并显示路径；SIXEL 与 iTerm2 inline images 不列为本次支持协议。
 - lyrel 如实报告已实现的能力。尚未识别 lyrel 的应用可通过自身公开选项选择图片协议；接入文档应注明已验证的应用版本与启动方式，不通过伪造 `TERM_PROGRAM` 取得支持，不承诺所有第三方应用自动识别。
 - 单图、每窗格及整体图片资源均须有界，预算不能只按压缩文件大小或图片张数计算。优先回收最旧的非可见历史图片，保留文字；可见图片已占满预算时拒绝新图，不无限增长或阻塞 Shell。被回收图片不再属于可恢复内容。
-- 因预算回收历史图片后，只在仍保留的原显示区域绘制“图片已回收”提示，不改写终端文本、插入新行、写入 PTY 或弹出通知。应用主动删除、清屏或显示位置离开历史保留范围时不显示此提示；尚未成功接收的新图没有显示位置时，按协议应答规则报告失败。
+- 因预算回收历史图片后，只在仍保留的原显示区域绘制“图片已淘汰”提示，不改写终端文本、插入新行、写入 PTY 或弹出通知。应用主动删除、清屏或显示位置离开历史保留范围时不显示此提示；尚未成功接收的新图没有显示位置时，按协议应答规则报告失败。
 - 正式兼容范围为 Windows/macOS 桌面的本地窗格，以及经 lyrel 原生 SSH 远程工作区连接 Linux daemon 的图片路径。tmux/screen 的中转配置与版本组合不列入本次兼容承诺。
 
 #### 实现验收
