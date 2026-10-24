@@ -4092,19 +4092,21 @@ impl TerminalView {
     }
 
     /// Clear presentation without discarding retained history or restarting
-    /// the process. Ctrl+L is sent through this pane's own transport.
+    /// the process. Only a live pane receives Ctrl+L through its own transport.
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
         self.cancel_scroll_anim();
-        self.terminal.clear_presentation(false);
-        self.terminal.write(vec![0x0c_u8]);
+        if self.terminal.clear_presentation(false) {
+            self.terminal.write(vec![0x0c_u8]);
+        }
         cx.notify();
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
         self.cancel_scroll_anim();
-        self.terminal.clear_presentation(true);
+        if self.terminal.clear_presentation(true) {
+            self.terminal.write(vec![0x0c_u8]);
+        }
         self.scroll_frac = 0.;
-        self.terminal.write(vec![0x0c_u8]);
         cx.notify();
     }
 
@@ -11899,6 +11901,8 @@ mod gpui_tests {
     }
 
     include!("graphics_consumer_tests.rs");
+    include!("graphics_resize_consumer_tests.rs");
+    include!("graphics_layout_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(

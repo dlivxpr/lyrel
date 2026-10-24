@@ -2541,7 +2541,10 @@ mod kitty_graphics {
     use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement};
 
     mod fixture {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support/kitty_pty.rs"));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/kitty_pty.rs"
+        ));
     }
     use fixture::{hex, unhex};
 
@@ -2550,7 +2553,6 @@ mod kitty_graphics {
     fn pty_sender() {
         fixture::pty_sender();
     }
-
 
     struct Consumer {
         session: lyrel_core::client::PaneSession,
@@ -2728,13 +2730,28 @@ mod kitty_graphics {
         let prototype = pane.placements.values().next().unwrap().clone();
         assert!(prototype.virtual_placement);
         pane.command("a=p,i=7,p=3,c=2,r=1,C=1");
-        let direct = pane.placements.values().find(|p| !p.virtual_placement).unwrap().clone();
+        let direct = pane
+            .placements
+            .values()
+            .find(|p| !p.virtual_placement)
+            .unwrap()
+            .clone();
         assert_eq!(prototype.resource, direct.resource);
-        assert_eq!((direct.anchor_row, direct.anchor_col), (3, 4), "U=1 does not move the cursor");
+        assert_eq!(
+            (direct.anchor_row, direct.anchor_col),
+            (3, 4),
+            "U=1 does not move the cursor"
+        );
         pane.command("a=d,d=A");
-        assert_eq!(pane.placements.values().cloned().collect::<Vec<_>>(), [prototype.clone()]);
+        assert_eq!(
+            pane.placements.values().cloned().collect::<Vec<_>>(),
+            [prototype.clone()]
+        );
         assert_eq!(pane.pixel(&prototype), [255, 0, 0, 255]);
-        pane.send("\x1b[38;5;7m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes(), 0);
+        pane.send(
+            "\x1b[38;5;7m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes(),
+            0,
+        );
         pane.command("a=d,d=i,i=7,p=2");
         assert!(pane.placements.is_empty());
         pane.command("a=p,i=7,p=4,U=1,c=4,r=2");
@@ -2829,6 +2846,115 @@ mod kitty_graphics {
         );
         assert_eq!((scaled.cols, scaled.rows), (2, 2));
         assert_eq!(pane.pixel(scaled), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn daemon_graphics_layout_resize_preserves_the_retained_slice() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-retained-resize");
+        let mut pane = Consumer::spawn(&daemon);
+        pane.session
+            .resize(WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 8,
+                cell_h: 16,
+            })
+            .unwrap();
+        pane.send(b"\x1b[?1049h\x1b[2J", 0);
+        pane.red_at(1, 1, "a=T,i=1,c=1,r=5,C=1");
+        pane.send(b"\x1b[24;1H\n", 0);
+        let clipped = pane.placements.values().next().unwrap().clone();
+        assert_eq!((clipped.clip_top, clipped.clip_bottom), (1, 5));
+        assert_eq!(clipped.anchor_row + 1 - pane.history_origin, 0);
+        pane.session
+            .resize(WinSize {
+                cols: 40,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            })
+            .unwrap();
+        pane.send(b"\x1b[0m", 0);
+        let resized = &pane.placements[&clipped.key];
+        assert_eq!((resized.clip_top, resized.clip_bottom), (1, 5));
+        assert_eq!(resized.anchor_row + 1 - pane.history_origin, 0);
+        assert_eq!(pane.pixel(resized), [255, 0, 0, 255]);
+        pane.send(b"\x1b[24;1H\n\n\n\n", 0);
+        assert!(!pane.placements.contains_key(&clipped.key));
+    }
+
+    #[test]
+    fn daemon_graphics_layout_anonymous_expiration_releases_resource_capacity() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-anonymous-expiration");
+        let mut pane = Consumer::spawn(&daemon);
+        pane.session
+            .resize(WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 8,
+                cell_h: 16,
+            })
+            .unwrap();
+        pane.send(b"\x1b[?1049h\x1b[2J\x1b[H", 0);
+        for _ in 0..16 {
+            let upload = b"\x1b_Ga=T,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\".repeat(64);
+            pane.send(&upload, 0);
+        }
+        assert_eq!(pane.resources.len(), 1024);
+        assert_eq!(pane.placements.len(), 1024);
+        pane.send(b"\x1b[24;1H\n", 0);
+        assert!(pane.placements.is_empty());
+        assert!(
+            pane.resources.is_empty(),
+            "unaddressable anonymous pixels cannot consume capacity forever"
+        );
+        assert_eq!(
+            pane.send(b"\x1b_Ga=T,i=2000,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1),
+            [b"\x1b_Gi=2000;OK\x1b\\".to_vec()]
+        );
+        let accepted = pane.placements.values().next().unwrap();
+        assert_eq!(accepted.image_id, 2000);
+        assert_eq!(pane.pixel(accepted), [255, 0, 0, 255]);
+        // Named pixels remain addressable after losing their last placement.
+        pane.send(b"\x1b[2J", 0);
+        pane.command("a=p,i=2000,C=1");
+        assert_eq!(pane.placements.values().next().unwrap().image_id, 2000);
+    }
+
+    #[test]
+    fn daemon_graphics_layout_deccolm_resets_both_scroll_region_edges() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-deccolm");
+        let mut pane = Consumer::spawn(&daemon);
+        for mode in [b'h', b'l'] {
+            for (operation, expected_row) in [
+                ("\x1b[10;1H\n", 5),
+                ("\x1b[3;1H\x1bM", 5),
+                ("\x1b[S", 4),
+                ("\x1b[T", 6),
+            ] {
+                pane.send(b"\x1b[?1049h\x1b[2J\x1b[3;10r", 0);
+                pane.red_at(6, 2, "a=T,i=1,c=1,r=1,C=1");
+                let key = pane
+                    .placements
+                    .values()
+                    .find(|p| p.screen == 1)
+                    .unwrap()
+                    .key;
+                pane.send(&[b'\x1b', b'[', b'?', b'3', mode], 0);
+                pane.send(operation.as_bytes(), 0);
+                let p = &pane.placements[&key];
+                assert_eq!(
+                    p.anchor_row - pane.history_origin,
+                    expected_row,
+                    "DECCOLM {mode} followed by {operation:?}"
+                );
+                assert_eq!((p.clip_top, p.clip_bottom), (0, 1));
+                pane.send(b"\x1b[?1049l", 0);
+            }
+        }
     }
 
     #[test]

@@ -1826,7 +1826,14 @@ impl DaemonPane {
             PaneState {
                 id,
                 ring,
-                graphics: Some(GraphicsState::new(size)),
+                graphics: Some(GraphicsState::with_resize_mode(
+                    size,
+                    if cfg!(windows) {
+                        crate::core::terminal_resize::ResizeMode::LocalConpty
+                    } else {
+                        crate::core::terminal_resize::ResizeMode::Raw
+                    },
+                )),
                 graphics_admission: Arc::new(GraphicsAdmissionBroker::default()),
                 subscriber: None,
                 subscriber_epoch: 0,

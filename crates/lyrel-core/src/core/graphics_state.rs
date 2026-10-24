@@ -202,6 +202,7 @@ use rio_vt::event::{VoidListener, WindowId};
 use rio_vt::performer::handler::Processor;
 
 use super::kitty_graphics::{Action, Control, MAX_IMAGE_BYTES, response};
+use super::terminal_resize::ResizeMode;
 use crate::daemon::protocol::WinSize;
 
 #[path = "graphics_terminal.rs"]
@@ -280,6 +281,7 @@ pub struct GraphicsState {
     next_key: u64,
     next_image_id: u32,
     size: WinSize,
+    resize_mode: ResizeMode,
     term: Crosswords<VoidListener>,
     processor: Processor,
     screen: u64,
@@ -291,7 +293,13 @@ pub struct GraphicsState {
 }
 
 impl GraphicsState {
+    /// Standard stream PTY semantics, including native SSH on Windows.
     pub fn new(size: WinSize) -> Self {
+        Self::with_resize_mode(size, ResizeMode::Raw)
+    }
+
+    /// The source PTY determines row anchoring, including for remote displays.
+    pub fn with_resize_mode(size: WinSize, resize_mode: ResizeMode) -> Self {
         let retention = retention::Retention::shared();
         let owner = retention.owner();
         Self {
@@ -306,6 +314,7 @@ impl GraphicsState {
             next_key: 0,
             next_image_id: 0,
             size,
+            resize_mode,
             term: Crosswords::new(
                 CrosswordsSize::new(usize::from(size.cols.max(1)), usize::from(size.rows.max(1))),
                 CursorShape::Block,
@@ -819,7 +828,9 @@ impl GraphicsState {
         let mut removed = Vec::new();
         self.placements.retain(|key, p| {
             let p = &p.placement;
-            if p.screen != self.screen || (p.virtual_placement && !matches!(target, b'i' | b'n' | b'r')) {
+            if p.screen != self.screen
+                || (p.virtual_placement && !matches!(target, b'i' | b'n' | b'r'))
+            {
                 return true;
             }
             let row = if target == b'c' {

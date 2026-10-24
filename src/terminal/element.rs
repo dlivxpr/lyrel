@@ -1972,7 +1972,9 @@ impl TerminalElement {
                 let line = Line(row as i32 - display_offset);
                 let source = &term.grid[line][..];
                 let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
-                if !slices.is_empty() { placeholders.push((row as i32, slices)); }
+                if !slices.is_empty() {
+                    placeholders.push((row as i32, slices));
+                }
                 let source_cols = rendered_cols.min(source.len());
                 for (col, cell) in source.iter().copied().take(source_cols).enumerate() {
                     let position = Pos::new(line, Column(col));
@@ -2007,7 +2009,9 @@ impl TerminalElement {
             if want_sliver && (display_offset as usize) < term.grid.history_size() {
                 let line = Line(-display_offset - 1);
                 let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
-                if !slices.is_empty() { placeholders.push((-1, slices)); }
+                if !slices.is_empty() {
+                    placeholders.push((-1, slices));
+                }
                 let mut row_buf = vec![RenderCell::default(); cols];
                 for (col, (slot, &cell)) in row_buf
                     .iter_mut()
@@ -4780,8 +4784,10 @@ mod tests {
         let terminal = cx.update(|cx| view.read(cx).terminal.term.clone());
         let (rows, cols) = {
             let mut term = terminal.lock();
-            rio_vt::performer::handler::Processor::default()
-                .advance(&mut *term, "\x1b[H\x1b[31mA\u{301}\x1b[4;58;5;9m\u{10eeee}\u{305}\u{305}".as_bytes());
+            rio_vt::performer::handler::Processor::default().advance(
+                &mut *term,
+                "\x1b[H\x1b[31mA\u{301}\x1b[4;58;5;9m\u{10eeee}\u{305}\u{305}".as_bytes(),
+            );
             (term.screen_lines(), term.columns())
         };
         let element = TerminalElement::new(view);
@@ -4809,7 +4815,10 @@ mod tests {
         build(&mut buf, cx);
         assert_eq!(buf[0].c, 'A');
         assert_eq!(buf[0].marks.as_deref(), Some(&['\u{301}'][..]));
-        assert_eq!(buf[1].c, ' ', "unresolved image placeholders never render PUA glyphs");
+        assert_eq!(
+            buf[1].c, ' ',
+            "unresolved image placeholders never render PUA glyphs"
+        );
         assert!(buf[1].marks.is_none());
         assert_eq!(buf[1].underline, UnderlineKind::None);
         // Simulate content left by a formerly wider/taller source grid.
