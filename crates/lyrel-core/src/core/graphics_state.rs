@@ -53,6 +53,7 @@ pub enum GraphicsUpdate {
     Screen {
         screen: u64,
         history_origin: i64,
+        epoch: u64,
     },
     Remove {
         placements: Vec<u64>,
@@ -78,6 +79,7 @@ enum Metadata {
     Screen {
         screen: u64,
         history_origin: i64,
+        epoch: u64,
     },
     Remove {
         placements: Vec<u64>,
@@ -112,10 +114,12 @@ impl GraphicsUpdate {
             Self::Screen {
                 screen,
                 history_origin,
+                epoch,
             } => (
                 Metadata::Screen {
                     screen: *screen,
                     history_origin: *history_origin,
+                    epoch: *epoch,
                 },
                 &[],
             ),
@@ -201,9 +205,11 @@ impl GraphicsUpdate {
             Metadata::Screen {
                 screen,
                 history_origin,
+                epoch,
             } if frame.len() == end => Some(Self::Screen {
                 screen,
                 history_origin,
+                epoch,
             }),
             Metadata::Remove {
                 placements,
@@ -304,6 +310,8 @@ pub struct GraphicsState {
     capacity: (usize, usize),
     generation: u64,
     resource_revision: u64,
+    viewport_epoch: u64,
+    viewports: BTreeMap<u64, (std::sync::Weak<std::sync::mpsc::Sender<crate::daemon::protocol::DaemonMsg>>, crate::daemon::protocol::GraphicsViewport)>,
     resources: BTreeMap<u64, Resource>,
     placements: BTreeMap<u64, AnchoredPlacement>,
     next_key: u64,
@@ -334,6 +342,8 @@ impl GraphicsState {
             capacity: (retention.limits.pane_encoded, retention.limits.pane_decoded),
             generation: 0,
             resource_revision: 0,
+            viewport_epoch: 0,
+            viewports: BTreeMap::new(),
             retention,
             owner,
             wake: None,
@@ -488,7 +498,7 @@ impl GraphicsState {
         placement: PreparedPlacement,
     ) -> Vec<GraphicsEffect> {
         self.generation += 1;
-        self.retention.protect(self.owner);
+        self.protect_resources();
         let mut effects = self.drain_evictions();
         if self
             .resources
@@ -611,25 +621,70 @@ impl GraphicsState {
             })
     }
 
+    fn protect_resources(&self) {
+        if self.resources.is_empty() { return; }
+        self.retention.protect(self.resources.values().map(|r| &r.resident));
+    }
+
+    pub(crate) fn set_viewport(
+        &mut self,
+        endpoint: u64,
+        owner: std::sync::Weak<std::sync::mpsc::Sender<crate::daemon::protocol::DaemonMsg>>,
+        viewport: crate::daemon::protocol::GraphicsViewport,
+    ) {
+        if viewport.epoch != self.viewport_epoch || viewport.screen != self.screen {
+            return;
+        }
+        self.protect_resources();
+        self.viewports.insert(endpoint, (owner, viewport));
+        self.refresh_retention();
+    }
+
+    pub(crate) fn remove_viewport(&mut self, endpoint: u64) {
+        self.viewports.remove(&endpoint);
+        self.refresh_retention();
+    }
+
+    pub(crate) fn retain_viewports(&mut self, mut attached: impl FnMut(&std::sync::Weak<std::sync::mpsc::Sender<crate::daemon::protocol::DaemonMsg>>) -> bool) {
+        let before = self.viewports.len();
+        self.viewports.retain(|_, (owner, _)| attached(owner));
+        if self.viewports.len() != before { self.refresh_retention(); }
+    }
+
     fn refresh_retention(&mut self) {
-        let live_placeholders = self.placeholder_resources(false);
+        use retention::Priority;
+        self.viewports.retain(|_, (owner, _)| owner.strong_count() != 0);
+        let mut visible_placeholders = self.placeholder_resources(false);
         let retained_placeholders = self.placeholder_resources(true);
         let top = self.history_origin();
         let bottom = top + i64::from(self.size.rows.max(1));
+        let oldest = self.term.grid.lines_evicted() as i64;
+        let visible_ranges: Vec<_> = self.viewports.values().filter_map(|(_, viewport)| {
+            if viewport.epoch != self.viewport_epoch || viewport.screen != self.screen || viewport.rows == 0 {
+                return None;
+            }
+            let start = viewport.top.unwrap_or(top).clamp(oldest, top);
+            Some((start, start + i64::from(viewport.rows), viewport.cols))
+        }).collect();
+        for &(start, end, _) in &visible_ranges {
+            visible_placeholders.extend(self.placeholder_resources_in(
+                (start - top) as i32, (end.min(bottom) - top) as i32,
+            ));
+        }
         for (&key, resource) in &self.resources {
             let mut priority = if self
                 .placements()
                 .any(|p| p.resource == key && p.screen != self.screen)
             {
-                2
+                Priority::Protected
             } else {
-                0
+                Priority::Unreferenced
             };
             if retained_placeholders.contains(&key) {
-                priority = priority.max(1);
+                priority = priority.max(Priority::History);
             }
-            if live_placeholders.contains(&key) {
-                priority = 2;
+            if visible_placeholders.contains(&key) {
+                priority = Priority::Protected;
             }
             for p in self
                 .placements()
@@ -638,8 +693,13 @@ impl GraphicsState {
                 let visible = p.screen != self.screen
                     || (p.anchor_col < u32::from(self.size.cols.max(1))
                         && p.anchor_row + i64::from(p.clip_top) < bottom
-                        && p.anchor_row + i64::from(p.clip_bottom) > top);
-                priority = priority.max(if visible { 2 } else { 1 });
+                        && p.anchor_row + i64::from(p.clip_bottom) > top)
+                    || visible_ranges.iter().any(|&(start, end, cols)| {
+                        p.anchor_col < u32::from(cols)
+                            && p.anchor_row + i64::from(p.clip_top) < end
+                            && p.anchor_row + i64::from(p.clip_bottom) > start
+                    });
+                priority = priority.max(if visible { Priority::Protected } else { Priority::History });
             }
             resource.resident.lock().unwrap().priority = priority;
         }
@@ -710,27 +770,29 @@ impl GraphicsState {
         updates.push(GraphicsEffect::Update(GraphicsUpdate::Screen {
             screen: self.screen,
             history_origin: self.history_origin(),
+            epoch: self.viewport_epoch,
         }));
         Some((updates, work))
     }
 
     pub fn resize(&mut self, size: WinSize) -> Vec<GraphicsEffect> {
         self.generation += 1;
-        self.retention.protect(self.owner);
+        self.protect_resources();
         self.resize_layout(size);
-        self.finish_layout(!self.placements.is_empty())
+        self.finish_layout(true)
     }
 
     pub fn output(&mut self, bytes: &[u8]) -> Vec<GraphicsEffect> {
         self.generation += 1;
-        self.retention.protect(self.owner);
-        let old = (self.screen, self.history_origin());
+        self.protect_resources();
+        let old = (self.screen, self.history_origin(), self.viewport_epoch);
         let mut processor = std::mem::take(&mut self.processor);
         processor.advance(self, bytes);
         self.processor = processor;
         self.expire_history();
         self.finish_layout(
-            !self.placements.is_empty() && old != (self.screen, self.history_origin()),
+            old.2 != self.viewport_epoch
+                || (!self.placements.is_empty() && old != (self.screen, self.history_origin(), self.viewport_epoch)),
         )
     }
 
@@ -894,7 +956,7 @@ impl GraphicsState {
                 }
             }
             Action::Display => {
-                self.retention.protect(self.owner);
+                self.protect_resources();
                 if let Some(key) = self
                     .lookup(&control)
                     .filter(|key| self.resources[key].resident.lock().unwrap().image.is_some())
@@ -1036,6 +1098,7 @@ impl GraphicsState {
         effects.push(GraphicsEffect::Update(GraphicsUpdate::Screen {
             screen: self.screen,
             history_origin: self.history_origin(),
+            epoch: self.viewport_epoch,
         }));
         if !control.no_move && !control.virtual_placement {
             // Kitty leaves the cursor on the placement's last row. Do not

@@ -80,7 +80,7 @@ fn input_caret_paint(
 #[derive(Default)]
 struct DisplayedRegistry(
     std::sync::Mutex<
-        std::collections::HashMap<EntityId, std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        std::collections::HashMap<EntityId, super::remote::GraphicsViewportReporter>,
     >,
 );
 
@@ -93,8 +93,8 @@ pub fn declare_displayed(cx: &App, panes: impl IntoIterator<Item = (EntityId, bo
     };
     let map = registry.0.lock().unwrap();
     for (id, on) in panes {
-        if let Some(flag) = map.get(&id) {
-            flag.store(on, std::sync::atomic::Ordering::Relaxed);
+        if let Some(reporter) = map.get(&id) {
+            reporter.set_displayed(on);
         }
     }
 }
@@ -108,7 +108,7 @@ pub(crate) fn displayed_for_test(cx: &App, id: EntityId) -> Option<bool> {
         .lock()
         .unwrap()
         .get(&id)
-        .map(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        .map(|reporter| reporter.displayed().load(std::sync::atomic::Ordering::Relaxed))
 }
 
 actions!(
@@ -1847,13 +1847,14 @@ impl TerminalView {
 
         super::color_scheme::watch(cx);
 
-        let displayed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let viewport_reporter = terminal.viewport_reporter();
+        let displayed = viewport_reporter.displayed();
         let entity_id = cx.entity().entity_id();
         cx.default_global::<DisplayedRegistry>()
             .0
             .lock()
             .unwrap()
-            .insert(entity_id, displayed.clone());
+            .insert(entity_id, viewport_reporter);
 
         cx.on_release_in(window, move |view, window, cx| {
             if let Some(registry) = cx.try_global::<DisplayedRegistry>() {
@@ -3410,6 +3411,7 @@ impl TerminalView {
         term.selection = None;
         term.scroll_display(Scroll::Bottom);
         drop(term);
+        self.terminal.viewport_reporter().report();
         self.scroll_frac = 0.;
     }
 
@@ -3638,6 +3640,7 @@ impl TerminalView {
                     .term
                     .lock()
                     .scroll_display(Scroll::Delta(lines));
+                self.terminal.viewport_reporter().report();
                 cx.notify();
             }
         }
@@ -6142,6 +6145,7 @@ impl TerminalView {
             sel.update(point, ds.side);
         }
         drop(term);
+        self.terminal.viewport_reporter().report();
         if offset != before {
             self.scroll_frac = 0.;
             cx.notify();
@@ -6380,6 +6384,7 @@ impl TerminalView {
             term.scroll_display(Scroll::Delta(jump));
         }
         drop(term);
+        self.terminal.viewport_reporter().report();
         if jump != 0 || frac != self.scroll_frac {
             self.scroll_frac = frac;
             cx.notify();
@@ -6422,6 +6427,7 @@ impl TerminalView {
         };
         drop(term);
         self.scroll_handle.sync(grid);
+        self.terminal.viewport_reporter().report();
     }
 
     /// Re-read the two things the frame itself declares — the terminal mode its
@@ -12157,6 +12163,7 @@ mod gpui_tests {
             GraphicsUpdate::Screen {
                 screen: 0,
                 history_origin: 10_003,
+                epoch: 0,
             },
         );
         DaemonMsg::Output(b"\x1b[20;60H".to_vec())
@@ -12190,6 +12197,7 @@ mod gpui_tests {
             GraphicsUpdate::Screen {
                 screen: 1,
                 history_origin: 0,
+                epoch: 1,
             },
         );
         DaemonMsg::Output(b"ALT-READY".to_vec())
@@ -12216,6 +12224,7 @@ mod gpui_tests {
             GraphicsUpdate::Screen {
                 screen: 0,
                 history_origin: 10_003,
+                epoch: 2,
             },
         );
         for _ in 0..200 {
@@ -12519,6 +12528,7 @@ mod gpui_tests {
             GraphicsUpdate::Screen {
                 screen: 0,
                 history_origin: 200,
+                epoch: 0,
             },
         );
         send_admitted_graphics(

@@ -92,7 +92,8 @@ const HEADER: usize = 5;
 /// v10 requires mutual version negotiation before opening a pane session.
 /// v11 distinguishes invisible virtual prototypes from direct placements.
 /// v12 carries pixel-free eviction metadata and bounded desktop capacity.
-pub const PROTOCOL_VERSION: u32 = 12;
+/// v13 reports connection-local absolute viewports with layout epochs.
+pub const PROTOCOL_VERSION: u32 = 13;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -976,6 +977,18 @@ pub enum SshPhase {
     Failed { reason: String },
 }
 
+/// A window fact, not a second graphics resource model. `top = None` follows
+/// the live screen; a historical top is absolute and cannot drift on output.
+/// Zero rows withdraws this connection's visible viewport (hidden pane).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphicsViewport {
+    pub screen: u64,
+    pub epoch: u64,
+    pub top: Option<i64>,
+    pub rows: u16,
+    pub cols: u16,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMsg {
     /// Assert the client's dialect before a session is opened on this stream.
@@ -999,6 +1012,7 @@ pub enum ClientMsg {
     GraphicsPressure {
         key: u64,
     },
+    GraphicsViewport(GraphicsViewport),
     Spawn {
         cwd: Option<PathBuf>,
         size: WinSize,
@@ -1198,6 +1212,7 @@ mod kind {
     pub const GRAPHICS_OFFER: u8 = 66;
     pub const GRAPHICS_CANCEL: u8 = 67;
     pub const GRAPHICS_PRESSURE: u8 = 68;
+    pub const GRAPHICS_VIEWPORT: u8 = 69;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1339,10 +1354,13 @@ pub fn take_frame(buf: &mut Vec<u8>) -> io::Result<Option<(u8, Vec<u8>)>> {
         return Ok(None);
     }
     let kind = buf[4];
-    if kind == kind::GRAPHICS && len >= 64 << 10 {
-        // The receiving consumer already reserved this resource's incoming
-        // allocation. Transfer it instead of keeping a second large capacity
-        // in an otherwise idle reader after the payload has been consumed.
+    if kind == kind::GRAPHICS
+        && len >= 64 << 10
+        && buf.capacity() <= len.saturating_mul(2).saturating_add(256 << 10)
+    {
+        // Transfer only this offer's bounded allocation, never a preceding
+        // snapshot's high-water capacity. The slow path copies an oversized
+        // receive buffer into the already reserved resource-sized allocation.
         let mut payload = std::mem::take(buf);
         *buf = payload.split_off(HEADER + len);
         payload.drain(..HEADER);
@@ -1350,6 +1368,9 @@ pub fn take_frame(buf: &mut Vec<u8>) -> io::Result<Option<(u8, Vec<u8>)>> {
     }
     let payload = buf[HEADER..HEADER + len].to_vec();
     buf.drain(..HEADER + len);
+    if buf.capacity() > buf.len().saturating_add(256 << 10) {
+        buf.shrink_to_fit();
+    }
     Ok(Some((kind, payload)))
 }
 
@@ -1474,6 +1495,9 @@ impl ClientMsg {
             }
             ClientMsg::GraphicsPressure { key } => {
                 write_frame(w, kind::GRAPHICS_PRESSURE, &to_json(key)?)
+            }
+            ClientMsg::GraphicsViewport(viewport) => {
+                write_frame(w, kind::GRAPHICS_VIEWPORT, &to_json(viewport)?)
             }
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
             ClientMsg::ClearPresentation { history } => {
@@ -1630,6 +1654,7 @@ impl ClientMsg {
             kind::GRAPHICS_PRESSURE => ClientMsg::GraphicsPressure {
                 key: from_json(&payload)?,
             },
+            kind::GRAPHICS_VIEWPORT => ClientMsg::GraphicsViewport(from_json(&payload)?),
             kind::INPUT => ClientMsg::Input(payload),
             kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation {
                 history: from_json(&payload)?,

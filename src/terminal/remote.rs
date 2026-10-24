@@ -728,6 +728,46 @@ fn send_loop(
     }
 }
 
+#[derive(Clone)]
+pub(super) struct GraphicsViewportReporter {
+    term: std::sync::Weak<FairMutex<Crosswords<EventProxy>>>,
+    images: crate::terminal::images::ImageStore,
+    displayed: Arc<AtomicBool>,
+    link: Arc<Mutex<(LinkSender, Option<crate::daemon::protocol::GraphicsViewport>)>>,
+}
+
+impl GraphicsViewportReporter {
+    pub(super) fn displayed(&self) -> Arc<AtomicBool> { self.displayed.clone() }
+
+    pub(super) fn set_displayed(&self, on: bool) {
+        if self.displayed.swap(on, Ordering::Relaxed) == on { return; }
+        if !on {
+            let mut link = self.link.lock().unwrap();
+            if let Some(mut viewport) = link.1 {
+                viewport.rows = 0;
+                link.0.send(ClientMsg::GraphicsViewport(viewport));
+                link.1 = Some(viewport);
+            }
+        } else {
+            self.report();
+        }
+    }
+
+    pub(super) fn report(&self) {
+        let Some(term) = self.term.upgrade() else { return; };
+        let Some(term) = term.try_lock() else { return; };
+        let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
+        let Some(viewport) = self.images.viewport(origin, term.display_offset(), term.screen_lines(), term.columns(), self.displayed.load(Ordering::Relaxed)) else { return; };
+        // Keep grid -> store -> link ordering. Enqueue before releasing the
+        // grid so a later user Input cannot overtake the viewport it observes.
+        let mut link = self.link.lock().unwrap();
+        if link.1 != Some(viewport) {
+            link.0.send(ClientMsg::GraphicsViewport(viewport));
+            link.1 = Some(viewport);
+        }
+    }
+}
+
 pub struct RemoteTerminal {
     pub term: Arc<FairMutex<Crosswords<EventProxy>>>,
     pub events: smol::channel::Receiver<PaneEvent>,
@@ -777,6 +817,7 @@ pub struct RemoteTerminal {
     /// client-grid placement anchors; protocol identities and resource lifetimes
     /// remain owned by the living daemon pane.
     images: crate::terminal::images::ImageStore,
+    viewport_reporter: GraphicsViewportReporter,
     clipboard_writes: Arc<Mutex<VecDeque<lyrel_core::core::clipboard::ClipboardWrite>>>,
     osc_notes: OscNotes,
     /// On the pane rather than its view so it survives a relink; only the
@@ -1235,6 +1276,7 @@ impl RemoteTerminal {
                 color_scheme_updates: self.color_scheme_updates.clone(),
             },
             link.sender(),
+            self.viewport_reporter.displayed(),
         );
         self.reader_thread = Some(reader);
         self.reader_quit = quit;
@@ -1242,6 +1284,7 @@ impl RemoteTerminal {
         // against the reader this link actually has. Assigning retires the old
         // `LinkWriter` through its `Drop`, which is what closes the old socket.
         self.link = link;
+        *self.viewport_reporter.link.lock().unwrap() = (self.link.sender(), None);
         self.route = route.clone();
         self.synced_size = false;
         self.resize(size, cell_w, cell_h);
@@ -1346,6 +1389,12 @@ impl RemoteTerminal {
             write_half,
             InputLoss::new(reader_quit.clone(), exited_flag.clone(), proxy.clone()),
         )?;
+        let viewport_reporter = GraphicsViewportReporter {
+            term: Arc::downgrade(&term),
+            images: images.clone(),
+            displayed: Arc::new(AtomicBool::new(true)),
+            link: Arc::new(Mutex::new((link.sender(), None))),
+        };
         let reader_thread = Self::spawn_reader(
             term.clone(),
             proxy.clone(),
@@ -1374,9 +1423,11 @@ impl RemoteTerminal {
                 color_scheme_updates: color_scheme_updates.clone(),
             },
             link.sender(),
+            viewport_reporter.displayed(),
         );
 
         Ok(Self {
+            viewport_reporter,
             term,
             events: rx,
             palette: super::palette::build(),
@@ -1469,6 +1520,7 @@ impl RemoteTerminal {
         quit: Arc<AtomicBool>,
         signals: ReaderSignals,
         writer: LinkSender,
+        pressure_displayed: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         let pressure_term = Arc::downgrade(&term);
         let pressure_writer = writer.clone();
@@ -1477,14 +1529,16 @@ impl RemoteTerminal {
                 use lyrel_core::core::kitty_graphics::placeholder_row;
                 let term = pressure_term.upgrade()?;
                 let term = term.lock();
+                let offset = term.display_offset() as i32;
                 let rows: Vec<_> = (0..term.screen_lines())
                     .filter_map(|row| {
-                        let slices =
-                            placeholder_row(&term.grid, rio_vt::crosswords::pos::Line(row as i32));
+                        let slices = placeholder_row(&term.grid, rio_vt::crosswords::pos::Line(row as i32 - offset));
                         (!slices.is_empty()).then_some((row as i32, slices))
                     })
                     .collect();
-                store.oldest_reclaimable(term.screen_lines(), term.columns(), &rows)
+                let displayed = pressure_displayed.load(Ordering::Relaxed);
+                let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
+                store.oldest_reclaimable(term.screen_lines(), term.columns(), origin, offset as usize, displayed, &rows)
             },
             move |key| pressure_writer.send(ClientMsg::GraphicsPressure { key }),
         );
@@ -1871,7 +1925,14 @@ impl RemoteTerminal {
                                         let _ = stream.shutdown(std::net::Shutdown::Both);
                                         return;
                                     }
-                                    if image_decoder.apply(update) {
+                                    let screen = matches!(&update, lyrel_core::core::kitty_graphics::GraphicsUpdate::Screen { .. });
+                                    if screen {
+                                        let term = term.lock();
+                                        if quit.load(Ordering::SeqCst) { return; }
+                                        let changed = image_decoder.apply(update);
+                                        image_decoder.sync_local_origin(term.grid.lines_evicted() as i64 + term.grid.history_size() as i64);
+                                        if changed { proxy.send(PaneEvent::Wakeup); }
+                                    } else if image_decoder.apply(update) {
                                         proxy.send(PaneEvent::Wakeup);
                                     }
                                 }
@@ -2301,6 +2362,10 @@ impl RemoteTerminal {
 
     pub fn foreground_agent(&self) -> Option<CLIAgent> {
         self.agent.lock().ok().and_then(|g| *g)
+    }
+
+    pub(super) fn viewport_reporter(&self) -> GraphicsViewportReporter {
+        self.viewport_reporter.clone()
     }
 
     /// The kitty-graphics image store for this pane. Cheap handle clone — the

@@ -269,11 +269,15 @@ fn graphics_consumer_real_daemon_anonymous_expiration_restores_admission(cx: &mu
     let (daemon, pane, view, window) = graphics_layout_harness(cx);
     graphics_send_fixture(&view, cx, 1, b"\x1b[?1049h\x1b[2J\x1b[H");
     for serial in 2..18 {
-        graphics_send_fixture(
+        // Expire each accepted anonymous resource before offering the next.
+        // 1,024 simultaneously visible atlas pages cannot fit the real cache;
+        // this regression is about released identities, not unbounded residency.
+        graphics_send_fixture_with_replies(
             &view,
             cx,
             serial,
-            &b"\x1b_Ga=T,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\".repeat(64),
+            &b"\x1b[24;1H\x1b_Ga=T,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\\n".repeat(64),
+            64,
         );
     }
     graphics_send_fixture(&view, cx, 18, b"\x1b[24;1H\n");

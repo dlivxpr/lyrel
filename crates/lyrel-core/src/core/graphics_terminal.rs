@@ -31,19 +31,20 @@ impl GraphicsState {
     /// second placement model are allocated. Inactive-screen resources remain
     /// screen-owned and must be protected separately while their grid is hidden.
     pub fn placeholder_resources(&self, history: bool) -> BTreeSet<u64> {
-        let mut resources = BTreeSet::new();
+        let resources = BTreeSet::new();
         if !self
             .placements()
             .any(|p| p.virtual_placement && p.screen == self.screen)
         {
             return resources;
         }
-        let start = if history {
-            -(self.term.grid.history_size() as i32)
-        } else {
-            0
-        };
-        for row in start..self.term.screen_lines() as i32 {
+        let start = if history { -(self.term.grid.history_size() as i32) } else { 0 };
+        self.placeholder_resources_in(start, self.term.screen_lines() as i32)
+    }
+
+    fn placeholder_resources_in(&self, start: i32, end: i32) -> BTreeSet<u64> {
+        let mut resources = BTreeSet::new();
+        for row in start..end {
             for slice in placeholder_row(&self.term.grid, Line(row)) {
                 if let Some(prototype) =
                     placeholder_prototype(self.placements(), self.screen, &slice.run)
@@ -115,6 +116,7 @@ impl GraphicsState {
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Screen {
                 screen: self.screen,
                 history_origin: self.history_origin(),
+                epoch: self.viewport_epoch,
             }));
         }
         effects.extend(
@@ -176,6 +178,10 @@ impl GraphicsState {
     pub(super) fn resize_layout(&mut self, size: WinSize) {
         use rio_vt::ansi::graphics::AtlasPlacement;
         let grid_changed = self.size.cols != size.cols || self.size.rows != size.rows;
+        if grid_changed {
+            self.viewport_epoch += 1;
+            self.viewports.clear();
+        }
         // Temporary, pixel-free adapter records ask Rio's public resize path
         // to retain its exact reflow map for both grids. They exist only during
         // resize: resources, ordering and retained placements stay here.
@@ -362,6 +368,8 @@ impl GraphicsState {
         self.discard_placements(|p| p.screen == 1);
         self.discard_resources(Some(1));
         self.screen = screen;
+        self.viewport_epoch += 1;
+        self.viewports.clear();
     }
 }
 
@@ -493,6 +501,8 @@ impl Handler for GraphicsState {
                     && p.anchor_row + i64::from(p.clip_top) < end
             }),
             ClearMode::Saved => {
+                self.viewport_epoch += 1;
+                self.viewports.clear();
                 for (key, p) in &mut self.placements {
                     let p = &mut p.placement;
                     if !p.virtual_placement
@@ -510,6 +520,8 @@ impl Handler for GraphicsState {
         self.term.clear_screen(mode);
     }
     fn reset_state(&mut self) {
+        self.viewport_epoch += 1;
+        self.viewports.clear();
         self.discard_placements(|_| true);
         self.discard_resources(None);
         self.term.reset_state();

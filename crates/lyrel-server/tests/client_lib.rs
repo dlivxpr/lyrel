@@ -2622,6 +2622,7 @@ mod kitty_graphics {
                 GraphicsUpdate::Screen {
                     screen,
                     history_origin,
+                    ..
                 } => {
                     self.screen = *screen;
                     self.history_origin = *history_origin;

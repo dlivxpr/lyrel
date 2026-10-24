@@ -71,6 +71,8 @@ impl Daemon {
                 "--nocapture",
                 "--test-threads=1",
             ])
+            // macOS re-exec appends its responsibility flag after libtest options.
+            .arg("--")
             .env("LYREL_RETENTION_TEST_DAEMON", dir.path())
             .env("LYREL_RETENTION_TEST_METADATA", metadata.to_string())
             .env("LYREL_CONFIG_DIR", dir.path())

@@ -9,7 +9,7 @@
 
 ### 新增
 
-- 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。当前数值预算见下述 #44；pane 协议为 `12`，control 保持 `16`，旧 daemon／远端 server 需要更新。
+- 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。当前数值预算见下述 #44；pane 协议为 `13`，control 保持 `16`，旧 daemon／远端 server 需要更新。
 - #40–#42 的核心、真实 daemon-session、GPUI 消费者及 reader／decoder 代次回归已在 Windows 集成分支运行通过。Windows/macOS 原生像素、真实 SSH→Linux、正式 omp 出图验收仍待完成；完整存活会话恢复顺序（#45）与最终实测仍由后续工单交付，不据此宣称 #39 已完成。
 - 加固 Kitty 流式传输与拒收（#41）：支持 PNG 的外层 `o=z`，分块逐次解码并限制 partial／APC 分配；对 PNG 做有界逐行真实校验，对 raw／zlib 检查尺寸、精确字节数及展开上限后才应答、保留或创建放置。查询不保存资源，文件／共享内存能力按负责主机与实际读取结果应答；临时文件删除要求标记路径，POSIX shm 改为有界 descriptor read。中断、取消、删除与下一条完整命令保持有序，匿名／quiet 请求不污染后续输入。
 - 隔离异步图片 reader／decoder 的代次：退休连接不能应用迟到帧或解码完成，也不能在延迟退出时关闭新连接的图片队列。新增真实 daemon 的格式、压缩、拒收、49 MiB 超限与输入存活回归，GPUI 实际 decoder／paint 回归，以及生产 decoder 的受控代次竞态回归。
@@ -18,7 +18,7 @@
 - 接入 Kitty Unicode 占位符（#43）：`U=1` 仅创建不可见 prototype，真实 Rio 单元的 indexed／true-color 身份、行列／高位 diacritics 和规范左至右继承决定显示切片；无效引用不造像素、不绘制 PUA 字形。共享投影同时供 daemon 资源引用和桌面 viewport 使用，直接／虚拟放置共用资源与预算，删除语义分开，文字移动／擦除、屏幕与几何沿用现有路径。共享真实 PTY fixture、独立 daemon 到 rooted GPUI production paint 的单链路回归及独立 CLI／ConPTY 协议冒烟已在 Windows 通过；原生 GPU 像素仍待验收，不承诺 tmux/screen。
 - pane 会话开启前强制双向版本协商（从协议 `10` 开始）：本地、路由及原生 SSH 的新建／附着／观察连接在发送会话请求前确认版本；旧客户端在创建 shell 或订阅图片前明确拒绝，新客户端遇到旧 server 显示版本与更新要求。独立诊断探测保留，不把 EOF 当作版本判断。
 - 加入图片保留预算与历史回收（#44）：按 daemon 全局准入序号先回收无引用资源，再回收最旧非可见历史；direct 与 Unicode placeholder 共用可见性。保护内容耗尽预算时拒新图，历史原位置仅绘制双语 muted 回收提示，不改终端文本／选择／光标／PTY，不为主动删除或 clear／reset 留提示。隐藏／detached pane 仍受预算与元数据配额限制，异步退休资源实际释放前继续占账。
-- 图片预算默认：单图编码／RGBA 权重各 32 MiB（容纳约 31.64 MiB 的常规 4K RGBA 截图）；daemon 每 pane 编码 64／RGBA 权重 128／工作 128 MiB，全 daemon 分别 128／256／256 MiB，图形 packet 聚合另限 256 MiB。桌面 source 字节池合计 256 MiB，派生 CPU／GPU／解码工作合计 1,024 MiB；按实际图片与至少 `1024×1024` 的 atlas page rounding 预留，空 pane 不占整额 lease，小图没有“两张”或“四个窗格”的计数限制。pane `12` 的资源 offer／grant 在成功准入前获取真实 source／decode／GPU 额度；不持 pane 锁等待，新桌面装不下保留图片时明确拒绝附着而不丢权威内容。
+- 图片预算默认：单图编码／RGBA 权重各 32 MiB（容纳约 31.64 MiB 的常规 4K RGBA 截图）；daemon 每 pane 编码 64／RGBA 权重 128／工作 128 MiB，全 daemon 分别 128／256／256 MiB，图形 packet 聚合另限 256 MiB。桌面 source 字节池合计 256 MiB，派生 CPU／GPU／解码工作合计 1,024 MiB；按实际图片与至少 `1024×1024` 的 atlas page rounding 预留，空 pane 不占整额 lease，小图没有“两张”或“四个窗格”的计数限制。资源 offer／grant 在成功准入前获取真实 source／decode／GPU 额度；不持 pane 锁等待，新桌面装不下保留图片时明确拒绝附着而不丢权威内容。
 - 图片及无像素回收提示的元数据也持有真实 byte ticket：每 owner 512 B，每 pane 4 MiB，daemon／桌面各自 aggregate 16 MiB；像素回收不释放 notice 票，snapshot 实际释放前继续占账。新独立放置及 replay notice 通过零像素 offer 准入，`a=T` 的资源与放置授权全部成功后才修改内容。
 - 添加真实 daemon-session／GPUI consumer 小预算回归与 `scripts/kitty-pressure.mjs` 原生压力夹具；本轮实现未运行检查，原生 Shell／GPU、Windows/macOS 与真实 SSH 峰值也未测。文档公布每进程会计和组合范围，不把桌面 1,296 MiB 会计或 daemon 656 MiB 会计当作 RSS／驱动峰值实测，不提前关闭 #44／#39。
 - 验证正式 `omp/18.12.6` 的公开图片选项：保持 `TERM_PROGRAM=lyrel`，`PI_FORCE_IMAGE_PROTOCOL=kitty` 配合 `PI_KITTY_PLACEHOLDERS=0/1`，真实交互 TUI 在 Windows ConPTY 中发送 SVG 栅格 PNG 与合成 toolResult PNG，独立 daemon／生产 `PaneClient` 收到对应资源和直接／虚拟放置。隔离会话未提交新 prompt，`/exit` 正常退出；此结果不替代原生像素、真实桌面截图、GUI 关开或 SSH 验收。
@@ -28,6 +28,8 @@
 - 修复 #42 审查发现的五项图片布局／清理边界：本地 ConPTY 的 daemon 镜像与桌面共用高度调整，远端标准 PTY 保持独立模式；部分裁切／过期图片按保留切片重排；匿名图片失去最后放置后释放容量；`DECCOLM` set／unset 同步恢复全屏滚动区域；退出／断链保留窗格的用户清理改为真正本地清理，活连接仍只走 daemon 权威路径。Windows 核心、8 项真实 daemon 布局、16 项生产 GPUI graphics consumer 与 14 项 prompt reflow 回归通过；不增加原生像素或其他平台的通过声明。
 - 真实 GPUI daemon fixture 显式固定初始视口并等待有序 resize，重绘时使用实际 grid 尺寸而非旧 requested size；macOS 的生产责任归属 re-exec 标记放在 libtest 参数分隔符后，避免被当作未知选项。实际 test runner 的旧参数失败／新参数通过已验证，macOS 端到端结果仍以新的 CI 为准。
 - 修正 Unix Kitty 共享内存夹具名称：保留随机隔离并将名称缩至 Darwin 的 31-byte 上限内，避免 macOS 在进入产品读取逻辑前就因 `shm_open` 失败而中断。失败信息保留实际 OS error；不放宽间接传输的主机或临时删除限制。
+- 修复 #44 的大接收缓冲所有权：先前文字 Snapshot／合并帧留下的超额容量不再转移进已授权的图片源，避免授权成功后静默漏图；core daemon 夹具补齐 macOS re-exec 的 libtest 参数分隔。
+- 修复回滚正在查看的历史图片被误回收：pane `13` 以连接级绝对行锚点和屏幕代次报告真实视口，direct／placeholder 及跨 daemon 桌面池采用一致保护；新输出不使旧视口漂移，隐藏、detach、抢占和 observer 移除撤销对应事实。普通文字输出只更新当前 pane 的资源保护，回收优先级改用具名枚举且保留最旧顺序。新增真实 daemon／rooted GPUI 回归尚待统一运行，不新增原生或跨平台通过声明。
 
 ### 维护
 

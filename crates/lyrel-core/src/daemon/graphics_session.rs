@@ -22,6 +22,7 @@ struct Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.broker.unregister(self.endpoint);
+        self.pane.remove_graphics_viewport(self.endpoint);
         match self.attached.take() {
             Some(Attached::Controller(epoch)) => {
                 self.pane.detach(epoch);
@@ -70,6 +71,9 @@ pub(super) fn run(
         while let Ok(message) = ClientMsg::read(&mut read_stream) {
             match message {
                 ClientMsg::GraphicsGrant { token, accepted } => input_broker.grant(endpoint, token, accepted),
+                // Apply this connection's viewport before its following
+                // pressure request, not behind the ordinary-input queue.
+                ClientMsg::GraphicsViewport(viewport) => input_pane.graphics_viewport(endpoint, &input_sender, viewport),
                 ClientMsg::GraphicsPressure { key } => input_pane.pressure_graphics(key),
                 ClientMsg::Detach => {
                     input_broker.unregister(endpoint);
@@ -77,7 +81,7 @@ pub(super) fn run(
                     break;
                 }
                 message => {
-                    // Never park Grant/Pressure behind keyboard traffic. The
+                    // Never park Grant/Viewport/Pressure behind keyboard traffic. The
                     // bounded queue closes with a truthful error on overload.
                     if matches!(&message, ClientMsg::Input(bytes) if bytes.len() > (1 << 20)) || input.try_send(message).is_err() {
                         if let Some(sender) = input_sender.upgrade() { let _ = sender.send(DaemonMsg::Error("Pane input backlog exhausted during graphics admission; reconnect".into())); }
