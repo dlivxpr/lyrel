@@ -42,12 +42,18 @@ impl Default for Limits {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Priority {
+    Unreferenced,
+    History,
+    Protected,
+}
+
 pub(super) struct Resident {
     pub image: Option<Arc<Image>>,
     pub packet: Option<crate::daemon::protocol::GraphicsPacket>,
     pub decoded: usize,
-    // 0 = unreferenced, 1 = retained history, 2 = protected live/inactive.
-    pub priority: u8,
+    pub priority: Priority,
     pub announced: bool,
     pub wake: Option<SyncSender<()>>,
 }
@@ -78,16 +84,12 @@ impl Retention {
             })
             .clone()
     }
-    pub(super) fn protect(&self, owner: u64) {
-        let registry = self.registry.lock().unwrap();
-        for entry in registry
-            .entries
-            .values()
-            .filter(|entry| entry.owner == owner)
-        {
-            if let Some(resident) = entry.resident.upgrade() {
-                resident.lock().unwrap().priority = 2;
-            }
+    pub(super) fn protect<'a>(&self, residents: impl Iterator<Item = &'a Arc<Mutex<Resident>>>) {
+        // Preserve registry -> resident lock order and the admission barrier,
+        // but visit only this pane's existing owners, not every daemon entry.
+        let _registry = self.registry.lock().unwrap();
+        for resident in residents {
+            resident.lock().unwrap().priority = Priority::Protected;
         }
     }
     pub(crate) fn owner(&self) -> u64 {
@@ -101,7 +103,7 @@ impl Retention {
     pub(super) fn reclaim_specific(&self, slot: &Arc<Mutex<Resident>>) -> bool {
         let _registry = self.registry.lock().unwrap();
         let mut resident = slot.lock().unwrap();
-        if resident.priority >= 2 || resident.image.is_none() {
+        if resident.priority == Priority::Protected || resident.image.is_none() {
             return false;
         }
         resident.image = None;
@@ -143,7 +145,7 @@ impl Retention {
                     pane.0 += image.data.capacity();
                     pane.1 += resident.decoded;
                 }
-                if resident.priority < 2 {
+                if resident.priority != Priority::Protected {
                     candidates.push((
                         resident.priority,
                         sequence,
@@ -215,7 +217,7 @@ impl Retention {
             image: Some(image),
             packet: Some(packet),
             decoded,
-            priority: 2,
+            priority: Priority::Protected,
             announced: false,
             wake,
         }));

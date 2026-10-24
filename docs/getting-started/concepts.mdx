@@ -78,7 +78,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 - 同一资源的多次放置共享解码像素。`x/y/w/h` 指定源裁剪，`c/r` 指定显示区域；只指定一轴时按比例推导，指定两轴时保持比例放入区域。`X/Y` 为单元内像素偏移，`C=1` 禁止本次放置移动光标。
 - 图片 ID 在窗格内独立。非零图片 ID 与非零放置 ID 的组合替换同次放置；省略 `p` 或 `p=0` 时，每次放置独立。`I` 分配新的图片 ID，并让后续按编号的命令选择该编号最新的资源；同一命令不能同时指定 `i` 与 `I`。重新传输同一个 `i` 会移除其旧资源与全部旧放置，不会让旧位置显示新内容。
 - 静态删除支持 `a/i/n/c/p/q/r/x/y/z` 及大写形式。`d=p` 是按 `x/y` 指定的单元删除，不是按放置 ID 删除；定位单次放置使用 `d=i,i=…,p=…`。小写保留可复用资源；大写只在资源没有其他放置引用时回收数据。缺资源、非法放置和不支持的操作返回带身份的错误，并遵守 `q=1/2`。
-- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `12`（加入无像素回收元数据及消费者容量租约），control 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
+- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `13`（无像素回收元数据、消费者容量授权及连接视口），control 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及 POSIX shared memory 只在发送方确实共享负责 daemon 的 Unix 主机时接受，Windows 或跨主机上下文明确拒绝，不把远端路径解析到桌面。文件必须是 regular file，临时文件仅在临时目录且路径包含 `tty-graphics-protocol` 时允许协议删除；shared memory 使用有界 descriptor read，避免发送方并发截断导致映射故障。
 - 应答关联 `i/I/p` 并写回 PTY，不作为终端文本显示；`q=1` 只保留失败，`q=2` 全部静默，没有图片身份的请求不注入应答。删除中止未完成上传；损坏或取消的 APC 不会与后续命令拼成图片。拒收不创建放置、不移动光标，也不删除其他已接受资源。
 
@@ -91,7 +91,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 | daemon 每窗格 | 实际编码分配合计 64 MiB、RGBA 权重 128 MiB、临时工作空间 128 MiB；最多 1,024 个资源元数据、4,096 个直接放置与虚拟 prototype，回收提示也占元数据配额 |
 | daemon 聚合 | 所有窗格实际编码分配合计 128 MiB、RGBA 权重 256 MiB、临时工作空间 256 MiB。RGBA 权重用于准入，不代表 daemon 另存整份 RGBA。raw zlib 用 64 KiB 输出 scratch、预留 256 KiB 校验空间；PNG 逐行校验 scratch 限 4 MiB。外层 zlib 的 PNG 逻辑展开限 32 MiB，校验按 100 MiB 预留几何增长期旧／新分配、裁紧及 4 MiB decoder scratch，不仅计算最后的展开长度 |
 | daemon 图形传输 | 已编码资源与在队列中的图形 packet 共享同份数据与租约，单独受 256 MiB 聚合池约束；资源被删除或回收后，仍在 writer 中的 packet 在最后引用释放前继续占账，不能提前归还信用 |
-| 桌面源内容 | 每窗格实际源内容及接收工作最多 64 MiB，整个桌面进程合计 256 MiB；本地与多个远端 daemon 共用同一池。空窗格不预留整份额度，也没有“四个图形窗格”的固定限制。每次 `GraphicsOffer` 按实际 packet 分配先预留 `2 × encoded bytes + 256 KiB` 接收峰值，提取帧后缩至实际源分配，decoder 输入释放后归还 |
+| 桌面源内容 | 每窗格实际源内容及接收工作最多 64 MiB，整个桌面进程合计 256 MiB；本地与多个远端 daemon 共用同一池。空窗格不预留整份额度，也没有“四个图形窗格”的固定限制。每次 `GraphicsOffer` 按实际 packet 分配先预留 `2 × encoded bytes + 256 KiB` 接收峰值，提取帧后缩至实际源分配，decoder 输入释放后归还。仅在接收容量落在本次预留内时转移大帧所有权；先前大文字 Snapshot 或合并帧留下的超额容量不会带入图片源，已消费的闲置大缓冲会释放 |
 | 桌面派生缓存 | 每窗格 384 MiB，整个桌面进程 1,024 MiB。每份资源在接收前预留 `4 × RGBA bytes + encoded bytes + GPU page bytes`，完成后保留实际 CPU 分配与 GPU page 票。queued／in-flight／decoded／painted-retired 与 snapshot 均持有相应租约。GPU 票按当前图片实际 page rounding 上界计算：`4 × max(width, 1024) × max(height, 1024)`；正式 Windows DirectX／macOS Metal 路径的 image tile padding 为零，一个小图最多按独占 4 MiB page 预留，不把所有图当作最坏 64 MiB。Linux 只有 headless daemon，不将未支持的 Linux 桌面 wgpu 当作本产品的已交付渲染路径 |
 | 桌面消费者准入 | 每窗格 daemon 编码上限 64 MiB、RGBA 权重 128 MiB，仍同时受桌面的实际 source／derived 字节池限制。daemon 接受新资源及回复成功前，渲染消费者必须对 `GraphicsOffer` 返回实际字节预留的 `GraphicsGrant`；拒绝、取消、超时与断连释放未完成预留。不设两个驻留资源槽，小图可在真实字节预算内继续接收 |
 | 保留元数据 | 每个资源或 placement 按 512 bytes 保守覆盖实际 owner、BTree／Arc 开销；daemon 与桌面分别使用独立的每 pane 4 MiB、aggregate 16 MiB 票池。无像素 notice 仍占票，旧 snapshot 也延续持票直到真正释放。新资源、新放置及 replay notice 分别准入，已有同 key 更新复用原票；元数据满额会拒绝新内容，不为无法释放元数据的历史位置做无效像素回收 |
@@ -100,7 +100,11 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 容量不是可以忽略的提示。所有生产 pane 客户端声明有限上限；渲染消费者另按每份资源的真实成本授权，同一 pane 多消费者均须满足准入。等待授权不持有 `PaneState` 锁，删除、resize、清理与退出仍可取消旧工作；无 GUI 或 detached 时仍按 daemon 自身预算接收输出。新桌面不能容纳已经保留的图片时，附着会明确失败并保留 daemon 权威内容，不以静默漏图或虚构回收提示冒充恢复成功。旧 reader 及在途解码退出前不提前归还它们仍持有的信用。
 
-`GraphicsOffer` 的零像素形式只申请资源或放置的元数据，不分配 source／GPU 票；`a=T` 在改变权威内容或回复成功前须同时获得资源与首次放置的授权，任一失败都会取消此前授权。GUI session 的独立输入 pump 优先处理授权及压力请求，普通输入待处理队列最多 64 条、每条最多 1 MiB；超限明确断连而不静默丢弃。这一普通输入边界不属于上述图片分配池合计。
+`GraphicsOffer` 的零像素形式只申请资源或放置的元数据，不分配 source／GPU 票；`a=T` 在改变权威内容或回复成功前须同时获得资源与首次放置的授权，任一失败都会取消此前授权。GUI session 的独立输入 pump 优先处理授权、视口及压力请求；同一连接先应用视口，再处理其后的压力请求，不能让压力越过尚在普通输入队列中的视口。普通输入待处理队列最多 64 条、每条最多 1 MiB；超限明确断连而不静默丢弃。这一普通输入边界不属于上述图片分配池合计。
+
+回收优先级为无引用、非可见历史、受保护内容；同级按原有准入顺序确定。可见历史不是“实时屏幕之外”的同义词：渲染连接通过 `GraphicsViewport { screen, epoch, top, rows, cols }` 报告真实滚动视口，`top` 是绝对文本行锚点，`None` 跟随实时屏，`rows=0` 撤销隐藏窗格的视口保护。`GraphicsUpdate::Screen` 携带对应 `epoch`；resize 行重排、主备屏切换、reset 和历史清理使旧代次失效。daemon 直接在自身资源／网格上核验 direct 放置与实际 placeholder 单元，不复制资源模型；同批新输出推进实时原点时，用户仍在看的历史锚点不随相对 offset 漂移。detach、控制器抢占及 observer 移除同步撤销相应连接事实；桌面跨 pane／跨 daemon 压力选择同样读取真实视口，最终仍由负责 daemon 决定能否回收。普通文字输出的准入屏障只访问当前 pane 已有资源，不扫描全 daemon 注册表。
+
+上述审查修复补充了真实 daemon 到 rooted GPUI 的大文字恢复后大图、direct／placeholder 历史回滚与并发输出、隐藏撤销、控制器抢占及跨 daemon 压力回归。修复版本的 build／tests／lint／formatter 交由集成阶段统一运行；已编写回归不代表运行通过，macOS fixture re-exec 与原生窗口／GPU／SSH 验收仍须分别取证。
 
 本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
 

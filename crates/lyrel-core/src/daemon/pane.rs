@@ -795,6 +795,16 @@ struct PaneState {
     last_redraw_nudge: Option<std::time::Instant>,
 }
 
+fn prune_graphics_viewports(st: &mut PaneState) {
+    let PaneState { graphics, subscriber, observers, .. } = st;
+    if let Some(graphics) = graphics {
+        graphics.retain_viewports(|owner| {
+            subscriber.as_ref().is_some_and(|sender| owner.as_ptr() == Arc::as_ptr(sender))
+                || observers.iter().any(|observer| owner.as_ptr() == Arc::as_ptr(&observer.tx))
+        });
+    }
+}
+
 fn notify(st: &mut PaneState, msg: DaemonMsg) {
     if let Some(sub) = &st.subscriber {
         let _ = sub.send(msg.clone());
@@ -804,6 +814,7 @@ fn notify(st: &mut PaneState, msg: DaemonMsg) {
     // which stopped draining would still queue without bound. Being over the
     // line already disqualifies it; the message is not sized individually.
     st.observers.retain(|obs| send_to_observer(obs, &msg, 0));
+    prune_graphics_viewports(st);
 }
 
 /// One message to an observer, within its budget. One past it is told why and
@@ -901,6 +912,7 @@ fn fan_out_one(st: &mut PaneState, msg: DaemonMsg, len: usize, gate: &OutputGate
         }
     }
     st.observers.retain(|obs| send_to_observer(obs, &msg, len));
+    prune_graphics_viewports(st);
 }
 
 /// Fan one PTY read out to the controller and every observer.
@@ -1727,6 +1739,27 @@ impl DaemonPane {
 
     pub fn graphics_admission_broker(&self) -> Arc<GraphicsAdmissionBroker> {
         self.state.lock().unwrap().graphics_admission.clone()
+    }
+
+    pub(crate) fn graphics_viewport(
+        &self,
+        endpoint: u64,
+        owner: &std::sync::Weak<Sender<DaemonMsg>>,
+        viewport: super::protocol::GraphicsViewport,
+    ) {
+        let mut state = self.state.lock().unwrap();
+        let Some(sender) = owner.upgrade() else { return; };
+        let attached = state.subscriber.as_ref().is_some_and(|s| Arc::ptr_eq(s, &sender))
+            || state.observers.iter().any(|o| Arc::ptr_eq(&o.tx, &sender));
+        if attached && let Some(graphics) = &mut state.graphics {
+            graphics.set_viewport(endpoint, owner.clone(), viewport);
+        }
+    }
+
+    pub(crate) fn remove_graphics_viewport(&self, endpoint: u64) {
+        if let Some(graphics) = &mut self.state.lock().unwrap().graphics {
+            graphics.remove_viewport(endpoint);
+        }
     }
 
     pub fn pressure_graphics(&self, key: u64) {
@@ -2676,6 +2709,7 @@ impl DaemonPane {
         let mut st = self.state.lock().unwrap();
         if st.subscriber_epoch == epoch {
             st.subscriber = None;
+            prune_graphics_viewports(&mut st);
             set_clipboard_permission(&mut st, false);
             self.gate.reset();
         }
@@ -2709,11 +2743,9 @@ impl DaemonPane {
     }
 
     pub fn unobserve(&self, observer_id: u64) {
-        self.state
-            .lock()
-            .unwrap()
-            .observers
-            .retain(|obs| obs.id != observer_id);
+        let mut state = self.state.lock().unwrap();
+        state.observers.retain(|obs| obs.id != observer_id);
+        prune_graphics_viewports(&mut state);
     }
 
     pub fn controls(&self, epoch: u64) -> bool {
@@ -3748,6 +3780,7 @@ fn attach_subscriber_with_permissions(
         st.subscriber = None;
         st.subscriber_epoch += 1;
     }
+    prune_graphics_viewports(st);
     epoch
 }
 

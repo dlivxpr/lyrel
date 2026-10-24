@@ -71,6 +71,8 @@ impl Daemon {
                 "--nocapture",
                 "--test-threads=1",
             ])
+            // macOS re-exec appends its responsibility flag after libtest options.
+            .arg("--")
             .env("LYREL_RETENTION_TEST_DAEMON", dir.path())
             .env("LYREL_RETENTION_TEST_METADATA", metadata.to_string())
             .env("LYREL_CONFIG_DIR", dir.path())
@@ -210,13 +212,17 @@ impl Consumer {
         self.session
             .input(format!("SEND {} {replies} {} 0\n", self.serial, fixture::hex(bytes)).as_bytes())
             .unwrap();
+        self.finish_exchange(bytes)
+    }
+
+    fn finish_exchange(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
         let marker = format!("KITTY_DONE_{}\r", self.serial);
         loop {
-            match self.session.recv().unwrap() {
+            match self.session.recv().unwrap_or_else(|error| panic!("pane {} exchange {} failed for {:?}: {error}", self.session.pane_id(), self.serial, String::from_utf8_lossy(&bytes[..bytes.len().min(160)]))) {
                 DaemonMsg::Graphics(frame) => self
                     .updates
                     .push(GraphicsUpdate::decode_frame_owned(frame.into_vec()).unwrap()),
-                DaemonMsg::Output(bytes) => {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
                     self.text.extend(bytes);
                     if self
                         .text
@@ -236,6 +242,16 @@ impl Consumer {
             .filter_map(|line| line.trim().strip_prefix("KITTY_REPLY ").map(fixture::unhex))
             .collect()
     }
+    fn exit(&mut self) {
+        self.serial += 1;
+        self.session.input(format!("EXIT {} 0 00 0\n", self.serial).as_bytes()).unwrap();
+        loop {
+            if matches!(self.session.recv().expect("the real child must report its ordered exit"), DaemonMsg::Exited { .. }) {
+                break;
+            }
+        }
+    }
+
     fn red(&mut self, control: &str) -> u64 {
         assert_eq!(
             self.exchange(
@@ -305,7 +321,16 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
     a.session
         .set_recv_timeout(Some(Duration::from_secs(30)))
         .unwrap();
-    let detached_reply = a.exchange(b"reconnected_shell", 0);
+    a.updates.clear();
+    a.text.clear();
+    a.serial = 1000;
+    a.finish_exchange(b"detached i=99 transfer");
+    // The old response may be in Snapshot or still arriving live. Once its
+    // PTY barrier completes, new input cannot be mistaken for that response.
+    // Retain both phases so the fresh marker also fences all graphics replay.
+    a.serial += 1;
+    a.session.input(format!("SEND {} 0 {} 0\n", a.serial, fixture::hex(b"reconnected_shell")).as_bytes()).unwrap();
+    let detached_reply = a.finish_exchange(b"reconnected_shell");
     assert!(
         detached_reply
             .iter()
@@ -368,12 +393,8 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
         inactive[0].starts_with(b"\x1b_Gi=9;ENOSPC:"),
         "inactive main screen remains protected"
     );
+    b.exit();
     daemon.panes().kill(b.session.pane_id()).unwrap();
-    loop {
-        if matches!(b.session.recv().unwrap(), DaemonMsg::Exited { .. }) {
-            break;
-        }
-    }
     a.red("a=T,i=10,c=1,r=1,C=1");
     daemon.panes().kill(a.session.pane_id()).unwrap();
 }
@@ -666,6 +687,8 @@ fn retention_daemon_offer_replay_refusal_live_cancel_and_pressure_keep_authority
     while offers.try_recv().is_ok() {}
     while cancellations.try_recv().is_ok() {}
     mode.store(2, Ordering::Release);
+    a.updates.clear();
+    a.text.clear();
     a.serial += 1;
     a.session
         .input(
@@ -692,7 +715,10 @@ fn retention_daemon_offer_replay_refusal_live_cancel_and_pressure_keep_authority
     .encode(&mut writer)
     .unwrap();
     mode.store(1, Ordering::Release);
-    let cancellation_reply = a.exchange(b"clear_cancel_shell", 0);
+    // GraphicsCancel precedes the PTY error response. Do not inject the next
+    // SEND while the child still reads that old reply: it would consume the
+    // new command as reply bytes. Await this request's existing stream barrier.
+    let cancellation_reply = a.finish_exchange(b"cancelled i=3 transfer");
     assert!(
         cancellation_reply
             .iter()
@@ -703,6 +729,7 @@ fn retention_daemon_offer_replay_refusal_live_cancel_and_pressure_keep_authority
             .iter()
             .any(|u| matches!(u, GraphicsUpdate::Resource { .. }))
     );
+    a.idle(b"clear_cancel_shell");
     let history = a.red("a=T,i=4,c=1,r=1,C=1");
     a.idle(&b"\r\n".repeat(40));
     ClientMsg::GraphicsPressure { key: history }
@@ -756,12 +783,8 @@ fn retention_daemon_metadata_budget_keeps_notice_owners_until_history_or_close_r
     ));
     let accepted = b.exchange(b"\x1b_Ga=p,i=2,p=9,c=1,r=1,C=1\x1b\\", 1);
     assert!(accepted[0].ends_with(b";OK\x1b\\"));
+    a.exit();
     daemon.panes().kill(a.session.pane_id()).unwrap();
-    loop {
-        if matches!(a.session.recv().unwrap(), DaemonMsg::Exited { .. }) {
-            break;
-        }
-    }
     let after_close = b.exchange(b"\x1b_Ga=p,i=2,p=10,c=1,r=1,C=1\x1b\\", 1);
     assert!(after_close[0].ends_with(b";OK\x1b\\"));
     daemon.panes().kill(b.session.pane_id()).unwrap();
@@ -805,12 +828,8 @@ fn retention_daemon_one_kib_metadata_refuses_atomic_image_without_moving_cursor_
     );
     a.session.clear_presentation(true).unwrap();
     a.red("a=T,i=4,p=1,c=1,r=1,C=1");
+    a.exit();
     daemon.panes().kill(a.session.pane_id()).unwrap();
-    loop {
-        if matches!(a.session.recv().unwrap(), DaemonMsg::Exited { .. }) {
-            break;
-        }
-    }
     let mut b = daemon.spawn();
     b.red("a=T,i=5,p=1,c=1,r=1,C=1");
     daemon.panes().kill(b.session.pane_id()).unwrap();

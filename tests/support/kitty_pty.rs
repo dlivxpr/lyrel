@@ -83,7 +83,7 @@ use std::io::{Read, Write};
             let fragment: usize = fields.next().unwrap_or("0").parse().unwrap();
             match operation {
                 "EXIT" => return,
-                "SEND" => {
+                "SEND" | "SEND_OK" => {
                     for part in bytes.chunks(if fragment == 0 {
                         bytes.len().max(1)
                     } else {
@@ -114,6 +114,9 @@ use std::io::{Read, Write};
                     let mut byte = [0];
                     input.read_exact(&mut byte).unwrap();
                     reply.push(byte[0]);
+                }
+                if operation == "SEND_OK" {
+                    assert!(reply.ends_with(b";OK\x1b\\"), "graphics admission failed: {}", String::from_utf8_lossy(&reply));
                 }
                 write!(
                     output,

@@ -218,7 +218,18 @@ fn graphics_send_fixture(
     serial: usize,
     bytes: &[u8],
 ) {
-    let request = format!("SEND {serial} 0 {} 0\n", graphics_pty_fixture::hex(bytes));
+    graphics_send_fixture_with_replies(view, cx, serial, bytes, 0);
+}
+
+fn graphics_send_fixture_with_replies(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    serial: usize,
+    bytes: &[u8],
+    replies: usize,
+) {
+    let operation = if replies == 0 { "SEND" } else { "SEND_OK" };
+    let request = format!("{operation} {serial} {replies} {} 0\n", graphics_pty_fixture::hex(bytes));
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     let marker = format!("KITTY_DONE_{serial}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -295,7 +306,13 @@ fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direc
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].placement.image_id, 16777223);
         assert_eq!(images[0].placement.placement_id, 9);
-        assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[0,0,255,255,0,255,0,255,255,0,0,255,255,255,255]);
+        // Sender RGBA pixels are red, green, blue, opaque white (4 × 4 bytes).
+        assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[
+            0, 0, 255, 255,
+            0, 255, 0, 255,
+            255, 0, 0, 255,
+            255, 255, 255, 255,
+        ]);
         let (crop, full) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
         assert_eq!(crop, Bounds::new(point(px(40.), px(50.)), gpui_kit::size(px(40.), px(10.))));
         assert_eq!(crop, full);
@@ -516,7 +533,7 @@ fn graphics_consumer_real_daemon_budget_notices_share_direct_and_placeholder_his
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
     // Two RGBA pixels fit. The third must reclaim history, not the live image.
-    let stream = daemon.stream_with_capacity(pane, 8, 8);
+    let stream = daemon.stream_with_capacity(pane, 1024, 8);
     cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
     let (view, window) = graphics_rooted_consumer(cx, pane, stream);
     graphics_send_fixture(&view, cx, 1, "\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=8,p=2,U=1,c=2,r=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\\x1b[8;5H\x1b[38;5;8;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes());
@@ -587,7 +604,7 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
         for serial in 0..3 {
             let daemon = &daemons[serial];
             let pane = daemon.spawn();
-            let stream = daemon.stream_with_capacity(pane, 4, 4);
+            let stream = daemon.stream_with_capacity(pane, 1024, 4);
             let (view, window) = graphics_rooted_consumer(cx, pane, stream);
             graphics_send_fixture(&view, cx, serial + 1, b"\x1b[5;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
             if serial < 2 {
@@ -610,6 +627,15 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
         // Only the oldest pane moves into history. It belongs to a different
         // daemon from the new offer, but both compete for the desktop pool.
         graphics_send_fixture(&terminals[0].1, cx, 4, &b"\r\n".repeat(80));
+        terminals[0].1.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+        graphics_send_fixture(&terminals[2].1, cx, 40, b"\x1b[5;5H\x1b_Ga=T,i=9,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+        assert!(terminals[2].1.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "another daemon cannot reclaim history the user is actually viewing");
+        terminals[0].1.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert!(!images[0].evicted);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
+        });
+        terminals[0].1.update(cx, |view, cx| view.scroll(-10_000, None, &Modifiers::default(), cx));
         graphics_send_fixture(&terminals[2].1, cx, 5, b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while terminals[2].1.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
@@ -832,4 +858,125 @@ fn graphics_consumer_user_clear_screen_works_after_real_exit_and_disconnect(cx: 
 #[gpui_kit::test]
 fn graphics_consumer_user_clear_scrollback_works_after_real_exit_and_disconnect(cx: &mut TestAppContext) {
     for child_exit in [true, false] { graphics_retained_pane_clear(cx, child_exit, true); }
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_large_text_replay_then_large_pixels_keeps_admitted_source(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    let (prior, prior_window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
+    graphics_send_fixture(&prior, cx, 1, &vec![b'X'; 768 << 10]);
+    prior.update(cx, |view, _| view.terminal.detach_link());
+    prior_window.update(cx, |_, window, _| window.remove_window()).unwrap();
+    drop(prior);
+    // The real replay ring coalesces the large text into a Snapshot. The
+    // production reader, not a synthetic allocation assertion, consumes it.
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
+    let pixels = [255, 0, 0, 255].repeat(192 * 128);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&pixels);
+    let command = format!("\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=3001,c=2,r=1,C=1,f=32,s=192,v=128;{encoded}\x1b\\");
+    graphics_send_fixture_with_replies(&view, cx, 2, command.as_bytes(), 1);
+    graphics_layout_wait_image(&view, cx, 3001);
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        let image = images.iter().find(|image| image.placement.image_id == 3001).unwrap();
+        let bytes = image.data.as_ref().unwrap().as_bytes(0).unwrap();
+        assert_eq!(bytes.len(), 192 * 128 * 4);
+        assert!(bytes.chunks_exact(4).all(|pixel| pixel == [0, 0, 255, 255]));
+        assert!(image.painted.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!image.evicted, "an ACKed source after a large text snapshot must remain paintable");
+    });
+    daemon.panes().kill(pane).unwrap();
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_scrolled_history_survives_new_output_and_hidden_viewport_withdraws(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    for placeholder in [false, true] {
+        let daemon = GraphicsDaemonProcess::start();
+        let pane = daemon.spawn();
+        let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 1024, 8));
+        let first = if placeholder {
+            "\x1b[2J\x1b[3J\x1b_Ga=T,i=7,p=1,U=1,c=2,r=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b[6;5H\x1b[38;5;7;58;5;1m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m"
+        } else {
+            "\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\"
+        };
+        graphics_send_fixture(&view, cx, 1, first.as_bytes());
+        graphics_layout_wait_image(&view, cx, 7);
+        graphics_send_fixture(&view, cx, 2, &b"\r\n".repeat(80));
+        graphics_send_fixture(&view, cx, 3, b"\x1b[6;5H\x1b_Ga=T,i=8,p=2,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\");
+        graphics_layout_wait_image(&view, cx, 8);
+        graphics_send_fixture(&view, cx, 4, &b"\r\n".repeat(80));
+        view.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+        graphics_assert_production_paint(window, &view, cx);
+        // New output advances history_origin before its next image is admitted.
+        // The reported absolute top must continue to protect the old red pixels.
+        let mut output = b"\r\n".repeat(80);
+        output.extend_from_slice(b"\x1b[10;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+        graphics_send_fixture(&view, cx, 5, &output);
+        graphics_layout_wait_image(&view, cx, 9);
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            let watched = images.iter().find(|image| image.placement.image_id == 7).unwrap();
+            assert!(!watched.evicted);
+            assert_eq!(watched.data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
+            let history = images.iter().find(|image| image.placement.image_id == 8).unwrap();
+            assert!(history.evicted && history.data.is_none(), "only the non-visible history is reclaimed");
+        });
+        graphics_assert_production_paint(window, &view, cx);
+        cx.update(|cx| declare_displayed(cx, [(view.entity_id(), false)]));
+        graphics_send_fixture(&view, cx, 6, b"\x1b[12;5H\x1b_Ga=T,i=10,p=4,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/////w==\x1b\\");
+        graphics_layout_wait_image(&view, cx, 10);
+        cx.update(|cx| declare_displayed(cx, [(view.entity_id(), true)]));
+        graphics_assert_production_paint(window, &view, cx);
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            let old = images.iter().find(|image| image.placement.image_id == 7).unwrap();
+            assert!(old.evicted && old.data.is_none(), "a hidden connection cannot pin its old viewport");
+            assert!(old.painted.load(std::sync::atomic::Ordering::Acquire));
+        });
+        daemon.panes().kill(pane).unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_preempted_scroll_viewport_cannot_pin_replayed_history(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let (prior, prior_window) = graphics_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 1024, 8));
+    graphics_send_fixture(&prior, cx, 1, b"\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+    graphics_layout_wait_image(&prior, cx, 7);
+    graphics_send_fixture(&prior, cx, 2, &b"\r\n".repeat(80));
+    graphics_send_fixture(&prior, cx, 3, b"\x1b[6;5H\x1b_Ga=T,i=8,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\");
+    graphics_layout_wait_image(&prior, cx, 8);
+    graphics_send_fixture(&prior, cx, 4, &b"\r\n".repeat(80));
+    prior.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+    graphics_send_fixture(&prior, cx, 5, b"old_viewport_was_processed");
+    // A new production attach preempts the old controller. Neither its old
+    // scroll position nor an in-flight sender clone is a current window fact.
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 1024, 8));
+    graphics_send_fixture(&view, cx, 6, b"\x1b[10;5H\x1b_Ga=T,i=9,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+    graphics_layout_wait_image(&view, cx, 9);
+    view.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        let oldest = images.iter().find(|image| image.placement.image_id == 7).unwrap();
+        assert!(oldest.evicted && oldest.data.is_none());
+        let retained = images.iter().find(|image| image.placement.image_id == 8).unwrap();
+        assert!(!retained.evicted);
+        assert_eq!(retained.data.as_ref().unwrap().as_bytes(0).unwrap(), [255, 0, 0, 255]);
+    });
+    prior_window.update(cx, |_, window, _| window.remove_window()).unwrap();
+    daemon.panes().kill(pane).unwrap();
 }

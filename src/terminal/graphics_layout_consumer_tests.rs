@@ -266,15 +266,25 @@ fn graphics_consumer_real_daemon_history_expiration_clips_before_resize(cx: &mut
 
 #[gpui_kit::test]
 fn graphics_consumer_real_daemon_anonymous_expiration_restores_admission(cx: &mut TestAppContext) {
-    let (daemon, pane, view, window) = graphics_layout_harness(cx);
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    // Exactly one decoded RGBA pixel fits, independently of Base64 scratch.
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 1024, 4));
     graphics_send_fixture(&view, cx, 1, b"\x1b[?1049h\x1b[2J\x1b[H");
-    for serial in 2..18 {
-        graphics_send_fixture(
-            &view,
-            cx,
-            serial,
-            &b"\x1b_Ga=T,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\".repeat(64),
-        );
+    for serial in 2..5 {
+        graphics_send_fixture(&view, cx, serial * 2, b"\x1b[1;1H\x1b_Ga=T,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\");
+        graphics_layout_wait_image(&view, cx, 0);
+        graphics_assert_production_paint(window, &view, cx);
+        view.read_with(cx, |view, _| {
+            let images = graphics_visible_images(view);
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
+        });
+        graphics_send_fixture(&view, cx, serial * 2 + 1, b"\x1b[24;1H\n");
+        assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "expired anonymous content must release the sole resource allowance without a notice");
     }
     graphics_send_fixture(&view, cx, 18, b"\x1b[24;1H\n");
     view.read_with(cx, |view, _| {
@@ -295,7 +305,7 @@ fn graphics_consumer_real_daemon_anonymous_expiration_restores_admission(cx: &mu
         assert_eq!(
             images.len(),
             1,
-            "all 1,024 expired anonymous placements release their inaccessible resource identities"
+            "expired anonymous resources release the allowance for a subsequent named resource"
         );
         assert_eq!(images[0].placement.image_id, 2000);
         let (crop, _) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);

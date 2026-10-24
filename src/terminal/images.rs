@@ -331,6 +331,9 @@ struct StoreInner {
     next_revision: u64,
     screen: u64,
     history_origin: i64,
+    viewport_epoch: u64,
+    local_origin: i64,
+    viewport_known: bool,
     cell_width: u16,
     cell_height: u16,
 }
@@ -718,12 +721,27 @@ impl ImageStore {
         }
     }
 
+    pub(super) fn viewport(&self, local_origin: i64, offset: usize, rows: usize, cols: usize, displayed: bool) -> Option<crate::daemon::protocol::GraphicsViewport> {
+        let inner = self.0.state.lock().unwrap();
+        if !inner.viewport_known { return None; }
+        Some(crate::daemon::protocol::GraphicsViewport {
+            screen: inner.screen,
+            epoch: inner.viewport_epoch,
+            top: (offset != 0).then(|| inner.history_origin.saturating_add(local_origin - inner.local_origin).saturating_sub(offset as i64)),
+            rows: if displayed { rows.min(u16::MAX as usize) as u16 } else { 0 },
+            cols: cols.min(u16::MAX as usize) as u16,
+        })
+    }
+
     /// The caller holds the live terminal grid while deriving rows, then enters
     /// this store. No registry/store lock is held while acquiring another grid.
     pub fn oldest_reclaimable(
         &self,
         live_rows: usize,
         live_cols: usize,
+        local_origin: i64,
+        display_offset: usize,
+        displayed: bool,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> Option<(u64, u64, bool)> {
         let mut inner = self.0.state.lock().unwrap();
@@ -738,9 +756,9 @@ impl ImageStore {
         let mut protected = BTreeSet::new();
         for anchored in inner.placements.values() {
             let placement = &anchored.placement;
-            let row = placement.anchor_row - inner.history_origin;
+            let row = placement.anchor_row - inner.history_origin - (local_origin - inner.local_origin) + display_offset as i64;
             if placement.screen != inner.screen
-                || (!placement.virtual_placement
+                || (displayed && !placement.virtual_placement
                     && placement.anchor_col < live_cols as u32
                     && row + i64::from(placement.clip_top) < live_rows as i64
                     && row + i64::from(placement.clip_bottom) > 0)
@@ -749,6 +767,7 @@ impl ImageStore {
             }
         }
         for (_, slices) in rows {
+            if !displayed { break; }
             for slice in slices {
                 let Some(prototype) = placeholder_prototype(
                     inner.placements.values().map(|p| &p.placement),
@@ -1189,10 +1208,13 @@ impl ImageStore {
             GraphicsUpdate::Screen {
                 screen,
                 history_origin,
+                epoch,
             } => {
-                let changed = inner.screen != screen || inner.history_origin != history_origin;
+                let changed = inner.screen != screen || inner.history_origin != history_origin || inner.viewport_epoch != epoch;
                 inner.screen = screen;
                 inner.history_origin = history_origin;
+                inner.viewport_epoch = epoch;
+                inner.viewport_known = true;
                 changed
             }
             GraphicsUpdate::Remove {
@@ -1258,6 +1280,13 @@ impl DecodeWorker {
             store,
             generation,
             handle: Some(handle),
+        }
+    }
+
+    pub(super) fn sync_local_origin(&self, local_origin: i64) {
+        let mut inner = self.store.0.state.lock().unwrap();
+        if inner.reader_generation == self.generation && !inner.closed {
+            inner.local_origin = local_origin;
         }
     }
 
