@@ -2484,8 +2484,41 @@ impl Element for TerminalElement {
         // the worst case is evicting one paint late, which is invisible.
         let retired_images = image_store.take_retired();
         let images = image_store.snapshot();
+        let paint_images = |window: &mut Window, z: std::ops::Range<i64>| {
+            // Separate crop/full-texture bounds select atlas UVs; no placement
+            // owns a copied pixel buffer. The enclosing pane mask still applies.
+            for img in images.iter().filter(|image| z.contains(&i64::from(image.placement.z))) {
+                let (bounds, image_bounds) = img.paint_bounds(
+                    geom.origin, geom.cell_width, geom.line_height,
+                    snap.history_size, snap.display_offset, window.scale_factor(),
+                );
+                let visible = bounds.intersect(&window.content_mask().bounds);
+                if visible.size.width <= px(0.) || visible.size.height <= px(0.)
+                    || !image_store.claim_for_paint(img)
+                {
+                    continue;
+                }
+                window.paint_layer(visible, |window| {
+                    let _ = window.paint_image(
+                        bounds, image_bounds, Corners::default(), img.data.clone(), 0, false,
+                    );
+                    if dim < 1. {
+                        let mut c: Hsla = under.into();
+                        c.a = 1. - dim;
+                        window.paint_quad(fill(bounds, c));
+                    }
+                });
+            }
+        };
+        let below_background = -(1_i64 << 30);
+        let sliver = sliver.map(|row| (CellGeom {
+            origin: point(geom.origin.x, geom.origin.y - geom.line_height),
+            rows: 1,
+            ..geom
+        }, row));
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            paint_images(window, i64::from(i32::MIN)..below_background);
             paint_backgrounds(window, &geom, &buf);
             if snap.any_selected {
                 paint_cell_runs(window, &geom, &buf, colors.selection_bg, |c| c.selected);
@@ -2505,6 +2538,13 @@ impl Element for TerminalElement {
                     c.match_current
                 });
             }
+            if let Some((sg, row)) = &sliver {
+                paint_backgrounds(window, sg, row);
+                if snap.any_selected {
+                    paint_cell_runs(window, sg, row, colors.selection_bg, |c| c.selected);
+                }
+            }
+            paint_images(window, below_background..0);
             paint_glyphs(
                 window,
                 cx,
@@ -2517,103 +2557,25 @@ impl Element for TerminalElement {
             );
             let scale = window.scale_factor();
             paint_special_underlines(window, &geom, &buf, scale);
-            // Kitty-graphics images, painted over the placeholder cells they
-            // occupy. `anchor_row` is absolute (measured from the top of
-            // scrollback); convert it to a screen row with the same scroll state
-            // `build_grid` captured. Rows spanning past the viewport top/bottom
-            // are clipped by the surrounding content mask.
-            //
-            // Sizing: per the kitty spec, an image with no `c=`/`r=` is shown at
-            // its natural size — one image pixel per terminal *device* pixel. A
-            // sender like terminal-browser renders its frame to exactly fill the
-            // pixel area we reported to the child via `ws_xpixel`/`ws_ypixel`,
-            // which the daemon sets to `cols × round(cell_w × scale)` /
-            // `rows × round(cell_h × scale)` — the cell size in *device* pixels
-            // (see `set_grid_size`). So the frame is at device resolution; to map
-            // it back to a cell span we divide by that *same* device cell size,
-            // `round(cell_logical × scale)`. Painting the resulting cell-span
-            // bounds (in logical px) lets gpui blit the device-resolution bitmap
-            // ~1:1 on the framebuffer — sharp, and the right size — instead of
-            // upscaling a half-resolution one. Deriving here, not at placement,
-            // keeps it correct across font-size / zoom / display-scale changes.
-            let scale = window.scale_factor();
-            let scale = if scale.is_finite() && scale > 0. {
-                scale
-            } else {
-                1.
-            };
-            for img in &images {
-                let round_w = (geom.cell_width.as_f32() * scale).round().max(1.);
-                let round_h = (geom.line_height.as_f32() * scale).round().max(1.);
-                let span_cols = if img.cols > 0 {
-                    img.cols as f32
-                } else {
-                    (img.width_px as f32 / round_w).round().max(1.)
-                };
-                let span_rows = if img.rows > 0 {
-                    img.rows as f32
-                } else {
-                    (img.height_px as f32 / round_h).round().max(1.)
-                };
-                let screen_row =
-                    img.anchor_row - snap.history_size as i64 + snap.display_offset as i64;
-                // Fully above or below the viewport: nothing visible to paint.
-                if screen_row + span_rows as i64 <= 0 || screen_row >= geom.rows as i64 {
-                    continue;
-                }
-                if !image_store.claim_for_paint(img) {
-                    continue;
-                }
-                let top = geom.origin.y + geom.line_height * screen_row as f32;
-                let left = geom.origin.x + geom.cell_width * img.anchor_col as f32;
-                let bounds = Bounds {
-                    origin: point(left, top),
-                    size: size(geom.cell_width * span_cols, geom.line_height * span_rows),
-                };
-                let _ = window.paint_image(
-                    bounds,
-                    bounds,
-                    Corners::default(),
-                    img.data.clone(),
-                    0,
-                    false,
-                );
-                // A bitmap is a single layer, so its dim cannot come from the
-                // pre-blended palette; blend the image itself toward the under
-                // the same way the surrounding cells are blended.
-                if dim < 1. {
-                    let mut c: Hsla = under.into();
-                    c.a = 1. - dim;
-                    window.paint_quad(fill(bounds, c));
-                }
-            }
-            // Evict superseded / deleted frames from the sprite atlas. Without
-            // this a browser re-transmitting at 60fps would leak one GPU tile per
-            // frame, growing the atlas without bound until the compositor stalls.
-            for retired in &retired_images {
-                let _ = window.drop_image(retired.clone());
-            }
-            if let Some(row) = sliver {
-                let sg = CellGeom {
-                    origin: point(geom.origin.x, geom.origin.y - geom.line_height),
-                    rows: 1,
-                    ..geom
-                };
-                paint_backgrounds(window, &sg, row);
-                if snap.any_selected {
-                    paint_cell_runs(window, &sg, row, colors.selection_bg, |c| c.selected);
-                }
+            if let Some((sg, row)) = &sliver {
                 paint_glyphs(
                     window,
                     cx,
-                    &sg,
+                    sg,
                     row,
                     font_size,
                     &base_font,
                     bold_font.as_ref(),
                     italic_font.as_ref(),
                 );
-                paint_special_underlines(window, &sg, row, scale);
+                paint_special_underlines(window, sg, row, scale);
+            }
+            paint_images(window, 0..i64::from(i32::MAX) + 1);
+            // Evict superseded / deleted frames from the sprite atlas. Without
+            // this a browser re-transmitting at 60fps would leak one GPU tile per
+            // frame, growing the atlas without bound until the compositor stalls.
+            for retired in &retired_images {
+                let _ = window.drop_image(retired.clone());
             }
             if !editor_active {
                 paint_cursor(
