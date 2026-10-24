@@ -754,10 +754,10 @@ pub struct RemoteTerminal {
     auto_supplied_password: bool,
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
-    /// Kitty-graphics images placed on this pane's grid (issue #213).
-    /// Written by the reader thread from out-of-band `Image`/`DeleteImage`
-    /// frames, read by the paint path — only the client holds the grid the
-    /// anchors are relative to, so the store lives here rather than in the daemon.
+    /// Derived decode/render cache for the daemon's authoritative graphics state.
+    /// The reader applies ordered out-of-band `Graphics` updates and captures
+    /// client-grid placement anchors; protocol identities and resource lifetimes
+    /// remain owned by the living daemon pane.
     images: crate::terminal::images::ImageStore,
     clipboard_writes: Arc<Mutex<VecDeque<lyrel_core::core::clipboard::ClipboardWrite>>>,
     osc_notes: OscNotes,
