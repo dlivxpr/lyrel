@@ -828,16 +828,21 @@ fn send_to_observer(obs: &Observer, msg: &DaemonMsg, len: usize) -> bool {
 /// (the bytes carry no tags and ConPTY emits no sync marker of its own), and
 /// is the same ambiguity every ConPTY terminal accepts on a mid-output
 /// resize. The echo exists to close the 16 MiB window, not that one.
-fn resize_state(st: &mut PaneState, size: WinSize) {
+fn resize_state(st: &mut PaneState, size: WinSize, gate: &OutputGate) {
     st.ring.resize(size);
-    if let Some(graphics) = &mut st.graphics {
-        graphics.resize(size);
-    }
+    let effects = st.graphics.as_mut().map(|graphics| graphics.resize(size)).unwrap_or_default();
     if let Some(sub) = &st.subscriber {
         let _ = sub.send(DaemonMsg::Size(size));
     }
     st.observers
         .retain(|obs| obs.tx.send(DaemonMsg::Size(size)).is_ok());
+    for effect in effects {
+        if let GraphicsEffect::Update(update) = effect {
+            let frame = update.encode_frame();
+            let len = frame.len();
+            fan_out_one(st, DaemonMsg::Graphics(frame), len, gate);
+        }
+    }
 }
 
 /// One gated message to the controller and to every observer.
@@ -1095,23 +1100,21 @@ fn process_graphics_output(
 ) {
     match sniffed {
         Sniffed::Plain(bytes) => {
-            if let Some(state) = state.as_deref_mut() {
-                state.output(bytes);
-            }
+            let effects = state.as_deref_mut().map(|state| state.output(bytes)).unwrap_or_default();
             pass.extend_from_slice(bytes);
-            if ordered && !bytes.is_empty() {
+            if (ordered || !effects.is_empty()) && !bytes.is_empty() {
                 frames.push(GraphicsFrame::Output(bytes.to_vec()));
             }
+            append_graphics_effects(effects, pass, frames, writer);
         }
         Sniffed::Segments(segments) => {
             for segment in segments {
                 match segment {
                     Segment::Output(bytes) => {
-                        if let Some(state) = state.as_deref_mut() {
-                            state.output(&bytes);
-                        }
+                        let effects = state.as_deref_mut().map(|state| state.output(&bytes)).unwrap_or_default();
                         pass.extend_from_slice(&bytes);
                         frames.push(GraphicsFrame::Output(bytes));
+                        append_graphics_effects(effects, pass, frames, writer);
                     }
                     Segment::Reply(reply) => write_graphics_reply(writer, &reply),
                     Segment::Command { control, image } => {
@@ -1121,25 +1124,27 @@ fn process_graphics_output(
                         let Some(state) = state.as_deref_mut() else {
                             continue;
                         };
-                        for effect in state.apply(control, image) {
-                            match effect {
-                                GraphicsEffect::Update(update) => {
-                                    frames.push(GraphicsFrame::Graphics(update.encode_frame()));
-                                }
-                                GraphicsEffect::Reply(reply) => {
-                                    write_graphics_reply(writer, &reply)
-                                }
-                                GraphicsEffect::Output(bytes) => {
-                                    // The state already applied its movement.
-                                    // Persist/forward it like ordinary output,
-                                    // without feeding it back to state.output.
-                                    pass.extend_from_slice(&bytes);
-                                    frames.push(GraphicsFrame::Output(bytes));
-                                }
-                            }
-                        }
+                        append_graphics_effects(state.apply(control, image), pass, frames, writer);
                     }
                 }
+            }
+        }
+    }
+}
+
+fn append_graphics_effects(
+    effects: Vec<GraphicsEffect>,
+    pass: &mut Vec<u8>,
+    frames: &mut Vec<GraphicsFrame>,
+    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+) {
+    for effect in effects {
+        match effect {
+            GraphicsEffect::Update(update) => frames.push(GraphicsFrame::Graphics(update.encode_frame())),
+            GraphicsEffect::Reply(reply) => write_graphics_reply(writer, &reply),
+            GraphicsEffect::Output(bytes) => {
+                pass.extend_from_slice(&bytes);
+                frames.push(GraphicsFrame::Output(bytes));
             }
         }
     }
@@ -1176,7 +1181,11 @@ fn lift_out_of_band<'a>(
         ClipboardSniffed::Plain(b) => match graphics.sniff(b) {
             Sniffed::Plain(b) => {
                 if let Some(state) = state.as_deref_mut() {
-                    state.output(b);
+                    let effects = state.output(b);
+                    if !effects.is_empty() {
+                        frames.push(GraphicsFrame::Output(b.to_vec()));
+                        append_graphics_effects(effects, &mut Vec::new(), frames, writer);
+                    }
                 }
                 std::borrow::Cow::Borrowed(b)
             }
@@ -2614,8 +2623,21 @@ impl DaemonPane {
 
     /// Resize the shared pane state before applying the new PTY geometry.
     pub fn resize(&self, size: WinSize) {
-        resize_state(&mut self.state.lock().unwrap(), size);
+        resize_state(&mut self.state.lock().unwrap(), size, &self.gate);
         self.resize_pty(size);
+    }
+
+    /// A controller command, not PTY input. All consumers see the same clear
+    /// and graphics removals under the output lock; the shell redraw follows.
+    pub fn clear_presentation(&self, history: bool) {
+        let mut st = self.state.lock().unwrap();
+        let Some(graphics) = st.graphics.as_mut() else { return; };
+        let effects = graphics.clear_presentation(history);
+        let mut frames = Vec::new();
+        let mut pass = Vec::new();
+        append_graphics_effects(effects, &mut pass, &mut frames, &self.writer);
+        record_output(&mut st, &pass);
+        fan_out_output(&mut st, &pass, frames, &self.gate);
     }
 
     fn resize_pty(&self, size: WinSize) {
@@ -7106,7 +7128,7 @@ mod tests {
 
         let pane_gate = OutputGate::new();
         fan_out_output(&mut st, b"old-width bytes", Vec::new(), &pane_gate);
-        resize_state(&mut st, ws(120, 30));
+        resize_state(&mut st, ws(120, 30), &pane_gate);
         fan_out_output(&mut st, b"new-width bytes", Vec::new(), &pane_gate);
 
         match controller_rx.try_recv().unwrap() {
@@ -7737,6 +7759,8 @@ mod tests {
             }
             other => panic!("expected Graphics frame, got {other:?}"),
         }
+        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Graphics(frame))
+            if matches!(GraphicsUpdate::decode_frame_owned(frame), Some(GraphicsUpdate::Screen { screen: 0, history_origin: 0 }))));
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"after"));
     }
 
@@ -7948,7 +7972,7 @@ mod tests {
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"x"));
         let mut resource = None;
         let mut placement = None;
-        for _ in 0..3 {
+        for _ in 0..4 {
             let Ok(DaemonMsg::Graphics(frame)) = sub_rx.try_recv() else {
                 panic!("expected an ordered graphics update");
             };
@@ -7968,6 +7992,7 @@ mod tests {
                     assert_eq!(placements, [placement.unwrap()]);
                     assert_eq!(resources, [resource.unwrap()]);
                 }
+                GraphicsUpdate::Screen { .. } => {}
             }
         }
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"y"));

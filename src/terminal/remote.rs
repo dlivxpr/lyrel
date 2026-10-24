@@ -1757,18 +1757,7 @@ impl RemoteTerminal {
                                 if let Some(update) =
                                     lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame_owned(frame)
                                 {
-                                    let (row, col) = if matches!(update,
-                                        lyrel_core::core::kitty_graphics::GraphicsUpdate::Place(_))
-                                    {
-                                        use rio_vt::crosswords::grid::Dimensions as _;
-                                        let term = term.lock();
-                                        if quit.load(Ordering::SeqCst) { return; }
-                                        let grid = &term.grid;
-                                        (grid.history_size() as i64
-                                            + i64::from(grid.cursor.pos.row.0),
-                                            grid.cursor.pos.col.0)
-                                    } else { (0, 0) };
-                                    if image_decoder.apply(update, row, col) {
+                                    if image_decoder.apply(update) {
                                         proxy.send(PaneEvent::Wakeup);
                                     }
                                 }
@@ -2055,6 +2044,10 @@ impl RemoteTerminal {
             PaneRoute::Remote { resize_echo, .. } => *resize_echo,
             PaneRoute::Unroutable(_) => false,
         }
+    }
+
+    pub fn clear_presentation(&self, history: bool) {
+        self.link.send(ClientMsg::ClearPresentation { history });
     }
 
     pub fn resize(&mut self, size: TermSize, cell_w: u16, cell_h: u16) {
@@ -4750,6 +4743,9 @@ mod windows_tests {
             placement.resource = key;
             placement.w = 1;
             placement.h = 1;
+            placement.span_cols = 1;
+            placement.span_rows = 1;
+            placement.clip_bottom = 1;
             DaemonMsg::Graphics(GraphicsUpdate::Place(placement).encode_frame())
                 .encode(stream).unwrap();
         };

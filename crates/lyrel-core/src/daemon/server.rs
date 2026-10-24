@@ -1367,7 +1367,7 @@ fn stream_observer(
 fn observe_loop<R: std::io::Read>(read_stream: &mut R, mut refuse: impl FnMut(DaemonMsg) -> bool) {
     loop {
         match ClientMsg::read(read_stream) {
-            Ok(ClientMsg::Input(_)) | Ok(ClientMsg::Resize(_)) => {
+            Ok(ClientMsg::Input(_)) | Ok(ClientMsg::Resize(_)) | Ok(ClientMsg::ClearPresentation { .. }) => {
                 if !refuse(DaemonMsg::Error(
                     "this connection is a read-only observer; attach to write".to_string(),
                 )) {
@@ -1416,6 +1416,10 @@ fn run_stream(
                         break 'conn;
                     }
                     pane.write_input(&bytes);
+                }
+                ClientMsg::ClearPresentation { history } => {
+                    if !pane.controls(epoch) { break 'conn; }
+                    pane.clear_presentation(history);
                 }
                 ClientMsg::Resize(size) => {
                     if !pane.controls(epoch) {
@@ -1590,6 +1594,7 @@ mod tests {
             .encode(&mut wire)
             .unwrap();
         ClientMsg::Resize(size).encode(&mut wire).unwrap();
+        ClientMsg::ClearPresentation { history: true }.encode(&mut wire).unwrap();
         ClientMsg::QueryProcs { pane_id: 1 }
             .encode(&mut wire)
             .unwrap();
@@ -1609,6 +1614,10 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(DaemonMsg::Error(m)) if m.contains("read-only")),
             "an observer's Resize must be answered with an Error, not applied"
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(DaemonMsg::Error(m)) if m.contains("read-only")),
+            "an observer cannot clear the controller's presentation or history"
         );
         assert!(
             rx.try_recv().is_err(),

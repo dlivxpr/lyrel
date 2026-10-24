@@ -2576,14 +2576,27 @@ mod kitty_graphics {
             }
             for _ in 0..replies {
                 let mut reply = Vec::new();
-                while !reply.ends_with(b"\x1b\\") {
+                while !(reply.ends_with(b"\x1b\\")
+                    || (reply.starts_with(b"\x1b[") && reply.ends_with(b"t"))) {
                     let mut byte = [0];
                     input.read_exact(&mut byte).unwrap();
                     reply.push(byte[0]);
                 }
-                writeln!(output, "\r\nKITTY_REPLY {}\r", hex(&reply)).unwrap();
+                write!(output, "\x1b7\x1b[1;1H\r\nKITTY_REPLY {}\r\n\x1b8", hex(&reply)).unwrap();
             }
-            writeln!(output, "\r\nKITTY_DONE_{serial}\r").unwrap();
+            // Force a parser boundary and wait for its application-visible
+            // answer before the text marker. Layout updates from preceding
+            // ordinary text must already be queued ahead of KITTY_DONE.
+            output.write_all(b"\x1b_Ga=q,i=4294967294,f=32,s=1,v=1;/wAA/w==\x1b\\").unwrap();
+            output.flush().unwrap();
+            let mut barrier = Vec::new();
+            while !barrier.ends_with(b"\x1b\\") {
+                let mut byte = [0];
+                input.read_exact(&mut byte).unwrap();
+                barrier.push(byte[0]);
+            }
+            assert_eq!(barrier, b"\x1b_Gi=4294967294;OK\x1b\\");
+            write!(output, "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial}\r\n\x1b8").unwrap();
             output.flush().unwrap();
         }
     }
@@ -2595,6 +2608,8 @@ mod kitty_graphics {
         serial: usize,
         updates: Vec<GraphicsUpdate>,
         last_output: Vec<u8>,
+        screen: u64,
+        history_origin: i64,
     }
 
     impl Consumer {
@@ -2624,6 +2639,8 @@ mod kitty_graphics {
                 serial: 0,
                 updates: Vec::new(),
                 last_output: Vec::new(),
+                screen: 0,
+                history_origin: 0,
             }
         }
 
@@ -2639,6 +2656,10 @@ mod kitty_graphics {
                 GraphicsUpdate::Place(placement) => {
                     assert!(self.resources.contains_key(&placement.resource));
                     self.placements.insert(placement.key, placement.clone());
+                }
+                GraphicsUpdate::Screen { screen, history_origin } => {
+                    self.screen = *screen;
+                    self.history_origin = *history_origin;
                 }
                 GraphicsUpdate::Remove {
                     placements,
@@ -2726,6 +2747,128 @@ mod kitty_graphics {
         fn pixel(&self, placement: &Placement) -> Vec<u8> {
             self.resources[&placement.resource].to_rgba8().unwrap()
         }
+    }
+
+    #[test]
+    fn daemon_graphics_layout_user_clear_is_ordered_and_observers_cannot_mutate_it() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-clear");
+        let mut pane = Consumer::spawn(&daemon);
+        let id = pane.session.pane_id();
+        let mut observer = daemon.panes().observe(id, size()).unwrap();
+        observer.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+        pane.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        let original = pane.placements.values().next().unwrap().clone();
+        observer.clear_presentation(true).unwrap();
+        loop {
+            if let DaemonMsg::Error(message) = observer.recv().unwrap() {
+                assert!(message.contains("read-only"));
+                break;
+            }
+        }
+        pane.send(b"\x1b[0m", 0);
+        assert_eq!(pane.placements[&original.key], original);
+        pane.session.clear_presentation(true).unwrap();
+        pane.send(b"\x1b[0m", 0);
+        assert!(pane.placements.is_empty());
+        assert!(pane.resources.is_empty(), "explicit history clearing releases active retained resources");
+        pane.send(b"\x1b[?1049h\x1b[?1049l", 0);
+        assert!(pane.placements.is_empty(), "a later screen transition cannot revive cleared graphics");
+    }
+
+    #[test]
+    fn daemon_graphics_layout_reflows_the_text_anchor_and_updates_font_pixel_spans() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-reflow");
+        let mut pane = Consumer::spawn(&daemon);
+        pane.session.resize(WinSize { cols: 80, rows: 24, cell_w: 8, cell_h: 16 }).unwrap();
+        let mut output = b"\x1b[2J\x1b[3J\x1b[H".to_vec();
+        output.extend_from_slice(&[b'x'; 120]);
+        output.extend_from_slice(b"\r\nanchor \x1b_Ga=T,i=1,p=1,f=32,s=1,v=1,c=2,r=2,C=1,q=2;/wAA/w==\x1b\\");
+        pane.send(&output, 0);
+        let original = pane.placements.values().next().unwrap().clone();
+        pane.session.resize(WinSize { cols: 40, rows: 24, cell_w: 8, cell_h: 16 }).unwrap();
+        pane.send(b"\x1b[0m", 0);
+        let reflowed = pane.placements[&original.key].clone();
+        assert_eq!(reflowed.anchor_row, original.anchor_row + 1,
+            "120 characters occupy three rather than two text rows after narrowing");
+        assert_eq!(reflowed.anchor_col, original.anchor_col);
+        pane.session.resize(WinSize { cols: 40, rows: 24, cell_w: 16, cell_h: 32 }).unwrap();
+        pane.send(b"\x1b[0m", 0);
+        let scaled = &pane.placements[&original.key];
+        assert_eq!(scaled.anchor_row, reflowed.anchor_row, "pixel-only changes must not reflow text");
+        assert_eq!((scaled.cols, scaled.rows), (2, 2));
+        assert_eq!(pane.pixel(scaled), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn daemon_graphics_layout_queries_follow_real_cell_metrics_once() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-queries");
+        let mut pane = Consumer::spawn(&daemon);
+        pane.session.resize(WinSize { cols: 63, rows: 19, cell_w: 15, cell_h: 30 }).unwrap();
+        let replies = pane.send(b"\x1b[14t\x1b[16t", 2);
+        assert_eq!(replies, [b"\x1b[4;570;945t".to_vec(), b"\x1b[6;30;15t".to_vec()]);
+        pane.session.resize(WinSize { cols: 63, rows: 19, cell_w: 10, cell_h: 20 }).unwrap();
+        assert_eq!(pane.send(b"\x1b[14t\x1b[16t", 2),
+            [b"\x1b[4;380;630t".to_vec(), b"\x1b[6;20;10t".to_vec()]);
+        // The next real Kitty query is a barrier as well as an assertion that
+        // no duplicated geometry response remains in the child's input queue.
+        assert_eq!(pane.send(b"\x1b_Ga=q,i=77,f=32,s=1,v=1;/wAA/w==\x1b\\", 1),
+            [b"\x1b_Gi=77;OK\x1b\\".to_vec()]);
+    }
+
+    #[test]
+    fn daemon_graphics_layout_scroll_regions_clip_only_contained_images() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-region");
+        let mut pane = Consumer::spawn(&daemon);
+        pane.send(b"\x1b[2J\x1b[H\x1b[3;10r", 0);
+        pane.red_at(3, 2, "a=T,i=1,p=1,c=2,r=2,C=1");
+        pane.red_at(2, 8, "a=T,i=2,p=2,c=2,r=3,C=1");
+        let clipped = pane.placements.values().find(|p| p.image_id == 1).unwrap().key;
+        let crossing = pane.placements.values().find(|p| p.image_id == 2).unwrap().clone();
+        pane.send(b"\x1b[10;1H\n", 0);
+        let p = &pane.placements[&clipped];
+        assert_eq!(p.anchor_row - pane.history_origin, 1);
+        assert_eq!((p.clip_top, p.clip_bottom), (1, 2));
+        assert_eq!(pane.placements[&crossing.key], crossing,
+            "a placement crossing a page margin stays fixed");
+        pane.send(b"\n", 0);
+        assert!(!pane.placements.contains_key(&clipped), "fully clipped image cannot return");
+        assert!(pane.placements.contains_key(&crossing.key));
+    }
+
+    #[test]
+    fn daemon_graphics_layout_buffers_clear_reset_and_expired_history() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-layout-screens");
+        let mut pane = Consumer::spawn(&daemon);
+        pane.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        let main = pane.placements.values().next().unwrap().clone();
+        pane.send(b"\x1b[?1049h", 0);
+        assert_eq!(pane.screen, 1);
+        pane.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        let alt = pane.placements.values().find(|p| p.screen == 1).unwrap().clone();
+        assert_ne!(main.resource, alt.resource, "identities are screen-local");
+        pane.send(b"\x1b[?1049l", 0);
+        assert_eq!(pane.screen, 0);
+        assert_eq!(pane.placements[&main.key], main);
+        assert!(!pane.placements.contains_key(&alt.key));
+        assert!(!pane.resources.contains_key(&alt.resource));
+        pane.send(b"\x1b[?1049h\x1b[?1049l\x1b[2K\x1b[1J", 0);
+        assert_eq!(pane.placements[&main.key], main, "ordinary text erasure does not delete graphics");
+        pane.send(b"\x1b[2J", 0);
+        assert!(!pane.placements.contains_key(&main.key));
+        pane.red_at(2, 1, "a=T,i=2,p=2,C=1");
+        let historical = pane.placements.values().find(|p| p.image_id == 2).unwrap().key;
+        pane.send(b"\x1b[r\x1b[24;1H", 0);
+        pane.send(&b"history row\r\n".repeat(10_100), 0);
+        assert!(!pane.placements.contains_key(&historical), "expired text rows cannot drift onto live output");
+        pane.red_at(3, 2, "a=T,i=3,p=3,C=1");
+        pane.send(b"\x1bc", 0);
+        assert!(pane.placements.is_empty());
+        assert!(pane.resources.is_empty());
     }
 
     #[test]

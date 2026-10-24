@@ -4093,29 +4093,16 @@ impl TerminalView {
     /// Clear presentation without discarding retained history or restarting
     /// the process. Ctrl+L is sent through this pane's own transport.
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
-        use rio_vt::ansi::ClearMode;
-        use rio_vt::performer::handler::Handler as _;
         self.cancel_scroll_anim();
-        self.terminal.term.lock().clear_screen(ClearMode::All);
+        self.terminal.clear_presentation(false);
         self.terminal.write(vec![0x0c_u8]);
         cx.notify();
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
-        use rio_vt::ansi::ClearMode;
-        use rio_vt::performer::handler::Handler as _;
 
         self.cancel_scroll_anim();
-        // Go through `clear_screen` rather than `grid_mut().clear_history()`:
-        // it drops a selection anchored in the rows we are about to discard and
-        // clamps the vi cursor back into the grid, which purging the history
-        // behind the term's back would leave pointing at rows that no longer
-        // exist.
-        {
-            let mut term = self.terminal.term.lock();
-            term.clear_screen(ClearMode::All);
-            term.clear_screen(ClearMode::Saved);
-        }
+        self.terminal.clear_presentation(true);
         self.scroll_frac = 0.;
         self.terminal.write(vec![0x0c_u8]);
         cx.notify();
@@ -11867,7 +11854,7 @@ mod gpui_tests {
             .unwrap();
     }
 
-    fn graphics_placement(key: u64, resource: u64) -> lyrel_core::core::kitty_graphics::Placement {
+    fn graphics_placement(key: u64, resource: u64, row: i64, col: u32) -> lyrel_core::core::kitty_graphics::Placement {
         let mut placement = lyrel_core::core::kitty_graphics::Placement::default();
         placement.key = key;
         placement.resource = resource;
@@ -11878,6 +11865,11 @@ mod gpui_tests {
         placement.x = 1;
         placement.w = 1;
         placement.h = 1;
+        placement.anchor_row = row;
+        placement.anchor_col = col;
+        placement.span_cols = 4;
+        placement.span_rows = 2;
+        placement.clip_bottom = 2;
         placement
     }
 
@@ -11911,24 +11903,23 @@ mod gpui_tests {
                     Sniffed::Segments(segments) => segments,
                 };
                 for segment in segments {
-                    match segment {
+                    let effects = match segment {
                         Segment::Output(output) => {
-                            state.output(&output);
+                            let effects = state.output(&output);
                             DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+                            effects
                         }
-                        Segment::Command { control, image } => {
-                            for effect in state.apply(control, image) {
-                                match effect {
-                                    GraphicsEffect::Update(update) => send_graphics(&mut daemon, update),
-                                    GraphicsEffect::Output(output) => {
-                                        state.output(&output);
-                                        DaemonMsg::Output(output).encode(&mut daemon).unwrap();
-                                    }
-                                    GraphicsEffect::Reply(_) => panic!("q=2 must suppress replies"),
-                                }
-                            }
-                        }
+                        Segment::Command { control, image } => state.apply(control, image),
                         Segment::Reply(_) => panic!("q=2 must suppress malformed replies"),
+                    };
+                    for effect in effects {
+                        match effect {
+                            GraphicsEffect::Update(update) => send_graphics(&mut daemon, update),
+                            GraphicsEffect::Output(output) => {
+                                DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+                            }
+                            GraphicsEffect::Reply(_) => panic!("q=2 must suppress replies"),
+                        }
                     }
                 }
             }
@@ -11972,7 +11963,106 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn graphics_consumer_upload_places_shared_cropped_bgra_at_ordered_cursor(
+    fn graphics_consumer_region_slice_preserves_texture_and_scales_with_device_cell_geometry(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+        use std::sync::Arc;
+        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        send_graphics(&mut daemon, GraphicsUpdate::Resource {
+            key: 801,
+            image: Arc::new(Image { width: 1, height: 2, format: WireFormat::Rgba,
+                compressed: false, data: vec![255, 0, 0, 255, 0, 0, 255, 80] }),
+        });
+        let mut placement = graphics_placement(802, 801, 2, 3);
+        placement.x = 0;
+        placement.w = 1;
+        placement.h = 2;
+        placement.cols = 2;
+        placement.rows = 4;
+        placement.span_rows = 4;
+        placement.clip_top = 1;
+        placement.clip_bottom = 3;
+        send_graphics(&mut daemon, GraphicsUpdate::Place(placement));
+        for _ in 0..200 {
+            if window.update(cx, |view, _, _| view.terminal.images().snapshot().len() == 1).unwrap() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |view, _, _| {
+            let images = view.terminal.images().snapshot();
+            let image = &images[0];
+            assert_eq!(image.data.as_bytes(0).unwrap(), &[0, 0, 255, 255, 255, 0, 0, 80]);
+            let (crop, full) = image.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+            assert_eq!(crop, Bounds::new(point(px(30.), px(60.)), gpui_kit::size(px(20.), px(20.))));
+            assert_eq!(full, Bounds::new(point(px(30.), px(40.)), gpui_kit::size(px(20.), px(40.))));
+            let (crop, full) = image.paint_bounds(point(px(0.), px(0.)), px(15.), px(30.), 0, 0, 1.5);
+            assert_eq!(crop, Bounds::new(point(px(45.), px(90.)), gpui_kit::size(px(30.), px(30.))));
+            assert_eq!(full, Bounds::new(point(px(45.), px(60.)), gpui_kit::size(px(30.), px(60.))));
+        }).unwrap();
+        send_graphics(&mut daemon, GraphicsUpdate::Remove { placements: vec![802], resources: vec![] });
+        for _ in 0..200 {
+            if window.update(cx, |view, _, _| view.terminal.images().snapshot().is_empty()).unwrap() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |view, window, _| {
+            window.refresh();
+            assert!(view.terminal.images().snapshot().is_empty(), "permanently clipped/deleted slices cannot return on paint");
+        }).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn graphics_consumer_uses_session_history_origin_and_screen_not_local_cursor(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+        use std::sync::Arc;
+
+        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        send_graphics(&mut daemon, GraphicsUpdate::Resource {
+            key: 901,
+            image: Arc::new(Image {
+                width: 1, height: 1, format: WireFormat::Rgba,
+                compressed: false, data: vec![200, 40, 10, 80],
+            }),
+        });
+        let mut placement = graphics_placement(902, 901, 0, 0);
+        placement.anchor_row = 10_005;
+        placement.anchor_col = 3;
+        placement.x = 0;
+        send_graphics(&mut daemon, GraphicsUpdate::Place(placement));
+        send_graphics(&mut daemon, GraphicsUpdate::Screen { screen: 0, history_origin: 10_003 });
+        DaemonMsg::Output(b"\x1b[20;60H".to_vec()).encode(&mut daemon).unwrap();
+        for _ in 0..200 {
+            if window.update(cx, |view, _, _| view.terminal.images().snapshot().len() == 1).unwrap() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |view, _, _| {
+            let images = view.terminal.images().snapshot();
+            assert_eq!(images.len(), 1);
+            let (bounds, _) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+            assert_eq!(bounds.origin, point(px(30.), px(40.)));
+            let (history, _) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 3, 1.);
+            assert_eq!(history.origin.y, px(100.));
+        }).unwrap();
+        send_graphics(&mut daemon, GraphicsUpdate::Screen { screen: 1, history_origin: 0 });
+        DaemonMsg::Output(b"ALT-READY".to_vec()).encode(&mut daemon).unwrap();
+        for _ in 0..200 {
+            if window.update(cx, |view, _, _| view.terminal.images().snapshot().is_empty()).unwrap() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |view, _, _| assert!(view.terminal.images().snapshot().is_empty())).unwrap();
+        send_graphics(&mut daemon, GraphicsUpdate::Screen { screen: 0, history_origin: 10_003 });
+        for _ in 0..200 {
+            if window.update(cx, |view, _, _| view.terminal.images().snapshot().len() == 1).unwrap() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |view, _, _| assert_eq!(view.terminal.images().snapshot().len(), 1)).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn graphics_consumer_upload_places_shared_cropped_bgra_at_session_coordinates(
         cx: &mut TestAppContext,
     ) {
         use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
@@ -12018,14 +12108,14 @@ mod gpui_tests {
 
         send_graphics(
             &mut daemon,
-            GraphicsUpdate::Place(graphics_placement(21, 11)),
+            GraphicsUpdate::Place(graphics_placement(21, 11, 2, 13)),
         );
         DaemonMsg::Output(b"\x1b[5;9H".to_vec())
             .encode(&mut daemon)
             .unwrap();
         send_graphics(
             &mut daemon,
-            GraphicsUpdate::Place(graphics_placement(22, 11)),
+            GraphicsUpdate::Place(graphics_placement(22, 11, 4, 8)),
         );
         DaemonMsg::Output(b"\x1b[9;2H".to_vec())
             .encode(&mut daemon)
@@ -12087,6 +12177,7 @@ mod gpui_tests {
                 assert_eq!(width_only.origin.x, px(132.));
                 natural.placement.cols = 0;
                 natural.placement.rows = 3;
+                natural.placement.clip_bottom = 3;
                 natural.placement.offset_x = 0;
                 natural.placement.offset_y = 4;
                 let (height_only, _) =
@@ -12122,7 +12213,7 @@ mod gpui_tests {
         );
         send_graphics(
             &mut other_daemon,
-            GraphicsUpdate::Place(graphics_placement(21, 11)),
+            GraphicsUpdate::Place(graphics_placement(21, 11, 0, 0)),
         );
         for _ in 0..200 {
             if other
@@ -12136,7 +12227,7 @@ mod gpui_tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        let mut replacement = graphics_placement(21, 11);
+        let mut replacement = graphics_placement(21, 11, 8, 1);
         replacement.x = 0;
         replacement.cols = 2;
         send_graphics(&mut daemon, GraphicsUpdate::Place(replacement));
@@ -12226,14 +12317,15 @@ mod gpui_tests {
         }
         send_graphics(
             &mut daemon,
-            GraphicsUpdate::Place(graphics_placement(71, 61)),
+            GraphicsUpdate::Place(graphics_placement(71, 61, 0, 0)),
         );
         let mut output = b"\r\n".repeat(200);
         output.extend_from_slice(b"\x1b[H");
         DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+        send_graphics(&mut daemon, GraphicsUpdate::Screen { screen: 0, history_origin: 200 });
         send_graphics(
             &mut daemon,
-            GraphicsUpdate::Place(graphics_placement(72, 62)),
+            GraphicsUpdate::Place(graphics_placement(72, 62, 200, 0)),
         );
         // Hold the UI pump until both decodes finish, so the first resource
         // cannot have been submitted to the atlas before scrolling offscreen.
@@ -12316,7 +12408,7 @@ mod gpui_tests {
                 }),
             },
         );
-        let mut placement = graphics_placement(51, 41);
+        let mut placement = graphics_placement(51, 41, 0, 0);
         placement.x = 0;
         send_graphics(&mut daemon, GraphicsUpdate::Place(placement));
         for _ in 0..200 {
@@ -12343,6 +12435,11 @@ mod gpui_tests {
                     .store(true, std::sync::atomic::Ordering::Relaxed)
             })
             .unwrap();
+        pane.read_with(cx, |view, _| {
+            let images = view.terminal.images().snapshot();
+            assert_eq!(images.len(), 1, "returning to the pane retains its current image without a resend");
+            assert_eq!(images[0].data.as_bytes(0).unwrap(), &[3, 2, 1, 64]);
+        });
         send_graphics(
             &mut daemon,
             GraphicsUpdate::Remove {
@@ -12399,13 +12496,28 @@ mod gpui_tests {
 
                 view.clear_scrollback(cx);
 
-                assert!(
-                    view.terminal.term.lock().selection.is_none(),
-                    "a selection left pointing at purged rows clamps onto the \
-                     viewport and copies whatever text moved into them"
-                );
             })
             .unwrap();
+        daemon.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        loop {
+            if let crate::daemon::protocol::ClientMsg::ClearPresentation { history } =
+                crate::daemon::protocol::ClientMsg::read(&mut daemon).unwrap()
+            {
+                assert!(history);
+                break;
+            }
+        }
+        // The real daemon applies this in its output lock and emits this same
+        // text sequence before graphics removals. The consumer must wait for it.
+        DaemonMsg::Output(b"\x1b[2J\x1b[3J".to_vec()).encode(&mut daemon).unwrap();
+        for _ in 0..200 {
+            if window.update(cx, |view, _, _| view.terminal.term.lock().selection.is_none()).unwrap() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |view, _, _| {
+            assert!(view.terminal.term.lock().selection.is_none(), "purged history cannot retain its selection");
+            assert_eq!(view.terminal.term.lock().grid.history_size(), 0);
+        }).unwrap();
     }
 
     #[gpui_kit::test]

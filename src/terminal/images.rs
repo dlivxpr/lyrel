@@ -1,8 +1,8 @@
 //! Pane-local derived graphics cache. The daemon alone owns resource and placement
 //! lifetime; a Resource never implies a display. One worker decodes each retained
 //! resource version once, and every placement shares its pixels and atlas marker.
-//! Anchors are captured in stream order. Screen/history lifecycle beyond these
-//! absolute rows belongs to the later screen-tracking work, not this cache.
+//! Coordinates and screen membership arrive from the daemon; the cache never
+//! infers placement lifetime or anchors from its local text grid.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +25,7 @@ pub struct RenderPlacement {
     width_px: u32,
     height_px: u32,
     revision: u64,
+    history_origin: i64,
 }
 
 impl RenderPlacement {
@@ -36,7 +37,7 @@ impl RenderPlacement {
         origin: Point<Pixels>,
         cell_width: Pixels,
         line_height: Pixels,
-        history_size: usize,
+        _history_size: usize,
         display_offset: i32,
         scale: f32,
     ) -> (Bounds<Pixels>, Bounds<Pixels>) {
@@ -46,7 +47,7 @@ impl RenderPlacement {
             1.
         };
         let placement = &self.placement;
-        let row = self.anchor_row - history_size as i64 + display_offset as i64;
+        let row = self.anchor_row - self.history_origin + display_offset as i64;
         let natural_width = placement.w as f32 / scale;
         let natural_height = placement.h as f32 / scale;
         let available_width = (cell_width.as_f32() * placement.cols as f32
@@ -81,14 +82,18 @@ impl RenderPlacement {
             ),
             size(sx * self.width_px as f32, sy * self.height_px as f32),
         );
-        (crop, full)
+        let clip_top = origin.y + line_height * (row + i64::from(placement.clip_top)) as f32;
+        let clip_bottom = origin.y + line_height * (row + i64::from(placement.clip_bottom)) as f32;
+        let clipped = crop.intersect(&Bounds::new(
+            point(crop.origin.x, clip_top),
+            size(crop.size.width, (clip_bottom - clip_top).max(px(0.))),
+        ));
+        (clipped, full)
     }
 }
 
 struct AnchoredPlacement {
     placement: Placement,
-    row: i64,
-    col: usize,
     revision: u64,
 }
 
@@ -113,6 +118,8 @@ struct StoreInner {
     closed: bool,
     reader_generation: u64,
     next_revision: u64,
+    screen: u64,
+    history_origin: i64,
 }
 
 #[derive(Default)]
@@ -142,6 +149,7 @@ impl ImageStore {
         let mut images: Vec<_> = inner
             .placements
             .values()
+            .filter(|anchored| anchored.placement.screen == inner.screen)
             .filter_map(|anchored| {
                 let decoded = inner
                     .resources
@@ -152,11 +160,12 @@ impl ImageStore {
                     data: decoded.data.clone(),
                     painted: decoded.painted.clone(),
                     placement: anchored.placement.clone(),
-                    anchor_row: anchored.row,
-                    anchor_col: anchored.col,
+                    anchor_row: anchored.placement.anchor_row,
+                    anchor_col: anchored.placement.anchor_col as usize,
                     width_px: decoded.width,
                     height_px: decoded.height,
                     revision: anchored.revision,
+                    history_origin: inner.history_origin,
                 })
             })
             .collect();
@@ -178,6 +187,8 @@ impl ImageStore {
             .placements
             .get(&image.placement.key)
             .is_some_and(|placement| placement.revision == image.revision)
+            && inner.screen == image.placement.screen
+            && inner.history_origin == image.history_origin
             && inner
                 .resources
                 .get(&image.placement.resource)
@@ -222,7 +233,7 @@ impl ImageStore {
         self.0.ready.notify_all();
     }
 
-    fn apply(&self, generation: u64, update: GraphicsUpdate, row: i64, col: usize) -> bool {
+    fn apply(&self, generation: u64, update: GraphicsUpdate) -> bool {
         let mut inner = self.0.state.lock().unwrap();
         if inner.closed || inner.reader_generation != generation {
             return false;
@@ -250,12 +261,16 @@ impl ImageStore {
                     placement.key,
                     AnchoredPlacement {
                         placement,
-                        row,
-                        col,
                         revision,
                     },
                 );
                 true
+            }
+            GraphicsUpdate::Screen { screen, history_origin } => {
+                let changed = inner.screen != screen || inner.history_origin != history_origin;
+                inner.screen = screen;
+                inner.history_origin = history_origin;
+                changed
             }
             GraphicsUpdate::Remove {
                 placements,
@@ -315,8 +330,8 @@ impl DecodeWorker {
         }
     }
 
-    pub fn apply(&self, update: GraphicsUpdate, row: i64, col: usize) -> bool {
-        self.store.apply(self.generation, update, row, col)
+    pub fn apply(&self, update: GraphicsUpdate) -> bool {
+        self.store.apply(self.generation, update)
     }
 
     fn run(
@@ -458,12 +473,16 @@ mod tests {
         }
     }
 
-    fn placement(key: u64, resource: u64) -> GraphicsUpdate {
+    fn placement(key: u64, resource: u64, row: i64, col: u32) -> GraphicsUpdate {
         let mut placement = Placement::default();
         placement.key = key;
         placement.resource = resource;
         placement.w = 1;
         placement.h = 1;
+        placement.anchor_row = row;
+        placement.anchor_col = col;
+        placement.span_rows = 1;
+        placement.clip_bottom = 1;
         GraphicsUpdate::Place(placement)
     }
 
@@ -504,19 +523,15 @@ mod tests {
                 }
             },
         );
-        worker.apply(resource(1, 1), 0, 0);
-        worker.apply(placement(10, 1), 3, 4);
+        worker.apply(resource(1, 1));
+        worker.apply(placement(10, 1, 3, 4));
         entered.wait();
-        worker.apply(
-            GraphicsUpdate::Remove {
-                placements: vec![10],
-                resources: vec![1],
-            },
-            0,
-            0,
-        );
-        worker.apply(resource(2, 90), 0, 0);
-        worker.apply(placement(10, 2), 40, 8);
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![10],
+            resources: vec![1],
+        });
+        worker.apply(resource(2, 90));
+        worker.apply(placement(10, 2, 40, 8));
         release.wait();
         wait_for(&store, |images| images.len() == 1);
         let images = store.snapshot();
@@ -547,22 +562,18 @@ mod tests {
                 decode(image)
             }
         });
-        worker.apply(resource(1, 1), 0, 0);
-        worker.apply(placement(1, 1), 1, 0);
+        worker.apply(resource(1, 1));
+        worker.apply(placement(1, 1, 1, 0));
         entered.wait();
         for key in 2..=9 {
-            worker.apply(resource(key, key as u8), 0, 0);
-            worker.apply(placement(key, key), key as i64, 0);
+            worker.apply(resource(key, key as u8));
+            worker.apply(placement(key, key, key as i64, 0));
         }
-        worker.apply(placement(1, 1), 77, 9);
-        worker.apply(
-            GraphicsUpdate::Remove {
-                placements: vec![2],
-                resources: vec![],
-            },
-            0,
-            0,
-        );
+        worker.apply(placement(1, 1, 77, 9));
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![2],
+            resources: vec![],
+        });
         release.wait();
         wait_for(&store, |images| images.len() == 8);
         let images = store.snapshot();
@@ -579,7 +590,7 @@ mod tests {
         assert_eq!((updated.anchor_row, updated.anchor_col), (77, 9));
         assert!(!images.iter().any(|image| image.placement.key == 2));
         // Removing a placement does not free its resource; daemon may display it later.
-        worker.apply(placement(20, 2), 88, 0);
+        worker.apply(placement(20, 2, 88, 0));
         wait_for(&store, |images| {
             images.iter().any(|image| image.placement.key == 20)
         });
@@ -610,36 +621,36 @@ mod tests {
                 decode(image)
             }
         });
-        old.apply(resource(1, 10), 0, 0);
-        old.apply(placement(1, 1), 1, 2);
+        old.apply(resource(1, 10));
+        old.apply(placement(1, 1, 1, 2));
         entered.wait();
         // Relink retires the reader synchronously, but never joins its decoder
         // on the UI thread. Hold the old real decode until the new one paints.
         store.retire_reader();
         store.clear();
         let new = DecodeWorker::spawn(store.clone(), || {});
-        new.apply(resource(2, 90), 0, 0);
-        new.apply(placement(2, 2), 4, 5);
+        new.apply(resource(2, 90));
+        new.apply(placement(2, 2, 4, 5));
         wait_for(&store, |images| images.len() == 1);
         let current = store.snapshot();
         assert_eq!(current[0].data.as_bytes(0).unwrap(), &[30, 20, 90, 128]);
         assert!(store.claim_for_paint(&current[0]));
         assert!(!old.apply(GraphicsUpdate::Remove {
             placements: vec![2], resources: vec![2],
-        }, 0, 0), "a retired reader cannot delete new link images");
-        old.apply(resource(3, 11), 0, 0);
-        old.apply(placement(3, 3), 9, 9);
+        }), "a retired reader cannot delete new link images");
+        old.apply(resource(3, 11));
+        old.apply(placement(3, 3, 9, 9));
         release.wait();
         drop(old);
         // Old Drop occurs after the successor is usable. It must neither land
         // its stale pixel nor close the new worker's wake/admission gate.
-        new.apply(resource(4, 100), 0, 0);
-        new.apply(placement(4, 4), 6, 7);
+        new.apply(resource(4, 100));
+        new.apply(placement(4, 4, 6, 7));
         wait_for(&store, |images| images.len() == 2);
         assert!(store.snapshot().iter().all(|image| image.placement.resource != 1 && image.placement.resource != 3));
         new.apply(GraphicsUpdate::Remove {
             placements: vec![2, 4], resources: vec![2, 4],
-        }, 0, 0);
+        });
         assert!(store.snapshot().is_empty(), "successor deletion remains live");
     }
 
@@ -647,45 +658,37 @@ mod tests {
     fn shared_resource_has_one_atlas_retirement_and_stale_placement_cannot_paint() {
         let store = ImageStore::new();
         let worker = DecodeWorker::spawn(store.clone(), || {});
-        worker.apply(resource(1, 50), 0, 0);
-        worker.apply(placement(10, 1), 1, 0);
-        worker.apply(placement(11, 1), 2, 0);
+        worker.apply(resource(1, 50));
+        worker.apply(placement(10, 1, 1, 0));
+        worker.apply(placement(11, 1, 2, 0));
         wait_for(&store, |images| images.len() == 2);
         let images = store.snapshot();
         assert!(Arc::ptr_eq(&images[0].data, &images[1].data));
         assert!(Arc::ptr_eq(&images[0].painted, &images[1].painted));
         assert!(store.claim_for_paint(&images[0]));
-        worker.apply(placement(10, 1), 9, 0);
+        worker.apply(placement(10, 1, 9, 0));
         assert!(!store.claim_for_paint(&images[0]));
-        worker.apply(
-            GraphicsUpdate::Remove {
-                placements: vec![10],
-                resources: vec![],
-            },
-            0,
-            0,
-        );
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![10],
+            resources: vec![],
+        });
         assert!(
             store.take_retired().is_empty(),
             "other placement still uses the atlas tile"
         );
         assert!(store.claim_for_paint(&images[1]));
-        worker.apply(
-            GraphicsUpdate::Remove {
-                placements: vec![11],
-                resources: vec![1],
-            },
-            0,
-            0,
-        );
+        worker.apply(GraphicsUpdate::Remove {
+            placements: vec![11],
+            resources: vec![1],
+        });
         assert!(!store.claim_for_paint(&images[1]));
         let retired = store.take_retired();
         assert_eq!(retired.len(), 1);
         assert!(Arc::ptr_eq(&retired[0], &images[0].data));
         assert!(store.take_for_release().is_empty());
-        worker.apply(resource(2, 100), 0, 0);
-        worker.apply(placement(20, 2), 0, 0);
-        worker.apply(placement(21, 2), 0, 0);
+        worker.apply(resource(2, 100));
+        worker.apply(placement(20, 2, 0, 0));
+        worker.apply(placement(21, 2, 0, 0));
         wait_for(&store, |images| images.len() == 2);
         let current = store.snapshot();
         assert!(store.claim_for_paint(&current[0]));

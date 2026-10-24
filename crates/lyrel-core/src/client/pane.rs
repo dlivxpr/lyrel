@@ -318,6 +318,10 @@ impl PaneSession {
         self.input.resize(size)
     }
 
+    pub fn clear_presentation(&mut self, history: bool) -> io::Result<()> {
+        self.input.clear_presentation(history)
+    }
+
     pub fn detach(self) -> io::Result<()> {
         self.input.detach()
     }
@@ -356,6 +360,10 @@ impl PaneInput {
 
     pub fn resize(&mut self, size: WinSize) -> io::Result<()> {
         ClientMsg::Resize(size).encode(&mut self.writer)
+    }
+
+    pub fn clear_presentation(&mut self, history: bool) -> io::Result<()> {
+        ClientMsg::ClearPresentation { history }.encode(&mut self.writer)
     }
 
     pub fn detach(mut self) -> io::Result<()> {
