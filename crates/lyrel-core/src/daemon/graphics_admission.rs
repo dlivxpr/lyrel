@@ -28,13 +28,23 @@ pub struct GraphicsAdmissionBroker {
 
 pub(crate) struct GraphicsGrant {
     broker: Arc<GraphicsAdmissionBroker>,
-    revision: u64,
+    // Live offers depend on the active-consumer/session revision. A replay
+    // reserves immutable object identities; the pane checks those identities
+    // against its final locked snapshot instead of cancelling on resize.
+    revision: Option<u64>,
     tokens: Vec<u64>,
     committed: bool,
 }
 impl GraphicsGrant {
     pub(crate) fn valid(&self) -> bool {
-        self.broker.state.lock().unwrap().revision == self.revision
+        let state = self.broker.state.lock().unwrap();
+        self.revision.is_none_or(|revision| state.revision == revision)
+            && self.tokens.iter().all(|token| {
+                state
+                    .pending
+                    .get(token)
+                    .is_some_and(|pending| pending.accepted == Some(true))
+            })
     }
     pub(crate) fn commit(mut self) {
         let mut state = self.broker.state.lock().unwrap();
@@ -157,7 +167,7 @@ impl GraphicsAdmissionBroker {
         metadata_bytes: usize,
     ) -> Option<GraphicsGrant> {
         let mut state = self.state.lock().unwrap();
-        let revision = state.revision;
+        let revision = only.is_none().then_some(state.revision);
         let endpoints: Vec<_> = state
             .endpoints
             .iter()
@@ -206,7 +216,7 @@ impl GraphicsAdmissionBroker {
         // indefinitely. Cancellation, detach, clear and close wake this wait.
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            if state.revision != revision
+            if revision.is_some_and(|revision| state.revision != revision)
                 || grant.tokens.iter().any(|token| {
                     state
                         .pending

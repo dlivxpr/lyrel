@@ -3088,10 +3088,50 @@ mod kitty_graphics {
             Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), serial);
         assert_eq!(replacement.stats(), identity);
         assert_eq!(replacement.placements, expected);
-        assert!(
-            original.session.recv().is_err(),
-            "successful takeover closes the old controller rather than pinning its sender"
-        );
+        // A marker's trailing newline/cursor restore can still be queued in
+        // the old stream. Drain already-published frames, but require a real
+        // disconnect, not a receive timeout or a still-subscribed controller.
+        let replacement_marker = format!("KITTY_STATS_{} ", replacement.serial);
+        let mut old_output = Vec::new();
+        let deadline = Instant::now() + STREAM_WITHIN;
+        loop {
+            assert!(Instant::now() < deadline, "displaced controller did not close");
+            match original.session.recv() {
+                Ok(DaemonMsg::Output(bytes)) => {
+                    old_output.extend(bytes);
+                    assert!(
+                        !windows_contain(&old_output, replacement_marker.as_bytes()),
+                        "new controller output leaked to the displaced subscriber"
+                    );
+                }
+                Ok(DaemonMsg::Graphics(frame)) => {
+                    let update = GraphicsUpdate::decode_frame_owned(frame.into_vec()).unwrap();
+                    assert!(
+                        !matches!(update, GraphicsUpdate::Resource { .. }),
+                        "takeover must not deliver new source leases to the old cache"
+                    );
+                    original.apply(update);
+                }
+                Ok(DaemonMsg::Exited { code }) => panic!("takeover ended the living child: {code:?}"),
+                Ok(DaemonMsg::Error(error)) => panic!("displaced controller failed: {error}"),
+                Ok(_) => {}
+                Err(error) => {
+                    assert!(
+                        matches!(
+                            error.kind(),
+                            std::io::ErrorKind::UnexpectedEof
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::NotConnected
+                        ),
+                        "successful takeover must close the old stream, not leave its sender pinned: {error}"
+                    );
+                    break;
+                }
+            }
+        }
+        drop(original);
         // A failed peer cannot remain in the broker and veto later output.
         replacement.red_at(8, 3, "a=T,i=3,p=1,C=1");
         assert_eq!(replacement.placements.len(), 3);
