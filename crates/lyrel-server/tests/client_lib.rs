@@ -3364,9 +3364,16 @@ mod kitty_graphics {
                 .values()
                 .all(|p| second.pixel(p) == [0, 255, 0, 255])
         );
-        // A text-only reattach must not persist APC/base64 pixels into scrollback.
+        // A fresh connection rebuilds its derived cache from daemon replay;
+        // replaying the retained identity is not identity reuse in one stream.
+        // Text snapshots must still exclude APC/base64 pixel payloads.
+        let retained_key = *second.resources.keys().next().unwrap();
         let id = second.session.pane_id();
         second.session.detach().unwrap();
+        second.resources.clear();
+        second.evicted.clear();
+        second.placements.clear();
+        second.updates.clear();
         second.session = daemon.panes().attach(id, size()).unwrap();
         second
             .session
@@ -3380,6 +3387,8 @@ mod kitty_graphics {
             }
         }
         second.command("a=p,i=9,C=1");
+        assert_eq!(second.resources[&retained_key].to_rgba8().unwrap(), [0, 255, 0, 255], "without retransmission, replay restores the same pane-scoped resource identity and pixels");
+        assert!(second.placements.values().all(|placement| placement.resource == retained_key));
         assert!(
             second
                 .placements
