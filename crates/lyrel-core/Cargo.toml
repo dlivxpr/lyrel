@@ -178,6 +178,10 @@ base64 = "0.23.1"
 # compatible with kitty's zlib wire format independently of the encoder library.
 miniz_oxide = "0.9.1"
 
+# Validate PNG streams row-by-row before acknowledging or retaining them. Reuse
+# the published version already locked for the desktop image decoder.
+png = "0.18.1"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
 # GSSAPI/Kerberos SSH auth — see the `gssapi` feature below for why it is

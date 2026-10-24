@@ -111,6 +111,7 @@ struct StoreInner {
     placements: BTreeMap<u64, AnchoredPlacement>,
     retired: Vec<Arc<RenderImage>>,
     closed: bool,
+    reader_generation: u64,
     next_revision: u64,
 }
 
@@ -209,9 +210,21 @@ impl ImageStore {
         }
     }
 
-    fn apply(&self, update: GraphicsUpdate, row: i64, col: usize) -> bool {
+    /// Invalidate the old reader synchronously before resetting/relinking the
+    /// grid. A late frame, completion, or worker Drop then cannot affect the
+    /// successor, and no UI-thread join is necessary.
+    pub fn retire_reader(&self) {
         let mut inner = self.0.state.lock().unwrap();
-        if inner.closed {
+        inner.reader_generation = inner.reader_generation.checked_add(1)
+            .expect("graphics reader generation exhausted");
+        inner.closed = true;
+        drop(inner);
+        self.0.ready.notify_all();
+    }
+
+    fn apply(&self, generation: u64, update: GraphicsUpdate, row: i64, col: usize) -> bool {
+        let mut inner = self.0.state.lock().unwrap();
+        if inner.closed || inner.reader_generation != generation {
             return false;
         }
         match update {
@@ -268,6 +281,7 @@ impl ImageStore {
 /// byte/resource limits: no small queue may discard a still-referenced version.
 pub struct DecodeWorker {
     store: ImageStore,
+    generation: u64,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -281,24 +295,33 @@ impl DecodeWorker {
         wake: impl Fn() + Send + 'static,
         decoder: impl Fn(&mut Image) -> Option<(Arc<RenderImage>, u32, u32)> + Send + 'static,
     ) -> Self {
-        store.0.state.lock().unwrap().closed = false;
+        let generation = {
+            let mut inner = store.0.state.lock().unwrap();
+            inner.reader_generation = inner.reader_generation.checked_add(1)
+                .expect("graphics reader generation exhausted");
+            inner.closed = false;
+            inner.reader_generation
+        };
+        store.0.ready.notify_all();
         let worker_store = store.clone();
         let handle = std::thread::Builder::new()
             .name("lyrel-image-decode".into())
-            .spawn(move || Self::run(worker_store, wake, decoder))
+            .spawn(move || Self::run(worker_store, generation, wake, decoder))
             .expect("start graphics decode worker");
         Self {
             store,
+            generation,
             handle: Some(handle),
         }
     }
 
     pub fn apply(&self, update: GraphicsUpdate, row: i64, col: usize) -> bool {
-        self.store.apply(update, row, col)
+        self.store.apply(self.generation, update, row, col)
     }
 
     fn run(
         store: ImageStore,
+        generation: u64,
         wake: impl Fn(),
         decoder: impl Fn(&mut Image) -> Option<(Arc<RenderImage>, u32, u32)>,
     ) {
@@ -306,7 +329,7 @@ impl DecodeWorker {
             let (key, revision, image) = {
                 let mut inner = store.0.state.lock().unwrap();
                 loop {
-                    if inner.closed {
+                    if inner.closed || inner.reader_generation != generation {
                         return;
                     }
                     if let Some((&key, resource)) = inner
@@ -323,7 +346,7 @@ impl DecodeWorker {
             let decoded = decoder(&mut image);
             let visible_change = {
                 let mut inner = store.0.state.lock().unwrap();
-                if inner.closed {
+                if inner.closed || inner.reader_generation != generation {
                     return;
                 }
                 let current = inner
@@ -354,8 +377,13 @@ impl DecodeWorker {
 
 impl Drop for DecodeWorker {
     fn drop(&mut self) {
-        self.store.0.state.lock().unwrap().closed = true;
-        self.store.0.ready.notify_one();
+        {
+            let mut inner = self.store.0.state.lock().unwrap();
+            if inner.reader_generation == self.generation {
+                inner.closed = true;
+            }
+        }
+        self.store.0.ready.notify_all();
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -365,6 +393,16 @@ impl Drop for DecodeWorker {
 /// Decode once into straight-alpha BGRA, the native GPUI atlas representation.
 /// Raw uncompressed RGBA transfers its allocation rather than copying pixels.
 pub fn decode(img: &mut Image) -> Option<(Arc<RenderImage>, u32, u32)> {
+    use lyrel_core::core::graphics_state::MAX_IMAGE_DIMENSION;
+    use lyrel_core::core::kitty_graphics::MAX_IMAGE_BYTES;
+
+    let bytes = (img.width as usize).checked_mul(img.height as usize)?.checked_mul(4)?;
+    if bytes == 0 || bytes > MAX_IMAGE_BYTES || img.data.len() > MAX_IMAGE_BYTES
+        || img.width > MAX_IMAGE_DIMENSION || img.height > MAX_IMAGE_DIMENSION
+        || (img.format == WireFormat::Png && img.compressed)
+    {
+        return None;
+    }
     let (mut rgba, w, h) = match img.format {
         WireFormat::Png => {
             let mut reader = image::ImageReader::with_format(
@@ -386,6 +424,9 @@ pub fn decode(img: &mut Image) -> Option<(Arc<RenderImage>, u32, u32)> {
         }
     };
     let bytes = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    if w != img.width || h != img.height {
+        return None;
+    }
     if w == 0 || h == 0 || rgba.len() != bytes {
         return None;
     }
@@ -553,6 +594,53 @@ mod tests {
                 .unwrap(),
             &[30, 20, 2, 128]
         );
+    }
+
+    #[test]
+    fn retired_decoder_cannot_apply_complete_or_close_its_successor() {
+        let store = ImageStore::new();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let old = DecodeWorker::spawn_with_decoder(store.clone(), || {}, {
+            let entered = entered.clone();
+            let release = release.clone();
+            move |image| {
+                entered.wait();
+                release.wait();
+                decode(image)
+            }
+        });
+        old.apply(resource(1, 10), 0, 0);
+        old.apply(placement(1, 1), 1, 2);
+        entered.wait();
+        // Relink retires the reader synchronously, but never joins its decoder
+        // on the UI thread. Hold the old real decode until the new one paints.
+        store.retire_reader();
+        store.clear();
+        let new = DecodeWorker::spawn(store.clone(), || {});
+        new.apply(resource(2, 90), 0, 0);
+        new.apply(placement(2, 2), 4, 5);
+        wait_for(&store, |images| images.len() == 1);
+        let current = store.snapshot();
+        assert_eq!(current[0].data.as_bytes(0).unwrap(), &[30, 20, 90, 128]);
+        assert!(store.claim_for_paint(&current[0]));
+        assert!(!old.apply(GraphicsUpdate::Remove {
+            placements: vec![2], resources: vec![2],
+        }, 0, 0), "a retired reader cannot delete new link images");
+        old.apply(resource(3, 11), 0, 0);
+        old.apply(placement(3, 3), 9, 9);
+        release.wait();
+        drop(old);
+        // Old Drop occurs after the successor is usable. It must neither land
+        // its stale pixel nor close the new worker's wake/admission gate.
+        new.apply(resource(4, 100), 0, 0);
+        new.apply(placement(4, 4), 6, 7);
+        wait_for(&store, |images| images.len() == 2);
+        assert!(store.snapshot().iter().all(|image| image.placement.resource != 1 && image.placement.resource != 3));
+        new.apply(GraphicsUpdate::Remove {
+            placements: vec![2, 4], resources: vec![2, 4],
+        }, 0, 0);
+        assert!(store.snapshot().is_empty(), "successor deletion remains live");
     }
 
     #[test]
