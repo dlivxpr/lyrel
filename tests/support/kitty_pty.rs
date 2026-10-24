@@ -82,6 +82,7 @@ use std::io::{Read, Write};
             let bytes = unhex(fields.next().unwrap());
             let fragment: usize = fields.next().unwrap_or("0").parse().unwrap();
             match operation {
+                "EXIT" => return,
                 "SEND" => {
                     for part in bytes.chunks(if fragment == 0 {
                         bytes.len().max(1)
