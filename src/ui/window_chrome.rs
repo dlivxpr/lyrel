@@ -12,32 +12,13 @@ use crate::ui::i18n::{L10nKey, t};
 use crate::ui::search::SearchTab;
 use crate::ui::tab_strip::chrome_tile_variant;
 
-/// 三按钮组与平台按钮的最小宽度；缩放后放不进侧栏时改用完整顶行。
-pub(crate) fn window_chrome_widths(window: &Window) -> (f32, f32) {
-    let rem = window.rem_size().as_f32();
-    let group = rem * 6.5; // 3 × 2rem 命中区、两处 0.125rem 间距和两侧 padding。
-    let native = if window_controls_drawn(window.is_fullscreen()) {
-        let controls = window.window_controls();
-        let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
-        gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
-    } else {
-        0.
-    };
-    (
-        crate::ui::app::TITLE_BAR_LEAD
-            + rem * (crate::ui::app::WINDOW_MARK_SIZE / 16. + 0.5 + 0.25)
-            + group,
-        group + rem * 0.25 + native,
-    )
-}
-
 /// 原生窗口按钮仍由 TitleBar 留出空间，产品控件尺寸跟随 rem。
 impl LyrelApp {
     pub(crate) fn render_window_chrome(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> (AnyElement, AnyElement) {
+    ) -> AnyElement {
         let left_open = self.left_panel_open(cx);
         let right_open = self.right_panel_open(cx);
         let can_split = self
@@ -182,7 +163,17 @@ impl LyrelApp {
             .justify_end()
             .pr_1()
             .child(right);
-        let right = if window_controls_drawn(window.is_fullscreen()) || cfg!(target_os = "macos") {
+        let controls_drawn = window_controls_drawn(window.is_fullscreen());
+        let native_width = if controls_drawn {
+            let controls = window.window_controls();
+            let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
+            gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
+        } else {
+            0.
+        };
+        // 三按钮组占 6.5rem，右侧留白占 0.25rem；原生控件不随界面缩放。
+        let right_width = window.rem_size().as_f32() * 6.75 + native_width;
+        let right = if controls_drawn || cfg!(target_os = "macos") {
             TitleBar::new()
                 .h(rems(3.))
                 .pl_0()
@@ -200,7 +191,13 @@ impl LyrelApp {
             crate::ui::app::title_bar_drag(row, "workbench-right-drag", window, cx)
                 .into_any_element()
         };
-        (left, right)
+        h_flex()
+            .flex_none()
+            .h(rems(3.))
+            .w_full()
+            .child(gpui_kit::div().flex_1().min_w_0().child(left))
+            .child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
+            .into_any_element()
     }
 }
 
@@ -251,7 +248,7 @@ mod gpui_tests {
         }
     }
     #[gpui_kit::test]
-    fn terminal_uses_caption_space_without_covering_persistent_controls(cx: &mut TestAppContext) {
+    fn sidebar_toggles_preserve_titlebar_and_terminal_height(cx: &mut TestAppContext) {
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
         vcx.simulate_resize(size(px(1440.), px(900.)));
         app.update_in(&mut vcx, |app, window, cx| {
@@ -262,73 +259,80 @@ mod gpui_tests {
         });
         settle(&mut vcx);
         let area = app.read_with(&vcx, |app, _| app.pane_area.get().unwrap());
+        let title_height = vcx.update(|window, _| window.rem_size() * 3.);
         assert_eq!(
             area.top(),
-            px(0.),
-            "the terminal owns the former caption gap"
+            title_height,
+            "the terminal starts below the persistent titlebar even with both sidebars open"
         );
-        let expanded_rows = app.read_with(&vcx, |app, cx| {
+        let rows = app.read_with(&vcx, |app, cx| {
             app.tabs[0].pane.terminals()[0]
                 .read(cx)
                 .terminal
                 .size()
                 .rows
         });
-        vcx.update(|window, cx| {
-            let terminal = window.find("terminal-surface").bounds();
-            assert_eq!(terminal.top(), area.top());
-            // 首行中央保留窗格抓手；在抓手旁验证终端输入，而不是点击窗格菜单。
-            window.click_at(
-                "terminal-surface",
-                gpui_kit::point(terminal.size.width / 4., px(12.)),
-                cx,
-            );
-        });
-        settle(&mut vcx);
-        assert!(
-            terminal_focused(&app, &mut vcx),
-            "clicking the reclaimed first row must focus the terminal"
-        );
-        vcx.simulate_keystrokes("x");
-        settle(&mut vcx);
-        assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"x"[..]));
-        for button in ["titlebar-left-panel", "titlebar-right-panel"] {
+        let controls = [
+            "titlebar-left-panel",
+            "titlebar-search",
+            "titlebar-add",
+            "titlebar-split-right",
+            "titlebar-split-down",
+            "titlebar-right-panel",
+        ];
+        let control_bounds =
+            vcx.update(|window, _| controls.map(|control| window.find(control).bounds()));
+        for (button, left_open, right_open) in [
+            ("titlebar-left-panel", false, true),
+            ("titlebar-right-panel", false, false),
+            ("titlebar-left-panel", true, false),
+            ("titlebar-right-panel", true, true),
+        ] {
             vcx.update(|window, cx| window.click(button, cx));
             settle(&mut vcx);
-            let collapsed = app.read_with(&vcx, |app, _| app.pane_area.get().unwrap());
-            vcx.update(|window, _| {
-                for control in [
-                    "titlebar-left-panel",
-                    "titlebar-search",
-                    "titlebar-add",
-                    "titlebar-split-right",
-                    "titlebar-split-down",
-                    "titlebar-right-panel",
-                ] {
+            app.update_in(&mut vcx, |app, _, cx| {
+                assert_eq!(app.left_panel_open(cx), left_open);
+                assert_eq!(app.right_panel_open(cx), right_open);
+                let current = app.pane_area.get().unwrap();
+                assert_eq!(
+                    current.top(),
+                    area.top(),
+                    "sidebar toggles cannot move the terminal top"
+                );
+                assert_eq!(current.bottom(), area.bottom());
+                assert_eq!(
+                    app.tabs[0].pane.terminals()[0]
+                        .read(cx)
+                        .terminal
+                        .size()
+                        .rows,
+                    rows,
+                    "sidebar toggles change PTY columns, not its row budget"
+                );
+            });
+            vcx.update(|window, cx| {
+                for (control, expected) in controls.into_iter().zip(control_bounds) {
                     let bounds = window.find(control).bounds();
+                    assert_eq!(bounds, expected, "{control} stays anchored to the window");
                     assert!(
-                        bounds.bottom() <= collapsed.top(),
+                        bounds.bottom() <= area.top(),
                         "{control} cannot cover terminal rows"
                     );
                 }
+                let terminal = window.find("terminal-surface").bounds();
+                assert_eq!(terminal.top(), area.top());
+                // 首行中央保留窗格抓手；在抓手旁验证终端输入。
+                window.click_at(
+                    "terminal-surface",
+                    gpui_kit::point(terminal.size.width / 4., px(12.)),
+                    cx,
+                );
             });
-            let collapsed_rows = app.read_with(&vcx, |app, cx| {
-                app.tabs[0].pane.terminals()[0]
-                    .read(cx)
-                    .terminal
-                    .size()
-                    .rows
-            });
-            assert!(
-                expanded_rows > collapsed_rows,
-                "reclaimed height reaches the PTY grid"
-            );
-            vcx.update(|window, cx| window.click(button, cx));
             settle(&mut vcx);
-            assert_eq!(
-                app.read_with(&vcx, |app, _| app.pane_area.get().unwrap().top()),
-                px(0.)
-            );
+            assert!(terminal_focused(&app, &mut vcx));
+            vcx.simulate_keystrokes("x");
+            settle(&mut vcx);
+            assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"x"[..]));
         }
     }
 
