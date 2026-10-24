@@ -14,9 +14,9 @@
 //! frame to the client; the base64 text never rides the socket, and the VT
 //! parser never has to chew through it.
 //!
-//! Scope: this handles the subset the wire actually carries in practice
-//! (transmit-and-display, query, delete). Which transmission media we accept
-//! depends on where the pane lives:
+//! Upload, independent placement, transmit-and-display, query and static delete
+//! commands feed the living pane's GraphicsState. Media acceptance depends on
+//! where the sender lives:
 //!
 //! - Direct (`t=d`, base64 inline) is always honored — it is the only medium
 //!   that survives lyrel's socket + SSH topology.
@@ -33,7 +33,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
-pub use super::graphics_state::{GraphicsUpdate, Placement};
+pub use super::graphics_state::{GraphicsEffect, GraphicsState, GraphicsUpdate, Placement};
 
 /// Cap on a single APC payload (one chunk) we'll buffer before abandoning it.
 /// `terminal-browser` chunks direct transmissions into 4 KiB base64 pieces, but
@@ -45,21 +45,16 @@ const MAX_APC_PAYLOAD: usize = MAX_TRANSMISSION_BASE64;
 
 /// Cap on the reassembled base64 of one chunked transmission.
 ///
-/// This has to stay under [`crate::daemon::protocol::MAX_FRAME`] once decoded:
-/// base64 shrinks by 3/4, and [`Image::encode_frame`] prepends [`HEADER_LEN`]
-/// bytes, so the decoded payload must leave room for the header inside the wire
-/// frame. Blowing past `MAX_FRAME` would make `write_frame` fail, which the
-/// daemon's writer loop treats as fatal — one oversized image would drop the
-/// client's whole connection instead of just that frame. 48 MiB of base64 is
-/// ~36 MB of pixels, comfortably more than a 4K full-window RGBA frame (~33 MB)
-/// and comfortably under the 64 MiB wire ceiling.
+/// The decoded transfer must leave room for GraphicsUpdate's metadata within
+/// the pane frame. A 48 MiB base64 limit admits an uncompressed 4K RGBA image
+/// while remaining below the 64 MiB pane-frame ceiling.
 const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
 
 /// Cap on the *resolved* pixel bytes of one image, whatever medium carried it.
 /// Bounds the file/shm fast path (where the sender names an object whose size we
 /// don't control) and backstops the direct path, keeping every frame we hand the
 /// daemon inside [`crate::daemon::protocol::MAX_FRAME`].
-pub const MAX_IMAGE_BYTES: usize = crate::daemon::protocol::MAX_FRAME - HEADER_LEN;
+pub const MAX_IMAGE_BYTES: usize = crate::daemon::protocol::MAX_FRAME - (1 << 20);
 
 /// A streaming tokenizer that splits raw output into a *passthrough* byte stream
 /// and the kitty graphics commands lifted out of it.
@@ -420,26 +415,16 @@ impl GraphicsSniffer {
 /// One ordered piece of a sniffed chunk — see [`GraphicsSniffer::sniff`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
-    /// Non-graphics bytes to append to the ring / forward as `Output`.
     Output(Vec<u8>),
-    /// An `a=q` reply to write back to the PTY.
-    Query(Vec<u8>),
-    /// An image to forward out-of-band.
-    Image(Image),
-    /// A file/shm transmission the daemon must resolve into pixels before
-    /// forwarding (local panes only). See [`MediumTransfer`].
-    ImageFromMedium(MediumTransfer),
-    /// A delete to forward out-of-band.
-    Delete(ImageDelete),
+    Command { control: Control, image: Option<Image> },
+    Reply(Vec<u8>),
 }
 
 impl From<Event> for Segment {
-    fn from(ev: Event) -> Self {
-        match ev {
-            Event::Query { reply, .. } => Segment::Query(reply),
-            Event::Image(img) => Segment::Image(img),
-            Event::ImageFromMedium(t) => Segment::ImageFromMedium(t),
-            Event::Delete(c) => Segment::Delete(ImageDelete::from_control(&c)),
+    fn from(event: Event) -> Self {
+        match event {
+            Event::Command { control, image } => Self::Command { control, image },
+            Event::Reply(reply) => Self::Reply(reply),
         }
     }
 }
@@ -530,6 +515,16 @@ pub struct Control {
     pub offset: u32,
     /// `S=` — number of bytes to read from a file/shm object (0 = to end).
     pub size: u32,
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    pub offset_x: u32,
+    pub offset_y: u32,
+    pub z: i32,
+    pub no_move: bool,
+    pub invalid: bool,
+    pub unsupported: bool,
 }
 
 impl Default for Control {
@@ -552,6 +547,8 @@ impl Default for Control {
             quiet: 0,
             offset: 0,
             size: 0,
+            x: 0, y: 0, w: 0, h: 0, offset_x: 0, offset_y: 0,
+            z: 0, no_move: false, invalid: false, unsupported: false,
         }
     }
 }
@@ -591,19 +588,21 @@ impl Control {
                 b"f" => {
                     c.format = match val {
                         b"24" => WireFormat::Rgb,
+                        b"32" => WireFormat::Rgba,
                         b"100" => WireFormat::Png,
-                        _ => WireFormat::Rgba, // 32 and the default
+                        _ => { c.unsupported = true; WireFormat::Rgba }
                     }
                 }
                 b"t" => {
                     c.medium = match val {
+                        b"d" => Medium::Direct,
                         b"f" => Medium::File,
                         b"s" => Medium::Shared,
                         b"t" => Medium::TempFile,
-                        _ => Medium::Direct,
+                        _ => { c.unsupported = true; Medium::Direct }
                     }
                 }
-                b"o" => c.compressed = val == b"z",
+                b"o" => { c.compressed = val == b"z"; c.unsupported |= val != b"z"; }
                 b"i" => c.id = num(),
                 b"I" => c.number = num(),
                 b"p" => c.placement = num(),
@@ -618,9 +617,25 @@ impl Control {
                 b"q" => c.quiet = num().min(u8::MAX as u32) as u8,
                 b"O" => c.offset = num(),
                 b"S" => c.size = num(),
+                b"x" => c.x = num(),
+                b"y" => c.y = num(),
+                b"w" => c.w = num(),
+                b"h" => c.h = num(),
+                b"X" => c.offset_x = num(),
+                b"Y" => c.offset_y = num(),
+                b"z" => match std::str::from_utf8(val).ok().and_then(|s| s.parse().ok()) {
+                    Some(z) => c.z = z,
+                    None => c.invalid = true,
+                },
+                b"C" => { c.no_move = val == b"1"; c.invalid |= val != b"0" && val != b"1"; }
+                b"U" | b"P" | b"Q" | b"H" | b"V" => c.unsupported |= val != b"0",
                 _ => {} // unknown key: ignore
             }
+            if matches!(key, b"i" | b"I" | b"p" | b"s" | b"v" | b"c" | b"r" | b"x" | b"y" | b"w" | b"h" | b"X" | b"Y" | b"O" | b"S")
+                && std::str::from_utf8(val).ok().and_then(|s| s.parse::<u32>().ok()).is_none()
+            { c.invalid = true; }
         }
+        c.invalid |= c.id != 0 && c.number != 0;
         Some(c)
     }
 }
@@ -656,15 +671,9 @@ fn payload_data(command: &[u8]) -> &[u8] {
 /// [`to_rgba8`]: Image::to_rgba8
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
-    pub id: u32,
-    pub number: u32,
-    pub placement: u32,
     /// Source pixel dimensions.
     pub width: u32,
     pub height: u32,
-    /// Requested display span in cells (0 = derive from pixels / cell size).
-    pub cols: u32,
-    pub rows: u32,
     /// The base64-decoded payload: zlib-compressed pixels when [`compressed`],
     /// otherwise raw pixels ([`WireFormat::Rgb`]/[`WireFormat::Rgba`]) or an
     /// encoded PNG file ([`WireFormat::Png`]).
@@ -691,62 +700,26 @@ impl Image {
     /// The caller checks the inflated length against `width*height*4` anyway, so
     /// capping it up front costs nothing.
     pub fn to_rgba8(&self) -> Option<Vec<u8>> {
-        if self.format == WireFormat::Png {
-            return None;
-        }
+        let expected = self.decoded_len()?;
+        if expected > MAX_IMAGE_BYTES { return None; }
         let raw = if self.compressed {
-            // Bound the inflate by the pixels the sender *claims* to be sending
-            // (`width * height` at this format's bytes-per-pixel). Without a cap,
-            // a high-ratio deflate payload well inside `MAX_TRANSMISSION_BASE64`
-            // (which bounds only the *compressed* bytes) inflates to tens of GB
-            // and OOMs the whole GUI process. A payload that decompresses past
-            // its own declared dimensions is malformed, so we drop it.
-            //
-            // The declared size is itself attacker-chosen, so clamp it too:
-            // `s=65535,v=65535` alone works out to 17 GB, which would hand the
-            // bomb right back its allocation. No real frame comes near
-            // `MAX_IMAGE_BYTES`, which is what the wire can carry anyway.
-            let limit = self.decoded_len()?.min(MAX_IMAGE_BYTES);
-            miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&self.data, limit).ok()?
-        } else {
-            self.data.clone()
-        };
-        Some(match self.format {
-            WireFormat::Rgb => rgb_to_rgba(&raw),
-            _ => raw, // Rgba
-        })
+            miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&self.data, expected).ok()?
+        } else { self.data.clone() };
+        if raw.len() != expected { return None; }
+        Some(if self.format == WireFormat::Rgb { rgb_to_rgba(&raw) } else { raw })
     }
 
-    /// Like [`to_rgba8`](Image::to_rgba8) but *moves* the pixel buffer out of the
-    /// image on the uncompressed fast path instead of cloning it, leaving
-    /// [`data`](Image::data) empty. This is the client hot path: a full-window
-    /// browser frame is ~26 MiB of RGBA, and the uncompressed shm/file transport
-    /// hands it to us already in the final `f=32` layout — so the clone
-    /// [`to_rgba8`] does there is pure waste at video frame rates. Only the pixel
-    /// buffer moves; the caller's `cols`/`rows`/`id`/`placement` metadata is
-    /// untouched. The compressed inflate and the PNG guard are identical to
-    /// [`to_rgba8`]; `f=24` still repacks (RGB→RGBA changes the length).
-    ///
-    /// [`to_rgba8`]: Image::to_rgba8
+    /// Consume the pixel buffer on the uncompressed fast path. Normalization
+    /// and all size checks stay off the UI thread in the desktop decode worker.
     pub fn take_rgba8(&mut self) -> Option<Vec<u8>> {
-        if self.format == WireFormat::Png {
-            return None;
-        }
+        let expected = self.decoded_len()?;
+        if expected > MAX_IMAGE_BYTES { return None; }
         let data = std::mem::take(&mut self.data);
-        if self.compressed {
-            // Same bounded inflate as `to_rgba8` — see that method for why the
-            // limit is clamped to `MAX_IMAGE_BYTES` as well as the declared size.
-            let limit = self.decoded_len()?.min(MAX_IMAGE_BYTES);
-            let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&data, limit).ok()?;
-            return Some(match self.format {
-                WireFormat::Rgb => rgb_to_rgba(&raw),
-                _ => raw,
-            });
-        }
-        Some(match self.format {
-            WireFormat::Rgb => rgb_to_rgba(&data),
-            _ => data, // Rgba — moved out of the frame, not cloned.
-        })
+        let raw = if self.compressed {
+            miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&data, expected).ok()?
+        } else { data };
+        if raw.len() != expected { return None; }
+        Some(if self.format == WireFormat::Rgb { rgb_to_rgba(&raw) } else { raw })
     }
 
     /// The byte length of this image's *decoded* (pre-`rgb_to_rgba`) pixels —
@@ -764,101 +737,8 @@ impl Image {
             .filter(|&n| n != 0)
     }
 
-    /// Encode for the daemon→client [`crate::daemon::protocol::DaemonMsg::Image`]
-    /// frame: a fixed 30-byte header carrying the metadata, then the raw `data`
-    /// bytes appended verbatim. A JSON envelope would base64-inflate the pixel
-    /// payload ~1.33×; this keeps it byte-for-byte, which matters at video frame
-    /// rates. See [`decode_frame`](Image::decode_frame).
-    pub fn encode_frame(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(HEADER_LEN + self.data.len());
-        out.extend_from_slice(&self.id.to_le_bytes());
-        out.extend_from_slice(&self.number.to_le_bytes());
-        out.extend_from_slice(&self.placement.to_le_bytes());
-        out.extend_from_slice(&self.width.to_le_bytes());
-        out.extend_from_slice(&self.height.to_le_bytes());
-        out.extend_from_slice(&self.cols.to_le_bytes());
-        out.extend_from_slice(&self.rows.to_le_bytes());
-        out.push(match self.format {
-            WireFormat::Rgb => 24,
-            WireFormat::Rgba => 32,
-            WireFormat::Png => 100,
-        });
-        out.push(u8::from(self.compressed));
-        out.extend_from_slice(&self.data);
-        out
-    }
-
-    /// Reconstruct from an [`encode_frame`](Image::encode_frame) payload.
-    pub fn decode_frame(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < HEADER_LEN {
-            return None;
-        }
-        let u32_at = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
-        let format = match bytes[28] {
-            24 => WireFormat::Rgb,
-            100 => WireFormat::Png,
-            _ => WireFormat::Rgba,
-        };
-        Some(Image {
-            id: u32_at(0),
-            number: u32_at(4),
-            placement: u32_at(8),
-            width: u32_at(12),
-            height: u32_at(16),
-            cols: u32_at(20),
-            rows: u32_at(24),
-            format,
-            compressed: bytes[29] != 0,
-            data: bytes[HEADER_LEN..].to_vec(),
-        })
-    }
-
-    /// Like [`decode_frame`](Image::decode_frame) but consumes the frame buffer,
-    /// reusing its allocation for the pixel payload instead of copying the tail
-    /// into a fresh `Vec`. The client owns the frame `Vec` straight off the
-    /// socket, and the pixels are the overwhelming majority of it (a ~26 MiB
-    /// RGBA frame behind a 30-byte header), so draining the header in place turns
-    /// a full-frame copy into a cheap front shift. Behaviourally identical to
-    /// `decode_frame` — same header parse, same fields.
-    pub fn decode_frame_owned(mut frame: Vec<u8>) -> Option<Self> {
-        if frame.len() < HEADER_LEN {
-            return None;
-        }
-        let u32_at = |o: usize| u32::from_le_bytes(frame[o..o + 4].try_into().unwrap());
-        let id = u32_at(0);
-        let number = u32_at(4);
-        let placement = u32_at(8);
-        let width = u32_at(12);
-        let height = u32_at(16);
-        let cols = u32_at(20);
-        let rows = u32_at(24);
-        let format = match frame[28] {
-            24 => WireFormat::Rgb,
-            100 => WireFormat::Png,
-            _ => WireFormat::Rgba,
-        };
-        let compressed = frame[29] != 0;
-        // Reuse the socket buffer as the pixel buffer: drop the header off the
-        // front rather than allocating a new `Vec` for `frame[HEADER_LEN..]`.
-        frame.drain(..HEADER_LEN);
-        Some(Image {
-            id,
-            number,
-            placement,
-            width,
-            height,
-            cols,
-            rows,
-            format,
-            compressed,
-            data: frame,
-        })
-    }
 }
 
-/// Byte length of the [`Image::encode_frame`] header: seven `u32` fields, then
-/// the format and compression bytes.
-const HEADER_LEN: usize = 7 * 4 + 1 + 1;
 
 impl MediumTransfer {
     /// Resolve the referenced bytes into an [`Image`] by reading the file or
@@ -882,13 +762,8 @@ impl MediumTransfer {
             Medium::Direct => return None,
         };
         Some(Image {
-            id: self.id,
-            number: self.number,
-            placement: self.placement,
             width: self.width,
             height: self.height,
-            cols: self.cols,
-            rows: self.rows,
             data,
             format: self.format,
             compressed: self.compressed,
@@ -1058,71 +933,11 @@ fn shm_name_is_wellformed(name: &[u8]) -> bool {
     !rest.contains(&b'/') && !rest.contains(&0) && rest != b"." && rest != b".."
 }
 
-/// A delete request distilled from an `a=d` command, in the compact form the
-/// daemon forwards to the client's image store. The full kitty delete grammar is
-/// rich (by id, by placement, by cell, by z-index, …); the client only needs the
-/// target selector plus the id/placement it may scope to, which is all any sender
-/// lyrel targets — most often `d=A` (delete everything) — actually uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ImageDelete {
-    /// The `d=` selector byte (e.g. `A`/`a` = all, `i` = by id, `p` = by
-    /// placement). Uppercase variants also free the image data in kitty; the
-    /// client frees unconditionally, so case only affects which images match.
-    pub target: u8,
-    pub id: u32,
-    pub placement: u32,
-}
-
-impl ImageDelete {
-    pub fn from_control(c: &Control) -> Self {
-        Self {
-            // A bare `a=d` with no `d=` means "delete all visible placements",
-            // which kitty spells `a` — normalize the unset case to it.
-            target: if c.delete == 0 { b'a' } else { c.delete },
-            id: c.id,
-            placement: c.placement,
-        }
-    }
-
-    /// A fixed 9-byte frame: the selector byte then id and placement (LE).
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(9);
-        out.push(self.target);
-        out.extend_from_slice(&self.id.to_le_bytes());
-        out.extend_from_slice(&self.placement.to_le_bytes());
-        out
-    }
-
-    pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 9 {
-            return None;
-        }
-        Some(Self {
-            target: bytes[0],
-            id: u32::from_le_bytes(bytes[1..5].try_into().unwrap()),
-            placement: u32::from_le_bytes(bytes[5..9].try_into().unwrap()),
-        })
-    }
-}
-
-/// What a fed command turned into. Query/Delete carry no pixels; the caller
-/// writes the query reply back to the PTY and applies deletes to its store.
+/// A complete request. GraphicsState owns identity and lifetime decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    /// An `a=q` probe. `reply` is the bytes to write to the PTY; `honored` says
-    /// whether we accepted the requested medium (for logging/metrics only).
-    Query { reply: Vec<u8>, honored: bool },
-    /// A complete image transmission (`a=T`/`a=t`).
-    Image(Image),
-    /// A transmission whose pixels live in a file or POSIX shm object rather
-    /// than inline in the escape. The parser can't read the filesystem (it must
-    /// stay pure and host-agnostic), so it hands the reference to the daemon
-    /// pane — which is co-located with the sender on a *local* pane — to `mmap`
-    /// / read and unlink. This is the zero-copy, zero-inflate path a sender like
-    /// `terminal-browser` prefers; see [`MediumTransfer`].
-    ImageFromMedium(MediumTransfer),
-    /// An `a=d` delete request.
-    Delete(Control),
+    Command { control: Control, image: Option<Image> },
+    Reply(Vec<u8>),
 }
 
 /// A file/shm transmission the daemon must resolve into pixels. The `name` is
@@ -1137,13 +952,8 @@ pub struct MediumTransfer {
     pub name: Vec<u8>,
     pub offset: u32,
     pub size: u32,
-    pub id: u32,
-    pub number: u32,
-    pub placement: u32,
     pub width: u32,
     pub height: u32,
-    pub cols: u32,
-    pub rows: u32,
     pub format: WireFormat,
     /// Whether the referenced bytes are zlib-compressed (`o=z`). A sender that
     /// picks shm/file for speed sends raw pixels, but honor the flag regardless.
@@ -1176,173 +986,91 @@ pub struct GraphicsParser {
 }
 
 impl GraphicsParser {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
-    /// A parser that may honor file/shm transfer because the sender is on this
-    /// host (see [`GraphicsParser::local`]).
-    pub fn new_local(local: bool) -> Self {
-        Self {
-            local,
-            ..Self::default()
-        }
-    }
+    pub fn new_local(local: bool) -> Self { Self { local, ..Self::default() } }
 
-    /// Whether a `t=f`/`t=t`/`t=s` transfer can actually be resolved here: the
-    /// sender has to share this host's filesystem (a local pane), and
-    /// [`MediumTransfer::resolve`] has to have a real implementation on this
-    /// platform (it is unix-only). Both `query_reply` and `finalize` route
-    /// through this so what we advertise and what we accept can't drift apart.
-    fn honors_indirect_media(&self) -> bool {
-        self.local && cfg!(unix)
-    }
-
-    /// Feed one complete `_G` command payload (the bytes [`ApcTokenizer`]
-    /// delivers). Returns an [`Event`] when a command completes (a query, a
-    /// finished image, or a delete); returns `None` for an intermediate chunk of
-    /// a still-incomplete transmission.
     pub fn feed(&mut self, command: &[u8]) -> Option<Event> {
         let control = Control::parse(command)?;
         let data = payload_data(command);
-
-        // A continuation chunk of a chunked transmission carries only `m=…` — no
-        // `a=` — so its action defaults to `Transmit`. Route anything while a
-        // transmission is pending straight to the chunk accumulator, which keeps
-        // the *first* chunk's real control keys.
-        if self.pending.is_some() {
-            return self.accept_chunk(control, data);
+        // A delete aborts a partial upload. Other complete commands must not be
+        // accidentally swallowed as base64 continuation bytes.
+        if control.action == Action::Delete { self.pending = None; }
+        if control.invalid || control.unsupported || control.action == Action::Other {
+            self.pending = None;
+            let status = if control.invalid { "EINVAL:Invalid control data" } else { "ENOTSUPPORTED:Unsupported operation" };
+            return response(&control, control.id, status).map(Event::Reply);
         }
-
+        if self.pending.is_some() {
+            let header = command.split(|b| *b == b';').next().unwrap_or(command);
+            let continuation = header.strip_prefix(b"G").unwrap_or(header).split(|b| *b == b',')
+                .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
+            if continuation { return self.accept_chunk(control, data); }
+            self.pending = None;
+        }
         match control.action {
-            Action::Query => self.query_reply(&control),
-            Action::Delete => Some(Event::Delete(control)),
-            Action::TransmitAndDisplay | Action::Transmit => self.accept_chunk(control, data),
-            // `a=p` places an image transmitted by an *earlier* command, which
-            // needs the stored-image table this parser deliberately doesn't
-            // keep. Routing it through `accept_chunk` would emit an `Image` with
-            // an empty payload — a frame the client can only throw away — so
-            // drop it here instead. Senders that split transmit from placement
-            // get nothing; `a=T` (the shape every sender lyrel targets uses)
-            // is unaffected.
-            Action::Display => None,
-            // An action we don't handle, with nothing in flight: drop it.
-            Action::Other => None,
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query => self.accept_chunk(control, data),
+            Action::Display | Action::Delete => {
+                if !data.is_empty() || control.more {
+                    response(&control, control.id, "EINVAL:Unexpected placement payload").map(Event::Reply)
+                } else { Some(Event::Command { control, image: None }) }
+            }
+            Action::Other => unreachable!(),
         }
     }
 
-    /// Append a (possibly first) chunk; finalize when `m` is not set.
     fn accept_chunk(&mut self, control: Control, data: &[u8]) -> Option<Event> {
-        // The first chunk carries the real control keys; later chunks repeat
-        // only `m=`. Preserve the first chunk's control across the transmission.
-        let is_first = self.pending.is_none();
-        if is_first {
-            self.pending = Some(Pending {
-                control,
-                base64: Vec::new(),
-            });
+        let pending = self.pending.get_or_insert_with(|| Pending { control, base64: Vec::new() });
+        if data.len() > MAX_TRANSMISSION_BASE64.saturating_sub(pending.base64.len()) {
+            let first = pending.control;
+            self.pending = None;
+            return response(&first, first.id, "ENOSPC:Transfer too large").map(Event::Reply);
         }
-        let pending = self.pending.as_mut()?;
         pending.base64.extend_from_slice(data);
-        if pending.base64.len() > MAX_TRANSMISSION_BASE64 {
-            log::debug!(
-                "kitty graphics: abandoning a transmission past {MAX_TRANSMISSION_BASE64} base64 bytes"
-            );
-            self.pending = None; // abandon an oversized transmission
-            return None;
-        }
-        if control.more {
-            return None; // more chunks to come
-        }
-        // Complete: decode and emit.
+        if control.more { return None; }
         let Pending { control, base64 } = self.pending.take()?;
         self.finalize(control, &base64)
     }
 
     fn finalize(&self, control: Control, base64: &[u8]) -> Option<Event> {
-        // Base64-decode the payload once. For direct transmission this *is* the
-        // (still-compressed) pixels; for file/shm it's the path/object name.
-        let data = BASE64.decode(base64).ok()?;
-
-        // File/shm transfer: the payload names bytes on this host. Hand the
-        // reference to the daemon to resolve — but only on a local pane, where
-        // the name is meaningful and reading it can't leak across an SSH tunnel.
-        // A `query_reply` earlier already refused these mediums on a remote
-        // pane, so a well-behaved sender never reaches here; the guard is
-        // belt-and-suspenders.
-        if control.medium != Medium::Direct {
-            if !self.honors_indirect_media() {
-                return None;
-            }
-            return Some(Event::ImageFromMedium(MediumTransfer {
-                medium: control.medium,
-                name: data,
-                offset: control.offset,
-                size: control.size,
-                id: control.id,
-                number: control.number,
-                placement: control.placement,
-                width: control.width,
-                height: control.height,
-                cols: control.cols,
-                rows: control.rows,
-                format: control.format,
-                compressed: control.compressed,
-            }));
+        let fail = |status| response(&control, control.id, status).map(Event::Reply);
+        if control.medium != Medium::Direct && !(self.local && cfg!(unix)) {
+            return fail("ENOTSUPPORTED:Host-local transfer unavailable");
         }
-
-        // Direct: inflation is deferred to the client (`to_rgba8`) so the
-        // payload rides the socket — and any SSH tunnel — compressed.
-        Some(Event::Image(Image {
-            id: control.id,
-            number: control.number,
-            placement: control.placement,
-            width: control.width,
-            height: control.height,
-            cols: control.cols,
-            rows: control.rows,
-            data,
-            format: control.format,
-            compressed: control.compressed,
-        }))
-    }
-
-    /// Build the `a=q` reply. On a local unix pane we honor direct, file, and
-    /// shm transfer, so any of those probes gets `OK`; otherwise only direct is
-    /// honored and a `t=f`/`t=s`/`t=t` probe gets an error — which makes a
-    /// sender like `terminal-browser` fall back to inline `t=d` on its own.
-    ///
-    /// The answer has to track what [`MediumTransfer::resolve`] can actually do,
-    /// including on the platform axis: it is unix-only, so replying `OK` to a
-    /// file/shm probe on Windows would talk a sender into a medium whose every
-    /// frame we then silently discard, leaving the pane blank.
-    fn query_reply(&self, control: &Control) -> Option<Event> {
-        let honored = control.medium == Medium::Direct || self.honors_indirect_media();
-        // `q=` asks us to stay quiet: 1 suppresses success replies, 2 suppresses
-        // failures too. This matters because the reply is written back to the
-        // *PTY* — it arrives as if the user had typed it. A sender that asked
-        // for silence and gets `\x1b_Gi=1;OK\x1b\` anyway has those bytes land
-        // in its stdin, or, if it already exited, on the shell's input line.
-        if control.quiet >= 2 || (control.quiet == 1 && honored) {
-            return None;
-        }
-        let status: &[u8] = if honored { b"OK" } else { b"ENOTSUPPORTED" };
-        // Echo back the id (preferred) or number the sender used, exactly as
-        // kitty does, so the sender can correlate the reply.
-        let mut reply = Vec::with_capacity(32);
-        reply.extend_from_slice(b"\x1b_G");
-        if control.id != 0 {
-            reply.extend_from_slice(format!("i={}", control.id).as_bytes());
-        } else if control.number != 0 {
-            reply.extend_from_slice(format!("I={}", control.number).as_bytes());
+        let data = match BASE64.decode(base64) {
+            Ok(data) => data,
+            Err(_) => return fail("EINVAL:Invalid base64 payload"),
+        };
+        let image = if control.medium == Medium::Direct {
+            Image { width: control.width, height: control.height, data,
+                format: control.format, compressed: control.compressed }
         } else {
-            reply.extend_from_slice(b"i=0");
-        }
-        reply.push(b';');
-        reply.extend_from_slice(status);
-        reply.extend_from_slice(b"\x1b\\");
-        Some(Event::Query { reply, honored })
+            let transfer = MediumTransfer { medium: control.medium, name: data,
+                offset: control.offset, size: control.size, width: control.width,
+                height: control.height, format: control.format, compressed: control.compressed };
+            match transfer.resolve() {
+                Some(image) => image,
+                None => return fail("EBADF:Failed to read image file"),
+            }
+        };
+        Some(Event::Command { control, image: Some(image) })
     }
+}
+
+/// Kitty acknowledgements are correlated with all supplied identities. Anonymous
+/// transmissions do not inject unsolicited bytes into the shell's input.
+pub(crate) fn response(control: &Control, image_id: u32, status: &str) -> Option<Vec<u8>> {
+    let success = status == "OK";
+    if control.quiet >= 2 || (success && control.quiet == 1) { return None; }
+    if success && control.action == Action::Delete { return None; }
+    if control.id == 0 && control.number == 0 && control.action != Action::Query { return None; }
+    let mut keys = Vec::with_capacity(3);
+    if image_id != 0 || control.number == 0 { keys.push(format!("i={image_id}")); }
+    if control.number != 0 { keys.push(format!("I={}", control.number)); }
+    if control.placement != 0 && (image_id != 0 || control.number != 0) {
+        keys.push(format!("p={}", control.placement));
+    }
+    Some(format!("\x1b_G{};{status}\x1b\\", keys.join(",")).into_bytes())
 }
 
 /// Expand tightly packed RGB into RGBA with an opaque alpha channel.
@@ -1453,652 +1181,106 @@ mod tests {
     }
 
     #[test]
-    fn sniffer_ties_tokenizer_and_parser_together() {
-        let mut s = GraphicsSniffer::new();
-        let mut pass = Vec::new();
-        let events = s.feed(b"hi\x1b_Gi=1,a=q,t=d;AAAA\x1b\\bye", |b| {
-            pass.extend_from_slice(b)
-        });
-        assert_eq!(pass, b"hibye".to_vec());
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            Event::Query { reply, honored } => {
-                assert!(honored);
-                assert_eq!(reply, b"\x1b_Gi=1;OK\x1b\\");
+    fn malformed_upload_does_not_swallow_neighboring_text_or_the_next_command() {
+        let stream = b"before\x1b_Ga=t,i=7,s=1,v=1;not-base64\x1b\\after\x1b_Ga=p,i=8,p=3\x1b\\end";
+        for split_at in 0..=stream.len() {
+            let mut sniffer = GraphicsSniffer::new();
+            let mut output = Vec::new();
+            let mut events = Vec::new();
+            for chunk in [&stream[..split_at], &stream[split_at..]] {
+                events.extend(sniffer.feed(chunk, |bytes| output.extend_from_slice(bytes)));
             }
-            _ => panic!("expected query"),
+            assert_eq!(output, b"beforeafterend");
+            assert!(matches!(&events[0], Event::Reply(reply) if reply.starts_with(b"\x1b_Gi=7;EINVAL:")));
+            assert!(matches!(&events[1], Event::Command { control, image: None }
+                if control.id == 8 && control.placement == 3 && control.action == Action::Display));
         }
     }
 
     #[test]
-    fn sniff_takes_zero_copy_fast_path_without_graphics() {
-        let mut s = GraphicsSniffer::new();
-        // A chunk full of CSI escapes but no APC borrows straight through.
-        match s.sniff(b"\x1b[31mred\x1b[0m plain") {
-            Sniffed::Plain(b) => assert_eq!(b, b"\x1b[31mred\x1b[0m plain"),
-            Sniffed::Segments(_) => panic!("expected the borrowed fast path"),
-        }
-    }
-
-    #[test]
-    fn sniff_preserves_stream_order_of_text_and_images() {
-        let pixel = [0xffu8, 0x00, 0x00, 0xff];
-        let b64 = BASE64.encode(pixel);
-        let stream = format!("A\x1b_Ga=T,f=32,t=d,s=1,v=1,i=1;{b64}\x1b\\B");
-        let mut s = GraphicsSniffer::new();
-        let segs = match s.sniff(stream.as_bytes()) {
-            Sniffed::Segments(segs) => segs,
-            Sniffed::Plain(_) => panic!("graphics present"),
-        };
-        // Text "A", then the image, then text "B" — in that order.
-        assert_eq!(segs.len(), 3);
-        assert_eq!(segs[0], Segment::Output(b"A".to_vec()));
-        assert!(matches!(&segs[1], Segment::Image(img) if img.id == 1));
-        assert_eq!(segs[2], Segment::Output(b"B".to_vec()));
-    }
-
-    #[test]
-    fn sniff_emits_query_and_delete_segments() {
-        let mut s = GraphicsSniffer::new();
-        let segs = match s.sniff(b"\x1b_Gi=7,a=q,t=d;AAAA\x1b\\x\x1b_Ga=d,d=A\x1b\\") {
-            Sniffed::Segments(segs) => segs,
-            Sniffed::Plain(_) => panic!("graphics present"),
-        };
-        assert_eq!(segs[0], Segment::Query(b"\x1b_Gi=7;OK\x1b\\".to_vec()));
-        assert_eq!(segs[1], Segment::Output(b"x".to_vec()));
-        assert!(matches!(&segs[2], Segment::Delete(d) if d.target == b'A'));
-    }
-
-    #[test]
-    fn sniff_coalesces_adjacent_passthrough_runs() {
-        // A foreign APC between two text runs is passthrough, so the whole thing
-        // collapses to a single output segment (no graphics segment at all).
-        let mut s = GraphicsSniffer::new();
-        match s.sniff(b"a\x1b_Zother\x1b\\b") {
-            Sniffed::Segments(segs) => {
-                assert_eq!(segs, vec![Segment::Output(b"a\x1b_Zother\x1b\\b".to_vec())]);
+    fn delete_aborts_a_partial_upload_without_consuming_its_own_selector() {
+        let mut parser = GraphicsParser::new();
+        assert_eq!(parser.feed(b"Ga=t,i=7,s=1,v=1,m=1;/wAA"), None);
+        assert!(matches!(parser.feed(b"Ga=d,d=i,i=7"), Some(Event::Command { control, image: None })
+            if control.action == Action::Delete && control.delete == b'i'));
+        match parser.feed(b"Ga=t,i=8,s=1,v=1;/wAA/w==").unwrap() {
+            Event::Command { control, image: Some(image) } => {
+                assert_eq!(control.id, 8);
+                assert_eq!(image.to_rgba8().unwrap(), [255, 0, 0, 255]);
             }
-            Sniffed::Plain(_) => panic!("an APC opener forces the slow path"),
+            other => panic!("complete next upload was lost: {other:?}"),
         }
     }
 
     #[test]
-    fn resyncs_on_new_apc_after_an_unterminated_one() {
-        assert_eq!(
-            collect(&[b"\x1b_Ga=T;dropped\x1b_Ga=q;AAAA\x1b\\"]),
-            vec![b"Ga=q;AAAA".to_vec()]
-        );
-    }
-
-    #[test]
-    fn oversized_chunk_is_abandoned_and_stream_recovers() {
-        let mut big = b"\x1b_G".to_vec();
-        big.extend(std::iter::repeat_n(b'x', MAX_APC_PAYLOAD + 1));
-        big.extend_from_slice(b"\x1b\\\x1b_Ga=q;AAAA\x1b\\");
-        assert_eq!(collect(&[&big]), vec![b"Ga=q;AAAA".to_vec()]);
-    }
-
-    #[test]
-    fn control_parses_the_keys_terminal_browser_sends() {
-        let c =
-            Control::parse(b"Ga=T,f=32,o=z,s=1920,v=1080,t=d,i=42,p=1,C=1,q=2,m=1;xxxx").unwrap();
-        assert_eq!(c.action, Action::TransmitAndDisplay);
-        assert_eq!(c.format, WireFormat::Rgba);
-        assert!(c.compressed);
-        assert_eq!(c.width, 1920);
-        assert_eq!(c.height, 1080);
-        assert_eq!(c.medium, Medium::Direct);
-        assert_eq!(c.id, 42);
-        assert!(c.more);
-        assert_eq!(c.quiet, 2);
-    }
-
-    #[test]
-    fn query_reply_refuses_shm_file_on_remote_pane() {
-        // The default parser is non-local (the SSH-safe posture): direct is
-        // honored, file/shm are refused so the sender falls back to inline.
-        let mut p = GraphicsParser::new();
-        // The exact probe terminal-browser's graphics.ts sends.
-        let ev = p.feed(b"Gi=4207,a=q,t=d,f=24,s=1,v=1;AAAA").unwrap();
-        match ev {
-            Event::Query { reply, honored } => {
-                assert!(honored);
-                assert_eq!(reply, b"\x1b_Gi=4207;OK\x1b\\".to_vec());
-            }
-            _ => panic!("expected query"),
-        }
-        // The shm/file medium probes must be refused so the sender falls back.
-        let ev = p.feed(b"Gi=299,a=q,t=s,f=32,s=1,v=1;L3B4LXE").unwrap();
-        match ev {
-            Event::Query { reply, honored } => {
-                assert!(!honored);
-                assert_eq!(reply, b"\x1b_Gi=299;ENOTSUPPORTED\x1b\\".to_vec());
-            }
-            _ => panic!("expected query"),
-        }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn query_reply_ok_for_shm_file_on_local_pane() {
-        // A local pane shares the sender's filesystem, so file/shm are honored:
-        // this is what unlocks terminal-browser's zero-inflate fast path.
-        let mut p = GraphicsParser::new_local(true);
-        for probe in [
-            &b"Gi=299,a=q,t=s,f=32,s=1,v=1;L3B4LXE"[..],
-            &b"Gi=300,a=q,t=f,f=32,s=1,v=1;L3RtcC94"[..],
-            &b"Gi=301,a=q,t=t,f=32,s=1,v=1;L3RtcC94"[..],
-        ] {
-            match p.feed(probe).unwrap() {
-                Event::Query { honored, reply } => {
-                    assert!(honored, "local pane should honor {probe:?}");
-                    assert!(reply.ends_with(b";OK\x1b\\"), "reply was {reply:?}");
+    fn chunked_compressed_rgb_decodes_after_arbitrary_pty_boundaries() {
+        let pixels = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
+        let encoded = BASE64.encode(miniz_oxide::deflate::compress_to_vec_zlib(&pixels, 1));
+        let stream = format!("text\x1b_Ga=T,i=9,f=24,s=2,v=1,o=z,m=1;{}\x1b\\\x1b_Gm=0;{}\x1b\\tail", &encoded[..4], &encoded[4..]);
+        for split_at in 0..=stream.len() {
+            let mut sniffer = GraphicsSniffer::new();
+            let mut text = Vec::new();
+            let mut events = sniffer.feed(&stream.as_bytes()[..split_at], |bytes| text.extend_from_slice(bytes));
+            events.extend(sniffer.feed(&stream.as_bytes()[split_at..], |bytes| text.extend_from_slice(bytes)));
+            assert_eq!(text, b"texttail");
+            match &events[0] {
+                Event::Command { control, image: Some(image) } => {
+                    assert_eq!(control.id, 9);
+                    assert_eq!(image.to_rgba8().unwrap(), [0x10, 0x20, 0x30, 255, 0x40, 0x50, 0x60, 255]);
                 }
-                _ => panic!("expected query"),
+                other => panic!("image did not survive stream boundaries: {other:?}"),
             }
         }
     }
 
     #[test]
-    #[cfg(unix)]
-    fn shared_transmission_surfaces_medium_transfer_on_local() {
-        // `terminal-browser`'s shm transmit template: raw f=32, no o=z, the
-        // shm object name base64'd after the `;`.
-        let name = b"/px-abc123";
-        let b64 = BASE64.encode(name);
-        let cmd = format!("Ga=T,f=32,t=s,s=64,v=1,i=7,S=256;{b64}");
-        let mut p = GraphicsParser::new_local(true);
-        match p.feed(cmd.as_bytes()).unwrap() {
-            Event::ImageFromMedium(t) => {
-                assert_eq!(t.medium, Medium::Shared);
-                assert_eq!(t.name, name);
-                assert_eq!(t.id, 7);
-                assert_eq!((t.width, t.height), (64, 1));
-                assert_eq!(t.size, 256);
-                assert!(!t.compressed);
-            }
-            _ => panic!("expected medium transfer"),
+    fn interrupted_and_oversized_apcs_preserve_following_text() {
+        for stream in [b"\x1b_Gxx\x1b[31mred".as_slice(), b"\x1b_foreign\x1b_Gbad\x1b[31mred"] {
+            let (text, _) = split(&[stream]);
+            assert!(text.ends_with(b"\x1b[31mred"));
         }
+        let mut oversized = b"\x1b_G".to_vec();
+        oversized.resize(MAX_APC_PAYLOAD + 4, b'x');
+        oversized.extend_from_slice(b"\x1b\\survives\x1b_Ga=p,i=1\x1b\\");
+        let (text, commands) = split(&[&oversized]);
+        assert_eq!(text, b"survives");
+        assert_eq!(commands, [b"Ga=p,i=1".to_vec()]);
     }
 
     #[test]
-    fn shared_transmission_dropped_on_remote() {
-        // A non-local parser must never surface a file/shm transfer even if a
-        // misbehaving sender ignored the refusal and sent one anyway.
-        let b64 = BASE64.encode(b"/px-abc123");
-        let cmd = format!("Ga=T,f=32,t=s,s=64,v=1,i=7;{b64}");
-        let mut p = GraphicsParser::new();
-        assert_eq!(p.feed(cmd.as_bytes()), None);
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn file_transfer_resolves_and_temp_file_is_removed() {
-        // A temp-file transfer: write raw RGBA to a temp path, resolve it, and
-        // confirm the file is deleted afterward (the one-shot handoff contract).
-        let rgba = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("lyrel-kitty-test-{}.rgba", std::process::id()));
-        std::fs::write(&path, rgba).unwrap();
-        let t = MediumTransfer {
-            medium: Medium::TempFile,
-            name: path.clone().into_os_string().into_encoded_bytes(),
-            offset: 0,
-            size: 0,
-            id: 1,
-            number: 0,
-            placement: 0,
-            width: 2,
-            height: 1,
-            cols: 0,
-            rows: 0,
-            format: WireFormat::Rgba,
-            compressed: false,
-        };
-        let img = t.resolve().expect("resolve temp file");
-        assert_eq!(img.data, rgba);
-        assert_eq!(img.to_rgba8().unwrap(), rgba);
-        assert!(!path.exists(), "temp file should be removed after read");
-    }
-
-    /// Build a `t=t` transfer naming `path`, the shape a hostile escape uses.
-    #[cfg(unix)]
-    fn temp_file_transfer(path: &std::path::Path) -> MediumTransfer {
-        MediumTransfer {
-            medium: Medium::TempFile,
-            name: path.to_path_buf().into_os_string().into_encoded_bytes(),
-            offset: 0,
-            size: 0,
-            id: 1,
-            number: 0,
-            placement: 0,
-            width: 2,
-            height: 1,
-            cols: 0,
-            rows: 0,
-            format: WireFormat::Rgba,
-            compressed: false,
-        }
+    fn inflation_is_bounded_before_a_claimed_huge_image_can_allocate() {
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0; 4096], 6);
+        let mut image = Image { width: 1, height: 1, data: compressed, format: WireFormat::Rgba, compressed: true };
+        assert_eq!(image.to_rgba8(), None);
+        assert_eq!(image.take_rgba8(), None);
+        let mut exact = Image { width: 1, height: 1, data: vec![1, 2, 3, 4], format: WireFormat::Rgba, compressed: false };
+        assert_eq!(exact.take_rgba8().unwrap(), [1, 2, 3, 4]);
+        assert!(exact.data.is_empty());
     }
 
     #[test]
     #[cfg(unix)]
-    fn a_temp_file_transfer_outside_the_temp_dir_is_read_but_not_deleted() {
-        // `t=t` names an arbitrary path out of an escape sequence — `cat`ing a
-        // hostile file is enough to send one. Unlinking whatever it points at
-        // would delete e.g. `~/.ssh/id_ed25519`. Read it, leave it.
-        //
-        // `/etc/hosts` stands in for the victim: a real, readable file that is
-        // never under a temp dir on any host we build for. Deliberately *not*
-        // something derived from `CARGO_MANIFEST_DIR` — a checkout can itself
-        // live under `/tmp`, which would make the test assert the opposite of
-        // what it means to.
-        let victim = std::path::Path::new("/etc/hosts");
-        let img = temp_file_transfer(victim).resolve().expect("still reads");
-        assert!(!img.data.is_empty());
-        assert!(
-            victim.exists(),
-            "a path outside the temp dir must survive a t=t handoff"
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn the_temp_dir_check_resolves_symlinks_and_dotdot_before_comparing() {
-        // The prefix has to be checked on the *canonicalized* path: `/tmp/../etc`
-        // starts with `/tmp` textually but lands nowhere near it. macOS also
-        // routes both `/tmp` and `TMPDIR` through `/private`, so a raw string
-        // compare would reject the legitimate case too.
+    fn indirect_media_are_host_local_bounded_and_temp_deletion_is_scoped() {
         let dir = tempfile::tempdir().unwrap();
-        let inside = dir.path().join("frame.rgba");
-        std::fs::write(&inside, [0u8; 4]).unwrap();
-        assert!(path_is_in_temp_dir(&inside));
-
-        assert!(!path_is_in_temp_dir(std::path::Path::new(
-            "/tmp/../etc/hosts"
-        )));
-        assert!(!path_is_in_temp_dir(std::path::Path::new("/etc/hosts")));
-        // A path that doesn't resolve at all can't be vouched for.
-        assert!(!path_is_in_temp_dir(std::path::Path::new(
-            "/nonexistent-lyrel-test-path"
-        )));
-        // The temp dir itself is not a file we'd ever unlink.
+        let path = dir.path().join("image.rgba");
+        std::fs::write(&path, [1, 2, 3, 4]).unwrap();
+        let mut transfer = MediumTransfer { medium: Medium::File,
+            name: path.clone().into_os_string().into_encoded_bytes(), offset: 0, size: 4096,
+            width: 1, height: 1, format: WireFormat::Rgba, compressed: false };
+        assert_eq!(transfer.resolve().unwrap().data, [1, 2, 3, 4]);
+        assert!(path.exists());
+        transfer.medium = Medium::TempFile;
+        assert_eq!(transfer.resolve().unwrap().data, [1, 2, 3, 4]);
+        assert!(!path.exists());
+        assert!(!path_is_in_temp_dir(std::path::Path::new("/tmp/../etc/hosts")));
         assert!(!path_is_in_temp_dir(&std::env::temp_dir()));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn a_transfer_naming_a_character_device_is_refused() {
-        // `fs::read` on `/dev/zero` never returns, and this runs on the daemon's
-        // reader thread — the pane's whole output path would wedge.
-        let t = temp_file_transfer(std::path::Path::new("/dev/zero"));
-        assert_eq!(t.resolve(), None);
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn a_malformed_shm_name_is_refused_before_shm_open() {
-        for name in [
-            &b"/../../etc/passwd"[..],
-            &b"/sub/dir"[..],
-            &b"no-leading-slash"[..],
-            &b"/"[..],
-            &b"/.."[..],
-        ] {
-            assert!(
-                !shm_name_is_wellformed(name),
-                "{:?} should be refused",
-                String::from_utf8_lossy(name)
-            );
+        transfer.name = b"/dev/zero".to_vec();
+        assert!(transfer.resolve().is_none());
+        for name in [b"/../../etc/passwd".as_slice(), b"/sub/dir", b"no-leading-slash", b"/", b"/.."] {
+            assert!(!shm_name_is_wellformed(name));
         }
-        assert!(shm_name_is_wellformed(b"/px-abc123"));
-    }
-
-    #[test]
-    fn a_bomb_that_declares_huge_dimensions_is_still_bounded() {
-        // The declared size is the sender's to choose, so bounding the inflate
-        // by it alone isn't enough: `s=65535,v=65535` works out to a 17 GB
-        // budget, which hands a bomb back exactly the allocation the bound was
-        // meant to deny. The absolute `MAX_IMAGE_BYTES` clamp is what closes it.
-        // (`to_rgba8_bounds_the_inflate_by_declared_dimensions` covers the
-        // ordinary case, where the declared size is the tighter of the two.)
-        let img = Image {
-            id: 1,
-            number: 0,
-            placement: 0,
-            width: 65535,
-            height: 65535,
-            cols: 0,
-            rows: 0,
-            // Has to inflate past `MAX_IMAGE_BYTES` to exercise the clamp at
-            // all — anything smaller decodes on its merits and proves nothing.
-            // Zeros deflate to a few KB, so the payload on the wire stays tiny,
-            // which is the whole point of the attack.
-            data: miniz_oxide::deflate::compress_to_vec_zlib(&vec![0u8; MAX_IMAGE_BYTES + 1], 6),
-            format: WireFormat::Rgba,
-            compressed: true,
-        };
-        assert!(
-            img.decoded_len().unwrap() > MAX_IMAGE_BYTES,
-            "the declared budget must be the looser bound for this to test anything"
-        );
-        assert!(
-            img.data.len() < 1 << 20,
-            "the compressed payload must stay small: {}",
-            img.data.len()
-        );
-        assert_eq!(img.to_rgba8(), None, "the clamp has to reject it");
-    }
-
-    #[test]
-    fn a_transmission_cap_leaves_room_for_the_wire_frame() {
-        // `MAX_TRANSMISSION_BASE64` has to decode to something that still fits
-        // in a `MAX_FRAME` wire frame with the header on it — otherwise
-        // `write_frame` fails, and the daemon's writer treats that as fatal and
-        // drops the client's whole connection over one image.
-        let decoded_max = MAX_TRANSMISSION_BASE64 / 4 * 3;
-        assert!(
-            decoded_max + HEADER_LEN <= crate::daemon::protocol::MAX_FRAME,
-            "{decoded_max} + {HEADER_LEN} must fit in {}",
-            crate::daemon::protocol::MAX_FRAME
-        );
-        assert!(MAX_IMAGE_BYTES + HEADER_LEN <= crate::daemon::protocol::MAX_FRAME);
-    }
-
-    #[test]
-    fn a_quiet_sender_gets_no_reply_written_back_to_its_pty() {
-        // The reply is written to the *PTY* — it arrives as if typed. `q=1`
-        // suppresses success, `q=2` suppresses failures too.
-        let mut p = GraphicsParser::new_local(true);
-        assert_eq!(p.feed(b"Gi=1,a=q,t=d,q=1;AAAA"), None);
-        assert_eq!(p.feed(b"Gi=2,a=q,t=d,q=2;AAAA"), None);
-        // A refusal still reaches a `q=1` sender, which needs to hear it to fall
-        // back, and an unquiet probe is answered as before.
-        let mut remote = GraphicsParser::new();
-        assert!(matches!(
-            remote.feed(b"Gi=3,a=q,t=s,q=1;AAAA"),
-            Some(Event::Query { honored: false, .. })
-        ));
-        assert!(matches!(
-            p.feed(b"Gi=4,a=q,t=d;AAAA"),
-            Some(Event::Query { honored: true, .. })
-        ));
-    }
-
-    #[test]
-    fn a_quiet_key_past_a_byte_does_not_wrap_to_chatty() {
-        assert_eq!(Control::parse(b"Ga=q,q=256;").unwrap().quiet, 255);
-    }
-
-    #[test]
-    fn graphics_after_an_unterminated_foreign_apc_are_still_lifted() {
-        // A foreign APC that never sends its ST used to swallow every `ESC _G`
-        // after it: the graphics were forwarded as APC text, which the client's
-        // vte then discards, so the image vanished with no trace.
-        let input = b"\x1b_somevendor\x1b_Ga=q;AAAA\x1b\\";
-        assert_eq!(collect(&[&input[..]]), vec![b"Ga=q;AAAA".to_vec()]);
-    }
-
-    #[test]
-    fn an_escape_interrupting_a_graphics_command_still_reaches_the_client() {
-        // The abandoned command's bytes stay stripped, but the escape that
-        // interrupted it belongs to the terminal — swallowing it turned a
-        // following `\x1b[31m` into literal `31m` on screen.
-        let mut t = ApcTokenizer::new();
-        let mut out = Vec::new();
-        t.feed(b"\x1b_Gxx\x1b[31mred", |b| out.extend_from_slice(b), |_| {});
-        assert_eq!(out, b"\x1b[31mred");
-    }
-
-    #[test]
-    fn a_place_only_command_emits_nothing_rather_than_an_empty_image() {
-        // `a=p` places an image transmitted earlier, which needs a stored-image
-        // table this parser doesn't keep. It used to fall through the chunk
-        // accumulator and emit an `Image` with no payload.
-        let mut p = GraphicsParser::new_local(true);
-        assert_eq!(p.feed(b"Ga=p,i=42,p=1;"), None);
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn an_oversized_size_key_truncates_instead_of_dropping_the_frame() {
-        // kitty truncates an `S=` that runs past the object; discarding the
-        // whole frame loses an image a real sender would have seen rendered.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("frame.rgba");
-        std::fs::write(&path, [1u8, 2, 3, 4]).unwrap();
-        let mut t = temp_file_transfer(&path);
-        t.medium = Medium::File; // leave the file in place
-        t.size = 4096;
-        assert_eq!(t.resolve().expect("truncated, not dropped").data.len(), 4);
-    }
-
-    #[test]
-    fn single_shot_rgba_transmission_decodes() {
-        // One 1x1 opaque-red RGBA pixel, uncompressed, direct.
-        let pixel = [0xffu8, 0x00, 0x00, 0xff];
-        let b64 = BASE64.encode(pixel);
-        let cmd = format!("Ga=T,f=32,t=d,s=1,v=1,i=7;{b64}");
-        let mut p = GraphicsParser::new();
-        let ev = p.feed(cmd.as_bytes()).unwrap();
-        match ev {
-            Event::Image(img) => {
-                assert_eq!(img.id, 7);
-                assert_eq!((img.width, img.height), (1, 1));
-                assert!(!img.compressed);
-                assert_eq!(img.to_rgba8().unwrap(), pixel);
-                assert_eq!(img.format, WireFormat::Rgba);
-            }
-            _ => panic!("expected image"),
-        }
-    }
-
-    #[test]
-    fn chunked_compressed_transmission_reassembles_and_inflates() {
-        // 2x1 RGBA (red, green), zlib-compressed, split into two direct chunks
-        // exactly the way terminal-browser frames a `t=d,o=z` transmission.
-        let rgba = [0xffu8, 0, 0, 0xff, 0x00, 0xff, 0x00, 0xff];
-        let z = miniz_oxide::deflate::compress_to_vec_zlib(&rgba, 1);
-        let b64 = BASE64.encode(&z);
-        let mid = b64.len() / 2;
-        let first = format!("Ga=T,f=32,o=z,t=d,s=2,v=1,i=9,m=1;{}", &b64[..mid]);
-        let second = format!("Gm=0;{}", &b64[mid..]);
-
-        let mut p = GraphicsParser::new();
-        assert_eq!(p.feed(first.as_bytes()), None); // more chunks pending
-        let ev = p.feed(second.as_bytes()).unwrap();
-        match ev {
-            Event::Image(img) => {
-                assert_eq!(img.id, 9);
-                assert_eq!((img.width, img.height), (2, 1));
-                assert!(img.compressed);
-                // Wire payload stays compressed; the client inflates.
-                assert_eq!(img.data, z);
-                assert_eq!(img.to_rgba8().unwrap(), rgba);
-            }
-            _ => panic!("expected image"),
-        }
-    }
-
-    #[test]
-    fn rgb_transmission_is_expanded_to_opaque_rgba() {
-        let rgb = [0x10u8, 0x20, 0x30]; // one pixel
-        let b64 = BASE64.encode(rgb);
-        let cmd = format!("Ga=T,f=24,t=d,s=1,v=1;{b64}");
-        let mut p = GraphicsParser::new();
-        match p.feed(cmd.as_bytes()).unwrap() {
-            Event::Image(img) => {
-                assert_eq!(img.to_rgba8().unwrap(), [0x10, 0x20, 0x30, 0xff])
-            }
-            _ => panic!("expected image"),
-        }
-    }
-
-    #[test]
-    fn delete_is_surfaced() {
-        let mut p = GraphicsParser::new();
-        match p.feed(b"Ga=d,d=A").unwrap() {
-            Event::Delete(c) => {
-                assert_eq!(c.action, Action::Delete);
-                assert_eq!(c.delete, b'A');
-            }
-            _ => panic!("expected delete"),
-        }
-    }
-
-    #[test]
-    fn image_delete_normalizes_and_roundtrips() {
-        // A bare `a=d` (no selector) means "all visible placements" (`a`).
-        let bare = ImageDelete::from_control(&Control::parse(b"Ga=d").unwrap());
-        assert_eq!(bare.target, b'a');
-        // A scoped delete keeps its selector and id.
-        let scoped = ImageDelete::from_control(&Control::parse(b"Ga=d,d=i,i=5").unwrap());
-        assert_eq!((scoped.target, scoped.id), (b'i', 5));
-        assert_eq!(ImageDelete::decode(&scoped.encode()), Some(scoped));
-        assert_eq!(ImageDelete::decode(&[b'a', 0, 0]), None); // too short
-    }
-
-    #[test]
-    fn image_frame_roundtrips_without_touching_the_payload() {
-        let img = Image {
-            id: 42,
-            number: 3,
-            placement: 1,
-            width: 1920,
-            height: 1080,
-            cols: 80,
-            rows: 24,
-            data: vec![1, 2, 3, 4, 5, 6, 7],
-            format: WireFormat::Rgba,
-            compressed: true,
-        };
-        let frame = img.encode_frame();
-        // Header + payload, payload byte-identical (no base64 inflation).
-        assert_eq!(&frame[HEADER_LEN..], &img.data[..]);
-        assert_eq!(Image::decode_frame(&frame), Some(img));
-        // A truncated frame is rejected, not panicked on.
-        assert_eq!(Image::decode_frame(&frame[..HEADER_LEN - 1]), None);
-    }
-
-    #[test]
-    fn decode_frame_owned_matches_decode_frame() {
-        // The consuming variant reuses the frame's allocation for the pixel
-        // buffer; it must reconstruct the exact same `Image` as the borrowing one.
-        let img = Image {
-            id: 42,
-            number: 3,
-            placement: 1,
-            width: 1920,
-            height: 1080,
-            cols: 80,
-            rows: 24,
-            data: vec![9, 8, 7, 6, 5, 4, 3, 2, 1],
-            format: WireFormat::Rgb,
-            compressed: true,
-        };
-        let frame = img.encode_frame();
-        assert_eq!(Image::decode_frame_owned(frame.clone()), Some(img));
-        // Same rejection of a short buffer, no panic on the in-place drain.
-        assert_eq!(
-            Image::decode_frame_owned(frame[..HEADER_LEN - 1].to_vec()),
-            None
-        );
-    }
-
-    #[test]
-    fn take_rgba8_moves_the_uncompressed_buffer_and_matches_to_rgba8() {
-        // Uncompressed RGBA: `take_rgba8` returns the exact bytes `to_rgba8`
-        // clones, but empties `data` (the buffer was moved, not copied).
-        let pixels = vec![0x10u8, 0x20, 0x30, 0x40];
-        let mut img = Image {
-            id: 0,
-            number: 0,
-            placement: 0,
-            width: 1,
-            height: 1,
-            cols: 0,
-            rows: 0,
-            data: pixels.clone(),
-            format: WireFormat::Rgba,
-            compressed: false,
-        };
-        let borrowed = img.to_rgba8().unwrap();
-        assert_eq!(borrowed, pixels);
-        let moved = img.take_rgba8().unwrap();
-        assert_eq!(moved, pixels);
-        assert!(
-            img.data.is_empty(),
-            "the pixel buffer was moved out, not cloned"
-        );
-    }
-
-    #[test]
-    fn take_rgba8_still_expands_rgb_and_bounds_the_bomb() {
-        // f=24 repacks to RGBA (length changes, so it can't move) — same result
-        // as `to_rgba8`.
-        let mut rgb = Image {
-            id: 0,
-            number: 0,
-            placement: 0,
-            width: 1,
-            height: 1,
-            cols: 0,
-            rows: 0,
-            data: vec![0x10, 0x20, 0x30],
-            format: WireFormat::Rgb,
-            compressed: false,
-        };
-        assert_eq!(rgb.take_rgba8().unwrap(), [0x10, 0x20, 0x30, 0xff]);
-
-        // The declared-dimension inflate bound is preserved on the moving path.
-        let bomb = vec![0u8; 4 * 1024 * 1024];
-        let z = miniz_oxide::deflate::compress_to_vec_zlib(&bomb, 9);
-        let mut img = Image {
-            id: 1,
-            number: 0,
-            placement: 0,
-            width: 1,
-            height: 1,
-            cols: 0,
-            rows: 0,
-            data: z,
-            format: WireFormat::Rgba,
-            compressed: true,
-        };
-        assert_eq!(
-            img.take_rgba8(),
-            None,
-            "an over-budget inflate is still dropped"
-        );
-    }
-
-    #[test]
-    fn to_rgba8_bounds_the_inflate_by_declared_dimensions() {
-        // A hostile payload: a tiny compressed blob that inflates far past the
-        // 1x1 image it claims to be. Without a cap this would balloon into a
-        // multi-MB (in the wild, multi-GB) allocation; bounded by the declared
-        // `width * height * 4` it must be rejected instead.
-        let bomb = vec![0u8; 4 * 1024 * 1024]; // 4 MiB of zeros → tiny deflate
-        let z = miniz_oxide::deflate::compress_to_vec_zlib(&bomb, 9);
-        assert!(z.len() < bomb.len(), "payload must actually compress");
-        let img = Image {
-            id: 1,
-            number: 0,
-            placement: 0,
-            width: 1,
-            height: 1,
-            cols: 0,
-            rows: 0,
-            data: z,
-            format: WireFormat::Rgba,
-            compressed: true,
-        };
-        assert_eq!(img.to_rgba8(), None, "an over-budget inflate is dropped");
-
-        // A payload that inflates to exactly its declared size still decodes.
-        let pixels = vec![0xabu8; 4]; // 1x1 RGBA
-        let z = miniz_oxide::deflate::compress_to_vec_zlib(&pixels, 9);
-        let ok = Image { data: z, ..img };
-        assert_eq!(ok.to_rgba8().as_deref(), Some(&pixels[..]));
+        let mut parser = GraphicsParser::new();
+        assert!(matches!(parser.feed(b"Ga=t,i=7,t=f;L2V0Yy9ob3N0cw=="), Some(Event::Reply(reply))
+            if reply.starts_with(b"\x1b_Gi=7;ENOTSUPPORTED:")));
     }
 }
