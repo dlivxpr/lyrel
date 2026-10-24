@@ -1858,11 +1858,16 @@ impl TerminalView {
             .unwrap()
             .insert(entity_id, viewport_reporter);
 
-        cx.on_release_in(window, move |view, window, cx| {
+        // The window may be gone before this entity is released. These owners
+        // must be removed even when on_release_in cannot update that window.
+        cx.on_release(move |view, cx| {
             if let Some(registry) = cx.try_global::<DisplayedRegistry>() {
                 registry.0.lock().unwrap().remove(&entity_id);
             }
             view.terminal.detach_link();
+        })
+        .detach();
+        cx.on_release_in(window, |view, window, cx| {
             view.terminal.images().release_all(window, cx);
         })
         .detach();
@@ -12168,13 +12173,16 @@ mod gpui_tests {
                 epoch: 0,
             },
         );
-        DaemonMsg::Output(b"\x1b[20;60H".to_vec())
+        // A decoded resource can exist before its following Screen frame.
+        // The later text marker fences the production reader's ordered stream.
+        DaemonMsg::Output(b"\x1b[20;60HMAIN-READY\x1b[20;60H".to_vec())
             .encode(&mut daemon)
             .unwrap();
         for _ in 0..200 {
             if window
                 .update(cx, |view, _, _| {
-                    view.terminal.images().snapshot().len() == 1
+                    view.scrollback_text().contains("MAIN-READY")
+                        && view.terminal.images().snapshot().len() == 1
                 })
                 .unwrap()
             {
@@ -12184,6 +12192,7 @@ mod gpui_tests {
         }
         window
             .update(cx, |view, _, _| {
+                assert!(view.scrollback_text().contains("MAIN-READY"));
                 let images = view.terminal.images().snapshot();
                 assert_eq!(images.len(), 1);
                 let (bounds, _) =
@@ -12208,7 +12217,8 @@ mod gpui_tests {
         for _ in 0..200 {
             if window
                 .update(cx, |view, _, _| {
-                    view.terminal.images().snapshot().is_empty()
+                    view.scrollback_text().contains("ALT-READY")
+                        && view.terminal.images().snapshot().is_empty()
                 })
                 .unwrap()
             {
@@ -12218,6 +12228,7 @@ mod gpui_tests {
         }
         window
             .update(cx, |view, _, _| {
+                assert!(view.scrollback_text().contains("ALT-READY"));
                 assert!(view.terminal.images().snapshot().is_empty())
             })
             .unwrap();
@@ -12229,10 +12240,14 @@ mod gpui_tests {
                 epoch: 2,
             },
         );
+        DaemonMsg::Output(b"\x1b[20;60HMAIN-RESTORED\x1b[20;60H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
         for _ in 0..200 {
             if window
                 .update(cx, |view, _, _| {
-                    view.terminal.images().snapshot().len() == 1
+                    view.scrollback_text().contains("MAIN-RESTORED")
+                        && view.terminal.images().snapshot().len() == 1
                 })
                 .unwrap()
             {
@@ -12242,6 +12257,7 @@ mod gpui_tests {
         }
         window
             .update(cx, |view, _, _| {
+                assert!(view.scrollback_text().contains("MAIN-RESTORED"));
                 assert_eq!(view.terminal.images().snapshot().len(), 1)
             })
             .unwrap();

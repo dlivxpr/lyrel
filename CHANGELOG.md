@@ -30,6 +30,7 @@
 - 修正 Unix Kitty 共享内存夹具：随机名称缩至 Darwin 的 31-byte 上限内，使用 `ftruncate`／`MAP_SHARED` 初始化并覆盖非页对齐偏移，不再对不支持写入的 macOS shm FD 调用 `write`。生产读取按平台选择受限路径，失败信息保留实际 OS error；不跳过用例或放宽主机／临时删除限制。
 - 修复 #44 的大接收缓冲所有权：先前文字 Snapshot／合并帧留下的超额容量不再转移进已授权的图片源，避免授权成功后静默漏图；core daemon 夹具补齐 macOS re-exec 的 libtest 参数分隔。
 - 修复回滚正在查看的历史图片被误回收：pane `13` 以连接级绝对行锚点和屏幕代次报告真实视口，direct／placeholder 及跨 daemon 桌面池采用一致保护；新输出不使旧视口漂移，隐藏、detach、抢占和 observer 移除撤销对应事实。普通文字输出只更新当前 pane 的资源保护，回收优先级改用具名枚举且保留最旧顺序。新增真实 daemon／rooted GPUI 回归尚待统一运行，不新增原生或跨平台通过声明。
+- 修复窗口先关闭时可见性注册表继续强持有图片 cache 的生命周期：registry 移除及 reader 退休改为窗口无关的 `on_release`，仅实际 atlas 清理保留在 `on_release_in`，避免失效窗口 handle 跳过回调后永久钉住 GPU 信用。真实关闭后再次准入回归保留完整像素与票据释放语义，运行结果待集成阶段确认。
 
 ### 维护
 
@@ -37,6 +38,7 @@
 - server 的 pane 隔离／quiet 回归在重连时重建派生接收状态，并核验 daemon 恢复原资源身份与像素；保留单连接内重复 Resource 的唯一性断言，不把合法 replay 当作资源 key 重用，也不放宽隔离与应答语义。
 - 共享真实 PTY 夹具给 `KITTY_REPLY` 文本记录附加原请求 serial，core／server 消费者只将对应记录归为本次应答；完整 Snapshot 仍作为历史消费，quiet 的空应答断言不会被旧回复文本污染，失败时保留实际 unexpected bytes。
 - rooted GPUI 图片夹具在 PTY 等待期间推进真实 UI 任务及测试时钟，使已绘制纹理经现有窗口 compaction 归还 GPU 票；历史 notice 回归通过生产滚动入口同步视口并核验 placeholder notice 的实际 paint。大文字恢复用合法的小于 1 MiB 的 Input 分批构造原总量 Snapshot，不放宽输入、图片预算或等待期限；修复后的消费链仍待统一运行。
+- GPUI 回归先同步 rooted 窗口的实际列数再修改终端尺寸，避免推进 UI 时由旧窗口布局回写覆盖 reflow；Screen／原点回归等待其后有序文本 marker 与实际解码状态，不以一张图片已出现替代 Screen 已消费。
 - x86_64 musl 的 CI 与 Release C++ 构建统一使用上游 `SIMDUTF_IMPLEMENTATION_ICELAKE=0` 配置，避开正式 `simdutf 0.7.0` 可选 Ice Lake backend 的 `evex512` 编译错误；保留 Zig `0.16.0` 与 AVX2／SSE／scalar 运行时分派，不修改第三方源码或提高远端 CPU 要求。
 
 - 工作台标题栏的文档输入回归在操作前有界等待真实 Host 文件加载完成，避免将 GPUI 队列空闲误判为 I/O 已完成而在 macOS CI 偶发失败；保留侧栏切换、文档／终端焦点及按键隔离断言，不修改生产行为。
