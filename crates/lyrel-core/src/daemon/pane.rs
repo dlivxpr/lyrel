@@ -1088,12 +1088,14 @@ fn process_graphics_output(
     ordered: bool,
     pass: &mut Vec<u8>,
     frames: &mut Vec<GraphicsFrame>,
-    state: &mut GraphicsState,
+    mut state: Option<&mut GraphicsState>,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
 ) {
     match sniffed {
         Sniffed::Plain(bytes) => {
-            state.output(bytes);
+            if let Some(state) = state.as_deref_mut() {
+                state.output(bytes);
+            }
             pass.extend_from_slice(bytes);
             if ordered && !bytes.is_empty() {
                 frames.push(GraphicsFrame::Output(bytes.to_vec()));
@@ -1103,12 +1105,20 @@ fn process_graphics_output(
             for segment in segments {
                 match segment {
                     Segment::Output(bytes) => {
-                        state.output(&bytes);
+                        if let Some(state) = state.as_deref_mut() {
+                            state.output(&bytes);
+                        }
                         pass.extend_from_slice(&bytes);
                         frames.push(GraphicsFrame::Output(bytes));
                     }
                     Segment::Reply(reply) => write_graphics_reply(writer, &reply),
                     Segment::Command { control, image } => {
+                        // The exit monitor may have released graphics before
+                        // PTY EOF. Still strip commands from late output, but
+                        // never recreate resources for the exited pane.
+                        let Some(state) = state.as_deref_mut() else {
+                            continue;
+                        };
                         for effect in state.apply(control, image) {
                             match effect {
                                 GraphicsEffect::Update(update) => {
@@ -1153,7 +1163,7 @@ fn lift_out_of_band<'a>(
     raw: &'a [u8],
     clipboard: &mut ClipboardSniffer,
     graphics: &mut GraphicsSniffer,
-    state: &mut GraphicsState,
+    mut state: Option<&mut GraphicsState>,
     has_controller: bool,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     frames: &mut Vec<GraphicsFrame>,
@@ -1161,7 +1171,9 @@ fn lift_out_of_band<'a>(
     match clipboard.sniff(raw) {
         ClipboardSniffed::Plain(b) => match graphics.sniff(b) {
             Sniffed::Plain(b) => {
-                state.output(b);
+                if let Some(state) = state.as_deref_mut() {
+                    state.output(b);
+                }
                 std::borrow::Cow::Borrowed(b)
             }
             sniffed @ Sniffed::Segments(_) => {
@@ -1176,7 +1188,7 @@ fn lift_out_of_band<'a>(
                 match seg {
                     ClipboardSegment::Output(b) => {
                         let sniffed = graphics.sniff(&b);
-                        process_graphics_output(sniffed, true, &mut pass, frames, state, writer);
+                        process_graphics_output(sniffed, true, &mut pass, frames, state.as_deref_mut(), writer);
                     }
                     ClipboardSegment::Event(ClipboardEvent::Reply(reply)) => {
                         if let Ok(mut w) = writer.lock() {
@@ -2173,15 +2185,12 @@ impl DaemonPane {
                             let mut st = state.lock().unwrap();
                             let controller = st.subscriber.as_ref().map(|_| st.subscriber_epoch);
                             clipboard.set_controller(controller, st.allow_remote_clipboard_write);
-                            let Some(graphics_state) = st.graphics.as_mut() else {
-                                break;
-                            };
                             let mut frames: Vec<GraphicsFrame> = Vec::new();
                             let passthrough = lift_out_of_band(
                                 raw,
                                 &mut clipboard,
                                 &mut graphics,
-                                graphics_state,
+                                st.graphics.as_mut(),
                                 controller.is_some(),
                                 &writer,
                                 &mut frames,
@@ -4741,7 +4750,7 @@ mod tests {
                     chunk,
                     &mut clipboard,
                     &mut graphics,
-                    &mut graphics_state,
+                    Some(&mut graphics_state),
                     true,
                     &writer,
                     &mut frames,
@@ -7546,6 +7555,78 @@ mod tests {
             "the idempotent reporter must not publish a second Exited"
         );
         reader.join().unwrap();
+    }
+
+    #[test]
+    fn reader_drains_late_text_without_reviving_graphics_after_exit_report() {
+        struct ControlledReader {
+            entered: Option<Sender<()>>,
+            chunks: mpsc::Receiver<Vec<u8>>,
+        }
+
+        impl Read for ControlledReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if let Some(entered) = self.entered.take() {
+                    entered.send(()).unwrap();
+                }
+                let bytes = self.chunks.recv_timeout(Duration::from_secs(5)).map_err(|error| {
+                    std::io::Error::other(format!("controlled reader: {error}"))
+                })?;
+                assert!(bytes.len() <= buf.len());
+                buf[..bytes.len()].copy_from_slice(&bytes);
+                Ok(bytes.len())
+            }
+        }
+
+        let state = Arc::new(Mutex::new(test_state(true)));
+        let (sub_tx, sub_rx) = mpsc::channel();
+        state.lock().unwrap().subscriber = Some(sub_tx);
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let death = Arc::new(DeathReporter::new(|| {}));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (chunks_tx, chunks_rx) = mpsc::channel();
+        let reader = DaemonPane::spawn_reader(
+            state.clone(),
+            shutting_down.clone(),
+            Arc::new(OutputGate::new()),
+            Box::new(ControlledReader { entered: Some(entered_tx), chunks: chunks_rx }),
+            null_writer(),
+            || false,
+            ForegroundProbes {
+                group: Box::new(|| None),
+                remote: Box::new(|| None),
+                agent: Box::new(|| None),
+                cwd: Box::new(|| None),
+            },
+            death.clone(),
+        );
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Same ordering as the Windows fallback monitor: report the death
+        // while the reader is blocked, then let pending PTY bytes arrive.
+        death.report(&state, &shutting_down);
+        assert!(state.lock().unwrap().graphics.is_none());
+        assert!(matches!(sub_rx.recv_timeout(Duration::from_secs(1)), Ok(DaemonMsg::Exited { .. })));
+        chunks_tx.send(b"late ".to_vec()).unwrap();
+        chunks_tx.send(b"\x1b_Ga=T,i=9,f=32,s=1,v=1,q=2;/wAA".to_vec()).unwrap();
+        chunks_tx.send(b"/w==\x1b\\final ".to_vec()).unwrap();
+        chunks_tx.send(b"\x1b]5522;type=write:id=late\x1b\\\x1b]5522;type=wdata:mime=aW1hZ2UvcG5n;cG5nLWRhdGE=\x1b\\\x1b]5522;type=wdata\x1b\\tail".to_vec()).unwrap();
+        chunks_tx.send(Vec::new()).unwrap();
+        reader.join().unwrap();
+
+        let mut output = Vec::new();
+        for message in sub_rx.try_iter() {
+            match message {
+                DaemonMsg::Output(bytes) => output.extend(bytes),
+                DaemonMsg::Graphics(_) => panic!("graphics cannot revive after the pane exits"),
+                DaemonMsg::ClipboardWrite(_) => panic!("clipboard permission must still be enforced"),
+                DaemonMsg::Exited { .. } => panic!("exit reporting remains idempotent"),
+                _ => {}
+            }
+        }
+        assert_eq!(output, b"late final tail");
+        let state = state.lock().unwrap();
+        assert_eq!(state.ring.flatten(), b"late final tail");
+        assert!(state.graphics.is_none());
     }
 
     /// A reader forwards authoritative resources and placements in stream
