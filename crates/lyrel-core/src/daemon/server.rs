@@ -829,7 +829,35 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         )?);
     }
 
-    let first = ClientMsg::from_frame(first_kind, first_payload)?;
+    let mut first = ClientMsg::from_frame(first_kind, first_payload)?;
+    let negotiated = if let ClientMsg::Negotiate { protocol } = &first {
+        let mut w = &write_stream;
+        DaemonMsg::Version(DaemonVersion::current()).encode(&mut w)?;
+        if *protocol != crate::daemon::protocol::PROTOCOL_VERSION {
+            return Ok(());
+        }
+        first = ClientMsg::read(&mut read_stream)?;
+        true
+    } else {
+        false
+    };
+    if !negotiated
+        && matches!(
+            &first,
+            ClientMsg::Spawn { .. }
+                | ClientMsg::SpawnNativeSsh { .. }
+                | ClientMsg::Attach { .. }
+                | ClientMsg::Observe { .. }
+        )
+    {
+        let mut w = &write_stream;
+        DaemonMsg::Error(format!(
+            "pane protocol v{} handshake required; update lyrel to match lyrel-server",
+            crate::daemon::protocol::PROTOCOL_VERSION
+        ))
+        .encode(&mut w)?;
+        return Ok(());
+    }
     match first {
         ClientMsg::Spawn {
             cwd,
@@ -1679,6 +1707,7 @@ mod tests {
         #[test]
         fn attach_to_missing_pane_reports_error() {
             let (mut client, h) = serve();
+            crate::daemon::protocol::negotiate_pane(&mut client).unwrap();
             ClientMsg::Attach {
                 pane_id: 999,
                 size: SIZE,
@@ -1696,6 +1725,7 @@ mod tests {
         #[test]
         fn observe_of_a_missing_pane_reports_error() {
             let (mut client, h) = serve();
+            crate::daemon::protocol::negotiate_pane(&mut client).unwrap();
             ClientMsg::Observe {
                 pane_id: 999,
                 size: SIZE,

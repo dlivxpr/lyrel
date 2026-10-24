@@ -890,6 +890,7 @@ impl RemoteTerminal {
         cancellation: Option<&SpawnCancellation>,
     ) -> anyhow::Result<(Self, u64)> {
         let mut stream = connect_routed(route)?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
         let await_claim = route.is_local() && cancellation.is_some();
         if await_claim
             && !crate::daemon::spawn::local_daemon_supports(
@@ -974,6 +975,17 @@ impl RemoteTerminal {
         Ok((term, pane_id))
     }
 
+    fn negotiate_pane_protocol(
+        stream: &mut Stream,
+        wait: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let _ = stream.set_read_timeout(Some(wait));
+        let result = crate::daemon::protocol::negotiate_pane(stream);
+        let _ = stream.set_read_timeout(None);
+        result?;
+        Ok(())
+    }
+
     pub(crate) fn claim_spawn(&mut self) {
         if let Some((pane_id, size)) = self.spawn_claim.take() {
             self.link.send(ClientMsg::Attach {
@@ -1006,6 +1018,7 @@ impl RemoteTerminal {
         pane_id: u64,
     ) -> anyhow::Result<Self> {
         let mut stream = connect_routed(route)?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
         let win = win_size(size, cell_w, cell_h);
 
         ClientMsg::Attach {
@@ -1064,6 +1077,7 @@ impl RemoteTerminal {
         cell_h: u16,
     ) -> anyhow::Result<(Stream, Vec<u8>)> {
         let mut stream = connect_routed(route)?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
         ClientMsg::Attach {
             pane_id,
             size: win_size(size, cell_w, cell_h),
@@ -2316,6 +2330,7 @@ impl RemoteTerminal {
         spec: Box<NativeSshSpec>,
     ) -> anyhow::Result<(Self, u64)> {
         let mut stream = connect()?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(&PaneRoute::Local))?;
         let win = win_size(size, cell_w, cell_h);
         let endpoint = (spec.host.clone(), spec.port);
         let user = spec.user.clone();
@@ -6200,10 +6215,9 @@ mod tests {
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
-        // `CSI 14t` is the one query the emulator hands out as its own event
-        // (the pixel size lives with the view) rather than as a `PtyWrite`;
-        // answered from a replay, its `CSI 4;h;w t` lands on whatever reads
-        // the pane now — a shell prompt, once the TUI that asked has quit.
+        // Replaying queries or side effects must never send fresh input to a
+        // later shell. Device-pixel queries are now owned solely by the daemon;
+        // live cursor reports below still belong to the desktop terminal grid.
         DaemonMsg::Snapshot(
             b"\x1b[6n\x1b]11;?\x07\x1b[14t\x1b[16t\x1b[18t\x1b]52;c;aGk=\x07\x07replayed".to_vec(),
         )
@@ -6236,27 +6250,6 @@ mod tests {
                     | PaneEvent::Bell
             )),
             "replayed history must not re-answer queries or replay side effects"
-        );
-
-        DaemonMsg::Output(b"\x1b[14t".to_vec())
-            .encode(&mut daemon_side)
-            .unwrap();
-        daemon_side.flush().unwrap();
-        let mut got_size_request = false;
-        for _ in 0..200 {
-            while let Ok(ev) = term.events.try_recv() {
-                if matches!(ev, PaneEvent::TextAreaSizeRequest(_)) {
-                    got_size_request = true;
-                }
-            }
-            if got_size_request {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(
-            got_size_request,
-            "a live pixel-size query must still be answered"
         );
 
         DaemonMsg::Output(b"\x1b[6n".to_vec())

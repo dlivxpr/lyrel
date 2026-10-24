@@ -61,6 +61,8 @@ fn routed(dir: &Path, name: &str, config_dir: &Path) -> (UnixStream, std::thread
     let mut sock = UnixStream::connect(&path).unwrap();
     let ack = negotiate(&mut sock, &pane_header(config_dir)).expect("the route should be accepted");
     assert_eq!(ack.link.as_deref(), Some("local-stdio"));
+    sock.set_read_timeout(Some(OUTPUT_TIMEOUT)).unwrap();
+    lyrel_core::daemon::protocol::negotiate_pane(&mut sock).expect("matching routed pane protocol");
     (sock, thread)
 }
 
