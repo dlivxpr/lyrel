@@ -68,7 +68,6 @@ impl GraphicsAdmissionBroker {
     /// its replay and generation have been admitted under the pane output lock.
     pub fn register(&self, endpoint: u64, sender: &Arc<Sender<DaemonMsg>>) {
         let mut state = self.state.lock().unwrap();
-        state.revision += 1;
         state.endpoints.insert(
             endpoint,
             Endpoint {
@@ -80,8 +79,13 @@ impl GraphicsAdmissionBroker {
     }
     pub fn unregister(&self, endpoint: u64) {
         let mut state = self.state.lock().unwrap();
-        if state.endpoints.remove(&endpoint).is_some() {
-            state.revision += 1;
+        if let Some(removed) = state.endpoints.remove(&endpoint) {
+            if removed.active {
+                state.revision += 1;
+            }
+            // Wake a pending replay too, without cancelling unrelated live
+            // grants just because a not-yet-admitted consumer disappeared.
+            state.pending.retain(|_, pending| pending.endpoint != endpoint);
             self.changed.notify_all();
         }
     }
@@ -106,6 +110,10 @@ impl GraphicsAdmissionBroker {
             return false;
         };
         endpoint.active = true;
+        // Activation happens with the pane output lock held. Any live upload
+        // prepared before this consumer joined must fail its old grant check,
+        // rather than publish unoffered pixels to the freshly attached cache.
+        state.revision += 1;
         true
     }
     pub(crate) fn request_after_release(

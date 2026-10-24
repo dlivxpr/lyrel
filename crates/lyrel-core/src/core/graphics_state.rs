@@ -309,7 +309,6 @@ pub struct GraphicsState {
     wake: Option<std::sync::mpsc::SyncSender<()>>,
     capacity: (usize, usize),
     generation: u64,
-    resource_revision: u64,
     viewport_epoch: u64,
     viewports: BTreeMap<
         u64,
@@ -347,7 +346,6 @@ impl GraphicsState {
         Self {
             capacity: (retention.limits.pane_encoded, retention.limits.pane_decoded),
             generation: 0,
-            resource_revision: 0,
             viewport_epoch: 0,
             viewports: BTreeMap::new(),
             retention,
@@ -382,9 +380,6 @@ impl GraphicsState {
     }
     pub(crate) fn generation(&self) -> u64 {
         self.generation
-    }
-    pub(crate) fn replay_generation(&self) -> (u64, u64) {
-        (self.generation, self.resource_revision)
     }
     pub(crate) fn pressure_resource(&mut self, key: u64) -> Vec<GraphicsEffect> {
         self.refresh_retention();
@@ -425,6 +420,27 @@ impl GraphicsState {
                 .map(|&key| (key, 0, 0, 0, GRAPHICS_METADATA_BYTES)),
         );
         Some((offers, work))
+    }
+
+    /// Geometry/text may advance while the desktop reserves capacity. Only
+    /// objects that need a lease must still match the offered version and cost.
+    /// Replaying their latest positions is atomic with the text snapshot.
+    pub(crate) fn matches_offers(&self, offers: &[(u64, u32, u32, usize, usize)]) -> bool {
+        if offers.len() != self.resources.len() + self.placements.len() {
+            return false;
+        }
+        let mut offers = offers.iter();
+        for (&key, resource) in &self.resources {
+            let resident = resource.resident.lock().unwrap();
+            let expected = match &resident.packet {
+                Some(packet) => (key, resource.image.width, resource.image.height, packet.len(), GRAPHICS_METADATA_BYTES),
+                None => (key, 0, 0, 0, GRAPHICS_METADATA_BYTES),
+            };
+            if offers.next() != Some(&expected) {
+                return false;
+            }
+        }
+        self.placements.keys().all(|&key| offers.next() == Some(&(key, 0, 0, 0, GRAPHICS_METADATA_BYTES)))
     }
 
     pub(crate) fn prepare_image_metadata(
@@ -761,9 +777,6 @@ impl GraphicsState {
         }
         for key in obsolete {
             self.remove_resource(key, &mut effects);
-        }
-        if !effects.is_empty() {
-            self.resource_revision += 1;
         }
         effects
     }

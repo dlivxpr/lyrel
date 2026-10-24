@@ -31,7 +31,7 @@ pub use graphics_admission::GraphicsAdmissionBroker;
 
 pub struct GraphicsReplayAdmission {
     endpoint: u64,
-    generation: Option<(u64, u64)>,
+    offers: Vec<(u64, u32, u32, usize, usize)>,
     grants: Vec<graphics_admission::GraphicsGrant>,
     _work: Option<crate::core::graphics_state::retention::Work>,
 }
@@ -1789,8 +1789,8 @@ impl DaemonPane {
     pub fn prepare_graphics_replay(
         &self,
         endpoint: u64,
-    ) -> Result<GraphicsReplayAdmission, String> {
-        let (broker, generation, resources, work) = {
+    ) -> Result<Option<GraphicsReplayAdmission>, String> {
+        let (broker, resources, work) = {
             let mut state = self.state.lock().unwrap();
             let effects = state
                 .graphics
@@ -1809,44 +1809,31 @@ impl DaemonPane {
             };
             (
                 state.graphics_admission.clone(),
-                state
-                    .graphics
-                    .as_ref()
-                    .map(GraphicsState::replay_generation),
                 resources,
                 work,
             )
         };
+        let current = || {
+            self.state.lock().unwrap().graphics.as_ref().map_or(resources.is_empty(), |graphics| graphics.matches_offers(&resources))
+        };
         let mut grants = Vec::with_capacity(resources.len());
-        for (key, width, height, encoded, metadata) in resources {
-            grants.push(
-                broker
-                    .request_after_release(
-                        Some(endpoint),
-                        key,
-                        width,
-                        height,
-                        encoded,
-                        metadata,
-                        || {
-                            self.state
-                                .lock()
-                                .unwrap()
-                                .graphics
-                                .as_ref()
-                                .map(GraphicsState::replay_generation)
-                                == generation
-                        },
-                    )
-                    .ok_or("Desktop graphics budget cannot admit retained session content")?,
-            );
+        for &(key, width, height, encoded, metadata) in &resources {
+            let Some(grant) = broker.request_after_release(
+                Some(endpoint), key, width, height, encoded, metadata, &current,
+            ) else {
+                if !current() {
+                    return Ok(None);
+                }
+                return Err("Desktop graphics budget cannot admit retained session content".into());
+            };
+            grants.push(grant);
         }
-        Ok(GraphicsReplayAdmission {
+        Ok(Some(GraphicsReplayAdmission {
             endpoint,
-            generation,
+            offers: resources,
             grants,
             _work: work,
-        })
+        }))
     }
 
     pub fn attach_admitted(
@@ -1854,7 +1841,7 @@ impl DaemonPane {
         subscriber: Arc<Sender<DaemonMsg>>,
         allow_clipboard: bool,
         admission: GraphicsReplayAdmission,
-    ) -> Result<u64, String> {
+    ) -> Result<Option<u64>, String> {
         let foreground = self.has_foreground_command();
         let mut state = self.state.lock().unwrap();
         let effects = state
@@ -1863,15 +1850,15 @@ impl DaemonPane {
             .map(GraphicsState::drain_evictions)
             .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
-        if state
-            .graphics
-            .as_ref()
-            .map(GraphicsState::replay_generation)
-            != admission.generation
+        if !state.graphics.as_ref().map_or(admission.offers.is_empty(), |graphics| graphics.matches_offers(&admission.offers))
             || !admission.grants.iter().all(|grant| grant.valid())
-            || !state.graphics_admission.activate(admission.endpoint)
         {
-            return Err("Graphics session changed during replay admission; reconnect".into());
+            // Cancel obsolete reservations before obtaining another bounded
+            // snapshot; text and geometry changes alone need no new leases.
+            return Ok(None);
+        }
+        if !state.graphics_admission.activate(admission.endpoint) {
+            return Err("Graphics replay connection closed during admission".into());
         }
         let epoch = attach_subscriber_with_permissions(
             &mut state,
@@ -1886,7 +1873,7 @@ impl DaemonPane {
         for grant in admission.grants {
             grant.commit();
         }
-        Ok(epoch)
+        Ok(Some(epoch))
     }
 
     pub fn observe_admitted(
@@ -1894,7 +1881,7 @@ impl DaemonPane {
         subscriber: Arc<Sender<DaemonMsg>>,
         gate: Arc<OutputGate>,
         admission: GraphicsReplayAdmission,
-    ) -> Result<u64, String> {
+    ) -> Result<Option<u64>, String> {
         let foreground = self.has_foreground_command();
         let mut state = self.state.lock().unwrap();
         let effects = state
@@ -1903,15 +1890,13 @@ impl DaemonPane {
             .map(GraphicsState::drain_evictions)
             .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
-        if state
-            .graphics
-            .as_ref()
-            .map(GraphicsState::replay_generation)
-            != admission.generation
+        if !state.graphics.as_ref().map_or(admission.offers.is_empty(), |graphics| graphics.matches_offers(&admission.offers))
             || !admission.grants.iter().all(|grant| grant.valid())
-            || !state.graphics_admission.activate(admission.endpoint)
         {
-            return Err("Graphics session changed during replay admission; reconnect".into());
+            return Ok(None);
+        }
+        if !state.graphics_admission.activate(admission.endpoint) {
+            return Err("Graphics replay connection closed during admission".into());
         }
         let id = observe_subscriber(&mut state, subscriber, gate, foreground);
         if !state.observers.iter().any(|observer| observer.id == id) {
@@ -1920,7 +1905,7 @@ impl DaemonPane {
         for grant in admission.grants {
             grant.commit();
         }
-        Ok(id)
+        Ok(Some(id))
     }
 
     pub fn spawn(

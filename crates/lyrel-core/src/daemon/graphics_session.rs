@@ -50,7 +50,7 @@ pub(super) fn run(
     endpoint: u64,
     observer: bool,
     allow_clipboard: bool,
-    ready: Option<DaemonMsg>,
+    mut ready: Option<DaemonMsg>,
     mut claim: Option<UnclaimedSpawn>,
 ) -> anyhow::Result<()> {
     let broker = pane.graphics_admission_broker();
@@ -104,42 +104,41 @@ pub(super) fn run(
         reader: Some(reader),
         attached: None,
     };
-    let admission = match pane.prepare_graphics_replay(endpoint) {
-        Ok(admission) => admission,
-        Err(error) => {
-            let _ = session
-                .sender
-                .as_ref()
-                .unwrap()
-                .send(DaemonMsg::Error(error));
-            return Ok(());
-        }
-    };
     if claim.is_some() && pane.alive() {
         registry.insert(pane.clone());
     }
-    if let Some(ready) = ready {
-        let _ = session.sender.as_ref().unwrap().send(ready);
-    }
-    let admitted = if observer {
-        pane.observe_admitted(session.sender.as_ref().unwrap().clone(), gate, admission)
-            .map(Attached::Observer)
-    } else {
-        pane.attach_admitted(
-            session.sender.as_ref().unwrap().clone(),
-            allow_clipboard,
-            admission,
-        )
-        .map(Attached::Controller)
-    };
+    // A pending desktop must not stop the PTY. If retained identities change
+    // during its offers, release that complete attempt before taking a fresh
+    // snapshot. Ordinary text/resize does not invalidate an applicable lease.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let admitted = (|| -> Result<Attached, String> {
+        loop {
+            let attached = if let Some(admission) = pane.prepare_graphics_replay(endpoint)? {
+                if let Some(ready) = ready.take() {
+                    let _ = session.sender.as_ref().unwrap().send(ready);
+                }
+                if observer {
+                    pane.observe_admitted(session.sender.as_ref().unwrap().clone(), gate.clone(), admission)?
+                        .map(Attached::Observer)
+                } else {
+                    pane.attach_admitted(session.sender.as_ref().unwrap().clone(), allow_clipboard, admission)?
+                        .map(Attached::Controller)
+                }
+            } else {
+                None
+            };
+            if let Some(attached) = attached {
+                return Ok(attached);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("Graphics session kept changing during replay admission; reconnect".into());
+            }
+        }
+    })();
     let attached = match admitted {
         Ok(attached) => attached,
         Err(error) => {
-            let _ = session
-                .sender
-                .as_ref()
-                .unwrap()
-                .send(DaemonMsg::Error(error));
+            let _ = session.sender.as_ref().unwrap().send(DaemonMsg::Error(error));
             return Ok(());
         }
     };
