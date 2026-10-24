@@ -38,11 +38,15 @@ impl GraphicsState {
         {
             return resources;
         }
-        let start = if history { -(self.term.grid.history_size() as i32) } else { 0 };
+        let start = if history {
+            -(self.term.grid.history_size() as i32)
+        } else {
+            0
+        };
         self.placeholder_resources_in(start, self.term.screen_lines() as i32)
     }
 
-    fn placeholder_resources_in(&self, start: i32, end: i32) -> BTreeSet<u64> {
+    pub(super) fn placeholder_resources_in(&self, start: i32, end: i32) -> BTreeSet<u64> {
         let mut resources = BTreeSet::new();
         for row in start..end {
             for slice in placeholder_row(&self.term.grid, Line(row)) {

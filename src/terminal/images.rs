@@ -721,14 +721,32 @@ impl ImageStore {
         }
     }
 
-    pub(super) fn viewport(&self, local_origin: i64, offset: usize, rows: usize, cols: usize, displayed: bool) -> Option<crate::daemon::protocol::GraphicsViewport> {
+    pub(super) fn viewport(
+        &self,
+        local_origin: i64,
+        offset: usize,
+        rows: usize,
+        cols: usize,
+        displayed: bool,
+    ) -> Option<crate::daemon::protocol::GraphicsViewport> {
         let inner = self.0.state.lock().unwrap();
-        if !inner.viewport_known { return None; }
+        if !inner.viewport_known {
+            return None;
+        }
         Some(crate::daemon::protocol::GraphicsViewport {
             screen: inner.screen,
             epoch: inner.viewport_epoch,
-            top: (offset != 0).then(|| inner.history_origin.saturating_add(local_origin - inner.local_origin).saturating_sub(offset as i64)),
-            rows: if displayed { rows.min(u16::MAX as usize) as u16 } else { 0 },
+            top: (offset != 0).then(|| {
+                inner
+                    .history_origin
+                    .saturating_add(local_origin - inner.local_origin)
+                    .saturating_sub(offset as i64)
+            }),
+            rows: if displayed {
+                rows.min(u16::MAX as usize) as u16
+            } else {
+                0
+            },
             cols: cols.min(u16::MAX as usize) as u16,
         })
     }
@@ -756,9 +774,12 @@ impl ImageStore {
         let mut protected = BTreeSet::new();
         for anchored in inner.placements.values() {
             let placement = &anchored.placement;
-            let row = placement.anchor_row - inner.history_origin - (local_origin - inner.local_origin) + display_offset as i64;
+            let row =
+                placement.anchor_row - inner.history_origin - (local_origin - inner.local_origin)
+                    + display_offset as i64;
             if placement.screen != inner.screen
-                || (displayed && !placement.virtual_placement
+                || (displayed
+                    && !placement.virtual_placement
                     && placement.anchor_col < live_cols as u32
                     && row + i64::from(placement.clip_top) < live_rows as i64
                     && row + i64::from(placement.clip_bottom) > 0)
@@ -767,7 +788,9 @@ impl ImageStore {
             }
         }
         for (_, slices) in rows {
-            if !displayed { break; }
+            if !displayed {
+                break;
+            }
             for slice in slices {
                 let Some(prototype) = placeholder_prototype(
                     inner.placements.values().map(|p| &p.placement),
@@ -1210,7 +1233,9 @@ impl ImageStore {
                 history_origin,
                 epoch,
             } => {
-                let changed = inner.screen != screen || inner.history_origin != history_origin || inner.viewport_epoch != epoch;
+                let changed = inner.screen != screen
+                    || inner.history_origin != history_origin
+                    || inner.viewport_epoch != epoch;
                 inner.screen = screen;
                 inner.history_origin = history_origin;
                 inner.viewport_epoch = epoch;

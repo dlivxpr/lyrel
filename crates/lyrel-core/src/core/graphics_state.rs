@@ -311,7 +311,13 @@ pub struct GraphicsState {
     generation: u64,
     resource_revision: u64,
     viewport_epoch: u64,
-    viewports: BTreeMap<u64, (std::sync::Weak<std::sync::mpsc::Sender<crate::daemon::protocol::DaemonMsg>>, crate::daemon::protocol::GraphicsViewport)>,
+    viewports: BTreeMap<
+        u64,
+        (
+            std::sync::Weak<std::sync::mpsc::Sender<crate::daemon::protocol::DaemonMsg>>,
+            crate::daemon::protocol::GraphicsViewport,
+        ),
+    >,
     resources: BTreeMap<u64, Resource>,
     placements: BTreeMap<u64, AnchoredPlacement>,
     next_key: u64,
@@ -622,8 +628,11 @@ impl GraphicsState {
     }
 
     fn protect_resources(&self) {
-        if self.resources.is_empty() { return; }
-        self.retention.protect(self.resources.values().map(|r| &r.resident));
+        if self.resources.is_empty() {
+            return;
+        }
+        self.retention
+            .protect(self.resources.values().map(|r| &r.resident));
     }
 
     pub(crate) fn set_viewport(
@@ -645,31 +654,46 @@ impl GraphicsState {
         self.refresh_retention();
     }
 
-    pub(crate) fn retain_viewports(&mut self, mut attached: impl FnMut(&std::sync::Weak<std::sync::mpsc::Sender<crate::daemon::protocol::DaemonMsg>>) -> bool) {
+    pub(crate) fn retain_viewports(
+        &mut self,
+        mut attached: impl FnMut(
+            &std::sync::Weak<std::sync::mpsc::Sender<crate::daemon::protocol::DaemonMsg>>,
+        ) -> bool,
+    ) {
         let before = self.viewports.len();
         self.viewports.retain(|_, (owner, _)| attached(owner));
-        if self.viewports.len() != before { self.refresh_retention(); }
+        if self.viewports.len() != before {
+            self.refresh_retention();
+        }
     }
 
     fn refresh_retention(&mut self) {
         use retention::Priority;
-        self.viewports.retain(|_, (owner, _)| owner.strong_count() != 0);
+        self.viewports
+            .retain(|_, (owner, _)| owner.strong_count() != 0);
         let mut visible_placeholders = self.placeholder_resources(false);
         let retained_placeholders = self.placeholder_resources(true);
         let top = self.history_origin();
         let bottom = top + i64::from(self.size.rows.max(1));
         let oldest = self.term.grid.lines_evicted() as i64;
-        let visible_ranges: Vec<_> = self.viewports.values().filter_map(|(_, viewport)| {
-            if viewport.epoch != self.viewport_epoch || viewport.screen != self.screen || viewport.rows == 0 {
-                return None;
-            }
-            let start = viewport.top.unwrap_or(top).clamp(oldest, top);
-            Some((start, start + i64::from(viewport.rows), viewport.cols))
-        }).collect();
+        let visible_ranges: Vec<_> = self
+            .viewports
+            .values()
+            .filter_map(|(_, viewport)| {
+                if viewport.epoch != self.viewport_epoch
+                    || viewport.screen != self.screen
+                    || viewport.rows == 0
+                {
+                    return None;
+                }
+                let start = viewport.top.unwrap_or(top).clamp(oldest, top);
+                Some((start, start + i64::from(viewport.rows), viewport.cols))
+            })
+            .collect();
         for &(start, end, _) in &visible_ranges {
-            visible_placeholders.extend(self.placeholder_resources_in(
-                (start - top) as i32, (end.min(bottom) - top) as i32,
-            ));
+            visible_placeholders.extend(
+                self.placeholder_resources_in((start - top) as i32, (end.min(bottom) - top) as i32),
+            );
         }
         for (&key, resource) in &self.resources {
             let mut priority = if self
@@ -699,7 +723,11 @@ impl GraphicsState {
                             && p.anchor_row + i64::from(p.clip_top) < end
                             && p.anchor_row + i64::from(p.clip_bottom) > start
                     });
-                priority = priority.max(if visible { Priority::Protected } else { Priority::History });
+                priority = priority.max(if visible {
+                    Priority::Protected
+                } else {
+                    Priority::History
+                });
             }
             resource.resident.lock().unwrap().priority = priority;
         }
@@ -792,7 +820,8 @@ impl GraphicsState {
         self.expire_history();
         self.finish_layout(
             old.2 != self.viewport_epoch
-                || (!self.placements.is_empty() && old != (self.screen, self.history_origin(), self.viewport_epoch)),
+                || (!self.placements.is_empty()
+                    && old != (self.screen, self.history_origin(), self.viewport_epoch)),
         )
     }
 

@@ -796,11 +796,20 @@ struct PaneState {
 }
 
 fn prune_graphics_viewports(st: &mut PaneState) {
-    let PaneState { graphics, subscriber, observers, .. } = st;
+    let PaneState {
+        graphics,
+        subscriber,
+        observers,
+        ..
+    } = st;
     if let Some(graphics) = graphics {
         graphics.retain_viewports(|owner| {
-            subscriber.as_ref().is_some_and(|sender| owner.as_ptr() == Arc::as_ptr(sender))
-                || observers.iter().any(|observer| owner.as_ptr() == Arc::as_ptr(&observer.tx))
+            subscriber
+                .as_ref()
+                .is_some_and(|sender| owner.as_ptr() == Arc::as_ptr(sender))
+                || observers
+                    .iter()
+                    .any(|observer| owner.as_ptr() == Arc::as_ptr(&observer.tx))
         });
     }
 }
@@ -1748,8 +1757,13 @@ impl DaemonPane {
         viewport: super::protocol::GraphicsViewport,
     ) {
         let mut state = self.state.lock().unwrap();
-        let Some(sender) = owner.upgrade() else { return; };
-        let attached = state.subscriber.as_ref().is_some_and(|s| Arc::ptr_eq(s, &sender))
+        let Some(sender) = owner.upgrade() else {
+            return;
+        };
+        let attached = state
+            .subscriber
+            .as_ref()
+            .is_some_and(|s| Arc::ptr_eq(s, &sender))
             || state.observers.iter().any(|o| Arc::ptr_eq(&o.tx, &sender));
         if attached && let Some(graphics) = &mut state.graphics {
             graphics.set_viewport(endpoint, owner.clone(), viewport);

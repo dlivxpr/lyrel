@@ -79,9 +79,7 @@ fn input_caret_paint(
 /// In the shipped binary there is exactly one `App`, so the two are the same.
 #[derive(Default)]
 struct DisplayedRegistry(
-    std::sync::Mutex<
-        std::collections::HashMap<EntityId, super::remote::GraphicsViewportReporter>,
-    >,
+    std::sync::Mutex<std::collections::HashMap<EntityId, super::remote::GraphicsViewportReporter>>,
 );
 
 impl gpui_kit::Global for DisplayedRegistry {}
@@ -108,7 +106,11 @@ pub(crate) fn displayed_for_test(cx: &App, id: EntityId) -> Option<bool> {
         .lock()
         .unwrap()
         .get(&id)
-        .map(|reporter| reporter.displayed().load(std::sync::atomic::Ordering::Relaxed))
+        .map(|reporter| {
+            reporter
+                .displayed()
+                .load(std::sync::atomic::Ordering::Relaxed)
+        })
 }
 
 actions!(
