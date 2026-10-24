@@ -281,7 +281,12 @@ impl GraphicsState {
             col: self.term.grid.cursor.pos.col.0 as u32, span_cols, span_rows });
         effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(placement)));
         if !control.no_move {
-            let movement = format!("\x1b[{}B\x1b[{}C", span_rows.min(u32::from(self.size.rows.max(1))), span_cols.min(u32::from(self.size.cols.max(1)))) .into_bytes();
+            // Kitty leaves the cursor on the placement's last row. Do not
+            // encode a zero CUD: terminals interpret CSI 0 B as one row.
+            let down = span_rows.saturating_sub(1).min(u32::from(self.size.rows.max(1)));
+            let right = span_cols.min(u32::from(self.size.cols.max(1)));
+            let movement = if down == 0 { format!("\x1b[{right}C") }
+                else { format!("\x1b[{down}B\x1b[{right}C") }.into_bytes();
             self.output(&movement);
             effects.push(GraphicsEffect::Output(movement));
         }
