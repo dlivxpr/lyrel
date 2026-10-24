@@ -118,11 +118,19 @@ pub(super) fn run(
                     let _ = session.sender.as_ref().unwrap().send(ready);
                 }
                 if observer {
-                    pane.observe_admitted(session.sender.as_ref().unwrap().clone(), gate.clone(), admission)?
-                        .map(Attached::Observer)
+                    pane.observe_admitted(
+                        session.sender.as_ref().unwrap().clone(),
+                        gate.clone(),
+                        admission,
+                    )?
+                    .map(Attached::Observer)
                 } else {
-                    pane.attach_admitted(session.sender.as_ref().unwrap().clone(), allow_clipboard, admission)?
-                        .map(Attached::Controller)
+                    pane.attach_admitted(
+                        session.sender.as_ref().unwrap().clone(),
+                        allow_clipboard,
+                        admission,
+                    )?
+                    .map(Attached::Controller)
                 }
             } else {
                 None
@@ -131,14 +139,20 @@ pub(super) fn run(
                 return Ok(attached);
             }
             if std::time::Instant::now() >= deadline {
-                return Err("Graphics session kept changing during replay admission; reconnect".into());
+                return Err(
+                    "Graphics session kept changing during replay admission; reconnect".into(),
+                );
             }
         }
     })();
     let attached = match admitted {
         Ok(attached) => attached,
         Err(error) => {
-            let _ = session.sender.as_ref().unwrap().send(DaemonMsg::Error(error));
+            let _ = session
+                .sender
+                .as_ref()
+                .unwrap()
+                .send(DaemonMsg::Error(error));
             return Ok(());
         }
     };

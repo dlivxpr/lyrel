@@ -1807,19 +1807,28 @@ impl DaemonPane {
                 }
                 None => (Vec::new(), None),
             };
-            (
-                state.graphics_admission.clone(),
-                resources,
-                work,
-            )
+            (state.graphics_admission.clone(), resources, work)
         };
         let current = || {
-            self.state.lock().unwrap().graphics.as_ref().map_or(resources.is_empty(), |graphics| graphics.matches_offers(&resources))
+            self.state
+                .lock()
+                .unwrap()
+                .graphics
+                .as_ref()
+                .map_or(resources.is_empty(), |graphics| {
+                    graphics.matches_offers(&resources)
+                })
         };
         let mut grants = Vec::with_capacity(resources.len());
         for &(key, width, height, encoded, metadata) in &resources {
             let Some(grant) = broker.request_after_release(
-                Some(endpoint), key, width, height, encoded, metadata, &current,
+                Some(endpoint),
+                key,
+                width,
+                height,
+                encoded,
+                metadata,
+                &current,
             ) else {
                 if !current() {
                     return Ok(None);
@@ -1850,7 +1859,12 @@ impl DaemonPane {
             .map(GraphicsState::drain_evictions)
             .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
-        if !state.graphics.as_ref().map_or(admission.offers.is_empty(), |graphics| graphics.matches_offers(&admission.offers))
+        if !state
+            .graphics
+            .as_ref()
+            .map_or(admission.offers.is_empty(), |graphics| {
+                graphics.matches_offers(&admission.offers)
+            })
             || !admission.grants.iter().all(|grant| grant.valid())
         {
             // Cancel obsolete reservations before obtaining another bounded
@@ -1890,7 +1904,12 @@ impl DaemonPane {
             .map(GraphicsState::drain_evictions)
             .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
-        if !state.graphics.as_ref().map_or(admission.offers.is_empty(), |graphics| graphics.matches_offers(&admission.offers))
+        if !state
+            .graphics
+            .as_ref()
+            .map_or(admission.offers.is_empty(), |graphics| {
+                graphics.matches_offers(&admission.offers)
+            })
             || !admission.grants.iter().all(|grant| grant.valid())
         {
             return Ok(None);

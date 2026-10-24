@@ -85,7 +85,9 @@ impl GraphicsAdmissionBroker {
             }
             // Wake a pending replay too, without cancelling unrelated live
             // grants just because a not-yet-admitted consumer disappeared.
-            state.pending.retain(|_, pending| pending.endpoint != endpoint);
+            state
+                .pending
+                .retain(|_, pending| pending.endpoint != endpoint);
             self.changed.notify_all();
         }
     }

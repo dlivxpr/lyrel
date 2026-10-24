@@ -433,14 +433,22 @@ impl GraphicsState {
         for (&key, resource) in &self.resources {
             let resident = resource.resident.lock().unwrap();
             let expected = match &resident.packet {
-                Some(packet) => (key, resource.image.width, resource.image.height, packet.len(), GRAPHICS_METADATA_BYTES),
+                Some(packet) => (
+                    key,
+                    resource.image.width,
+                    resource.image.height,
+                    packet.len(),
+                    GRAPHICS_METADATA_BYTES,
+                ),
                 None => (key, 0, 0, 0, GRAPHICS_METADATA_BYTES),
             };
             if offers.next() != Some(&expected) {
                 return false;
             }
         }
-        self.placements.keys().all(|&key| offers.next() == Some(&(key, 0, 0, 0, GRAPHICS_METADATA_BYTES)))
+        self.placements
+            .keys()
+            .all(|&key| offers.next() == Some(&(key, 0, 0, 0, GRAPHICS_METADATA_BYTES)))
     }
 
     pub(crate) fn prepare_image_metadata(
