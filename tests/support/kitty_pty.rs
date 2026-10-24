@@ -48,6 +48,46 @@ use std::io::{Read, Write};
             );
         }
     }
+    #[derive(Default)]
+    struct OutputStats {
+        bytes: usize,
+        uploads: usize,
+        placements: usize,
+        prefix: usize,
+        header: Option<Vec<u8>>,
+    }
+
+    impl OutputStats {
+        fn record(&mut self, bytes: &[u8]) {
+            self.bytes += bytes.len();
+            for &byte in bytes {
+                if let Some(header) = &mut self.header {
+                    if byte == b';' || byte == 0x1b {
+                        let action = header.split(|b| *b == b',').find_map(|field| field.strip_prefix(b"a="));
+                        match action {
+                            Some(b"t" | b"T") => self.uploads += 1,
+                            Some(b"p") => self.placements += 1,
+                            _ => {}
+                        }
+                        self.header = None;
+                    } else if header.len() < 4096 {
+                        header.push(byte);
+                    } else {
+                        self.header = None;
+                    }
+                } else if byte == b"\x1b_G"[self.prefix] {
+                    self.prefix += 1;
+                    if self.prefix == 3 {
+                        self.prefix = 0;
+                        self.header = Some(Vec::new());
+                    }
+                } else {
+                    self.prefix = usize::from(byte == 0x1b);
+                }
+            }
+        }
+    }
+
 
     // This is a real PTY child, not a daemon seam. Running the current test
     // binary avoids an external Python/Node/shell dependency on every platform.
@@ -60,6 +100,7 @@ use std::io::{Read, Write};
         raw_pty();
         let mut input = std::io::stdin().lock();
         let mut output = std::io::stdout().lock();
+        let mut stats = OutputStats::default();
         output.write_all(b"\r\nKITTY_READY\r\n").unwrap();
         output.flush().unwrap();
         loop {
@@ -81,9 +122,26 @@ use std::io::{Read, Write};
             let replies: usize = fields.next().unwrap().parse().unwrap();
             let bytes = unhex(fields.next().unwrap());
             let fragment: usize = fields.next().unwrap_or("0").parse().unwrap();
+            let gate = fields.next().map(|path| {
+                std::path::PathBuf::from(String::from_utf8(unhex(path)).unwrap())
+            });
+            if operation == "WAIT" {
+                write!(output, "\r\nKITTY_WAITING_{serial}\r\n").unwrap();
+                output.flush().unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                while !gate.as_ref().expect("WAIT requires a gate").exists() {
+                    assert!(std::time::Instant::now() < deadline, "PTY gate deadline");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
             match operation {
                 "EXIT" => return,
-                "SEND" | "SEND_OK" => {
+                "STAT" => {
+                    write!(output, "\x1b7\x1b[2;1H\r\nKITTY_STATS_{serial} pid={} bytes={} uploads={} placements={}\r\n\x1b8", std::process::id(), stats.bytes, stats.uploads, stats.placements).unwrap();
+                    output.flush().unwrap();
+                }
+                "SEND" | "SEND_OK" | "WAIT" => {
+                    stats.record(&bytes);
                     for part in bytes.chunks(if fragment == 0 {
                         bytes.len().max(1)
                     } else {
@@ -94,6 +152,8 @@ use std::io::{Read, Write};
                     }
                 }
                 "FLOOD" => {
+                    stats.bytes += 49 * 1024 * 1024;
+                    stats.record(b"\x1b_Ga=T,i=720,s=1,v=1;");
                     output.write_all(b"\x1b_Ga=T,i=720,s=1,v=1;").unwrap();
                     // 49 MiB exceeds the 48 MiB APC cap without allocating a
                     // 98 MiB hex request or relying on an external sender.
@@ -101,6 +161,7 @@ use std::io::{Read, Write};
                     for _ in 0..(49 * 1024 * 1024 / block.len()) {
                         output.write_all(&block).unwrap();
                     }
+                    stats.record(b"\x1b\\after_oversize");
                     output.write_all(b"\x1b\\after_oversize").unwrap();
                     output.flush().unwrap();
                 }
@@ -141,5 +202,8 @@ use std::io::{Read, Write};
             assert_eq!(barrier, b"\x1b_Gi=4294967294;OK\x1b\\");
             write!(output, "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial}\r\n\x1b8").unwrap();
             output.flush().unwrap();
+            if let Some(gate) = gate {
+                std::fs::write(gate.with_extension("done"), []).unwrap();
+            }
         }
     }

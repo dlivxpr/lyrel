@@ -869,3 +869,87 @@ fn retention_daemon_one_kib_metadata_refuses_atomic_image_without_moving_cursor_
     b.red("a=T,i=5,p=1,c=1,r=1,C=1");
     daemon.panes().kill(b.session.pane_id()).unwrap();
 }
+
+#[test]
+fn retention_daemon_recovery_fresh_subscribers_keep_refusal_notices_and_detached_delete_expiry_precedence() {
+    fn stats(consumer: &mut Consumer) -> String {
+        consumer.serial += 1;
+        consumer.text.clear();
+        consumer.updates.clear();
+        consumer.session.input(format!("STAT {} 0 00 0\n", consumer.serial).as_bytes()).unwrap();
+        assert!(consumer.finish_exchange(b"sender identity and no-retransmit counters").is_empty());
+        let prefix = format!("KITTY_STATS_{} ", consumer.serial);
+        String::from_utf8_lossy(&consumer.text).lines().find_map(|line| line.trim().strip_prefix(&prefix).map(str::to_owned)).unwrap()
+    }
+    fn detach(consumer: Consumer) {
+        let (input, mut output) = consumer.session.split();
+        input.detach().unwrap();
+        while output.recv().is_ok() {}
+    }
+    fn fresh(daemon: &Daemon, pane: u64, serial: usize) -> Consumer {
+        let session = daemon.panes().attach(pane, size()).unwrap();
+        session.set_recv_timeout(Some(Duration::from_secs(30))).unwrap();
+        Consumer { session, serial, updates: Vec::new(), text: Vec::new() }
+    }
+    let daemon = Daemon::start();
+    let (mut a, mut b) = (daemon.spawn(), daemon.spawn());
+    let deleted_notice = a.red("a=T,i=1,p=1,c=1,r=1,C=1");
+    let expired_notice = a.red("a=T,i=2,p=1,c=1,r=1,C=1");
+    a.idle(&b"historical explanation\r\n".repeat(40));
+    b.red("a=T,i=10,p=1,c=1,r=1,C=1");
+    b.red("a=T,i=11,p=1,c=1,r=1,C=1");
+    assert_eq!(a.eviction(), GraphicsUpdate::Evicted { key: deleted_notice, width: 1, height: 1 });
+    let visible = a.red("a=T,i=3,p=1,c=1,r=1,C=1");
+    assert!(a.updates.iter().any(|u| *u == GraphicsUpdate::Evicted { key: expired_notice, width: 1, height: 1 }));
+    let refused = a.exchange(b"\x1b_Ga=T,i=4,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\visible_refusal_keeps_shell", 1);
+    assert_eq!(refused.len(), 1);
+    assert!(refused[0].starts_with(b"\x1b_Gi=4,p=1;ENOSPC:"));
+    assert!(a.text.windows(b"visible_refusal_keeps_shell".len()).any(|part| part == b"visible_refusal_keeps_shell"));
+    assert!(!a.updates.iter().any(|u| matches!(u, GraphicsUpdate::Resource { .. } | GraphicsUpdate::Place(_) | GraphicsUpdate::Evicted { .. })));
+    let identity = stats(&mut a);
+    let (pane, serial) = (a.session.pane_id(), a.serial);
+    detach(a);
+
+    let mut recovered = fresh(&daemon, pane, serial);
+    assert_eq!(stats(&mut recovered), identity, "fresh cache does not make the child resend evicted or accepted content");
+    for old in [deleted_notice, expired_notice] {
+        assert!(recovered.updates.iter().any(|u| matches!(u, GraphicsUpdate::Evicted { key, .. } if *key == old)));
+        assert!(recovered.updates.iter().any(|u| matches!(u, GraphicsUpdate::Place(p) if p.resource == old)));
+        assert!(!recovered.updates.iter().any(|u| matches!(u, GraphicsUpdate::Resource { key, .. } if *key == old)), "evicted historical pixels cannot hide in an old subscriber cache or replay packet");
+    }
+    assert!(recovered.updates.iter().any(|u| matches!(u, GraphicsUpdate::Resource { key, .. } if *key == visible)));
+    let mut detached = b"\x1b_Ga=d,d=I,i=1,q=2\x1b\\\x1b[24;1H".to_vec();
+    detached.extend(b"detached expiry\r\n".repeat(10_100));
+    detached.extend_from_slice(b"\x1b_Ga=T,i=4,p=1,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\\x1b_Ga=p,i=4,p=2,U=1,c=1,r=1,q=2\x1b\\\x1b[38;5;4;58;5;2m\xf4\x8e\xbb\xae\xcc\x85\xcc\x85\x1b[0mDETACHED_RETENTION_DONE");
+    detach(recovered);
+    let dir = tempfile::TempDir::new().unwrap();
+    let gate = dir.path().join("release");
+    daemon.panes().send_input(pane, format!("WAIT 1000 0 {} 0 {}\n", fixture::hex(&detached), fixture::hex(gate.to_str().unwrap().as_bytes())).as_bytes()).unwrap();
+    std::fs::write(&gate, []).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !gate.with_extension("done").exists() {
+        assert!(Instant::now() < deadline, "detached sender barrier deadline");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let mut final_consumer = fresh(&daemon, pane, 1000);
+    let final_identity = stats(&mut final_consumer);
+    assert!(final_consumer.text.windows(b"DETACHED_RETENTION_DONE".len()).any(|part| part == b"DETACHED_RETENTION_DONE"));
+    assert!(!final_consumer.updates.iter().any(|u| match u {
+        GraphicsUpdate::Resource { key, .. } | GraphicsUpdate::Evicted { key, .. } => [deleted_notice, expired_notice, visible].contains(key),
+        GraphicsUpdate::Place(p) => [deleted_notice, expired_notice, visible].contains(&p.resource),
+        _ => false,
+    }), "detached application deletion and history expiration outrank stale replay notices/pixels");
+    assert_eq!(final_consumer.updates.iter().filter(|u| matches!(u, GraphicsUpdate::Resource { .. })).count(), 1);
+    let placements: Vec<_> = final_consumer.updates.iter().filter_map(|u| if let GraphicsUpdate::Place(p) = u { Some(p) } else { None }).collect();
+    assert_eq!(placements.len(), 2);
+    assert_eq!(placements[0].resource, placements[1].resource);
+    assert!(placements.iter().any(|p| p.virtual_placement));
+    let serial = final_consumer.serial;
+    detach(final_consumer);
+    let mut last = fresh(&daemon, pane, serial);
+    assert_eq!(stats(&mut last), final_identity, "a second fresh cache cannot revive discarded history or resend the new retained resource");
+    last.exit();
+    b.exit();
+    daemon.panes().kill(pane).unwrap();
+    daemon.panes().kill(b.session.pane_id()).unwrap();
+}

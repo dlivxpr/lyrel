@@ -2586,12 +2586,17 @@ mod kitty_graphics {
                 .unwrap();
             session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
             assert!(collect_until(&mut session, b"KITTY_READY").1.is_none());
+            Self::from_session(session, 0)
+        }
+
+        fn from_session(session: lyrel_core::client::PaneSession, serial: usize) -> Self {
+            session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
             Self {
                 session,
                 resources: BTreeMap::new(),
                 evicted: BTreeMap::new(),
                 placements: BTreeMap::new(),
-                serial: 0,
+                serial,
                 updates: Vec::new(),
                 last_output: Vec::new(),
                 screen: 0,
@@ -2667,6 +2672,10 @@ mod kitty_graphics {
                 self.serial
             );
             self.session.input(request.as_bytes()).unwrap();
+            self.finish_exchange()
+        }
+
+        fn finish_exchange(&mut self) -> Vec<Vec<u8>> {
             let marker = format!("KITTY_DONE_{}\r", self.serial);
             let mut plain = Vec::new();
             loop {
@@ -2677,7 +2686,7 @@ mod kitty_graphics {
                                 .expect("valid graphics update"),
                         );
                     }
-                    DaemonMsg::Output(bytes) => {
+                    DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
                         assert!(
                             !windows_contain(&bytes, b"\x1b_G"),
                             "pixels must not enter text output"
@@ -2688,6 +2697,7 @@ mod kitty_graphics {
                         }
                     }
                     DaemonMsg::Exited { code } => panic!("PTY fixture exited: {code:?}"),
+                    DaemonMsg::Error(error) => panic!("graphics consumer refused: {error}"),
                     _ => {}
                 }
             }
@@ -2698,6 +2708,26 @@ mod kitty_graphics {
                 .lines()
                 .filter_map(|line| line.trim().strip_prefix(prefix.as_str()).map(unhex))
                 .collect()
+        }
+
+        fn stats(&mut self) -> String {
+            assert!(self.exchange("STAT", "00", 0, 0).is_empty());
+            let prefix = format!("KITTY_STATS_{} ", self.serial);
+            String::from_utf8_lossy(&self.last_output)
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(&prefix).map(str::to_owned))
+                .expect("current sender identity and no-retransmit counters")
+        }
+
+        fn exit(mut self) {
+            self.session.input(b"EXIT 4294967293 0 00 0\n").unwrap();
+            loop {
+                match self.session.recv().expect("ordered real PTY child exit") {
+                    DaemonMsg::Exited { .. } => break,
+                    DaemonMsg::Error(error) => panic!("exit failed: {error}"),
+                    _ => {}
+                }
+            }
         }
 
         fn command(&mut self, control: &str) {
@@ -2725,6 +2755,342 @@ mod kitty_graphics {
         fn pixel(&self, placement: &Placement) -> Vec<u8> {
             self.resources[&placement.resource].to_rgba8().unwrap()
         }
+    }
+
+    fn detach_consumer(consumer: Consumer) {
+        let (input, mut output) = consumer.session.split();
+        input.detach().unwrap();
+        while output.recv().is_ok() {}
+        // All pixel/placement caches in `consumer` die with this function.
+    }
+
+    fn wait_file(path: &std::path::Path) {
+        let deadline = Instant::now() + STREAM_WITHIN;
+        while !path.exists() {
+            assert!(Instant::now() < deadline, "real sender did not finish detached output");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn offered_recovery(daemon: &Daemon, pane: u64, observe: bool) -> lyrel_core::daemon::transport::Stream {
+        use lyrel_core::daemon::{protocol::ClientMsg, transport};
+        let mut stream = transport::connect_endpoint_at(&daemon.pane_endpoint()).unwrap();
+        stream.set_read_timeout(Some(STREAM_WITHIN)).unwrap();
+        lyrel_core::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+        ClientMsg::GraphicsCapacity { encoded_bytes: 64 << 20, decoded_bytes: 128 << 20, offers: true }.encode(&mut stream).unwrap();
+        let request = if observe {
+            ClientMsg::Observe { pane_id: pane, size: size() }
+        } else {
+            ClientMsg::Attach { pane_id: pane, size: size(), allow_remote_clipboard_write: false }
+        };
+        request.encode(&mut stream).unwrap();
+        stream
+    }
+
+    fn first_offer(stream: &mut lyrel_core::daemon::transport::Stream) -> (u64, u64) {
+        match DaemonMsg::read(stream).expect("pending replay's first retained-source offer") {
+            DaemonMsg::GraphicsOffer { token, key, .. } => (token, key),
+            other => panic!("replay leaked or failed before admission: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_graphics_recovery_pending_offer_tracks_resize_upload_replacement_place_delete_and_screen_in_one_snapshot() {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-live");
+        let mut controller = Consumer::spawn(&daemon);
+        controller.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        controller.red_at(6, 2, "a=T,i=2,p=1,C=1");
+        let pane = controller.session.pane_id();
+        let obsolete: Vec<_> = controller.resources.keys().copied().collect();
+        let mut recovery = offered_recovery(&daemon, pane, true);
+        let (pending, old_key) = first_offer(&mut recovery);
+        assert!(obsolete.contains(&old_key));
+        // This completes through the original production controller while the
+        // fresh observer deliberately holds its very first replay grant.
+        let replies = controller.send(b"\x1b_Ga=t,i=1,f=32,s=2,v=1;AP8A/wAA//8=\x1b\\\x1b_Ga=d,d=I,i=2,q=2\x1b\\\x1b[8;5H\x1b_Ga=p,i=1,p=3,x=1,w=1,h=1,c=3,r=2,C=1\x1b\\\x1b_Ga=p,i=1,p=4,U=1,c=2,r=1\x1b\\\x1b[38;5;1;58;5;4m\xf4\x8e\xbb\xae\xcc\x85\xcc\x85\x1b[0m\x1b[?1049h\x1b_Ga=T,i=3,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\\x1b_Ga=d,d=I,i=3,q=2\x1b\\\x1b[?1049lLIVE_REPLAY_ORDER", 4);
+        assert_eq!(replies, [b"\x1b_Gi=1;OK\x1b\\".to_vec(), b"\x1b_Gi=1,p=3;OK\x1b\\".to_vec(), b"\x1b_Gi=1,p=4;OK\x1b\\".to_vec(), b"\x1b_Gi=3,p=1;OK\x1b\\".to_vec()]);
+        let resized = WinSize { cols: 110, rows: 35, cell_w: 10, cell_h: 20 };
+        controller.session.resize(resized).unwrap();
+        controller.send(b"RESIZED_BEFORE_REPLAY_GRANT", 0);
+        let expected = controller.placements.clone();
+        assert_eq!(expected.len(), 2);
+        let identity = controller.stats();
+        ClientMsg::GraphicsGrant { token: pending, accepted: true }.encode(&mut recovery).unwrap();
+        let marker_serial = controller.serial + 100;
+        daemon.panes().send_input(pane, format!("STAT {marker_serial} 0 00 0\n").as_bytes()).unwrap();
+        let marker = format!("KITTY_DONE_{marker_serial}\r");
+        let mut text = Vec::new();
+        let mut updates = Vec::new();
+        let mut latest_size = None;
+        let mut cancelled = false;
+        let mut screen = None;
+        loop {
+            match DaemonMsg::read(&mut recovery).expect("bounded ordered replay-to-live stream") {
+                DaemonMsg::GraphicsOffer { token, .. } => ClientMsg::GraphicsGrant { token, accepted: true }.encode(&mut recovery).unwrap(),
+                DaemonMsg::GraphicsCancel { token } => cancelled |= token == pending,
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                    assert!(!windows_contain(&bytes, b"\x1b_G"));
+                    text.extend(bytes);
+                }
+                DaemonMsg::Size(size) => latest_size = Some(size),
+                DaemonMsg::Graphics(frame) => {
+                    let update = GraphicsUpdate::decode_frame_owned(frame.into_vec()).unwrap();
+                    if let GraphicsUpdate::Screen { screen: active, .. } = update { screen = Some(active); }
+                    updates.push(update);
+                }
+                DaemonMsg::Error(error) => panic!("ordinary concurrent output must not break recovery: {error}"),
+                DaemonMsg::Exited { code } => panic!("living sender replaced: {code:?}"),
+                _ => {}
+            }
+            if screen.is_some() && windows_contain(&text, marker.as_bytes()) { break; }
+        }
+        assert!(cancelled, "obsolete replay reservation must be explicitly released before retry");
+        assert_eq!(latest_size, Some(resized));
+        assert_eq!(screen, Some(0));
+        let replayed: BTreeMap<_, _> = updates.iter().filter_map(|u| if let GraphicsUpdate::Place(p) = u { Some((p.key, p.clone())) } else { None }).collect();
+        assert_eq!(replayed, expected);
+        assert_eq!(updates.iter().filter(|u| matches!(u, GraphicsUpdate::Place(_))).count(), expected.len(), "retry cannot duplicate placements");
+        let sources: Vec<_> = updates.iter().filter_map(|u| if let GraphicsUpdate::Resource { key, image } = u { Some((*key, image.to_rgba8().unwrap())) } else { None }).collect();
+        assert_eq!(sources.len(), 1);
+        assert!(!obsolete.contains(&sources[0].0), "deleted/replaced pixels cannot leak from admission snapshot");
+        assert_eq!(sources[0].1, [0, 255, 0, 255, 0, 0, 255, 255]);
+        assert!(windows_contain(&text, b"LIVE_REPLAY_ORDER"));
+        assert!(windows_contain(&text, b"RESIZED_BEFORE_REPLAY_GRANT"));
+        assert!(windows_contain(&text, format!("KITTY_STATS_{marker_serial} {identity}").as_bytes()));
+        // Observing must not steal the original writer; observer mutation is
+        // still explicitly refused after recovery succeeds.
+        assert_eq!(controller.stats(), identity);
+        ClientMsg::Input(b"not application input".to_vec()).encode(&mut recovery).unwrap();
+        loop {
+            if let DaemonMsg::Error(error) = DaemonMsg::read(&mut recovery).unwrap() {
+                assert!(error.contains("read-only observer"));
+                break;
+            }
+        }
+        ClientMsg::Detach.encode(&mut recovery).unwrap();
+        while DaemonMsg::read(&mut recovery).is_ok() {}
+        controller.exit();
+    }
+
+    #[test]
+    fn daemon_graphics_recovery_text_and_geometry_change_do_not_reoffer_unchanged_sources() {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-text");
+        let mut controller = Consumer::spawn(&daemon);
+        controller.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        let mut recovery = offered_recovery(&daemon, controller.session.pane_id(), true);
+        let (pending, resource) = first_offer(&mut recovery);
+        controller.session.resize(WinSize { cols: 120, ..size() }).unwrap();
+        controller.send(b"\x1b[30;1Hconcurrent text\r\n", 0);
+        let expected = controller.placements.clone();
+        ClientMsg::GraphicsGrant { token: pending, accepted: true }.encode(&mut recovery).unwrap();
+        let mut offered_resource = 1;
+        let mut placements = BTreeMap::new();
+        loop {
+            match DaemonMsg::read(&mut recovery).unwrap() {
+                DaemonMsg::GraphicsOffer { token, key, .. } => {
+                    offered_resource += usize::from(key == resource);
+                    ClientMsg::GraphicsGrant { token, accepted: true }.encode(&mut recovery).unwrap();
+                }
+                DaemonMsg::GraphicsCancel { token } if token == pending => panic!("text/resize must not discard an applicable source grant"),
+                DaemonMsg::Graphics(frame) => match GraphicsUpdate::decode_frame_owned(frame.into_vec()).unwrap() {
+                    GraphicsUpdate::Place(p) => { placements.insert(p.key, p); }
+                    GraphicsUpdate::Screen { .. } => break,
+                    _ => {}
+                },
+                DaemonMsg::Error(error) => panic!("text/resize interrupted recovery: {error}"),
+                _ => {}
+            }
+        }
+        assert_eq!(offered_resource, 1, "unchanged pixels need no repeated reservation or retransmission");
+        assert_eq!(placements, expected, "geometry comes from the same latest pane-locked snapshot as text");
+        ClientMsg::Detach.encode(&mut recovery).unwrap();
+        while DaemonMsg::read(&mut recovery).is_ok() {}
+        controller.exit();
+    }
+
+    #[test]
+    fn daemon_graphics_recovery_refused_controller_releases_partial_grants_and_does_not_preempt() {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-refused");
+        let mut original = Consumer::spawn(&daemon);
+        original.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        original.red_at(5, 2, "a=T,i=2,p=1,C=1");
+        let expected = original.placements.clone();
+        let identity = original.stats();
+        let pane = original.session.pane_id();
+        let mut refused = offered_recovery(&daemon, pane, false);
+        let (first, _) = first_offer(&mut refused);
+        ClientMsg::GraphicsGrant { token: first, accepted: true }.encode(&mut refused).unwrap();
+        let mut released = false;
+        loop {
+            match DaemonMsg::read(&mut refused).expect("budget refusal must be explicit and bounded") {
+                DaemonMsg::GraphicsOffer { token, .. } => ClientMsg::GraphicsGrant { token, accepted: false }.encode(&mut refused).unwrap(),
+                DaemonMsg::GraphicsCancel { token } => released |= token == first,
+                DaemonMsg::Graphics(_) | DaemonMsg::Snapshot(_) => panic!("partially admitted recovery leaked content"),
+                DaemonMsg::Error(error) => {
+                    assert!(error.contains("cannot admit retained session content"), "{error}");
+                    break;
+                }
+                other => panic!("unexpected pending attach event: {other:?}"),
+            }
+        }
+        assert!(released, "earlier accepted leases must be cancelled when a later offer is refused");
+        assert_eq!(original.stats(), identity, "failed attach must not evict accepted pixels or steal the controller");
+        assert_eq!(original.placements, expected);
+        let serial = original.serial;
+        let mut replacement = Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), serial);
+        assert_eq!(replacement.stats(), identity);
+        assert_eq!(replacement.placements, expected);
+        assert!(original.session.recv().is_err(), "successful takeover closes the old controller rather than pinning its sender");
+        // A failed peer cannot remain in the broker and veto later output.
+        replacement.red_at(8, 3, "a=T,i=3,p=1,C=1");
+        assert_eq!(replacement.placements.len(), 3);
+        replacement.exit();
+    }
+
+    #[test]
+    fn daemon_graphics_recovery_pending_subscriber_does_not_cancel_an_existing_live_upload() {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-pending-live");
+        let mut controller = Consumer::spawn(&daemon);
+        controller.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        let pane = controller.session.pane_id();
+        let mut active = offered_recovery(&daemon, pane, true);
+        loop {
+            match DaemonMsg::read(&mut active).unwrap() {
+                DaemonMsg::GraphicsOffer { token, .. } => ClientMsg::GraphicsGrant { token, accepted: true }.encode(&mut active).unwrap(),
+                DaemonMsg::Graphics(frame) => {
+                    if matches!(GraphicsUpdate::decode_frame_owned(frame.into_vec()), Some(GraphicsUpdate::Screen { .. })) {
+                        break;
+                    }
+                }
+                DaemonMsg::Error(error) => panic!("initial observer admission: {error}"),
+                _ => {}
+            }
+        }
+        controller.serial += 1;
+        controller.updates.clear();
+        controller.session.input(format!("SEND {} 1 {} 0\n", controller.serial, hex(b"\x1b_Ga=T,i=2,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\LIVE_UPLOAD_CONTINUES")).as_bytes()).unwrap();
+        let live = loop {
+            match DaemonMsg::read(&mut active).unwrap() {
+                DaemonMsg::GraphicsOffer { token, encoded_bytes, .. } if encoded_bytes != 0 => break token,
+                DaemonMsg::GraphicsCancel { .. } => panic!("upload unexpectedly cancelled before pending connection"),
+                _ => {}
+            }
+        };
+        let mut pending = offered_recovery(&daemon, pane, true);
+        let _ = first_offer(&mut pending);
+        ClientMsg::Detach.encode(&mut pending).unwrap();
+        ClientMsg::GraphicsGrant { token: live, accepted: true }.encode(&mut active).unwrap();
+        let marker = format!("KITTY_DONE_{}\r", controller.serial);
+        let mut text = Vec::new();
+        loop {
+            match DaemonMsg::read(&mut active).unwrap() {
+                DaemonMsg::GraphicsOffer { token, .. } => ClientMsg::GraphicsGrant { token, accepted: true }.encode(&mut active).unwrap(),
+                DaemonMsg::GraphicsCancel { token } if token == live => panic!("pending registration/detach invalidated an unrelated live grant"),
+                DaemonMsg::Output(bytes) => text.extend(bytes),
+                DaemonMsg::Error(error) => panic!("existing observer interrupted: {error}"),
+                _ => {}
+            }
+            if windows_contain(&text, marker.as_bytes()) { break; }
+        }
+        assert_eq!(controller.finish_exchange(), [b"\x1b_Gi=2,p=1;OK\x1b\\".to_vec()]);
+        assert!(controller.placements.values().any(|p| p.image_id == 2));
+        assert!(windows_contain(&controller.last_output, b"LIVE_UPLOAD_CONTINUES"));
+        ClientMsg::Detach.encode(&mut active).unwrap();
+        while DaemonMsg::read(&mut active).is_ok() {}
+        while DaemonMsg::read(&mut pending).is_ok() {}
+        controller.exit();
+    }
+
+    #[test]
+    fn daemon_graphics_recovery_fresh_cache_restores_shared_crops_history_and_both_screens_without_resend() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-fresh");
+        let mut original = Consumer::spawn(&daemon);
+        original.send(b"\x1b[3;4H\x1b_Ga=t,i=7,f=32,s=2,v=1,q=2;/wAA/wD/AP8=\x1b\\", 0);
+        original.command("a=p,i=7,p=1,x=1,w=1,h=1,c=3,r=2,X=2,Y=3,C=1");
+        original.command("a=p,i=7,p=2,U=1,c=2,r=1");
+        original.send("\x1b[8;4H\x1b[38;5;7;58;5;2m\u{10eeee}\u{305}\u{305}\x1b[0m\x1b[30;1H".as_bytes(), 0);
+        original.send(&b"retained image explanation\r\n".repeat(40), 0);
+        let primary = original.placements.clone();
+        assert_eq!(primary.len(), 2);
+        assert!(primary.values().any(|p| !p.virtual_placement && p.anchor_row < original.history_origin));
+        original.send(b"\x1b[?1049h", 0);
+        original.red_at(4, 5, "a=T,i=7,p=1,c=2,r=1,C=1");
+        let expected = original.placements.clone();
+        let pixels: BTreeMap<_, _> = original.resources.iter().map(|(&key, image)| (key, image.to_rgba8().unwrap())).collect();
+        let identity = original.stats();
+        let (pane, serial) = (original.session.pane_id(), original.serial);
+        detach_consumer(original);
+
+        let mut fresh = Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), serial);
+        assert_eq!(fresh.stats(), identity, "same real child, no image/placement output on reattach");
+        assert_eq!(fresh.screen, 1);
+        assert_eq!(fresh.placements, expected);
+        assert_eq!(fresh.resources.iter().map(|(&key, image)| (key, image.to_rgba8().unwrap())).collect::<BTreeMap<_, _>>(), pixels);
+        assert!(windows_contain(&fresh.last_output, "\u{10eeee}".as_bytes()));
+        assert!(!windows_contain(&fresh.last_output, b"/wAA/wD/AP8="), "persistent text snapshots contain no encoded pixels");
+        assert_eq!(daemon.panes().list().unwrap().iter().filter(|entry| entry.pane_id == pane && entry.alive).count(), 1);
+        fresh.send(b"\x1b[?1049l", 0);
+        assert_eq!(fresh.screen, 0);
+        assert_eq!(fresh.placements, primary, "leaving replayed alternate screen restores only primary placements");
+        let crop = fresh.placements.values().find(|p| p.placement_id == 1).unwrap();
+        assert_eq!((crop.x, crop.w, crop.h, crop.cols, crop.rows, crop.offset_x, crop.offset_y), (1, 1, 1, 3, 2, 2, 3));
+        fresh.exit();
+    }
+
+    #[test]
+    fn daemon_graphics_recovery_detached_replacement_delete_and_new_placeholder_are_session_owned() {
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-detached");
+        let mut original = Consumer::spawn(&daemon);
+        original.red_at(3, 2, "a=T,i=1,p=1,C=1");
+        original.red_at(5, 2, "a=T,i=2,p=1,C=1");
+        let deleted = original.placements.values().find(|p| p.image_id == 2).unwrap().resource;
+        let replaced = original.placements.values().find(|p| p.image_id == 1).unwrap().resource;
+        let before = original.stats();
+        let pane = original.session.pane_id();
+        detach_consumer(original);
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let gate = dir.path().join("release");
+        let bytes = b"\x1b_Ga=d,d=I,i=2,q=2\x1b\\\x1b_Ga=t,i=1,f=32,s=2,v=1,q=2;AP8A/wAA//8=\x1b\\\x1b[7;4H\x1b_Ga=p,i=1,p=3,x=1,w=1,h=1,c=2,r=1,C=1,q=2\x1b\\\x1b_Ga=p,i=1,p=4,U=1,c=2,r=1,q=2\x1b\\\x1b[38;5;1;58;5;4m\xf4\x8e\xbb\xae\xcc\x85\xcc\x85\x1b[0mDETACHED_REPLACED";
+        daemon.panes().send_input(pane, format!("WAIT 1000 0 {} 0 {}\n", hex(bytes), hex(gate.to_str().unwrap().as_bytes())).as_bytes()).unwrap();
+        std::fs::write(&gate, []).unwrap();
+        wait_file(&gate.with_extension("done"));
+        // The real child has completed its query/reply barrier before any new
+        // consumer exists: this is detached production, not reconnect redraw.
+        let mut fresh = Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), 1000);
+        let after = fresh.stats();
+        assert_ne!(after, before, "detached application did really emit a changed image");
+        assert_eq!(fresh.resources.len(), 1);
+        assert!(!fresh.resources.contains_key(&deleted));
+        assert!(!fresh.resources.contains_key(&replaced));
+        assert!(fresh.evicted.is_empty(), "intentional deletion/replacement is not budget eviction");
+        assert_eq!(fresh.placements.len(), 2);
+        assert!(fresh.placements.values().any(|p| p.virtual_placement && p.placement_id == 4));
+        let crop = fresh.placements.values().find(|p| p.placement_id == 3).unwrap();
+        assert_eq!((crop.anchor_row, crop.anchor_col, crop.x, crop.w), (6, 3, 1, 1));
+        assert_eq!(fresh.pixel(crop), [0, 255, 0, 255, 0, 0, 255, 255]);
+        assert!(windows_contain(&fresh.last_output, b"DETACHED_REPLACED"));
+        let serial = fresh.serial;
+        detach_consumer(fresh);
+        let mut observer = Consumer::from_session(daemon.panes().observe(pane, size()).unwrap(), serial);
+        daemon.panes().send_input(pane, format!("STAT {} 0 00 0\n", serial + 1).as_bytes()).unwrap();
+        observer.serial += 1;
+        assert!(observer.finish_exchange().is_empty());
+        let marker = format!("KITTY_STATS_{} {after}", observer.serial);
+        assert!(windows_contain(&observer.last_output, marker.as_bytes()), "another fresh subscriber cannot trigger retransmission");
+        assert_eq!(observer.placements.len(), 2);
+        detach_consumer(observer);
+        Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), serial + 1).exit();
     }
 
     #[test]
