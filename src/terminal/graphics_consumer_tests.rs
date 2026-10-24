@@ -25,7 +25,9 @@ impl GraphicsDaemonProcess {
     fn start() -> Self {
         let dir = tempfile::TempDir::new().unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", concat!(module_path!(), "::graphics_fixture_daemon"), "--nocapture", "--test-threads=1"])
+            .args(["--ignored", "--exact"])
+            .arg(format!("{}::graphics_fixture_daemon", module_path!().split_once("::").unwrap().1))
+            .args(["--nocapture", "--test-threads=1"])
             .env("LYREL_GRAPHICS_TEST_DAEMON", dir.path())
             .env("LYREL_CONFIG_DIR", dir.path())
             .env("LYREL_DATA_DIR", dir.path())
@@ -56,7 +58,7 @@ impl GraphicsDaemonProcess {
         use crate::daemon::protocol::{ShellSpec, WinSize};
         let shell = ShellSpec {
             program: std::env::current_exe().unwrap().to_str().unwrap().into(),
-            args: vec!["--ignored".into(), "--exact".into(), concat!(module_path!(), "::graphics_fixture_sender").into(), "--nocapture".into(), "--color=never".into(), "--test-threads=1".into()],
+            args: vec!["--ignored".into(), "--exact".into(), format!("{}::graphics_fixture_sender", module_path!().split_once("::").unwrap().1), "--nocapture".into(), "--color=never".into(), "--test-threads=1".into()],
             args_are_lyrel_defaults: false,
         };
         let mut session = self.panes().spawn(None, WinSize { cols: 80, rows: 24, cell_w: 10, cell_h: 20 }, Some(shell), None, None).unwrap();
@@ -72,6 +74,7 @@ impl GraphicsDaemonProcess {
 
     fn stream(&self, pane: u64) -> Stream {
         let mut stream = crate::daemon::transport::connect_endpoint_at(&self.endpoint("daemon")).unwrap();
+        crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
         ClientMsg::Attach { pane_id: pane, size: crate::daemon::protocol::WinSize { cols: 80, rows: 24, cell_w: 10, cell_h: 20 }, allow_remote_clipboard_write: false }.encode(&mut stream).unwrap();
         stream
     }

@@ -36,7 +36,7 @@ impl GraphicsState {
             return resources;
         }
         let start = if history { -(self.term.grid.history_size() as i32) } else { 0 };
-        for row in start..i32::from(self.size.rows.max(1)) {
+        for row in start..self.term.screen_lines() as i32 {
             for slice in placeholder_row(&self.term.grid, Line(row)) {
                 if let Some(prototype) = placeholder_prototype(self.placements(), self.screen, &slice.run)
                     && slice.run.row < prototype.span_rows && slice.run.col < prototype.span_cols
