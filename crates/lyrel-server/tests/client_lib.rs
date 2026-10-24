@@ -2556,7 +2556,11 @@ mod kitty_graphics {
             let fragment: usize = fields.next().unwrap_or("0").parse().unwrap();
             match operation {
                 "SEND" => {
-                    for part in bytes.chunks(if fragment == 0 { bytes.len().max(1) } else { fragment }) {
+                    for part in bytes.chunks(if fragment == 0 {
+                        bytes.len().max(1)
+                    } else {
+                        fragment
+                    }) {
                         output.write_all(part).unwrap();
                         output.flush().unwrap();
                     }
@@ -2577,17 +2581,25 @@ mod kitty_graphics {
             for _ in 0..replies {
                 let mut reply = Vec::new();
                 while !(reply.ends_with(b"\x1b\\")
-                    || (reply.starts_with(b"\x1b[") && reply.ends_with(b"t"))) {
+                    || (reply.starts_with(b"\x1b[") && reply.ends_with(b"t")))
+                {
                     let mut byte = [0];
                     input.read_exact(&mut byte).unwrap();
                     reply.push(byte[0]);
                 }
-                write!(output, "\x1b7\x1b[1;1H\r\nKITTY_REPLY {}\r\n\x1b8", hex(&reply)).unwrap();
+                write!(
+                    output,
+                    "\x1b7\x1b[1;1H\r\nKITTY_REPLY {}\r\n\x1b8",
+                    hex(&reply)
+                )
+                .unwrap();
             }
             // Force a parser boundary and wait for its application-visible
             // answer before the text marker. Layout updates from preceding
             // ordinary text must already be queued ahead of KITTY_DONE.
-            output.write_all(b"\x1b_Ga=q,i=4294967294,f=32,s=1,v=1;/wAA/w==\x1b\\").unwrap();
+            output
+                .write_all(b"\x1b_Ga=q,i=4294967294,f=32,s=1,v=1;/wAA/w==\x1b\\")
+                .unwrap();
             output.flush().unwrap();
             let mut barrier = Vec::new();
             while !barrier.ends_with(b"\x1b\\") {
@@ -2657,7 +2669,10 @@ mod kitty_graphics {
                     assert!(self.resources.contains_key(&placement.resource));
                     self.placements.insert(placement.key, placement.clone());
                 }
-                GraphicsUpdate::Screen { screen, history_origin } => {
+                GraphicsUpdate::Screen {
+                    screen,
+                    history_origin,
+                } => {
                     self.screen = *screen;
                     self.history_origin = *history_origin;
                 }
@@ -2685,10 +2700,19 @@ mod kitty_graphics {
             self.exchange("SEND", &hex(bytes), replies, 0)
         }
 
-        fn exchange(&mut self, operation: &str, payload: &str, replies: usize, fragment: usize) -> Vec<Vec<u8>> {
+        fn exchange(
+            &mut self,
+            operation: &str,
+            payload: &str,
+            replies: usize,
+            fragment: usize,
+        ) -> Vec<Vec<u8>> {
             self.serial += 1;
             self.updates.clear();
-            let request = format!("{operation} {} {replies} {payload} {fragment}\n", self.serial);
+            let request = format!(
+                "{operation} {} {replies} {payload} {fragment}\n",
+                self.serial
+            );
             self.session.input(request.as_bytes()).unwrap();
             let marker = format!("KITTY_DONE_{}\r", self.serial);
             let mut plain = Vec::new();
@@ -2771,9 +2795,15 @@ mod kitty_graphics {
         pane.session.clear_presentation(true).unwrap();
         pane.send(b"\x1b[0m", 0);
         assert!(pane.placements.is_empty());
-        assert!(pane.resources.is_empty(), "explicit history clearing releases active retained resources");
+        assert!(
+            pane.resources.is_empty(),
+            "explicit history clearing releases active retained resources"
+        );
         pane.send(b"\x1b[?1049h\x1b[?1049l", 0);
-        assert!(pane.placements.is_empty(), "a later screen transition cannot revive cleared graphics");
+        assert!(
+            pane.placements.is_empty(),
+            "a later screen transition cannot revive cleared graphics"
+        );
     }
 
     #[test]
@@ -2781,22 +2811,51 @@ mod kitty_graphics {
         let daemon = Daemon::start();
         let _control = daemon.control("graphics-layout-reflow");
         let mut pane = Consumer::spawn(&daemon);
-        pane.session.resize(WinSize { cols: 80, rows: 24, cell_w: 8, cell_h: 16 }).unwrap();
+        pane.session
+            .resize(WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 8,
+                cell_h: 16,
+            })
+            .unwrap();
         let mut output = b"\x1b[2J\x1b[3J\x1b[H".to_vec();
         output.extend_from_slice(&[b'x'; 120]);
-        output.extend_from_slice(b"\r\nanchor \x1b_Ga=T,i=1,p=1,f=32,s=1,v=1,c=2,r=2,C=1,q=2;/wAA/w==\x1b\\");
+        output.extend_from_slice(
+            b"\r\nanchor \x1b_Ga=T,i=1,p=1,f=32,s=1,v=1,c=2,r=2,C=1,q=2;/wAA/w==\x1b\\",
+        );
         pane.send(&output, 0);
         let original = pane.placements.values().next().unwrap().clone();
-        pane.session.resize(WinSize { cols: 40, rows: 24, cell_w: 8, cell_h: 16 }).unwrap();
+        pane.session
+            .resize(WinSize {
+                cols: 40,
+                rows: 24,
+                cell_w: 8,
+                cell_h: 16,
+            })
+            .unwrap();
         pane.send(b"\x1b[0m", 0);
         let reflowed = pane.placements[&original.key].clone();
-        assert_eq!(reflowed.anchor_row, original.anchor_row + 1,
-            "120 characters occupy three rather than two text rows after narrowing");
+        assert_eq!(
+            reflowed.anchor_row,
+            original.anchor_row + 1,
+            "120 characters occupy three rather than two text rows after narrowing"
+        );
         assert_eq!(reflowed.anchor_col, original.anchor_col);
-        pane.session.resize(WinSize { cols: 40, rows: 24, cell_w: 16, cell_h: 32 }).unwrap();
+        pane.session
+            .resize(WinSize {
+                cols: 40,
+                rows: 24,
+                cell_w: 16,
+                cell_h: 32,
+            })
+            .unwrap();
         pane.send(b"\x1b[0m", 0);
         let scaled = &pane.placements[&original.key];
-        assert_eq!(scaled.anchor_row, reflowed.anchor_row, "pixel-only changes must not reflow text");
+        assert_eq!(
+            scaled.anchor_row, reflowed.anchor_row,
+            "pixel-only changes must not reflow text"
+        );
         assert_eq!((scaled.cols, scaled.rows), (2, 2));
         assert_eq!(pane.pixel(scaled), [255, 0, 0, 255]);
     }
@@ -2806,16 +2865,37 @@ mod kitty_graphics {
         let daemon = Daemon::start();
         let _control = daemon.control("graphics-layout-queries");
         let mut pane = Consumer::spawn(&daemon);
-        pane.session.resize(WinSize { cols: 63, rows: 19, cell_w: 15, cell_h: 30 }).unwrap();
+        pane.session
+            .resize(WinSize {
+                cols: 63,
+                rows: 19,
+                cell_w: 15,
+                cell_h: 30,
+            })
+            .unwrap();
         let replies = pane.send(b"\x1b[14t\x1b[16t", 2);
-        assert_eq!(replies, [b"\x1b[4;570;945t".to_vec(), b"\x1b[6;30;15t".to_vec()]);
-        pane.session.resize(WinSize { cols: 63, rows: 19, cell_w: 10, cell_h: 20 }).unwrap();
-        assert_eq!(pane.send(b"\x1b[14t\x1b[16t", 2),
-            [b"\x1b[4;380;630t".to_vec(), b"\x1b[6;20;10t".to_vec()]);
+        assert_eq!(
+            replies,
+            [b"\x1b[4;570;945t".to_vec(), b"\x1b[6;30;15t".to_vec()]
+        );
+        pane.session
+            .resize(WinSize {
+                cols: 63,
+                rows: 19,
+                cell_w: 10,
+                cell_h: 20,
+            })
+            .unwrap();
+        assert_eq!(
+            pane.send(b"\x1b[14t\x1b[16t", 2),
+            [b"\x1b[4;380;630t".to_vec(), b"\x1b[6;20;10t".to_vec()]
+        );
         // The next real Kitty query is a barrier as well as an assertion that
         // no duplicated geometry response remains in the child's input queue.
-        assert_eq!(pane.send(b"\x1b_Ga=q,i=77,f=32,s=1,v=1;/wAA/w==\x1b\\", 1),
-            [b"\x1b_Gi=77;OK\x1b\\".to_vec()]);
+        assert_eq!(
+            pane.send(b"\x1b_Ga=q,i=77,f=32,s=1,v=1;/wAA/w==\x1b\\", 1),
+            [b"\x1b_Gi=77;OK\x1b\\".to_vec()]
+        );
     }
 
     #[test]
@@ -2826,16 +2906,31 @@ mod kitty_graphics {
         pane.send(b"\x1b[2J\x1b[H\x1b[3;10r", 0);
         pane.red_at(3, 2, "a=T,i=1,p=1,c=2,r=2,C=1");
         pane.red_at(2, 8, "a=T,i=2,p=2,c=2,r=3,C=1");
-        let clipped = pane.placements.values().find(|p| p.image_id == 1).unwrap().key;
-        let crossing = pane.placements.values().find(|p| p.image_id == 2).unwrap().clone();
+        let clipped = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 1)
+            .unwrap()
+            .key;
+        let crossing = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 2)
+            .unwrap()
+            .clone();
         pane.send(b"\x1b[10;1H\n", 0);
         let p = &pane.placements[&clipped];
         assert_eq!(p.anchor_row - pane.history_origin, 1);
         assert_eq!((p.clip_top, p.clip_bottom), (1, 2));
-        assert_eq!(pane.placements[&crossing.key], crossing,
-            "a placement crossing a page margin stays fixed");
+        assert_eq!(
+            pane.placements[&crossing.key], crossing,
+            "a placement crossing a page margin stays fixed"
+        );
         pane.send(b"\n", 0);
-        assert!(!pane.placements.contains_key(&clipped), "fully clipped image cannot return");
+        assert!(
+            !pane.placements.contains_key(&clipped),
+            "fully clipped image cannot return"
+        );
         assert!(pane.placements.contains_key(&crossing.key));
     }
 
@@ -2849,7 +2944,12 @@ mod kitty_graphics {
         pane.send(b"\x1b[?1049h", 0);
         assert_eq!(pane.screen, 1);
         pane.red_at(3, 2, "a=T,i=1,p=1,C=1");
-        let alt = pane.placements.values().find(|p| p.screen == 1).unwrap().clone();
+        let alt = pane
+            .placements
+            .values()
+            .find(|p| p.screen == 1)
+            .unwrap()
+            .clone();
         assert_ne!(main.resource, alt.resource, "identities are screen-local");
         pane.send(b"\x1b[?1049l", 0);
         assert_eq!(pane.screen, 0);
@@ -2857,14 +2957,25 @@ mod kitty_graphics {
         assert!(!pane.placements.contains_key(&alt.key));
         assert!(!pane.resources.contains_key(&alt.resource));
         pane.send(b"\x1b[?1049h\x1b[?1049l\x1b[2K\x1b[1J", 0);
-        assert_eq!(pane.placements[&main.key], main, "ordinary text erasure does not delete graphics");
+        assert_eq!(
+            pane.placements[&main.key], main,
+            "ordinary text erasure does not delete graphics"
+        );
         pane.send(b"\x1b[2J", 0);
         assert!(!pane.placements.contains_key(&main.key));
         pane.red_at(2, 1, "a=T,i=2,p=2,C=1");
-        let historical = pane.placements.values().find(|p| p.image_id == 2).unwrap().key;
+        let historical = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 2)
+            .unwrap()
+            .key;
         pane.send(b"\x1b[r\x1b[24;1H", 0);
         pane.send(&b"history row\r\n".repeat(10_100), 0);
-        assert!(!pane.placements.contains_key(&historical), "expired text rows cannot drift onto live output");
+        assert!(
+            !pane.placements.contains_key(&historical),
+            "expired text rows cannot drift onto live output"
+        );
         pane.red_at(3, 2, "a=T,i=3,p=3,C=1");
         pane.send(b"\x1bc", 0);
         assert!(pane.placements.is_empty());
@@ -3289,9 +3400,13 @@ mod kitty_graphics {
             let id = 700 + index;
             let request = format!(
                 "\x1b_Ga=T,i={id},p=4,f={format},s=1,v=1,C=1{compression},m=1;{}\x1b\\between_chunks\x1b_Gm=0;{}\x1b\\after_image",
-                &payload[..4], &payload[4..]
+                &payload[..4],
+                &payload[4..]
             );
-            assert_eq!(pane.exchange("SEND", &hex(request.as_bytes()), 1, 1), [format!("\x1b_Gi={id},p=4;OK\x1b\\").into_bytes()]);
+            assert_eq!(
+                pane.exchange("SEND", &hex(request.as_bytes()), 1, 1),
+                [format!("\x1b_Gi={id},p=4;OK\x1b\\").into_bytes()]
+            );
             assert!(windows_contain(&pane.last_output, b"between_chunks"));
             assert!(windows_contain(&pane.last_output, b"after_image"));
             let placement = pane.placements.values().find(|p| p.image_id == id).unwrap();
@@ -3300,7 +3415,10 @@ mod kitty_graphics {
             if format != 100 {
                 assert_eq!(pane.pixel(placement), expected);
             } else {
-                assert!(!image.compressed, "PNG compression is normalized before admission");
+                assert!(
+                    !image.compressed,
+                    "PNG compression is normalized before admission"
+                );
                 assert_eq!(&image.data[..8], b"\x89PNG\r\n\x1a\n");
             }
         }
@@ -3309,37 +3427,83 @@ mod kitty_graphics {
             ("f=32,s=1,v=1", "!", "EINVAL"),
             ("f=32,s=1,v=1", "AAAA", "EINVAL"),
             ("f=32,s=1,v=1,o=z", "eJz7z8AAAAMAAQA=", "EINVAL"),
-            ("f=32,s=1,v=1,o=z", "eJztwQENAAAAwqD3T20PBxQAAADQuQEQAAAB", "EINVAL"),
+            (
+                "f=32,s=1,v=1,o=z",
+                "eJztwQENAAAAwqD3T20PBxQAAADQuQEQAAAB",
+                "EINVAL",
+            ),
             ("f=32,s=4294967295,v=4294967295", "AAAA", "ENOSPC"),
             ("f=100", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB", "EINVAL"),
-            ("f=100", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DQAAAEgQGALVXOsAAAAABJRU5ErkJggg==", "EINVAL"),
-            ("f=100", "iVBORw0KGgoAAAANSUhEUgAAIAEAAAABCAYAAACZiUteAAAADUlEQVR4nGP4z8DQAAAEgQGALFXOsAAAAABJRU5ErkJggg==", "ENOSPC"),
+            (
+                "f=100",
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DQAAAEgQGALVXOsAAAAABJRU5ErkJggg==",
+                "EINVAL",
+            ),
+            (
+                "f=100",
+                "iVBORw0KGgoAAAANSUhEUgAAIAEAAAABCAYAAACZiUteAAAADUlEQVR4nGP4z8DQAAAEgQGALFXOsAAAAABJRU5ErkJggg==",
+                "ENOSPC",
+            ),
             ("f=100,o=z", "AAAA", "EINVAL"),
             ("f=1,s=1,v=1", "AAAA", "ENOTSUPPORTED"),
             ("f=32,t=x,s=1,v=1", "AAAA", "ENOTSUPPORTED"),
         ] {
-            let reply = pane.send(format!("before\x1b_Ga=T,i=710,p=8,{header};{payload}\x1b\\after").as_bytes(), 1);
+            let reply = pane.send(
+                format!("before\x1b_Ga=T,i=710,p=8,{header};{payload}\x1b\\after").as_bytes(),
+                1,
+            );
             assert!(reply[0].starts_with(format!("\x1b_Gi=710,p=8;{error}:").as_bytes()));
-            assert_eq!(pane.placements, retained, "rejection preserves unrelated images");
+            assert_eq!(
+                pane.placements, retained,
+                "rejection preserves unrelated images"
+            );
             assert!(windows_contain(&pane.last_output, b"beforeafter"));
         }
-        let query = pane.send(b"\x1b_Ga=q,i=711,p=9,f=32,s=1,v=1,m=1;/wAA\x1b\\\x1b_Gm=0;gA==\x1b\\", 1);
+        let query = pane.send(
+            b"\x1b_Ga=q,i=711,p=9,f=32,s=1,v=1,m=1;/wAA\x1b\\\x1b_Gm=0;gA==\x1b\\",
+            1,
+        );
         assert_eq!(query, [b"\x1b_Gi=711,p=9;OK\x1b\\".to_vec()]);
         assert_eq!(pane.placements, retained, "query never stores or displays");
         // Quiet and anonymous commands must not leave a reply queued in stdin:
         // the following SEND is parsed by the actual child, not a mock echo.
-        pane.send(b"\x1b_Ga=q,q=2,i=712,f=32,s=1,v=1;!\x1b\\\x1b_Ga=t,f=32,s=1,v=1;/wAAgA==\x1b\\", 0);
-        pane.send(b"\x1b_Ga=t,i=713,s=1,v=1,m=1;/wAA\x1b\\\x1b_Ga=d,d=I,i=713\x1b\\", 0);
+        pane.send(
+            b"\x1b_Ga=q,q=2,i=712,f=32,s=1,v=1;!\x1b\\\x1b_Ga=t,f=32,s=1,v=1;/wAAgA==\x1b\\",
+            0,
+        );
+        pane.send(
+            b"\x1b_Ga=t,i=713,s=1,v=1,m=1;/wAA\x1b\\\x1b_Ga=d,d=I,i=713\x1b\\",
+            0,
+        );
         assert!(pane.placements.values().all(|p| p.image_id != 713));
         pane.red("a=T,i=714,C=1");
-        assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 714).unwrap()), [255, 0, 0, 255]);
+        assert_eq!(
+            pane.pixel(
+                pane.placements
+                    .values()
+                    .find(|p| p.image_id == 714)
+                    .unwrap()
+            ),
+            [255, 0, 0, 255]
+        );
         pane.send(b"subsequent_input_and_text_survive", 0);
-        assert!(windows_contain(&pane.last_output, b"subsequent_input_and_text_survive"));
+        assert!(windows_contain(
+            &pane.last_output,
+            b"subsequent_input_and_text_survive"
+        ));
         let oversized = pane.exchange("FLOOD", "00", 1, 0);
         assert!(oversized[0].starts_with(b"\x1b_Gi=720;EINVAL:"));
         assert!(windows_contain(&pane.last_output, b"after_oversize"));
         pane.red("a=T,i=721,C=1");
-        assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 721).unwrap()), [255, 0, 0, 255]);
+        assert_eq!(
+            pane.pixel(
+                pane.placements
+                    .values()
+                    .find(|p| p.image_id == 721)
+                    .unwrap()
+            ),
+            [255, 0, 0, 255]
+        );
     }
 
     #[test]
@@ -3347,14 +3511,22 @@ mod kitty_graphics {
         let daemon = Daemon::start();
         let _control = daemon.control("graphics-capabilities");
         let mut pane = Consumer::spawn(&daemon);
-        assert_eq!(pane.send(b"\x1b_Ga=q,i=730,p=3,f=24,s=1,v=1;AAAA\x1b\\", 1),
-            [b"\x1b_Gi=730,p=3;OK\x1b\\".to_vec()]);
+        assert_eq!(
+            pane.send(b"\x1b_Ga=q,i=730,p=3,f=24,s=1,v=1;AAAA\x1b\\", 1),
+            [b"\x1b_Gi=730,p=3;OK\x1b\\".to_vec()]
+        );
         assert!(pane.resources.is_empty(), "query cannot retain its fixture");
         for medium in ["f", "t", "s"] {
-            let replies = pane.send(format!("\x1b_Ga=q,i=731,p=4,f=24,s=1,v=1,t={medium};L2RvZXMtbm90LWV4aXN0\x1b\\").as_bytes(), 1);
+            let replies = pane.send(
+                format!("\x1b_Ga=q,i=731,p=4,f=24,s=1,v=1,t={medium};L2RvZXMtbm90LWV4aXN0\x1b\\")
+                    .as_bytes(),
+                1,
+            );
             let error = if cfg!(unix) { "EBADF" } else { "ENOTSUPPORTED" };
-            assert!(replies[0].starts_with(format!("\x1b_Gi=731,p=4;{error}:").as_bytes()),
-                "host-local capability must actually attempt to read the named object");
+            assert!(
+                replies[0].starts_with(format!("\x1b_Gi=731,p=4;{error}:").as_bytes()),
+                "host-local capability must actually attempt to read the named object"
+            );
         }
         for command in [
             "a=q,i=732,p=5,f=1,s=1,v=1;AAAA",
@@ -3374,22 +3546,47 @@ mod kitty_graphics {
             "a=q,i=734,q=2,f=24,s=1,v=1;!",
             "a=q,i=734,I=8,q=2,f=24,s=1,v=1;AAAA",
         ] {
-            assert!(pane.send(format!("\x1b_G{command}\x1b\\").as_bytes(), 0).is_empty());
+            assert!(
+                pane.send(format!("\x1b_G{command}\x1b\\").as_bytes(), 0)
+                    .is_empty()
+            );
         }
         for interruption in ["\x18", "\x1a", "\x1b[31m", "\x1b_Ga=d,d=i,i=735\x1b\\"] {
-            let request = format!("\x1b_Ga=T,i=735,s=1,v=1,m=1;/wAA\x1b\\\x1b_Gm=0;bad{interruption}\x1b_Ga=T,i=736,s=1,v=1,C=1,q=2;/wAAgA==\x1b\\recovered");
+            let request = format!(
+                "\x1b_Ga=T,i=735,s=1,v=1,m=1;/wAA\x1b\\\x1b_Gm=0;bad{interruption}\x1b_Ga=T,i=736,s=1,v=1,C=1,q=2;/wAAgA==\x1b\\recovered"
+            );
             let replies = pane.send(request.as_bytes(), 1);
             assert!(replies[0].starts_with(b"\x1b_Gi=735;EINVAL:"));
             assert!(pane.placements.values().all(|p| p.image_id != 735));
-            assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 736).unwrap()), [255, 0, 0, 128]);
+            assert_eq!(
+                pane.pixel(
+                    pane.placements
+                        .values()
+                        .find(|p| p.image_id == 736)
+                        .unwrap()
+                ),
+                [255, 0, 0, 128]
+            );
             assert!(windows_contain(&pane.last_output, b"recovered"));
         }
         pane.send(b"\x1b_Ga=T,i=737,s=1,v=1,m=1;/wAA\x1b\\between\x1b_Ga=d,d=i,i=736\x1b\\\x1b_Gm=0;gA==\x1b\\after_delete", 0);
-        assert!(pane.placements.values().all(|p| p.image_id != 736 && p.image_id != 737));
+        assert!(
+            pane.placements
+                .values()
+                .all(|p| p.image_id != 736 && p.image_id != 737)
+        );
         assert!(windows_contain(&pane.last_output, b"between"));
         assert!(windows_contain(&pane.last_output, b"after_delete"));
         pane.red("a=T,i=738,C=1");
-        assert_eq!(pane.pixel(pane.placements.values().find(|p| p.image_id == 738).unwrap()), [255, 0, 0, 255]);
+        assert_eq!(
+            pane.pixel(
+                pane.placements
+                    .values()
+                    .find(|p| p.image_id == 738)
+                    .unwrap()
+            ),
+            [255, 0, 0, 255]
+        );
     }
 
     #[test]
@@ -3404,16 +3601,24 @@ mod kitty_graphics {
             (0, "q=1,m=0", "!", 1),
             (2, "q=0,m=0", "!", 1),
         ] {
-            let request = format!("\x1b_Ga=q,i=739,p=7,s=1,v=1,q={initial_quiet},m=1;/wAA\x1b\\\x1b_G{continuation};{payload}\x1b\\after_continuation");
+            let request = format!(
+                "\x1b_Ga=q,i=739,p=7,s=1,v=1,q={initial_quiet},m=1;/wAA\x1b\\\x1b_G{continuation};{payload}\x1b\\after_continuation"
+            );
             let actual = pane.send(request.as_bytes(), replies);
             assert_eq!(actual.len(), replies);
             if replies != 0 {
                 assert!(actual[0].starts_with(b"\x1b_Gi=739,p=7;EINVAL:"));
             }
-            assert!(pane.resources.is_empty(), "queries must not retain resources");
+            assert!(
+                pane.resources.is_empty(),
+                "queries must not retain resources"
+            );
             assert!(windows_contain(&pane.last_output, b"after_continuation"));
         }
         pane.send(b"input_after_quiet_continuation", 0);
-        assert!(windows_contain(&pane.last_output, b"input_after_quiet_continuation"));
+        assert!(windows_contain(
+            &pane.last_output,
+            b"input_after_quiet_continuation"
+        ));
     }
 }

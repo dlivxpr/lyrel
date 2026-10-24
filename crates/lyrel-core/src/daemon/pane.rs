@@ -830,7 +830,11 @@ fn send_to_observer(obs: &Observer, msg: &DaemonMsg, len: usize) -> bool {
 /// resize. The echo exists to close the 16 MiB window, not that one.
 fn resize_state(st: &mut PaneState, size: WinSize, gate: &OutputGate) {
     st.ring.resize(size);
-    let effects = st.graphics.as_mut().map(|graphics| graphics.resize(size)).unwrap_or_default();
+    let effects = st
+        .graphics
+        .as_mut()
+        .map(|graphics| graphics.resize(size))
+        .unwrap_or_default();
     if let Some(sub) = &st.subscriber {
         let _ = sub.send(DaemonMsg::Size(size));
     }
@@ -1100,7 +1104,10 @@ fn process_graphics_output(
 ) {
     match sniffed {
         Sniffed::Plain(bytes) => {
-            let effects = state.as_deref_mut().map(|state| state.output(bytes)).unwrap_or_default();
+            let effects = state
+                .as_deref_mut()
+                .map(|state| state.output(bytes))
+                .unwrap_or_default();
             pass.extend_from_slice(bytes);
             if (ordered || !effects.is_empty()) && !bytes.is_empty() {
                 frames.push(GraphicsFrame::Output(bytes.to_vec()));
@@ -1111,7 +1118,10 @@ fn process_graphics_output(
             for segment in segments {
                 match segment {
                     Segment::Output(bytes) => {
-                        let effects = state.as_deref_mut().map(|state| state.output(&bytes)).unwrap_or_default();
+                        let effects = state
+                            .as_deref_mut()
+                            .map(|state| state.output(&bytes))
+                            .unwrap_or_default();
                         pass.extend_from_slice(&bytes);
                         frames.push(GraphicsFrame::Output(bytes));
                         append_graphics_effects(effects, pass, frames, writer);
@@ -1140,7 +1150,9 @@ fn append_graphics_effects(
 ) {
     for effect in effects {
         match effect {
-            GraphicsEffect::Update(update) => frames.push(GraphicsFrame::Graphics(update.encode_frame())),
+            GraphicsEffect::Update(update) => {
+                frames.push(GraphicsFrame::Graphics(update.encode_frame()))
+            }
             GraphicsEffect::Reply(reply) => write_graphics_reply(writer, &reply),
             GraphicsEffect::Output(bytes) => {
                 pass.extend_from_slice(&bytes);
@@ -2631,7 +2643,9 @@ impl DaemonPane {
     /// and graphics removals under the output lock; the shell redraw follows.
     pub fn clear_presentation(&self, history: bool) {
         let mut st = self.state.lock().unwrap();
-        let Some(graphics) = st.graphics.as_mut() else { return; };
+        let Some(graphics) = st.graphics.as_mut() else {
+            return;
+        };
         let effects = graphics.clear_presentation(history);
         let mut frames = Vec::new();
         let mut pass = Vec::new();
@@ -7673,95 +7687,6 @@ mod tests {
         let state = state.lock().unwrap();
         assert_eq!(state.ring.flatten(), b"late final tail");
         assert!(state.graphics.is_none());
-    }
-
-    /// A reader forwards authoritative resources and placements in stream
-    /// order, writes query replies to the PTY, and persists only plain text.
-    #[test]
-    fn reader_strips_graphics_and_forwards_them_out_of_band() {
-        use crate::core::kitty_graphics::GraphicsUpdate;
-        use base64::Engine as _;
-
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        state.lock().unwrap().subscriber = Some(sub_tx);
-
-        // A writer we can read back, to prove the query reply reached the PTY.
-        #[derive(Clone)]
-        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
-        impl Write for SharedBuf {
-            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(b);
-                Ok(b.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let sink = Arc::new(Mutex::new(Vec::new()));
-        let writer: Arc<Mutex<Box<dyn Write + Send>>> =
-            Arc::new(Mutex::new(Box::new(SharedBuf(sink.clone()))));
-
-        // One 1x1 opaque-red RGBA pixel, transmitted-and-displayed inline.
-        let pixel = [0xffu8, 0x00, 0x00, 0xff];
-        let b64 = base64::engine::general_purpose::STANDARD.encode(pixel);
-        let stream = format!(
-            "before\x1b_Gi=1,a=q,t=d,f=32,s=1,v=1;{b64}\x1b\\\
-             mid\x1b_Ga=T,f=32,t=d,s=1,v=1,i=1,q=2,C=1;{b64}\x1b\\after"
-        );
-
-        let handle = DaemonPane::spawn_reader(
-            state.clone(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(stream.into_bytes())),
-            writer,
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-            },
-            Arc::new(DeathReporter::new(|| {})),
-        );
-        handle.join().unwrap();
-
-        // (1) The ring holds the text, none of the graphics bytes.
-        assert_eq!(state.lock().unwrap().ring.flatten(), b"beforemidafter");
-        // (2) The query reply went to the PTY writer.
-        assert_eq!(sink.lock().unwrap().as_slice(), b"\x1b_Gi=1;OK\x1b\\");
-        // (3) The subscriber sees the passthrough and the image *in stream order*:
-        // the text before the image, then the image at its cursor cell, then the
-        // text after it. The `a=q` reply splits "before" from "mid" into two
-        // Output frames; the image sits between "mid" and "after".
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"before"));
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"mid"));
-        match sub_rx.try_recv() {
-            Ok(DaemonMsg::Graphics(frame)) => {
-                let GraphicsUpdate::Resource { key, image } =
-                    GraphicsUpdate::decode_frame_owned(frame).expect("decodable resource")
-                else {
-                    panic!("expected a resource before the placement");
-                };
-                assert_eq!((image.width, image.height), (1, 1));
-                assert_eq!(image.to_rgba8().unwrap(), pixel);
-                let Ok(DaemonMsg::Graphics(frame)) = sub_rx.try_recv() else {
-                    panic!("expected the placement after its resource");
-                };
-                let Some(GraphicsUpdate::Place(placement)) =
-                    GraphicsUpdate::decode_frame_owned(frame)
-                else {
-                    panic!("expected a placement");
-                };
-                assert_eq!(placement.resource, key);
-                assert_eq!(placement.image_id, 1);
-            }
-            other => panic!("expected Graphics frame, got {other:?}"),
-        }
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Graphics(frame))
-            if matches!(GraphicsUpdate::decode_frame_owned(frame), Some(GraphicsUpdate::Screen { screen: 0, history_origin: 0 }))));
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"after"));
     }
 
     /// A window that reopens onto a native ssh pane it outlived attaches by

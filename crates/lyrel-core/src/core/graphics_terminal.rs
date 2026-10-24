@@ -2,6 +2,7 @@
 //! grid. Handler callbacks attach graphics lifetime to the same text mutations.
 
 use super::*;
+use rio_unicode::UnicodeWidthChar as _;
 use rio_vt::ansi::mode::{Mode, PrivateMode};
 use rio_vt::ansi::{ClearMode, LineClearMode, TabulationClearMode};
 use rio_vt::config::colors::ColorRgb;
@@ -10,7 +11,6 @@ use rio_vt::crosswords::grid::row::SemanticPrompt;
 use rio_vt::crosswords::pos::{CharsetIndex, Column, Line, StandardCharset};
 use rio_vt::crosswords::square::Hyperlink;
 use rio_vt::performer::handler::{Handler, ScpCharPath, ScpUpdateMode};
-use rio_unicode::UnicodeWidthChar as _;
 
 impl GraphicsState {
     /// The live screen's first text row in stable, oldest-first coordinates.
@@ -18,7 +18,9 @@ impl GraphicsState {
         self.term.grid.lines_evicted() as i64 + self.term.grid.history_size() as i64
     }
 
-    pub fn active_screen(&self) -> u64 { self.screen }
+    pub fn active_screen(&self) -> u64 {
+        self.screen
+    }
 
     pub fn placements(&self) -> impl Iterator<Item = &Placement> {
         self.placements.values().map(|p| &p.placement)
@@ -26,7 +28,11 @@ impl GraphicsState {
     /// Explicit user clear also releases the active screen's retained uploads
     /// when history is discarded; a plain ED2 retains upload identity.
     pub fn clear_presentation(&mut self, history: bool) -> Vec<GraphicsEffect> {
-        let bytes: &[u8] = if history { b"\x1b[2J\x1b[3J" } else { b"\x1b[2J" };
+        let bytes: &[u8] = if history {
+            b"\x1b[2J\x1b[3J"
+        } else {
+            b"\x1b[2J"
+        };
         let mut effects = vec![GraphicsEffect::Output(bytes.to_vec())];
         effects.extend(self.output(bytes));
         if history {
@@ -38,25 +44,32 @@ impl GraphicsState {
         effects
     }
 
-
     pub(super) fn finish_layout(&mut self, screen_changed: bool) -> Vec<GraphicsEffect> {
         let mut effects = Vec::new();
         if !self.removed.is_empty() || !self.freed.is_empty() {
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
-                placements: std::mem::take(&mut self.removed), resources: std::mem::take(&mut self.freed),
+                placements: std::mem::take(&mut self.removed),
+                resources: std::mem::take(&mut self.freed),
             }));
         }
         for key in std::mem::take(&mut self.dirty) {
             if let Some(p) = self.placements.get(&key) {
-                effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(p.placement.clone())));
+                effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(
+                    p.placement.clone(),
+                )));
             }
         }
         if screen_changed {
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Screen {
-                screen: self.screen, history_origin: self.history_origin(),
+                screen: self.screen,
+                history_origin: self.history_origin(),
             }));
         }
-        effects.extend(std::mem::take(&mut self.replies).into_iter().map(GraphicsEffect::Reply));
+        effects.extend(
+            std::mem::take(&mut self.replies)
+                .into_iter()
+                .map(GraphicsEffect::Reply),
+        );
         effects
     }
 
@@ -66,14 +79,18 @@ impl GraphicsState {
                 self.removed.push(*key);
                 self.dirty.remove(key);
                 false
-            } else { true }
+            } else {
+                true
+            }
         });
     }
 
     pub(super) fn expire_history(&mut self) {
         let screen = self.screen;
         let oldest = self.term.grid.lines_evicted() as i64;
-        self.discard_placements(|p| p.screen == screen && p.anchor_row + i64::from(p.clip_bottom) <= oldest);
+        self.discard_placements(|p| {
+            p.screen == screen && p.anchor_row + i64::from(p.clip_bottom) <= oldest
+        });
     }
 
     pub(super) fn resize_layout(&mut self, size: WinSize) {
@@ -84,19 +101,37 @@ impl GraphicsState {
         // resize: resources, ordering and retained placements stay here.
         for p in self.placements.values().map(|p| &p.placement) {
             let marker = AtlasPlacement {
-                image_key: p.key, abs_row: p.anchor_row, col: p.anchor_col as usize,
-                columns: 1, rows: 1, src_x: 0, src_y: 0, src_width: 1, src_height: 1,
-                total_width: 1, total_height: 1, insert_cell_w: 1, insert_cell_h: 1,
+                image_key: p.key,
+                abs_row: p.anchor_row,
+                col: p.anchor_col as usize,
+                columns: 1,
+                rows: 1,
+                src_x: 0,
+                src_y: 0,
+                src_width: 1,
+                src_height: 1,
+                total_width: 1,
+                total_height: 1,
+                insert_cell_w: 1,
+                insert_cell_h: 1,
             };
             if p.screen == self.screen {
                 self.term.graphics.atlas_placements.push(marker);
             } else {
-                self.term.graphics.kitty_inactive_screen.atlas_placements.push(marker);
+                self.term
+                    .graphics
+                    .kitty_inactive_screen
+                    .atlas_placements
+                    .push(marker);
             }
         }
-        self.term.resize(CrosswordsSize::new(usize::from(size.cols.max(1)), usize::from(size.rows.max(1))));
+        self.term.resize(CrosswordsSize::new(
+            usize::from(size.cols.max(1)),
+            usize::from(size.rows.max(1)),
+        ));
         let active = std::mem::take(&mut self.term.graphics.atlas_placements);
-        let inactive = std::mem::take(&mut self.term.graphics.kitty_inactive_screen.atlas_placements);
+        let inactive =
+            std::mem::take(&mut self.term.graphics.kitty_inactive_screen.atlas_placements);
         let mut retained = BTreeSet::new();
         for marker in active.into_iter().chain(inactive) {
             if let Some(p) = self.placements.get_mut(&marker.image_key) {
@@ -107,24 +142,43 @@ impl GraphicsState {
         }
         self.discard_placements(|p| !retained.contains(&p.key));
         self.size = size;
-        if grid_changed { self.region = 0..i32::from(size.rows.max(1)); }
+        if grid_changed {
+            self.region = 0..i32::from(size.rows.max(1));
+        }
         // A new font or scale changes the occupied span even when rows/cols
         // are unchanged. Recompute from retained request/crop, not old pixels.
-        let geometries: Vec<_> = self.placements.iter().filter_map(|(key, p)| {
-            let p = &p.placement;
-            let c = Control { cols: p.cols, rows: p.rows, x: p.x, y: p.y,
-                w: p.w, h: p.h, offset_x: p.offset_x.min(u32::from(size.cell_w.max(1))-1),
-                offset_y: p.offset_y.min(u32::from(size.cell_h.max(1))-1), ..Control::default() };
-            self.geometry(&c, &self.resources.get(&p.resource)?.image).map(|(_, _, cols, rows)| (*key, cols, rows))
-        }).collect();
+        let geometries: Vec<_> = self
+            .placements
+            .iter()
+            .filter_map(|(key, p)| {
+                let p = &p.placement;
+                let c = Control {
+                    cols: p.cols,
+                    rows: p.rows,
+                    x: p.x,
+                    y: p.y,
+                    w: p.w,
+                    h: p.h,
+                    offset_x: p.offset_x.min(u32::from(size.cell_w.max(1)) - 1),
+                    offset_y: p.offset_y.min(u32::from(size.cell_h.max(1)) - 1),
+                    ..Control::default()
+                };
+                self.geometry(&c, &self.resources.get(&p.resource)?.image)
+                    .map(|(_, _, cols, rows)| (*key, cols, rows))
+            })
+            .collect();
         for (key, cols, rows) in geometries {
             let p = &mut self.placements.get_mut(&key).unwrap().placement;
             let bottom_was_full = p.clip_bottom == p.span_rows;
             p.span_cols = cols;
             p.span_rows = rows;
-            if bottom_was_full { p.clip_bottom = rows; } else { p.clip_bottom = p.clip_bottom.min(rows); }
-            p.offset_x = p.offset_x.min(u32::from(size.cell_w.max(1))-1);
-            p.offset_y = p.offset_y.min(u32::from(size.cell_h.max(1))-1);
+            if bottom_was_full {
+                p.clip_bottom = rows;
+            } else {
+                p.clip_bottom = p.clip_bottom.min(rows);
+            }
+            p.offset_x = p.offset_x.min(u32::from(size.cell_w.max(1)) - 1);
+            p.offset_y = p.offset_y.min(u32::from(size.cell_h.max(1)) - 1);
             self.dirty.insert(key);
         }
         self.expire_history();
@@ -133,24 +187,33 @@ impl GraphicsState {
     /// Scroll only graphics wholly contained in the affected page. Preserve
     /// the full texture mapping while permanently clipping the departing edge.
     fn scroll_graphics(&mut self, start: i32, end: i32, delta: i32, old_base: i64) {
-        if delta == 0 || self.placements.is_empty() { return; }
+        if delta == 0 || self.placements.is_empty() {
+            return;
+        }
         let base = self.history_origin();
         let shift = base - old_base;
         let top = old_base + i64::from(start);
         let bottom = old_base + i64::from(end);
-        let keep_history = self.screen == 0 && start == 0 && end == i32::from(self.size.rows.max(1)) && delta < 0;
+        let keep_history =
+            self.screen == 0 && start == 0 && end == i32::from(self.size.rows.max(1)) && delta < 0;
         // A full main-screen scroll advances the viewport over stable text
         // rows, including a picture straddling the history/live boundary.
-        if keep_history { return; }
+        if keep_history {
+            return;
+        }
         for (key, p) in &mut self.placements {
             let p = &mut p.placement;
-            if p.screen != self.screen { continue; }
+            if p.screen != self.screen {
+                continue;
+            }
             let pt = p.anchor_row + i64::from(p.clip_top);
             let pb = p.anchor_row + i64::from(p.clip_bottom);
             if pt >= top && pb <= bottom {
                 p.anchor_row += i64::from(delta) + shift;
                 p.clip_top = p.clip_top.max((top + shift - p.anchor_row).max(0) as u32);
-                p.clip_bottom = p.clip_bottom.min((bottom + shift - p.anchor_row).max(0) as u32);
+                p.clip_bottom = p
+                    .clip_bottom
+                    .min((bottom + shift - p.anchor_row).max(0) as u32);
                 self.dirty.insert(*key);
             } else if shift != 0 && pb > old_base {
                 // Fixed rows outside a top-origin scrolling region must not
@@ -165,16 +228,27 @@ impl GraphicsState {
     fn index_scroll(&mut self, reverse: bool, action: impl FnOnce(&mut Crosswords<VoidListener>)) {
         let row = self.term.grid.cursor.pos.row.0;
         let base = self.history_origin();
-        let delta = if reverse && row == self.region.start { 1 }
-            else if !reverse && row + 1 == self.region.end { -1 } else { 0 };
+        let delta = if reverse && row == self.region.start {
+            1
+        } else if !reverse && row + 1 == self.region.end {
+            -1
+        } else {
+            0
+        };
         action(&mut self.term);
         self.scroll_graphics(self.region.start, self.region.end, delta, base);
     }
 
     fn discard_resources(&mut self, screen: Option<u64>) {
-        let keys: Vec<_> = self.resources.iter().filter_map(|(key, r)| {
-            screen.is_none_or(|screen| r.screen == screen).then_some(*key)
-        }).collect();
+        let keys: Vec<_> = self
+            .resources
+            .iter()
+            .filter_map(|(key, r)| {
+                screen
+                    .is_none_or(|screen| r.screen == screen)
+                    .then_some(*key)
+            })
+            .collect();
         for key in keys {
             if let Some(r) = self.resources.remove(&key) {
                 self.encoded_bytes -= r.image.data.len();
@@ -185,8 +259,14 @@ impl GraphicsState {
     }
 
     fn sync_screen(&mut self) {
-        let screen = u64::from(self.term.mode().contains(rio_vt::crosswords::Mode::ALT_SCREEN));
-        if screen == self.screen { return; }
+        let screen = u64::from(
+            self.term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::ALT_SCREEN),
+        );
+        if screen == self.screen {
+            return;
+        }
         // Alternate graphics are a bounded, transient screen. Clear on both
         // edges so old in-flight decodes cannot revive a previous invocation.
         self.discard_placements(|p| p.screen == 1);
@@ -197,23 +277,39 @@ impl GraphicsState {
 
 impl Handler for GraphicsState {
     fn input(&mut self, c: char) {
-        if self.placements.is_empty() { self.term.input(c); return; }
+        if self.placements.is_empty() {
+            self.term.input(c);
+            return;
+        }
         let base = self.history_origin();
         let width = c.width().unwrap_or(0);
         let wraps = width != 0
-            && self.term.mode().contains(rio_vt::crosswords::Mode::LINE_WRAP)
+            && self
+                .term
+                .mode()
+                .contains(rio_vt::crosswords::Mode::LINE_WRAP)
             && (self.term.grid.cursor.should_wrap
                 || self.term.grid.cursor.pos.col.0 + width > self.term.grid.columns())
             && self.term.grid.cursor.pos.row.0 + 1 == self.region.end;
         self.term.input(c);
-        if wraps { self.scroll_graphics(self.region.start, self.region.end, -1, base); }
+        if wraps {
+            self.scroll_graphics(self.region.start, self.region.end, -1, base);
+        }
     }
     fn input_str(&mut self, s: &str) {
-        if self.placements.is_empty() { self.term.input_str(s); }
-        else { for c in s.chars() { self.input(c); } }
+        if self.placements.is_empty() {
+            self.term.input_str(s);
+        } else {
+            for c in s.chars() {
+                self.input(c);
+            }
+        }
     }
     fn input_ascii_str(&mut self, mut s: &str) {
-        if self.placements.is_empty() { self.term.input_ascii_str(s); return; }
+        if self.placements.is_empty() {
+            self.term.input_ascii_str(s);
+            return;
+        }
         while !s.is_empty() {
             if self.term.grid.cursor.should_wrap {
                 self.input(char::from(s.as_bytes()[0]));
@@ -221,47 +317,90 @@ impl Handler for GraphicsState {
             } else {
                 // Batch through a row; only its wrap boundary needs a graphics
                 // callback. Ordinary ASCII output keeps Rio's fast bulk path.
-                let end = s.len().min(self.term.grid.columns() - self.term.grid.cursor.pos.col.0);
+                let end = s
+                    .len()
+                    .min(self.term.grid.columns() - self.term.grid.cursor.pos.col.0);
                 self.term.input_ascii_str(&s[..end]);
                 s = &s[end..];
             }
         }
     }
     fn input_codepoints(&mut self, codepoints: &[u32]) {
-        if self.placements.is_empty() { self.term.input_codepoints(codepoints); }
-        else { for cp in codepoints { if let Some(c) = char::from_u32(*cp) { self.input(c); } } }
+        if self.placements.is_empty() {
+            self.term.input_codepoints(codepoints);
+        } else {
+            for cp in codepoints {
+                if let Some(c) = char::from_u32(*cp) {
+                    self.input(c);
+                }
+            }
+        }
     }
-    fn linefeed(&mut self) { self.index_scroll(false, |t| t.linefeed()); }
-    fn newline(&mut self) { self.index_scroll(false, |t| t.newline()); }
-    fn reverse_index(&mut self) { self.index_scroll(true, |t| t.reverse_index()); }
+    fn linefeed(&mut self) {
+        self.index_scroll(false, |t| t.linefeed());
+    }
+    fn newline(&mut self) {
+        self.index_scroll(false, |t| t.newline());
+    }
+    fn reverse_index(&mut self) {
+        self.index_scroll(true, |t| t.reverse_index());
+    }
     fn scroll_up(&mut self, rows: usize) {
         let base = self.history_origin();
         self.term.scroll_up(rows);
-        self.scroll_graphics(self.region.start, self.region.end, -(rows.min((self.region.end-self.region.start) as usize) as i32), base);
+        self.scroll_graphics(
+            self.region.start,
+            self.region.end,
+            -(rows.min((self.region.end - self.region.start) as usize) as i32),
+            base,
+        );
     }
     fn scroll_down(&mut self, rows: usize) {
         let base = self.history_origin();
         self.term.scroll_down(rows);
-        self.scroll_graphics(self.region.start, self.region.end, rows.min((self.region.end-self.region.start) as usize) as i32, base);
+        self.scroll_graphics(
+            self.region.start,
+            self.region.end,
+            rows.min((self.region.end - self.region.start) as usize) as i32,
+            base,
+        );
     }
     fn insert_blank_lines(&mut self, count: usize) {
         let row = self.term.grid.cursor.pos.row.0;
         let base = self.history_origin();
         self.term.insert_blank_lines(count);
-        if self.region.contains(&row) { self.scroll_graphics(row, self.region.end, count.min((self.region.end-row) as usize) as i32, base); }
+        if self.region.contains(&row) {
+            self.scroll_graphics(
+                row,
+                self.region.end,
+                count.min((self.region.end - row) as usize) as i32,
+                base,
+            );
+        }
     }
     fn delete_lines(&mut self, count: usize) {
         let row = self.term.grid.cursor.pos.row.0;
         let base = self.history_origin();
         self.term.delete_lines(count);
-        if self.region.contains(&row) { self.scroll_graphics(row, self.region.end, -(count.min((self.region.end-row) as usize) as i32), base); }
+        if self.region.contains(&row) {
+            self.scroll_graphics(
+                row,
+                self.region.end,
+                -(count.min((self.region.end - row) as usize) as i32),
+                base,
+            );
+        }
     }
     fn clear_screen(&mut self, mode: ClearMode) {
         let screen = self.screen;
         let base = self.history_origin();
         let end = base + i64::from(self.size.rows.max(1));
         match mode {
-            ClearMode::All => self.discard_placements(|p| p.screen == screen && p.anchor_row + i64::from(p.clip_bottom) > base && p.anchor_row + i64::from(p.clip_top) < end),
+            ClearMode::All => self.discard_placements(|p| {
+                p.screen == screen
+                    && p.anchor_row + i64::from(p.clip_bottom) > base
+                    && p.anchor_row + i64::from(p.clip_top) < end
+            }),
             ClearMode::Saved => {
                 for (key, p) in &mut self.placements {
                     let p = &mut p.placement;
@@ -292,18 +431,27 @@ impl Handler for GraphicsState {
         self.sync_screen();
     }
     fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>) {
-        let bottom = bottom.unwrap_or(usize::from(self.size.rows.max(1))).min(usize::from(self.size.rows.max(1)));
-        if top.max(1) < bottom { self.region = top.max(1) as i32 - 1..bottom as i32; }
+        let bottom = bottom
+            .unwrap_or(usize::from(self.size.rows.max(1)))
+            .min(usize::from(self.size.rows.max(1)));
+        if top.max(1) < bottom {
+            self.region = top.max(1) as i32 - 1..bottom as i32;
+        }
         self.term.set_scrolling_region(top, Some(bottom));
     }
     fn text_area_size_pixels(&mut self) {
         let height = u32::from(self.size.rows) * u32::from(self.size.cell_h);
         let width = u32::from(self.size.cols) * u32::from(self.size.cell_w);
-        if width != 0 && height != 0 { self.replies.push(format!("\x1b[4;{height};{width}t").into_bytes()); }
+        if width != 0 && height != 0 {
+            self.replies
+                .push(format!("\x1b[4;{height};{width}t").into_bytes());
+        }
     }
     fn cells_size_pixels(&mut self) {
         let (w, h) = (self.size.cell_w, self.size.cell_h);
-        if w != 0 && h != 0 { self.replies.push(format!("\x1b[6;{h};{w}t").into_bytes()); }
+        if w != 0 && h != 0 {
+            self.replies.push(format!("\x1b[6;{h};{w}t").into_bytes());
+        }
     }
     fn set_title(&mut self, title: Option<String>) {
         self.term.set_title(title);

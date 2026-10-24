@@ -1367,7 +1367,9 @@ fn stream_observer(
 fn observe_loop<R: std::io::Read>(read_stream: &mut R, mut refuse: impl FnMut(DaemonMsg) -> bool) {
     loop {
         match ClientMsg::read(read_stream) {
-            Ok(ClientMsg::Input(_)) | Ok(ClientMsg::Resize(_)) | Ok(ClientMsg::ClearPresentation { .. }) => {
+            Ok(ClientMsg::Input(_))
+            | Ok(ClientMsg::Resize(_))
+            | Ok(ClientMsg::ClearPresentation { .. }) => {
                 if !refuse(DaemonMsg::Error(
                     "this connection is a read-only observer; attach to write".to_string(),
                 )) {
@@ -1418,7 +1420,9 @@ fn run_stream(
                     pane.write_input(&bytes);
                 }
                 ClientMsg::ClearPresentation { history } => {
-                    if !pane.controls(epoch) { break 'conn; }
+                    if !pane.controls(epoch) {
+                        break 'conn;
+                    }
                     pane.clear_presentation(history);
                 }
                 ClientMsg::Resize(size) => {
@@ -1594,7 +1598,9 @@ mod tests {
             .encode(&mut wire)
             .unwrap();
         ClientMsg::Resize(size).encode(&mut wire).unwrap();
-        ClientMsg::ClearPresentation { history: true }.encode(&mut wire).unwrap();
+        ClientMsg::ClearPresentation { history: true }
+            .encode(&mut wire)
+            .unwrap();
         ClientMsg::QueryProcs { pane_id: 1 }
             .encode(&mut wire)
             .unwrap();

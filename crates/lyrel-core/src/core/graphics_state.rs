@@ -43,7 +43,10 @@ pub enum GraphicsUpdate {
         image: Arc<Image>,
     },
     Place(Placement),
-    Screen { screen: u64, history_origin: i64 },
+    Screen {
+        screen: u64,
+        history_origin: i64,
+    },
     Remove {
         placements: Vec<u64>,
         resources: Vec<u64>,
@@ -60,7 +63,10 @@ enum Metadata {
         compressed: bool,
     },
     Place(Placement),
-    Screen { screen: u64, history_origin: i64 },
+    Screen {
+        screen: u64,
+        history_origin: i64,
+    },
     Remove {
         placements: Vec<u64>,
         resources: Vec<u64>,
@@ -83,9 +89,16 @@ impl GraphicsUpdate {
                 &image.data,
             ),
             Self::Place(placement) => (Metadata::Place(placement.clone()), &[]),
-            Self::Screen { screen, history_origin } => (Metadata::Screen {
-                screen: *screen, history_origin: *history_origin,
-            }, &[]),
+            Self::Screen {
+                screen,
+                history_origin,
+            } => (
+                Metadata::Screen {
+                    screen: *screen,
+                    history_origin: *history_origin,
+                },
+                &[],
+            ),
             Self::Remove {
                 placements,
                 resources,
@@ -133,8 +146,13 @@ impl GraphicsUpdate {
                 })
             }
             Metadata::Place(placement) if frame.len() == end => Some(Self::Place(placement)),
-            Metadata::Screen { screen, history_origin } if frame.len() == end =>
-                Some(Self::Screen { screen, history_origin }),
+            Metadata::Screen {
+                screen,
+                history_origin,
+            } if frame.len() == end => Some(Self::Screen {
+                screen,
+                history_origin,
+            }),
             Metadata::Remove {
                 placements,
                 resources,
@@ -245,7 +263,9 @@ impl GraphicsState {
         processor.advance(self, bytes);
         self.processor = processor;
         self.expire_history();
-        self.finish_layout(!self.placements.is_empty() && old != (self.screen, self.history_origin()))
+        self.finish_layout(
+            !self.placements.is_empty() && old != (self.screen, self.history_origin()),
+        )
     }
 
     fn key(&mut self) -> u64 {
@@ -569,7 +589,9 @@ impl GraphicsState {
         let mut removed = Vec::new();
         self.placements.retain(|key, p| {
             let p = &p.placement;
-            if p.screen != self.screen { return true; }
+            if p.screen != self.screen {
+                return true;
+            }
             let row = if target == b'c' {
                 cursor_row
             } else {
@@ -585,9 +607,7 @@ impl GraphicsState {
             let in_row = row >= top && row < bottom;
             let in_col = col >= p.anchor_col && col < p.anchor_col.saturating_add(p.span_cols);
             let selected = match target {
-                b'a' => {
-                    top < history + i64::from(self.size.rows) && bottom > history
-                }
+                b'a' => top < history + i64::from(self.size.rows) && bottom > history,
                 b'i' | b'n' => {
                     Some(p.resource) == newest
                         && (c.placement == 0 || p.placement_id == c.placement)
@@ -610,11 +630,9 @@ impl GraphicsState {
             affected.extend(newest);
         }
         if target == b'r' {
-            affected.extend(
-                self.resources
-                    .iter()
-                    .filter_map(|(key, r)| (r.screen == self.screen && r.id >= c.x && r.id <= c.y).then_some(*key)),
-            );
+            affected.extend(self.resources.iter().filter_map(|(key, r)| {
+                (r.screen == self.screen && r.id >= c.x && r.id <= c.y).then_some(*key)
+            }));
         }
         affected.sort_unstable();
         affected.dedup();
@@ -652,8 +670,10 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
     if image.format == WireFormat::Png {
         if image.compressed {
             image.data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
-                &image.data, MAX_IMAGE_BYTES,
-            ).map_err(|_| "EINVAL:Invalid or excessive compressed PNG")?;
+                &image.data,
+                MAX_IMAGE_BYTES,
+            )
+            .map_err(|_| "EINVAL:Invalid or excessive compressed PNG")?;
             image.compressed = false;
         }
         if image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
@@ -699,10 +719,18 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
         decoder.set_ignore_iccp_chunk(true);
         decoder.ignore_checksums(false);
         let mut reader = decoder.read_info().map_err(|_| "EINVAL:Invalid PNG data")?;
-        while reader.next_row().map_err(|_| "EINVAL:Invalid PNG pixels")?.is_some() {}
+        while reader
+            .next_row()
+            .map_err(|_| "EINVAL:Invalid PNG pixels")?
+            .is_some()
+        {}
         reader.finish().map_err(|_| "EINVAL:Invalid PNG end")?;
     } else {
-        let expected = if image.format == WireFormat::Rgb { bytes / 4 * 3 } else { bytes };
+        let expected = if image.format == WireFormat::Rgb {
+            bytes / 4 * 3
+        } else {
+            bytes
+        };
         if image.compressed {
             validate_zlib_pixels(&image.data, expected)?;
         } else if image.data.len() != expected {
@@ -724,14 +752,21 @@ fn validate_zlib_pixels(data: &[u8], expected: usize) -> Result<(), &'static str
     let mut decoded = 0;
     loop {
         let len = scratch.len().min(expected - decoded + 1);
-        let result = inflate(&mut state, &data[consumed..], &mut scratch[..len], MZFlush::None);
+        let result = inflate(
+            &mut state,
+            &data[consumed..],
+            &mut scratch[..len],
+            MZFlush::None,
+        );
         consumed += result.bytes_consumed;
         decoded += result.bytes_written;
         if decoded > expected {
             return Err("EINVAL:Compressed pixels exceed declared dimensions");
         }
         match result.status {
-            Ok(MZStatus::StreamEnd) if decoded == expected && consumed == data.len() => return Ok(()),
+            Ok(MZStatus::StreamEnd) if decoded == expected && consumed == data.len() => {
+                return Ok(());
+            }
             Ok(MZStatus::Ok) if result.bytes_consumed != 0 || result.bytes_written != 0 => {}
             _ => return Err("EINVAL:Invalid compressed pixel data or byte count"),
         }

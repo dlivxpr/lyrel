@@ -4729,15 +4729,31 @@ mod windows_tests {
         // teardown boundary. Decode scheduling itself is synchronized by the
         // focused real-decoder generation regression in images.rs.
         let old_reader = term.reader_thread.take().unwrap();
-        term.adopt_relink(new_client, Vec::new(), &PaneRoute::Local,
-            TermSize::new(80, 24), 8, 16).unwrap();
+        term.adopt_relink(
+            new_client,
+            Vec::new(),
+            &PaneRoute::Local,
+            TermSize::new(80, 24),
+            8,
+            16,
+        )
+        .unwrap();
         let send_image = |stream: &mut Stream, key, red| {
-            DaemonMsg::Graphics(GraphicsUpdate::Resource {
-                key, image: Arc::new(Image {
-                    width: 1, height: 1, format: WireFormat::Rgba,
-                    compressed: false, data: vec![red, 20, 30, 128],
-                }),
-            }.encode_frame()).encode(stream).unwrap();
+            DaemonMsg::Graphics(
+                GraphicsUpdate::Resource {
+                    key,
+                    image: Arc::new(Image {
+                        width: 1,
+                        height: 1,
+                        format: WireFormat::Rgba,
+                        compressed: false,
+                        data: vec![red, 20, 30, 128],
+                    }),
+                }
+                .encode_frame(),
+            )
+            .encode(stream)
+            .unwrap();
             let mut placement = Placement::default();
             placement.key = key;
             placement.resource = key;
@@ -4747,7 +4763,8 @@ mod windows_tests {
             placement.span_rows = 1;
             placement.clip_bottom = 1;
             DaemonMsg::Graphics(GraphicsUpdate::Place(placement).encode_frame())
-                .encode(stream).unwrap();
+                .encode(stream)
+                .unwrap();
         };
         let wait_pixel = |term: &RemoteTerminal, red| {
             for _ in 0..200 {
@@ -4761,28 +4778,50 @@ mod windows_tests {
         };
         send_image(&mut new_daemon, 11, 90);
         wait_pixel(&term, 90);
-        let _ = DaemonMsg::Graphics(GraphicsUpdate::Remove {
-            placements: vec![11], resources: vec![11],
-        }.encode_frame()).encode(&mut old_daemon);
+        let _ = DaemonMsg::Graphics(
+            GraphicsUpdate::Remove {
+                placements: vec![11],
+                resources: vec![11],
+            }
+            .encode_frame(),
+        )
+        .encode(&mut old_daemon);
         drop(old_daemon);
         old_reader.join().unwrap();
         wait_pixel(&term, 90);
         send_image(&mut new_daemon, 12, 100);
-        DaemonMsg::Graphics(GraphicsUpdate::Remove {
-            placements: vec![11], resources: vec![11],
-        }.encode_frame()).encode(&mut new_daemon).unwrap();
+        DaemonMsg::Graphics(
+            GraphicsUpdate::Remove {
+                placements: vec![11],
+                resources: vec![11],
+            }
+            .encode_frame(),
+        )
+        .encode(&mut new_daemon)
+        .unwrap();
         wait_pixel(&term, 100);
-        DaemonMsg::Graphics(GraphicsUpdate::Remove {
-            placements: vec![12], resources: vec![12],
-        }.encode_frame()).encode(&mut new_daemon).unwrap();
-        DaemonMsg::Output(b"after_graphics_relink".to_vec()).encode(&mut new_daemon).unwrap();
+        DaemonMsg::Graphics(
+            GraphicsUpdate::Remove {
+                placements: vec![12],
+                resources: vec![12],
+            }
+            .encode_frame(),
+        )
+        .encode(&mut new_daemon)
+        .unwrap();
+        DaemonMsg::Output(b"after_graphics_relink".to_vec())
+            .encode(&mut new_daemon)
+            .unwrap();
         for _ in 0..200 {
             if term.term.lock().grid.cursor.pos.col.0 == 21 {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(term.images.snapshot().is_empty(), "new link deletion remains active");
+        assert!(
+            term.images.snapshot().is_empty(),
+            "new link deletion remains active"
+        );
         assert_eq!(term.term.lock().grid.cursor.pos.col.0, 21);
     }
 

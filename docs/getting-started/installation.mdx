@@ -263,9 +263,12 @@ macOS／Windows server 在对应工具链中使用 `cargo build --release --lock
 Linux musl server 按 release workflow 使用 Zig `0.16.0` 与 cargo-zigbuild。Actions 在临时 Python venv 中安装官方 PyPI 的 `ziglang==0.16.0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向该解释器，不依赖旧 Node.js runtime 的 Zig setup action：
 
 ```bash
-cargo zigbuild --release --locked -p lyrel-server --target x86_64-unknown-linux-musl
+CXXFLAGS_x86_64_unknown_linux_musl=-DSIMDUTF_IMPLEMENTATION_ICELAKE=0 \
+  cargo zigbuild --release --locked -p lyrel-server --target x86_64-unknown-linux-musl
 bash .github/scripts/assert-static.sh target/x86_64-unknown-linux-musl/release/lyrel-server
 ```
+
+x86_64 musl 的 C++ 编译通过上游 `SIMDUTF_IMPLEMENTATION_ICELAKE=0` 配置排除 `simdutf 0.7.0` 与 Zig 不兼容的可选 Ice Lake backend，仍按 CPU 能力选择 AVX2／SSE／scalar 实现；aarch64 及桌面构建不受该目标专用环境键影响。CI 与 Release 使用相同配置，不修改 registry 源码，也不通过全局启用 AVX-512 提高远端 CPU 要求。上游的条件编译入口见 [simdutf icelake.h](https://github.com/simdutf/simdutf/blob/master/src/simdutf/icelake.h)。
 
 Rust 与 Zig 的组合仍可能输出 `ignoring deprecated linker optimization setting '1'`，见
 [Rust 上游记录](https://github.com/rust-lang/rust/issues/158192)。这是 rustc 自动传入已被 Zig 忽略的链接优化参数所致；保留这条已知误报，不关闭其他 linker diagnostics，静态链接断言仍必须通过。

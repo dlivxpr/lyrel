@@ -226,7 +226,9 @@ impl ImageStore {
     /// successor, and no UI-thread join is necessary.
     pub fn retire_reader(&self) {
         let mut inner = self.0.state.lock().unwrap();
-        inner.reader_generation = inner.reader_generation.checked_add(1)
+        inner.reader_generation = inner
+            .reader_generation
+            .checked_add(1)
             .expect("graphics reader generation exhausted");
         inner.closed = true;
         drop(inner);
@@ -266,7 +268,10 @@ impl ImageStore {
                 );
                 true
             }
-            GraphicsUpdate::Screen { screen, history_origin } => {
+            GraphicsUpdate::Screen {
+                screen,
+                history_origin,
+            } => {
                 let changed = inner.screen != screen || inner.history_origin != history_origin;
                 inner.screen = screen;
                 inner.history_origin = history_origin;
@@ -312,7 +317,9 @@ impl DecodeWorker {
     ) -> Self {
         let generation = {
             let mut inner = store.0.state.lock().unwrap();
-            inner.reader_generation = inner.reader_generation.checked_add(1)
+            inner.reader_generation = inner
+                .reader_generation
+                .checked_add(1)
                 .expect("graphics reader generation exhausted");
             inner.closed = false;
             inner.reader_generation
@@ -411,9 +418,14 @@ pub fn decode(img: &mut Image) -> Option<(Arc<RenderImage>, u32, u32)> {
     use lyrel_core::core::graphics_state::MAX_IMAGE_DIMENSION;
     use lyrel_core::core::kitty_graphics::MAX_IMAGE_BYTES;
 
-    let bytes = (img.width as usize).checked_mul(img.height as usize)?.checked_mul(4)?;
-    if bytes == 0 || bytes > MAX_IMAGE_BYTES || img.data.len() > MAX_IMAGE_BYTES
-        || img.width > MAX_IMAGE_DIMENSION || img.height > MAX_IMAGE_DIMENSION
+    let bytes = (img.width as usize)
+        .checked_mul(img.height as usize)?
+        .checked_mul(4)?;
+    if bytes == 0
+        || bytes > MAX_IMAGE_BYTES
+        || img.data.len() > MAX_IMAGE_BYTES
+        || img.width > MAX_IMAGE_DIMENSION
+        || img.height > MAX_IMAGE_DIMENSION
         || (img.format == WireFormat::Png && img.compressed)
     {
         return None;
@@ -635,9 +647,13 @@ mod tests {
         let current = store.snapshot();
         assert_eq!(current[0].data.as_bytes(0).unwrap(), &[30, 20, 90, 128]);
         assert!(store.claim_for_paint(&current[0]));
-        assert!(!old.apply(GraphicsUpdate::Remove {
-            placements: vec![2], resources: vec![2],
-        }), "a retired reader cannot delete new link images");
+        assert!(
+            !old.apply(GraphicsUpdate::Remove {
+                placements: vec![2],
+                resources: vec![2],
+            }),
+            "a retired reader cannot delete new link images"
+        );
         old.apply(resource(3, 11));
         old.apply(placement(3, 3, 9, 9));
         release.wait();
@@ -647,11 +663,20 @@ mod tests {
         new.apply(resource(4, 100));
         new.apply(placement(4, 4, 6, 7));
         wait_for(&store, |images| images.len() == 2);
-        assert!(store.snapshot().iter().all(|image| image.placement.resource != 1 && image.placement.resource != 3));
+        assert!(
+            store
+                .snapshot()
+                .iter()
+                .all(|image| image.placement.resource != 1 && image.placement.resource != 3)
+        );
         new.apply(GraphicsUpdate::Remove {
-            placements: vec![2, 4], resources: vec![2, 4],
+            placements: vec![2, 4],
+            resources: vec![2, 4],
         });
-        assert!(store.snapshot().is_empty(), "successor deletion remains live");
+        assert!(
+            store.snapshot().is_empty(),
+            "successor deletion remains live"
+        );
     }
 
     #[test]

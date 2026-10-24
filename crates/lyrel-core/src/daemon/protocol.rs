@@ -880,7 +880,9 @@ pub enum ClientMsg {
     },
     Input(Vec<u8>),
     /// Clear the controlling pane's presentation in the ordered output stream.
-    ClearPresentation { history: bool },
+    ClearPresentation {
+        history: bool,
+    },
     SendInput {
         pane_id: u64,
         bytes: Vec<u8>,
@@ -1286,7 +1288,9 @@ impl ClientMsg {
                 write_frame(w, kind::OBSERVE, &to_json(&(pane_id, size))?)
             }
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
-            ClientMsg::ClearPresentation { history } => write_frame(w, kind::CLEAR_PRESENTATION, &to_json(history)?),
+            ClientMsg::ClearPresentation { history } => {
+                write_frame(w, kind::CLEAR_PRESENTATION, &to_json(history)?)
+            }
             ClientMsg::SendInput { pane_id, bytes } => {
                 write_frame(w, kind::SEND_INPUT, &to_json(&(pane_id, bytes))?)
             }
@@ -1421,7 +1425,9 @@ impl ClientMsg {
                 ClientMsg::Observe { pane_id, size }
             }
             kind::INPUT => ClientMsg::Input(payload),
-            kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation { history: from_json(&payload)? },
+            kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation {
+                history: from_json(&payload)?,
+            },
             kind::SEND_INPUT => {
                 let (pane_id, bytes) = from_json(&payload)?;
                 ClientMsg::SendInput { pane_id, bytes }

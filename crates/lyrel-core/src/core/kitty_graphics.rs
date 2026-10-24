@@ -177,7 +177,11 @@ impl ApcTokenizer {
                 },
                 State::ApcDrop => match memchr::memchr3(0x1b, 0x18, 0x1a, &bytes[i..]) {
                     Some(off) => {
-                        self.state = if bytes[i + off] == 0x1b { State::ApcDropEsc } else { State::Ground };
+                        self.state = if bytes[i + off] == 0x1b {
+                            State::ApcDropEsc
+                        } else {
+                            State::Ground
+                        };
                         i += off + 1;
                     }
                     None => return,
@@ -334,7 +338,9 @@ impl ApcTokenizer {
         }
         let required = self.buf.len() + run.len();
         if required > self.buf.capacity() {
-            let capacity = required.max(self.buf.capacity().saturating_mul(2)).min(MAX_APC_PAYLOAD);
+            let capacity = required
+                .max(self.buf.capacity().saturating_mul(2))
+                .min(MAX_APC_PAYLOAD);
             self.buf.reserve_exact(capacity - self.buf.len());
         }
         self.buf.extend_from_slice(run);
@@ -388,7 +394,11 @@ impl GraphicsSniffer {
         let Self { tokenizer, parser } = self;
         let mut events = Vec::new();
         tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted| {
-            if let Some(ev) = if aborted { parser.abort(cmd) } else { parser.feed(cmd) } {
+            if let Some(ev) = if aborted {
+                parser.abort(cmd)
+            } else {
+                parser.feed(cmd)
+            } {
                 events.push(ev);
             }
         });
@@ -437,7 +447,11 @@ impl GraphicsSniffer {
                 }
             },
             |cmd, aborted| {
-                if let Some(ev) = if aborted { parser.abort(cmd) } else { parser.feed(cmd) } {
+                if let Some(ev) = if aborted {
+                    parser.abort(cmd)
+                } else {
+                    parser.feed(cmd)
+                } {
                     segments.borrow_mut().push(Segment::from(ev));
                 }
             },
@@ -659,8 +673,14 @@ impl Control {
                     c.compressed = val == b"z";
                     c.unsupported |= val != b"z";
                 }
-                b"i" => { has_id = true; c.id = num(); }
-                b"I" => { has_number = true; c.number = num(); }
+                b"i" => {
+                    has_id = true;
+                    c.id = num();
+                }
+                b"I" => {
+                    has_number = true;
+                    c.number = num();
+                }
                 b"p" => c.placement = num(),
                 b"s" => c.width = num(),
                 b"v" => c.height = num(),
@@ -835,7 +855,10 @@ impl Image {
         // wire payload. These helpers also defend desktop frames independently.
         if self.width > super::graphics_state::MAX_IMAGE_DIMENSION
             || self.height > super::graphics_state::MAX_IMAGE_DIMENSION
-            || (self.width as usize).checked_mul(self.height as usize)?.checked_mul(4)? > MAX_IMAGE_BYTES
+            || (self.width as usize)
+                .checked_mul(self.height as usize)?
+                .checked_mul(4)?
+                > MAX_IMAGE_BYTES
         {
             return None;
         }
@@ -895,7 +918,11 @@ impl MediumTransfer {
         }
         let start = u64::from(self.offset);
         let available = meta.len().checked_sub(start)?;
-        let len = if self.size == 0 { available } else { available.min(u64::from(self.size)) };
+        let len = if self.size == 0 {
+            available
+        } else {
+            available.min(u64::from(self.size))
+        };
         file.seek(SeekFrom::Start(start)).ok()?;
         let mut out = vec![0; len as usize];
         file.read_exact(&mut out).ok()?;
@@ -904,8 +931,8 @@ impl MediumTransfer {
 
     #[cfg(unix)]
     fn read_file(&self) -> Option<Vec<u8>> {
-        use std::os::unix::fs::OpenOptionsExt as _;
         use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::fs::OpenOptionsExt as _;
         let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(self.name.clone()));
 
         // Read through a bounded reader, not `fs::read`. The name is attacker
@@ -920,8 +947,11 @@ impl MediumTransfer {
         }
         // A path can change after metadata: nonblocking open plus a second
         // descriptor-based check also closes the FIFO replacement race.
-        let file = std::fs::OpenOptions::new().read(true)
-            .custom_flags(libc::O_NONBLOCK).open(&path).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .ok()?;
         let out = self.read_region(file)?;
         // A temp file is the sender's one-shot handoff: remove it after reading
         // so the browser's per-frame temp files don't pile up. A named `t=f`
@@ -934,7 +964,10 @@ impl MediumTransfer {
         // for exactly that reason.
         if self.medium == Medium::TempFile
             && path_is_in_temp_dir(&path)
-            && path.as_os_str().as_encoded_bytes().windows(b"tty-graphics-protocol".len())
+            && path
+                .as_os_str()
+                .as_encoded_bytes()
+                .windows(b"tty-graphics-protocol".len())
                 .any(|part| part == b"tty-graphics-protocol")
         {
             let _ = std::fs::remove_file(&path);
@@ -1080,9 +1113,17 @@ impl GraphicsParser {
     }
 
     fn abort(&mut self, command: &[u8]) -> Option<Event> {
-        let control = self.pending.take().map(|pending| pending.control)
+        let control = self
+            .pending
+            .take()
+            .map(|pending| pending.control)
             .or_else(|| Control::parse(command))?;
-        response(&control, control.id, "EINVAL:Interrupted or excessive image command").map(Event::Reply)
+        response(
+            &control,
+            control.id,
+            "EINVAL:Interrupted or excessive image command",
+        )
+        .map(Event::Reply)
     }
 
     pub fn feed(&mut self, command: &[u8]) -> Option<Event> {
@@ -1100,12 +1141,16 @@ impl GraphicsParser {
                 .split(|b| *b == b',')
                 .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
             if continuation {
-                if header.split(|b| *b == b',').any(|pair| pair.starts_with(b"q=")) {
+                if header
+                    .split(|b| *b == b',')
+                    .any(|pair| pair.starts_with(b"q="))
+                {
                     self.pending.as_mut().unwrap().control.quiet = control.quiet;
                 }
                 if control.invalid {
                     let first = self.pending.take().unwrap().control;
-                    return response(&first, first.id, "EINVAL:Invalid continuation control").map(Event::Reply);
+                    return response(&first, first.id, "EINVAL:Invalid continuation control")
+                        .map(Event::Reply);
                 }
                 return self.accept_chunk(control, data);
             }
@@ -1153,8 +1198,11 @@ impl GraphicsParser {
         }
         let raw_len = if first.format != WireFormat::Png {
             let image = Image {
-                width: first.width, height: first.height, format: first.format,
-                compressed: first.compressed, data: Vec::new(),
+                width: first.width,
+                height: first.height,
+                format: first.format,
+                compressed: first.compressed,
+                data: Vec::new(),
             };
             match image.decoded_len() {
                 Some(len) => Some(len),
@@ -1163,7 +1211,9 @@ impl GraphicsParser {
                     return fail("ENOSPC:Decoded image dimensions exceed limit");
                 }
             }
-        } else { None };
+        } else {
+            None
+        };
         // Non-final blocks are independent, complete base64 quanta. Decode
         // directly into the accumulator with exact reservation, avoiding both
         // an accumulated base64 copy. Capacity growth is geometric but never
@@ -1174,18 +1224,23 @@ impl GraphicsParser {
             4096
         } else if !first.compressed {
             raw_len.unwrap_or(MAX_TRANSMISSION_BASE64 / 4 * 3)
-        } else { MAX_TRANSMISSION_BASE64 / 4 * 3 };
+        } else {
+            MAX_TRANSMISSION_BASE64 / 4 * 3
+        };
         if decoded_capacity > payload_limit.saturating_add(2).saturating_sub(buffered) {
             self.pending = None;
             return fail("EINVAL:Payload exceeds declared image size");
         }
         let pending = self.pending.get_or_insert_with(|| Pending {
-            control, data: Vec::new(), encoded_bytes: 0,
+            control,
+            data: Vec::new(),
+            encoded_bytes: 0,
         });
         let start = pending.data.len();
         let required = start + decoded_capacity;
         if required > pending.data.capacity() {
-            let capacity = required.max(pending.data.capacity().saturating_mul(2))
+            let capacity = required
+                .max(pending.data.capacity().saturating_mul(2))
                 .min(payload_limit.saturating_add(3));
             pending.data.reserve_exact(capacity - start);
         }
@@ -1509,7 +1564,10 @@ mod tests {
         std::fs::write(&unmarked, [1, 2, 3, 4]).unwrap();
         transfer.name = unmarked.clone().into_os_string().into_encoded_bytes();
         assert_eq!(transfer.resolve().unwrap().data, [1, 2, 3, 4]);
-        assert!(unmarked.exists(), "t=t may unlink only marked temporary paths");
+        assert!(
+            unmarked.exists(),
+            "t=t may unlink only marked temporary paths"
+        );
         assert!(!path_is_in_temp_dir(std::path::Path::new(
             "/tmp/../etc/hosts"
         )));
@@ -1527,15 +1585,26 @@ mod tests {
         use std::io::Write as _;
         use std::os::fd::FromRawFd as _;
         let shm = std::ffi::CString::new(format!("/lyrel-kitty-{}", uuid::Uuid::new_v4())).unwrap();
-        let fd = unsafe { libc::shm_open(shm.as_ptr(), libc::O_CREAT | libc::O_EXCL | libc::O_RDWR, 0o600) };
+        let fd = unsafe {
+            libc::shm_open(
+                shm.as_ptr(),
+                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+                0o600,
+            )
+        };
         assert!(fd >= 0);
         let mut object = unsafe { std::fs::File::from_raw_fd(fd) };
         object.write_all(&[1, 2, 3, 4]).unwrap();
         transfer.medium = Medium::Shared;
         transfer.name = shm.as_bytes().to_vec();
-        assert_eq!(transfer.resolve().unwrap().to_rgba8().unwrap(), [1, 2, 3, 4]);
-        assert!(unsafe { libc::shm_open(shm.as_ptr(), libc::O_RDONLY, 0) } < 0,
-            "a consumed shm handoff must be unlinked");
+        assert_eq!(
+            transfer.resolve().unwrap().to_rgba8().unwrap(),
+            [1, 2, 3, 4]
+        );
+        assert!(
+            unsafe { libc::shm_open(shm.as_ptr(), libc::O_RDONLY, 0) } < 0,
+            "a consumed shm handoff must be unlinked"
+        );
         for name in [
             b"/../../etc/passwd".as_slice(),
             b"/sub/dir",
