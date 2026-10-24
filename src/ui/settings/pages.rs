@@ -51,7 +51,7 @@ impl LyrelApp {
                                 &[("error", &error)],
                             ),
                         };
-                        window.push_notification(message, cx);
+                        window.notify_app(message, cx);
                     },
                 )
                 .into_any_element();
@@ -551,7 +551,6 @@ impl LyrelApp {
         let config = cx.global::<Config>();
         let overridden = window_overrides_active(config, cfg!(target_os = "windows"));
         let dim_inactive_panes = config.dim_inactive_panes;
-        let auto_hide_titlebar_buttons = config.auto_hide_titlebar_buttons;
         let opacity = LyrelApp::effective_window_opacity(cx);
 
         const MIN: f32 = 0.2;
@@ -634,12 +633,6 @@ impl LyrelApp {
             cx,
             |this, on, _, cx| this.set_dim_inactive_panes(on, cx),
         );
-        let auto_hide_chrome = self.settings_switch(
-            "auto-hide-titlebar-buttons",
-            auto_hide_titlebar_buttons,
-            cx,
-            |this, on, _, cx| this.set_auto_hide_titlebar_buttons(on, cx),
-        );
         let follow_theme = overridden.then(|| {
             h_flex()
                 .pt(px(4.))
@@ -688,15 +681,6 @@ impl LyrelApp {
                 t(L10nKey::SettingsDimInactivePanes),
                 t(L10nKey::SettingsDimInactivePanesDesc),
                 dim,
-                cx,
-            )
-            .into_any_element(),
-        );
-        rows.push(
-            self.settings_row(
-                t(L10nKey::SettingsAutoHideTitlebarButtons),
-                t(L10nKey::SettingsAutoHideTitlebarButtonsDesc),
-                auto_hide_chrome,
                 cx,
             )
             .into_any_element(),
@@ -1379,10 +1363,6 @@ impl LyrelApp {
             NewTabPosition::AfterCurrent => 0,
             NewTabPosition::End => 1,
         };
-        let tab_bar_idx = match cfg.tab_bar_position {
-            TabBarPosition::Top => 0,
-            TabBarPosition::Left => 1,
-        };
         let sidebar_auto_grouping = cfg.sidebar_auto_grouping;
         let confirm_idx = match cfg.confirm_close {
             ConfirmClose::Never => 0,
@@ -1423,22 +1403,6 @@ impl LyrelApp {
                 );
             },
         );
-        let tab_bar = self.settings_choice(
-            "wt-tab-bar-pos",
-            &[t(L10nKey::SettingsTop), t(L10nKey::SettingsLeft)],
-            tab_bar_idx,
-            cx,
-            |this, ix, _w, cx| {
-                this.set_tab_bar_position(
-                    if ix == 0 {
-                        TabBarPosition::Top
-                    } else {
-                        TabBarPosition::Left
-                    },
-                    cx,
-                );
-            },
-        );
         let grouping = self.settings_switch(
             "wt-sidebar-auto-grouping",
             sidebar_auto_grouping,
@@ -1453,12 +1417,6 @@ impl LyrelApp {
                     t(L10nKey::SettingsNewTabPosition),
                     t(L10nKey::SettingsNewTabPositionDesc),
                     new_tab,
-                    cx,
-                ),
-                self.settings_row(
-                    t(L10nKey::SettingsTabBarPosition),
-                    t(L10nKey::SettingsTabBarPositionDesc),
-                    tab_bar,
                     cx,
                 ),
                 self.settings_row(

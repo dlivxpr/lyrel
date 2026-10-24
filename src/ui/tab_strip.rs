@@ -1,15 +1,15 @@
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Side, Sizable as _, h_flex,
 };
 use gpui_kit::{
-    Animation, AnimationExt as _, AnyElement, App, Axis, Bounds, Context, FontWeight, MouseButton,
-    Pixels, SharedString, Window, canvas, deferred, div, ease_out_quint, linear_color_stop,
-    linear_gradient, prelude::*, px,
+    AnyElement, App, Axis, Context, FontWeight, MouseButton, Pixels, SharedString, Window, div,
+    prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -23,10 +23,8 @@ use crate::core::cli_agent::CLIAgent;
 use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab, tile_trailing_inset};
-use crate::ui::hints::tab_badge_label;
+use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::search::SearchTab;
 
 /// One duration and one curve for every transition the app runs, so a fade and
@@ -34,9 +32,6 @@ use crate::ui::search::SearchTab;
 /// enough that nobody waits on it.
 pub(crate) const TRANSITION_MS: u64 = 140;
 pub(crate) const REORDER_SLIDE_MS: u64 = TRANSITION_MS;
-const CHIP_GAP: f32 = 6.;
-
-pub(crate) const GRAB_HANDLE_W: f32 = 80.;
 
 const KEEP_SEGMENTS: usize = 3;
 
@@ -201,37 +196,6 @@ pub(crate) fn label_of(
         TabLabel::Process(title) => title.to_string(),
         TabLabel::Unknown => unnamed(),
     }
-}
-
-/// What a row can add on hover: the name behind the one [`label_of`] cut down,
-/// or `None` when it cut nothing and the tooltip would only repeat the row.
-///
-/// The comparison has to happen on the *same* spelling, which is the whole
-/// trick here. `label_of` abbreviates a path under the home before it elides
-/// it, and this returns the abbreviated form too, so a raw `/Users/x/repo`
-/// measured against a label of `~/repo` looks like a difference that isn't
-/// one — and every tab named after a directory inside the home would hang a
-/// tooltip saying exactly what it already says. Abbreviate first, compare
-/// after.
-fn tooltip_of(
-    view: &crate::ui::machine_mirror::TabView,
-    index: usize,
-    home: Option<&std::path::Path>,
-) -> Option<SharedString> {
-    use crate::ui::machine_mirror::TabLabel;
-
-    // The other rungs are never shortened: a given name and a process name are
-    // printed whole, and an agent's is a word.
-    let raw = match view.label() {
-        TabLabel::Osc(title) => title,
-        TabLabel::Cwd(cwd) => cwd,
-        _ => return None,
-    };
-    let full = abbreviate_home(raw.trim(), home);
-    if full.trim().is_empty() || full.as_ref() == label_of(view, index, home).as_str() {
-        return None;
-    }
-    Some(SharedString::from(full.into_owned()))
 }
 
 /// Width of `text` shaped in `font` at `size`, in pixels.
@@ -628,26 +592,6 @@ pub(crate) fn hit_target(button: Button) -> Button {
     button.w(px(MIN_TARGET)).h(px(MIN_TARGET))
 }
 
-/// The narrowest a chip gets: its `min_w`, which flex-shrink cannot go under.
-const CHIP_MIN_W: f32 = 100.;
-
-/// The run of chips to draw when they cannot all fit.
-///
-/// The row clips what overflows, so past a certain tab count the chips at the
-/// end simply were not drawn — including, right after ⌘T, the tab that was
-/// just opened and made active. Slide the run instead: keep it anchored at the
-/// first tab until the active one would fall off the right edge, then move it
-/// by as little as it takes to hold the active chip.
-fn visible_chips(order: &[usize], active: usize, avail: f32) -> Vec<usize> {
-    let fits = ((avail / (CHIP_MIN_W + CHIP_GAP)).floor() as usize).max(1);
-    if order.len() <= fits {
-        return order.to_vec();
-    }
-    let at = order.iter().position(|&i| i == active).unwrap_or(0);
-    let start = at.saturating_sub(fits - 1).min(order.len() - fits);
-    order[start..start + fits].to_vec()
-}
-
 pub(crate) fn chrome_tile(button: Button, selected: bool, cx: &gpui_kit::App) -> Button {
     chrome_tile_sized(button, TILE_SIZE, TILE_GLYPH, selected, cx)
 }
@@ -699,27 +643,6 @@ pub(crate) const TAB_OUTER_PAD: f32 = 2.;
 /// A label's hover target reaches this far past its word.
 const TAB_INNER_PAD: f32 = 4.;
 
-/// The panel toggle and its trailing inset. The open panel uses this same
-/// reservation so the title bar never budgets for a second, absent control.
-pub(crate) fn trailing_chrome_tiles_w() -> f32 {
-    let trailing_pad = if cfg!(target_os = "macos") {
-        tile_trailing_inset()
-    } else {
-        4.
-    };
-    trailing_pad + crate::ui::app::TILE_SIZE
-}
-
-/// The whole trailing cluster: those tiles and the OS window buttons beyond
-/// them.
-///
-/// Anything else drawn into that end of the title bar has to stop short of it —
-/// which for the hoisted document header means the case where the detail panel
-/// is closed and the document column runs to the window's right edge.
-pub(crate) fn trailing_chrome_w(fullscreen: bool) -> f32 {
-    trailing_chrome_tiles_w() + crate::ui::app::window_controls_w(fullscreen)
-}
-
 pub(crate) fn chrome_tile_sized(
     button: Button,
     tile: f32,
@@ -759,96 +682,6 @@ const MENU_SHELLS: usize = 3;
 /// Only agents that have been run are named — there is no "default agent" to
 /// lead the way shells' default does. Everything else is one row away.
 const MENU_AGENTS: usize = 3;
-
-/// The Search Everywhere button in the middle of the title bar: the width of
-/// a field that reads as one, and the 28px of the rail's own search.
-const TITLEBAR_SEARCH_W: f32 = 360.;
-const TITLEBAR_SEARCH_H: f32 = 28.;
-
-/// Air between the search box and the nearest chrome tile when the bar is too
-/// narrow for the box to sit at its full width.
-const TITLEBAR_SEARCH_CLEAR_GAP: f32 = 8.;
-
-/// Where the title-bar search box is centred, as offsets from the tab strip it
-/// is drawn inside.
-///
-/// The strip does not start at the terminal column's left edge. The title bar
-/// leaves a lead before it — `TRAFFIC_LIGHTS_LEAD` on macOS, for the traffic lights, whether or
-/// not the rail is standing in front of them, plus the bar's own inset in
-/// fullscreen; 12 elsewhere — and a box centred on the strip was centred that
-/// much too far right by half: 40pt on macOS then, which is plainly visible with
-/// the rail collapsed and the box standing alone in an empty bar (#1033).
-/// So the band reaches back over the lead, and its left edge is the column's.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SearchBand {
-    /// `left` for the band, against the strip's left edge: the lead, negated.
-    pub(crate) left: f32,
-    /// `right` for the band, against the strip's right edge.
-    pub(crate) right: f32,
-    /// How much of *each* end of the band the box keeps clear of, so that in
-    /// a narrow bar it shrinks rather than slides under the chrome tiles. The
-    /// same at both ends, because a box clear of only one is no longer
-    /// centred.
-    pub(crate) clear: f32,
-}
-
-/// [`SearchBand`] for a strip that starts `lead` in from the terminal column's
-/// left edge.
-///
-/// `docked_right` is what is docked to the right of the terminal — the detail
-/// panel and a document column. Off macOS the bar spans those too, so the band
-/// stops at the terminal column: the strip already stops short of the window
-/// controls, so they come off the columns' share. On macOS the bar is inside
-/// the terminal column already and the strip runs to its end.
-///
-/// `leading_w` is the collapsed rail's group at the strip's left end, measured
-/// from the strip's left edge; `trailing_w` the chrome tiles at the band's
-/// right end, when they are there rather than off over a docked column.
-pub(crate) fn search_band(
-    macos: bool,
-    lead: f32,
-    docked_right: f32,
-    controls_w: f32,
-    leading_w: Option<f32>,
-    trailing_w: Option<f32>,
-) -> SearchBand {
-    let right = match !macos && docked_right > 0. {
-        true => (docked_right - controls_w).max(0.),
-        false => 0.,
-    };
-    let leading = leading_w.map_or(0., |w| lead + w + TITLEBAR_SEARCH_CLEAR_GAP);
-    let trailing = trailing_w.map_or(0., |w| w + TITLEBAR_SEARCH_CLEAR_GAP);
-    SearchBand {
-        left: -lead,
-        right,
-        clear: leading.max(trailing),
-    }
-}
-
-/// How far the title bar's lead reaches before the tab strip starts: the room
-/// we have `TitleBar` leave for the traffic lights on macOS, and the bar's own inset
-/// that gpui-component adds to it in fullscreen, where the lights are gone but
-/// the room is not; `TITLE_BAR_LEAD` elsewhere, in both of the rows the strip
-/// can sit in.
-fn title_bar_strip_lead(fullscreen: bool, rem: f32) -> f32 {
-    match cfg!(target_os = "macos") && fullscreen {
-        // `pl_3` on the bar inside `TitleBar`.
-        true => crate::ui::app::TITLE_BAR_LEAD + 0.75 * rem,
-        false => crate::ui::app::TITLE_BAR_LEAD,
-    }
-}
-
-/// How wide the collapsed rail's group at the start of the strip is: the
-/// window mark where there is one, then New Tab and Show Sidebar. Mirrors the
-/// `left_group` built in `tab_strip`, `ml` included.
-fn collapsed_rail_group_w() -> f32 {
-    use crate::ui::app::{CONTENT_INSET, TILE_SIZE, WINDOW_MARK_SIZE, tile_trailing_inset};
-    let mark = match cfg!(target_os = "macos") {
-        true => 0.,
-        false => (CONTENT_INSET - tile_trailing_inset()) + WINDOW_MARK_SIZE + 4. + 2.,
-    };
-    crate::ui::app::title_bar_hug_offset() + mark + TILE_SIZE + 2. + TILE_SIZE
-}
 
 /// How wide the New Tab menu is allowed to get.
 const MENU_W: Pixels = px(360.);
@@ -1309,7 +1142,7 @@ impl LyrelApp {
                 .id("workspace-rename")
                 .flex_shrink_0()
                 .items_center()
-                .h(px(28.))
+                .h(gpui_kit::rems(1.75))
                 .w_full()
                 .px(px(9.))
                 .rounded_md()
@@ -1345,7 +1178,7 @@ impl LyrelApp {
                             .w_full()
                             .h_full()
                             .items_center()
-                            .gap(px(6.))
+                            .gap_1p5()
                             // The tile's own hover is a fill the palette keeps
                             // a hair off the surface, which on the rail is
                             // barely a change at all — and the name and the
@@ -1361,10 +1194,10 @@ impl LyrelApp {
                                     .flex_shrink_0()
                                     .items_center()
                                     .justify_center()
-                                    .size(px(Self::AVATAR_PX))
+                                    .size(gpui_kit::rems(Self::AVATAR_PX / 16.))
                                     .rounded_full()
                                     .bg(cx.theme().secondary)
-                                    .text_size(px(10.))
+                                    .text_size(gpui_kit::rems(10. / 16.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(monogram),
                             )
@@ -1375,10 +1208,10 @@ impl LyrelApp {
                                 // headers' weight so the one dark line in
                                 // the column stays the tab in front.
                                 div()
-                                    .flex_shrink(1.)
+                                    .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(13.))
+                                    .text_size(gpui_kit::rems(13. / 16.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(cx.theme().foreground)
                                     .child(SharedString::from(current.clone())),
@@ -1388,18 +1221,14 @@ impl LyrelApp {
                                 // panel, not a menu hanging off the button.
                                 Icon::empty()
                                     .path("icons/chevrons-up-down.svg")
-                                    .size(px(11.))
+                                    .size(gpui_kit::rems(11. / 16.))
                                     .flex_shrink_0(),
                             ),
                     )
                     .xsmall()
                     .w_full()
-                    .h(px(28.))
-                    .rounded(px(7.))
-                    // Button pins the arrow for every non-link variant; the
-                    // switcher's own rows point, so the tile that opens them
-                    // does too.
-                    .cursor_pointer()
+                    .h(gpui_kit::rems(1.75))
+                    .rounded_lg()
                     .accessibility_label(t(L10nKey::HomeSwitchWorkspace))
                     .tooltip_with_action(
                         t(L10nKey::HomeSwitchWorkspace),
@@ -1413,67 +1242,12 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    /// Persistent window controls, including when either sidebar is collapsed.
-    pub(crate) fn window_chrome(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let trailing = match cfg!(target_os = "macos") {
-            true => tile_trailing_inset(),
-            false => 4.,
-        };
-        // Opening the panel moves this control to the panel's header on
-        // macOS. Reuse the same tile and inset there: a different hit target
-        // moves the centred glyph even when the icon itself keeps its size.
-        let panel_open = self.right_panel_open(cx);
-        h_flex()
-            .flex_shrink_0()
-            .items_center()
-            .pr(px(trailing))
-            .child(
-                div().occlude().flex_shrink_0().child(
-                    chrome_tile(
-                        Button::new("titlebar-right-panel")
-                            // Keep the outline fixed; only the panel region's
-                            // fill changes to show whether the panel is visible.
-                            .icon(Icon::empty().path(match panel_open {
-                                true => "icons/panel-right.svg",
-                                false => "icons/panel-right-collapsed.svg",
-                            })),
-                        false,
-                        cx,
-                    )
-                    .rounded_lg()
-                    .accessibility_label(match panel_open {
-                        true => t(L10nKey::TabTooltipHideDetailPanel),
-                        false => t(L10nKey::TabTooltipShowDetailPanel),
-                    })
-                    .tooltip_with_action(
-                        match panel_open {
-                            true => t(L10nKey::TabTooltipHideDetailPanel),
-                            false => t(L10nKey::TabTooltipShowDetailPanel),
-                        },
-                        &crate::core::actions::ToggleRightPanel,
-                        None,
-                    )
-                    // On macOS this tile is drawn inside the panel's own
-                    // titlebar while the panel is open, so closing from it
-                    // destroys the element holding the focus — and a keymap
-                    // scoped to a focused thing goes quiet with it, leaving the
-                    // ⌘J that would undo this doing nothing. Hand the terminal
-                    // back what it lost.
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let closing = this.right_panel_open(cx);
-                        this.toggle_right_panel(cx);
-                        if closing {
-                            this.focus_active(window, cx);
-                        }
-                    })),
-                ),
-            )
-    }
-
-    /// The right panel's tabs: words, the current one in body ink and medium
-    /// weight on a pill (ink and weight alone read as no selection at all).
-    /// Four names fit the panel's resting width once Search folded into Files.
-    pub(crate) fn right_panel_tabs(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// 右侧面板使用文字页签；当前页仅提高文字对比与字重，不叠加胶囊底色。
+    pub(crate) fn right_panel_tabs(
+        &self,
+        changes_count: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let active_tab = self.right_panel_tab;
         let body_ink = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
@@ -1498,14 +1272,15 @@ impl LyrelApp {
                     .flex()
                     .items_center()
                     .px(px(TAB_OUTER_PAD))
-                    .cursor_pointer()
                     .child(
                         div()
                             .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap_1()
                             .px(px(TAB_INNER_PAD))
                             .py_0p5()
                             .rounded_md()
-                            .when(current, |s| s.bg(cx.theme().secondary))
                             .text_size(gpui_kit::rems(crate::ui::right_panel::TAB_TEXT))
                             .font_weight(match current {
                                 true => FontWeight::MEDIUM,
@@ -1513,7 +1288,20 @@ impl LyrelApp {
                             })
                             .text_color(ink)
                             .hover(move |s| s.text_color(body_ink))
-                            .child(t(label_key)),
+                            .child(t(label_key))
+                            .when(tab == RightPanelTab::Scm, |label| {
+                                label.when_some(changes_count.clone(), |label, count| {
+                                    label.child(
+                                        div()
+                                            .id("right-panel-change-count")
+                                            .test_support()
+                                            .aria_label(count.clone())
+                                            .font_weight(FontWeight::NORMAL)
+                                            .text_color(muted)
+                                            .child(count),
+                                    )
+                                })
+                            }),
                     )
                     // The current one does nothing: only ⌘J and the title-bar
                     // panel tile put the panel away.
@@ -1758,29 +1546,6 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    /// The full title behind a shortened one, for the row to name on hover.
-    ///
-    /// `tab_label` hands back a path elided to its last three segments and then
-    /// capped, and the chip truncates whatever is left over — so a tab could
-    /// read `…/a/b/c` with no way to find out which `a` that was. `None` when
-    /// nothing was dropped, so tabs that already show their whole name stay
-    /// quiet under the pointer.
-    ///
-    /// It has to unshorten whatever the label was *made of*, which is why it
-    /// reads the same [`TabView`](crate::ui::machine_mirror::TabView) the label
-    /// did: a tab named after its directory wants that directory spelled out,
-    /// not the title it never had. See [`tooltip_of`].
-    pub(crate) fn tab_title_tooltip(
-        &self,
-        tab: &Tab,
-        index: usize,
-        window: Option<&Window>,
-        cx: &App,
-    ) -> Option<SharedString> {
-        let (view, home) = tab.label_view(window, cx);
-        tooltip_of(&view, index, home.as_deref())
-    }
-
     /// What this window puts on a tab of its own — the same ladder, through the
     /// same renderer, as the switcher uses for a tab of somebody else's window.
     /// See [`label_of`].
@@ -1867,7 +1632,10 @@ impl LyrelApp {
             false,
             cx,
         )
-        .rounded(px(RAIL_TILE_RADIUS))
+        .w(gpui_kit::rems(tile / 16.))
+        .h(gpui_kit::rems(tile / 16.))
+        .with_size(cx.theme().font_size * (glyph / BUTTON_ICON_SCALE / 16.))
+        .rounded_lg()
         // Every other tile in this row names itself on hover — Switch
         // Workspace, More, Hide Sidebar. The three New Tab buttons that
         // come through here were the ones left silent. The chord is worth
@@ -1955,9 +1723,7 @@ impl LyrelApp {
         };
         let this = entity.read(cx);
         // Taken before `this` is let go for the Move to Group submenu below.
-        let sidebar =
-            cx.global::<Config>().tab_bar_position == crate::core::config::TabBarPosition::Left;
-        let move_targets = sidebar.then(|| {
+        let move_targets = Some({
             let keys = this.sidebar_group_keys(cx);
             crate::ui::tab_sidebar::move_targets(&keys, &this.sidebar_groups, index)
         });
@@ -2261,544 +2027,6 @@ impl LyrelApp {
                 }),
             )
     }
-
-    pub(crate) fn tab_strip(
-        &self,
-        show_chips: bool,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let active = self.active;
-        let show_badges = self.mod_hint_badges;
-        // On macOS an open detail panel draws its own chrome in the title bar,
-        // so the strip stops at the panel's edge rather than running the width
-        // of the window. Sizing it to the whole viewport made it overrun that
-        // edge, and what got pushed out past it was the New Tab button.
-        let panel_w = match cfg!(target_os = "macos") && self.right_panel_open(cx) {
-            true => self.right_panel_px(window, cx),
-            false => 0.,
-        };
-        // A docked document column has the same claim on this strip the detail
-        // panel does, and it is answered in the same two ways. On macOS the
-        // strip lives *inside* the terminal column, so the column's width comes
-        // off `strip_w` the way the panel's does — sizing the strip to more
-        // than it gets is what pushed the New Tab button out before.
-        // Everywhere else the strip spans the workspace and the column's header
-        // is drawn over its trailing end, so the width is reserved as a corner
-        // instead: that header carries no fill of its own, and a chip left
-        // under it showed through the file name while staying clickable.
-        let document_w = self.document_dock_px(window, cx).unwrap_or(0.);
-        let controls_w = crate::ui::app::window_controls_w(window.is_fullscreen());
-        let strip_w = if cfg!(target_os = "macos") {
-            (window.viewport_size().width
-                - px(crate::ui::app::TITLE_BAR_LEAD + panel_w + document_w))
-            .max(px(160.))
-        } else {
-            (window.viewport_size().width - px(crate::ui::app::TITLE_BAR_LEAD + controls_w))
-                .max(px(140.))
-        };
-        let chrome_band_w = (!cfg!(target_os = "macos") && self.right_panel_open(cx))
-            .then(|| (self.right_panel_px(window, cx) - controls_w - 1.).max(0.));
-        // `corner_w` reserves the trailing window chrome. With the panel open on
-        // macOS that chrome belongs to the panel's own header, which the strip
-        // now stops short of, so reserving for it here would charge the chips
-        // for it twice.
-        // On macOS the trailing tiles sit at the end of the terminal column's
-        // strip only while nothing stands to the right of it. A docked document
-        // takes the window's right edge the way the panel does, so the tiles
-        // give way to it instead of hanging in the middle of the window beside
-        // the document's own header. ⌘J and the palette still reach both.
-        let strip_chrome = !cfg!(target_os = "macos") || (panel_w <= 0. && document_w <= 0.);
-        let corner_w = if !strip_chrome || panel_w > 0. {
-            0.
-        } else {
-            chrome_band_w.unwrap_or_else(trailing_chrome_tiles_w)
-        } + if cfg!(target_os = "macos") {
-            // Already taken out of `strip_w` above; charging it here too would
-            // narrow the chips by a column's width twice over.
-            0.
-        } else {
-            document_w
-        };
-        let fixed_w = 3. * CHIP_GAP + crate::ui::app::TILE_SIZE + corner_w;
-        let chips_avail = (strip_w - px(fixed_w + GRAB_HANDLE_W)).max(px(80.));
-        let mut chips = h_flex()
-            .items_center()
-            .gap(px(CHIP_GAP))
-            .min_w_0()
-            .max_w(chips_avail)
-            .overflow_hidden();
-
-        // Held by the app rather than by the frame: a pane dropped up here has
-        // to read the gaps between the chips, and it is asking a frame later
-        // than the one that drew them. Blanked here and written again from
-        // paint, so a chip that is not drawn this time — the strip is hidden,
-        // or the chip scrolled out of it — leaves nothing behind to aim at.
-        let slots = self.strip_slots.clone();
-        *slots.borrow_mut() = vec![Bounds::default(); self.tabs.len()];
-        let preview = reorder::preview(
-            &self.reorder,
-            &Surface::Strip,
-            self.tabs.len(),
-            window.mouse_position(),
-        );
-        let display: Vec<usize> = match &preview {
-            Some(p) => {
-                reorder::set_pending(&self.reorder, &Surface::Strip, p.order.clone());
-                p.order.clone()
-            }
-            None => (0..self.tabs.len()).collect(),
-        };
-        let display = visible_chips(&display, active, f32::from(chips_avail));
-
-        for i in display {
-            if !show_chips {
-                break;
-            }
-            let dragged = preview.as_ref().is_some_and(|p| p.from == i);
-            let tab = &self.tabs[i];
-            let is_active = i == active;
-            let label = self.tab_label(tab, i, Some(window), cx);
-            let full_title = self.tab_title_tooltip(tab, i, Some(window), cx);
-            let ssh_dot = self.tab_ssh_dot(tab, cx);
-            let asleep = tab.is_asleep();
-            let agent = tab.agent(cx).or_else(|| tab.asleep_agent());
-            let agent_status = tab.agent_status(cx);
-            let agent_unread = tab.agent_unread_count(cx);
-            let zoomed = self.tab_is_zoomed(i);
-
-            let rename_input = self
-                .renaming
-                .as_ref()
-                .filter(|r| r.tab == tab.tree_id.get())
-                .map(|r| r.input.clone());
-            let label_region = match rename_input {
-                Some(input) => div()
-                    .id(("tab-rename", i))
-                    .flex_1()
-                    .min_w_0()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    // The chip switches tabs on the *release* now, so holding
-                    // the press back is no longer enough: a click landing in
-                    // the field would reach the chip behind it and switch away
-                    // from the name being typed, taking the focus with it.
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    // No inset of its own: the label it replaces starts
-                    // flush, and the field's 12px padding jumped the name
-                    // sideways the moment rename began.
-                    .child(Input::new(&input).appearance(false).px_0())
-                    .into_any_element(),
-                None => div()
-                    .id(("tab-label", i))
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .when(is_active, |d| d.font_weight(FontWeight::MEDIUM))
-                    .when_some(full_title, |d, title| {
-                        d.tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(title.clone())
-                                .build(window, cx)
-                        })
-                    })
-                    .child(label)
-                    .into_any_element(),
-            };
-
-            let chip = h_flex()
-                .id(("tab-chip", i))
-                .on_drag(DragTab, {
-                    let state = self.reorder.clone();
-                    let slots = slots.clone();
-                    let id = tab.tree_id.get();
-                    move |_drag, grab, _window, cx| {
-                        cx.stop_propagation();
-                        *state.borrow_mut() = Some(
-                            Reorder::new(
-                                Surface::Strip,
-                                i,
-                                slots.borrow().clone(),
-                                Axis::Horizontal,
-                                px(CHIP_GAP),
-                                grab,
-                            )
-                            .of_tab(id),
-                        );
-                        cx.new(|_| DragTab)
-                    }
-                })
-                .occlude()
-                .group(SharedString::from(format!("tab-chip-{i}")))
-                .cursor_pointer()
-                .items_center()
-                .justify_between()
-                .gap_1p5()
-                .h(px(30.))
-                .min_w(px(CHIP_MIN_W))
-                .flex_shrink(1.)
-                .pl_3()
-                .pr_1p5()
-                .rounded_lg()
-                .when(is_active, |s| {
-                    s.bg(cx.theme().secondary).text_color(cx.theme().foreground)
-                })
-                .when(!is_active, |s| {
-                    s.text_color(cx.theme().muted_foreground)
-                        .hover(|s| s.bg(cx.theme().muted))
-                })
-                // Faded as well as marked: a row of chips is read at a glance,
-                // and the tabs holding nothing should be the quiet ones.
-                .when(asleep, |s| s.opacity(0.6))
-                .when(dragged, |s| s.opacity(0.75))
-                .child(
-                    canvas(
-                        {
-                            let slots = slots.clone();
-                            move |bounds, _window, _cx| {
-                                if let Some(slot) = slots.borrow_mut().get_mut(i) {
-                                    *slot = bounds;
-                                }
-                            }
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-                // The press is kept from the title bar under it, but it is the
-                // release that switches tabs: a press that turns into a drag is
-                // the tab being picked up, and picking a tab up to drop it into
-                // another one must not first put it on screen.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(
-                    cx.listener(move |this, ev: &gpui_kit::ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        let double =
-                            matches!(ev, gpui_kit::ClickEvent::Mouse(e) if e.down.click_count >= 2);
-                        if double {
-                            window.titlebar_double_click();
-                        } else {
-                            this.activate(i, window, cx);
-                        }
-                    }),
-                )
-                .when_some(ssh_dot, |c, rgb| {
-                    c.child(
-                        div()
-                            .flex_shrink_0()
-                            .size(px(6.))
-                            .rounded_full()
-                            .bg(gpui_kit::rgb(rgb)),
-                    )
-                })
-                .when_some(agent, |chip, agent| {
-                    chip.child(self.tab_avatar(
-                        ("tab-avatar", i),
-                        Some(agent),
-                        agent_status,
-                        agent_unread,
-                        None,
-                        18.,
-                        cx,
-                    ))
-                })
-                // Leading, beside the other state marks: the trailing end of a
-                // chip belongs to the badge and to the close button that fades
-                // in over it, and a mark parked there would vanish under the
-                // pointer that came to read it.
-                .when(zoomed, |chip| {
-                    chip.child(self.zoom_mark(("tab-zoom", i), cx))
-                })
-                .when(asleep, |chip| {
-                    chip.child(self.sleep_mark(("tab-asleep", i), cx))
-                })
-                .child(label_region)
-                .when(show_badges && i < 9, |chip| {
-                    chip.child(
-                        div()
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(20.))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if is_active {
-                                cx.theme().foreground
-                            } else {
-                                cx.theme().muted_foreground
-                            })
-                            .child(tab_badge_label(i)),
-                    )
-                })
-                .when(!(show_badges && i < 9), |chip| {
-                    let backing = if is_active {
-                        cx.theme().secondary
-                    } else {
-                        cx.theme().muted
-                    };
-                    let mut fade_from = backing;
-                    fade_from.a = 0.;
-                    chip.child(
-                        h_flex()
-                            .absolute()
-                            // 3 + MIN_TARGET + 3 centres the button in the 30px chip.
-                            .top(px(3.))
-                            .right(px(6.))
-                            .opacity(0.)
-                            .group_hover(SharedString::from(format!("tab-chip-{i}")), |s| {
-                                s.opacity(1.)
-                            })
-                            .child(div().w(px(10.)).h(px(MIN_TARGET)).bg(linear_gradient(
-                                90.,
-                                linear_color_stop(fade_from, 0.),
-                                linear_color_stop(backing, 1.),
-                            )))
-                            .child(
-                                div().bg(backing).child(
-                                    hit_target(
-                                        Button::new(("tab-close", i))
-                                            .icon(IconName::Close)
-                                            .ghost()
-                                            .xsmall(),
-                                    )
-                                    .tooltip(t(L10nKey::TabContextCloseTab))
-                                    // Held here, because the chip behind it
-                                    // switches tabs on the release too: without
-                                    // this the same click closes tab `i` and
-                                    // then activates whichever tab slid into
-                                    // its place.
-                                    .on_click(cx.listener(
-                                        move |this, _, window, cx| {
-                                            cx.stop_propagation();
-                                            this.close_tab(i, window, cx);
-                                        },
-                                    )),
-                                ),
-                            ),
-                    )
-                });
-
-            let menu_app = cx.entity().downgrade();
-            let chip = chip.context_menu(move |menu, window, cx| {
-                Self::tab_context_menu(menu, i, false, &menu_app, window, cx)
-            });
-            chips = chips.child(match &preview {
-                Some(p) if p.from == i => deferred(chip.relative().left(p.held)).into_any_element(),
-                Some(p) => {
-                    let offset = p.offsets[i].as_f32();
-                    chip.with_animation(
-                        (
-                            SharedString::from(format!("chip-slide-{}", p.generation)),
-                            i,
-                        ),
-                        Animation::new(std::time::Duration::from_millis(REORDER_SLIDE_MS))
-                            .with_easing(ease_out_quint()),
-                        move |el, delta| el.left(px(offset * (1. - delta))),
-                    )
-                    .into_any_element()
-                }
-                None => chip.into_any_element(),
-            });
-        }
-
-        let add_button = div()
-            .occlude()
-            .flex_shrink_0()
-            .child(self.new_tab_button("tab-add", cx));
-
-        // Same bargain the rail's own tiles keep when the Appearance switch is
-        // on: present in the layout, painted only while the pointer is on the
-        // bar. The New Tab button that trails the chips is left alone — it is
-        // part of the row of tabs, not of the window's chrome.
-        let auto_hide_chrome = cx.global::<Config>().auto_hide_titlebar_buttons;
-        let strip_chrome_shown =
-            crate::ui::app::titlebar_chrome_shown(auto_hide_chrome, self.strip_chrome_hover.get());
-        let rail_collapsed = !show_chips && !self.left_panel_open(cx);
-        let left_group = rail_collapsed.then(|| {
-            h_flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(2.))
-                .ml(px(crate::ui::app::title_bar_hug_offset()))
-                .when_some(crate::ui::app::window_mark(), |group, mark| {
-                    group.child(
-                        div()
-                            .flex_shrink_0()
-                            .pl(px(crate::ui::app::CONTENT_INSET
-                                - crate::ui::app::tile_trailing_inset()))
-                            .pr(px(4.))
-                            .child(mark),
-                    )
-                })
-                // The logo above stays put: it is the window's mark, not a
-                // control, and a window that loses its identity when nobody is
-                // pointing at it reads as a different window.
-                .child(
-                    crate::ui::app::resting_chrome(
-                        div().occlude().flex_shrink_0(),
-                        strip_chrome_shown,
-                    )
-                    .child(self.new_tab_button("titlebar-add-collapsed", cx)),
-                )
-                .child(
-                    crate::ui::app::resting_chrome(
-                        div().occlude().flex_shrink_0(),
-                        strip_chrome_shown,
-                    )
-                    .child(
-                        chrome_tile(
-                            Button::new("titlebar-expand-sidebar")
-                                .icon(Icon::empty().path("icons/panel-left-collapsed.svg")),
-                            false,
-                            cx,
-                        )
-                        .rounded_lg()
-                        .accessibility_label(t(L10nKey::TabTooltipShowSidebar))
-                        .tooltip_with_action(
-                            t(L10nKey::TabTooltipShowSidebar),
-                            &crate::core::actions::ToggleLeftPanel,
-                            None,
-                        )
-                        .on_click(cx.listener(|this, _, _window, cx| this.toggle_left_panel(cx))),
-                    ),
-                )
-        });
-
-        // macOS places these controls in the open panel's own title bar, and
-        // drops them while a docked document holds the right edge.
-        //
-        // Elsewhere, with the panel open, they stand in the band above it,
-        // beside the panel's own tab row — which is painted whenever the panel
-        // is, so a band that grew a button on hover read as a glitch next to
-        // it. Once the panel is open they belong to its chrome, and stay.
-        let right_chrome_shown = strip_chrome_shown || self.right_panel_open(cx);
-        let right_chrome = strip_chrome.then(|| {
-            crate::ui::app::resting_chrome(div().flex_shrink_0(), right_chrome_shown)
-                .child(self.window_chrome(cx))
-        });
-
-        // With the tabs in the rail, the middle of the bar over the terminal
-        // is the way into Search Everywhere: a field-shaped button, centred,
-        // that opens the search where it stands. The rail beside it already
-        // names every tab, so the bar has no title of its own to repeat. The
-        // box alone takes the pointer; the rest of the bar still drags.
-        //
-        // Centred over the terminal column, not the bar: see `search_band`.
-        // Off macOS the bar spans the workspace while a document or the detail
-        // panel is docked, and centred on all of it the box landed under the
-        // document's hoisted header, which has no fill to hide it.
-        let docked_right = document_w
-            + match self.right_panel_open(cx) {
-                true => self.right_panel_px(window, cx),
-                false => 0.,
-            };
-        let band = search_band(
-            cfg!(target_os = "macos"),
-            title_bar_strip_lead(window.is_fullscreen(), window.rem_size().as_f32()),
-            docked_right,
-            controls_w,
-            rail_collapsed.then(collapsed_rail_group_w),
-            (strip_chrome && docked_right <= 0.).then(trailing_chrome_tiles_w),
-        );
-        let centre_search = (!show_chips).then(|| {
-            // The chord as text, not caps: a cap's fill is this box's own
-            // grey, so on it a cap is only a gap between two letters.
-            let chord = crate::ui::keymap::effective_key("TogglePalette", cx)
-                .map(|spec| crate::ui::keymap::key_tokens(&spec).join(""));
-            // Two equal springs either side keep the box centred; each stops
-            // at the band's `clear`, and past that it is the box that gives.
-            let spring = || div().flex_1().min_w(px(band.clear));
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(band.left))
-                .right(px(band.right))
-                .flex()
-                .items_center()
-                .child(spring())
-                .child(
-                    h_flex()
-                        .id("titlebar-search")
-                        .occlude()
-                        .w(px(TITLEBAR_SEARCH_W))
-                        .min_w_0()
-                        // Enough of the bar that the label and its chord still
-                        // fit with a document docked beside the terminal; at a
-                        // half it read `Search Everywhe…` in exactly the
-                        // layout people search from most.
-                        .max_w(gpui_kit::relative(0.6))
-                        .h(px(TITLEBAR_SEARCH_H))
-                        .items_center()
-                        .gap(px(7.))
-                        .pl(px(10.))
-                        .pr(px(10.))
-                        .rounded(px(7.))
-                        // The left rail's fill (`Surfaces::rail`, #f5f5f3 /
-                        // #1e1e20 on the default pair) — not `sidebar`, which
-                        // is the window's own fill and vanished into the bar.
-                        .bg(gpui_kit::rgb(
-                            cx.global::<crate::ui::presets::Surfaces>().rail.base,
-                        ))
-                        .cursor_pointer()
-                        .text_size(window.rem_size() * 0.8125)
-                        .text_color(cx.theme().muted_foreground)
-                        .hover(|s| s.text_color(cx.theme().foreground))
-                        .child(Icon::new(IconName::Search).size(px(12.)).flex_shrink_0())
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(t(L10nKey::AppMenuSearchEverywhere)),
-                        )
-                        .when_some(chord, |row, chord| {
-                            row.child(div().flex_shrink_0().child(chord))
-                        })
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(
-                            cx.listener(|this, _, window, cx| match this.search.is_some() {
-                                true => this.close_search(window, cx),
-                                false => this.open_search(SearchTab::All, "", window, cx),
-                            }),
-                        ),
-                )
-                .child(spring())
-        });
-
-        h_flex()
-            .id("tab-strip")
-            .relative()
-            .items_center()
-            .gap_1p5()
-            .when(show_chips, |this| this.w(strip_w))
-            .when(!show_chips, |this| this.w_full())
-            .pl_0()
-            .min_w_0()
-            .when_some(centre_search, |this, search| this.child(search))
-            .when_some(left_group, |this, g| this.child(g))
-            .child(chips)
-            .when(show_chips, move |this| this.child(add_button))
-            .child(div().flex_1().min_w(px(GRAB_HANDLE_W)))
-            .when_some(right_chrome, |this, chrome| match chrome_band_w {
-                Some(w) => this.child(
-                    h_flex()
-                        .flex_none()
-                        .w(px(w))
-                        .items_center()
-                        .pl(px(tile_trailing_inset()))
-                        .child(chrome),
-                ),
-                None => this.child(chrome),
-            })
-            .when(auto_hide_chrome, |this| {
-                this.child(crate::ui::app::hover_sheet(
-                    "strip-chrome-hover",
-                    &self.strip_chrome_hover,
-                ))
-            })
-    }
 }
 
 /// The tab menu's SSH row, against real tabs in a real window.
@@ -3089,79 +2317,9 @@ mod ssh_host_row_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::theme::TRAFFIC_LIGHTS_LEAD;
     use gpui_kit::TestAppContext;
     use std::path::Path;
     use unicode_segmentation::UnicodeSegmentation;
-
-    /// Where a band lands in the terminal column, for a strip that starts
-    /// `lead` in and ends `strip_end` from the column's left edge.
-    fn band_in_column(band: SearchBand, lead: f32, strip_end: f32) -> (f32, f32) {
-        (lead + band.left, strip_end - band.right)
-    }
-
-    /// #1033, with the reporter's window: 1946pt wide, the rail collapsed.
-    /// The strip started 80pt in, after the traffic lights, and centred on it
-    /// the box sat at 1013 — 40pt right of the window's middle at 973.
-    #[test]
-    fn with_the_rail_collapsed_on_macos_the_search_box_centres_on_the_window() {
-        let (w, lead) = (1946., TRAFFIC_LIGHTS_LEAD);
-        let band = search_band(true, lead, 0., 0., Some(58.), Some(49.));
-        let (l, r) = band_in_column(band, lead, w);
-        assert_eq!((l, r), (0., w));
-        assert_eq!((l + r) / 2., 973.);
-        // Clear of the traffic lights and the two tiles after them, at both
-        // ends so that clearing them does not pull the box off centre.
-        assert_eq!(band.clear, lead + 58. + TITLEBAR_SEARCH_CLEAR_GAP);
-    }
-
-    /// With the rail open, the title bar sits in the terminal column but
-    /// still leaves the traffic lights' lead before the strip, over nothing
-    /// — the lights are over the rail. The band reaches back over that too,
-    /// and centres on the column.
-    #[test]
-    fn with_the_rail_open_on_macos_the_search_box_centres_on_the_terminal_column() {
-        let (column, lead) = (1200., TRAFFIC_LIGHTS_LEAD);
-        let band = search_band(true, lead, 0., 0., None, Some(49.));
-        assert_eq!(band_in_column(band, lead, column), (0., column));
-        assert_eq!(band.clear, 49. + TITLEBAR_SEARCH_CLEAR_GAP);
-
-        // A docked panel on macOS is beside the column, not under its bar:
-        // nothing to subtract from the strip's end.
-        let docked = search_band(true, lead, 360., 0., None, None);
-        assert_eq!(band_in_column(docked, lead, column), (0., column));
-        assert_eq!(docked.clear, 0.);
-    }
-
-    /// Fullscreen keeps the traffic lights' lead and adds the bar's own inset.
-    #[test]
-    fn fullscreen_on_macos_reaches_back_over_the_bars_extra_inset_as_well() {
-        let lead = TRAFFIC_LIGHTS_LEAD + 12.;
-        let band = search_band(true, lead, 0., 0., Some(58.), Some(49.));
-        assert_eq!(band_in_column(band, lead, 1440.), (0., 1440.));
-    }
-
-    /// Off macOS the bar spans the docked columns and stops short of the
-    /// window buttons; the band ends where the terminal column does, as it
-    /// always has, and now starts where it does too.
-    #[test]
-    fn off_macos_the_band_is_the_terminal_column_beside_a_docked_panel() {
-        let (w, lead, controls, panel) = (1600., 12., 102., 360.);
-        let strip_end = w - controls;
-        let band = search_band(false, lead, panel, controls, None, None);
-        assert_eq!(band.right, panel - controls);
-        assert_eq!(band_in_column(band, lead, strip_end), (0., w - panel));
-
-        // Nothing docked: the band runs to the end of the strip, short of
-        // the window buttons, and keeps clear of the tiles standing there.
-        let bare = search_band(false, lead, 0., controls, None, Some(38.));
-        assert_eq!(band_in_column(bare, lead, strip_end), (0., strip_end));
-        assert_eq!(bare.clear, 38. + TITLEBAR_SEARCH_CLEAR_GAP);
-
-        // A panel narrower than the buttons leaves no room to take off.
-        let thin = search_band(false, lead, 80., controls, None, None);
-        assert_eq!(thin.right, 0.);
-    }
 
     /// Most of these tests are about where a title is *cut*, not about what
     /// `~` means: the paths they pass either already start with `~` or are
@@ -3690,49 +2848,6 @@ mod tests {
         }
     }
 
-    /// One chip is 100 wide plus a 6 gap, so this is "room for exactly four".
-    const FOUR_CHIPS: f32 = 4. * (CHIP_MIN_W + CHIP_GAP);
-
-    #[test]
-    fn every_chip_is_drawn_while_they_all_fit() {
-        let order: Vec<usize> = (0..4).collect();
-        assert_eq!(visible_chips(&order, 0, FOUR_CHIPS), order);
-        assert_eq!(visible_chips(&order, 3, FOUR_CHIPS), order);
-        assert_eq!(visible_chips(&[0, 1], 1, FOUR_CHIPS), vec![0, 1]);
-    }
-
-    #[test]
-    fn the_run_stays_put_until_the_active_chip_would_fall_off() {
-        let order: Vec<usize> = (0..9).collect();
-        // Anchored at the first tab for as long as the active one is inside it.
-        assert_eq!(visible_chips(&order, 0, FOUR_CHIPS), vec![0, 1, 2, 3]);
-        assert_eq!(visible_chips(&order, 3, FOUR_CHIPS), vec![0, 1, 2, 3]);
-        // Then it slides by exactly as much as it has to.
-        assert_eq!(visible_chips(&order, 4, FOUR_CHIPS), vec![1, 2, 3, 4]);
-        assert_eq!(visible_chips(&order, 8, FOUR_CHIPS), vec![5, 6, 7, 8]);
-    }
-
-    #[test]
-    fn the_active_chip_is_always_among_the_drawn_ones() {
-        let order: Vec<usize> = (0..40).collect();
-        for active in 0..40 {
-            for avail in [0., 1., 80., FOUR_CHIPS, 4000.] {
-                let shown = visible_chips(&order, active, avail);
-                assert!(
-                    shown.contains(&active),
-                    "active {active} missing at {avail}px: {shown:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_reordered_run_is_sliced_in_its_own_order() {
-        // Mid-drag the strip renders `preview.order`, not 0..n.
-        let order = vec![3, 0, 1, 2, 4, 5];
-        assert_eq!(visible_chips(&order, 5, FOUR_CHIPS), vec![1, 2, 4, 5]);
-    }
-
     #[test]
     fn configured_shell_arguments_remain_user_authored_in_the_menu() {
         let shell = DetectedShell {
@@ -3821,47 +2936,6 @@ mod tests {
         );
     }
 
-    /// A tooltip exists to say what the row had to leave out. One that repeats
-    /// the row is worse than none, and the label and the raw string it came
-    /// from are not comparable until both have been abbreviated: `~/repo` and
-    /// `/Users/x/repo` are the same name spelled two ways, and reading them as
-    /// a difference hung a tooltip on every tab named after a directory under
-    /// the home — which, after this change, is most of them.
-    #[test]
-    fn a_tab_named_after_a_directory_says_nothing_more_on_hover_unless_it_was_cut() {
-        let mut tab = strip_tab();
-        tab.cwd = Some("/Users/x/repo".into());
-
-        assert_eq!(label_of(&tab, 0, Some(home())), "~/repo");
-        assert_eq!(
-            tooltip_of(&tab, 0, Some(home())),
-            None,
-            "the row is already showing the whole directory"
-        );
-
-        // Cut down to its last three segments, so the head is worth having.
-        tab.cwd = Some("/Users/x/repo/crates/lyrel-core/src".into());
-        assert_eq!(label_of(&tab, 0, Some(home())), "…/crates/lyrel-core/src");
-        assert_eq!(
-            tooltip_of(&tab, 0, Some(home())).as_deref(),
-            Some("~/repo/crates/lyrel-core/src")
-        );
-
-        // The same holds for a title that happens to be a path — the rung this
-        // guard was already getting wrong before a directory could reach it.
-        let mut titled = strip_tab();
-        titled.osc_title = Some("/Users/x/repo".into());
-        assert_eq!(tooltip_of(&titled, 0, Some(home())), None);
-
-        // A shell integration's `user@host:` head is not in the label, so it
-        // is still worth spelling out.
-        titled.osc_title = Some("me@box:/Users/x/repo".into());
-        assert_eq!(
-            tooltip_of(&titled, 0, Some(home())).as_deref(),
-            Some("me@box:/Users/x/repo")
-        );
-    }
-
     /// The one test that fails if any of the wiring is put back: a real tab,
     /// built the way the window builds one, named through `tab_label` — and
     /// checked against what the switcher renders from the machine tree's view
@@ -3920,12 +2994,6 @@ mod tests {
                 strip,
                 label_of(&from_tree, index, home.as_deref()),
                 "the two columns name the same tab the same way"
-            );
-
-            assert_eq!(
-                app.tab_title_tooltip(tab, index, Some(window), cx),
-                None,
-                "and the row is showing the whole path, so it stays quiet"
             );
         });
     }
@@ -4001,12 +3069,10 @@ mod tests {
             "measured against the home of the host it is on, not of this one"
         );
 
-        // The root of a filesystem is a directory like any other: a tab
-        // sitting in it says so, and says nothing more on hover.
+        // The root of a filesystem is a directory like any other.
         let mut root = strip_tab();
         root.cwd = Some("/".into());
         assert_eq!(label_of(&root, 0, Some(home())), "/");
-        assert_eq!(tooltip_of(&root, 0, Some(home())), None);
     }
 
     fn inventory(labels: &[&str]) -> Vec<DetectedShell> {

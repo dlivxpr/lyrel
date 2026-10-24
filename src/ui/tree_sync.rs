@@ -1,12 +1,12 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, Global};
 use lyrel_core::core::machine::{
     AgentFacts, Axis as TreeAxis, LayoutDelta, Machine, PaneNode, PaneRecord, PaneSeed, Side,
-    Tab as TreeTab, TabId, Workspace,
+    Tab as TreeTab, TabId, TabPresentation, Workspace,
 };
 use lyrel_core::daemon::control::{ControlClient, ControlRequest, ReplyOk};
 use lyrel_core::host::HostId;
@@ -16,6 +16,172 @@ use crate::core::session::{Session, SessionPane, SessionTab, WorkspaceId, Worksp
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneSlot};
+
+fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {
+    match slot {
+        PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
+        PaneSlot::Connecting(pending) => pending.read(cx).spawn.restore_pane,
+    }
+}
+
+fn logical_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<PaneNode> {
+    match pane {
+        Pane::Leaf(slot) => {
+            if remote_window
+                && matches!(slot, PaneSlot::Ready(view) if view.read(cx).ssh_spec().is_some())
+            {
+                return None;
+            }
+            slot_pane_id(slot, cx).map(|pane| PaneNode::Leaf { pane })
+        }
+        Pane::Split {
+            axis, ratio, a, b, ..
+        } => {
+            match (
+                logical_node(a, remote_window, cx),
+                logical_node(b, remote_window, cx),
+            ) {
+                (Some(a), Some(b)) => Some(PaneNode::Split {
+                    axis: match axis {
+                        gpui_kit::Axis::Horizontal => TreeAxis::Horizontal,
+                        gpui_kit::Axis::Vertical => TreeAxis::Vertical,
+                    },
+                    ratio: ratio.get(),
+                    a: Box::new(a),
+                    b: Box::new(b),
+                }),
+                (one, other) => one.or(other),
+            }
+        }
+        Pane::Empty => None,
+    }
+}
+
+fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
+    match node {
+        PaneNode::Leaf { pane } => slots.remove(pane).map(Pane::Leaf),
+        PaneNode::Split { axis, ratio, a, b } => Some(Pane::split_node(
+            match axis {
+                TreeAxis::Horizontal => gpui_kit::Axis::Horizontal,
+                TreeAxis::Vertical => gpui_kit::Axis::Vertical,
+            },
+            *ratio,
+            pane_from_existing(a, slots)?,
+            pane_from_existing(b, slots)?,
+        )),
+    }
+}
+
+/// Toggles presentation through the shared domain mutation. Every leaf, including
+/// client-local native SSH, stays in the logical tree and keeps its existing view.
+pub(crate) fn toggle_pip_for_tab(
+    tab: &mut crate::ui::app::Tab,
+    pane: gpui_kit::EntityId,
+    fallback: Option<gpui_kit::EntityId>,
+    workspace: WorkspaceId,
+    cx: &App,
+) -> bool {
+    change_presentation_for_tab(tab, pane, fallback, None, workspace, cx)
+}
+
+pub(crate) fn set_parked_for_tab(
+    tab: &mut crate::ui::app::Tab,
+    pane: gpui_kit::EntityId,
+    fallback: Option<gpui_kit::EntityId>,
+    parked: bool,
+    workspace: WorkspaceId,
+    cx: &App,
+) -> bool {
+    change_presentation_for_tab(tab, pane, fallback, Some(parked), workspace, cx)
+}
+
+fn change_presentation_for_tab(
+    tab: &mut crate::ui::app::Tab,
+    pane: gpui_kit::EntityId,
+    fallback: Option<gpui_kit::EntityId>,
+    parked: Option<bool>,
+    workspace: WorkspaceId,
+    cx: &App,
+) -> bool {
+    let leaves = tab.pane.leaves();
+    let remote = WorkspaceStore::all(cx)
+        .get(workspace)
+        .is_some_and(|w| w.is_remote());
+    if remote
+        && let Some(changed) =
+            crate::ui::pane_sidecar::change_for_tab(tab, pane, fallback, parked, cx)
+    {
+        return changed;
+    }
+    let Some(target_slot) = leaves.iter().find(|slot| slot.entity_id() == pane) else {
+        return false;
+    };
+    if remote
+        && matches!(target_slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
+    {
+        return false;
+    }
+    let Some(target) = slot_pane_id(target_slot, cx) else {
+        return false;
+    };
+    let Some(root) = logical_node(&tab.pane, remote, cx) else {
+        return false;
+    };
+    // An unassigned connecting leaf must not disappear when a restore reshapes.
+    let mut slots = HashMap::with_capacity(leaves.len());
+    let mut client_local = Vec::new();
+    for slot in &leaves {
+        if remote && matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
+        {
+            client_local.push(slot.clone());
+            continue;
+        }
+        let Some(id) = slot_pane_id(slot, cx) else {
+            return false;
+        };
+        if slots.insert(id, slot.clone()).is_some() {
+            return false;
+        }
+    }
+    let fallback = fallback
+        .and_then(|id| leaves.iter().find(|slot| slot.entity_id() == id))
+        .filter(|slot| {
+            !remote
+                || !matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
+        })
+        .and_then(|slot| slot_pane_id(slot, cx));
+    let mut logical = TreeTab {
+        root,
+        presentation: tab.presentation.clone(),
+        id: tab.tree_id.get(),
+        name: None,
+        group: None,
+        last_auto: None,
+        hibernated: false,
+    };
+    let changed = match parked {
+        Some(true) => logical.park(target),
+        Some(false) => logical.restore_parked(target, fallback),
+        None => {
+            let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target))
+                .then_some(target);
+            logical.set_pip(promote, fallback)
+        }
+    };
+    if !changed {
+        return false;
+    }
+    if logical_node(&tab.pane, remote, cx).as_ref() != Some(&logical.root) {
+        let Some(pane) = pane_from_existing(&logical.root, &mut slots) else {
+            return false;
+        };
+        tab.pane = client_local.into_iter().fold(pane, |tree, slot| {
+            Pane::split_node(gpui_kit::Axis::Horizontal, 0.5, tree, Pane::Leaf(slot))
+        });
+    }
+    tab.presentation = logical.presentation;
+    true
+}
 
 pub(crate) fn control_for(cx: &mut App, host: HostId) -> Option<Arc<ControlClient>> {
     if host.is_local() {
@@ -121,6 +287,7 @@ pub(crate) struct Retiring {
 /// #672, #716, and Restart Server emptying a workspace with sixteen agents in
 /// it). Absence alone now only ever leaves the machine's tab where it is.
 pub(crate) fn intend_close(cx: &mut App, client_ws: WorkspaceId, tab: TabId) {
+    crate::ui::pane_sidecar::intend_close(cx, client_ws, tab);
     let closing = &mut cx
         .default_global::<TreeSync>()
         .windows
@@ -217,6 +384,7 @@ fn closed_session_tab(tab: &TreeTab, panes: &[PaneRecord]) -> SessionTab {
         group: tab.group,
         last_auto: tab.last_auto.clone(),
         tree_id: Some(tab.id),
+        presentation: tab.presentation.clone(),
         hibernated: false,
         asleep_view: None,
     }
@@ -310,6 +478,8 @@ pub(crate) struct DesiredTab {
     pub group: Option<GroupId>,
     pub last_auto: Option<AutoKey>,
     pub root: DesiredNode,
+    pub presentation: TabPresentation,
+    pub presentation_fallback: Option<u64>,
     /// The tab is asleep, and `root` is the layout it will wake into — the
     /// same pane ids the machine already holds, none of them running.
     pub hibernated: bool,
@@ -355,6 +525,17 @@ impl DesiredNode {
             DesiredNode::Split { a, b, .. } => a.seed_of(pane).or_else(|| b.seed_of(pane)),
         }
     }
+
+    fn sibling_of(&self, pane: u64) -> Option<u64> {
+        let DesiredNode::Split { a, b, .. } = self else {
+            return None;
+        };
+        match (a.as_ref(), b.as_ref()) {
+            (DesiredNode::Leaf { pane: id, .. }, _) if *id == pane => Some(*b.first_leaf().0),
+            (_, DesiredNode::Leaf { pane: id, .. }) if *id == pane => Some(*a.first_leaf().0),
+            _ => a.sibling_of(pane).or_else(|| b.sibling_of(pane)),
+        }
+    }
 }
 
 pub(crate) fn desired_tabs(
@@ -395,6 +576,18 @@ pub(crate) fn desired_tabs(
             // A group that really is gone was already cleared by the machine.
             group: tab.group.get(),
             last_auto: tab.auto_group.borrow().clone(),
+            presentation: {
+                let mut presentation = tab.presentation.clone();
+                presentation.remap_panes(|pane| root.seed_of(pane).map(|_| pane));
+                presentation
+            },
+            presentation_fallback: tab.last_focused.and_then(|focused| {
+                tab.pane
+                    .leaves()
+                    .into_iter()
+                    .find(|slot| slot.entity_id() == focused)
+                    .and_then(|slot| slot_pane_id(&slot, cx))
+            }),
             root,
             hibernated: tab.asleep_layout().is_some(),
         });
@@ -468,6 +661,11 @@ fn every_leaf_is_native_ssh(pane: &Pane, cx: &App) -> bool {
             every_leaf_is_native_ssh(a, cx) && every_leaf_is_native_ssh(b, cx)
         }
     }
+}
+
+pub(crate) fn seed_for_slot(slot: &PaneSlot, cx: &App) -> Option<PaneSeed> {
+    let node = desired_node(&Pane::Leaf(slot.clone()), false, cx)?;
+    Some(node.first_leaf().1.clone())
 }
 
 fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNode> {
@@ -627,7 +825,9 @@ pub(crate) fn diff(
     // becoming can ask for it.
     for want in desired {
         if let Some(at) = mirror.tabs.iter().position(|t| t.id == want.id) {
+            reconcile_presentation(workspace, &mut mirror.tabs[at], want, &mut ops);
             reconcile_tab(workspace, mirror, at, want, &mut ops);
+            reconcile_presentation(workspace, &mut mirror.tabs[at], want, &mut ops);
         }
     }
     for (index, want) in desired.iter().enumerate() {
@@ -850,9 +1050,89 @@ fn create_tab(
             last_auto: want.last_auto.clone(),
             root,
             hibernated: want.hibernated,
+            presentation: TabPresentation::default(),
         },
     );
+    let at = index.min(mirror.tabs.len().saturating_sub(1));
+    reconcile_presentation(workspace, &mut mirror.tabs[at], want, ops);
     mirror.active = Some(want.id);
+}
+
+fn reconcile_presentation(
+    workspace: WorkspaceId,
+    tab: &mut TreeTab,
+    want: &DesiredTab,
+    ops: &mut Vec<ControlRequest>,
+) {
+    // Apply recovery before reconciling the tree, then replay records after
+    // arbitrary reshaping. No parked leaf is ever interpreted as PaneClose.
+    let removed = tab
+        .presentation
+        .parked()
+        .iter()
+        .filter(|entry| !want.presentation.is_parked(entry.pane()))
+        .map(|entry| entry.pane())
+        .collect::<Vec<_>>();
+    for pane in removed {
+        if tab.restore_parked(pane, want.presentation_fallback) {
+            ops.push(ControlRequest::PaneRestore {
+                workspace,
+                pane,
+                fallback: want.presentation_fallback,
+            });
+        }
+    }
+    for restore in want.presentation.parked() {
+        if tab.park_with_restore(restore.pane(), Some(restore.clone())) {
+            ops.push(ControlRequest::PanePark {
+                workspace,
+                pane: restore.pane(),
+                restore: Some(restore.clone()),
+            });
+        }
+    }
+    let have = tab.presentation.pip().map(|pip| pip.pane());
+    let desired = want.presentation.pip().map(|pip| pip.pane());
+    if tab.presentation == want.presentation {
+        return;
+    }
+    let fallback = tab.visible_root().and_then(|root| {
+        have.and_then(|pane| want.root.sibling_of(pane))
+            .filter(|pane| root.contains(*pane) && Some(*pane) != desired)
+            .or_else(|| {
+                want.presentation_fallback
+                    .filter(|pane| root.contains(*pane) && Some(*pane) != desired)
+            })
+            .or_else(|| {
+                root.pane_ids()
+                    .into_iter()
+                    .find(|pane| Some(*pane) != desired)
+            })
+    });
+    let Some(pane) = desired.or(have) else {
+        return;
+    };
+    let restore = want.presentation.pip().cloned();
+    if tab.set_pip_with_restore(desired, fallback, restore.clone()) {
+        ops.push(ControlRequest::PaneSetPresentation {
+            workspace,
+            pane,
+            pip: desired.is_some(),
+            fallback,
+            restore,
+        });
+    }
+    if tab
+        .presentation
+        .set_pip_geometry(want.presentation.pip_geometry())
+        && desired.is_some()
+    {
+        ops.push(ControlRequest::PaneSetPipGeometry {
+            workspace,
+            pane,
+            geometry: want.presentation.pip_geometry(),
+        });
+    }
 }
 
 fn materialize_splits(
@@ -1366,6 +1646,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
     if !cx.has_global::<crate::core::session::WorkspaceStore>() {
         return;
     }
+    crate::ui::pane_sidecar::sync_window(app, cx);
     if crate::ui::remote_workspace::workspace_is_preempted(cx, client_ws) {
         return;
     }
@@ -1450,6 +1731,9 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
 }
 
 pub(crate) fn on_link_up(cx: &mut App, host: HostId) {
+    if host.is_local() {
+        crate::ui::pane_sidecar::on_local_link_up(cx);
+    }
     for (workspace, app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
         if WorkspaceStore::host_of(cx, workspace) != host {
             continue;
@@ -1771,7 +2055,7 @@ fn start_prime(cx: &mut App, client_ws: WorkspaceId) {
 pub(crate) fn fresh_workspace_name(cx: &App, host: HostId) -> String {
     let mut taken: Vec<String> = Vec::new();
     if let Some(machine) = crate::ui::machine_mirror::MachineMirrors::machine(cx, host) {
-        taken.extend(machine.workspaces.iter().filter_map(|w| w.name.clone()));
+        taken.extend(machine.user_workspaces().filter_map(|w| w.name.clone()));
     }
     // Labels are the names the switcher actually shows, which for an unnamed
     // workspace is its directory. Counting those as taken is deliberately
@@ -2132,6 +2416,7 @@ pub(crate) fn session_from_tree(
             group: tab.group,
             last_auto: tab.last_auto.clone(),
             pane: session_pane_from_node(&tab.root, panes),
+            presentation: tab.presentation.clone(),
             hibernated: tab.hibernated,
             asleep_view: tab.hibernated.then_some(view),
         })
@@ -2500,7 +2785,7 @@ fn say_why_the_window_is_empty(cx: &mut App, client_ws: WorkspaceId) {
         return;
     };
     let _ = handle.update(cx, |_, window, cx| {
-        window.push_notification(t(L10nKey::TreeWindowOpenedEmpty), cx);
+        window.notify_app(t(L10nKey::TreeWindowOpenedEmpty), cx);
     });
 }
 
@@ -2636,8 +2921,7 @@ fn pull_workspace(
     // The whole tree is already in hand, so the taken names can be read
     // straight off it rather than passed down from the main thread.
     let taken: Vec<&str> = machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .filter_map(|w| w.name.as_deref())
         .collect();
     // A name the user typed beats a rolled one. This create and `start_prime`'s
@@ -2714,7 +2998,8 @@ fn layout_of(
     machine: Machine,
     machine_ws: WorkspaceId,
 ) -> Result<(Machine, WsMirror, Session), Machine> {
-    let Some(ws) = machine.workspaces.iter().find(|w| w.id == machine_ws) else {
+    let workspace = machine.user_workspaces().find(|w| w.id == machine_ws);
+    let Some(ws) = workspace else {
         return Err(machine);
     };
     let mirror = WsMirror {
@@ -2782,8 +3067,7 @@ fn settle_hydration(
     // reconnected onto one opens taken over instead, with Take Back.
     if host.is_local() {
         let holder = machine
-            .workspaces
-            .iter()
+            .user_workspaces()
             .find(|w| w.id == machine_ws)
             .and_then(|w| w.attachment.as_ref())
             .map(|a| a.hostname.clone());
@@ -2802,8 +3086,7 @@ fn settle_hydration(
     // What the tree that is about to be installed calls this workspace, which
     // for a pull that had to create it is the name that create proposed.
     let answered = machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .find(|w| w.id == machine_ws)
         .and_then(|w| w.name.clone());
     crate::ui::machine_mirror::MachineMirrors::install(cx, host, machine);
@@ -2998,6 +3281,14 @@ fn on_workspace_deleted(cx: &mut App, client_ws: WorkspaceId) {
 }
 
 pub(crate) fn on_layout_delta(cx: &mut App, host: HostId, key: &str, delta: LayoutDelta) {
+    if host.is_local()
+        && let LayoutDelta::WorkspaceCreated { workspace } = &delta
+        && workspace.foreign_view.is_some()
+    {
+        crate::ui::machine_mirror::MachineMirrors::apply_delta(cx, host, key, &delta);
+        crate::ui::pane_sidecar::on_sidecar_delta(cx, workspace);
+        return;
+    }
     // Asked while the mirror still holds the pane as it was.
     let nothing_shown =
         crate::ui::machine_mirror::MachineMirrors::delta_changes_nothing_shown(cx, host, &delta);
@@ -3087,7 +3378,7 @@ fn apply_to_mirror(mirror: &mut WsMirror, delta: &LayoutDelta) -> bool {
             mirror.tabs.insert(at, tab.clone());
             true
         }
-        LayoutDelta::TabClosed { tab } => {
+        LayoutDelta::TabClosed { tab, .. } => {
             let before = mirror.tabs.len();
             mirror.tabs.retain(|t| t.id != *tab);
             if mirror.tabs.is_empty() {
@@ -3255,8 +3546,25 @@ impl LyrelApp {
             LayoutDelta::TabCreated { at, tab } => {
                 self.insert_tab_from_tree((*at).min(self.tabs.len()), tab, window, cx)
             }
-            LayoutDelta::TabClosed { tab } => {
+            LayoutDelta::TabClosed { tab, reason } => {
+                if *reason == lyrel_core::core::machine::TabCloseReason::Explicit {
+                    crate::ui::pane_sidecar::intend_close(cx, self.workspace, *tab);
+                }
                 if let Some(index) = index_of(&self.tabs, *tab) {
+                    let removed_focus = self.tabs[index].pane.focused_leaf(window, cx).is_some();
+                    if *reason == lyrel_core::core::machine::TabCloseReason::Emptied
+                        && crate::ui::pane_sidecar::retain_client_local(&mut self.tabs[index], cx)
+                    {
+                        self.tabs[index].zoomed = None;
+                        self.maximized = None;
+                        if removed_focus {
+                            self.focus_active(window, cx);
+                        }
+                        crate::ui::pane_sidecar::sync_window(self, cx);
+                        self.refocus_parked_pane(window, cx);
+                        cx.notify();
+                        return true;
+                    }
                     let active_id = self.tabs.get(self.active).map(|t| t.tree_id.get());
                     self.tabs.remove(index);
                     self.active = active_id
@@ -3323,6 +3631,9 @@ impl LyrelApp {
                 }
             }
         };
+        if applied {
+            self.refocus_parked_pane(window, cx);
+        }
         cx.notify();
         applied
     }
@@ -3374,6 +3685,20 @@ impl LyrelApp {
         let remote = WorkspaceStore::all(cx)
             .get(self.workspace)
             .is_some_and(|w| w.is_remote());
+        if remote {
+            crate::ui::pane_sidecar::note_primary_tab(&mut self.tabs[index], tab, cx);
+        }
+        let presentation = tab.presentation.clone();
+        if logical_node(&self.tabs[index].pane, remote, cx).as_ref() == Some(&tab.root) {
+            let gui = &mut self.tabs[index];
+            gui.presentation = presentation;
+            gui.name = tab.name.clone();
+            gui.group.set(tab.group);
+            if gui.auto_group.borrow().is_none() {
+                *gui.auto_group.borrow_mut() = tab.last_auto.clone();
+            }
+            return true;
+        }
         let mut existing: HashMap<u64, PaneSlot> = HashMap::new();
         let mut ssh_slots: Vec<PaneSlot> = Vec::new();
         for slot in self.tabs[index].pane.leaves() {
@@ -3397,6 +3722,7 @@ impl LyrelApp {
         });
         let gui = &mut self.tabs[index];
         gui.pane = pane;
+        gui.presentation = presentation;
         gui.name = tab.name.clone();
         gui.group.set(tab.group);
         if gui.auto_group.borrow().is_none() {
@@ -3478,6 +3804,119 @@ fn set_gui_ratio(pane: &mut Pane, path: &[Side], ratio: f32) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn pip_sync_keeps_every_logical_pane_and_only_changes_presentation() {
+        let workspace = WorkspaceId::new();
+        let mut logical = TreeTab::leaf(1);
+        logical
+            .root
+            .split_leaf(1, 2, TreeAxis::Horizontal, 0.4, false);
+        let id = logical.id;
+        let mut mirror = WsMirror {
+            tabs: vec![logical.clone()],
+            active: Some(id),
+            ..Default::default()
+        };
+        assert!(logical.set_pip(Some(2), Some(1)));
+        let mut desired = tab(id, split(TreeAxis::Horizontal, 0.4, leaf(1), leaf(2)));
+        desired.presentation = logical.presentation.clone();
+        desired.presentation_fallback = Some(1);
+        assert_eq!(
+            diff(
+                workspace,
+                &mut mirror,
+                &[desired.clone()],
+                Some(id),
+                SyncScope::Full,
+                &[]
+            ),
+            vec![ControlRequest::PaneSetPresentation {
+                workspace,
+                pane: 2,
+                pip: true,
+                fallback: Some(1),
+                restore: logical.presentation.pip().cloned(),
+            }],
+        );
+        assert_eq!(mirror.tabs[0].root.pane_ids(), vec![1, 2]);
+        assert_eq!(mirror.tabs[0].presentation, logical.presentation);
+        desired.presentation = TabPresentation::default();
+        assert_eq!(
+            diff(
+                workspace,
+                &mut mirror,
+                &[desired],
+                Some(id),
+                SyncScope::Full,
+                &[]
+            ),
+            vec![ControlRequest::PaneSetPresentation {
+                workspace,
+                pane: 2,
+                pip: false,
+                fallback: Some(1),
+                restore: None
+            }],
+        );
+        assert_eq!(mirror.tabs[0].root, logical.root);
+        assert!(mirror.tabs[0].presentation.pip().is_none());
+    }
+
+    #[test]
+    fn an_orphan_pip_restore_syncs_beside_the_actual_desired_fallback() {
+        let workspace = WorkspaceId::new();
+        let mut logical = TreeTab::leaf(1);
+        logical
+            .root
+            .split_leaf(1, 2, TreeAxis::Horizontal, 0.4, false);
+        assert!(logical.set_pip(Some(2), Some(1)));
+        logical.root.remove_leaf(1);
+        logical
+            .root
+            .split_leaf(2, 3, TreeAxis::Vertical, 0.6, false);
+        logical
+            .root
+            .split_leaf(3, 4, TreeAxis::Horizontal, 0.7, false);
+        let id = logical.id;
+        let mut mirror = WsMirror {
+            tabs: vec![logical],
+            active: Some(id),
+            ..Default::default()
+        };
+        let mut desired = tab(
+            id,
+            split(
+                TreeAxis::Horizontal,
+                0.7,
+                leaf(3),
+                split(TreeAxis::Horizontal, 0.4, leaf(4), leaf(2)),
+            ),
+        );
+        // The restored pane has already received local focus; that must not
+        // replace the tiled fallback the restore actually used.
+        desired.presentation_fallback = Some(2);
+        let ops = diff(
+            workspace,
+            &mut mirror,
+            &[desired.clone()],
+            Some(id),
+            SyncScope::Full,
+            &[],
+        );
+        assert_eq!(
+            ops,
+            vec![ControlRequest::PaneSetPresentation {
+                workspace,
+                pane: 2,
+                pip: false,
+                fallback: Some(4),
+                restore: None,
+            }]
+        );
+        assert_eq!(mirror.tabs[0].root, desired.root.to_pane_node());
+        assert!(mirror.tabs[0].presentation.pip().is_none());
+    }
+
     fn retiring(tab: TabId, panes: Vec<u64>) -> Retiring {
         Retiring {
             tab,
@@ -3553,7 +3992,7 @@ mod tests {
     #[test]
     fn a_reopened_tab_reads_back_its_layout_and_what_each_pane_was() {
         use lyrel_core::core::machine::{PaneRecord, ReopenedTab};
-        let tab = TreeTab {
+        let mut tab = TreeTab {
             name: Some("api".into()),
             root: PaneNode::Split {
                 axis: TreeAxis::Vertical,
@@ -3563,6 +4002,7 @@ mod tests {
             },
             ..TreeTab::leaf(0)
         };
+        assert!(tab.set_pip(Some(8), Some(7)));
         let mut agent_pane = PaneRecord::new(8);
         agent_pane.cwd = Some("/repo".into());
         agent_pane.agent = Some(AgentFacts {
@@ -3581,6 +4021,7 @@ mod tests {
         };
 
         let st = session_tab_from_reopened(&reopened);
+        assert_eq!(st.presentation, tab.presentation);
 
         assert_eq!(st.tree_id, Some(tab.id));
         assert_eq!(st.name.as_deref(), Some("api"));
@@ -4203,6 +4644,7 @@ mod tests {
                 name: None,
                 group: None,
                 last_auto: None,
+                presentation: TabPresentation::default(),
                 root: PaneNode::Leaf { pane: 1 },
                 hibernated: false,
             };
@@ -4251,6 +4693,7 @@ mod tests {
             name: None,
             group: None,
             last_auto: None,
+            presentation: TabPresentation::default(),
             root: PaneNode::Leaf { pane },
             hibernated: false,
         };
@@ -4893,6 +5336,7 @@ mod tests {
                             name: None,
                             group: None,
                             last_auto: None,
+                            presentation: TabPresentation::default(),
                             root: PaneNode::Leaf { pane: 1 },
                             hibernated: false,
                         },
@@ -4901,6 +5345,7 @@ mod tests {
                             name: None,
                             group: None,
                             last_auto: None,
+                            presentation: TabPresentation::default(),
                             root: PaneNode::Leaf { pane: 2 },
                             hibernated: false,
                         },
@@ -4990,6 +5435,7 @@ mod tests {
                             name: None,
                             group: None,
                             last_auto: None,
+                            presentation: TabPresentation::default(),
                             root: PaneNode::Leaf { pane: 11 },
                             hibernated: false,
                         },
@@ -4998,6 +5444,7 @@ mod tests {
                             name: None,
                             group: None,
                             last_auto: None,
+                            presentation: TabPresentation::default(),
                             root: PaneNode::Leaf { pane: 12 },
                             hibernated: false,
                         },
@@ -5136,6 +5583,8 @@ mod tests {
             group: None,
             last_auto: None,
             root,
+            presentation: TabPresentation::default(),
+            presentation_fallback: None,
             hibernated: false,
         }
     }
@@ -5167,6 +5616,7 @@ mod tests {
             assert_eq!(m.name, d.name);
             assert_eq!(m.group, d.group);
             assert_eq!(m.root, d.root.to_pane_node());
+            assert_eq!(m.presentation, d.presentation);
         }
     }
 
@@ -5472,7 +5922,7 @@ mod tests {
         let ws = WorkspaceId::new();
         let id = TabId::new();
         let mut mirror = WsMirror::default();
-        let before = vec![tab(
+        let mut before = vec![tab(
             id,
             split(
                 TreeAxis::Vertical,
@@ -5481,10 +5931,16 @@ mod tests {
                 split(TreeAxis::Horizontal, 0.5, leaf(3), leaf(4)),
             ),
         )];
+        let mut original = TreeTab {
+            root: before[0].root.to_pane_node(),
+            ..TreeTab::leaf(1)
+        };
+        assert!(original.set_pip(Some(1), Some(2)));
+        before[0].presentation = original.presentation.clone();
         diff(ws, &mut mirror, &before, Some(id), SyncScope::Full, &[]);
 
         // 1 and 4 trade corners: two panes moved, which no one op describes.
-        let after = vec![tab(
+        let mut after = vec![tab(
             id,
             split(
                 TreeAxis::Vertical,
@@ -5493,11 +5949,18 @@ mod tests {
                 split(TreeAxis::Horizontal, 0.5, leaf(3), leaf(1)),
             ),
         )];
+        after[0].presentation = original.presentation.clone();
         let ops = diff(ws, &mut mirror, &after, Some(id), SyncScope::Full, &[]);
         assert!(
             matches!(ops.first(), Some(ControlRequest::TabClose { .. })),
             "expected the rebuild fallback, got {ops:?}"
         );
+        assert!(
+            matches!(ops.last(), Some(ControlRequest::PaneSetPresentation {
+            pane: 1, pip: true, restore: Some(restore), ..
+        }) if Some(restore) == original.presentation.pip())
+        );
+        assert_eq!(mirror.tabs[0].presentation, original.presentation);
         assert_converged(&mirror, &after);
     }
 
@@ -5803,6 +6266,7 @@ mod tests {
             name: None,
             group: None,
             last_auto: None,
+            presentation: TabPresentation::default(),
             root: PaneNode::Leaf { pane: 1 },
             hibernated: false,
         };
@@ -5825,6 +6289,7 @@ mod tests {
                     name: None,
                     group: None,
                     last_auto: None,
+                    presentation: TabPresentation::default(),
                     root: PaneNode::Split {
                         axis: TreeAxis::Vertical,
                         ratio: 0.5,
@@ -5882,7 +6347,10 @@ mod tests {
         );
         assert!(!apply_to_mirror(
             &mut mirror,
-            &LayoutDelta::TabClosed { tab: TabId::new() },
+            &LayoutDelta::TabClosed {
+                tab: TabId::new(),
+                reason: lyrel_core::core::machine::TabCloseReason::Explicit
+            },
         ),);
     }
 
@@ -5896,6 +6364,7 @@ mod tests {
                 name: Some("build".into()),
                 group: Some(GroupId::new()),
                 last_auto: Some(AutoKey::Repo("/work".into())),
+                presentation: TabPresentation::default(),
                 root: PaneNode::Split {
                     axis: TreeAxis::Vertical,
                     ratio: 0.3,
@@ -5999,6 +6468,7 @@ mod tests {
                 name: None,
                 group: None,
                 last_auto: None,
+                presentation: TabPresentation::default(),
                 root: PaneNode::Leaf { pane: 7 },
                 hibernated: false,
             }],
@@ -6030,6 +6500,7 @@ mod tests {
                 name: None,
                 group: None,
                 last_auto: None,
+                presentation: TabPresentation::default(),
                 root: PaneNode::Leaf { pane: 1 },
                 hibernated: false,
             }],
@@ -6263,6 +6734,7 @@ mod tests {
                     name: None,
                     group: None,
                     last_auto: None,
+                    presentation: TabPresentation::default(),
                     root: PaneNode::Leaf { pane: 1 },
                     hibernated: false,
                 },
@@ -6271,6 +6743,7 @@ mod tests {
                     name: None,
                     group: None,
                     last_auto: None,
+                    presentation: TabPresentation::default(),
                     root: PaneNode::Leaf { pane: 2 },
                     hibernated: true,
                 },

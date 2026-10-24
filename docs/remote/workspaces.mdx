@@ -7,6 +7,21 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
 
 不会同步或复制任何内容。仓库始终留在原处。
 
+### 整机 CPU／内存
+
+终端工作流的全局状态栏显示当前工作区所属远端主机的整机 CPU／MEM。
+桌面通过已经建立的 `RemoteHost` control 连接请求远端 daemon；Windows、macOS 与 Linux server 都在各自主机后台采样，
+不读取桌面进程或窗格进程树。CPU 为全部逻辑核归一化至 0–100% 的忙碌率，MEM 为系统定义的已用物理 RAM 比例，不含 swap。
+悬停可查看服务器报告的实际主机名及已用／总 GiB。
+
+首次采样需要建立 CPU 基线；连接中、重连中、断开、服务器不支持指标和采样失败都有明确状态，不用 0% 或本机数据代替。
+从本地切到远端、从远端切回本地或切换两台远端机器时，旧主机的数字不会挂在新主机名称下。
+同一工作区内切标签页、聚焦 PiP 或终端窗格不会改变测量对象。多窗口访问同一主机共享采样，离开其最后一个终端工作流后停止轮询。
+
+指标使用 `host-metrics-v1` capability 和现有 control v16 消息；pane 协议仍为 v7。
+重连会重新核对服务器 instance，拒绝旧连接迟到的结果。缺少 capability 时保留正常控制连接，只将指标标为不可用。
+
+
 <a id="connecting"></a>
 ## 连接
 
@@ -42,7 +57,7 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
 
 Linux 二进制文件完全静态链接 musl，因此无论 glibc 版本新旧，都能在任何发行版上运行。macOS 二进制文件只链接每台 Mac 都已具备的库。无论哪种情况，都不会额外安装其他内容。
 
-二进制文件按其使用的通信协议版本命名，因此客户端和服务器协议不一致时，不会悄悄进入只能部分工作的状态——lyrel 会改为安装匹配的版本。客户端与服务器的应用版本统一为 `0.1.2`；这不重置 IPC 协议，当前文件名为 `lyrel-server-c12p7`，Windows 加 `.exe`。stdio 连接使用该程序的 `--stdio` 入口；pane 连接沿用既有 `--pane` 参数。
+二进制文件按其使用的通信协议版本命名，因此客户端和服务器协议不一致时，不会悄悄进入只能部分工作的状态——lyrel 会改为安装匹配的版本。应用版本以当前发布资产为准，不重置 IPC 协议；整机指标与共享窗格呈现使用 control v16，当前文件名为 `lyrel-server-c16p7`，Windows 加 `.exe`。stdio 连接使用该程序的 `--stdio` 入口；pane 连接沿用既有 `--pane` 参数。
 
 SSH 优先查找客户端旁的包内程序：`server/`、客户端目录本身，以及 macOS 的 `Resources/server/`；没有匹配资产时才从 `https://github.com/dlivxpr/lyrel/releases/download/v<version>/` 下载。Linux 资产是 `lyrel-server-linux-x86_64-musl` 或 `lyrel-server-linux-aarch64-musl`，macOS 是 `lyrel-server-macos-aarch64`（仅 Apple 芯片），Windows 是 `lyrel-server-windows-x86_64.zip`（仅 x64 主机；ARM64 主机会被拒绝）。下载必须通过同一 release 的 `checksums.txt` SHA-256 校验；缺 release、匹配包、校验和或校验失败都会终止安装，不猜选其他平台资产，也不回退上游。上传后的临时程序还必须报告匹配的 control／pane 协议，才能发布到最终路径并启动。
 

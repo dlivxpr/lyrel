@@ -56,6 +56,8 @@ pub struct SessionTab {
     #[serde(default)]
     pub name: Option<String>,
     pub pane: SessionPane,
+    #[serde(default)]
+    pub presentation: crate::core::machine::TabPresentation,
     /// The pinned sidebar group the tab was in. Carried so a tab reopened
     /// with ⌘⇧T goes back where it was, when that group is still there.
     #[serde(default, skip_serializing_if = "Option::is_none")]

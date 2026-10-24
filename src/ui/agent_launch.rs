@@ -14,10 +14,10 @@
 //! workspace before (`WindowView::seen_agents`). Either way the order is
 //! frecency, recorded the way saved SSH hosts' is.
 
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, Axis, Context, Window};
 
 use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
@@ -241,12 +241,12 @@ impl LyrelApp {
     ) {
         use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind};
         let Some(cwd) = cwd else {
-            window.push_notification(crate::ui::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
+            window.notify_app(crate::ui::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
             return;
         };
         if self.spawn_host(cx) != host_id {
-            window.push_notification(
-                gpui_kit::component::notification::Notification::error(
+            window.notify_app(
+                crate::ui::notification_history::Notification::error(
                     "the selected history belongs to another host",
                 ),
                 cx,
@@ -254,15 +254,15 @@ impl LyrelApp {
             return;
         }
         let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
-            window.push_notification(crate::ui::i18n::t(L10nKey::RemoteNoticeDisconnected), cx);
+            window.notify_app(crate::ui::i18n::t(L10nKey::RemoteNoticeDisconnected), cx);
             return;
         };
         let launch = agent.launch_command(&cx.global::<Config>().agent_launch);
         let launch_argv = match crate::core::cli_agent::parse_command_argv(&launch) {
             Ok(argv) if !argv.is_empty() => argv,
             _ => {
-                window.push_notification(
-                    gpui_kit::component::notification::Notification::error(
+                window.notify_app(
+                    crate::ui::notification_history::Notification::error(
                         "the configured agent launch is not a literal argv command",
                     ),
                     cx,
@@ -358,7 +358,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui_kit::component::notification::Notification;
+        use crate::ui::notification_history::Notification;
         let mut note = Notification::error(error.to_string()).autohide(false);
         if let Some(prepared) = error.retained {
             note = note
@@ -367,7 +367,7 @@ impl LyrelApp {
                     app.retry_prepared_session((*prepared).clone(), window, cx);
                 }));
         }
-        window.push_notification(note, cx);
+        window.notify_app(note, cx);
     }
 
     fn retry_prepared_session(
@@ -384,7 +384,7 @@ impl LyrelApp {
             cx,
             crate::ui::host_ops::HostId(prepared.host_id),
         ) else {
-            window.push_notification(crate::ui::i18n::t(L10nKey::RemoteNoticeDisconnected), cx);
+            window.notify_app(crate::ui::i18n::t(L10nKey::RemoteNoticeDisconnected), cx);
             return;
         };
         let mut scope = prepared.scope;
@@ -417,7 +417,7 @@ impl LyrelApp {
             Some(agent) => self.launch_agent(agent, SpawnWhere::NewTab, window, cx),
             None => {
                 let remote = WorkspaceStore::remote_ref(cx, self.workspace).is_some();
-                window.push_notification(
+                window.notify_app(
                     crate::ui::i18n::t(if remote {
                         L10nKey::AppNoAgentSeenHere
                     } else {
@@ -456,7 +456,7 @@ impl LyrelApp {
         };
         let view = view.read(cx);
         let Some(agent) = view.agent() else {
-            window.push_notification(crate::ui::i18n::t(L10nKey::AppPaneNoCodingAgent), cx);
+            window.notify_app(crate::ui::i18n::t(L10nKey::AppPaneNoCodingAgent), cx);
             return;
         };
         let name = agent.display_name();
@@ -465,7 +465,7 @@ impl LyrelApp {
             .and_then(|s| s.launch_argv)
             .and_then(|argv| launch_line_to_save(agent, &argv))
         else {
-            window.push_notification(
+            window.notify_app(
                 t_fmt(L10nKey::AppAgentLaunchArgsUnknown, &[("name", name)]),
                 cx,
             );
@@ -473,7 +473,7 @@ impl LyrelApp {
         };
         let saved = line.clone();
         self.update_config(cx, |cfg| remember_launch_line(cfg, agent, saved));
-        window.push_notification(
+        window.notify_app(
             t_fmt(
                 L10nKey::AppAgentLaunchSaved,
                 &[("name", name), ("command", &line)],

@@ -231,14 +231,6 @@ pub struct Config {
     pub window_backdrop: WindowBackdrop,
     #[serde(default = "default_true")]
     pub dim_inactive_panes: bool,
-    /// Paint the title bar's buttons — new tab and the two panel toggles —
-    /// only while the pointer is over the bar they sit in. Off by default: a
-    /// button that is not on screen is a button nobody finds, and the switch
-    /// is for those who already know where it is and would rather rest their
-    /// eyes on a bare bar. The struct-level `serde(default)` reads a file
-    /// written before the key existed as off, which is how every window drew
-    /// then.
-    pub auto_hide_titlebar_buttons: bool,
     /// Lenient one entry at a time, for the same reason the nested keys below
     /// are: this is hand-edited, and it used to be all-or-nothing. A single
     /// value serde could not read — `"ActivateTab1": null`, a number, an object
@@ -274,8 +266,6 @@ pub struct Config {
     pub scrollback_limit: usize,
     #[serde(default, deserialize_with = "de_lenient")]
     pub new_tab_position: NewTabPosition,
-    #[serde(default, deserialize_with = "de_lenient")]
-    pub tab_bar_position: TabBarPosition,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
     #[serde(default)]
@@ -649,14 +639,6 @@ pub enum NewTabPosition {
     End,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TabBarPosition {
-    Top,
-    #[default]
-    Left,
-}
-
 /// Native window backdrop material for the Windows GUI. Other platforms retain
 /// the value for config synchronization but do not use it for rendering.
 /// `Auto` keeps the legacy behavior where theme blur decides between blurred
@@ -828,7 +810,6 @@ impl Default for Config {
             window_blur: None,
             window_backdrop: WindowBackdrop::default(),
             dim_inactive_panes: true,
-            auto_hide_titlebar_buttons: false,
             keybindings: HashMap::new(),
             keybinding_preset: default_preset(),
             prefix: default_prefix(),
@@ -841,7 +822,6 @@ impl Default for Config {
             cursor_blink: true,
             scrollback_limit: 10_000,
             new_tab_position: NewTabPosition::AfterCurrent,
-            tab_bar_position: TabBarPosition::Left,
             sidebar_width: default_sidebar_width(),
             sidebar_collapsed: false,
             right_panel_visible: false,
@@ -939,6 +919,36 @@ impl LoadOutcome {
     }
 }
 
+/// 只移除已退役的导航选项，不用 Config 重新序列化用户配置。
+fn migrate_left_navigation(path: &Path, text: String) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(strip_bom(&text)) else {
+        return text;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return text;
+    };
+    let removed_layout = object.remove("tab_bar_position").is_some();
+    let removed_hover = object.remove("auto_hide_titlebar_buttons").is_some();
+    if !removed_layout && !removed_hover {
+        return text;
+    }
+    match serde_json::to_string_pretty(&value)
+        .map_err(std::io::Error::other)
+        .and_then(|updated| {
+            write_atomic(path, updated.as_bytes())?;
+            Ok(updated)
+        }) {
+        Ok(updated) => updated,
+        Err(error) => {
+            log::warn!(
+                "could not migrate retired navigation settings at {}: {error}",
+                path.display()
+            );
+            text
+        }
+    }
+}
+
 impl Config {
     pub fn load() -> Self {
         Self::load_with_outcome().0
@@ -1003,6 +1013,7 @@ impl Config {
         match serde_json::from_str::<Config>(strip_bom(&text)) {
             Ok(mut cfg) => {
                 cfg.sanitize();
+                let text = migrate_left_navigation(path, text);
                 (cfg, LoadOutcome::Parsed, Some(text))
             }
             Err(e) => {
@@ -1966,21 +1977,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_hide_titlebar_buttons_defaults_off_and_round_trips() {
-        assert!(!Config::default().auto_hide_titlebar_buttons);
-
-        // A file from before the key existed keeps its buttons on screen.
-        let old: Config = serde_json::from_str(r#"{"font_size": 15.0}"#).unwrap();
-        assert!(!old.auto_hide_titlebar_buttons);
-
-        let on: Config = serde_json::from_str(r#"{"auto_hide_titlebar_buttons": true}"#).unwrap();
-        assert!(on.auto_hide_titlebar_buttons);
-        let json = serde_json::to_string(&on).unwrap();
-        let back: Config = serde_json::from_str(&json).unwrap();
-        assert!(back.auto_hide_titlebar_buttons, "persisted");
-    }
-
-    #[test]
     fn theme_follow_system_defaults_and_round_trips() {
         let cfg: Config = serde_json::from_str(r#"{"theme_preset":"dracula"}"#).unwrap();
         assert!(!cfg.theme_follow_system);
@@ -2296,6 +2292,50 @@ mod tests {
     }
 
     #[test]
+    fn left_navigation_upgrade_preserves_other_preferences_and_files() {
+        for position in ["top", "left", "diagonal"] {
+            let dir = TestDir::new(&format!("left-navigation-{position}"));
+            let path = dir.path().join("config.json");
+            let original = serde_json::json!({
+                "tab_bar_position": position,
+                "auto_hide_titlebar_buttons": true,
+                "theme_preset": "dark", "font_size": 19.0,
+                "ui_font_family": "Example UI", "window_opacity": 0.73,
+                "sidebar_collapsed": true, "sidebar_width": 315.0,
+                "keybindings": { "SplitRight": "ctrl-alt-d" },
+                "future_preferences": { "keep": [1, "中文", false] }
+            });
+            std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+            let unrelated = dir.path().join("workspace.json");
+            std::fs::write(&unrelated, b"untouched").unwrap();
+            let (loaded, outcome) = Config::load_from(&path);
+            assert_eq!(outcome, LoadOutcome::Parsed);
+            assert_eq!(loaded.font_size, 19.0);
+            assert_eq!(loaded.window_opacity, Some(0.73));
+            assert!(loaded.sidebar_collapsed);
+            let mut expected = original;
+            expected.as_object_mut().unwrap().remove("tab_bar_position");
+            expected
+                .as_object_mut()
+                .unwrap()
+                .remove("auto_hide_titlebar_buttons");
+            let migrated = std::fs::read(&path).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&migrated).unwrap(),
+                expected
+            );
+            let (_, outcome) = Config::load_from(&path);
+            assert_eq!(outcome, LoadOutcome::Parsed);
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                migrated,
+                "migration is idempotent"
+            );
+            assert_eq!(std::fs::read(&unrelated).unwrap(), b"untouched");
+        }
+    }
+
+    #[test]
     fn behavior_enums_fall_back_leniently_on_bad_values() {
         let cfg: Config = serde_json::from_str(
             r#"{"font_size": 20.0, "new_tab_position": "middle", "notify_on_command_finish": "sometimes", "tab_bar_position": "diagonal"}"#,
@@ -2304,7 +2344,6 @@ mod tests {
         assert_eq!(cfg.font_size, 20.0);
         assert_eq!(cfg.new_tab_position, NewTabPosition::AfterCurrent);
         assert_eq!(cfg.notify_on_command_finish, NotifyMode::Unfocused);
-        assert_eq!(cfg.tab_bar_position, TabBarPosition::Left);
 
         let cfg: Config = serde_json::from_str(
             r#"{"new_tab_position": "end", "notify_on_command_finish": "always", "tab_bar_position": "top"}"#,
@@ -2312,7 +2351,6 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.new_tab_position, NewTabPosition::End);
         assert_eq!(cfg.notify_on_command_finish, NotifyMode::Always);
-        assert_eq!(cfg.tab_bar_position, TabBarPosition::Top);
     }
 
     #[test]

@@ -480,8 +480,7 @@ pub struct RemoteWorkspaceRow {
 
 pub fn rows_from_machine(machine: &lyrel_core::core::machine::Machine) -> Vec<RemoteWorkspaceRow> {
     let mut rows: Vec<RemoteWorkspaceRow> = machine
-        .workspaces
-        .iter()
+        .user_workspaces()
         .map(|ws| RemoteWorkspaceRow {
             id: ws.id,
             name: crate::ui::machine_mirror::display_name_of(ws, &machine.panes),

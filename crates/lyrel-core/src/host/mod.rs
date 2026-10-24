@@ -1,6 +1,7 @@
 pub mod conformance;
 pub mod content_search;
 pub mod local;
+pub mod metrics;
 pub mod remote;
 pub mod server;
 pub mod session_operations;
@@ -302,6 +303,17 @@ pub trait WatchHandle: Send + Sync {
 
 pub trait Host: Send + Sync + 'static {
     fn id(&self) -> HostId;
+
+    /// Whole-machine metrics, never process-tree totals. The local daemon's
+    /// native Host implements this; unsupported transports must not substitute
+    /// the GUI's machine. Blocking calls belong on the Host executor.
+    fn host_metrics(&self) -> io::Result<metrics::HostMetrics> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "host metrics are unavailable on this transport",
+        ))
+    }
 
     /// How far away this host is: the round trip to it, measured now.
     ///

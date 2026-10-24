@@ -1085,9 +1085,11 @@ impl LyrelApp {
                 None => {
                     // Said out loud: a swallowed click on Push looks exactly
                     // like a push that finished instantly.
-                    gpui_kit::component::WindowExt::push_notification(
+                    crate::ui::notification_history::NotificationWindowExt::notify_app(
                         window,
-                        crate::ui::i18n::t(crate::ui::i18n::L10nKey::ScmNetworkBusy).to_string(),
+                        crate::ui::notification_history::Notification::info(crate::ui::i18n::t(
+                            crate::ui::i18n::L10nKey::ScmNetworkBusy,
+                        )),
                         cx,
                     );
                     return;
@@ -1173,9 +1175,9 @@ impl LyrelApp {
         // bare line — `push: fatal: 'origin' does not appear to be a git
         // repository` — it read as a stderr dump that had escaped onto the
         // screen, with nothing to mark it as a failure at all.
-        let note = gpui_kit::component::notification::Notification::error(git_reason(&err.message))
+        let note = crate::ui::notification_history::Notification::error(git_reason(&err.message))
             .title(t_fmt(L10nKey::GitOpFailed, &[("op", err.op)]));
-        gpui_kit::component::WindowExt::push_notification(window, note, cx);
+        crate::ui::notification_history::NotificationWindowExt::notify_app(window, note, cx);
         if err.kind == GitOpErrorKind::AuthRequired {
             log::info!(
                 "git {} needs a credential; re-run in a pane: {}",

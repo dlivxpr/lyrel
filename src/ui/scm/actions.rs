@@ -224,7 +224,7 @@ impl LyrelApp {
             // first" and "nothing to commit" call for opposite actions, and
             // answering the first with the second sends the user staging
             // files they already staged (#546).
-            gpui_kit::component::WindowExt::push_notification(
+            crate::ui::notification_history::NotificationWindowExt::notify_app(
                 window,
                 t(plan.reason).to_string(),
                 cx,
@@ -364,7 +364,7 @@ impl LyrelApp {
                 // and the follow-up half of "Commit and Push" all land in
                 // this guard, so the toast is the only place they can say
                 // why nothing moved (#545).
-                gpui_kit::component::WindowExt::push_notification(
+                crate::ui::notification_history::NotificationWindowExt::notify_app(
                     window,
                     t(reason).to_string(),
                     cx,

@@ -11,6 +11,7 @@ mod ui;
 use crate::core::config::Config;
 use crate::ui::assets::Assets;
 use crate::ui::keymap;
+use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::*;
 
 fn register_bundled_fonts(cx: &mut App) {
@@ -198,7 +199,6 @@ fn notify_config_load_failed(
 ) {
     use crate::core::config::LoadOutcome;
     use crate::ui::i18n::L10nKey;
-    use gpui_kit::component::WindowExt as _;
 
     // Only an unparseable file leaves a copy behind; an unreadable one had
     // nothing to copy, so it must not send the user after a `.corrupt` file
@@ -216,7 +216,7 @@ fn notify_config_load_failed(
         return;
     };
     let _ = handle.update(cx, |_, window, cx| {
-        window.push_notification(crate::ui::i18n::t(key), cx);
+        window.notify_app(crate::ui::i18n::t(key), cx);
     });
 }
 

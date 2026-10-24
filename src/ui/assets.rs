@@ -34,6 +34,8 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/git-commit.svg" => include_bytes!("../../assets/icons/git-commit.svg"),
         "icons/panel-left.svg" => include_bytes!("../../assets/icons/panel-left.svg"),
         "icons/panel-right.svg" => include_bytes!("../../assets/icons/panel-right.svg"),
+        "icons/split-right.svg" => include_bytes!("../../assets/icons/split-right.svg"),
+        "icons/split-down.svg" => include_bytes!("../../assets/icons/split-down.svg"),
         "icons/panel-left-collapsed.svg" => {
             include_bytes!("../../assets/icons/panel-left-collapsed.svg")
         }
@@ -47,6 +49,7 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/info.svg" => include_bytes!("../../assets/icons/info.svg"),
         "icons/eye.svg" => include_bytes!("../../assets/icons/eye.svg"),
         "icons/search.svg" => include_bytes!("../../assets/icons/search.svg"),
+        "icons/command.svg" => include_bytes!("../../assets/icons/command.svg"),
         "icons/github.svg" => include_bytes!("../../assets/icons/github.svg"),
         "icons/copy.svg" => include_bytes!("../../assets/icons/copy.svg"),
         "icons/folder.svg" => include_bytes!("../../assets/icons/folder.svg"),

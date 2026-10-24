@@ -510,6 +510,7 @@ mod tests {
             last_auto: None,
             hibernated: false,
             asleep_view: None,
+            presentation: Default::default(),
             pane: leaf(Some("/work/getty")),
         };
         assert_eq!(closed_tab_label(&tab).as_deref(), Some("build"));
@@ -524,6 +525,7 @@ mod tests {
             last_auto: None,
             hibernated: false,
             asleep_view: None,
+            presentation: Default::default(),
             pane: leaf(Some("/work/getty")),
         };
         assert_eq!(closed_tab_label(&tab).as_deref(), Some("getty"));
@@ -536,6 +538,7 @@ mod tests {
             hibernated: false,
             asleep_view: None,
             pane: leaf(Some("/work/getty")),
+            presentation: Default::default(),
         };
         assert_eq!(closed_tab_label(&tab).as_deref(), Some("getty"));
     }
@@ -549,6 +552,7 @@ mod tests {
             last_auto: None,
             hibernated: false,
             asleep_view: None,
+            presentation: Default::default(),
             pane: SessionPane::Split {
                 axis: crate::core::session::SessionAxis::Horizontal,
                 ratio: 0.5,
@@ -568,6 +572,7 @@ mod tests {
             last_auto: None,
             hibernated: false,
             asleep_view: None,
+            presentation: Default::default(),
             pane: leaf(None),
         };
         assert_eq!(closed_tab_label(&unnamed), None);
@@ -578,6 +583,7 @@ mod tests {
             last_auto: None,
             hibernated: false,
             asleep_view: None,
+            presentation: Default::default(),
             pane: leaf(Some("/")),
         };
         assert_eq!(closed_tab_label(&root), None);
@@ -592,6 +598,7 @@ mod tests {
             last_auto: None,
             hibernated: false,
             asleep_view: None,
+            presentation: Default::default(),
             pane: leaf(None),
         };
         let label = closed_tab_label(&tab).unwrap();

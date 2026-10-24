@@ -178,10 +178,11 @@ impl LyrelApp {
             None => {}
         }
         self.remember_active_pane(window, cx);
+        let focus_handle = cx.focus_handle();
+        self.watch_document_status_focus(&focus_handle, window, cx);
         let Some(tab) = self.tabs.get_mut(active) else {
             return;
         };
-        let focus_handle = cx.focus_handle();
         tab.diff_overlay = Some(DiffOverlayState {
             host_id: host,
             cwd,
@@ -602,9 +603,7 @@ impl LyrelApp {
             DiffBody::Rows(snap) => self.diff_rows_list(overlay, snap, cx),
         };
 
-        let header = chrome
-            .renders_own_header()
-            .then(|| self.diff_header(overlay, chrome, window, cx));
+        let header = self.diff_header(overlay, chrome, window, cx);
         let focus_handle = overlay.focus_handle.clone();
 
         let shell = v_flex();
@@ -627,7 +626,7 @@ impl LyrelApp {
             // Docked, the column wrapper has already painted the surface this
             // sits on — the same one the right panel uses — and nothing behind
             // it needs stopping.
-            DocumentChrome::Dock | DocumentChrome::DockHoisted => shell.size_full().min_w_0(),
+            DocumentChrome::Dock => shell.size_full().min_w_0(),
         };
         Some(
             shell
@@ -653,22 +652,8 @@ impl LyrelApp {
                     MouseButton::Left,
                     cx.listener(|this, _, _window, cx| this.end_diff_selection(cx)),
                 )
-                .children(header)
+                .child(header)
                 .child(content)
-                .into_any_element(),
-        )
-    }
-
-    /// The diff header alone, for the strip above a docked column.
-    pub(crate) fn render_diff_header_only(
-        &mut self,
-        chrome: DocumentChrome,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let overlay = self.tabs.get(self.active)?.diff_overlay.as_ref()?;
-        Some(
-            self.diff_header(overlay, chrome, window, cx)
                 .into_any_element(),
         )
     }
@@ -688,31 +673,16 @@ impl LyrelApp {
             }
             _ => (String::new(), 0, 0, 0, 0),
         };
-        // See `render_editor_header`: the traffic-light inset belongs to a
-        // header that starts at the window's left edge, which a column's does
-        // not.
-        let lead = if self.left_panel_open(cx) || chrome.is_dock() {
-            crate::ui::app::CONTENT_INSET
-        } else {
-            crate::ui::app::TITLE_BAR_LEAD
-        };
         let mono = SharedString::from(self.font_family.clone());
         let subject = source_subject(&overlay.source, branch);
         let subject_takes_the_slack =
             chrome.is_dock() && !subject.is_rev && subject.label.is_none();
         let hover = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().window.hover);
         let row = h_flex().id("diff-overlay-header");
-        let row = if chrome.header_is_title_strip() {
-            crate::ui::app::title_bar_drag(row, "diff-overlay-header", window, cx)
-        } else {
-            row
-        };
         row.flex_shrink_0()
-            // The row's own hairline stays exactly as thin as it is drawn; it
-            // only gives back the half point the title bar spends, so this
-            // header's tiles land on the traffic lights' line rather than below.
+            // Keep document header geometry aligned with its own content.
             .title_strip_row(HAIRLINE_W, hairline(cx))
-            .pl(px(lead))
+            .pl(px(crate::ui::app::CONTENT_INSET))
             // The close tile is a notch smaller than the title bar's own, and
             // is pulled in by half the difference so its glyph stays on the
             // column every other trailing tile in the window is centred on.

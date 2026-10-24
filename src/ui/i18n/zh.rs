@@ -2,6 +2,16 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::NotificationInbox => "通知",
+        L10nKey::NotificationClearHistory => "清空通知历史",
+        L10nKey::NotificationScope => "本机已收到的应用通知 · 最近 500 条",
+        L10nKey::NotificationEmpty => "暂无通知。新的应用通知会显示在这里。",
+        L10nKey::NotificationSourceUnavailable => "来源已不可用",
+        L10nKey::NotificationUnread => "未读",
+        L10nKey::NotificationSuccess => "成功",
+        L10nKey::NotificationInfo => "信息",
+        L10nKey::NotificationWarning => "警告",
+        L10nKey::NotificationError => "错误",
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
             "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 或 skills.sh 发现候选，审查共享安装、检查更新、保留本地改动并安全移除精确关联链接。"
@@ -435,7 +445,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSaveError => "无法保存更改：{error}",
         L10nKey::SettingsRetrySave => "重新保存",
 
-        L10nKey::SearchTabs => "搜索标签页…",
         L10nKey::SearchFiles => "搜索文件…",
         L10nKey::PanelSearchPlaceholder => "在文件中搜索…",
         L10nKey::PanelSearchWholeWord => "全字匹配",
@@ -793,10 +802,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::FollowTheme => "跟随主题",
         L10nKey::SettingsDimInactivePanes => "调暗非活动窗格",
         L10nKey::SettingsDimInactivePanesDesc => "在分屏中淡化未聚焦的窗格，让活动窗格更突出。",
-        L10nKey::SettingsAutoHideTitlebarButtons => "悬停时显示标题栏按钮",
-        L10nKey::SettingsAutoHideTitlebarButtonsDesc => {
-            "新标签页、侧栏开关等按钮平时隐藏，鼠标移到标题栏上才出现。"
-        }
         L10nKey::SettingsOpenThemesFolder => "打开主题文件夹",
         L10nKey::SettingsChangeThemeImage => "更改…",
         L10nKey::SettingsChooseThemeImage => "选择…",
@@ -1130,8 +1135,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::ConfirmCloseNever => "从不",
         L10nKey::ConfirmCloseWhenBusy => "有程序在运行时",
         L10nKey::ConfirmCloseAlways => "总是",
-        L10nKey::SettingsTabBarPosition => "标签栏位置",
-        L10nKey::SettingsTabBarPositionDesc => "将标签页显示为顶部横向条或左侧垂直侧栏。",
         L10nKey::SettingsSidebarGrouping => "自动分组",
         L10nKey::SettingsSidebarGroupingDesc => {
             "未固定的标签页按 git 仓库分组，SSH 标签页按主机分组。"
@@ -1153,8 +1156,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsStartupFullscreen => "全屏",
         L10nKey::SettingsAfterCurrent => "当前之后",
         L10nKey::SettingsAtEnd => "末尾",
-        L10nKey::SettingsTop => "顶部",
-        L10nKey::SettingsLeft => "左侧",
         L10nKey::SettingsPreset => "预设",
         L10nKey::SettingsPresetDesc => "tmux 预设把操作映射为前缀键（如 Ctrl-B C）。",
         L10nKey::SettingsPrefix => "前缀",
@@ -1306,9 +1307,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchDimInactivePanesKeywords => {
             "调暗 非活动窗格 淡化 未聚焦 分屏 高亮 active dimming pane focus"
         }
-        L10nKey::SettingsSearchAutoHideTitlebarButtonsKeywords => {
-            "自动隐藏 标题栏 按钮 悬停 鼠标 简洁 新标签页 侧栏 auto hide title bar buttons hover"
-        }
         L10nKey::SettingsSearchFocusFollowsMouseKeywords => {
             "焦点跟随鼠标 悬停 激活 窗格 focus follows mouse hover activate pane"
         }
@@ -1433,9 +1431,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::SettingsSearchPromptEditorKeywords => {
             "提示符编辑器 提示符 编辑器 原生输入 行编辑 键位 快捷键 输入法 粘贴 prompt editor native shell input zle readline"
-        }
-        L10nKey::SettingsSearchTabBarPositionKeywords => {
-            "标签栏位置 标签栏 侧边栏 左侧 顶部 布局 tab bar position tabs sidebar left top"
         }
         L10nKey::SettingsSearchTabCompletionKeywords => {
             "Tab补全 补全 菜单 建议 tab completion suggestions prompt"
@@ -1578,6 +1573,8 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorStripCloseOthers => "关闭其他",
         L10nKey::EditorBackToTerminal => "返回终端 (Esc)",
         L10nKey::EditorLnCol => "行 {line}，列 {column}",
+        L10nKey::EditorToggleLineEnding => "在 LF 与 CRLF 换行符之间切换",
+        L10nKey::StatusRemoteHost => "远端主机 {id}",
         L10nKey::EditorEdit => "编辑",
         L10nKey::EditorPreview => "预览",
         L10nKey::EditorWrapOn => "自动换行：开",
@@ -1889,6 +1886,14 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
             "此窗口是 {machine} 上的工作区，但 lyrel 没有它的连接信息了——检查其 SSH 配置或 ~/.ssh/config 条目是否还在。"
         }
         L10nKey::RemoteThisComputer => "本机",
+        L10nKey::HostMetricsWaiting => "等待主机采样",
+        L10nKey::HostMetricsConnecting => "正在连接主机",
+        L10nKey::HostMetricsReconnecting => "正在重连主机",
+        L10nKey::HostMetricsUnavailable => "主机指标不可用",
+        L10nKey::HostMetricsDisconnected => "主机已断开",
+        L10nKey::HostMetricsFailed => "主机采样失败：{reason}",
+        L10nKey::HostMetricsError => "主机采样失败",
+        L10nKey::HostMetricsSample => "{host} · 整机 CPU · 内存 {used} / {total} GiB",
         L10nKey::RemoteProfileGone => "已删除的配置",
         L10nKey::RemoteRestartTitle => "重启“{machine}”上的 lyrel server？",
         L10nKey::RemoteRestartBody => {
@@ -2085,8 +2090,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdHideRightPanel => "隐藏右侧面板",
         L10nKey::CmdShowRightPanel => "显示右侧面板",
         L10nKey::CmdShowCodePanel => "显示代码面板",
-        L10nKey::CmdTabBarMoveToTop => "标签栏：移到顶部",
-        L10nKey::CmdTabBarMoveToLeftSidebar => "标签栏：移到左侧边栏",
         L10nKey::CmdRightPanelInfo => "右侧面板：信息",
         L10nKey::CmdRightPanelChanges => "右侧面板：变更",
         L10nKey::CmdRightPanelFiles => "右侧面板：文件",
@@ -2218,7 +2221,35 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppSshConnectionFailed => "SSH 连接失败：{error}",
         L10nKey::AppSshReconnectFailed => "SSH 重新连接失败：{error}",
         L10nKey::AppSplitPaneFailed => "无法拆分窗格：{error}",
-        L10nKey::PaneDragHandleTooltip => "拖动可把这个窗格挪到别处",
+        L10nKey::PaneDragHandleTooltip => "拖动移动或停放窗格，点击打开窗格菜单",
+        L10nKey::PaneMenuTitle => "窗格操作",
+        L10nKey::PaneMoveToTab => "移至新标签页",
+        L10nKey::PaneEnterPip => "将窗格移入画中画",
+        L10nKey::PaneRestorePip => "将画中画恢复到分屏布局",
+        L10nKey::PaneTogglePip => "切换窗格画中画",
+        L10nKey::PanePipTitle => "画中画终端",
+        L10nKey::PanePark => "停放窗格",
+        L10nKey::PaneRestoreParked => "恢复已停放窗格…",
+        L10nKey::ParkedDeckTitle => "已停放窗格",
+        L10nKey::ParkedRestore => "恢复",
+        L10nKey::ParkedAlive => "运行中",
+        L10nKey::ParkedExited => "已退出",
+        L10nKey::ParkedEmpty => "所有窗格均已停放。可恢复卡片或新建窗格。",
+        L10nKey::ParkDropTarget => "停放",
+        L10nKey::ParkedMore => "更多…",
+        L10nKey::ParkedOverflowHint => "↑↓ / Home / End 选择 · Enter 预览后恢复 · Esc 返回",
+        L10nKey::PanePipMove => "移动画中画；拖至底部目标停放（方向键调整，Escape 取消）",
+        L10nKey::PanePipResize => "调整画中画大小（方向键调整，Escape 返回终端）",
+        L10nKey::PaneFindScrollback => "在滚动历史中查找…",
+        L10nKey::PaneOpenScrollback => "在编辑器中打开滚动历史",
+        L10nKey::PaneClearScreen => "清屏",
+        L10nKey::PaneClearAll => "清屏和滚动历史",
+        L10nKey::PaneRestartShell => "重启 shell…",
+        L10nKey::PaneRestartShellDetail => {
+            "这会终止此窗格中正在运行的程序，并在同一台机器上启动新 shell。其他窗格不会重启。"
+        }
+        L10nKey::PaneRestartFailed => "无法重启 shell：{error}",
+        L10nKey::PaneClose => "关闭窗格",
         L10nKey::AppWorktreeRemoved => "已删除 worktree“{branch}”",
         L10nKey::AppWorktreeRemoveFailed => "删除 worktree 失败：{error}",
         L10nKey::WorktreePromptAgent => "启动",
@@ -2426,7 +2457,6 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppMenuLeftSidebar => "左侧边栏",
         L10nKey::AppMenuRightPanel => "右侧面板",
         L10nKey::AppMenuCodePanel => "代码面板",
-        L10nKey::AppMenuTabBarPosition => "标签栏位置",
         L10nKey::AppMenuFocusNextPane => "聚焦下一个窗格",
         L10nKey::AppMenuFocusPreviousPane => "聚焦上一个窗格",
         L10nKey::AppMenuZoomPane => "缩放窗格",
@@ -2723,14 +2753,4 @@ pub fn translate_variant_zh(key: L10nKey, branch: &'static str) -> Option<&'stat
         _ => return None,
     };
     Some(res)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn chinese_covers_every_key() {
-        assert_eq!(translate_zh(L10nKey::SearchTabs), Some("搜索标签页…"));
-    }
 }

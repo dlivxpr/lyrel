@@ -52,6 +52,11 @@ src/ui/app.rs|std::fs::create_dir_all
 # local config dir, like the themes above — not a file in any workspace.
 src/ui/editor_session.rs|std::fs::read
 
+# 通知收件箱仅使用本机 config_dir_path()/notifications.json；来源中的
+# Host/workspace/pane 仅为导航元数据，绝不作为文件系统路径。
+src/ui/notification_history.rs|std::fs::read
+src/ui/notification_history.rs|std::fs::create_dir_all
+
 # Reading a private key off *this* machine to hash it into a keychain account
 # (`core::keychain`). The key is the client's credential; the far side never
 # sees the file, only the resulting auth.

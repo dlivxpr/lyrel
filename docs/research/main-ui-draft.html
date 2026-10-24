@@ -1,0 +1,2698 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" data-material="true">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>lyrel 主界面设计初稿</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #18181a;
+      --foreground: #ececed;
+      --rail: #1e1e20;
+      --sidebar: #18181a;
+      --popover: #242429;
+      --status: #1b1b1e;
+      --muted: #26262a;
+      --muted-foreground: #a1a1aa;
+      --subtle-foreground: #777781;
+      --border: #34343a;
+      --divider: rgba(255, 255, 255, 0.075);
+      --hover: rgba(255, 255, 255, 0.055);
+      --selected: rgba(255, 255, 255, 0.095);
+      --accent: #78a8f5;
+      --accent-soft: rgba(120, 168, 245, 0.15);
+      --success: #4cc27a;
+      --warning: #e0a345;
+      --danger: #ef7575;
+      --terminal-green: #68d391;
+      --terminal-cyan: #63b3ed;
+      --terminal-violet: #c5b6ff;
+      --shadow: 0 28px 90px rgba(0, 0, 0, 0.46);
+      --hairline: 1px;
+      --radius-row: 7px;
+      --radius-window: 14px;
+      --chrome-h: 48px;
+      --statusbar-h: 26px;
+      --rail-w: 232px;
+      --panel-w: 280px;
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --background: #fcfcfb;
+      --foreground: #1c1c1e;
+      --rail: #f5f5f3;
+      --sidebar: #fcfcfb;
+      --popover: #ffffff;
+      --status: #f4f4f2;
+      --muted: #eeeeec;
+      --muted-foreground: #62626a;
+      --subtle-foreground: #85858d;
+      --border: #d7d7d4;
+      --divider: rgba(28, 28, 30, 0.09);
+      --hover: rgba(28, 28, 30, 0.052);
+      --selected: rgba(28, 28, 30, 0.082);
+      --accent: #1f6bf0;
+      --accent-soft: rgba(31, 107, 240, 0.11);
+      --success: #2f8a52;
+      --warning: #b7791f;
+      --danger: #c84a4a;
+      --terminal-green: #237a46;
+      --terminal-cyan: #1268b3;
+      --terminal-violet: #6650b8;
+      --shadow: 0 24px 70px rgba(58, 54, 78, 0.24);
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      color: var(--foreground);
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      background:
+        radial-gradient(circle at 12% 18%, rgba(197, 182, 255, 0.40), transparent 32%),
+        radial-gradient(circle at 78% 8%, rgba(120, 168, 245, 0.30), transparent 31%),
+        radial-gradient(circle at 74% 86%, rgba(76, 194, 122, 0.22), transparent 30%),
+        linear-gradient(135deg, #17151f 0%, #1b2230 48%, #10161d 100%);
+    }
+
+    html[data-theme="light"] body {
+      background:
+        radial-gradient(circle at 12% 18%, rgba(197, 182, 255, 0.45), transparent 34%),
+        radial-gradient(circle at 78% 8%, rgba(31, 107, 240, 0.20), transparent 32%),
+        radial-gradient(circle at 74% 86%, rgba(47, 138, 82, 0.17), transparent 31%),
+        linear-gradient(135deg, #ece9f4 0%, #e7eef7 52%, #e7ece7 100%);
+    }
+
+    button,
+    input { font: inherit; }
+    button { color: inherit; }
+
+    .prototype-header {
+      position: relative;
+      z-index: 30;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 18px;
+    }
+
+    .prototype-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    .prototype-title .mark {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #29253f;
+      color: #c5b6ff;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+
+    .prototype-title .mark svg {
+      width: 15px;
+      height: 15px;
+    }
+
+    .prototype-title span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .prototype-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      background: rgba(18, 18, 22, 0.42);
+      backdrop-filter: blur(18px) saturate(140%);
+    }
+
+    html[data-theme="light"] .prototype-controls {
+      border-color: rgba(28, 28, 30, 0.11);
+      background: rgba(255, 255, 255, 0.52);
+    }
+
+    .prototype-controls button {
+      height: 28px;
+      border: 0;
+      border-radius: 7px;
+      padding: 0 10px;
+      background: transparent;
+      color: inherit;
+      font-size: 12px;
+      cursor: default;
+    }
+
+    .prototype-controls button:hover { background: var(--hover); }
+    .prototype-controls button[aria-pressed="true"] {
+      background: var(--selected);
+      font-weight: 600;
+    }
+
+    .prototype-controls .separator {
+      width: 1px;
+      height: 18px;
+      background: var(--divider);
+    }
+
+    .stage {
+      height: calc(100vh - 72px);
+      padding: 0 16px 16px;
+    }
+
+    .window {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-width: 760px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-window);
+      background: var(--background);
+      box-shadow: var(--shadow);
+    }
+
+    html[data-material="true"] .window {
+      background: color-mix(in srgb, var(--background) 76%, transparent);
+      backdrop-filter: blur(30px) saturate(150%);
+    }
+
+    .workspace-row {
+      display: flex;
+      height: calc(100% - var(--statusbar-h));
+      min-height: 0;
+    }
+
+    .left-rail {
+      position: relative;
+      z-index: 2;
+      width: var(--rail-w);
+      min-width: 208px;
+      display: flex;
+      flex: 0 0 var(--rail-w);
+      flex-direction: column;
+      border-right: var(--hairline) solid var(--divider);
+      background: var(--rail);
+      transition: background-color 160ms ease;
+    }
+
+    html[data-material="true"] .left-rail {
+      background: color-mix(in srgb, var(--rail) 20%, transparent);
+    }
+
+    .window.left-hidden .left-rail { display: none; }
+
+    .rail-header {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+      padding: 8px 8px 0;
+    }
+
+    .rail-top-row {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .app-brand {
+      position: absolute;
+      z-index: 15;
+      top: 8px;
+      left: 8px;
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      color: var(--terminal-violet);
+      pointer-events: none;
+    }
+
+    .app-brand svg {
+      width: 16px;
+      height: 15px;
+      fill: currentColor;
+    }
+
+    .workspace-switch {
+      width: 100%;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 8px;
+      min-width: 0;
+      border: 0;
+      border-radius: 7px;
+      padding: 0 8px 0 4px;
+      background: transparent;
+      color: var(--foreground);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: default;
+    }
+
+    .workspace-switch:hover,
+    .workspace-switch:focus-visible { background: var(--hover); }
+
+    .workspace-avatar {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 22px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--foreground) 10%, transparent);
+      color: var(--muted-foreground);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .workspace-switch .workspace-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .workspace-switch .workspace-chevron {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+      color: var(--muted-foreground);
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    .icon-button,
+    .window-button,
+    .status-icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      background: transparent;
+      color: var(--muted-foreground);
+      cursor: default;
+    }
+
+    .icon-button {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+    }
+
+    .icon-button svg,
+    .window-button svg,
+    .status-icon-button svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    .icon-button:hover,
+    .icon-button:focus-visible,
+    .status-icon-button:hover,
+    .status-icon-button:focus-visible {
+      background: var(--hover);
+      color: var(--foreground);
+    }
+
+    .icon-button[aria-pressed="true"],
+    .status-icon-button[aria-pressed="true"] {
+      color: var(--foreground);
+      background: var(--selected);
+    }
+
+    .rail-content {
+      min-height: 0;
+      flex: 1;
+      overflow: hidden;
+      padding: 4px 8px 12px;
+    }
+
+    .workspace-group + .workspace-group { margin-top: 16px; }
+
+    .group-title {
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px;
+      color: var(--muted-foreground);
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+
+    .group-title span:last-child {
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-weight: 400;
+    }
+
+    .tab-row {
+      width: 100%;
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 0;
+      border-radius: var(--radius-row);
+      margin-top: 1px;
+      padding: 4px 8px;
+      background: transparent;
+      color: var(--foreground);
+      text-align: left;
+      cursor: default;
+    }
+
+    .tab-row:hover { background: var(--hover); }
+    .tab-row.active {
+      background: var(--selected);
+      font-weight: 600;
+    }
+
+    .tab-row .agent-dot {
+      width: 16px;
+      height: 16px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 16px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--warning) 18%, transparent);
+      color: var(--warning);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .tab-row .label {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12.5px;
+    }
+
+    .tab-row .state-dot {
+      width: 5px;
+      height: 5px;
+      flex: 0 0 5px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 12%, transparent);
+    }
+
+    .tab-row.path-row {
+      color: var(--muted-foreground);
+      font-size: 12px;
+    }
+
+    .center-column {
+      position: relative;
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .control-cluster {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex: 0 0 auto;
+      border: 1px solid color-mix(in srgb, var(--foreground) 13%, transparent);
+      border-radius: 8px;
+      padding: 2px;
+      background: color-mix(in srgb, var(--popover) 62%, transparent);
+    }
+
+    .floating-controls {
+      position: absolute;
+      z-index: 12;
+      top: 8px;
+      display: none;
+    }
+
+    .left-float-controls { left: 8px; }
+    .right-float-controls { right: 8px; }
+    .window.left-hidden .left-float-controls { display: flex; left: 42px; }
+    .window.right-collapsed .right-float-controls { display: flex; }
+
+    .terminal-workspace {
+      position: relative;
+      min-height: 0;
+      flex: 1;
+      display: flex;
+    }
+
+    .terminal-grid {
+      min-width: 0;
+      min-height: 0;
+      flex: 1;
+      display: grid;
+    }
+
+    .terminal-grid > *,
+    .split-node {
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .split-node { display: grid; }
+    .split-node.axis-right { grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr); }
+    .split-node.axis-down { grid-template-rows: minmax(0, 1fr) 1px minmax(0, 1fr); }
+
+    .terminal-pane.hidden-pane { display: none; }
+
+    .terminal-empty {
+      display: grid;
+      place-items: center;
+      color: var(--muted-foreground);
+      font-size: 12.5px;
+    }
+
+    .terminal-pane.active-pane::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+      pointer-events: none;
+    }
+
+    .terminal-pane {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+
+    .terminal-pane.drag-source {
+      opacity: 0.45;
+      transition: none;
+    }
+
+    .terminal-pane.drop-target::after {
+      content: "";
+      position: absolute;
+      inset: 8px;
+      border: 2px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent-soft);
+      pointer-events: none;
+    }
+
+    .split-divider {
+      background: var(--divider);
+      cursor: col-resize;
+    }
+
+    .split-node.axis-down > .split-divider { cursor: row-resize; }
+    .split-divider:hover { background: var(--accent); }
+
+    .pane-grip {
+      position: absolute;
+      z-index: 8;
+      top: 8px;
+      left: 50%;
+      width: 40px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      transform: translateX(-50%);
+      border: 1px solid color-mix(in srgb, var(--foreground) 20%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--popover) 76%, transparent);
+      color: var(--muted-foreground);
+      opacity: 0;
+      pointer-events: none;
+      cursor: grab;
+    }
+
+    .terminal-pane.top-near .pane-grip,
+    .terminal-pane.menu-open .pane-grip {
+      opacity: 0.88;
+      pointer-events: auto;
+    }
+
+    .pane-grip:hover,
+    .terminal-pane.menu-open .pane-grip {
+      opacity: 1;
+      border-color: color-mix(in srgb, var(--foreground) 28%, transparent);
+      background: color-mix(in srgb, var(--popover) 88%, transparent);
+      color: var(--foreground);
+    }
+
+    .pane-grip:active { cursor: grabbing; }
+
+    .grip-dots {
+      display: grid;
+      grid-template-columns: repeat(3, 3px);
+      grid-template-rows: repeat(2, 3px);
+      gap: 3px;
+    }
+
+    .grip-dots i {
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .grip-tooltip {
+      position: absolute;
+      top: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 7px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--popover);
+      color: var(--foreground);
+      font-size: 12px;
+      white-space: nowrap;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .pane-grip:hover .grip-tooltip { opacity: 1; }
+
+    .terminal-content {
+      height: 100%;
+      padding: 38px 18px 18px;
+      overflow: hidden;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.58;
+    }
+
+    .prompt-line {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    .prompt-user { color: var(--terminal-green); }
+    .prompt-path { color: var(--terminal-cyan); }
+    .prompt-branch { color: var(--terminal-violet); }
+    .prompt-cursor {
+      width: 7px;
+      height: 16px;
+      margin-left: 5px;
+      background: var(--accent);
+    }
+
+    .terminal-lines {
+      margin-top: 10px;
+      color: var(--muted-foreground);
+    }
+
+    .terminal-lines .ok { color: var(--success); }
+    .terminal-lines .warn { color: var(--warning); }
+
+    .pane-menu {
+      position: absolute;
+      z-index: 28;
+      width: 310px;
+      display: none;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 5px;
+      background: var(--popover);
+      box-shadow: 0 18px 54px rgba(0, 0, 0, 0.36);
+    }
+
+    .pane-menu.open { display: block; }
+
+    .menu-row {
+      width: 100%;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 0;
+      border-radius: 7px;
+      padding: 0 8px;
+      background: transparent;
+      color: var(--foreground);
+      font-size: 12.5px;
+      text-align: left;
+      cursor: default;
+    }
+
+    .menu-row:hover,
+    .menu-row:focus-visible { background: var(--selected); }
+    .menu-row.danger { color: var(--danger); }
+
+    .menu-icon {
+      width: 18px;
+      color: var(--muted-foreground);
+      text-align: center;
+    }
+
+    .menu-row.danger .menu-icon { color: var(--danger); }
+    .menu-row .menu-label { flex: 1; }
+    .menu-row .menu-shortcut {
+      color: var(--muted-foreground);
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .menu-separator {
+      height: 1px;
+      margin: 5px 8px;
+      background: var(--divider);
+    }
+
+    .park-zone {
+      position: absolute;
+      z-index: 7;
+      left: 50%;
+      bottom: 0;
+      width: 360px;
+      height: 170px;
+      display: none;
+      place-items: start center;
+      transform: translateX(-50%);
+      border: 1px solid color-mix(in srgb, var(--warning) 54%, transparent);
+      border-bottom: 0;
+      border-radius: 360px 360px 0 0;
+      background: color-mix(in srgb, var(--warning) 8%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 10%, transparent);
+      pointer-events: none;
+    }
+
+    .park-zone.active { display: grid; }
+
+    .park-target {
+      height: 24px;
+      display: grid;
+      place-items: center;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 999px;
+      padding: 0 12px;
+      background: color-mix(in srgb, var(--warning) 82%, transparent);
+      color: #22180a;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+      box-shadow: 0 4px 14px color-mix(in srgb, var(--warning) 22%, transparent);
+    }
+
+    .park-zone.park-hover .park-target {
+      background: var(--warning);
+      transform: scale(1.04);
+    }
+
+    .park-dock {
+      position: absolute;
+      z-index: 9;
+      left: 50%;
+      bottom: 0;
+      width: 360px;
+      height: 154px;
+      display: none;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+
+    .park-dock.visible { display: block; }
+
+    .park-aura {
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      width: 260px;
+      height: 130px;
+      transform: translateX(-50%);
+      border: 1px solid color-mix(in srgb, var(--warning) 58%, transparent);
+      border-bottom: 0;
+      border-radius: 260px 260px 0 0;
+      background: color-mix(in srgb, var(--warning) 7%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 10%, transparent);
+      opacity: 0;
+      transition: opacity 180ms ease;
+      pointer-events: none;
+    }
+
+    .park-dock.fan-open .park-aura,
+    .park-dock:focus-within .park-aura,
+    .park-dock.preview-open .park-aura { opacity: 1; }
+
+    .park-stack {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .park-card {
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      width: 56px;
+      height: 74px;
+      margin-left: -28px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0;
+      background: color-mix(in srgb, var(--popover) 90%, transparent);
+      color: var(--muted-foreground);
+      cursor: default;
+      pointer-events: auto;
+      transform: translateX(var(--stack-x)) translateY(var(--stack-y)) rotate(var(--stack-rotate));
+      transform-origin: 50% 100%;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+      transition: transform 220ms ease, border-color 160ms ease, color 160ms ease, opacity 180ms ease;
+    }
+
+    .park-card:hover,
+    .park-card:focus-visible {
+      border-color: var(--accent);
+      color: var(--foreground);
+    }
+
+    .park-dock.fan-open .park-card,
+    .park-dock:focus-within .park-card,
+    .park-dock.preview-open .park-card {
+      transform: translateX(var(--fan-x)) translateY(var(--fan-y)) rotate(var(--fan-rotate));
+    }
+
+    .park-dock.fan-open .park-card.hovered,
+    .park-dock:focus-within .park-card:focus-visible {
+      z-index: 7;
+      transform: translateX(var(--fan-x)) translateY(-30px) rotate(0deg) scale(1.28);
+      border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+      color: var(--foreground);
+    }
+
+    .park-dock.preview-open .park-card:not(.selected) { opacity: 0.72; }
+
+    .park-dock .park-card.selected,
+    .park-dock .park-card.selected.hovered {
+      z-index: 8;
+      border-color: var(--accent);
+      color: var(--foreground);
+      transform: translateX(var(--fan-x)) translateY(-66px) rotate(0deg) scale(1.58);
+      box-shadow: 0 22px 54px rgba(0, 0, 0, 0.36);
+    }
+
+    .park-card-inner {
+      position: absolute;
+      inset: 0;
+      transform-style: preserve-3d;
+      transition: transform 260ms ease;
+    }
+
+    .park-card.selected .park-card-inner { transform: rotateY(180deg); }
+
+    .park-card-face {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      padding: 7px 4px;
+      overflow: hidden;
+      border-radius: 9px;
+      backface-visibility: hidden;
+      pointer-events: none;
+      text-align: center;
+    }
+
+    .park-card.selected .park-card-face.back { pointer-events: auto; }
+
+    .park-card-face.back {
+      justify-content: flex-start;
+      gap: 4px;
+      padding-top: 9px;
+      background: color-mix(in srgb, var(--popover) 96%, transparent);
+      transform: rotateY(180deg);
+    }
+
+    .park-card svg {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      fill: none;
+    }
+
+    .park-title,
+    .park-state,
+    .park-path {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .park-title {
+      color: var(--foreground);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .park-state,
+    .park-path { font-size: 10px; }
+
+    .park-restore {
+      min-width: 48px;
+      height: 20px;
+      border: 0;
+      border-radius: 5px;
+      margin-top: 2px;
+      padding: 0 7px;
+      background: var(--accent);
+      color: #10131a;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: default;
+    }
+
+    .park-restore:hover,
+    .park-restore:focus-visible { filter: brightness(1.08); }
+
+    .pip-card {
+      position: absolute;
+      z-index: 10;
+      right: 18px;
+      bottom: 42px;
+      width: 180px;
+      height: 112px;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--popover) 92%, transparent);
+      color: var(--foreground);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.34);
+    }
+
+    .pip-card.visible { display: flex; }
+
+    .pip-card-header {
+      height: 26px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      border-bottom: var(--hairline) solid var(--divider);
+      padding: 0 4px 0 8px;
+      color: var(--muted-foreground);
+      font-size: 11px;
+    }
+
+    .pip-card-header .pip-title {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pip-action {
+      width: 20px;
+      height: 20px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: inherit;
+      cursor: default;
+    }
+
+    .pip-action:hover {
+      background: var(--hover);
+      color: var(--foreground);
+    }
+
+    .pip-card-body {
+      flex: 1;
+      display: grid;
+      place-items: center;
+      padding: 10px;
+      color: var(--muted-foreground);
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .right-panel {
+      width: var(--panel-w);
+      min-width: 248px;
+      display: flex;
+      flex: 0 0 var(--panel-w);
+      flex-direction: column;
+      border-left: var(--hairline) solid var(--divider);
+      background: var(--sidebar);
+      transition: background-color 160ms ease;
+    }
+
+    html[data-material="true"] .right-panel {
+      background: color-mix(in srgb, var(--sidebar) 17%, transparent);
+    }
+
+    .window.right-collapsed .right-panel { display: none; }
+
+    .panel-header {
+      height: var(--chrome-h);
+      flex: 0 0 var(--chrome-h);
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 8px;
+      padding: 0 8px;
+    }
+
+    .window-controls {
+      position: absolute;
+      z-index: 14;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      align-items: center;
+      gap: 1px;
+    }
+
+    .window.right-collapsed .right-float-controls { right: 108px; }
+
+    .window-button {
+      width: 30px;
+      height: 28px;
+      border-radius: 6px;
+    }
+
+    .window-button:hover {
+      background: var(--hover);
+      color: var(--foreground);
+    }
+
+    .window-button.close:hover {
+      background: color-mix(in srgb, var(--danger) 18%, transparent);
+      color: var(--danger);
+    }
+
+    .panel-tabs-row {
+      height: 34px;
+      flex: 0 0 34px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 8px 0 22px;
+      border-bottom: var(--hairline) solid transparent;
+    }
+
+    .panel-tab {
+      flex: 0 0 auto;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--muted-foreground);
+      font-size: 12.5px;
+      white-space: nowrap;
+      cursor: default;
+    }
+
+    .panel-tab:hover { color: var(--foreground); }
+    .panel-tab.active {
+      color: var(--foreground);
+      font-weight: 600;
+    }
+
+    .panel-tab .count {
+      margin-left: 3px;
+      color: var(--muted-foreground);
+      font-size: 11px;
+      font-weight: 400;
+    }
+
+    .panel-content {
+      min-height: 0;
+      flex: 1;
+      padding: 8px 10px 12px;
+      overflow: hidden;
+    }
+
+    .panel-search {
+      height: 28px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 2px 10px;
+      border-radius: var(--radius-row);
+      padding: 0 9px;
+      background: color-mix(in srgb, var(--foreground) 4.5%, transparent);
+      color: var(--muted-foreground);
+      font-size: 12.5px;
+    }
+
+    .panel-search svg {
+      width: 13px;
+      height: 13px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      fill: none;
+    }
+
+    .file-tree { font-size: 12.5px; }
+
+    .tree-row {
+      height: 26px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 6px;
+      padding: 0 7px;
+      color: var(--foreground);
+    }
+
+    .tree-row:hover { background: var(--hover); }
+    .tree-row.active {
+      background: var(--selected);
+      font-weight: 600;
+    }
+
+    .tree-row .chevron {
+      width: 12px;
+      color: var(--muted-foreground);
+      font-size: 10px;
+    }
+
+    .tree-row .file-icon {
+      width: 15px;
+      color: var(--muted-foreground);
+      text-align: center;
+    }
+
+    .tree-row .name {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tree-row .git-state {
+      color: var(--warning);
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .tree-row.child { padding-left: 25px; }
+    .tree-row.grandchild { padding-left: 43px; }
+
+    .document-mode {
+      display: none;
+      min-height: 0;
+      flex: 1;
+      flex-direction: column;
+      background: var(--background);
+    }
+
+    html[data-material="true"] .document-mode {
+      background: color-mix(in srgb, var(--background) 55%, transparent);
+    }
+
+    .window.file-fill .terminal-mode { display: none; }
+    .window.file-fill .document-mode { display: flex; }
+
+    .document-header {
+      height: var(--chrome-h);
+      flex: 0 0 var(--chrome-h);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px 0 12px;
+      border-bottom: var(--hairline) solid var(--divider);
+    }
+
+    .document-tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .document-tab {
+      height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: 7px;
+      padding: 0 10px;
+      color: var(--muted-foreground);
+      font-size: 12.5px;
+    }
+
+    .document-tab.active {
+      background: var(--selected);
+      color: var(--foreground);
+      font-weight: 600;
+    }
+
+    .document-tab .dirty {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--warning);
+    }
+
+    .editor-area {
+      min-height: 0;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      overflow: hidden;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.68;
+    }
+
+    .line-numbers {
+      padding: 18px 10px 18px 0;
+      color: var(--subtle-foreground);
+      text-align: right;
+      user-select: none;
+    }
+
+    .code {
+      min-width: 0;
+      padding: 18px 24px;
+      white-space: pre;
+      overflow: hidden;
+      color: var(--foreground);
+    }
+
+    .code .comment { color: var(--subtle-foreground); }
+    .code .keyword { color: var(--terminal-violet); }
+    .code .string { color: var(--terminal-green); }
+    .code .fn { color: var(--terminal-cyan); }
+
+    .statusbar {
+      position: relative;
+      z-index: 10;
+      height: var(--statusbar-h);
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) auto minmax(360px, 1fr);
+      align-items: center;
+      border-top: var(--hairline) solid var(--divider);
+      background: var(--status);
+      color: var(--muted-foreground);
+      font-size: 12px;
+      transition: background-color 160ms ease;
+    }
+
+    html[data-material="true"] .statusbar {
+      background: color-mix(in srgb, var(--status) 42%, transparent);
+    }
+
+    .status-region {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 8px;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .status-region.center { justify-content: center; }
+    .status-region.right { justify-content: flex-end; }
+
+    .status-icon-button {
+      width: 20px;
+      height: 20px;
+      flex: 0 0 20px;
+      border-radius: 5px;
+    }
+
+    .status-icon-button svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .status-item {
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 0;
+      border-radius: 5px;
+      padding: 0 5px;
+      background: transparent;
+      color: inherit;
+      cursor: default;
+    }
+
+    button.status-item:hover,
+    button.status-item:focus-visible {
+      background: var(--hover);
+      color: var(--foreground);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+
+    .status-separator {
+      width: 1px;
+      height: 12px;
+      flex: 0 0 1px;
+      background: var(--divider);
+    }
+
+    .status-path {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .metric {
+      width: 28px;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--foreground) 11%, transparent);
+    }
+
+    .metric i {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--muted-foreground);
+    }
+
+    .modal-layer,
+    .settings-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      display: none;
+      background: rgba(0, 0, 0, 0.28);
+    }
+
+    html[data-theme="light"] .modal-layer,
+    html[data-theme="light"] .settings-layer {
+      background: rgba(55, 52, 68, 0.20);
+    }
+
+    .modal-layer.open,
+    .settings-layer.open { display: block; }
+
+    .palette {
+      width: min(620px, calc(100% - 48px));
+      max-height: 470px;
+      display: flex;
+      flex-direction: column;
+      margin: 112px auto 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--popover);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+    }
+
+    .palette-input-row {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+    }
+
+    .palette-input-row svg {
+      width: 15px;
+      height: 15px;
+      color: var(--muted-foreground);
+      stroke: currentColor;
+      stroke-width: 1.8;
+      fill: none;
+    }
+
+    .palette-input-row input {
+      min-width: 0;
+      flex: 1;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--foreground);
+      font-size: 14px;
+    }
+
+    .keycap {
+      min-width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 5px;
+      padding: 0 5px;
+      background: color-mix(in srgb, var(--foreground) 7%, transparent);
+      color: var(--muted-foreground);
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 10.5px;
+    }
+
+    .palette-tabs {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 12px;
+      color: var(--muted-foreground);
+      font-size: 12px;
+    }
+
+    .palette-tabs span.active {
+      color: var(--foreground);
+      font-weight: 600;
+    }
+
+    .palette-list {
+      min-height: 0;
+      flex: 1;
+      padding: 4px 8px 8px;
+      border-top: var(--hairline) solid var(--divider);
+    }
+
+    .palette-section {
+      height: 28px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      color: var(--muted-foreground);
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+
+    .palette-row {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border-radius: 8px;
+      padding: 0 8px;
+      color: var(--foreground);
+    }
+
+    .palette-row.selected { background: var(--selected); }
+
+    .palette-row .row-icon {
+      width: 17px;
+      color: var(--muted-foreground);
+      text-align: center;
+    }
+
+    .palette-row .row-title {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12.5px;
+    }
+
+    .palette-row .row-meta {
+      color: var(--muted-foreground);
+      font-size: 11.5px;
+    }
+
+    .palette-footer {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+      border-top: var(--hairline) solid var(--divider);
+      padding: 0 12px;
+      color: var(--muted-foreground);
+      font-size: 11.5px;
+    }
+
+    .settings-preview {
+      width: min(480px, calc(100% - 80px));
+      margin: 132px auto 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--popover);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.44);
+    }
+
+    .settings-titlebar {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: var(--hairline) solid var(--divider);
+      padding: 0 12px;
+    }
+
+    .settings-titlebar strong {
+      flex: 1;
+      font-size: 13px;
+    }
+
+    .settings-titlebar .badge {
+      border-radius: 999px;
+      padding: 3px 8px;
+      background: var(--selected);
+      color: var(--muted-foreground);
+      font-size: 11px;
+    }
+
+    .settings-note {
+      padding: 24px 26px 26px;
+    }
+
+    .settings-note h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+
+    .settings-note p {
+      margin: 0 0 14px;
+      color: var(--muted-foreground);
+      font-size: 12.5px;
+    }
+
+    .settings-note .current-window {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: color-mix(in srgb, var(--foreground) 5%, transparent);
+      color: var(--muted-foreground);
+      font-size: 12px;
+    }
+
+    .notes-panel {
+      position: fixed;
+      z-index: 40;
+      top: 66px;
+      right: 16px;
+      bottom: 16px;
+      width: min(390px, calc(100vw - 32px));
+      display: none;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--popover);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36);
+    }
+
+    body.notes-open .notes-panel { display: block; }
+    .notes-inner { padding: 20px; }
+    .notes-inner h1 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+
+    .notes-inner h2 {
+      margin: 22px 0 8px;
+      font-size: 13px;
+    }
+
+    .notes-inner p,
+    .notes-inner li {
+      color: var(--muted-foreground);
+      font-size: 12.5px;
+    }
+
+    .notes-inner ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+
+    .notes-inner code {
+      border-radius: 5px;
+      padding: 1px 4px;
+      background: var(--selected);
+      color: var(--foreground);
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .notes-inner a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .notes-inner a:hover { text-decoration: underline; }
+
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    @media (max-width: 1180px) {
+      :root {
+        --rail-w: 208px;
+        --panel-w: 248px;
+      }
+
+      .panel-tabs-row { gap: 12px; }
+    }
+
+    @media (max-width: 900px) {
+      .right-panel { display: none; }
+      .statusbar { grid-template-columns: minmax(210px, 1fr) auto minmax(220px, 1fr); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></symbol>
+    <symbol id="i-command" viewBox="0 0 24 24"><path d="M9.2 9.2H7a2.2 2.2 0 1 1 2.2-2.2v2.2Zm0 0v5.6m0-5.6h5.6m-5.6 5.6H7a2.2 2.2 0 1 0 2.2 2.2v-2.2Zm5.6-5.6H17a2.2 2.2 0 1 0-2.2-2.2v2.2Zm0 5.6v2.2a2.2 2.2 0 1 0 2.2-2.2h-2.2Z"></path></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M15 5v14"></path></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.86a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.88.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09c0 .68.4 1.3 1.03 1.56.62.27 1.34.14 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.88V9c.26.63.88 1.03 1.56 1.03H21a2 2 0 1 1 0 4h-.09c-.68 0-1.3.4-1.51 1.03Z"></path></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10.3 21a2 2 0 0 0 3.4 0"></path></symbol>
+    <symbol id="i-split-right" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M12 5v14"></path></symbol>
+    <symbol id="i-split-down" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 12h16"></path></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"></path></symbol>
+    <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"></path></symbol>
+    <symbol id="i-max" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect></symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5M11 18l-6-6 6-6"></path></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4M12 16h7"></path></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"></path><path d="M14 3v5h5"></path></symbol>
+  </svg>
+
+  <header class="prototype-header">
+    <div class="prototype-title" aria-label="lyrel 主界面设计初稿">
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 160 150"><path d="M28 25H49V64C49 85 58 97 75 97S101 85 101 64V25H122V65C122 98 104 119 75 119S28 98 28 65Z M67 26H83V76H67Z" fill="currentColor"></path></svg></span>
+      <span>lyrel 主界面设计初稿</span>
+    </div>
+    <div class="prototype-controls" aria-label="原型控制">
+      <button type="button" data-mode="terminal" aria-pressed="true">终端分屏</button>
+      <button type="button" data-mode="fill" aria-pressed="false">文件铺满</button>
+      <span class="separator" aria-hidden="true"></span>
+      <button type="button" id="material-toggle" aria-pressed="true">窗口材质</button>
+      <button type="button" id="theme-toggle" aria-pressed="true">深色</button>
+      <button type="button" id="notes-toggle" aria-pressed="false">设计说明</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section class="window" id="window" aria-label="lyrel 主界面原型">
+      <div class="workspace-row">
+        <aside class="left-rail" aria-label="工作区与标签页">
+          <div class="rail-header">
+            <div class="rail-top-row">
+              <div class="control-cluster" aria-label="左侧栏控制">
+                <button class="icon-button" type="button" id="left-toggle" title="收起侧栏" aria-label="收起侧栏" aria-pressed="false"><svg><use href="#i-panel"></use></svg></button>
+                <button class="icon-button" type="button" id="global-search" title="随处搜索…（Ctrl+Shift+P）" aria-label="随处搜索"><svg><use href="#i-command"></use></svg></button>
+                <button class="icon-button" type="button" id="new-tab" title="新建标签页" aria-label="新建标签页"><svg><use href="#i-plus"></use></svg></button>
+              </div>
+            </div>
+            <button class="workspace-switch" type="button" id="workspace-switch" title="切换工作区" aria-label="切换工作区">
+              <span class="workspace-avatar" aria-hidden="true">D</span>
+              <span class="workspace-name">dlivxpr</span>
+              <svg class="workspace-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg>
+            </button>
+          </div>
+
+          <div class="rail-content" id="tab-list">
+            <section class="workspace-group" aria-label="lyrel 工作区">
+              <div class="group-title"><span>lyrel</span><span>main</span></div>
+              <button class="tab-row active" type="button"><span class="agent-dot">π</span><span class="label">GIT: … close issues</span><span class="state-dot" title="运行中"></span></button>
+              <button class="tab-row" type="button"><span class="agent-dot">π</span><span class="label">lyrel</span></button>
+            </section>
+            <section class="workspace-group" aria-label="TEMP 工作区">
+              <div class="group-title"><span>TEMP</span><span>main</span></div>
+              <button class="tab-row path-row" type="button"><span class="label">~/Documents/selfup/cac</span></button>
+            </section>
+            <section class="workspace-group" aria-label="未分组">
+              <div class="group-title"><span>未分组</span></div>
+              <button class="tab-row path-row" type="button"><span class="label">~/Documents/rscode</span></button>
+            </section>
+          </div>
+        </aside>
+
+        <section class="center-column" aria-label="工作区内容">
+          <div class="terminal-mode terminal-workspace">
+            <div class="terminal-grid" id="terminal-grid" aria-label="终端窗格">
+              <section class="terminal-pane" id="pane-a" data-title="π > lyrel" data-path="~/Documents/rscode/lyrel" aria-label="终端窗格 1">
+                <button class="pane-grip" type="button" aria-label="窗格操作：拖动或打开菜单" aria-haspopup="menu" aria-expanded="false">
+                  <span class="grip-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                  <span class="grip-tooltip">拖动，或点击打开窗格菜单</span>
+                </button>
+                <div class="terminal-content">
+                  <div class="prompt-line"><span class="prompt-user">dlivxpr</span><span>&nbsp;on&nbsp;</span><span class="prompt-path">~/Documents/rscode/lyrel</span><span>&nbsp;</span><span class="prompt-branch">main</span><span class="prompt-cursor"></span></div>
+                  <div class="terminal-lines">
+                    <div><span class="ok">✓</span> cargo test --locked</div>
+                    <div>test result: ok. 428 passed; 0 failed</div>
+                    <div><span class="warn">!</span> 2 个文件有未提交更改</div>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div class="park-zone" id="park-zone" aria-hidden="true"><div class="park-target">Park</div></div>
+            <div class="park-dock" id="park-dock" aria-label="底部停放窗格">
+              <div class="park-aura" aria-hidden="true"></div>
+              <div class="park-stack" id="park-stack"></div>
+            </div>
+            <div class="pip-card" id="pip-card" role="dialog" aria-label="画中画窗格">
+              <div class="pip-card-header"><span class="pip-title" id="pip-title">π > lyrel</span><button class="pip-action" type="button" data-pip-action="stash" title="停放到底部" aria-label="停放到底部">▁</button><button class="pip-action" type="button" data-pip-action="dock" title="还原为分屏" aria-label="还原为分屏">◫</button></div>
+              <div class="pip-card-body" id="pip-body">~/Documents/rscode/lyrel<br>等待输入</div>
+            </div>
+          </div>
+
+          <div class="document-mode" aria-label="文档铺满模式">
+            <header class="document-header">
+              <button class="icon-button" type="button" id="back-terminal" title="返回终端" aria-label="返回终端"><svg><use href="#i-arrow-left"></use></svg></button>
+              <div class="document-tabs">
+                <div class="document-tab active"><svg width="14" height="14"><use href="#i-file"></use></svg><span>app.rs</span><span class="dirty" title="未保存"></span></div>
+                <div class="document-tab"><span>theme.rs</span></div>
+              </div>
+              <button class="icon-button document-action" type="button" data-message="新建文档（原型示意）" title="新建文档" aria-label="新建文档"><svg><use href="#i-plus"></use></svg></button>
+              <button class="icon-button document-action" type="button" data-message="切换停靠（原型示意）" title="切换停靠" aria-label="切换停靠"><svg><use href="#i-panel"></use></svg></button>
+              <button class="icon-button document-action" type="button" data-message="关闭文档（原型示意）" title="关闭文档" aria-label="关闭文档"><svg><use href="#i-close"></use></svg></button>
+            </header>
+            <div class="editor-area">
+              <div class="line-numbers" aria-hidden="true">121<br>122<br>123<br>124<br>125<br>126<br>127<br>128<br>129<br>130<br>131<br>132<br>133<br>134<br>135</div>
+              <div class="code"><span class="comment">// 全局状态栏吸收文档状态，避免双层底栏。</span>
+<span class="keyword">pub fn</span> <span class="fn">render_status</span>(cx: &amp;mut Context&lt;Self&gt;) -&gt; impl IntoElement {
+    StatusBar::new()
+        .left(workspace_summary(cx))
+        .child(document_context(cx))
+        .right(widget_tray(cx))
+}
+
+<span class="comment">// 侧栏只使用窗口材质，不绘制独立的背景模糊。</span>
+<span class="keyword">let</span> surface = translucent_surface(theme.rail, material_active);</div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="right-panel" aria-label="上下文面板">
+          <header class="panel-header">
+            <div class="control-cluster panel-controls" aria-label="窗格与右侧面板控制">
+              <button class="icon-button" type="button" data-split-direction="right" title="向右分屏（Ctrl+Shift+D）" aria-label="向右分屏"><svg><use href="#i-split-right"></use></svg></button>
+              <button class="icon-button" type="button" data-split-direction="down" title="向下分屏（Ctrl+Alt+Shift+D）" aria-label="向下分屏"><svg><use href="#i-split-down"></use></svg></button>
+              <button class="icon-button" type="button" id="right-collapse" title="收起右侧面板" aria-label="收起右侧面板" aria-pressed="false"><svg><use href="#i-panel"></use></svg></button>
+            </div>
+          </header>
+          <nav class="panel-tabs-row" aria-label="上下文页签">
+            <button class="panel-tab" type="button">信息</button>
+            <button class="panel-tab active" type="button">文件</button>
+            <button class="panel-tab" type="button">更改<span class="count">12</span></button>
+            <button class="panel-tab" type="button">GitHub</button>
+          </nav>
+          <div class="panel-content">
+            <div class="panel-search"><svg><use href="#i-search"></use></svg><span>搜索文件…</span></div>
+            <div class="file-tree" aria-label="文件树">
+              <div class="tree-row"><span class="chevron">▾</span><span class="file-icon">▣</span><span class="name">TEMP</span></div>
+              <div class="tree-row child"><span class="chevron">▸</span><span class="file-icon">▣</span><span class="name">.git</span></div>
+              <div class="tree-row child"><span class="chevron">▾</span><span class="file-icon">▣</span><span class="name">src</span><span class="git-state">M</span></div>
+              <div class="tree-row grandchild active"><span class="chevron"></span><span class="file-icon">▷</span><span class="name">app.rs</span><span class="git-state">M</span></div>
+              <div class="tree-row grandchild"><span class="chevron"></span><span class="file-icon">▷</span><span class="name">theme.rs</span></div>
+              <div class="tree-row"><span class="chevron">▾</span><span class="file-icon">▣</span><span class="name">cac</span></div>
+              <div class="tree-row child"><span class="chevron">▸</span><span class="file-icon">▣</span><span class="name">docs</span></div>
+              <div class="tree-row child"><span class="chevron"></span><span class="file-icon">▷</span><span class="name">AGENTS.md</span></div>
+              <div class="tree-row child"><span class="chevron"></span><span class="file-icon">▷</span><span class="name">GLOSSARY.md</span><span class="git-state">?</span></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <span class="app-brand" aria-hidden="true"><svg viewBox="0 0 160 150"><path d="M28 25H49V64C49 85 58 97 75 97S101 85 101 64V25H122V65C122 98 104 119 75 119S28 98 28 65Z M67 26H83V76H67Z"></path></svg></span>
+
+      <div class="window-controls" aria-label="窗口控制">
+        <button class="window-button" type="button" aria-label="最小化"><svg><use href="#i-min"></use></svg></button>
+        <button class="window-button" type="button" aria-label="最大化"><svg><use href="#i-max"></use></svg></button>
+        <button class="window-button close" type="button" aria-label="关闭"><svg><use href="#i-close"></use></svg></button>
+      </div>
+
+      <div class="control-cluster floating-controls left-float-controls" aria-label="左侧栏控制">
+        <button class="icon-button" type="button" id="left-toggle-float" title="打开侧栏" aria-label="打开侧栏" aria-pressed="false"><svg><use href="#i-panel"></use></svg></button>
+        <button class="icon-button" type="button" id="global-search-float" title="随处搜索…（Ctrl+Shift+P）" aria-label="随处搜索"><svg><use href="#i-command"></use></svg></button>
+        <button class="icon-button" type="button" id="new-tab-float" title="新建标签页" aria-label="新建标签页"><svg><use href="#i-plus"></use></svg></button>
+      </div>
+
+      <div class="control-cluster floating-controls right-float-controls" aria-label="窗格与右侧面板控制">
+        <button class="icon-button" type="button" data-split-direction="right" title="向右分屏（Ctrl+Shift+D）" aria-label="向右分屏"><svg><use href="#i-split-right"></use></svg></button>
+        <button class="icon-button" type="button" data-split-direction="down" title="向下分屏（Ctrl+Alt+Shift+D）" aria-label="向下分屏"><svg><use href="#i-split-down"></use></svg></button>
+        <button class="icon-button" type="button" id="right-toggle-float" title="打开右侧面板" aria-label="打开右侧面板" aria-pressed="true"><svg><use href="#i-panel"></use></svg></button>
+      </div>
+
+      <footer class="statusbar" aria-label="全局状态栏">
+        <div class="status-region left">
+          <button class="status-icon-button" type="button" id="settings-open" title="设置…（Ctrl+,）" aria-label="设置"><svg><use href="#i-settings"></use></svg></button>
+          <span class="status-separator"></span>
+          <div class="status-context" id="status-context"></div>
+        </div>
+        <div class="status-region center" id="status-center"></div>
+        <div class="status-region right">
+          <div class="status-widgets" id="status-widgets"></div>
+          <button class="status-icon-button" type="button" id="notifications" title="通知" aria-label="通知"><svg><use href="#i-bell"></use></svg></button>
+        </div>
+      </footer>
+
+      <div class="pane-menu" id="pane-menu" role="menu" aria-label="窗格菜单">
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="paste"><span class="menu-icon">▣</span><span class="menu-label">粘贴</span><span class="menu-shortcut">Ctrl+Shift+V</span></button>
+        <div class="menu-separator"></div>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="split-right"><span class="menu-icon">◫</span><span class="menu-label">向右分屏</span><span class="menu-shortcut">Ctrl+Shift+D</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="split-down"><span class="menu-icon">⬓</span><span class="menu-label">向下分屏</span><span class="menu-shortcut">Ctrl+Alt+Shift+D</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="pip"><span class="menu-icon">▣</span><span class="menu-label">画中画</span><span class="menu-shortcut">Ctrl+Alt+Shift+P</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="park"><span class="menu-icon">▁</span><span class="menu-label">停放到底部</span><span class="menu-shortcut">Park</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="zoom"><span class="menu-icon">↗</span><span class="menu-label">缩放窗格</span><span class="menu-shortcut">Ctrl+Shift+R</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="move-tab"><span class="menu-icon">⇥</span><span class="menu-label">移动窗格到标签页…</span></button>
+        <div class="menu-separator"></div>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="find"><span class="menu-icon">⌕</span><span class="menu-label">在滚动历史中查找</span><span class="menu-shortcut">Ctrl+Shift+F</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="open-scrollback"><span class="menu-icon">□</span><span class="menu-label">在编辑器中打开滚动历史</span><span class="menu-shortcut">Ctrl+Shift+H</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="clear"><span class="menu-icon">⌫</span><span class="menu-label">清屏和滚动历史</span><span class="menu-shortcut">Ctrl+Shift+K</span></button>
+        <button class="menu-row" type="button" role="menuitem" data-pane-action="restart"><span class="menu-icon">↻</span><span class="menu-label">重启 shell</span></button>
+        <div class="menu-separator"></div>
+        <button class="menu-row danger" type="button" role="menuitem" data-pane-action="close"><span class="menu-icon">×</span><span class="menu-label">关闭窗格</span><span class="menu-shortcut">Ctrl+Shift+W</span></button>
+      </div>
+
+      <div class="modal-layer" id="palette-layer" role="dialog" aria-modal="true" aria-label="随处搜索">
+        <div class="palette">
+          <div class="palette-input-row"><svg><use href="#i-search"></use></svg><input id="palette-input" type="text" placeholder="随处搜索…" aria-label="随处搜索"><span class="keycap">esc</span></div>
+          <div class="palette-tabs" aria-label="搜索范围"><span class="active">全部</span><span>终端</span><span>会话</span><span>主机</span><span>操作</span></div>
+          <div class="palette-list" id="palette-list"></div>
+          <div class="palette-footer"><span><span class="keycap">↑↓</span> 导航</span><span><span class="keycap">↵</span> 打开</span><span><span class="keycap">Tab</span> 切换范围</span></div>
+        </div>
+      </div>
+
+      <div class="settings-layer" id="settings-layer" role="dialog" aria-modal="true" aria-label="设置窗口说明">
+        <div class="settings-preview">
+          <div class="settings-titlebar"><strong>设置</strong><span class="badge">现有独立窗口</span><button class="icon-button" type="button" id="settings-close" aria-label="关闭设置说明"><svg><use href="#i-close"></use></svg></button></div>
+          <div class="settings-note">
+            <h2>设置界面保持当前实现</h2>
+            <p>本会话只重新设计主界面。真实行为仍然是打开现有独立设置窗口，不改变设置页的信息架构、导航或控件。</p>
+            <div class="current-window"><span>当前设置窗口</span><span>960 × 700</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="notes-panel" aria-label="设计说明">
+    <div class="notes-inner">
+      <h1>设计决策</h1>
+      <p>这是可交互 HTML 初稿，不是生产样式补丁。颜色只表达 lyrel 语义 token；生产实现仍应从 <code>cx.theme()</code> 与 <code>src/ui/presets.rs</code> 取色。</p>
+
+      <h2>本轮已调整</h2>
+      <ul>
+        <li>中央顶栏保持移除；当前目录、分支、主机状态、设置与通知保留在 26px 全局状态栏，状态栏中央不放置常驻文字。</li>
+        <li>设置在状态栏最左侧且只保留图标；通知在状态栏最右侧。</li>
+        <li>左右两组三按钮使用同一种圆角控件组；左栏第一行是 lyrel 图标和左侧三按钮，第二行是工作区切换按钮。</li>
+        <li>lyrel 图标是窗口级元素；左侧栏收起后仍保留在窗口左上角，左侧三按钮组向右让位。</li>
+        <li>左侧组顺序为“收起左侧栏 / 随处搜索 / 新建标签页”；右侧组顺序为“向右分屏 / 向下分屏 / 收起右侧面板”。</li>
+        <li>工作区切换按钮沿用当前界面形态：圆形首字母头像、工作区名和上下切换箭头。</li>
+        <li>窗口控制“最小化 / 最大化 / 关闭”上移为窗口级常驻控件；右侧面板收起后仍保留在窗口右上角。</li>
+        <li>分屏按钮沿用当前产品右键菜单语义：从当前 pane 向右侧或下侧新增一个终端，快捷键分别为 <code>Ctrl+Shift+D</code> 与 <code>Ctrl+Alt+Shift+D</code>。</li>
+        <li>切换或新建标签页不向状态栏中央写“已切换”提示。</li>
+        <li>侧栏收起后仍保留对应三按钮：左侧组浮在窗口左上角，右侧组浮在窗口右上角；不显示缩小版侧栏内容。</li>
+        <li>工作区切换按钮位于左栏第二行并占满可用宽度。</li>
+        <li>随处搜索使用 macOS Command 图形；左栏内重复的“筛选标签页”输入框移除。</li>
+        <li>右侧“信息 / 文件 / 更改 / GitHub”保持独立页签行，位于右侧面板开关下方。</li>
+        <li>pane 抓手只在指针接近 pane 顶部时出现；点击打开命令菜单，拖动移动窗格。</li>
+        <li>底部 park 改为可放多个窗格的紧凑牌堆；静止时牌堆底部与状态栏顶边对齐、不进入状态栏，悬停时出现暖色半圆光环，只有指针下的牌抬升、转正并放大，其他牌仍贴近底部。</li>
+        <li>点击某张停放牌会翻面并放大为预览，背面显示标题、路径和“恢复”按钮；点击牌堆外部或按 <code>Esc</code> 关闭预览。</li>
+        <li>拖拽进入底部 park 时显示暖色大半圆和顶部 <code>Park</code> 胶囊，不再使用虚线小框。</li>
+        <li>底部 park 落点参考 tern 截图与录屏；官方 Stencil Tern 文档中可核实的对应能力是 <code>pip stash</code> 与 PiP deck/fan 类交互，不是名为 park 的公开命令。</li>
+        <li>设置预览不再重绘设置界面，只说明按钮仍打开现有独立设置窗口。</li>
+      </ul>
+
+      <h2>pane 菜单来源</h2>
+      <p>命令名以 <a href="https://docs.stencil.so/tern/reference/actions.md">Stencil Tern Built-in Actions</a> 为依据；菜单中可见的快捷键来自用户给出的 tern 截图，只是原型占位，不能当作官方默认绑定。Stencil 官方文档可核实 <code>split_right</code>、<code>split_down</code>、<code>pip</code> 与 <code>pip stash</code>，但没有把 <code>park</code> 定义成公开 pane 命令。</p>
+
+      <h2>实现边界</h2>
+      <ul>
+        <li>HTML 的 <code>backdrop-filter</code> 只是近似；生产实现使用整窗原生背景外观，侧栏共同透出该背景，不做左右栏独立模糊。项目的 <code>WindowBackdrop</code> 是 Windows 材质配置；macOS 沿用原生背景与模糊能力，不能承诺与浏览器的模糊半径、饱和度逐像素一致。</li>
+        <li>park 卡片表达“PiP 贴边暂存后留下的恢复入口”；底部落点来自截图观察，官方文档只明确左／右边缘 stash。</li>
+        <li>HTML 用 <code>rotateY</code> 表达翻面。当前锁定的 <code>gpui-kit 0.8.0</code> / <code>gpui-pre 0.3.9</code> 未提供通用的整棵元素子树 3D transform；整牌旋转、文字变换和命中区域也不能直接照搬 CSS。自绘或水平压缩换面的候选实现必须先在原生窗口验证；任何可见差异须经用户确认，不自动降低设计要求。</li>
+        <li>Park 与 PiP 只改变 pane 的可见布局，不复制或停止终端会话。实施讨论已明确解除原型的单窗格 PiP 限制：只有一个窗格时也能浮起，中央允许暂时为空，不自动创建另一会话。</li>
+        <li>HTML 中的 CPU 与 MEM 仍是示意数值；总方案已确认包含这两个真实内置小组件，不保留固定数值占位，本轮不同时建立第三方小组件插件系统。</li>
+        <li>CPU/MEM 统计当前工作区所属主机的整体负载：本地工作区显示本机，远程工作区显示远端，并标明统计对象；数据不可用时明确显示不可用，不回退为另一台主机的指标。</li>
+      </ul>
+
+      <h2>实施方案讨论：已确认约束（尚未实施）</h2>
+      <ul>
+        <li>总方案的终态是完整落地本设计，不是只换外壳或交付简化版；分阶段实施不意味着遗漏尚未完成的设计项。框架限制与未验证能力必须明确列出。</li>
+        <li>统一使用设计图的左侧标签栏，移除顶部水平标签模式及对应设置并迁移已有配置；窗口级品牌图标、左右六个功能按钮、原生窗口控制与拖动区域独立保留。</li>
+        <li>PiP 与停放牌堆属于各自标签页；切换标签页时一起切换，不作为跨标签页、跨工作区的窗口级收纳区。</li>
+        <li>画中画（PiP）是同一终端的浮动展示，保留输入、选择和滚动能力，不是只读缩略图。每个标签页最多一个 PiP，默认位于右下角，可在内容区域内拖动和调整大小；将另一个窗格设为 PiP 时，原 PiP 先还原为分屏，不创建独立系统置顶窗口。</li>
+        <li>窗格停放（Park）是终端继续运行、暂不占据常规分屏区域的展示状态，不是关闭或休眠；卡片提供状态、预览与恢复，不接收终端输入。</li>
+        <li>停放总数不设上限；常规数量保持扇形牌堆。卡片过多或窗口过窄时提供“更多”列表，不无限压缩命中区，所有窗格均可通过鼠标与键盘找到并恢复。</li>
+        <li>“恢复”一律返回原分屏关系，包括从 PiP 停放的窗格；恢复不回滚停放期间的其他布局调整。原位置失效时才放到当前窗格旁，全部停放时首个恢复窗格填满可用内容区。</li>
+        <li>允许停放最后一个普通分屏窗格；全部停放后保留标签页、牌堆以及恢复／新建入口，不自动创建新 shell。</li>
+        <li>关闭并重开 GUI 后保持各标签页的 PiP／停放状态与必要的还原信息；不持久化悬停或翻面预览。这不改变服务器重启会结束原进程的既有边界。</li>
+        <li>PiP／停放关系随所属工作区保存在对应机器的 daemon 布局中，换客户端打开同一工作区也保持；实际位置与大小受当前窗口约束。悬停、焦点与翻面预览不共享。</li>
+        <li>状态栏铃铛打开应用内通知列表，记录应用现有的全部成功、提示、警告与错误 Toast，不读取操作系统通知历史，也不保存终端输出日志。通知标明来源工作区，已收到的未读与历史记录跨 GUI 启动保留；不凭空补出 GUI 关闭期间未收到的事件。</li>
+        <li>当前电脑上所有 lyrel 窗口共用一个本地通知收件箱，最多保存最近 500 条，超过上限淘汰最旧记录。通知弹层提供“清空通知历史”按钮，一次点击清空全部历史与未读计数，无二次确认；不影响操作系统通知或其他电脑的历史，不再弹出“清空成功”Toast。清空之后新到达的通知照常记录。</li>
+      </ul>
+
+      <h2>实施分层与验收门槛（已确认，暂不实施）</h2>
+      <p>用户已确认完整总方案，当前暂不开始实施：不创建原生验证样例，不修改生产代码。后续启动实施须由用户另行授权；方案确认不代表原生效果已经验证通过。</p>
+      <p>完整实施规格已发布为 <a href="https://github.com/dlivxpr/lyrel/issues/22">GitHub Issue #22</a>，含已确认的高层测试接缝；<code>ready-for-agent</code> 表示规格已备齐，不改变当前暂不实施的决定。</p>
+      <ol>
+        <li><strong>原生能力门槛：</strong>先验证整牌含中文文字的倾斜、抬升、翻面、阴影、命中区域，以及原生材质。不能仅凭动画 API 存在判定效果成立；未通过时明确列出差异，由用户决定，不用 WebView、依赖源码补丁或删减交互绕过。</li>
+        <li><strong>窗口外壳：</strong>重组 <code>src/ui/app.rs</code>、<code>tab_sidebar.rs</code> 与现有顶部控件。主内容与全局状态栏由同一个布局拥有者分配空间，PiP、牌堆及扇形落点都限制在状态栏上方；移除中央顶栏、重复侧栏筛选框及多余边缘强调线，保留侧栏调整宽度的能力。macOS 原生红绿灯与 Windows 全屏规则按平台保留。</li>
+        <li><strong>窗格模型：</strong>在 <code>lyrel-core</code> 的工作区／标签页布局中表达分屏、PiP、停放三种展示状态，保留完整逻辑分屏树和会话归属；GUI 从中投影当前可见布局，不能把隐藏的叶子同步成 <code>PaneClose</code>。沿用镜像、状态重放、会话恢复和隐藏 pane 通知门控；悬停、翻面与动画只属于 GUI。</li>
+        <li><strong>状态栏：</strong>独立承载主机、路径、分支、Agent 与文档状态，移除重复的文档底栏；搜索、设置、分屏等入口复用现有 Action。CPU/MEM 经对应 Host／daemon 的后台采集提供真实主机数据，不在 UI 线程采集，也不为远端查询本机指标。保留用户已有主题、字体和透明度选择。</li>
+        <li><strong>通知收件箱：</strong>由应用自有模型保存并持久化有界历史，所有应用通知入口统一接入，再使用框架 Toast 呈现短暂反馈；不能把框架的临时 Toast 列表当作历史存储。弹层复用原生焦点、键盘、滚动与关闭语义，源窗格已不存在时不自动复活会话。</li>
+        <li><strong>协议与调用方：</strong>布局展示状态和主机指标的协议变更与 GUI、CLI、server 同步交付；新增 control 消息按仓库规则提升 <code>CONTROL_VERSION</code>。停放 pane 继续可由 CLI 定位、发送输入和捕获内容。开发与验证使用隔离 daemon，不重启用户的真实会话。</li>
+        <li><strong>最终验收：</strong>在真实窗口对照设计检查浅／深主题、宽／窄窗口、界面缩放、侧栏折叠、文件铺满、单窗格 PiP、全部停放、卡片溢出、GUI 重开、远端布局恢复、真实 CPU/MEM 与通知的第 501 条及一键清空。拖动、停放和恢复不得重启 PTY；卡片和光环任何状态均不得压入状态栏。Windows 与 macOS 分别保留实窗证据，构建通过不能替代。</li>
+        <li><strong>正式契约：</strong>实现完成后同步更新 <code>docs/design-system.md</code>、标签页／分屏、侧栏、侧面板、设置、快捷键与 CLI 相关文档和行为测试；移除被替代的布局分支，不保留新旧 UI 双轨开关。本节只记录待实施总方案，不表示原型脚本或生产功能已经完成这些变更。</li>
+      </ol>
+
+      <h2>验收路径</h2>
+      <ul>
+        <li>左栏第一行是 lyrel 图标和圆角三按钮组“收起侧栏、随处搜索、新建标签页”；第二行是整宽工作区切换按钮。</li>
+        <li>工作区切换按钮包含圆形 <code>D</code> 头像、<code>dlivxpr</code> 和上下切换箭头。</li>
+        <li>右侧面板顶部是圆角三按钮组“向右分屏、向下分屏、收起右侧面板”，不再与窗口控制按钮重叠。</li>
+        <li>初始只有一个终端；点击“向右分屏”会在当前 pane 右侧新增终端，点击“向下分屏”会在当前 pane 下方新增终端。</li>
+        <li>连续分屏会相对当前激活 pane 插入新终端；pane 菜单中的两个分屏命令与当前产品右键菜单同名同快捷键。</li>
+        <li>收起左栏后，lyrel 图标仍留在窗口左上角，左侧三按钮组位于图标右侧；收起右栏后，右侧三按钮组浮在窗口控制按钮左侧。</li>
+        <li>停放多个窗格后，牌堆与扇形光环的实际包围盒都不越过状态栏顶边；悬停时扇形展开，点击其中一张会翻面放大并显示“恢复”。</li>
+        <li>点击某张牌的“恢复”只恢复该窗格；其余停放窗格仍保留在底部牌堆。</li>
+        <li>切换或新建标签页时，状态栏中央不出现“已切换”或“已新建”提示。</li>
+        <li>左栏没有“筛选标签页”输入框；状态栏中央默认没有常驻文字。</li>
+        <li>指针进入 pane 顶部 36px 才显示抓手；点击抓手打开菜单。</li>
+        <li>从抓手拖到底部圆形落点会停放 pane；点击底部卡片打开翻面预览，再点击“恢复”还原该窗格。</li>
+        <li>pane 菜单的“画中画”会把窗格浮到右下角卡片；卡片可停放到底部或还原为分屏。</li>
+        <li>文件铺满时无中央顶栏，目录与文档状态仍在全局状态栏。</li>
+      </ul>
+    </div>
+  </aside>
+
+  <script>
+    const root = document.documentElement;
+    const body = document.body;
+    const appWindow = document.getElementById('window');
+    const modeButtons = [...document.querySelectorAll('[data-mode]')];
+    const materialToggle = document.getElementById('material-toggle');
+    const themeToggle = document.getElementById('theme-toggle');
+    const notesToggle = document.getElementById('notes-toggle');
+    const statusContext = document.getElementById('status-context');
+    const statusCenter = document.getElementById('status-center');
+    const statusWidgets = document.getElementById('status-widgets');
+    const paletteLayer = document.getElementById('palette-layer');
+    const paletteInput = document.getElementById('palette-input');
+    const paletteList = document.getElementById('palette-list');
+    const globalSearch = document.getElementById('global-search');
+    const globalSearchFloat = document.getElementById('global-search-float');
+    const settingsLayer = document.getElementById('settings-layer');
+    const settingsOpen = document.getElementById('settings-open');
+    const settingsClose = document.getElementById('settings-close');
+    const workspaceSwitch = document.getElementById('workspace-switch');
+    const leftToggle = document.getElementById('left-toggle');
+    const leftToggleFloat = document.getElementById('left-toggle-float');
+    const rightCollapse = document.getElementById('right-collapse');
+    const rightToggleFloat = document.getElementById('right-toggle-float');
+    const newTabButton = document.getElementById('new-tab');
+    const newTabFloatButton = document.getElementById('new-tab-float');
+    const tabList = document.getElementById('tab-list');
+    const terminalGrid = document.getElementById('terminal-grid');
+    const parkZone = document.getElementById('park-zone');
+    const parkDock = document.getElementById('park-dock');
+    const parkStack = document.getElementById('park-stack');
+    const pipCard = document.getElementById('pip-card');
+    const pipTitle = document.getElementById('pip-title');
+    const pipBody = document.getElementById('pip-body');
+    const paneMenu = document.getElementById('pane-menu');
+    const splitButtons = [...document.querySelectorAll('[data-split-direction]')];
+    const notifications = document.getElementById('notifications');
+
+    let mode = 'terminal';
+    let paletteSelection = 0;
+    let hiddenPane = null;
+    let hiddenMode = null;
+    let pipPane = null;
+    let selectedParkedPaneId = null;
+    const parkedPanes = [];
+    let menuPane = null;
+    let newTabCount = 0;
+    let statusTimer = null;
+    let dragSession = null;
+    let lastSearchTrigger = globalSearch;
+    let paneSequence = 0;
+    let activePaneId = null;
+    let zoomedPaneId = null;
+    let layoutRoot = null;
+    const paneStates = new Map();
+
+    const paletteItems = [
+      { section: '终端', icon: '›', title: 'π > lyrel', meta: 'main · 当前' },
+      { section: '终端', icon: '›', title: 'π > GIT: … close issues', meta: '运行中' },
+      { section: '文件', icon: '□', title: 'src/ui/app.rs', meta: '未保存' },
+      { section: '操作', icon: '◫', title: '向右分屏', meta: 'Ctrl+Shift+D' },
+      { section: '操作', icon: '⬓', title: '向下分屏', meta: 'Ctrl+Alt+Shift+D' },
+      { section: '操作', icon: '▣', title: '画中画', meta: 'PiP' },
+      { section: '操作', icon: '▁', title: '停放窗格到底部', meta: 'Park' },
+      { section: '操作', icon: '⚙', title: '设置…', meta: 'Ctrl+,' },
+      { section: '主机', icon: '⌂', title: 'ubuntu', meta: '已连接' }
+    ];
+
+    function visiblePaneCount() {
+      return [...paneStates.values()].filter((pane) => !pane.hidden).length;
+    }
+
+    function firstVisiblePane() {
+      return [...paneStates.values()].find((pane) => !pane.hidden) || null;
+    }
+
+    function updateActivePane() {
+      paneStates.forEach((pane) => {
+        pane.element.classList.toggle('active-pane', pane.id === activePaneId && !pane.hidden);
+      });
+    }
+
+    function attachPaneInteractions(pane) {
+      pane.addEventListener('pointerdown', () => {
+        if (!paneStates.get(pane.id)?.hidden) {
+          activePaneId = pane.id;
+          updateActivePane();
+        }
+      });
+      pane.addEventListener('pointermove', (event) => {
+        const rect = pane.getBoundingClientRect();
+        pane.classList.toggle('top-near', event.clientY - rect.top <= 36 || pane.classList.contains('menu-open'));
+      });
+      pane.addEventListener('pointerleave', () => {
+        if (!pane.classList.contains('menu-open')) pane.classList.remove('top-near');
+      });
+      const grip = pane.querySelector('.pane-grip');
+      grip.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        beginDrag(event, pane, grip);
+      });
+      grip.addEventListener('pointermove', updateDrag);
+      grip.addEventListener('pointerup', finishDrag);
+      grip.addEventListener('pointercancel', finishDrag);
+      grip.addEventListener('click', (event) => {
+        if (event.detail === 0) openPaneMenu(pane);
+      });
+    }
+
+    function registerPane(element) {
+      paneSequence += 1;
+      if (!element.id) element.id = `pane-${paneSequence}`;
+      const pane = { id: element.id, element, hidden: false, hiddenMode: null };
+      paneStates.set(pane.id, pane);
+      attachPaneInteractions(element);
+      return pane;
+    }
+
+    function createTerminalPane() {
+      const nextNumber = paneSequence + 1;
+      const source = paneStates.get(activePaneId) || firstVisiblePane();
+      const path = source?.element.dataset.path || '~/Documents/rscode/lyrel';
+      const element = document.createElement('section');
+      element.className = 'terminal-pane';
+      element.dataset.title = `π > 终端 ${nextNumber}`;
+      element.dataset.path = path;
+      element.setAttribute('aria-label', `终端窗格 ${nextNumber}`);
+      element.innerHTML = `
+        <button class="pane-grip" type="button" aria-label="窗格操作：拖动或打开菜单" aria-haspopup="menu" aria-expanded="false">
+          <span class="grip-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="grip-tooltip">拖动，或点击打开窗格菜单</span>
+        </button>
+        <div class="terminal-content">
+          <div class="prompt-line"><span class="prompt-user">dlivxpr</span><span>&nbsp;on&nbsp;</span><span class="prompt-path">${path}</span><span>&nbsp;</span><span class="prompt-branch">main</span><span class="prompt-cursor"></span></div>
+          <div class="terminal-lines">
+            <div>新终端 · 等待输入</div>
+          </div>
+        </div>`;
+      return registerPane(element);
+    }
+
+    function insertSplit(node, targetId, direction, newPaneId) {
+      if (node.type === 'pane') {
+        if (node.paneId !== targetId) return [node, false];
+        return [{
+          type: 'split',
+          direction,
+          first: node,
+          second: { type: 'pane', paneId: newPaneId }
+        }, true];
+      }
+      const [first, firstDone] = insertSplit(node.first, targetId, direction, newPaneId);
+      if (firstDone) return [{ ...node, first }, true];
+      const [second, secondDone] = insertSplit(node.second, targetId, direction, newPaneId);
+      return [{ ...node, second }, secondDone];
+    }
+
+    function renderLayoutNode(node) {
+      if (node.type === 'pane') {
+        const pane = paneStates.get(node.paneId);
+        return pane && !pane.hidden ? pane.element : null;
+      }
+      const first = renderLayoutNode(node.first);
+      const second = renderLayoutNode(node.second);
+      if (first && second) {
+        const split = document.createElement('div');
+        split.className = `split-node axis-${node.direction}`;
+        const divider = document.createElement('div');
+        divider.className = 'split-divider';
+        divider.setAttribute('role', 'separator');
+        divider.setAttribute('aria-orientation', node.direction === 'down' ? 'horizontal' : 'vertical');
+        divider.setAttribute('aria-label', '调整终端窗格大小');
+        split.append(first, divider, second);
+        return split;
+      }
+      return first || second;
+    }
+
+    function renderTerminalLayout() {
+      const zoomed = zoomedPaneId ? paneStates.get(zoomedPaneId) : null;
+      const content = zoomed && !zoomed.hidden ? zoomed.element : renderLayoutNode(layoutRoot);
+      if (content) {
+        terminalGrid.replaceChildren(content);
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'terminal-empty';
+        empty.textContent = '所有终端窗格已隐藏';
+        terminalGrid.replaceChildren(empty);
+      }
+      updateActivePane();
+    }
+
+    function splitPane(paneId, direction) {
+      const target = paneStates.get(paneId);
+      if (!target || target.hidden) return;
+      const pane = createTerminalPane();
+      const [nextRoot, inserted] = insertSplit(layoutRoot, target.id, direction, pane.id);
+      if (!inserted) return;
+      layoutRoot = nextRoot;
+      activePaneId = pane.id;
+      zoomedPaneId = null;
+      renderTerminalLayout();
+      flashStatus(direction === 'right' ? '已向右侧打开终端' : '已向下方打开终端');
+    }
+
+    function splitActivePane(direction) {
+      const active = paneStates.get(activePaneId);
+      const target = active && !active.hidden ? active : firstVisiblePane();
+      if (target) splitPane(target.id, direction);
+    }
+
+    const initialPane = registerPane(document.getElementById('pane-a'));
+    layoutRoot = { type: 'pane', paneId: initialPane.id };
+    activePaneId = initialPane.id;
+
+    function parkLabel(pane) {
+      const title = pane.dataset.title?.replace(/^π >\s*/, '') || '终端';
+      return title || pane.dataset.path?.split('/').filter(Boolean).at(-1) || '窗格';
+    }
+
+    function renderParkDock() {
+      const count = parkedPanes.length;
+      if (!count) {
+        selectedParkedPaneId = null;
+        parkDock.classList.remove('visible', 'preview-open');
+        parkStack.replaceChildren();
+        return;
+      }
+      if (!parkedPanes.some((pane) => pane.id === selectedParkedPaneId)) selectedParkedPaneId = null;
+      parkDock.classList.add('visible');
+      parkDock.classList.toggle('preview-open', !!selectedParkedPaneId);
+      const middle = (count - 1) / 2;
+      const fanStep = count > 1 ? Math.min(58, 230 / (count - 1)) : 0;
+      const cards = parkedPanes.map((pane, index) => {
+        const offset = index - middle;
+        const card = document.createElement('article');
+        card.className = 'park-card';
+        card.dataset.parkId = pane.id;
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-label', `预览停放的窗格 ${pane.dataset.title}`);
+        card.setAttribute('aria-pressed', String(selectedParkedPaneId === pane.id));
+        card.classList.toggle('selected', selectedParkedPaneId === pane.id);
+        card.style.setProperty('--stack-x', `${offset * 13}px`);
+        card.style.setProperty('--stack-y', `${Math.abs(offset) * -8}px`);
+        card.style.setProperty('--stack-rotate', `${offset * 7}deg`);
+        card.style.setProperty('--fan-x', `${offset * fanStep}px`);
+        card.style.setProperty('--fan-y', `${Math.abs(offset) * -8}px`);
+        card.style.setProperty('--fan-rotate', `${offset * 12}deg`);
+        card.innerHTML = `
+          <div class="park-card-inner">
+            <div class="park-card-face front"><svg><use href="#i-terminal"></use></svg><span class="park-title">${parkLabel(pane)}</span><span class="park-state">idle</span></div>
+            <div class="park-card-face back"><svg><use href="#i-terminal"></use></svg><span class="park-title">${pane.dataset.title}</span><span class="park-path">${pane.dataset.path}</span><span class="park-state">已停放 · 会话保持</span><button class="park-restore" type="button" data-park-restore>恢复</button></div>
+          </div>`;
+        return card;
+      });
+      parkStack.replaceChildren(...cards);
+    }
+
+    function restoreParkedPane(paneId, announce = true) {
+      const index = parkedPanes.findIndex((pane) => pane.id === paneId);
+      if (index < 0) return;
+      const [pane] = parkedPanes.splice(index, 1);
+      const state = paneStates.get(pane.id);
+      if (selectedParkedPaneId === pane.id) selectedParkedPaneId = null;
+      if (state) {
+        state.hidden = false;
+        state.hiddenMode = null;
+        activePaneId = state.id;
+      }
+      renderTerminalLayout();
+      renderStatus();
+      renderParkDock();
+      if (announce) flashStatus('已恢复停放的窗格');
+    }
+
+    function renderStatus() {
+      statusCenter.textContent = '';
+      if (mode === 'fill') {
+        statusContext.innerHTML = '<span class="status-item"><span class="status-dot"></span>本地</span><span class="status-separator"></span><span class="status-item status-path" title="src/ui/app.rs">src/ui/app.rs · ~/Documents/rscode/lyrel</span><button class="status-item" type="button" title="切换分支">main ↑ 1</button>';
+        statusWidgets.innerHTML = '<button class="status-item" type="button" title="跳转到行列">Ln 128, Col 24</button><span class="status-separator"></span><button class="status-item" type="button" title="查看问题">0 问题</button><button class="status-item" type="button" title="换行">LF</button><span class="status-item">10:24</span>';
+      } else {
+        statusContext.innerHTML = '<span class="status-item"><span class="status-dot"></span>本地</span><span class="status-separator"></span><span class="status-item status-path" title="~/Documents/rscode/lyrel">~/Documents/rscode/lyrel</span><button class="status-item" type="button" title="切换分支">main ↑ 1</button>';
+        statusWidgets.innerHTML = '<button class="status-item" type="button" title="Agent 状态">Agent 1</button><span class="status-separator"></span><span class="status-item" title="示意小组件，不代表第一版已实现">CPU <span class="metric"><i style="width:7%"></i></span> 7%</span><span class="status-item" title="示意小组件，不代表第一版已实现">MEM <span class="metric"><i style="width:66%"></i></span> 66%</span><span class="status-separator"></span><span class="status-item">10:24</span>';
+      }
+    }
+
+    function flashStatus(message) {
+      clearTimeout(statusTimer);
+      statusCenter.textContent = message;
+      statusTimer = setTimeout(renderStatus, 1800);
+    }
+
+    function setMode(nextMode) {
+      mode = nextMode;
+      appWindow.classList.toggle('file-fill', mode === 'fill');
+      modeButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
+      [globalSearch, globalSearchFloat].forEach((button) => button.classList.toggle('attention', mode === 'fill'));
+      closePaneMenu();
+      renderStatus();
+    }
+
+    function setSplit(direction) {
+      splitActivePane(direction);
+    }
+
+    function hidePane(pane, how) {
+      const state = paneStates.get(pane?.id);
+      if (!state || state.hidden) return;
+      if (pipPane === pane) {
+        pipPane = null;
+        pipCard.classList.remove('visible');
+      }
+      if (how === 'parked') {
+        if (!parkedPanes.includes(pane)) parkedPanes.push(pane);
+      } else {
+        hiddenPane = pane;
+        hiddenMode = how;
+      }
+      state.hidden = true;
+      state.hiddenMode = how;
+      if (zoomedPaneId === pane.id) zoomedPaneId = null;
+      if (activePaneId === pane.id) activePaneId = firstVisiblePane()?.id || null;
+      renderTerminalLayout();
+      renderParkDock();
+      renderStatus();
+    }
+
+    function restorePane(announce = true) {
+      if (!hiddenPane) return;
+      const state = paneStates.get(hiddenPane.id);
+      if (state) {
+        state.hidden = false;
+        state.hiddenMode = null;
+        activePaneId = state.id;
+      }
+      hiddenPane = null;
+      hiddenMode = null;
+      renderTerminalLayout();
+      renderStatus();
+      if (announce) flashStatus('已恢复窗格');
+    }
+
+    function showPiP(pane) {
+      const state = paneStates.get(pane?.id);
+      if (!state || state.hidden) return;
+      if (visiblePaneCount() <= 1) {
+        flashStatus('只剩一个窗格，不能画中画');
+        return;
+      }
+      if (hiddenPane) restorePane(false);
+      if (pipPane && pipPane !== pane) dockPiP(false);
+      pipPane = pane;
+      state.hidden = true;
+      state.hiddenMode = 'pip';
+      if (zoomedPaneId === pane.id) zoomedPaneId = null;
+      if (activePaneId === pane.id) activePaneId = firstVisiblePane()?.id || null;
+      pipTitle.textContent = pane.dataset.title;
+      pipBody.innerHTML = `${pane.dataset.path}<br>等待输入`;
+      pipCard.classList.add('visible');
+      renderTerminalLayout();
+      renderStatus();
+      flashStatus('已浮为画中画');
+    }
+
+    function dockPiP(announce = true) {
+      if (!pipPane) return;
+      const state = paneStates.get(pipPane.id);
+      if (state) {
+        state.hidden = false;
+        state.hiddenMode = null;
+        activePaneId = state.id;
+      }
+      pipCard.classList.remove('visible');
+      pipPane = null;
+      renderTerminalLayout();
+      renderStatus();
+      if (announce) flashStatus('已还原为分屏');
+    }
+
+    function stashPiP() {
+      if (!pipPane) return;
+      const pane = pipPane;
+      const state = paneStates.get(pane.id);
+      pipPane = null;
+      pipCard.classList.remove('visible');
+      if (!parkedPanes.includes(pane)) parkedPanes.push(pane);
+      if (state) state.hiddenMode = 'parked';
+      renderTerminalLayout();
+      renderParkDock();
+      renderStatus();
+      flashStatus('已停放画中画');
+    }
+
+    function openPaneMenu(pane) {
+      if (menuPane === pane && paneMenu.classList.contains('open')) {
+        closePaneMenu();
+        return;
+      }
+      closePaneMenu();
+      menuPane = pane;
+      pane.classList.add('menu-open', 'top-near');
+      const grip = pane.querySelector('.pane-grip');
+      grip.setAttribute('aria-expanded', 'true');
+      const gripRect = grip.getBoundingClientRect();
+      const windowRect = appWindow.getBoundingClientRect();
+      const left = Math.min(Math.max(gripRect.left - windowRect.left - 135, 12), windowRect.width - 322);
+      paneMenu.style.left = `${left}px`;
+      paneMenu.style.top = `${gripRect.bottom - windowRect.top + 8}px`;
+      paneMenu.classList.add('open');
+      paneMenu.querySelector('.menu-row').focus();
+    }
+
+    function closePaneMenu() {
+      if (menuPane) {
+        menuPane.classList.remove('menu-open');
+        menuPane.querySelector('.pane-grip').setAttribute('aria-expanded', 'false');
+      }
+      menuPane = null;
+      paneMenu.classList.remove('open');
+    }
+
+    function runPaneAction(action) {
+      const pane = menuPane;
+      closePaneMenu();
+      if (!pane) return;
+      if (action === 'split-right') splitPane(pane.id, 'right');
+      else if (action === 'split-down') splitPane(pane.id, 'down');
+      else if (action === 'pip') showPiP(pane);
+      else if (action === 'park') hidePane(pane, 'parked');
+      else if (action === 'zoom') {
+        zoomedPaneId = zoomedPaneId === pane.id ? null : pane.id;
+        renderTerminalLayout();
+        flashStatus(zoomedPaneId ? '已缩放当前窗格' : '已恢复窗格布局');
+      } else if (action === 'close') hidePane(pane, 'closed');
+      else if (action === 'move-tab') flashStatus('移动窗格到标签页（原型示意）');
+      else if (action === 'find') flashStatus('在滚动历史中查找（原型示意）');
+      else if (action === 'open-scrollback') flashStatus('在编辑器中打开滚动历史（原型示意）');
+      else if (action === 'clear') flashStatus('已清屏（原型示意）');
+      else if (action === 'restart') flashStatus('已重启 shell（原型示意）');
+      else if (action === 'paste') flashStatus('粘贴（原型示意）');
+    }
+
+    function beginDrag(event, pane, grip) {
+      dragSession = {
+        pointerId: event.pointerId,
+        pane,
+        grip,
+        startX: event.clientX,
+        startY: event.clientY,
+        dragging: false
+      };
+      grip.setPointerCapture(event.pointerId);
+    }
+
+    function updateDrag(event) {
+      if (!dragSession || event.pointerId !== dragSession.pointerId) return;
+      const distance = Math.hypot(event.clientX - dragSession.startX, event.clientY - dragSession.startY);
+      if (!dragSession.dragging && distance > 5) {
+        dragSession.dragging = true;
+        closePaneMenu();
+        dragSession.pane.classList.add('drag-source');
+        paneStates.forEach((pane) => {
+          if (pane.element !== dragSession.pane && !pane.hidden) pane.element.classList.add('drop-target');
+        });
+        parkZone.classList.add('active');
+      }
+      if (dragSession.dragging) {
+        const zone = parkZone.getBoundingClientRect();
+        const over = event.clientX >= zone.left && event.clientX <= zone.right && event.clientY >= zone.top && event.clientY <= zone.bottom;
+        parkZone.classList.toggle('park-hover', over);
+      }
+    }
+
+    function finishDrag(event) {
+      if (!dragSession || event.pointerId !== dragSession.pointerId) return;
+      const session = dragSession;
+      dragSession = null;
+      session.grip.releasePointerCapture(event.pointerId);
+      if (!session.dragging) {
+        openPaneMenu(session.pane);
+        return;
+      }
+      session.pane.classList.remove('drag-source');
+      document.querySelectorAll('.terminal-pane').forEach((pane) => pane.classList.remove('drop-target'));
+      const shouldPark = parkZone.classList.contains('park-hover');
+      parkZone.classList.remove('active', 'park-hover');
+      if (shouldPark) hidePane(session.pane, 'parked');
+    }
+
+
+    paneMenu.addEventListener('click', (event) => {
+      const row = event.target.closest('[data-pane-action]');
+      if (row) runPaneAction(row.dataset.paneAction);
+    });
+
+    paneMenu.addEventListener('keydown', (event) => {
+      const rows = [...paneMenu.querySelectorAll('.menu-row')];
+      const index = rows.indexOf(document.activeElement);
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        rows[Math.min(index + 1, rows.length - 1)].focus();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        rows[Math.max(index - 1, 0)].focus();
+      }
+    });
+
+    document.addEventListener('pointerdown', (event) => {
+      if (!paneMenu.contains(event.target) && !event.target.closest('.pane-grip')) closePaneMenu();
+      if (selectedParkedPaneId && !parkDock.contains(event.target)) {
+        selectedParkedPaneId = null;
+        renderParkDock();
+      }
+    });
+
+    function selectParkedPane(paneId) {
+      selectedParkedPaneId = selectedParkedPaneId === paneId ? null : paneId;
+      renderParkDock();
+    }
+
+    parkStack.addEventListener('click', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (!card) return;
+      if (event.target.closest('[data-park-restore]')) restoreParkedPane(card.dataset.parkId);
+      else selectParkedPane(card.dataset.parkId);
+    });
+
+    parkStack.addEventListener('keydown', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (!card || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      selectParkedPane(card.dataset.parkId);
+    });
+
+    parkStack.addEventListener('pointerover', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (!card) return;
+      parkDock.classList.add('fan-open');
+      parkStack.querySelectorAll('.park-card.hovered').forEach((item) => item.classList.remove('hovered'));
+      card.classList.add('hovered');
+    });
+
+    parkStack.addEventListener('pointerout', (event) => {
+      const card = event.target.closest('[data-park-id]');
+      if (event.relatedTarget && card?.contains(event.relatedTarget)) return;
+      card?.classList.remove('hovered');
+      if (event.relatedTarget && parkStack.contains(event.relatedTarget)) return;
+      parkDock.classList.remove('fan-open');
+    });
+
+    pipCard.addEventListener('click', (event) => {
+      const action = event.target.closest('[data-pip-action]')?.dataset.pipAction;
+      if (action === 'stash') stashPiP();
+      else if (action === 'dock') dockPiP();
+    });
+    splitButtons.forEach((button) => {
+      button.addEventListener('click', () => setSplit(button.dataset.splitDirection));
+    });
+
+    function renderPalette() {
+      const query = paletteInput.value.trim().toLowerCase();
+      const visible = paletteItems.filter((item) => `${item.title} ${item.meta}`.toLowerCase().includes(query));
+      paletteSelection = Math.min(paletteSelection, Math.max(visible.length - 1, 0));
+      let currentSection = '';
+      paletteList.innerHTML = visible.map((item, index) => {
+        const section = item.section !== currentSection ? `<div class="palette-section">${item.section}</div>` : '';
+        currentSection = item.section;
+        return `${section}<div class="palette-row ${index === paletteSelection ? 'selected' : ''}" data-index="${index}"><span class="row-icon">${item.icon}</span><span class="row-title">${item.title}</span><span class="row-meta">${item.meta}</span></div>`;
+      }).join('') || '<div class="palette-section">没有结果</div>';
+    }
+
+    function openPalette(trigger = globalSearch) {
+      lastSearchTrigger = trigger;
+      closePaneMenu();
+      paletteLayer.classList.add('open');
+      paletteInput.value = '';
+      paletteSelection = 0;
+      renderPalette();
+      paletteInput.focus();
+    }
+
+    function closePalette() {
+      paletteLayer.classList.remove('open');
+      const target = lastSearchTrigger.offsetParent ? lastSearchTrigger : leftToggleFloat;
+      target.focus();
+    }
+
+    function openSettings() {
+      settingsLayer.classList.add('open');
+      settingsClose.focus();
+    }
+
+    function closeSettings() {
+      settingsLayer.classList.remove('open');
+      settingsOpen.focus();
+    }
+
+    modeButtons.forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
+    document.getElementById('back-terminal').addEventListener('click', () => setMode('terminal'));
+    document.querySelectorAll('.document-action').forEach((button) => button.addEventListener('click', () => flashStatus(button.dataset.message)));
+
+    materialToggle.addEventListener('click', () => {
+      const enabled = root.dataset.material !== 'true';
+      root.dataset.material = String(enabled);
+      materialToggle.setAttribute('aria-pressed', String(enabled));
+      materialToggle.textContent = enabled ? '窗口材质' : '不透明';
+    });
+
+    themeToggle.addEventListener('click', () => {
+      const dark = root.dataset.theme !== 'dark';
+      root.dataset.theme = dark ? 'dark' : 'light';
+      themeToggle.setAttribute('aria-pressed', String(dark));
+      themeToggle.textContent = dark ? '深色' : '浅色';
+    });
+
+    notesToggle.addEventListener('click', () => {
+      const open = !body.classList.contains('notes-open');
+      body.classList.toggle('notes-open', open);
+      notesToggle.setAttribute('aria-pressed', String(open));
+    });
+
+    [globalSearch, globalSearchFloat].forEach((button) => {
+      button.addEventListener('click', () => openPalette(button));
+    });
+    workspaceSwitch.addEventListener('click', () => flashStatus('切换工作区（原型示意）'));
+    settingsOpen.addEventListener('click', openSettings);
+    settingsClose.addEventListener('click', closeSettings);
+    notifications.addEventListener('click', () => flashStatus('通知（原型示意）'));
+
+    function setRightCollapsed(collapsed) {
+      appWindow.classList.toggle('right-collapsed', collapsed);
+      rightCollapse.setAttribute('aria-pressed', String(collapsed));
+      rightToggleFloat.setAttribute('aria-pressed', String(collapsed));
+      rightCollapse.title = collapsed ? '打开右侧面板' : '收起右侧面板';
+      rightCollapse.setAttribute('aria-label', rightCollapse.title);
+      rightToggleFloat.title = rightCollapse.title;
+      rightToggleFloat.setAttribute('aria-label', rightCollapse.title);
+    }
+
+    rightCollapse.addEventListener('click', () => setRightCollapsed(true));
+    rightToggleFloat.addEventListener('click', () => setRightCollapsed(false));
+
+    function setLeftHidden(hidden) {
+      appWindow.classList.toggle('left-hidden', hidden);
+      leftToggle.setAttribute('aria-pressed', String(hidden));
+      leftToggleFloat.setAttribute('aria-pressed', String(hidden));
+      leftToggle.title = hidden ? '打开侧栏' : '收起侧栏';
+      leftToggle.setAttribute('aria-label', leftToggle.title);
+      leftToggleFloat.title = leftToggle.title;
+      leftToggleFloat.setAttribute('aria-label', leftToggle.title);
+      flashStatus(hidden ? '已隐藏左侧栏' : '已显示左侧栏');
+    }
+
+    leftToggle.addEventListener('click', () => setLeftHidden(true));
+    leftToggleFloat.addEventListener('click', () => setLeftHidden(false));
+
+    function createTab() {
+      newTabCount += 1;
+      const group = tabList.querySelector('.workspace-group');
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'tab-row';
+      row.innerHTML = `<span class="agent-dot">π</span><span class="label">新标签页 ${newTabCount}</span>`;
+      group.appendChild(row);
+      tabList.querySelectorAll('.tab-row').forEach((item) => item.classList.remove('active'));
+      row.classList.add('active');
+    }
+
+    [newTabButton, newTabFloatButton].forEach((button) => button.addEventListener('click', createTab));
+
+    tabList.addEventListener('click', (event) => {
+      const row = event.target.closest('.tab-row');
+      if (!row) return;
+      tabList.querySelectorAll('.tab-row').forEach((item) => item.classList.remove('active'));
+      row.classList.add('active');
+    });
+
+    document.querySelectorAll('.panel-tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.panel-tab').forEach((item) => item.classList.remove('active'));
+        tab.classList.add('active');
+        flashStatus(`已切换到${tab.textContent.trim()}（原型示意）`);
+      });
+    });
+
+    paletteInput.addEventListener('input', () => {
+      paletteSelection = 0;
+      renderPalette();
+    });
+
+    paletteList.addEventListener('click', (event) => {
+      const row = event.target.closest('.palette-row');
+      if (row) closePalette();
+    });
+
+    paletteLayer.addEventListener('click', (event) => {
+      if (event.target === paletteLayer) closePalette();
+    });
+
+    settingsLayer.addEventListener('click', (event) => {
+      if (event.target === settingsLayer) closeSettings();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const command = event.ctrlKey || event.metaKey;
+      if (command && event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        openPalette();
+        return;
+      }
+      if (command && event.key === ',') {
+        event.preventDefault();
+        openSettings();
+        return;
+      }
+      if (selectedParkedPaneId && event.key === 'Escape') {
+        event.preventDefault();
+        selectedParkedPaneId = null;
+        renderParkDock();
+        return;
+      }
+      if (paneMenu.classList.contains('open') && event.key === 'Escape') {
+        event.preventDefault();
+        closePaneMenu();
+        return;
+      }
+      if (paletteLayer.classList.contains('open')) {
+        const rows = [...paletteList.querySelectorAll('.palette-row')];
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closePalette();
+        } else if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          paletteSelection = Math.min(paletteSelection + 1, rows.length - 1);
+          renderPalette();
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          paletteSelection = Math.max(paletteSelection - 1, 0);
+          renderPalette();
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          closePalette();
+        }
+        return;
+      }
+      if (settingsLayer.classList.contains('open') && event.key === 'Escape') {
+        event.preventDefault();
+        closeSettings();
+      }
+    });
+
+    renderTerminalLayout();
+    renderParkDock();
+    renderStatus();
+    renderPalette();
+  </script>
+</body>
+</html>

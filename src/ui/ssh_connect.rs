@@ -1,3 +1,4 @@
+use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
@@ -204,10 +205,9 @@ impl LyrelApp {
         self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
             this.open_ssh_profile_form(profile, window, cx);
             if jumped {
-                use gpui_kit::component::WindowExt as _;
                 // Silently dropping the hop would leave a host that saves fine and
                 // then cannot be reached.
-                window.push_notification(
+                window.notify_app(
                     crate::ui::i18n::t(crate::ui::i18n::L10nKey::SshSaveDroppedJumpHost),
                     cx,
                 );

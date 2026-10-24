@@ -98,6 +98,16 @@ pub struct Interactions {
 
 impl Global for Interactions {}
 
+/// 停放交互的暖色引导，不表示 warning、离线或会话异常。
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Parking {
+    pub affordance: Semantic,
+    pub shadow: u32,
+}
+
+impl Global for Parking {}
+
 pub mod state {
     pub const HOVER: f32 = 1.18;
     pub const SELECTED: f32 = 1.30;
@@ -334,6 +344,19 @@ impl Theme {
             choice,
             choice_ink: legible_foreground(choice, m.foreground),
             input_border: m.border,
+        }
+    }
+
+    pub(crate) fn parking(&self) -> Parking {
+        let seed = if self.dark { 0xe0a345 } else { 0xb7791f };
+        let fill = self.clear_ink(seed, ACCENT_FLOOR);
+        Parking {
+            affordance: Semantic {
+                ink: self.clear_ink(seed, TEXT_FLOOR),
+                fill,
+                on_fill: ink_on(fill, self.neutrals().foreground, TEXT_FLOOR),
+            },
+            shadow: 0x000000,
         }
     }
 
@@ -2214,6 +2237,39 @@ mod tests {
                     m.muted_foreground,
                 );
             }
+        }
+    }
+
+    #[test]
+    fn custom_workspace_surfaces_and_local_controls_keep_readable_ink() {
+        // Non-neutral light/dark backgrounds exercise the same semantic roles
+        // the workspace projects as translucent tints. This proves contrast
+        // on known solid surfaces, not on an arbitrary native desktop/image.
+        for (background, foreground, accent, dark) in [
+            (0x102c31, 0xe2f2ed, 0x9fd9cf, true),
+            (0xf3eadb, 0x403226, 0x2f6270, false),
+        ] {
+            let mut theme = builtins().remove(0);
+            theme.background = Fill::Solid(background);
+            theme.foreground = foreground;
+            theme.accent = accent;
+            theme.dark = dark;
+            let neutrals = theme.neutrals();
+            let surfaces = theme.surfaces();
+            for surface in [surfaces.sidebar, surfaces.rail] {
+                assert!(contrast(surface.text_resting, surface.base) >= TEXT_FLOOR);
+                assert!(contrast(neutrals.muted_foreground, surface.base) >= TEXT_FLOOR);
+                assert!(contrast(surface.text_selected, surface.selected) >= TEXT_FLOOR);
+            }
+            let controls = theme.interactions();
+            for fill in [
+                controls.primary.fill,
+                controls.primary_hover,
+                controls.primary_pressed,
+            ] {
+                assert!(contrast(controls.primary.on_fill, fill) >= TEXT_FLOOR - 0.01);
+            }
+            assert!(contrast(controls.choice_ink, controls.choice) >= TEXT_FLOOR);
         }
     }
 

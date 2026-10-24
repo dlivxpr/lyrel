@@ -176,7 +176,6 @@ pub(crate) fn suspend(state: &ReorderState, yes: bool) {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Surface {
-    Strip,
     SidebarRows(Option<GroupKey>),
     /// The auto groups' headers, below the divider.
     SidebarGroups,
@@ -395,7 +394,7 @@ mod tests {
             })
             .collect();
         Reorder::new(
-            Surface::Strip,
+            Surface::SidebarRows(None),
             from,
             rects,
             Axis::Vertical,
@@ -481,7 +480,7 @@ mod tests {
     #[test]
     fn pending_only_survives_the_frame_that_recorded_it() {
         let state: ReorderState = Rc::new(RefCell::new(Some(column(3, 30., 2., 0))));
-        let mine = Surface::Strip;
+        let mine = Surface::SidebarRows(None);
 
         clear_pending(&state);
         set_pending(&state, &mine, vec![1, 0, 2]);
@@ -607,7 +606,7 @@ mod tests {
             })
             .collect();
         Reorder::new(
-            Surface::Strip,
+            Surface::SidebarRows(None),
             from,
             rects,
             Axis::Horizontal,
@@ -670,7 +669,7 @@ mod tests {
             })
             .collect();
         let r = Reorder::new(
-            Surface::Strip,
+            Surface::SidebarRows(None),
             0,
             rects,
             Axis::Horizontal,

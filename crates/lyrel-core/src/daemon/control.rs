@@ -65,7 +65,8 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// directory hints. Both belong to one unpublished cutover; pane framing stays v7.
 /// v14 adds independently gated native statistics requests; pane framing stays v7.
 /// v15 adds raw symbolic-link/junction target reads; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 15;
+/// v16 adds whole-host metrics and shared pane presentations; pane framing stays v7.
+pub const CONTROL_VERSION: u32 = 16;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -148,6 +149,7 @@ pub mod feature {
     pub const HOST_RPC: &str = "host-rpc";
     /// Raw symbolic-link/junction targets; older peers must be upgraded first.
     pub const READ_LINK: &str = "host-read-link-v1";
+    pub const HOST_METRICS: &str = "host-metrics-v1";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
     /// The peer can say what is running inside one of its panes, and what that
@@ -194,6 +196,7 @@ pub use crate::core::session::WorkspaceId;
 #[serde(rename_all = "snake_case")]
 pub enum ControlRequest {
     Ping,
+    HostMetrics,
 
     ReadDir {
         dir: String,
@@ -315,6 +318,15 @@ pub enum ControlRequest {
     WorkspaceTree {
         workspace: WorkspaceId,
     },
+    WorkspaceSidecarGet {
+        remote: crate::core::session::RemoteRef,
+    },
+    WorkspaceSidecarApply {
+        remote: crate::core::session::RemoteRef,
+        updates: Vec<crate::core::pane_sidecar::SidecarUpdate>,
+        #[serde(default)]
+        panes: Vec<PaneSeed>,
+    },
     WorkspaceCreate {
         name: Option<String>,
         #[serde(default)]
@@ -410,6 +422,30 @@ pub enum ControlRequest {
     PaneClose {
         workspace: WorkspaceId,
         pane: u64,
+    },
+    PaneSetPresentation {
+        workspace: WorkspaceId,
+        pane: u64,
+        pip: bool,
+        fallback: Option<u64>,
+        #[serde(default)]
+        restore: Option<crate::core::machine::PipPane>,
+    },
+    PanePark {
+        workspace: WorkspaceId,
+        pane: u64,
+        #[serde(default)]
+        restore: Option<crate::core::machine::PipPane>,
+    },
+    PaneRestore {
+        workspace: WorkspaceId,
+        pane: u64,
+        fallback: Option<u64>,
+    },
+    PaneSetPipGeometry {
+        workspace: WorkspaceId,
+        pane: u64,
+        geometry: Option<crate::core::machine::PipGeometry>,
     },
     PaneSetRatio {
         workspace: WorkspaceId,
@@ -520,7 +556,7 @@ impl ControlRequest {
     pub fn deadline(&self) -> Duration {
         use ControlRequest::*;
         match self {
-            Ping => Duration::from_secs(5),
+            Ping | HostMetrics => Duration::from_secs(5),
             ReadDir { .. }
             | Stat { .. }
             | Exists { .. }
@@ -548,6 +584,8 @@ impl ControlRequest {
             GuiOpen { .. } => Duration::from_secs(5),
             MachineGet
             | WorkspaceTree { .. }
+            | WorkspaceSidecarGet { .. }
+            | WorkspaceSidecarApply { .. }
             | WorkspaceCreate { .. }
             | WorkspaceRename { .. }
             | WorkspaceRemove { .. }
@@ -564,6 +602,10 @@ impl ControlRequest {
             | TabSetHibernated { .. }
             | PaneSplit { .. }
             | PaneClose { .. }
+            | PaneSetPresentation { .. }
+            | PanePark { .. }
+            | PaneRestore { .. }
+            | PaneSetPipGeometry { .. }
             | PaneSetRatio { .. }
             | PaneMove { .. }
             | PaneReplace { .. } => Duration::from_secs(10),
@@ -602,6 +644,7 @@ impl ControlReply {
 pub enum ReplyOk {
     Unit,
     Pong,
+    HostMetrics(crate::host::metrics::HostMetrics),
     Entries(Vec<Entry>),
     Meta(Meta),
     Bool(bool),
@@ -656,6 +699,7 @@ pub enum ReplyOk {
     },
     MachineTree(Box<Machine>),
     WorkspaceTree(Box<crate::core::machine::Workspace>),
+    WorkspaceSidecar(Option<Box<crate::core::pane_sidecar::SidecarSnapshot>>),
     TabTree(Box<Tab>),
     /// The answer to [`ControlRequest::TabReopen`]; `None` when the workspace
     /// has nothing left to reopen.
@@ -1404,6 +1448,33 @@ impl ControlClient {
 
     pub fn ping(&self) -> io::Result<()> {
         self.call(ControlRequest::Ping).map(|_| ())
+    }
+
+    /// Ask this daemon only. Missing capability, a dead link, or an invalid
+    /// subject never falls back to a sample taken in the client process.
+    pub fn host_metrics(&self) -> io::Result<crate::host::metrics::HostMetrics> {
+        crate::host::guard_off_ui();
+        if !self.is_connected() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "host metrics daemon is disconnected",
+            ));
+        }
+        if !self.hello().has_feature(feature::HOST_METRICS) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "daemon does not support whole-host metrics",
+            ));
+        }
+        match self.call(ControlRequest::HostMetrics)? {
+            ReplyOk::HostMetrics(metrics) if metrics.instance() == self.hello().instance => {
+                Ok(metrics)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "host metrics came from an unexpected daemon",
+            )),
+        }
     }
 
     pub fn close(&self) {

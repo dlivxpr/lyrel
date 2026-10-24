@@ -68,7 +68,6 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 | `window_blur` | bool | — | 对半透明窗口背后的内容应用模糊（macOS）。未设置时跟随主题。 |
 | `window_backdrop` | enum | `"auto"` | 仅限 Windows：`auto`、`blur`、`mica`、`mica-alt`、`acrylic`、`off`。 |
 | `dim_inactive_panes` | bool | `true` | 调暗未获得焦点的窗格。 |
-| `auto_hide_titlebar_buttons` | bool | `false` | 仅当指针悬停在按钮所在的标题栏区域时，显示新建标签页和侧边栏按钮。 |
 | `startup_mode` | enum | `"normal"` | `normal`、`maximized`、`fullscreen`。 |
 | `remember_window_size` | bool | `true` | 按上次的大小和位置重新打开窗口。 |
 | `restore_session` | bool | `true` | 恢复上次窗口的标签页、分屏和目录。 |
@@ -82,7 +81,6 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 
 | 键 | 类型 | 默认值 | |
 |---|---|---|---|
-| `tab_bar_position` | enum | `"left"` | `left`（侧边栏）或 `top`（顶部标签栏）。 |
 | `new_tab_position` | enum | `"after-current"` | 也可设为 `end`。 |
 | `confirm_close` | enum | `"when-busy"` | 关闭标签页或窗格时是否先询问：`never`、`when-busy`（仍有程序或智能体运行）、`always`（即使 shell 空闲也询问）。无论此项如何设置，都会遵循 `ssh_warn_on_close`。 |
 | `sidebar_auto_grouping` | bool | `true` | 按仓库对未固定的标签页分组（SSH 标签页按主机分组）。关闭后，在固定分组下方显示平铺列表；固定分组始终显示。固定分组和折叠状态随工作区保存，不保存在此处。 |
@@ -98,6 +96,8 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 | `editor_soft_wrap` | bool | `false` | 文件在代码面板中打开时是否启用自动换行。与状态栏的“自动换行”开关保持一致，保留上次设置的状态。 |
 | `editor_markdown_preview` | bool | `false` | Markdown 文件打开时是否显示渲染结果而非源码。同样与“预览 / 编辑”开关保持一致。 |
 | `show_tray_icon` | bool | `true` | 托盘 / 菜单栏状态图标。 |
+
+标签导航固定在左侧，窗口六按钮常驻。加载旧配置时精准移除 `tab_bar_position` 和 `auto_hide_titlebar_buttons`，不将整个配置重写为默认值；其他键（含当前版本不识别的键）、主题、字体、opacity、快捷键及工作区文件均保留。侧栏收起状态仍由 `sidebar_collapsed` 控制。
 
 <a id="terminal"></a>
 ## 终端
