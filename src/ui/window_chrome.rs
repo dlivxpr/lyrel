@@ -2,7 +2,7 @@
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, TitleBar, h_flex};
-use gpui_kit::{AnyElement, Context, Window, div, prelude::*, rems};
+use gpui_kit::{AnyElement, Context, Window, prelude::*, px, rems};
 
 use crate::core::actions::{
     SplitDown, SplitRight, ToggleLeftPanel, TogglePalette, ToggleRightPanel,
@@ -12,13 +12,32 @@ use crate::ui::i18n::{L10nKey, t};
 use crate::ui::search::SearchTab;
 use crate::ui::tab_strip::chrome_tile_variant;
 
+/// 三按钮组与平台按钮的最小宽度；缩放后放不进侧栏时改用完整顶行。
+pub(crate) fn window_chrome_widths(window: &Window) -> (f32, f32) {
+    let rem = window.rem_size().as_f32();
+    let group = rem * 6.5; // 3 × 2rem 命中区、两处 0.125rem 间距和两侧 padding。
+    let native = if window_controls_drawn(window.is_fullscreen()) {
+        let controls = window.window_controls();
+        let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
+        gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
+    } else {
+        0.
+    };
+    (
+        crate::ui::app::TITLE_BAR_LEAD
+            + rem * (crate::ui::app::WINDOW_MARK_SIZE / 16. + 0.5 + 0.25)
+            + group,
+        group + rem * 0.25 + native,
+    )
+}
+
 /// 原生窗口按钮仍由 TitleBar 留出空间，产品控件尺寸跟随 rem。
 impl LyrelApp {
-    pub(crate) fn render_window_title_bar(
+    pub(crate) fn render_window_chrome(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> (AnyElement, AnyElement) {
         let left_open = self.left_panel_open(cx);
         let right_open = self.right_panel_open(cx);
         let can_split = self
@@ -140,37 +159,48 @@ impl LyrelApp {
                     this.focus_previous_content(window, cx);
                 })),
             );
+        let left_row = h_flex()
+            .id("workbench-left-drag")
+            .w_full()
+            .min_w_0()
+            .h(rems(3.))
+            .flex_none()
+            .border_b_1()
+            .border_color(cx.theme().transparent)
+            // 交通灯是原生平台几何，不随界面字体放大。
+            .pl(px(crate::ui::app::TITLE_BAR_LEAD))
+            .pr_1()
+            .gap_2()
+            .child(crate::ui::app::window_mark())
+            .child(left);
+        let left = crate::ui::app::title_bar_drag(left_row, "workbench-left-drag", window, cx)
+            .into_any_element();
         let strip = h_flex()
-            .id("workbench-window-controls")
             .w_full()
             .min_w_0()
             .h_full()
-            .gap_2()
+            .justify_end()
             .pr_1()
-            .child(crate::ui::app::window_mark())
-            .child(left)
-            .child(div().flex_1().min_w_4())
             .child(right);
-        if window_controls_drawn(window.is_fullscreen()) || cfg!(target_os = "macos") {
+        let right = if window_controls_drawn(window.is_fullscreen()) || cfg!(target_os = "macos") {
             TitleBar::new()
                 .h(rems(3.))
-                // 交通灯是原生平台几何，不随界面字体放大。
-                .pl(gpui_kit::px(crate::ui::app::TITLE_BAR_LEAD))
+                .pl_0()
                 .bg(cx.theme().transparent)
                 .border_color(cx.theme().transparent)
                 .child(strip)
                 .into_any_element()
         } else {
             let row = h_flex()
-                .id("workbench-fullscreen-drag")
-                .h_12()
+                .id("workbench-right-drag")
+                .h(rems(3.))
                 .flex_none()
                 .w_full()
-                .px_3()
                 .child(strip);
-            crate::ui::app::title_bar_drag(row, "workbench-fullscreen-drag", window, cx)
+            crate::ui::app::title_bar_drag(row, "workbench-right-drag", window, cx)
                 .into_any_element()
-        }
+        };
+        (left, right)
     }
 }
 
@@ -218,6 +248,87 @@ mod gpui_tests {
                 }
                 Err(error) => panic!("pane connection failed: {error}"),
             }
+        }
+    }
+    #[gpui_kit::test]
+    fn terminal_uses_caption_space_without_covering_persistent_controls(cx: &mut TestAppContext) {
+        let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.sidebar_collapsed = false;
+            app.right_panel_visible = true;
+            app.focus_active(window, cx);
+            cx.notify();
+        });
+        settle(&mut vcx);
+        let area = app.read_with(&vcx, |app, _| app.pane_area.get().unwrap());
+        assert_eq!(
+            area.top(),
+            px(0.),
+            "the terminal owns the former caption gap"
+        );
+        let expanded_rows = app.read_with(&vcx, |app, cx| {
+            app.tabs[0].pane.terminals()[0]
+                .read(cx)
+                .terminal
+                .size()
+                .rows
+        });
+        vcx.update(|window, cx| {
+            let terminal = window.find("terminal-surface").bounds();
+            assert_eq!(terminal.top(), area.top());
+            // 首行中央保留窗格抓手；在抓手旁验证终端输入，而不是点击窗格菜单。
+            window.click_at(
+                "terminal-surface",
+                gpui_kit::point(terminal.size.width / 4., px(12.)),
+                cx,
+            );
+        });
+        settle(&mut vcx);
+        assert!(
+            terminal_focused(&app, &mut vcx),
+            "clicking the reclaimed first row must focus the terminal"
+        );
+        vcx.simulate_keystrokes("x");
+        settle(&mut vcx);
+        assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"x"[..]));
+        for button in ["titlebar-left-panel", "titlebar-right-panel"] {
+            vcx.update(|window, cx| window.click(button, cx));
+            settle(&mut vcx);
+            let collapsed = app.read_with(&vcx, |app, _| app.pane_area.get().unwrap());
+            vcx.update(|window, _| {
+                for control in [
+                    "titlebar-left-panel",
+                    "titlebar-search",
+                    "titlebar-add",
+                    "titlebar-split-right",
+                    "titlebar-split-down",
+                    "titlebar-right-panel",
+                ] {
+                    let bounds = window.find(control).bounds();
+                    assert!(
+                        bounds.bottom() <= collapsed.top(),
+                        "{control} cannot cover terminal rows"
+                    );
+                }
+            });
+            let collapsed_rows = app.read_with(&vcx, |app, cx| {
+                app.tabs[0].pane.terminals()[0]
+                    .read(cx)
+                    .terminal
+                    .size()
+                    .rows
+            });
+            assert!(
+                expanded_rows > collapsed_rows,
+                "reclaimed height reaches the PTY grid"
+            );
+            vcx.update(|window, cx| window.click(button, cx));
+            settle(&mut vcx);
+            assert_eq!(
+                app.read_with(&vcx, |app, _| app.pane_area.get().unwrap().top()),
+                px(0.)
+            );
         }
     }
 

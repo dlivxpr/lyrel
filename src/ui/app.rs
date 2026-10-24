@@ -10397,7 +10397,9 @@ impl LyrelApp {
             deck.set_drop_target(show_park_target, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
-        let sidebar = self.sidebar_open(cx).then(|| self.tab_sidebar(window, cx));
+        let sidebar = self
+            .sidebar_open(cx)
+            .then(|| self.tab_sidebar(window, cx).into_any_element());
         let ssh_status = self
             .tabs
             .get(self.active)
@@ -10556,6 +10558,67 @@ impl LyrelApp {
         };
 
         let right_panel = self.render_right_panel(window, cx);
+        let (left_chrome, right_chrome) = self.render_window_chrome(window, cx);
+        let (left_min, right_min) = crate::ui::window_chrome::window_chrome_widths(window);
+        let chrome_divider = crate::ui::theme::hairline(window);
+        let side_chrome = sidebar.is_some()
+            && right_panel.is_some()
+            && self.sidebar_px(window, cx) >= left_min + chrome_divider.as_f32()
+            && self.right_panel_px(window, cx) >= right_min + chrome_divider.as_f32();
+        // 侧栏各自拥有 chrome；中央矩形完整交给终端。折叠或缩放后放不下
+        // 控件时才保留整行，不能用绝对定位把按钮盖到终端首行上。
+        let (sidebar, right_panel, top_chrome) = if side_chrome {
+            let sidebar = sidebar.map(|panel| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .w(px(self.sidebar_px(window, cx)))
+                    .h_full()
+                    .child(
+                        div()
+                            .flex_none()
+                            .h(gpui_kit::rems(3.))
+                            .bg(crate::ui::theme::rail_surface_color(cx))
+                            .border_r(chrome_divider)
+                            .border_color(cx.theme().sidebar_border)
+                            .child(left_chrome),
+                    )
+                    .child(div().flex_1().min_h_0().child(panel))
+                    .into_any_element()
+            });
+            let right_panel = right_panel.map(|panel| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .w(px(self.right_panel_px(window, cx)))
+                    .h_full()
+                    .child(
+                        div()
+                            .flex_none()
+                            .h(gpui_kit::rems(3.))
+                            .bg(crate::ui::theme::workspace_surface_color(cx))
+                            .border_l(chrome_divider)
+                            .border_color(cx.theme().sidebar_border)
+                            .child(right_chrome),
+                    )
+                    .child(div().flex_1().min_h_0().child(panel))
+                    .into_any_element()
+            });
+            (sidebar, right_panel, None)
+        } else {
+            let top = div()
+                .flex()
+                .flex_row()
+                .flex_none()
+                .h(gpui_kit::rems(3.))
+                .w_full()
+                .child(div().flex_1().min_w_0().child(left_chrome))
+                .child(div().flex_none().w(px(right_min)).child(right_chrome))
+                .into_any_element();
+            (sidebar, right_panel, Some(top))
+        };
         let terminal_column = div()
             .flex_1()
             .min_w_0()
@@ -10596,7 +10659,7 @@ impl LyrelApp {
                     }
                 }),
             )
-            .child(self.render_window_title_bar(window, cx))
+            .children(top_chrome)
             .child(self.pane_drag_capture(cx))
             .child(
                 div()

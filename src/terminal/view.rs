@@ -1,5 +1,6 @@
 use super::remote::PaneEvent;
 use crate::ui::notification_history::NotificationWindowExt as _;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
@@ -7799,6 +7800,7 @@ impl Render for TerminalView {
 
         div()
             .id("terminal-surface")
+            .test_support()
             // The surface, not the grid inside it, is what carries the role:
             // a11y focus is only ever reported for a `div` that tracks a focus
             // handle *and* has a node of its own, so a terminal with no role
