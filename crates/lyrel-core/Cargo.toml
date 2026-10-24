@@ -97,6 +97,8 @@ smallvec.workspace = true
 
 # daemon 的图片状态使用同一正式 VT 网格；不引入窗口、GPU 或 Rio 自有 PTY。
 rio-vt.workspace = true
+# 图片滚动挂接使用与 VT 相同的零宽字符判定；不新增版本或后端。
+rio-unicode.workspace = true
 
 # Cross-platform PTY for the daemon: a Unix pty on Unix, ConPTY on Windows,
 # behind one blocking `Read`/`Write`/`resize` API. This is what lets

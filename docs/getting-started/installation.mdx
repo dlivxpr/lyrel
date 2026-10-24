@@ -131,7 +131,7 @@ GUI 统一通过正式 `gpui-kit 0.8.0` 使用 `gpui-pre 0.3.9` 配套链，GUI 
 
 `Cargo.lock` 会收录可选后端及其他平台的依赖，这不表示当前构建启用了它们。用 `cargo tree --locked -p lyrel -i gpui-pre` 检查实际后端链；未启用 `gpui-fast` 时，`cargo tree --locked -p lyrel -i gpui-fast` 没有依赖路径。
 
-GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.28`（不启用默认 features），保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的窗口或 GPU 后端。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不再决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。依赖包内部的上游快照和多版本副本仍以正式解析结果为准。
+GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.28`（不启用默认 features），保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的窗口或 GPU 后端。图片布局的零宽字符判定直接使用同一锁图中的 `rio-unicode =0.5.28`，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不再决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。依赖包内部的上游快照和多版本副本仍以正式解析结果为准。
 
 桌面用量的浏览器 LocalStorage 读取使用正式 registry 的 `rusty-leveldb 4.0.2` 与 `rusqlite 0.40.2`（`bundled`）。SQLite 随 crate 构建，无需另装系统 SQLite；仍需下述平台 C/C++ 编译工具链。Snappy、文件锁、SHA-256 与内存擦除也使用锁图中的正式依赖，不引入 Git／补丁包或浏览器注入工具。
 

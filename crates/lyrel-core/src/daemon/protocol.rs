@@ -8,8 +8,8 @@ pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 /// A frame is a little-endian `u32` length, a one-byte kind, then the payload.
 const HEADER: usize = 5;
 
-/// v8 replaces image/delete frames with authoritative graphics resource updates.
-pub const PROTOCOL_VERSION: u32 = 8;
+/// v9 adds daemon-owned placement coordinates, screen state and clear commands.
+pub const PROTOCOL_VERSION: u32 = 9;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -879,6 +879,8 @@ pub enum ClientMsg {
         size: WinSize,
     },
     Input(Vec<u8>),
+    /// Clear the controlling pane's presentation in the ordered output stream.
+    ClearPresentation { history: bool },
     SendInput {
         pane_id: u64,
         bytes: Vec<u8>,
@@ -1034,6 +1036,7 @@ mod kind {
     pub const ATTACH: u8 = 2;
     pub const INPUT: u8 = 3;
     pub const RESIZE: u8 = 4;
+    pub const CLEAR_PRESENTATION: u8 = 63;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1283,6 +1286,7 @@ impl ClientMsg {
                 write_frame(w, kind::OBSERVE, &to_json(&(pane_id, size))?)
             }
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
+            ClientMsg::ClearPresentation { history } => write_frame(w, kind::CLEAR_PRESENTATION, &to_json(history)?),
             ClientMsg::SendInput { pane_id, bytes } => {
                 write_frame(w, kind::SEND_INPUT, &to_json(&(pane_id, bytes))?)
             }
@@ -1417,6 +1421,7 @@ impl ClientMsg {
                 ClientMsg::Observe { pane_id, size }
             }
             kind::INPUT => ClientMsg::Input(payload),
+            kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation { history: from_json(&payload)? },
             kind::SEND_INPUT => {
                 let (pane_id, bytes) = from_json(&payload)?;
                 ClientMsg::SendInput { pane_id, bytes }

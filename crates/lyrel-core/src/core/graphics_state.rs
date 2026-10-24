@@ -24,6 +24,16 @@ pub struct Placement {
     pub offset_x: u32,
     pub offset_y: u32,
     pub z: i32,
+    /// Stable text row, including rows evicted from the retained history ring.
+    pub anchor_row: i64,
+    pub anchor_col: u32,
+    /// Main screen is zero; alternate screen is one and cleared on entry.
+    pub screen: u64,
+    pub span_cols: u32,
+    pub span_rows: u32,
+    /// Retained vertical slice, in cell rows relative to the original anchor.
+    pub clip_top: u32,
+    pub clip_bottom: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +43,7 @@ pub enum GraphicsUpdate {
         image: Arc<Image>,
     },
     Place(Placement),
+    Screen { screen: u64, history_origin: i64 },
     Remove {
         placements: Vec<u64>,
         resources: Vec<u64>,
@@ -49,6 +60,7 @@ enum Metadata {
         compressed: bool,
     },
     Place(Placement),
+    Screen { screen: u64, history_origin: i64 },
     Remove {
         placements: Vec<u64>,
         resources: Vec<u64>,
@@ -71,6 +83,9 @@ impl GraphicsUpdate {
                 &image.data,
             ),
             Self::Place(placement) => (Metadata::Place(placement.clone()), &[]),
+            Self::Screen { screen, history_origin } => (Metadata::Screen {
+                screen: *screen, history_origin: *history_origin,
+            }, &[]),
             Self::Remove {
                 placements,
                 resources,
@@ -118,6 +133,8 @@ impl GraphicsUpdate {
                 })
             }
             Metadata::Place(placement) if frame.len() == end => Some(Self::Place(placement)),
+            Metadata::Screen { screen, history_origin } if frame.len() == end =>
+                Some(Self::Screen { screen, history_origin }),
             Metadata::Remove {
                 placements,
                 resources,
@@ -130,7 +147,7 @@ impl GraphicsUpdate {
     }
 }
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rio_vt::ansi::CursorShape;
 use rio_vt::crosswords::grid::Dimensions as _;
@@ -140,6 +157,9 @@ use rio_vt::performer::handler::Processor;
 
 use super::kitty_graphics::{Action, Control, MAX_IMAGE_BYTES, response};
 use crate::daemon::protocol::WinSize;
+
+#[path = "graphics_terminal.rs"]
+mod terminal;
 
 pub const MAX_PANE_ENCODED_BYTES: usize = 128 << 20;
 pub const MAX_PANE_DECODED_BYTES: usize = 256 << 20;
@@ -158,14 +178,12 @@ struct Resource {
     id: u32,
     number: u32,
     decoded_bytes: usize,
+    screen: u64,
 }
 
 struct AnchoredPlacement {
     placement: Placement,
-    row: i64,
-    col: u32,
-    span_cols: u32,
-    span_rows: u32,
+    // Geometry is carried by Placement; no client-captured second anchor.
 }
 
 /// The living pane owns this state. Desktop caches receive ordered mutations,
@@ -180,6 +198,12 @@ pub struct GraphicsState {
     size: WinSize,
     term: Crosswords<VoidListener>,
     processor: Processor,
+    screen: u64,
+    region: std::ops::Range<i32>,
+    dirty: BTreeSet<u64>,
+    removed: Vec<u64>,
+    freed: Vec<u64>,
+    replies: Vec<Vec<u8>>,
 }
 
 impl GraphicsState {
@@ -201,19 +225,27 @@ impl GraphicsState {
                 10_000,
             ),
             processor: Processor::default(),
+            screen: 0,
+            region: 0..i32::from(size.rows.max(1)),
+            dirty: BTreeSet::new(),
+            removed: Vec::new(),
+            freed: Vec::new(),
+            replies: Vec::new(),
         }
     }
 
-    pub fn resize(&mut self, size: WinSize) {
-        self.size = size;
-        self.term.resize(CrosswordsSize::new(
-            usize::from(size.cols.max(1)),
-            usize::from(size.rows.max(1)),
-        ));
+    pub fn resize(&mut self, size: WinSize) -> Vec<GraphicsEffect> {
+        self.resize_layout(size);
+        self.finish_layout(!self.placements.is_empty())
     }
 
-    pub fn output(&mut self, bytes: &[u8]) {
-        self.processor.advance(&mut self.term, bytes);
+    pub fn output(&mut self, bytes: &[u8]) -> Vec<GraphicsEffect> {
+        let old = (self.screen, self.history_origin());
+        let mut processor = std::mem::take(&mut self.processor);
+        processor.advance(self, bytes);
+        self.processor = processor;
+        self.expire_history();
+        self.finish_layout(!self.placements.is_empty() && old != (self.screen, self.history_origin()))
     }
 
     fn key(&mut self) -> u64 {
@@ -226,8 +258,9 @@ impl GraphicsState {
 
     fn lookup(&self, control: &Control) -> Option<u64> {
         self.resources.iter().rev().find_map(|(key, resource)| {
-            ((control.id != 0 && resource.id == control.id)
-                || (control.number != 0 && resource.number == control.number))
+            (resource.screen == self.screen
+                && ((control.id != 0 && resource.id == control.id)
+                    || (control.number != 0 && resource.number == control.number)))
                 .then_some(*key)
         })
     }
@@ -334,6 +367,7 @@ impl GraphicsState {
                         id,
                         number: control.number,
                         decoded_bytes,
+                        screen: self.screen,
                     },
                 );
                 effects.push(GraphicsEffect::Update(GraphicsUpdate::Resource {
@@ -438,19 +472,25 @@ impl GraphicsState {
             offset_x: control.offset_x,
             offset_y: control.offset_y,
             z: control.z,
+            anchor_row: self.history_origin() + i64::from(self.term.grid.cursor.pos.row.0),
+            anchor_col: self.term.grid.cursor.pos.col.0 as u32,
+            screen: self.screen,
+            span_cols,
+            span_rows,
+            clip_top: 0,
+            clip_bottom: span_rows,
         };
         self.placements.insert(
             key,
             AnchoredPlacement {
                 placement: placement.clone(),
-                row: self.term.grid.history_size() as i64
-                    + i64::from(self.term.grid.cursor.pos.row.0),
-                col: self.term.grid.cursor.pos.col.0 as u32,
-                span_cols,
-                span_rows,
             },
         );
         effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(placement)));
+        effects.push(GraphicsEffect::Update(GraphicsUpdate::Screen {
+            screen: self.screen,
+            history_origin: self.history_origin(),
+        }));
         if !control.no_move {
             // Kitty leaves the cursor on the placement's last row. Do not
             // encode a zero CUD: terminals interpret CSI 0 B as one row.
@@ -464,8 +504,9 @@ impl GraphicsState {
                 format!("\x1b[{down}B\x1b[{right}C")
             }
             .into_bytes();
-            self.output(&movement);
+            let layout = self.output(&movement);
             effects.push(GraphicsEffect::Output(movement));
+            effects.extend(layout);
         }
         Self::reply(effects, control, id, "OK");
     }
@@ -516,12 +557,14 @@ impl GraphicsState {
             return;
         }
         let newest = self.lookup(c);
-        let history = self.term.grid.history_size() as i64;
+        let history = self.history_origin();
         let cursor_row = history + i64::from(self.term.grid.cursor.pos.row.0);
         let cursor_col = self.term.grid.cursor.pos.col.0 as u32;
         let mut affected = Vec::new();
         let mut removed = Vec::new();
         self.placements.retain(|key, p| {
+            let p = &p.placement;
+            if p.screen != self.screen { return true; }
             let row = if target == b'c' {
                 cursor_row
             } else {
@@ -532,28 +575,29 @@ impl GraphicsState {
             } else {
                 c.x.saturating_sub(1)
             };
-            let in_row = row >= p.row && row < p.row + i64::from(p.span_rows);
-            let in_col = col >= p.col && col < p.col.saturating_add(p.span_cols);
+            let top = p.anchor_row + i64::from(p.clip_top);
+            let bottom = p.anchor_row + i64::from(p.clip_bottom);
+            let in_row = row >= top && row < bottom;
+            let in_col = col >= p.anchor_col && col < p.anchor_col.saturating_add(p.span_cols);
             let selected = match target {
                 b'a' => {
-                    p.row < history + i64::from(self.size.rows)
-                        && p.row + i64::from(p.span_rows) > history
+                    top < history + i64::from(self.size.rows) && bottom > history
                 }
                 b'i' | b'n' => {
-                    Some(p.placement.resource) == newest
-                        && (c.placement == 0 || p.placement.placement_id == c.placement)
+                    Some(p.resource) == newest
+                        && (c.placement == 0 || p.placement_id == c.placement)
                 }
                 b'c' | b'p' => in_row && in_col,
-                b'q' => in_row && in_col && p.placement.z == c.z,
-                b'r' => p.placement.image_id >= c.x && p.placement.image_id <= c.y,
+                b'q' => in_row && in_col && p.z == c.z,
+                b'r' => p.image_id >= c.x && p.image_id <= c.y,
                 b'x' => in_col,
                 b'y' => in_row,
-                b'z' => p.placement.z == c.z,
+                b'z' => p.z == c.z,
                 _ => false,
             };
             if selected {
                 removed.push(*key);
-                affected.push(p.placement.resource);
+                affected.push(p.resource);
             }
             !selected
         });
@@ -564,7 +608,7 @@ impl GraphicsState {
             affected.extend(
                 self.resources
                     .iter()
-                    .filter_map(|(key, r)| (r.id >= c.x && r.id <= c.y).then_some(*key)),
+                    .filter_map(|(key, r)| (r.screen == self.screen && r.id >= c.x && r.id <= c.y).then_some(*key)),
             );
         }
         affected.sort_unstable();
