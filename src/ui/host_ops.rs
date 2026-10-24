@@ -185,7 +185,7 @@ mod blocking {
     }
 }
 
-async fn off_thread<T, F>(f: F) -> Option<T>
+pub(crate) async fn off_thread<T, F>(f: F) -> Option<T>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,

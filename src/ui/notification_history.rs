@@ -169,7 +169,6 @@ impl Notification {
         self.toast = self.toast.on_click(callback);
         self
     }
-    #[cfg(test)]
     pub(crate) fn source(mut self, source: Source) -> Self {
         self.source = Some(source);
         self
@@ -536,7 +535,7 @@ impl LyrelApp {
         self.notification_source_for_pane(None, window, cx)
     }
 
-    fn notification_source_for_pane(
+    pub(crate) fn notification_source_for_pane(
         &self,
         origin: Option<ScopedPane>,
         window: &Window,
@@ -659,7 +658,17 @@ fn open_app(source: &Source, window: &Window, cx: &App) -> Option<Entity<LyrelAp
 }
 
 fn stored_source_exists(source: &Source, cx: &App) -> bool {
-    if let Some(remote) = WorkspaceStore::remote_ref(cx, source.workspace) {
+    let remote = WorkspaceStore::remote_ref(cx, source.workspace);
+    let (host, workspace) = remote
+        .as_ref()
+        .map(|remote| (remote.host_id(), remote.workspace))
+        .unwrap_or((HostId::LOCAL, source.workspace));
+    // A cached machine tree does not authorize reopening a forgotten/rebound
+    // client bookmark: open_at_tab would otherwise fall back to a local shell.
+    if host.0 != source.host || workspace != source.machine_workspace {
+        return false;
+    }
+    if let Some(remote) = remote {
         let sidecar = crate::ui::machine_mirror::MachineMirrors::machine(cx, HostId::LOCAL)
             .and_then(|machine| {
                 machine

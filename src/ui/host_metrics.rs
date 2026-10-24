@@ -164,10 +164,11 @@ impl HostMetricsView {
                 let next = match source {
                     Some(source) => {
                         let query = source.clone();
-                        let result = cx
-                            .background_executor()
-                            .spawn(async move { query.sample() })
-                            .await;
+                        let Some(result) =
+                            crate::ui::host_ops::off_thread(move || query.sample()).await
+                        else {
+                            break;
+                        };
                         cx.update(|cx| source.response_state(host, result, cx))
                     }
                     None => cx.update(|cx| missing_source(host, cx)),

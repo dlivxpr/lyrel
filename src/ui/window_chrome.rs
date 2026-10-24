@@ -1,7 +1,7 @@
 //! 窗口级标题栏与常驻六按钮；独立于标签导航和文档布局。
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, TitleBar, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, TitleBar, h_flex};
 use gpui_kit::{AnyElement, Context, Window, div, prelude::*, rems};
 
 use crate::core::actions::{
@@ -29,6 +29,8 @@ impl LyrelApp {
         let tile = |button: Button| button.custom(chrome_tile_variant(cx)).size_8().rounded_lg();
         let group = || {
             h_flex()
+                // 按钮区不能穿透到 TitleBar 的原生命中与按下拖动处理。
+                .occlude()
                 .flex_none()
                 .p_0p5()
                 .gap_0p5()
@@ -68,15 +70,18 @@ impl LyrelApp {
                 })),
             )
             .child(
-                tile(Button::new("titlebar-search").icon(Icon::new(IconName::Search).size_4()))
-                    .accessibility_label(t(L10nKey::AppMenuSearchEverywhere))
-                    .tooltip_with_action(t(L10nKey::AppMenuSearchEverywhere), &TogglePalette, None)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| match this.search.is_some() {
-                            true => this.close_search(window, cx),
-                            false => this.open_search(SearchTab::All, "", window, cx),
-                        }),
-                    ),
+                tile(
+                    Button::new("titlebar-search")
+                        .icon(Icon::empty().path("icons/command.svg").size_4()),
+                )
+                .accessibility_label(t(L10nKey::AppMenuSearchEverywhere))
+                .tooltip_with_action(t(L10nKey::AppMenuSearchEverywhere), &TogglePalette, None)
+                .on_click(
+                    cx.listener(|this, _, window, cx| match this.search.is_some() {
+                        true => this.close_search(window, cx),
+                        false => this.open_search(SearchTab::All, "", window, cx),
+                    }),
+                ),
             )
             .child(self.new_tab_button("titlebar-add", cx));
         let right = group()
@@ -173,7 +178,7 @@ impl LyrelApp {
 mod gpui_tests {
     use std::io::ErrorKind;
 
-    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
 
     use crate::core::actions::{ActivateTab1, ActivateTab2};
@@ -213,6 +218,51 @@ mod gpui_tests {
                 }
                 Err(error) => panic!("pane connection failed: {error}"),
             }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn titlebar_buttons_accept_clicks_with_pointer_drift(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        vcx.simulate_resize(size(px(1440.), px(900.)));
+        settle(&mut vcx);
+
+        for button in [
+            "titlebar-left-panel",
+            "titlebar-right-panel",
+            "titlebar-search",
+        ] {
+            let before = app.read_with(&vcx, |app, cx| {
+                (
+                    app.left_panel_open(cx),
+                    app.right_panel_open(cx),
+                    app.search.is_some(),
+                )
+            });
+            vcx.update(|window, cx| {
+                let start = window.find(button).bounds().center();
+                let end = start + gpui_kit::point(px(1.), px(1.));
+                window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
+                window.pointer_move(end, Some(gpui_kit::MouseButton::Left), cx);
+                window.pointer_up(end, gpui_kit::MouseButton::Left, cx);
+            });
+            settle(&mut vcx);
+            let after = app.read_with(&vcx, |app, cx| {
+                (
+                    app.left_panel_open(cx),
+                    app.right_panel_open(cx),
+                    app.search.is_some(),
+                )
+            });
+            let expected = match button {
+                "titlebar-left-panel" => (!before.0, before.1, before.2),
+                "titlebar-right-panel" => (before.0, !before.1, before.2),
+                _ => (before.0, before.1, !before.2),
+            };
+            assert_eq!(
+                after, expected,
+                "{button} activates despite a 1px pointer drift"
+            );
         }
     }
 

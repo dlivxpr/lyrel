@@ -796,8 +796,17 @@ fn run_request(
             updates,
             panes,
         } => {
-            conn.machine()?
-                .sidecar_apply(remote.clone(), updates, panes, conn.machine_origin)?;
+            let closed = conn.machine()?.sidecar_apply(
+                remote.clone(),
+                updates,
+                panes,
+                conn.machine_origin,
+            )?;
+            if let Some(directory) = conn.panes.as_ref() {
+                for pane in closed {
+                    directory.close_pane(pane);
+                }
+            }
             (
                 ReplyOk::WorkspaceSidecar(conn.machine()?.sidecar_snapshot(&remote).map(Box::new)),
                 Vec::new(),

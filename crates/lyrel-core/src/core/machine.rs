@@ -456,7 +456,7 @@ impl<K: Copy + Eq> Tab<K> {
         }
     }
 
-    fn forget_presentation(&mut self, pane: K) {
+    pub(super) fn forget_presentation(&mut self, pane: K) {
         if self.presentation.pip().is_some_and(|pip| pip.pane == pane) {
             self.presentation.pip = None;
         }
@@ -1130,7 +1130,7 @@ impl MachineStore {
         updates: Vec<crate::core::pane_sidecar::SidecarUpdate>,
         seeds: Vec<PaneSeed>,
         origin: Option<SubscriberId>,
-    ) -> io::Result<Workspace> {
+    ) -> io::Result<Vec<u64>> {
         use crate::core::pane_sidecar::ForeignWorkspace;
         self.mutate(origin, |machine| {
             let existing = machine.workspaces.iter().position(|workspace| {
@@ -1149,8 +1149,9 @@ impl MachineStore {
                 .foreign_view
                 .as_mut()
                 .expect("sidecar owns a foreign view");
-            if !foreign.apply(&updates)? {
-                return Ok((workspace, Vec::new()));
+            let applied = foreign.apply(&updates)?;
+            if !applied.changed {
+                return Ok((Vec::new(), Vec::new()));
             }
             let local_tabs: Vec<Tab> = foreign
                 .tabs()
@@ -1193,8 +1194,18 @@ impl MachineStore {
             } else {
                 machine.workspaces.push(workspace.clone());
             }
+            let mut closed: Vec<u64> = applied
+                .closed
+                .into_iter()
+                .filter(|pane| pane.owner().is_client_local())
+                .map(|pane| pane.pane())
+                .filter(|pane| !references(machine, *pane))
+                .collect();
+            closed.sort_unstable();
+            closed.dedup();
+            machine.panes.retain(|pane| !closed.contains(&pane.id));
             Ok((
-                workspace.clone(),
+                closed,
                 vec![(workspace.id, LayoutDelta::WorkspaceCreated { workspace })],
             ))
         })
@@ -1767,6 +1778,25 @@ impl MachineStore {
                 .iter()
                 .position(|t| t.root.contains(pane))
                 .ok_or_else(|| not_found(format!("workspace {workspace} has no pane {pane}")))?;
+            if let Some(foreign) = ws.foreign_view.as_mut() {
+                foreign.remove_pane(crate::core::pane_sidecar::ScopedPane::client_local(pane));
+                ws.tabs = foreign
+                    .tabs()
+                    .iter()
+                    .filter_map(|tab| {
+                        tab.map_panes(|pane| pane.owner().is_client_local().then_some(pane.pane()))
+                    })
+                    .collect();
+                if !ws.tabs.iter().any(|tab| Some(tab.id) == ws.active_tab) {
+                    ws.active_tab = ws.tabs.first().map(|tab| tab.id);
+                }
+                let delta = LayoutDelta::WorkspaceCreated {
+                    workspace: ws.clone(),
+                };
+                let orphans = collect_orphan_panes(m);
+                m.panes.retain(|record| !orphans.contains(&record.id));
+                return Ok((orphans, vec![(workspace, delta)]));
+            }
             let mut deltas = Vec::new();
             ws.tabs[index].forget_presentation(pane);
             match ws.tabs[index].root.remove_leaf(pane) {

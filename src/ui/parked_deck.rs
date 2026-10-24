@@ -956,6 +956,8 @@ impl Render for ParkedDeck {
                             let pane = model.pane;
                             let status = model.status(&labels);
                             let card_weak = prepaint_weak.clone();
+                            // This opens a preview, not a list selection: selected
+                            // metadata suppresses UIA Invoke on a Button.
                             let mut card = div()
                                 .id(("parked-card", pane as usize))
                                 .test_support()
@@ -966,7 +968,6 @@ impl Render for ParkedDeck {
                                 .h(bounds.size.height)
                                 .role(Role::Button)
                                 .aria_label(format!("{}\n{}\n{}", model.title, model.path, status))
-                                .aria_selected(selected)
                                 .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
                                     let _ = card_weak.update(cx, |this, cx| {
                                         this.preview(pane, None, window, cx)

@@ -1547,23 +1547,19 @@ fn apply_fallback_chain(
 }
 
 impl TerminalView {
-    /// Attaches an existing local-owner session without ever spawning a substitute.
+    /// Attaches an existing owned session without ever spawning a substitute.
     pub(crate) fn attach_owned_terminal(
+        workspace: Option<crate::terminal::PaneWorkspace>,
         pane_id: u64,
         owner: Option<crate::core::session::WorkspaceId>,
     ) -> anyhow::Result<ShellParts> {
-        let terminal = RemoteTerminal::attach_on(
-            &crate::terminal::PaneRoute::Local,
-            TermSize::new(80, 24),
-            8,
-            17,
-            pane_id,
-        )?;
+        let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
+        let terminal = RemoteTerminal::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
         Ok(ShellParts {
             terminal,
             pane_id,
             shell_spec: None,
-            workspace: None,
+            workspace,
             restored: true,
             owner,
         })

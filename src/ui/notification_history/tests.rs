@@ -472,3 +472,67 @@ fn equal_pane_numbers_on_different_daemons_preserve_notification_destination(
         });
     }
 }
+
+#[gpui_kit::test]
+fn a_forgotten_remote_notification_cannot_reopen_as_a_local_workspace(cx: &mut TestAppContext) {
+    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
+    use crate::ui::machine_mirror::MachineMirrors;
+    use lyrel_core::core::machine::{Machine, Tab, Workspace};
+
+    let (app, mut window) = harness(cx);
+    let _dir = isolated(&mut window);
+    let remote = RemoteRef::new(
+        RemoteTarget::direct("me", "forgotten-notification-host", 22),
+        WorkspaceId::new(),
+    );
+    let view = WindowView::on_remote(remote.clone());
+    let tab = Tab::leaf(41);
+    let source = Source {
+        workspace: view.id,
+        machine_workspace: remote.workspace,
+        host: remote.host_id().0,
+        tab: Some(tab.id),
+        pane: Some(41),
+        pane_owner: Some(PaneOwner::Workspace),
+        label: "remote workspace · #41".into(),
+    };
+    window.update(|window, cx| {
+        WorkspaceStore::install_for_test(
+            cx,
+            WindowViews {
+                views: vec![view],
+                active: None,
+            },
+        );
+        MachineMirrors::install(
+            cx,
+            remote.host_id(),
+            Machine {
+                workspaces: vec![Workspace {
+                    id: remote.workspace,
+                    tabs: vec![tab],
+                    ..Workspace::default()
+                }],
+                panes: Vec::new(),
+            },
+        );
+        window.notify_app(
+            Notification::info("remote finished").source(source.clone()),
+            cx,
+        );
+        assert!(source_exists(&source, window, cx));
+        WorkspaceStore::remove(cx, source.workspace);
+        assert!(MachineMirrors::machine(cx, remote.host_id()).is_some());
+        assert!(
+            !source_exists(&source, window, cx),
+            "a cached remote tree is not a current route to the forgotten workspace"
+        );
+        assert!(!navigate(&source, window, cx));
+    });
+    settle(&mut window);
+    assert_eq!(messages(&window), ["remote finished"]);
+    assert_ne!(
+        app.read_with(&window, |app, _| app.workspace),
+        source.workspace
+    );
+}

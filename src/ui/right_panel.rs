@@ -1658,7 +1658,7 @@ impl LyrelApp {
     /// deleted. Only ports bound somewhere this machine could reach through the
     /// tunnel — a listener pinned to one of the far host's own interfaces is a
     /// different service, and guessing at it would build a forward to nothing.
-    fn auto_forward_ports(&mut self, cx: &mut Context<Self>) {
+    fn auto_forward_ports(&mut self, window: &Window, cx: &mut Context<Self>) {
         if !self.watching_ports() {
             return;
         }
@@ -1693,9 +1693,21 @@ impl LyrelApp {
         if fresh.is_empty() {
             return;
         }
+        let origin = match owner {
+            crate::ui::app::ForwardOwnerKey::Pane(pane) => {
+                lyrel_core::core::pane_sidecar::ScopedPane::client_local(pane)
+            }
+            crate::ui::app::ForwardOwnerKey::Workspace(_) => {
+                let Some(pane) = self.right_panel.procs_pane else {
+                    return;
+                };
+                lyrel_core::core::pane_sidecar::ScopedPane::workspace(pane)
+            }
+        };
         // Claimed before the request goes out, so the next poll — two seconds
         // away, and this round trip crosses a network — does not ask again.
         seen.extend(fresh.iter().copied());
+        let source = self.notification_source_for_pane(Some(origin), window, cx);
         cx.spawn(async move |this, cx| {
             let built = cx
                 .background_executor()
@@ -1715,10 +1727,11 @@ impl LyrelApp {
                 for (port, local) in built {
                     match local {
                         Ok(local) => window.notify_app(
-                            t_fmt(
+                            crate::ui::notification_history::Notification::info(t_fmt(
                                 L10nKey::PortAutoForwarded,
                                 &[("port", &port.to_string()), ("local", &local.to_string())],
-                            ),
+                            ))
+                            .source(source.clone()),
                             cx,
                         ),
                         Err(e) => {
@@ -1855,7 +1868,7 @@ impl LyrelApp {
                 .unwrap_or(false);
             // After the list has landed, so the ports it forwards are the ones
             // this poll actually saw.
-            let _ = this.update(cx, |app, cx| app.auto_forward_ports(cx));
+            let _ = this.update_in(cx, |app, window, cx| app.auto_forward_ports(window, cx));
             if !keep_polling {
                 return;
             }

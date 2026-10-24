@@ -1025,29 +1025,43 @@ impl Pane<PaneSlot> {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui_kit::AnyElement {
-        // Hidden siblings can leave an arbitrarily deep chain around one
-        // visible pane. Walk that chain without retaining element builders on
-        // the native stack; only actual visible splits need child results.
+        // Post-order traversal visits every node once. Even an entirely hidden
+        // subtree must not recurse or repeatedly scan for a visible descendant.
+        enum Pending<'a> {
+            Right(&'a Pane<PaneSlot>, &'a Pane<PaneSlot>),
+            Join(&'a Pane<PaneSlot>, Option<gpui_kit::AnyElement>),
+        }
+        let mut pending = Vec::new();
         let mut node = self;
-        loop {
-            match node {
-                Pane::Empty => return div().into_any_element(),
-                Pane::Leaf(slot) if hidden.contains(&slot.entity_id()) => {
-                    return div().into_any_element();
-                }
-                Pane::Leaf(_) => return node.render_node(None, chrome, window, cx),
+        'visit: loop {
+            let mut rendered = match node {
+                Pane::Empty => None,
+                Pane::Leaf(slot) if hidden.contains(&slot.entity_id()) => None,
+                Pane::Leaf(_) => Some(node.render_node(None, chrome, window, cx)),
                 Pane::Split { a, b, .. } => {
-                    if !a.has_visible_leaf(hidden) {
-                        node = b;
-                    } else if !b.has_visible_leaf(hidden) {
-                        node = a;
-                    } else {
-                        let a = a.render_without(hidden, chrome, window, cx);
-                        let b = b.render_without(hidden, chrome, window, cx);
-                        return node.render_node(Some((a, b)), chrome, window, cx);
+                    pending.push(Pending::Right(node, b));
+                    node = a;
+                    continue;
+                }
+            };
+            while let Some(next) = pending.pop() {
+                match next {
+                    Pending::Right(split, right) => {
+                        pending.push(Pending::Join(split, rendered));
+                        node = right;
+                        continue 'visit;
+                    }
+                    Pending::Join(split, left) => {
+                        rendered = match (left, rendered) {
+                            (Some(a), Some(b)) => {
+                                Some(split.render_node(Some((a, b)), chrome, window, cx))
+                            }
+                            (left, right) => left.or(right),
+                        };
                     }
                 }
             }
+            return rendered.unwrap_or_else(|| div().into_any_element());
         }
     }
 
@@ -1262,14 +1276,6 @@ impl Pane<PaneSlot> {
                     )
                     .into_any_element()
             }
-        }
-    }
-
-    fn has_visible_leaf(&self, hidden: &[gpui_kit::EntityId]) -> bool {
-        match self {
-            Pane::Empty => false,
-            Pane::Leaf(slot) => !hidden.contains(&slot.entity_id()),
-            Pane::Split { a, b, .. } => a.has_visible_leaf(hidden) || b.has_visible_leaf(hidden),
         }
     }
 }

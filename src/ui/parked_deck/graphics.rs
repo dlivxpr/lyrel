@@ -190,6 +190,34 @@ fn escape(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn css_font_family(family: &str) -> String {
+    use std::fmt::Write as _;
+
+    // SVG 不认识 GPUI 的虚拟字族；Windows 使用默认 UI 字族，
+    // macOS 系统名称与已发布 GPUI Apple load_family 的映射一致。
+    #[cfg(target_os = "windows")]
+    let system = "Segoe UI";
+    #[cfg(target_os = "macos")]
+    let system = ".AppleSystemUIFont";
+    let family = font_name_with_fallbacks(family, system);
+    let mut quoted = String::with_capacity(family.len() + 2);
+    quoted.push('\'');
+    for ch in family.chars() {
+        match ch {
+            '\\' | '\'' => {
+                quoted.push('\\');
+                quoted.push(ch);
+            }
+            ch if ch.is_control() => {
+                write!(quoted, "\\{:x} ", ch as u32).expect("writing to String");
+            }
+            ch => quoted.push(ch),
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
 fn text(value: &str, font: &str, x: f32, y: f32, size: f32, width: f32, bold: bool) -> String {
     let mut result = String::new();
     let mut advance = 0.;
@@ -205,7 +233,9 @@ fn text(value: &str, font: &str, x: f32, y: f32, size: f32, width: f32, bold: bo
     // alpha-mask 的白色是 raster 数据，不是界面颜色；最终墨色由主题传给 paint_svg。
     format!(
         r#"<text x="{x}" y="{y}" text-anchor="middle" font-family="{},Segoe UI,Microsoft YaHei,PingFang SC,sans-serif" font-size="{size}" font-weight="{}" fill="white">{}</text>"#,
-        escape(font),
+        // 必须先引用 CSS 字符串再做 XML 转义；未引用的 .SystemUIFont 会使
+        // usvg 丢弃整个 family 列表，直接使用默认 Times New Roman。
+        escape(&css_font_family(font)),
         if bold { 600 } else { 400 },
         escape(&result)
     )
@@ -742,5 +772,113 @@ impl Frame {
                 .map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Layer, ParkedCard, ParkedDeckLabels, Sprite, card_sprites, park_label, sprite};
+    use gpui_kit::SvgRenderer;
+    use std::sync::Arc;
+
+    fn pixels(renderer: &SvgRenderer, sprite: &Sprite) -> Vec<u8> {
+        renderer
+            .render_single_frame(sprite.data.as_bytes(), 2.)
+            .expect("render the production SVG through GPUI's font resolver")
+            .as_bytes(0)
+            .expect("SVG has one frame")
+            .to_vec()
+    }
+
+    fn reference(family: &str, value: &str, x: f32, y: f32, viewbox: [f32; 4]) -> Sprite {
+        sprite(
+            Layer::Ink,
+            None,
+            viewbox,
+            &format!(
+                r#"<text x="{x}" y="{y}" text-anchor="middle" font-family="'{family}',Segoe UI,Microsoft YaHei,PingFang SC,sans-serif" font-size="11" font-weight="600" fill="white">{value}</text>"#,
+            ),
+        )
+    }
+
+    #[test]
+    fn deck_text_raster_matches_selected_sans_for_cards_preview_and_park_pill() {
+        let renderer = SvgRenderer::new(Arc::new(gpui_kit::assets::Assets));
+        let cases = [
+            (
+                "Terminal workspace session",
+                "Termi…",
+                "Terminal works…",
+                "Terminal w…",
+                true,
+            ),
+            (
+                "A中文ABCD中文ABCD中文",
+                "A中文…",
+                "A中文ABCD中文ABC…",
+                "A中文ABCD中…",
+                false,
+            ),
+        ];
+        #[cfg(target_os = "windows")]
+        let families = [
+            (".SystemUIFont", "Segoe UI"),
+            ("Arial", "Arial"),
+            (".ZedSans", "IBM Plex Sans"),
+            (".Missing'Sans\\,Family", "Segoe UI"),
+        ];
+        #[cfg(target_os = "macos")]
+        let families = [
+            (".SystemUIFont", ".AppleSystemUIFont"),
+            ("Arial", "Arial"),
+            (".ZedSans", "IBM Plex Sans"),
+            (".Missing'Sans\\,Family", "PingFang SC"),
+        ];
+
+        for (selected, actual) in families {
+            for (value, front, back, pill, latin_only) in cases {
+                let labels = ParkedDeckLabels::new("", "", value, "", "");
+                let card = ParkedCard::new(1, value, "", true);
+                let sprites = card_sprites(&card, &labels, selected);
+                // 只裁取标题区域，排除同一墨层中的图标；比较实际渲染像素。
+                for (back, viewbox, x, y, shown) in [
+                    (false, [0., 34., 56., 18.], 28., 45., front),
+                    (true, [0., 33., 120., 18.], 60., 44., back),
+                ] {
+                    let title = sprites
+                        .iter()
+                        .find(|sprite| {
+                            matches!(sprite.layer, Layer::Ink) && sprite.back == Some(back)
+                        })
+                        .expect("card title ink layer");
+                    let title = sprite(Layer::Ink, None, viewbox, &title.data);
+                    let expected = reference(actual, shown, x, y, viewbox);
+                    let rendered = pixels(&renderer, &title);
+                    assert!(rendered.chunks_exact(4).any(|pixel| pixel[3] != 0));
+                    // usvg 0.46 的 fallback 若覆盖整段，会替换所有 glyph；混排样本的
+                    // sans/serif 因而可能收敛到同一 CJK 字体。纯 Latin 才能独立判定
+                    // 原非法 family 列表造成的 Times New Roman 回退。
+                    if latin_only {
+                        let serif = reference("Times New Roman", shown, x, y, viewbox);
+                        assert_ne!(
+                            rendered,
+                            pixels(&renderer, &serif),
+                            "{selected} Latin must not fall back to serif"
+                        );
+                    }
+                    assert_eq!(
+                        rendered,
+                        pixels(&renderer, &expected),
+                        "{selected}, {value}, back={back}"
+                    );
+                }
+                let expected = reference(actual, pill, 180., 28., [0., 0., 360., 170.]);
+                assert_eq!(
+                    pixels(&renderer, &park_label(&labels.park, selected)),
+                    pixels(&renderer, &expected),
+                    "{selected}, {value}, Park"
+                );
+            }
+        }
     }
 }

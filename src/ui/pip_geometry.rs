@@ -1,7 +1,11 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use gpui_kit::component::{ActiveTheme as _, tooltip::Tooltip};
+use gpui_kit::component::{
+    ActiveTheme as _, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    tooltip::Tooltip,
+};
 use gpui_kit::{
     App, Bounds, EntityId, KeyDownEvent, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Point,
     TestSupportExt as _, WeakEntity, Window, canvas, div, point, prelude::*, px, size,
@@ -93,6 +97,29 @@ fn changed(gesture: Gesture, at: Point<Pixels>, viewport: Bounds<Pixels>, rem: f
     let x = ((bounds.origin.x - viewport.origin.x).as_f32() - inset) / (width - w).max(1.);
     let y = ((bounds.origin.y - viewport.origin.y).as_f32() - inset) / (height - h).max(1.);
     PipGeometry::new(x.clamp(0., 1.), y.clamp(0., 1.), w / width, h / height).unwrap_or_default()
+}
+
+fn control_focus(
+    pane: EntityId,
+    resize: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui_kit::FocusHandle {
+    window
+        .use_keyed_state(
+            (
+                if resize {
+                    "pip-resize-focus"
+                } else {
+                    "pip-move-focus"
+                },
+                pane.as_u64() as usize,
+            ),
+            cx,
+            |_, cx| cx.focus_handle().tab_stop(true),
+        )
+        .read(cx)
+        .clone()
 }
 
 pub(crate) fn commit(
@@ -277,9 +304,13 @@ fn render_in_viewport(
         .unwrap_or_default();
     let resolved = resolve(intent, viewport, rem);
     let local = resolved.origin - viewport.origin;
+    let move_focus = control_focus(id, false, window, cx);
+    let resize_focus = control_focus(id, true, window, cx);
     let measurement = canvas(|_, _, _| (), {
         let state = state.clone();
         let app = app.clone();
+        let move_focus = move_focus.clone();
+        let resize_focus = resize_focus.clone();
         move |_, _, window, _| {
             window.on_mouse_event({
                 let state = state.clone();
@@ -314,6 +345,8 @@ fn render_in_viewport(
             window.on_mouse_event({
                 let state = state.clone();
                 let app = app.clone();
+                let move_focus = move_focus.clone();
+                let resize_focus = resize_focus.clone();
                 move |event: &MouseUpEvent, phase, window, cx| {
                     if !phase.capture() || event.button != MouseButton::Left {
                         return;
@@ -332,6 +365,16 @@ fn render_in_viewport(
                             })
                             .unwrap_or(gesture.geometry);
                         commit(&app, tab_id, id, geometry, cx);
+                        if !gesture.dragged {
+                            window.focus(
+                                if gesture.resize {
+                                    &resize_focus
+                                } else {
+                                    &move_focus
+                                },
+                                cx,
+                            );
+                        }
                         window.refresh();
                         cx.stop_propagation();
                     }
@@ -362,9 +405,28 @@ fn render_in_viewport(
     } else {
         Vec::new()
     };
+    let title: gpui_kit::SharedString = match &slot {
+        PaneSlot::Ready(view) => view.read(cx).title.clone().into(),
+        PaneSlot::Connecting(view) => view.read(cx).machine.clone(),
+    };
+    let mut header = div()
+        .id(("pip-header", id.as_u64() as usize))
+        .test_support()
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(gpui_kit::rems(26. / 16.))
+        .pr_1()
+        .gap_1()
+        .border_b(crate::ui::theme::hairline(window))
+        .border_color(cx.theme().border)
+        .text_color(cx.theme().muted_foreground)
+        .text_size(gpui_kit::rems(11. / 16.));
+    let mut resize_handle = None;
     let mut shell = div()
         .id(("pane-pip", id.as_u64() as usize))
         .test_support()
+        .role(gpui_kit::Role::Group)
         .aria_label(t(L10nKey::PanePipTitle))
         .absolute()
         .left(local.x)
@@ -379,28 +441,13 @@ fn render_in_viewport(
         .overflow_hidden()
         .occlude()
         .flex()
-        .flex_col()
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .child(Pane::leaf(slot.clone()).render(&terminal_chrome, window, cx)),
-        );
+        .flex_col();
     for resize in [false, true] {
-        let focus = window.use_keyed_state(
-            (
-                if resize {
-                    "pip-resize-focus"
-                } else {
-                    "pip-move-focus"
-                },
-                id.as_u64() as usize,
-            ),
-            cx,
-            |_, cx| cx.focus_handle().tab_stop(true),
-        );
-        let focus = focus.read(cx).clone();
+        let focus = if resize {
+            resize_focus.clone()
+        } else {
+            move_focus.clone()
+        };
         let name = if resize {
             L10nKey::PanePipResize
         } else {
@@ -412,10 +459,10 @@ fn render_in_viewport(
                 id.as_u64() as usize,
             ))
             .test_support()
+            .role(gpui_kit::Role::Button)
             .aria_label(t(name))
             .track_focus(&focus)
-            .absolute()
-            .bg(cx.theme().muted)
+            .when(resize, |d| d.absolute().bg(cx.theme().muted))
             .text_color(cx.theme().muted_foreground)
             .hover(|s| s.bg(cx.theme().secondary))
             .focus_visible(|s| s.border_1().border_color(cx.theme().primary))
@@ -429,12 +476,30 @@ fn render_in_viewport(
                 d.right_0().bottom_0().size(gpui_kit::rems(1.5)).child("◢")
             })
             .when(!resize, |d| {
-                d.left(gpui_kit::rems(0.5))
-                    .top(gpui_kit::rems(0.5))
-                    .w(gpui_kit::rems(2.5))
-                    .h(gpui_kit::rems(1.5))
-                    .rounded_md()
-                    .child("⠿")
+                d.flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .id(("pip-title", id.as_u64() as usize))
+                            .test_support()
+                            .role(gpui_kit::Role::Label)
+                            .aria_label(title.clone())
+                            .min_w_0()
+                            .truncate()
+                            .tooltip({
+                                let title = title.clone();
+                                move |window, cx| Tooltip::new(title.clone()).build(window, cx)
+                            })
+                            .child(title.clone()),
+                    )
+            })
+            .on_a11y_action(gpui_kit::AccessibleAction::Click, {
+                let focus = focus.clone();
+                move |_, window, cx| window.focus(&focus, cx)
             })
             .on_mouse_down(MouseButton::Left, {
                 let state = state.clone();
@@ -451,6 +516,7 @@ fn render_in_viewport(
                         dragged: false,
                     }));
                     window.refresh();
+                    window.prevent_default();
                     cx.stop_propagation();
                 }
             })
@@ -494,8 +560,58 @@ fn render_in_viewport(
                     cx.stop_propagation();
                 }
             });
-        shell = shell.child(handle);
+        if resize {
+            resize_handle = Some(handle.into_any_element());
+        } else {
+            header = header.child(handle);
+        }
     }
+    for (key, name, glyph, park) in [
+        ("pip-park", L10nKey::PanePark, "▁", true),
+        ("pip-dock", L10nKey::PaneRestorePip, "◫", false),
+    ] {
+        header = header.child(
+            Button::new((key, id.as_u64() as usize))
+                .ghost()
+                .xsmall()
+                .flex_none()
+                .size(gpui_kit::rems(1.25))
+                .p_0()
+                .accessibility_label(t(name))
+                .tooltip(t(name))
+                .child(glyph)
+                .on_click({
+                    let app = app.clone();
+                    move |_, window, cx| {
+                        let _ = app.update(cx, |app, cx| {
+                            // Buttons act on this rendered PiP, never a stale terminal focus.
+                            if !app.tabs.get(app.active).is_some_and(|tab| {
+                                tab.tree_id.get() == tab_id
+                                    && tab.pip_slot(cx).is_some_and(|pip| pip.entity_id() == id)
+                            }) {
+                                return;
+                            }
+                            if park {
+                                app.park_pane(id, window, cx);
+                            } else {
+                                app.restore_pane_pip(window, cx);
+                            }
+                        });
+                        cx.stop_propagation();
+                    }
+                }),
+        );
+    }
+    shell = shell
+        .child(header)
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(Pane::leaf(slot.clone()).render(&terminal_chrome, window, cx)),
+        )
+        .children(resize_handle);
     div()
         .relative()
         .size_full()

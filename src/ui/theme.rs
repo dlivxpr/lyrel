@@ -670,7 +670,9 @@ pub(crate) fn default_window_opacity(backdrop: WindowBackdrop, blur: bool) -> f3
 /// Tint above the shared workspace background, not another native material.
 /// Any translucent window needs translucent sidebars: that includes plain
 /// transparency, Windows Auto with an opacity override, and macOS native blur.
-/// A 0.15 src-over tint retains 85% of the terminal's native-background share.
+/// Retains 85% of the terminal's native-background share. Windows needs an
+/// alpha budget because gpui-pre-windows 0.3.9 adds destination alpha (ONE)
+/// instead of using src-over attenuation; a fixed 0.15 saturates at opacity 0.85.
 /// With an opaque window the original semantic surface remains fully opaque.
 /// `theme.sidebar` itself stays solid for components on the settings overlay.
 pub(crate) fn workspace_surface_color(cx: &App) -> Hsla {
@@ -686,14 +688,19 @@ pub(crate) fn rail_surface_color(cx: &App) -> Hsla {
 }
 
 fn translucent_surface(base: Hsla, cx: &App) -> Hsla {
-    let translucent = cx
+    let Some(opacity) = cx
         .try_global::<presets::ActiveBackground>()
         .and_then(|bg| bg.opacity)
-        .is_some_and(|o| o < 1.0);
-    if !translucent {
+        .filter(|opacity| *opacity < 1.0)
+    else {
         return base;
-    }
-    base.alpha(0.15)
+    };
+    let tint_alpha = if cfg!(target_os = "windows") {
+        0.15 * (1.0 - opacity)
+    } else {
+        0.15
+    };
+    base.alpha(tint_alpha)
 }
 
 /// The backdrop presets offered in the settings dropdown: everything the
@@ -1436,6 +1443,55 @@ mod tests {
 
             cx.global_mut::<Config>().theme_follow_system = false;
             assert_eq!(effective_preset_id(cx), Config::default().theme_preset);
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    #[gpui_kit::test]
+    fn sidebars_preserve_desktop_transmission_in_the_windows_frame(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = crate::ui::app::test_window::harness_with_tabs(cx, 1);
+        vcx.update(|window, cx| {
+            // Match the production window: only LyrelApp supplies the background.
+            window
+                .root::<gpui_kit::component::Root>()
+                .flatten()
+                .unwrap()
+                .update(cx, |root, _| {
+                    root.style().background = Some(gpui_kit::transparent_black().into());
+                });
+            cx.global_mut::<Config>().window_opacity = Some(0.88);
+            apply_theme(Some(window), cx);
+        });
+        app.update(&mut vcx, |app, cx| {
+            app.right_panel_visible = true;
+            cx.notify();
+        });
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            let viewport = window.viewport_size();
+            let scale = window.scale_factor();
+            let quads = window.painted_quads();
+            for x in [50., viewport.width.as_f32() - 50.] {
+                let sample = point(
+                    gpui_kit::ScaledPixels(x * scale),
+                    gpui_kit::ScaledPixels((viewport.height.as_f32() - 100.) * scale),
+                );
+                // gpui-pre-windows 0.3.9 adds destination alpha (ONE), rather
+                // than attenuating it. Observe the actual frame, not just a token.
+                let alpha: f32 = quads
+                    .iter()
+                    .filter(|quad| {
+                        quad.bounds.contains(&sample) && quad.content_mask.bounds.contains(&sample)
+                    })
+                    .filter_map(|quad| quad.background.as_solid())
+                    .map(|fill| fill.a)
+                    .sum();
+                let desktop = 1. - alpha.min(1.);
+                assert!(
+                    (desktop - 0.102).abs() < 0.001,
+                    "sidebar at x={x} transmits {desktop}, expected 85% of the terminal's 12%"
+                );
+            }
         });
     }
 

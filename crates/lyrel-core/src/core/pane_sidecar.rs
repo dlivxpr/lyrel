@@ -78,6 +78,13 @@ pub struct ForeignWorkspace {
     applied: std::collections::VecDeque<uuid::Uuid>,
 }
 
+#[derive(Debug, Default)]
+pub struct SidecarApplied {
+    pub changed: bool,
+    /// Explicitly closed leaves, not leaves removed by a transfer or reorder.
+    pub closed: Vec<ScopedPane>,
+}
+
 impl ForeignWorkspace {
     pub fn new(remote: RemoteRef) -> Self {
         Self {
@@ -97,11 +104,23 @@ impl ForeignWorkspace {
         &self.tabs
     }
 
+    pub(crate) fn remove_pane(&mut self, pane: ScopedPane) {
+        self.tabs.retain_mut(|tab| {
+            if !tab.root.contains(pane) {
+                return true;
+            }
+            tab.forget_presentation(pane);
+            tab.root.remove_leaf(pane).is_some()
+        });
+        self.revision = self.revision.saturating_add(1);
+    }
+
     /// Replays changes against the latest tree. An old client's unchanged fields
     /// never replace newer changes another client made while its pull was in flight.
-    pub fn apply(&mut self, updates: &[SidecarUpdate]) -> io::Result<bool> {
+    pub fn apply(&mut self, updates: &[SidecarUpdate]) -> io::Result<SidecarApplied> {
         let before = self.tabs.clone();
         let mut accepted = Vec::new();
+        let mut closed = Vec::new();
         for update in updates {
             if self.applied.contains(&update.id) || accepted.contains(&update.id) {
                 continue;
@@ -109,7 +128,13 @@ impl ForeignWorkspace {
             accepted.push(update.id);
             match &update.change {
                 SidecarChange::CloseTab { tab } => {
-                    self.tabs.retain(|candidate| candidate.id != *tab)
+                    self.tabs.retain(|candidate| {
+                        if candidate.id != *tab {
+                            return true;
+                        }
+                        closed.extend(candidate.root.pane_ids());
+                        false
+                    });
                 }
                 SidecarChange::Reconcile {
                     base,
@@ -123,8 +148,18 @@ impl ForeignWorkspace {
                             "sidecar edit changes tab identity",
                         ));
                     }
+                    // A reconcile edits an existing tab; only a seed may create
+                    // one. Reject before transfer can steal another tab's leaves.
+                    if base.is_some() && !self.tabs.iter().any(|tab| tab.id == desired.id) {
+                        continue;
+                    }
                     if *transfer {
-                        let arriving = desired.root.pane_ids();
+                        let mut arriving = desired.root.pane_ids();
+                        // A stale base may still name leaves already moved by
+                        // another client. Only newly added leaves may transfer.
+                        if let Some(base) = base {
+                            arriving.retain(|pane| !base.root.contains(*pane));
+                        }
                         self.tabs.retain_mut(|tab| {
                             if tab.id == desired.id {
                                 return true;
@@ -167,7 +202,7 @@ impl ForeignWorkspace {
             ));
         }
         if accepted.is_empty() {
-            return Ok(false);
+            return Ok(SidecarApplied::default());
         }
         for id in accepted {
             self.applied.push_back(id);
@@ -176,7 +211,10 @@ impl ForeignWorkspace {
             }
         }
         self.revision = self.revision.saturating_add(1);
-        Ok(true)
+        Ok(SidecarApplied {
+            changed: true,
+            closed,
+        })
     }
 }
 
@@ -233,7 +271,7 @@ fn merge_tab(
     let Some(base) = base else {
         // Two clients may concurrently discover the same tab. The second seed
         // contributes new leaves, but has no authority to erase existing ones.
-        insert_missing(&mut current.root, &desired.root);
+        insert_missing(&mut current.root, &desired.root, None);
         if let Some(pip) = desired.presentation.pip() {
             current.set_pip_with_restore(
                 Some(pip.pane()),
@@ -263,16 +301,20 @@ fn merge_tab(
             current.root.remove_leaf(pane);
         }
     }
-    insert_missing(&mut current.root, &desired.root);
+    // Unchanged leaves deleted by a newer authoritative edit stay deleted.
+    insert_missing(&mut current.root, &desired.root, Some(&base.root));
     let common = |pane| old.contains(&pane) && want.contains(&pane);
     let old_common = base
         .root
-        .filter_map_panes(&|pane| common(pane).then_some(pane));
+        .filter_map_panes(&|pane| (common(pane) && current.root.contains(pane)).then_some(pane));
     let desired_common = desired
         .root
-        .filter_map_panes(&|pane| common(pane).then_some(pane));
+        .filter_map_panes(&|pane| (common(pane) && current.root.contains(pane)).then_some(pane));
     if old_common != desired_common {
         for pane in want.iter().copied().filter(|pane| common(*pane)) {
+            if !current.root.contains(pane) {
+                continue;
+            }
             let (Some(before), Some(after)) = (
                 base.root.relationship(pane),
                 desired.root.relationship(pane),
@@ -362,9 +404,13 @@ fn merge_tab(
     }
 }
 
-fn insert_missing(root: &mut PaneNode<ScopedPane>, desired: &PaneNode<ScopedPane>) {
+fn insert_missing(
+    root: &mut PaneNode<ScopedPane>,
+    desired: &PaneNode<ScopedPane>,
+    base: Option<&PaneNode<ScopedPane>>,
+) {
     for pane in desired.pane_ids() {
-        if root.contains(pane) {
+        if root.contains(pane) || base.is_some_and(|base| base.contains(pane)) {
             continue;
         }
         let Some(relation) = desired.relationship(pane) else {

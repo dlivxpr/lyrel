@@ -17,7 +17,6 @@ struct SidecarState {
     baseline: HashMap<TabId, TreeTab<ScopedPane>>,
     pending: Vec<SidecarUpdate>,
     sent: Vec<SidecarUpdate>,
-    alive: HashSet<u64>,
     seeds: HashMap<u64, lyrel_core::core::machine::PaneSeed>,
     records: std::sync::Arc<HashMap<u64, lyrel_core::core::machine::PaneRecord>>,
     loaded: bool,
@@ -357,13 +356,25 @@ pub(crate) fn intend_close(cx: &mut App, workspace: WorkspaceId, tab: TabId) {
     pump(cx, remote);
 }
 
+pub(crate) fn on_sidecar_snapshot(
+    cx: &mut App,
+    snapshot: lyrel_core::core::pane_sidecar::SidecarSnapshot,
+) {
+    let (workspace, records) = snapshot.into_parts();
+    let Some(foreign) = &workspace.foreign_view else {
+        return;
+    };
+    let remote = foreign.remote().clone();
+    accept(cx, remote, Some(workspace), Some(records));
+}
+
 pub(crate) fn on_sidecar_delta(cx: &mut App, workspace: &Workspace) {
     let Some(view) = &workspace.foreign_view else {
         return;
     };
     let remote = view.remote().clone();
-    accept(cx, remote.clone(), Some(workspace.clone()), None, None);
-    // A different client may have added an owned session not in our last liveness list.
+    accept(cx, remote.clone(), Some(workspace.clone()), None);
+    // Refresh the matching records before interpreting a missing local session.
     refresh(cx, remote);
 }
 
@@ -409,15 +420,7 @@ fn refresh(cx: &mut App, remote: RemoteRef) {
                             )));
                         }
                     };
-                let alive = crate::terminal::RemoteTerminal::try_list_panes_on(
-                    &crate::terminal::PaneRoute::Local,
-                )
-                .map_err(std::io::Error::other)?
-                .into_iter()
-                .filter(|pane| pane.alive)
-                .map(|pane| pane.pane_id)
-                .collect();
-                Ok((workspace, alive, records))
+                Ok((workspace, records))
             })
             .await;
         cx.update(|cx| {
@@ -427,9 +430,11 @@ fn refresh(cx: &mut App, remote: RemoteRef) {
                 .or_default()
                 .pulling = false;
             match result {
-                Ok((workspace, alive, records)) => {
-                    accept(cx, remote.clone(), workspace, Some(alive), Some(records))
-                }
+                Ok((Some(workspace), records)) => on_sidecar_snapshot(
+                    cx,
+                    lyrel_core::core::pane_sidecar::SidecarSnapshot::new(workspace, records),
+                ),
+                Ok((None, records)) => accept(cx, remote.clone(), None, Some(records)),
                 Err(error) => log::warn!("could not load local-owner pane composition: {error}"),
             }
             pump(cx, remote);
@@ -479,15 +484,7 @@ fn pump(cx: &mut App, remote: RemoteRef) {
                             )));
                         }
                     };
-                let alive = crate::terminal::RemoteTerminal::try_list_panes_on(
-                    &crate::terminal::PaneRoute::Local,
-                )
-                .map_err(std::io::Error::other)?
-                .into_iter()
-                .filter(|pane| pane.alive)
-                .map(|pane| pane.pane_id)
-                .collect();
-                Ok((workspace, alive, records))
+                Ok((workspace, records))
             })
             .await;
         cx.update(|cx| {
@@ -498,14 +495,11 @@ fn pump(cx: &mut App, remote: RemoteRef) {
                 .or_default();
             state.inflight = false;
             match result {
-                Ok((workspace, alive, records)) => {
+                Ok((workspace, records)) => {
                     state.sent.clear();
-                    accept(
+                    on_sidecar_snapshot(
                         cx,
-                        remote.clone(),
-                        Some(workspace),
-                        Some(alive),
-                        Some(records),
+                        lyrel_core::core::pane_sidecar::SidecarSnapshot::new(workspace, records),
                     );
                     pump(cx, remote);
                 }
@@ -525,7 +519,6 @@ fn accept(
     cx: &mut App,
     remote: RemoteRef,
     workspace: Option<Workspace>,
-    alive: Option<HashSet<u64>>,
     records: Option<Vec<lyrel_core::core::machine::PaneRecord>>,
 ) {
     let state = cx
@@ -533,15 +526,7 @@ fn accept(
         .0
         .entry(remote.clone())
         .or_default();
-    state.loaded = true;
-    if let Some(alive) = alive {
-        state.alive = alive;
-    }
-    if let Some(records) = records {
-        state.records =
-            std::sync::Arc::new(records.into_iter().map(|pane| (pane.id, pane)).collect());
-    }
-    if let Some(workspace) = workspace {
+    if let Some(workspace) = &workspace {
         let revision = workspace
             .foreign_view
             .as_ref()
@@ -551,9 +536,18 @@ fn accept(
             .as_ref()
             .and_then(|workspace| workspace.foreign_view.as_ref())
             .map_or(0, ForeignWorkspace::revision);
-        if state.known.is_none() || revision >= previous {
-            state.known = Some(workspace);
+        if state.known.is_some() && revision < previous {
+            return;
         }
+    }
+    state.loaded = true;
+    let authoritative_records = workspace.is_some() && records.is_some();
+    if let Some(records) = records {
+        state.records =
+            std::sync::Arc::new(records.into_iter().map(|pane| (pane.id, pane)).collect());
+    }
+    if let Some(workspace) = workspace {
+        state.known = Some(workspace);
     }
     let Some(mut effective) = state.known.clone() else {
         return;
@@ -561,12 +555,26 @@ fn accept(
     let Some(foreign) = effective.foreign_view.as_mut() else {
         return;
     };
+    // Only a matching daemon snapshot can prove a local session was closed.
+    // Liveness, missing views and remote connection state cannot. Compute this
+    // before replay so locally added, not-yet-acknowledged sessions survive.
+    let closed_local: HashSet<_> = if authoritative_records {
+        foreign
+            .tabs()
+            .iter()
+            .flat_map(|tab| tab.root.pane_ids())
+            .filter(|pane| {
+                pane.owner().is_client_local() && !state.records.contains_key(&pane.pane())
+            })
+            .collect()
+    } else {
+        HashSet::new()
+    };
     let replay: Vec<_> = state.sent.iter().chain(&state.pending).cloned().collect();
     if let Err(error) = foreign.apply(&replay) {
         log::warn!("sidecar local replay failed: {error}");
         return;
     }
-    let alive = state.alive.clone();
     let records = state.records.clone();
     for tab in foreign.tabs() {
         state.baseline.insert(tab.id, tab.clone());
@@ -583,10 +591,9 @@ fn accept(
             continue;
         };
         let effective = effective.clone();
-        let alive = alive.clone();
         let _ = handle.update(cx, |_, window, cx| {
             app.update(cx, |app, cx| {
-                adopt(app, &effective, &alive, &records, window, cx)
+                adopt(app, &effective, &records, &closed_local, window, cx)
             });
         });
     }
@@ -595,14 +602,15 @@ fn accept(
 fn adopt(
     app: &mut LyrelApp,
     sidecar: &Workspace,
-    alive: &HashSet<u64>,
     records: &HashMap<u64, lyrel_core::core::machine::PaneRecord>,
+    closed_local: &HashSet<ScopedPane>,
     window: &mut Window,
     cx: &mut Context<LyrelApp>,
 ) {
     let Some(foreign) = &sidecar.foreign_view else {
         return;
     };
+    let active = app.tabs.get(app.active).map(|tab| tab.tree_id.get());
     let mut slots: HashMap<ScopedPane, PaneSlot> = app
         .tabs
         .iter()
@@ -620,31 +628,57 @@ fn adopt(
         tab.foreign_presentation.is_none() || authoritative.contains(&tab.tree_id.get())
     });
     for source in foreign.tabs() {
+        let pruned;
+        let source = if closed_local.is_empty() {
+            source
+        } else {
+            let Some(source_pruned) =
+                source.map_panes(|pane| (!closed_local.contains(&pane)).then_some(pane))
+            else {
+                app.tabs.retain(|tab| tab.tree_id.get() != source.id);
+                continue;
+            };
+            pruned = source_pruned;
+            &pruned
+        };
         for key in source.root.pane_ids() {
-            if slots.contains_key(&key)
-                || !key.owner().is_client_local()
-                || !alive.contains(&key.pane())
-            {
+            if slots.contains_key(&key) {
                 continue;
             }
-            let spec = records
-                .get(&key.pane())
-                .and_then(|pane| pane.ssh_spec.clone());
-            match crate::ui::app::attach_sidecar_terminal(
-                key.pane(),
-                sidecar.id,
-                app.font_size,
-                spec,
-                window,
-                cx,
-            ) {
+            // A missing view is not a removed leaf. Represent every surviving
+            // authoritative ID through the existing attach-only pending flow so
+            // save_session cannot publish a partial tree as a user deletion.
+            let attached = if key.owner().is_client_local() {
+                let spec = records
+                    .get(&key.pane())
+                    .and_then(|pane| pane.ssh_spec.clone());
+                crate::ui::app::attach_sidecar_terminal(
+                    key.pane(),
+                    sidecar.id,
+                    app.font_size,
+                    spec,
+                    window,
+                    cx,
+                )
+            } else {
+                crate::ui::app::attach_existing_terminal(
+                    Some(
+                        app.window_workspace(cx)
+                            .expect("sidecar adoption requires its remote workspace route"),
+                    ),
+                    key.pane(),
+                    app.workspace,
+                    app.font_size,
+                    None,
+                    window,
+                    cx,
+                )
+            };
+            match attached {
                 Ok(slot) => {
                     slots.insert(key, slot);
                 }
-                Err(error) => log::warn!(
-                    "could not attach local-owner pane {}: {error:#}",
-                    key.pane()
-                ),
+                Err(error) => log::warn!("could not attach sidecar pane {}: {error:#}", key.pane()),
             }
         }
         let Some(pane) = pane_from_existing(&source.root, &mut slots) else {
@@ -673,6 +707,29 @@ fn adopt(
             install_tab_presentation(&mut tab, presentation);
             app.tabs.push(tab);
         }
+    }
+    app.active = active
+        .and_then(|active| app.tabs.iter().position(|tab| tab.tree_id.get() == active))
+        .unwrap_or_else(|| app.active.min(app.tabs.len().saturating_sub(1)));
+    for tab in &mut app.tabs {
+        if tab.zoomed.as_ref().is_some_and(|view| {
+            !tab.pane
+                .leaves()
+                .iter()
+                .any(|slot| slot.entity_id() == view.entity_id())
+        }) {
+            tab.zoomed = None;
+        }
+    }
+    if app.maximized.as_ref().is_some_and(|view| {
+        !app.tabs.get(app.active).is_some_and(|tab| {
+            tab.pane
+                .leaves()
+                .iter()
+                .any(|slot| slot.entity_id() == view.entity_id())
+        })
+    }) {
+        app.maximized = None;
     }
     if focused.is_some_and(|focused| {
         !app.tabs

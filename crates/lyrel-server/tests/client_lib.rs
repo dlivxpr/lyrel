@@ -181,6 +181,49 @@ fn drain_until_exit(session: &mut lyrel_core::client::PaneSession) -> Vec<u8> {
     }
 }
 
+// Explicit close deliberately does not emit Exited. Check the owned OS
+// process, not just removal from the daemon's pane registry.
+fn assert_process_exited(pid: u32) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        };
+
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        if handle.is_null() {
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(ERROR_INVALID_PARAMETER as i32),
+                "could not observe the owned shell {pid}"
+            );
+            return;
+        }
+        let result = unsafe { WaitForSingleObject(handle, STREAM_WITHIN.as_millis() as u32) };
+        unsafe { CloseHandle(handle) };
+        assert_eq!(result, WAIT_OBJECT_0, "closed shell {pid} is still running");
+    }
+    #[cfg(unix)]
+    {
+        let deadline = Instant::now() + STREAM_WITHIN;
+        loop {
+            if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::ESRCH)
+                );
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "closed shell {pid} is still running"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
 fn windows_contain(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
@@ -1129,6 +1172,540 @@ fn mixed_owner_sidecar_survives_clients_without_colliding_or_overwriting_new_pan
         local_panes.kill(pane).unwrap();
     }
     remote_panes.kill(remote_id).unwrap();
+}
+
+fn sidecar_update(
+    client: &ControlClient,
+    remote: &lyrel_core::core::session::RemoteRef,
+    updates: Vec<lyrel_core::core::pane_sidecar::SidecarUpdate>,
+    panes: Vec<PaneSeed>,
+) -> lyrel_core::core::machine::Workspace {
+    match client
+        .request(ControlRequest::WorkspaceSidecarApply {
+            remote: remote.clone(),
+            updates,
+            panes,
+        })
+        .unwrap()
+    {
+        ReplyOk::WorkspaceSidecar(Some(snapshot)) => snapshot.into_parts().0,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn sidecar_closed_tab_rejects_stale_reconcile_before_transferring_panes() {
+    use lyrel_core::core::machine::{Axis, Tab};
+    use lyrel_core::core::pane_sidecar::{ScopedPane, SidecarUpdate};
+    use lyrel_core::core::session::{RemoteRef, RemoteTarget, WorkspaceId};
+
+    let daemon = Daemon::start();
+    let client = daemon.control("sidecar-stale");
+    let remote = RemoteRef::new(
+        RemoteTarget::direct("me", "sidecar-host", 22),
+        WorkspaceId::new(),
+    );
+    let closed = Tab::leaf(ScopedPane::workspace(41));
+    let donor = Tab::leaf(ScopedPane::workspace(42));
+    sidecar_update(
+        &client,
+        &remote,
+        vec![
+            SidecarUpdate::new(None, closed.clone()),
+            SidecarUpdate::new(None, donor.clone()),
+            SidecarUpdate::close_tab(closed.id),
+        ],
+        Vec::new(),
+    );
+    let mut stale = closed.clone();
+    stale.root.split_leaf(
+        ScopedPane::workspace(41),
+        ScopedPane::workspace(42),
+        Axis::Horizontal,
+        0.5,
+        false,
+    );
+    stale.set_pip(Some(ScopedPane::workspace(41)), None);
+    let saved = sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::new(Some(closed.clone()), stale).with_transfer()],
+        Vec::new(),
+    );
+    let tabs = saved.foreign_view.as_ref().unwrap().tabs();
+    assert!(!tabs.iter().any(|tab| tab.id == closed.id));
+    assert!(
+        tabs.iter()
+            .any(|tab| tab.id == donor.id && tab.root.contains(ScopedPane::workspace(42)))
+    );
+    let created = sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::new(None, closed.clone())],
+        Vec::new(),
+    );
+    assert!(
+        created
+            .foreign_view
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .any(|tab| tab.id == closed.id)
+    );
+}
+
+#[test]
+fn sidecar_pane_close_preserves_remote_and_native_siblings_and_accepts_later_edits() {
+    use lyrel_core::core::machine::{Axis, Tab};
+    use lyrel_core::core::pane_sidecar::{ScopedPane, SidecarUpdate};
+    use lyrel_core::core::session::{RemoteRef, RemoteTarget, WorkspaceId};
+
+    let local = Daemon::start();
+    let remote_daemon = Daemon::start();
+    let panes = local.panes();
+    let remote_panes = remote_daemon.panes();
+    let client = local.control("sidecar-pane-close");
+    let native = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let local_id = native.pane_id();
+    let mut sibling = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let sibling_id = sibling.pane_id();
+    let mut remote_shell = remote_panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let remote_id = remote_shell.pane_id();
+    assert_eq!(remote_id, local_id);
+    sibling.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    remote_shell.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let remote = RemoteRef::new(
+        RemoteTarget::direct("me", "sidecar-host", 22),
+        WorkspaceId::new(),
+    );
+    let mut tab = Tab::leaf(ScopedPane::workspace(remote_id));
+    tab.root.split_leaf(
+        ScopedPane::workspace(remote_id),
+        ScopedPane::client_local(local_id),
+        Axis::Horizontal,
+        0.5,
+        false,
+    );
+    tab.root.split_leaf(
+        ScopedPane::client_local(local_id),
+        ScopedPane::client_local(sibling_id),
+        Axis::Vertical,
+        0.5,
+        false,
+    );
+    tab.set_pip(
+        Some(ScopedPane::client_local(local_id)),
+        Some(ScopedPane::workspace(remote_id)),
+    );
+    tab.park(ScopedPane::workspace(remote_id));
+    let saved = sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::new(None, tab.clone())],
+        vec![seed(local_id), seed(sibling_id)],
+    );
+    let removed = match client
+        .request(ControlRequest::PaneClose {
+            workspace: saved.id,
+            pane: local_id,
+        })
+        .unwrap()
+    {
+        ReplyOk::Panes(panes) => panes,
+        other => panic!("{other:?}"),
+    };
+    assert!(removed.contains(&local_id));
+    let snapshot = match client
+        .request(ControlRequest::WorkspaceSidecarGet {
+            remote: remote.clone(),
+        })
+        .unwrap()
+    {
+        ReplyOk::WorkspaceSidecar(Some(snapshot)) => snapshot.into_parts().0,
+        other => panic!("{other:?}"),
+    };
+    let full = &snapshot.foreign_view.as_ref().unwrap().tabs()[0];
+    assert!(!full.root.contains(ScopedPane::client_local(local_id)));
+    assert!(full.root.contains(ScopedPane::workspace(remote_id)));
+    assert!(full.root.contains(ScopedPane::client_local(sibling_id)));
+    assert!(full.presentation.pip().is_none());
+    assert!(
+        full.presentation
+            .is_parked(ScopedPane::workspace(remote_id))
+    );
+    assert_eq!(snapshot.tabs[0].root.pane_ids(), vec![sibling_id]);
+
+    // A delayed client edit must not reintroduce the now-closed native leaf.
+    let mut edited = tab.clone();
+    edited.restore_parked(
+        ScopedPane::workspace(remote_id),
+        Some(ScopedPane::client_local(sibling_id)),
+    );
+    let updated = sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::new(Some(tab), edited)],
+        Vec::new(),
+    );
+    let full = &updated.foreign_view.as_ref().unwrap().tabs()[0];
+    assert!(!full.root.contains(ScopedPane::client_local(local_id)));
+    assert!(
+        !full
+            .presentation
+            .is_parked(ScopedPane::workspace(remote_id))
+    );
+    assert!(full.root.contains(ScopedPane::client_local(sibling_id)));
+    panes
+        .send_input(sibling_id, b"echo SIDECAR_SIBLING_ALIVE\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut sibling, b"SIDECAR_SIBLING_ALIVE")
+            .1
+            .is_none()
+    );
+    remote_panes
+        .send_input(remote_id, b"echo SIDECAR_REMOTE_ALIVE\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut remote_shell, b"SIDECAR_REMOTE_ALIVE")
+            .1
+            .is_none()
+    );
+    client
+        .request(ControlRequest::PaneClose {
+            workspace: saved.id,
+            pane: sibling_id,
+        })
+        .unwrap();
+    let remaining = match client
+        .request(ControlRequest::WorkspaceSidecarGet {
+            remote: remote.clone(),
+        })
+        .unwrap()
+    {
+        ReplyOk::WorkspaceSidecar(Some(snapshot)) => snapshot.into_parts().0,
+        other => panic!("{other:?}"),
+    };
+    assert!(remaining.tabs.is_empty());
+    let remote_only = &remaining.foreign_view.as_ref().unwrap().tabs()[0];
+    assert_eq!(
+        remote_only.root.pane_ids(),
+        vec![ScopedPane::workspace(remote_id)]
+    );
+    let mut parked_remote = remote_only.clone();
+    parked_remote.park(ScopedPane::workspace(remote_id));
+    let updated = sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::new(Some(remote_only.clone()), parked_remote)],
+        Vec::new(),
+    );
+    assert!(
+        updated.foreign_view.as_ref().unwrap().tabs()[0]
+            .presentation
+            .is_parked(ScopedPane::workspace(remote_id))
+    );
+    drop((native, sibling, remote_shell));
+    for pane in removed.into_iter().chain([sibling_id]) {
+        panes.kill(pane).unwrap();
+    }
+    remote_panes.kill(remote_id).unwrap();
+}
+
+#[test]
+fn sidecar_explicit_close_terminates_only_unheld_local_shells_not_transferred_panes() {
+    use lyrel_core::core::machine::{Axis, Tab};
+    use lyrel_core::core::pane_sidecar::{ScopedPane, SidecarUpdate};
+    use lyrel_core::core::session::{RemoteRef, RemoteTarget, WorkspaceId};
+
+    let local = Daemon::start();
+    let remote_daemon = Daemon::start();
+    let panes = local.panes();
+    let remote_panes = remote_daemon.panes();
+    let client = local.control("sidecar-explicit-close");
+    let mut closing = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let closing_id = closing.pane_id();
+    let mut moved = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let moved_id = moved.pane_id();
+    let mut unrelated = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let unrelated_id = unrelated.pane_id();
+    let mut remote_shell = remote_panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let remote_id = remote_shell.pane_id();
+    assert_eq!(closing_id, remote_id);
+    for session in [&mut closing, &mut moved, &mut unrelated, &mut remote_shell] {
+        session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    }
+    let shell_pid = |pane| {
+        panes
+            .procs(pane)
+            .unwrap()
+            .procs
+            .into_iter()
+            .find(|process| process.depth == 0)
+            .expect("live pane reports its shell process")
+            .pid
+    };
+    let closing_pid = shell_pid(closing_id);
+    let moved_pid = shell_pid(moved_id);
+    let remote = RemoteRef::new(
+        RemoteTarget::direct("me", "sidecar-host", 22),
+        WorkspaceId::new(),
+    );
+    let mut old = Tab::leaf(ScopedPane::workspace(remote_id));
+    old.root.split_leaf(
+        ScopedPane::workspace(remote_id),
+        ScopedPane::client_local(closing_id),
+        Axis::Horizontal,
+        0.5,
+        false,
+    );
+    old.root.split_leaf(
+        ScopedPane::client_local(closing_id),
+        ScopedPane::client_local(moved_id),
+        Axis::Vertical,
+        0.5,
+        false,
+    );
+    let target = Tab::leaf(ScopedPane::workspace(999));
+    sidecar_update(
+        &client,
+        &remote,
+        vec![
+            SidecarUpdate::new(None, old.clone()),
+            SidecarUpdate::new(None, target.clone()),
+        ],
+        vec![seed(closing_id), seed(moved_id)],
+    );
+    let mut transferred = target.clone();
+    transferred.root.split_leaf(
+        ScopedPane::workspace(999),
+        ScopedPane::client_local(moved_id),
+        Axis::Horizontal,
+        0.5,
+        false,
+    );
+    sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::new(Some(target), transferred.clone()).with_transfer()],
+        Vec::new(),
+    );
+    panes
+        .send_input(moved_id, b"echo SIDECAR_TRANSFER_SURVIVED\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut moved, b"SIDECAR_TRANSFER_SURVIVED")
+            .1
+            .is_none()
+    );
+
+    let closed = sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::close_tab(old.id)],
+        Vec::new(),
+    );
+    assert_process_exited(closing_pid);
+    assert!(
+        panes.attach(closing_id, size()).is_err(),
+        "a closed shell cannot accept another attachment or input"
+    );
+    assert!(
+        !panes
+            .list()
+            .unwrap()
+            .iter()
+            .any(|pane| pane.pane_id == closing_id && pane.alive)
+    );
+    let machine = match client.request(ControlRequest::MachineGet).unwrap() {
+        ReplyOk::MachineTree(machine) => machine,
+        other => panic!("{other:?}"),
+    };
+    assert!(!machine.panes.iter().any(|pane| pane.id == closing_id));
+    assert!(
+        closed
+            .foreign_view
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .any(|tab| tab.root.contains(ScopedPane::client_local(moved_id)))
+    );
+    panes
+        .send_input(moved_id, b"echo SIDECAR_MOVED_STILL_ALIVE\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut moved, b"SIDECAR_MOVED_STILL_ALIVE")
+            .1
+            .is_none()
+    );
+    panes
+        .send_input(unrelated_id, b"echo SIDECAR_UNRELATED_ALIVE\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut unrelated, b"SIDECAR_UNRELATED_ALIVE")
+            .1
+            .is_none()
+    );
+    remote_panes
+        .send_input(remote_id, b"echo SIDECAR_REMOTE_NOT_CLOSED\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut remote_shell, b"SIDECAR_REMOTE_NOT_CLOSED")
+            .1
+            .is_none()
+    );
+    // Closing a tab does not end a pane retained by another tab in the same
+    // authoritative transaction, even when the close precedes the new owner.
+    let retained = Tab::leaf(ScopedPane::client_local(moved_id));
+    sidecar_update(
+        &client,
+        &remote,
+        vec![
+            SidecarUpdate::close_tab(transferred.id),
+            SidecarUpdate::new(None, retained.clone()),
+        ],
+        Vec::new(),
+    );
+    panes
+        .send_input(moved_id, b"echo SIDECAR_REHELD_ALIVE\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut moved, b"SIDECAR_REHELD_ALIVE")
+            .1
+            .is_none()
+    );
+    sidecar_update(
+        &client,
+        &remote,
+        vec![SidecarUpdate::close_tab(retained.id)],
+        Vec::new(),
+    );
+    assert_process_exited(moved_pid);
+    drop((closing, moved, unrelated, remote_shell));
+    panes.kill(unrelated_id).unwrap();
+    remote_panes.kill(remote_id).unwrap();
+}
+
+#[test]
+fn sidecar_stale_transfer_preserves_a_pane_moved_by_another_client() {
+    use lyrel_core::core::machine::{Axis, Tab};
+    use lyrel_core::core::pane_sidecar::{ScopedPane, SidecarUpdate};
+    use lyrel_core::core::session::{RemoteRef, RemoteTarget, WorkspaceId};
+
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let first = daemon.control("sidecar-stale-transfer-first");
+    let second = daemon.control("sidecar-stale-transfer-second");
+    let mut moved = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    let mut added = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    moved.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    added.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let moved_id = moved.pane_id();
+    let added_id = added.pane_id();
+    let remote = RemoteRef::new(
+        RemoteTarget::direct("me", "sidecar-host", 22),
+        WorkspaceId::new(),
+    );
+    let mut a = Tab::leaf(ScopedPane::workspace(500));
+    a.root.split_leaf(
+        ScopedPane::workspace(500),
+        ScopedPane::client_local(moved_id),
+        Axis::Horizontal,
+        0.5,
+        false,
+    );
+    let b = Tab::leaf(ScopedPane::workspace(501));
+    sidecar_update(
+        &first,
+        &remote,
+        vec![
+            SidecarUpdate::new(None, a.clone()),
+            SidecarUpdate::new(None, b.clone()),
+        ],
+        vec![seed(moved_id)],
+    );
+    let mut destination = b.clone();
+    destination.root.split_leaf(
+        ScopedPane::workspace(501),
+        ScopedPane::client_local(moved_id),
+        Axis::Vertical,
+        0.4,
+        false,
+    );
+    destination.set_pip(Some(ScopedPane::client_local(moved_id)), None);
+    sidecar_update(
+        &second,
+        &remote,
+        vec![SidecarUpdate::new(Some(b.clone()), destination).with_transfer()],
+        Vec::new(),
+    );
+
+    // The first client's unchanged P leaf is stale, not a request to move P
+    // back. Only its newly added Q leaf has transfer authority.
+    let mut delayed = a.clone();
+    delayed.root.split_leaf(
+        ScopedPane::workspace(500),
+        ScopedPane::client_local(added_id),
+        Axis::Vertical,
+        0.6,
+        false,
+    );
+    let saved = sidecar_update(
+        &first,
+        &remote,
+        vec![SidecarUpdate::new(Some(a.clone()), delayed).with_transfer()],
+        vec![seed(added_id)],
+    );
+    let tabs = saved.foreign_view.as_ref().unwrap().tabs();
+    let current_a = tabs.iter().find(|tab| tab.id == a.id).unwrap();
+    let current_b = tabs.iter().find(|tab| tab.id == b.id).unwrap();
+    assert!(current_a.root.contains(ScopedPane::workspace(500)));
+    assert!(current_a.root.contains(ScopedPane::client_local(added_id)));
+    assert!(!current_a.root.contains(ScopedPane::client_local(moved_id)));
+    assert!(current_b.root.contains(ScopedPane::client_local(moved_id)));
+    assert_eq!(
+        current_b.presentation.pip().unwrap().pane(),
+        ScopedPane::client_local(moved_id)
+    );
+    panes
+        .send_input(moved_id, b"echo SIDECAR_MOVED_OWNER_RETAINED\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut moved, b"SIDECAR_MOVED_OWNER_RETAINED")
+            .1
+            .is_none()
+    );
+    panes
+        .send_input(added_id, b"echo SIDECAR_NEW_LEAF_ALIVE\r")
+        .unwrap();
+    assert!(
+        collect_until(&mut added, b"SIDECAR_NEW_LEAF_ALIVE")
+            .1
+            .is_none()
+    );
+    drop((moved, added));
+    panes.kill(moved_id).unwrap();
+    panes.kill(added_id).unwrap();
 }
 
 fn parking_workspace(client: &ControlClient) -> lyrel_core::core::session::WorkspaceId {

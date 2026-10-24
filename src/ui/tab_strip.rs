@@ -1242,9 +1242,7 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    /// The right panel's tabs: words, the current one in body ink and medium
-    /// weight on a pill (ink and weight alone read as no selection at all).
-    /// Four names fit the panel's resting width once Search folded into Files.
+    /// 右侧面板使用文字页签；当前页仅提高文字对比与字重，不叠加胶囊底色。
     pub(crate) fn right_panel_tabs(
         &self,
         changes_count: Option<SharedString>,
@@ -1274,7 +1272,6 @@ impl LyrelApp {
                     .flex()
                     .items_center()
                     .px(px(TAB_OUTER_PAD))
-                    .cursor_pointer()
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1284,7 +1281,6 @@ impl LyrelApp {
                             .px(px(TAB_INNER_PAD))
                             .py_0p5()
                             .rounded_md()
-                            .when(current, |s| s.bg(cx.theme().secondary))
                             .text_size(gpui_kit::rems(crate::ui::right_panel::TAB_TEXT))
                             .font_weight(match current {
                                 true => FontWeight::MEDIUM,
