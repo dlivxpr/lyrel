@@ -135,6 +135,8 @@ GUI 与 CLI 的终端解析统一采用正式 `rio-vt =0.5.28`（不启用默认
 
 桌面用量的浏览器 LocalStorage 读取使用正式 registry 的 `rusty-leveldb 4.0.2` 与 `rusqlite 0.40.2`（`bundled`）。SQLite 随 crate 构建，无需另装系统 SQLite；仍需下述平台 C/C++ 编译工具链。Snappy、文件锁、SHA-256 与内存擦除也使用锁图中的正式依赖，不引入 Git／补丁包或浏览器注入工具。
 
+Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.11.1`，保留 `zeroize` feature。升级精确版本依赖时，须同步 `Cargo.toml` 与 `Cargo.lock`；仅更新锁文件会被 `--locked` 拒绝。
+
 整机 CPU／物理内存采样复用正式 registry 的锁定 `sysinfo =0.31.4`，只启用 `system`，
 只刷新 CPU 与 RAM，不枚举进程、磁盘或网络。采样位于共享核心，因此 Windows／macOS daemon 与 Linux headless server
 使用相同 Host／control 契约，不要求外部监控程序或新增系统服务。
