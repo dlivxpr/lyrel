@@ -96,7 +96,8 @@ impl GraphicsState {
     }
 
     pub(super) fn finish_layout(&mut self, screen_changed: bool) -> Vec<GraphicsEffect> {
-        let mut effects = Vec::new();
+        self.refresh_retention();
+        let mut effects = self.drain_evictions();
         if !self.removed.is_empty() || !self.freed.is_empty() {
             effects.push(GraphicsEffect::Update(GraphicsUpdate::Remove {
                 placements: std::mem::take(&mut self.removed),
@@ -327,8 +328,7 @@ impl GraphicsState {
 
     fn free_resource(&mut self, key: u64) {
         if let Some(resource) = self.resources.remove(&key) {
-            self.encoded_bytes -= resource.image.data.len();
-            self.decoded_bytes -= resource.decoded_bytes;
+            drop(resource);
             self.freed.push(key);
         }
     }

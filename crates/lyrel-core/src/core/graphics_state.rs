@@ -44,6 +44,7 @@ pub enum GraphicsUpdate {
         key: u64,
         image: Arc<Image>,
     },
+    Evicted { key: u64, width: u32, height: u32 },
     Place(Placement),
     Screen {
         screen: u64,
@@ -64,6 +65,7 @@ enum Metadata {
         format: WireFormat,
         compressed: bool,
     },
+    Evicted { key: u64, width: u32, height: u32 },
     Place(Placement),
     Screen {
         screen: u64,
@@ -78,7 +80,7 @@ enum Metadata {
 impl GraphicsUpdate {
     /// A length-prefixed, small JSON header followed by unexpanded resource
     /// bytes. In particular pixels are never serialized as JSON/base64.
-    pub fn encode_frame(&self) -> Vec<u8> {
+    fn header_pixels(&self) -> (Vec<u8>, &[u8]) {
         let (metadata, pixels): (Metadata, &[u8]) = match self {
             Self::Resource { key, image } => (
                 Metadata::Resource {
@@ -90,6 +92,7 @@ impl GraphicsUpdate {
                 },
                 &image.data,
             ),
+            Self::Evicted { key, width, height } => (Metadata::Evicted { key: *key, width: *width, height: *height }, &[]),
             Self::Place(placement) => (Metadata::Place(placement.clone()), &[]),
             Self::Screen {
                 screen,
@@ -113,11 +116,33 @@ impl GraphicsUpdate {
             ),
         };
         let header = serde_json::to_vec(&metadata).expect("serializable graphics metadata");
+        (header, pixels)
+    }
+
+    pub fn encode_frame(&self) -> Vec<u8> {
+        let (header, pixels) = self.header_pixels();
+        Self::join_frame(&header, pixels)
+    }
+
+    fn join_frame(header: &[u8], pixels: &[u8]) -> Vec<u8> {
         let mut frame = Vec::with_capacity(4 + header.len() + pixels.len());
         frame.extend_from_slice(&(header.len() as u32).to_le_bytes());
-        frame.extend_from_slice(&header);
+        frame.extend_from_slice(header);
         frame.extend_from_slice(pixels);
         frame
+    }
+
+    pub(crate) fn encode_packet(&self) -> Option<crate::daemon::protocol::GraphicsPacket> {
+        let retention = retention::Retention::shared();
+        let mut header_work = retention.work(retention.owner());
+        let header_bytes = match self {
+            Self::Remove { placements, resources } => (placements.len() + resources.len()) * 128 + 1024,
+            Self::Place(_) => 4096,
+            _ => 1024,
+        };
+        if !header_work.resize(header_bytes) { return None; }
+        let (header, pixels) = self.header_pixels();
+        crate::daemon::protocol::GraphicsPacket::try_encode(4 + header.len() + pixels.len(), || Self::join_frame(&header, pixels))
     }
 
     pub fn decode_frame_owned(mut frame: Vec<u8>) -> Option<Self> {
@@ -147,6 +172,7 @@ impl GraphicsUpdate {
                     }),
                 })
             }
+            Metadata::Evicted { key, width, height } if frame.len() == end => Some(Self::Evicted { key, width, height }),
             Metadata::Place(placement) if frame.len() == end => Some(Self::Place(placement)),
             Metadata::Screen {
                 screen,
@@ -186,40 +212,74 @@ mod terminal;
 mod placeholder;
 pub use placeholder::{PlaceholderSlice, placeholder_prototype, placeholder_row};
 
-pub const MAX_PANE_ENCODED_BYTES: usize = 128 << 20;
-pub const MAX_PANE_DECODED_BYTES: usize = 256 << 20;
+/// Encoded source and RGBA-equivalent bounds; these are independent scopes.
+pub const MAX_PANE_ENCODED_BYTES: usize = 64 << 20;
+pub const MAX_PANE_DECODED_BYTES: usize = 128 << 20;
+/// Admits a 3840 × 2160 RGBA screenshot (33,177,600 bytes).
+pub const MAX_IMAGE_DECODED_BYTES: usize = 32 << 20;
+#[path = "graphics_retention.rs"]
+pub(crate) mod retention;
+pub use retention::{MAX_DAEMON_DECODED_BYTES, MAX_DAEMON_ENCODED_BYTES, MAX_DAEMON_WORK_BYTES, MAX_PANE_WORK_BYTES};
+pub use retention::{GRAPHICS_METADATA_BYTES, MAX_DAEMON_METADATA_BYTES, MAX_PANE_METADATA_BYTES};
 pub const MAX_IMAGE_DIMENSION: u32 = 8192;
 pub const MAX_RESOURCES: usize = 1024;
 pub const MAX_PLACEMENTS: usize = 4096;
 
 pub enum GraphicsEffect {
     Update(GraphicsUpdate),
+    Frame(crate::daemon::protocol::GraphicsPacket),
     Reply(Vec<u8>),
     Output(Vec<u8>),
 }
 
 struct Resource {
-    image: Arc<Image>,
+    image: Image,
+    resident: Arc<std::sync::Mutex<retention::Resident>>,
     id: u32,
     number: u32,
-    decoded_bytes: usize,
     screen: u64,
+    _metadata: retention::MetadataTicket,
 }
 
 struct AnchoredPlacement {
     placement: Placement,
+    _metadata: retention::MetadataTicket,
     // Geometry is carried by Placement; no client-captured second anchor.
+}
+
+pub(crate) struct PreparedImage {
+    pub image: Arc<Image>,
+    pub packet: Option<crate::daemon::protocol::GraphicsPacket>,
+    decoded_bytes: usize,
+    key: u64,
+    metadata: Option<retention::MetadataTicket>,
+    placement: Option<(u64, retention::MetadataTicket)>,
+    _work: retention::Work,
+}
+impl PreparedImage {
+    pub(crate) fn placement_key(&self) -> Option<u64> { self.placement.as_ref().map(|(key, _)| *key) }
+}
+
+pub(crate) struct PreparedPlacement {
+    resource: u64,
+    pub key: u64,
+    metadata: retention::MetadataTicket,
+    pub needs_offer: bool,
 }
 
 /// The living pane owns this state. Desktop caches receive ordered mutations,
 /// never decide protocol identities or resource/placement deletion lifetimes.
 pub struct GraphicsState {
+    retention: Arc<retention::Retention>,
+    owner: u64,
+    wake: Option<std::sync::mpsc::SyncSender<()>>,
+    capacity: (usize, usize),
+    generation: u64,
+    resource_revision: u64,
     resources: BTreeMap<u64, Resource>,
     placements: BTreeMap<u64, AnchoredPlacement>,
     next_key: u64,
     next_image_id: u32,
-    encoded_bytes: usize,
-    decoded_bytes: usize,
     size: WinSize,
     resize_mode: ResizeMode,
     term: Crosswords<VoidListener>,
@@ -240,13 +300,19 @@ impl GraphicsState {
 
     /// The source PTY determines row anchoring, including for remote displays.
     pub fn with_resize_mode(size: WinSize, resize_mode: ResizeMode) -> Self {
+        let retention = retention::Retention::shared();
+        let owner = retention.owner();
         Self {
+            capacity: (retention.limits.pane_encoded, retention.limits.pane_decoded),
+            generation: 0,
+            resource_revision: 0,
+            retention,
+            owner,
+            wake: None,
             resources: BTreeMap::new(),
             placements: BTreeMap::new(),
             next_key: 0,
             next_image_id: 0,
-            encoded_bytes: 0,
-            decoded_bytes: 0,
             size,
             resize_mode,
             term: Crosswords::new(
@@ -267,12 +333,180 @@ impl GraphicsState {
         }
     }
 
+    pub(crate) fn work_owner(&self) -> u64 { self.owner }
+    pub(crate) fn generation(&self) -> u64 { self.generation }
+    pub(crate) fn replay_generation(&self) -> (u64, u64) { (self.generation, self.resource_revision) }
+    pub(crate) fn pressure_resource(&mut self, key: u64) -> Vec<GraphicsEffect> {
+        self.refresh_retention();
+        if let Some(resource) = self.resources.get(&key) { self.retention.reclaim_specific(&resource.resident); }
+        self.drain_evictions()
+    }
+    pub(crate) fn reserve_resource_key(&mut self) -> u64 { self.key() }
+    pub(crate) fn offer_resources(&self) -> Option<(Vec<(u64, u32, u32, usize, usize)>, retention::Work)> {
+        let count = self.resources.len() + self.placements.len();
+        let mut work = self.retention.work(self.owner);
+        if !work.resize(count * GRAPHICS_METADATA_BYTES) { return None; }
+        let mut offers = Vec::with_capacity(count);
+        for (&key, resource) in &self.resources {
+            let resident = resource.resident.lock().unwrap();
+            offers.push(if let Some(packet) = &resident.packet { (key, resource.image.width, resource.image.height, packet.len(), GRAPHICS_METADATA_BYTES) }
+                else { (key, 0, 0, 0, GRAPHICS_METADATA_BYTES) });
+        }
+        offers.extend(self.placements.keys().map(|&key| (key, 0, 0, 0, GRAPHICS_METADATA_BYTES)));
+        Some((offers, work))
+    }
+
+    pub(crate) fn prepare_image_metadata(&mut self, control: &Control, image: &mut PreparedImage) -> Result<(), &'static str> {
+        self.check_prepared(control, &image.image)?;
+        if control.action == Action::Query || image.metadata.is_some() { return Ok(()); }
+        let replaced = (control.id != 0).then(|| self.lookup(control)).flatten();
+        image.metadata = replaced.and_then(|key| self.resources.get(&key)).map(|r| r._metadata.clone())
+            .or_else(|| self.retention.metadata(self.owner));
+        if image.metadata.is_none() { return Err("ENOSPC:Graphics metadata budget exhausted"); }
+        if control.action == Action::TransmitAndDisplay {
+            let metadata = self.placements.values().find(|p| Some(p.placement.resource) == replaced).map(|p| p._metadata.clone())
+                .or_else(|| self.retention.metadata(self.owner)).ok_or("ENOSPC:Graphics metadata budget exhausted")?;
+            image.placement = Some((self.key(), metadata));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_placement(&mut self, control: &Control) -> Result<PreparedPlacement, &'static str> {
+        let resource = self.lookup(control).filter(|key| self.resources[key].resident.lock().unwrap().image.is_some()).ok_or("ENOENT:Image not found")?;
+        self.geometry(control, &self.resources[&resource].image).ok_or("EINVAL:Invalid placement rectangle")?;
+        let existing = (control.placement != 0).then(|| self.placements.iter().find(|(_, p)| p.placement.resource == resource && p.placement.placement_id == control.placement)).flatten();
+        if let Some((&key, p)) = existing { return Ok(PreparedPlacement { resource, key, metadata: p._metadata.clone(), needs_offer: false }); }
+        if self.placements.len() >= MAX_PLACEMENTS { return Err("ENOSPC:Placement budget exhausted"); }
+        let metadata = self.retention.metadata(self.owner).ok_or("ENOSPC:Graphics metadata budget exhausted")?;
+        Ok(PreparedPlacement { resource, key: self.key(), metadata, needs_offer: true })
+    }
+
+    pub(crate) fn apply_prepared_placement(&mut self, control: Control, placement: PreparedPlacement) -> Vec<GraphicsEffect> {
+        self.generation += 1;
+        self.retention.protect(self.owner);
+        let mut effects = self.drain_evictions();
+        if self.resources.get(&placement.resource).is_some_and(|r| r.resident.lock().unwrap().image.is_some()) {
+            self.place(placement.resource, &control, &mut effects, Some((placement.key, placement.metadata)));
+        } else { Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found"); }
+        self.refresh_retention();
+        effects
+    }
+
+    pub(crate) fn check_prepared(&self, control: &Control, image: &Image) -> Result<(), &'static str> {
+        if control.action == Action::Query { return Ok(()); }
+        if control.action == Action::TransmitAndDisplay && self.geometry(control, image).is_none() {
+            return Err("EINVAL:Invalid placement rectangle");
+        }
+        let replaced = (control.id != 0).then(|| self.lookup(control)).flatten();
+        let placement_full = control.action == Action::TransmitAndDisplay && self.placements.len() >= MAX_PLACEMENTS
+            && !self.placements.values().any(|p| Some(p.placement.resource) == replaced);
+        if self.resources.len() - usize::from(replaced.is_some()) >= MAX_RESOURCES || placement_full {
+            return Err("ENOSPC:Pane graphics budget exhausted");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_image(mut image: Image, owner: u64, key: u64, control: &Control) -> Result<PreparedImage, &'static str> {
+        let retention = retention::Retention::shared();
+        let mut work = retention.work(owner);
+        let scratch = match (image.format, image.compressed) {
+            (WireFormat::Png, true) => MAX_IMAGE_BYTES * 3 + (4 << 20),
+            (WireFormat::Png, false) => 4 << 20,
+            (_, true) => 256 << 10,
+            (_, false) => 0,
+        };
+        if !work.resize(scratch) { return Err("ENOSPC:Graphics validation budget exhausted"); }
+        let decoded_bytes = validate_image(&mut image).map_err(|status| if control.medium == super::kitty_graphics::Medium::Direct { status } else { "EBADF:Failed to read image file" })?;
+        let image = Arc::new(image);
+        let packet = if control.action != Action::Query {
+            Some((GraphicsUpdate::Resource { key, image: image.clone() }).encode_packet().ok_or("ENOSPC:Graphics transport budget exhausted")?)
+        } else { None };
+        Ok(PreparedImage { image, packet, decoded_bytes, key, metadata: None, placement: None, _work: work })
+    }
+
+    pub(crate) fn set_wake(&mut self, wake: std::sync::mpsc::SyncSender<()>) { self.wake = Some(wake); }
+
+    pub(crate) fn set_capacity(&mut self, encoded: usize, decoded: usize) -> bool {
+        let usage = self.resident_usage(None);
+        if usage.0 > encoded || usage.1 > decoded { return false; }
+        self.capacity = (encoded.min(self.retention.limits.pane_encoded), decoded.min(self.retention.limits.pane_decoded));
+        true
+    }
+
+    fn resident_usage(&self, excluding: Option<u64>) -> (usize, usize) {
+        self.resources.iter().filter(|(key, _)| Some(**key) != excluding).fold((0, 0), |mut usage, (_, resource)| {
+            let resident = resource.resident.lock().unwrap();
+            if let Some(image) = &resident.image { usage.0 += image.data.capacity(); usage.1 += resident.decoded; }
+            usage
+        })
+    }
+
+    fn refresh_retention(&mut self) {
+        let live_placeholders = self.placeholder_resources(false);
+        let retained_placeholders = self.placeholder_resources(true);
+        let top = self.history_origin();
+        let bottom = top + i64::from(self.size.rows.max(1));
+        for (&key, resource) in &self.resources {
+            let mut priority = if self.placements().any(|p| p.resource == key && p.screen != self.screen) { 2 } else { 0 };
+            if retained_placeholders.contains(&key) { priority = priority.max(1); }
+            if live_placeholders.contains(&key) { priority = 2; }
+            for p in self.placements().filter(|p| p.resource == key && !p.virtual_placement) {
+                let visible = p.screen != self.screen || (p.anchor_col < u32::from(self.size.cols.max(1))
+                    && p.anchor_row + i64::from(p.clip_top) < bottom
+                    && p.anchor_row + i64::from(p.clip_bottom) > top);
+                priority = priority.max(if visible { 2 } else { 1 });
+            }
+            resource.resident.lock().unwrap().priority = priority;
+        }
+    }
+
+    /// Drain under the pane output lock before any later mutation. A removed
+    /// resource has no slot here, so a queued wake cannot resurrect it.
+    pub(crate) fn drain_evictions(&mut self) -> Vec<GraphicsEffect> {
+        let retained = self.placeholder_resources(true);
+        let mut effects = Vec::new();
+        let mut obsolete = Vec::new();
+        for (&key, resource) in &self.resources {
+            let mut resident = resource.resident.lock().unwrap();
+            if resident.image.is_some() { continue; }
+            let has_position = self.placements().any(|p| p.resource == key && (!p.virtual_placement || retained.contains(&key) || p.screen != self.screen));
+            if !has_position { obsolete.push(key); }
+            else if !resident.announced {
+                resident.announced = true;
+                effects.push(GraphicsEffect::Update(GraphicsUpdate::Evicted { key, width: resource.image.width, height: resource.image.height }));
+            }
+        }
+        for key in obsolete { self.remove_resource(key, &mut effects); }
+        if !effects.is_empty() { self.resource_revision += 1; }
+        effects
+    }
+
+    pub(crate) fn replay(&self) -> Option<(Vec<GraphicsEffect>, retention::Work)> {
+        let mut work = self.retention.work(self.owner);
+        if self.resources.is_empty() { return Some((Vec::new(), work)); }
+        let count = self.resources.len() + self.placements.len() + 1;
+        if !work.resize(count * std::mem::size_of::<GraphicsEffect>()) { return None; }
+        let mut updates = Vec::with_capacity(count);
+        for (&key, resource) in &self.resources {
+            let resident = resource.resident.lock().unwrap();
+            updates.push(if let Some(packet) = &resident.packet { GraphicsEffect::Frame(packet.clone()) }
+                else { GraphicsEffect::Update(GraphicsUpdate::Evicted { key, width: resource.image.width, height: resource.image.height }) });
+        }
+        updates.extend(self.placements().cloned().map(|p| GraphicsEffect::Update(GraphicsUpdate::Place(p))));
+        updates.push(GraphicsEffect::Update(GraphicsUpdate::Screen { screen: self.screen, history_origin: self.history_origin() }));
+        Some((updates, work))
+    }
+
     pub fn resize(&mut self, size: WinSize) -> Vec<GraphicsEffect> {
+        self.generation += 1;
+        self.retention.protect(self.owner);
         self.resize_layout(size);
         self.finish_layout(!self.placements.is_empty())
     }
 
     pub fn output(&mut self, bytes: &[u8]) -> Vec<GraphicsEffect> {
+        self.generation += 1;
+        self.retention.protect(self.owner);
         let old = (self.screen, self.history_origin());
         let mut processor = std::mem::take(&mut self.processor);
         processor.advance(self, bytes);
@@ -307,7 +541,16 @@ impl GraphicsState {
     }
 
     pub fn apply(&mut self, control: Control, image: Option<Image>) -> Vec<GraphicsEffect> {
-        let mut effects = Vec::new();
+        self.apply_inner(control, image, None)
+    }
+
+    pub(crate) fn apply_prepared(&mut self, control: Control, image: PreparedImage) -> Vec<GraphicsEffect> {
+        self.apply_inner(control, None, Some(image))
+    }
+
+    fn apply_inner(&mut self, control: Control, image: Option<Image>, prepared: Option<PreparedImage>) -> Vec<GraphicsEffect> {
+        self.generation += 1;
+        let mut effects = self.drain_evictions();
         if control.invalid || control.unsupported || control.action == Action::Other {
             let status = if control.invalid {
                 "EINVAL:Invalid control data"
@@ -319,41 +562,31 @@ impl GraphicsState {
         }
         match control.action {
             Action::Transmit | Action::TransmitAndDisplay | Action::Query => {
-                let Some(mut image) = image else {
-                    Self::reply(
-                        &mut effects,
-                        &control,
-                        control.id,
-                        "EINVAL:Missing image data",
-                    );
-                    return effects;
+                let prepared = match prepared {
+                    Some(prepared) => Ok(prepared),
+                    None => match image {
+                        Some(image) => { let key = self.key(); Self::prepare_image(image, self.owner, key, &control) }
+                        None => Err("EINVAL:Missing image data"),
+                    },
                 };
-                let decoded_bytes = match validate_image(&mut image) {
-                    Ok(bytes) => bytes,
+                let mut prepared = match prepared {
+                    Ok(prepared) => prepared,
                     Err(status) => {
-                        let status = if control.medium == super::kitty_graphics::Medium::Direct {
-                            status
-                        } else {
-                            "EBADF:Failed to read image file"
-                        };
                         Self::reply(&mut effects, &control, control.id, status);
                         return effects;
                     }
                 };
+                if let Err(status) = self.prepare_image_metadata(&control, &mut prepared) {
+                    Self::reply(&mut effects, &control, control.id, status);
+                    return effects;
+                }
+                let PreparedImage { image, packet, decoded_bytes, key, metadata, placement: placement_lease, _work: _validation } = prepared;
                 if control.action == Action::Query {
                     Self::reply(&mut effects, &control, control.id, "OK");
                     return effects;
                 }
-                // Validate a=T's display before replacing any accepted resource.
-                if control.action == Action::TransmitAndDisplay
-                    && self.geometry(&control, &image).is_none()
-                {
-                    Self::reply(
-                        &mut effects,
-                        &control,
-                        control.id,
-                        "EINVAL:Invalid placement rectangle",
-                    );
+                if let Err(status) = self.check_prepared(&control, &image) {
+                    Self::reply(&mut effects, &control, control.id, status);
                     return effects;
                 }
                 let replaced = if control.id != 0 {
@@ -361,28 +594,15 @@ impl GraphicsState {
                 } else {
                     None
                 };
-                let old = replaced.and_then(|key| self.resources.get(&key));
-                let old_encoded = old.map_or(0, |r| r.image.data.len());
-                let old_decoded = old.map_or(0, |r| r.decoded_bytes);
-                let at_placement_limit = control.action == Action::TransmitAndDisplay
-                    && self.placements.len() >= MAX_PLACEMENTS
-                    && !self
-                        .placements
-                        .values()
-                        .any(|p| Some(p.placement.resource) == replaced);
-                if self.resources.len() - usize::from(replaced.is_some()) >= MAX_RESOURCES
-                    || self.encoded_bytes - old_encoded + image.data.len() > MAX_PANE_ENCODED_BYTES
-                    || self.decoded_bytes - old_decoded + decoded_bytes > MAX_PANE_DECODED_BYTES
-                    || at_placement_limit
-                {
-                    Self::reply(
-                        &mut effects,
-                        &control,
-                        control.id,
-                        "ENOSPC:Pane graphics budget exhausted",
-                    );
+                let replacement = replaced.and_then(|key| self.resources.get(&key)).map(|r| r.resident.clone());
+                let metadata_lease = metadata.expect("prepared resource owns its metadata lease");
+                self.refresh_retention();
+                let packet = packet.expect("transmit preparation encodes its resource packet");
+                let Some(resident) = self.retention.admit(self.owner, image.clone(), decoded_bytes, replacement.as_ref(), self.wake.clone(), self.capacity, packet.clone()) else {
+                    Self::reply(&mut effects, &control, control.id, "ENOSPC:Graphics retention budget exhausted");
                     return effects;
-                }
+                };
+                effects.extend(self.drain_evictions());
                 let id = if control.number != 0 {
                     loop {
                         self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
@@ -396,33 +616,29 @@ impl GraphicsState {
                 if let Some(old_key) = replaced {
                     self.remove_resource(old_key, &mut effects);
                 }
-                let key = self.key();
-                let image = Arc::new(image);
-                self.encoded_bytes += image.data.len();
-                self.decoded_bytes += decoded_bytes;
+                let metadata = Image { width: image.width, height: image.height, data: Vec::new(), format: image.format, compressed: image.compressed };
                 self.resources.insert(
                     key,
                     Resource {
-                        image: image.clone(),
+                        image: metadata,
+                        resident,
                         id,
                         number: control.number,
-                        decoded_bytes,
                         screen: self.screen,
+                        _metadata: metadata_lease,
                     },
                 );
-                effects.push(GraphicsEffect::Update(GraphicsUpdate::Resource {
-                    key,
-                    image,
-                }));
+                effects.push(GraphicsEffect::Frame(packet));
                 if control.action == Action::TransmitAndDisplay {
-                    self.place(key, &control, &mut effects);
+                    self.place(key, &control, &mut effects, placement_lease);
                 } else {
                     Self::reply(&mut effects, &control, id, "OK");
                 }
             }
             Action::Display => {
-                if let Some(key) = self.lookup(&control) {
-                    self.place(key, &control, &mut effects);
+                self.retention.protect(self.owner);
+                if let Some(key) = self.lookup(&control).filter(|key| self.resources[key].resident.lock().unwrap().image.is_some()) {
+                    self.place(key, &control, &mut effects, None);
                 } else {
                     Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
                 }
@@ -430,6 +646,8 @@ impl GraphicsState {
             Action::Delete => self.delete(&control, &mut effects),
             Action::Other => unreachable!(),
         }
+        self.refresh_retention();
+        effects.extend(self.drain_evictions());
         effects
     }
 
@@ -477,7 +695,7 @@ impl GraphicsState {
         Some((w, h, cols.max(1), rows.max(1)))
     }
 
-    fn place(&mut self, resource_key: u64, control: &Control, effects: &mut Vec<GraphicsEffect>) {
+    fn place(&mut self, resource_key: u64, control: &Control, effects: &mut Vec<GraphicsEffect>, reserved_metadata: Option<(u64, retention::MetadataTicket)>) {
         let resource = &self.resources[&resource_key];
         let id = resource.id;
         let Some((w, h, span_cols, span_rows)) = self.geometry(control, &resource.image) else {
@@ -497,7 +715,12 @@ impl GraphicsState {
             Self::reply(effects, control, id, "ENOSPC:Placement budget exhausted");
             return;
         }
-        let key = replacement.unwrap_or_else(|| self.key());
+        let metadata = reserved_metadata.or_else(|| replacement.and_then(|key| self.placements.get(&key)).map(|p| (p.placement.key, p._metadata.clone())))
+            .or_else(|| self.retention.metadata(self.owner).map(|metadata| (self.key(), metadata)));
+        let Some((key, metadata)) = metadata else {
+            Self::reply(effects, control, id, "ENOSPC:Graphics metadata budget exhausted");
+            return;
+        };
         let placement = Placement {
             key,
             resource: resource_key,
@@ -525,6 +748,7 @@ impl GraphicsState {
             key,
             AnchoredPlacement {
                 placement: placement.clone(),
+                _metadata: metadata,
             },
         );
         effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(placement)));
@@ -556,8 +780,7 @@ impl GraphicsState {
         let Some(resource) = self.resources.remove(&key) else {
             return;
         };
-        self.encoded_bytes -= resource.image.data.len();
-        self.decoded_bytes -= resource.decoded_bytes;
+        drop(resource);
         let placements: Vec<_> = self
             .placements
             .iter()
@@ -666,8 +889,7 @@ impl GraphicsState {
             if let Some(resource) = self.resources.get(&key)
                 && (selector.is_ascii_uppercase() || resource.id == 0)
             {
-                self.encoded_bytes -= resource.image.data.len();
-                self.decoded_bytes -= resource.decoded_bytes;
+                let _ = resource;
                 self.resources.remove(&key);
                 freed.push(key);
             }
@@ -691,7 +913,8 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
                 &image.data,
                 MAX_IMAGE_BYTES,
             )
-            .map_err(|_| "EINVAL:Invalid or excessive compressed PNG")?;
+            .map_err(|_| "EINVAL:Invalid or excessive compressed PNG")?
+            .into_boxed_slice().into_vec();
             image.compressed = false;
         }
         if image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
@@ -722,7 +945,7 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
     let bytes = (image.width as usize)
         .checked_mul(image.height as usize)
         .and_then(|n| n.checked_mul(4))
-        .filter(|bytes| *bytes > 0 && *bytes <= MAX_IMAGE_BYTES)
+        .filter(|bytes| *bytes > 0 && *bytes <= MAX_IMAGE_DECODED_BYTES)
         .ok_or("ENOSPC:Decoded image dimensions exceed limit")?;
     if image.format == WireFormat::Png {
         // Header dimensions are checked above, before the PNG library can
@@ -790,3 +1013,7 @@ fn validate_zlib_pixels(data: &[u8], expected: usize) -> Result<(), &'static str
         }
     }
 }
+
+#[cfg(test)]
+#[path = "graphics_retention_tests.rs"]
+mod retention_tests;

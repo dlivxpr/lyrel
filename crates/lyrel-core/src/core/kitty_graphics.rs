@@ -57,7 +57,7 @@ const MAX_TRANSMISSION_BASE64: usize = 48 << 20; // 48 MiB
 /// Bounds the file/shm fast path (where the sender names an object whose size we
 /// don't control) and backstops the direct path, keeping every frame we hand the
 /// daemon inside [`crate::daemon::protocol::MAX_FRAME`].
-pub const MAX_IMAGE_BYTES: usize = crate::daemon::protocol::MAX_FRAME - (1 << 20);
+pub const MAX_IMAGE_BYTES: usize = 32 << 20;
 
 /// A streaming tokenizer that splits raw output into a *passthrough* byte stream
 /// and the kitty graphics commands lifted out of it.
@@ -77,6 +77,7 @@ pub struct ApcTokenizer {
     /// terminate. Cleared whenever a command finishes or is abandoned.
     buf: Vec<u8>,
     state: State,
+    work: super::graphics_state::retention::Work,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -113,6 +114,7 @@ impl ApcTokenizer {
         Self {
             buf: Vec::new(),
             state: State::Ground,
+            work: { let retention = super::graphics_state::retention::Retention::shared(); retention.work(retention.owner()) },
         }
     }
 
@@ -134,7 +136,7 @@ impl ApcTokenizer {
         on_passthrough: impl FnMut(&[u8]),
         mut on_command: impl FnMut(&[u8]),
     ) {
-        self.tokenize(bytes, on_passthrough, |command, aborted| {
+        self.tokenize(bytes, on_passthrough, |command, aborted, _| {
             if !aborted {
                 on_command(command);
             }
@@ -147,7 +149,7 @@ impl ApcTokenizer {
         &mut self,
         bytes: &[u8],
         mut on_passthrough: impl FnMut(&[u8]),
-        mut on_command: impl FnMut(&[u8], bool),
+        mut on_command: impl FnMut(&[u8], bool, bool),
     ) {
         let mut i = 0;
         while i < bytes.len() {
@@ -195,14 +197,14 @@ impl ApcTokenizer {
                             if bytes[i + off] == 0x1b {
                                 self.state = State::ApcGraphicsEsc;
                             } else {
-                                on_command(&self.buf, true);
-                                self.buf.clear();
+                                on_command(&self.buf, true, false);
+                                self.clear_buffer();
                                 self.state = State::Ground;
                             }
                             i += off + 1;
                         } else {
-                            on_command(&self.buf, true);
-                            self.buf.clear();
+                            on_command(&self.buf, true, true);
+                            self.clear_buffer();
                             // Oversized: abandon and let the drop state consume
                             // the terminator we just found (leave `i` on the ESC).
                             self.state = State::ApcDrop;
@@ -211,8 +213,8 @@ impl ApcTokenizer {
                     }
                     None => {
                         if !self.push_graphics(&bytes[i..]) {
-                            on_command(&self.buf, true);
-                            self.buf.clear();
+                            on_command(&self.buf, true, true);
+                            self.clear_buffer();
                             self.state = State::ApcDrop;
                         }
                         return;
@@ -220,7 +222,7 @@ impl ApcTokenizer {
                 },
                 State::Esc => match bytes[i] {
                     b'_' => {
-                        self.buf.clear();
+                        self.clear_buffer();
                         self.state = State::ApcStart;
                         i += 1;
                     }
@@ -239,8 +241,8 @@ impl ApcTokenizer {
                 },
                 State::ApcStart => {
                     if bytes[i] == b'G' {
-                        self.buf.clear();
-                        self.buf.push(b'G');
+                        self.clear_buffer();
+                        if !self.push_graphics(b"G") { self.state = State::ApcDrop; i += 1; continue; }
                         self.state = State::ApcGraphics;
                         i += 1;
                     } else {
@@ -252,16 +254,16 @@ impl ApcTokenizer {
                 }
                 State::ApcGraphicsEsc => match bytes[i] {
                     b'\\' => {
-                        on_command(&self.buf, false);
-                        self.buf.clear();
+                        on_command(&self.buf, false, false);
+                        self.clear_buffer();
                         self.state = State::Ground;
                         i += 1;
                     }
                     0x1b => i += 1, // a run of ESCs; stay poised for `\`
                     // A bare `ESC _` re-opens: the next byte decides graphics again.
                     b'_' => {
-                        on_command(&self.buf, true);
-                        self.buf.clear();
+                        on_command(&self.buf, true, false);
+                        self.clear_buffer();
                         self.state = State::ApcStart;
                         i += 1;
                     }
@@ -272,8 +274,8 @@ impl ApcTokenizer {
                     // both. Swallowing them would turn a `\x1b[31m` that follows
                     // an unterminated graphics command into literal `31m`.
                     _ => {
-                        on_command(&self.buf, true);
-                        self.buf.clear();
+                        on_command(&self.buf, true, false);
+                        self.clear_buffer();
                         on_passthrough(b"\x1b");
                         self.state = State::Ground;
                     }
@@ -310,7 +312,7 @@ impl ApcTokenizer {
                     }
                     0x1b => i += 1,
                     b'_' => {
-                        self.buf.clear();
+                        self.clear_buffer();
                         self.state = State::ApcStart;
                         i += 1;
                     }
@@ -326,6 +328,11 @@ impl ApcTokenizer {
         }
     }
 
+    fn clear_buffer(&mut self) {
+        self.buf = Vec::new();
+        self.work.resize(0);
+    }
+
     /// Append within the cap; keep a bounded header prefix on failure so the
     /// ordered abort can correlate an error before the caller clears it.
     fn push_graphics(&mut self, run: &[u8]) -> bool {
@@ -335,7 +342,12 @@ impl ApcTokenizer {
             );
             if self.buf.len() < 4096 {
                 let prefix = run.len().min(4096 - self.buf.len());
-                self.buf.extend_from_slice(&run[..prefix]);
+                let required = self.buf.len() + prefix;
+                if self.work.resize(required + self.buf.capacity()) {
+                    self.buf.reserve_exact(required.saturating_sub(self.buf.len()));
+                    self.work.resize(self.buf.capacity());
+                    self.buf.extend_from_slice(&run[..prefix]);
+                }
             }
             return false;
         }
@@ -344,7 +356,9 @@ impl ApcTokenizer {
             let capacity = required
                 .max(self.buf.capacity().saturating_mul(2))
                 .min(MAX_APC_PAYLOAD);
+            if !self.work.resize(capacity + self.buf.capacity()) { return false; }
             self.buf.reserve_exact(capacity - self.buf.len());
+            self.work.resize(self.buf.capacity());
         }
         self.buf.extend_from_slice(run);
         true
@@ -378,6 +392,21 @@ impl GraphicsSniffer {
         }
     }
 
+    pub(crate) fn new_budgeted(local: bool, owner: u64) -> Self {
+        let mut sniffer = Self::new_local(local);
+        let retention = super::graphics_state::retention::Retention::shared();
+        sniffer.tokenizer.work = retention.work(owner);
+        sniffer.parser.work = Some(retention.work(owner));
+        sniffer
+    }
+
+    pub(crate) fn begin_read(&mut self) {
+        self.parser.completed_bytes = 0;
+        if let Some(work) = &mut self.parser.work {
+            work.resize(self.parser.pending.as_ref().map_or(0, |p| p.data.capacity()));
+        }
+    }
+
     /// Update whether the sender currently shares this host's filesystem. A pane
     /// is local when lyrel spawned a local shell and no foreground `ssh` owns the
     /// PTY; that can flip mid-session, and it gates whether the next `a=q` probe
@@ -394,11 +423,12 @@ impl GraphicsSniffer {
     /// loop, prefer [`sniff`](Self::sniff), which preserves it. Retained as the
     /// low-level primitive the unit tests drive.
     pub fn feed(&mut self, bytes: &[u8], on_passthrough: impl FnMut(&[u8])) -> Vec<Event> {
+        self.begin_read();
         let Self { tokenizer, parser } = self;
         let mut events = Vec::new();
-        tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted| {
+        tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted, exhausted| {
             if let Some(ev) = if aborted {
-                parser.abort(cmd)
+                parser.abort(cmd, exhausted)
             } else {
                 parser.feed(cmd)
             } {
@@ -426,6 +456,11 @@ impl GraphicsSniffer {
     /// trailing-`ESC` guard keeps an `ESC _` straddling a chunk boundary on the
     /// slow path, where the held-`ESC` state carries it across correctly.
     pub fn sniff<'a>(&mut self, bytes: &'a [u8]) -> Sniffed<'a> {
+        self.begin_read();
+        self.sniff_part(bytes)
+    }
+
+    pub(crate) fn sniff_part<'a>(&mut self, bytes: &'a [u8]) -> Sniffed<'a> {
         if matches!(self.tokenizer.state, State::Ground)
             && bytes.last() != Some(&0x1b)
             && memchr::memmem::find(bytes, b"\x1b_").is_none()
@@ -449,9 +484,9 @@ impl GraphicsSniffer {
                     segs.push(Segment::Output(run.to_vec()));
                 }
             },
-            |cmd, aborted| {
+            |cmd, aborted, exhausted| {
                 if let Some(ev) = if aborted {
-                    parser.abort(cmd)
+                    parser.abort(cmd, exhausted)
                 } else {
                     parser.feed(cmd)
                 } {
@@ -816,7 +851,7 @@ impl Image {
     /// capping it up front costs nothing.
     pub fn to_rgba8(&self) -> Option<Vec<u8>> {
         let expected = self.decoded_len()?;
-        if expected > MAX_IMAGE_BYTES {
+        if expected > super::graphics_state::MAX_IMAGE_DECODED_BYTES {
             return None;
         }
         let raw = if self.compressed {
@@ -838,7 +873,7 @@ impl Image {
     /// and all size checks stay off the UI thread in the desktop decode worker.
     pub fn take_rgba8(&mut self) -> Option<Vec<u8>> {
         let expected = self.decoded_len()?;
-        if expected > MAX_IMAGE_BYTES {
+        if expected > super::graphics_state::MAX_IMAGE_DECODED_BYTES {
             return None;
         }
         let data = std::mem::take(&mut self.data);
@@ -868,7 +903,7 @@ impl Image {
             || (self.width as usize)
                 .checked_mul(self.height as usize)?
                 .checked_mul(4)?
-                > MAX_IMAGE_BYTES
+                > super::graphics_state::MAX_IMAGE_DECODED_BYTES
         {
             return None;
         }
@@ -1108,6 +1143,8 @@ pub struct GraphicsParser {
     /// then can we honor file/shm transfer, whose names are host-local; a pane
     /// running over SSH must stay on inline `t=d` so the pixels ride the tunnel.
     local: bool,
+    work: Option<super::graphics_state::retention::Work>,
+    completed_bytes: usize,
 }
 
 impl GraphicsParser {
@@ -1122,16 +1159,22 @@ impl GraphicsParser {
         }
     }
 
-    fn abort(&mut self, command: &[u8]) -> Option<Event> {
+    fn cancel_pending(&mut self) {
+        self.pending = None;
+        if let Some(work) = &mut self.work { work.resize(self.completed_bytes); }
+    }
+
+    fn abort(&mut self, command: &[u8], exhausted: bool) -> Option<Event> {
         let control = self
             .pending
             .take()
             .map(|pending| pending.control)
             .or_else(|| Control::parse(command))?;
+        self.cancel_pending();
         response(
             &control,
             control.id,
-            "EINVAL:Interrupted or excessive image command",
+            if exhausted { "ENOSPC:Graphics transfer budget exhausted" } else { "EINVAL:Interrupted image command" },
         )
         .map(Event::Reply)
     }
@@ -1142,7 +1185,7 @@ impl GraphicsParser {
         // A delete aborts a partial upload. Other complete commands must not be
         // accidentally swallowed as base64 continuation bytes.
         if control.action == Action::Delete {
-            self.pending = None;
+            self.cancel_pending();
         }
         if self.pending.is_some() {
             let header = command.split(|b| *b == b';').next().unwrap_or(command);
@@ -1159,15 +1202,16 @@ impl GraphicsParser {
                 }
                 if control.invalid {
                     let first = self.pending.take().unwrap().control;
+                    self.cancel_pending();
                     return response(&first, first.id, "EINVAL:Invalid continuation control")
                         .map(Event::Reply);
                 }
                 return self.accept_chunk(control, data);
             }
-            self.pending = None;
+            self.cancel_pending();
         }
         if control.invalid || control.unsupported || control.action == Action::Other {
-            self.pending = None;
+            self.cancel_pending();
             let status = if control.invalid {
                 "EINVAL:Invalid control data"
             } else {
@@ -1198,12 +1242,12 @@ impl GraphicsParser {
         let first = self.pending.as_ref().map_or(control, |p| p.control);
         let fail = |status| response(&first, first.id, status).map(Event::Reply);
         if first.medium != Medium::Direct && !(self.local && cfg!(unix)) {
-            self.pending = None;
+            self.cancel_pending();
             return fail("ENOTSUPPORTED:Host-local transfer unavailable");
         }
         let encoded_bytes = self.pending.as_ref().map_or(0, |p| p.encoded_bytes);
         if data.len() > MAX_TRANSMISSION_BASE64.saturating_sub(encoded_bytes) {
-            self.pending = None;
+            self.cancel_pending();
             return fail("ENOSPC:Transfer too large");
         }
         let raw_len = if first.format != WireFormat::Png {
@@ -1217,7 +1261,7 @@ impl GraphicsParser {
             match image.decoded_len() {
                 Some(len) => Some(len),
                 None => {
-                    self.pending = None;
+                    self.cancel_pending();
                     return fail("ENOSPC:Decoded image dimensions exceed limit");
                 }
             }
@@ -1233,13 +1277,26 @@ impl GraphicsParser {
         let payload_limit = if first.medium != Medium::Direct {
             4096
         } else if !first.compressed {
-            raw_len.unwrap_or(MAX_TRANSMISSION_BASE64 / 4 * 3)
+            raw_len.unwrap_or(MAX_IMAGE_BYTES)
         } else {
-            MAX_TRANSMISSION_BASE64 / 4 * 3
+            MAX_IMAGE_BYTES
         };
         if decoded_capacity > payload_limit.saturating_add(2).saturating_sub(buffered) {
-            self.pending = None;
-            return fail("EINVAL:Payload exceeds declared image size");
+            self.cancel_pending();
+            return fail(if first.compressed || first.format == WireFormat::Png { "ENOSPC:Transfer too large" } else { "EINVAL:Payload exceeds declared image size" });
+        }
+        let old_capacity = self.pending.as_ref().map_or(0, |p| p.data.capacity());
+        let capacity = if buffered + decoded_capacity > old_capacity {
+            (buffered + decoded_capacity).max(old_capacity.saturating_mul(2)).min(payload_limit.saturating_add(3))
+        } else { old_capacity };
+        if self.work.is_none() {
+            let retention = super::graphics_state::retention::Retention::shared();
+            self.work = Some(retention.work(retention.owner()));
+        }
+        let transient = if capacity > old_capacity { capacity + old_capacity } else { capacity };
+        if !self.work.as_mut().unwrap().resize(self.completed_bytes + transient) {
+            self.cancel_pending();
+            return fail("ENOSPC:Graphics transfer budget exhausted");
         }
         let pending = self.pending.get_or_insert_with(|| Pending {
             control,
@@ -1249,15 +1306,13 @@ impl GraphicsParser {
         let start = pending.data.len();
         let required = start + decoded_capacity;
         if required > pending.data.capacity() {
-            let capacity = required
-                .max(pending.data.capacity().saturating_mul(2))
-                .min(payload_limit.saturating_add(3));
             pending.data.reserve_exact(capacity - start);
         }
+        self.work.as_mut().unwrap().resize(self.completed_bytes + pending.data.capacity());
         pending.data.resize(required, 0);
         let decoded = BASE64.decode_slice(data, &mut pending.data[start..]);
         let Ok(decoded) = decoded else {
-            self.pending = None;
+            self.cancel_pending();
             return fail("EINVAL:Invalid base64 payload");
         };
         pending.data.truncate(start + decoded);
@@ -1265,8 +1320,20 @@ impl GraphicsParser {
         if control.more {
             return None;
         }
+        let retained = self.pending.as_ref().map_or(0, |p| p.data.capacity());
+        let resolved = if first.medium == Medium::Direct { 0 } else { MAX_IMAGE_BYTES };
+        if !self.work.as_mut().unwrap().resize(self.completed_bytes + retained + resolved) {
+            self.cancel_pending();
+            return fail("ENOSPC:Graphics transfer budget exhausted");
+        }
         let Pending { control, data, .. } = self.pending.take()?;
-        self.finalize(control, data)
+        let event = self.finalize(control, data);
+        self.completed_bytes += match &event {
+            Some(Event::Command { image: Some(image), .. }) => image.data.capacity(),
+            _ => 0,
+        };
+        self.work.as_mut().unwrap().resize(self.completed_bytes);
+        event
     }
 
     fn finalize(&self, control: Control, data: Vec<u8>) -> Option<Event> {

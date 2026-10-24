@@ -1833,7 +1833,10 @@ impl TerminalView {
                     .timer(std::time::Duration::from_millis(300))
                     .await;
                 if this
-                    .update_in(cx, |view, window, cx| view.poll_foreground(window, cx))
+                    .update_in(cx, |view, window, cx| {
+                        view.terminal.images().release_retired(window, cx);
+                        view.poll_foreground(window, cx);
+                    })
                     .is_err()
                 {
                     break;
@@ -1857,9 +1860,7 @@ impl TerminalView {
                 registry.0.lock().unwrap().remove(&entity_id);
             }
             view.terminal.detach_link();
-            for image in view.terminal.images().take_for_release() {
-                cx.drop_image(image, Some(window));
-            }
+            view.terminal.images().release_all(window, cx);
         })
         .detach();
 
@@ -11883,9 +11884,20 @@ mod gpui_tests {
         stream: &mut Stream,
         update: lyrel_core::core::kitty_graphics::GraphicsUpdate,
     ) {
-        DaemonMsg::Graphics(update.encode_frame())
+        assert!(!matches!(&update, lyrel_core::core::kitty_graphics::GraphicsUpdate::Resource { .. } | lyrel_core::core::kitty_graphics::GraphicsUpdate::Place(_) | lyrel_core::core::kitty_graphics::GraphicsUpdate::Evicted { .. }), "owner fixture must explicitly reserve before transmitting");
+        DaemonMsg::Graphics(update.encode_frame().into())
             .encode(stream)
             .unwrap();
+    }
+
+    fn send_admitted_graphics(
+        images: &crate::terminal::images::ImageStore,
+        stream: &mut Stream,
+        update: lyrel_core::core::kitty_graphics::GraphicsUpdate,
+    ) {
+        let frame = update.encode_frame();
+        assert!(images.admit_test_resource(&update, frame.len()), "fixture resource must fit the production offer budget");
+        DaemonMsg::Graphics(frame.into()).encode(stream).unwrap();
     }
 
     include!("graphics_consumer_tests.rs");
@@ -11900,6 +11912,7 @@ mod gpui_tests {
             GraphicsEffect, GraphicsSniffer, GraphicsState, Segment, Sniffed,
         };
         let (window, view, mut daemon) = rooted_harness(cx);
+        let images = view.read_with(cx, |view, _| view.terminal.images());
         let mut state = GraphicsState::new(crate::daemon::protocol::WinSize {
             cols: 80,
             rows: 24,
@@ -11927,7 +11940,7 @@ mod gpui_tests {
                     };
                     for effect in effects {
                         match effect {
-                            GraphicsEffect::Update(update) => send_graphics(&mut daemon, update),
+                            GraphicsEffect::Update(update) => send_admitted_graphics(&images, &mut daemon, update),
                             GraphicsEffect::Output(output) => {
                                 DaemonMsg::Output(output).encode(&mut daemon).unwrap();
                             }
@@ -11966,7 +11979,7 @@ mod gpui_tests {
             let images = view.terminal.images().snapshot();
             assert_eq!(images.len(), 3);
             for image in images {
-                assert_eq!(image.data.as_bytes(0).unwrap(), &[0, 0, 255, 128]);
+                assert_eq!(image.data.as_ref().unwrap().as_bytes(0).unwrap(), &[0, 0, 255, 128]);
                 assert_eq!((image.anchor_row, image.anchor_col), (2, 3));
                 assert!(
                     image.painted.load(std::sync::atomic::Ordering::Acquire),
@@ -11988,7 +12001,8 @@ mod gpui_tests {
         use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
         use std::sync::Arc;
         let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-        send_graphics(
+        let images = window.update(cx, |view, _, _| view.terminal.images()).unwrap();
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Resource {
                 key: 801,
@@ -12010,7 +12024,7 @@ mod gpui_tests {
         placement.span_rows = 4;
         placement.clip_top = 1;
         placement.clip_bottom = 3;
-        send_graphics(&mut daemon, GraphicsUpdate::Place(placement));
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
         for _ in 0..200 {
             if window
                 .update(cx, |view, _, _| {
@@ -12027,7 +12041,7 @@ mod gpui_tests {
                 let images = view.terminal.images().snapshot();
                 let image = &images[0];
                 assert_eq!(
-                    image.data.as_bytes(0).unwrap(),
+                    image.data.as_ref().unwrap().as_bytes(0).unwrap(),
                     &[0, 0, 255, 255, 255, 0, 0, 80]
                 );
                 let (crop, full) =
@@ -12089,7 +12103,8 @@ mod gpui_tests {
         use std::sync::Arc;
 
         let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-        send_graphics(
+        let images = window.update(cx, |view, _, _| view.terminal.images()).unwrap();
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Resource {
                 key: 901,
@@ -12106,7 +12121,7 @@ mod gpui_tests {
         placement.anchor_row = 10_005;
         placement.anchor_col = 3;
         placement.x = 0;
-        send_graphics(&mut daemon, GraphicsUpdate::Place(placement));
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
         send_graphics(
             &mut daemon,
             GraphicsUpdate::Screen {
@@ -12200,7 +12215,9 @@ mod gpui_tests {
 
         let (window, mut daemon) = harness_on(cx, PtySource::Raw);
         let (other, mut other_daemon) = harness_on(cx, PtySource::Raw);
-        send_graphics(
+        let images = window.update(cx, |view, _, _| view.terminal.images()).unwrap();
+        let other_images = other.update(cx, |view, _, _| view.terminal.images()).unwrap();
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Resource {
                 key: 11,
@@ -12236,14 +12253,14 @@ mod gpui_tests {
             })
             .unwrap();
 
-        send_graphics(
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Place(graphics_placement(21, 11, 2, 13)),
         );
         DaemonMsg::Output(b"\x1b[5;9H".to_vec())
             .encode(&mut daemon)
             .unwrap();
-        send_graphics(
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Place(graphics_placement(22, 11, 4, 8)),
         );
@@ -12276,10 +12293,10 @@ mod gpui_tests {
                 assert_eq!((first.anchor_row, first.anchor_col), (2, 13));
                 assert_eq!((second.anchor_row, second.anchor_col), (4, 8));
                 assert_eq!(
-                    first.data.as_bytes(0).unwrap(),
+                    first.data.as_ref().unwrap().as_bytes(0).unwrap(),
                     &[0, 0, 255, 255, 30, 20, 10, 128]
                 );
-                assert!(Arc::ptr_eq(&first.data, &second.data));
+                assert!(Arc::ptr_eq(first.data.as_ref().unwrap(), second.data.as_ref().unwrap()));
                 assert!(Arc::ptr_eq(&first.painted, &second.painted));
                 let (crop, full) =
                     first.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
@@ -12328,7 +12345,7 @@ mod gpui_tests {
                 assert!(view.terminal.images().snapshot().is_empty())
             })
             .unwrap();
-        send_graphics(
+        send_admitted_graphics(&other_images,
             &mut other_daemon,
             GraphicsUpdate::Resource {
                 key: 11,
@@ -12341,7 +12358,7 @@ mod gpui_tests {
                 }),
             },
         );
-        send_graphics(
+        send_admitted_graphics(&other_images,
             &mut other_daemon,
             GraphicsUpdate::Place(graphics_placement(21, 11, 0, 0)),
         );
@@ -12360,7 +12377,7 @@ mod gpui_tests {
         let mut replacement = graphics_placement(21, 11, 8, 1);
         replacement.x = 0;
         replacement.cols = 2;
-        send_graphics(&mut daemon, GraphicsUpdate::Place(replacement));
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(replacement));
         send_graphics(
             &mut daemon,
             GraphicsUpdate::Remove {
@@ -12397,7 +12414,7 @@ mod gpui_tests {
                 );
                 assert_eq!((images[0].anchor_row, images[0].anchor_col), (8, 1));
                 assert_eq!(
-                    images[0].data.as_bytes(0).unwrap(),
+                    images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
                     &[0, 0, 255, 255, 30, 20, 10, 128]
                 );
             })
@@ -12407,7 +12424,7 @@ mod gpui_tests {
                 let images = view.terminal.images().snapshot();
                 assert_eq!(images.len(), 1);
                 assert_eq!(
-                    images[0].data.as_bytes(0).unwrap(),
+                    images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
                     &[60, 50, 40, 255, 90, 80, 70, 255]
                 );
                 assert_eq!(
@@ -12426,12 +12443,13 @@ mod gpui_tests {
         use std::sync::{Arc, atomic::Ordering};
 
         let (window, view, mut daemon) = rooted_harness(cx);
+        let images = view.read_with(cx, |view, _| view.terminal.images());
         window.update(cx, |_, window, _| window.refresh()).unwrap();
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(400));
         cx.run_until_parked();
         for key in [61, 62] {
-            send_graphics(
+            send_admitted_graphics(&images,
                 &mut daemon,
                 GraphicsUpdate::Resource {
                     key,
@@ -12445,7 +12463,7 @@ mod gpui_tests {
                 },
             );
         }
-        send_graphics(
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Place(graphics_placement(71, 61, 0, 0)),
         );
@@ -12459,7 +12477,7 @@ mod gpui_tests {
                 history_origin: 200,
             },
         );
-        send_graphics(
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Place(graphics_placement(72, 62, 200, 0)),
         );
@@ -12494,7 +12512,7 @@ mod gpui_tests {
                 "real TerminalElement paint must claim the visible resource"
             );
             assert_eq!(
-                visible.data.as_bytes(0).unwrap(),
+                visible.data.as_ref().unwrap().as_bytes(0).unwrap(),
                 &[0, 0, 255, 255, 0, 200, 0, 80]
             );
             assert_eq!(
@@ -12516,6 +12534,7 @@ mod gpui_tests {
         use std::{cell::Cell, rc::Rc, sync::Arc};
 
         let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        let images = window.update(cx, |view, _, _| view.terminal.images()).unwrap();
         let pane = window
             .update(cx, |view, _, cx| {
                 view.displayed
@@ -12531,7 +12550,7 @@ mod gpui_tests {
                 count.set(count.get() + 1);
             })
         });
-        send_graphics(
+        send_admitted_graphics(&images,
             &mut daemon,
             GraphicsUpdate::Resource {
                 key: 41,
@@ -12546,7 +12565,7 @@ mod gpui_tests {
         );
         let mut placement = graphics_placement(51, 41, 0, 0);
         placement.x = 0;
-        send_graphics(&mut daemon, GraphicsUpdate::Place(placement));
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
         for _ in 0..200 {
             cx.run_until_parked();
             if pane.read_with(cx, |view, _| !view.terminal.images().snapshot().is_empty()) {
@@ -12557,7 +12576,7 @@ mod gpui_tests {
         cx.run_until_parked();
         pane.read_with(cx, |view, _| {
             let images = view.terminal.images().snapshot();
-            assert_eq!(images[0].data.as_bytes(0).unwrap(), &[3, 2, 1, 64]);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[3, 2, 1, 64]);
             assert!(!images[0].painted.load(std::sync::atomic::Ordering::Acquire));
         });
         assert_eq!(
@@ -12578,7 +12597,7 @@ mod gpui_tests {
                 1,
                 "returning to the pane retains its current image without a resend"
             );
-            assert_eq!(images[0].data.as_bytes(0).unwrap(), &[3, 2, 1, 64]);
+            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), &[3, 2, 1, 64]);
         });
         send_graphics(
             &mut daemon,

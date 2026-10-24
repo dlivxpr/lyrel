@@ -5,12 +5,77 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
+pub const MAX_DAEMON_GRAPHICS_QUEUE_BYTES: usize = 256 << 20;
+/// Conservative 64-bit resource/placement ownership, including map/Arc headers.
+pub const GRAPHICS_METADATA_ENTRY_BYTES: usize = 512;
+pub const MAX_PANE_GRAPHICS_METADATA_BYTES: usize = 4 << 20;
+pub const MAX_AGGREGATE_GRAPHICS_METADATA_BYTES: usize = 16 << 20;
+static GRAPHICS_QUEUE_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[derive(Debug)]
+struct GraphicsQueueReservation(usize);
+
+impl Drop for GraphicsQueueReservation {
+    fn drop(&mut self) {
+        GRAPHICS_QUEUE_BYTES.fetch_sub(self.0, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+#[derive(Debug)]
+struct GraphicsPacketInner {
+    bytes: Vec<u8>,
+    _reservation: Option<GraphicsQueueReservation>,
+}
+
+/// One encoded graphics mutation shared by the authority and all queued
+/// consumers. Daemon reservations survive eviction until the last writer drops
+/// the packet; receiving clients account their own source leases separately.
+#[derive(Clone, Debug)]
+pub struct GraphicsPacket(std::sync::Arc<GraphicsPacketInner>);
+
+impl GraphicsPacket {
+    pub(crate) fn try_encode(bytes: usize, encode: impl FnOnce() -> Vec<u8>) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        GRAPHICS_QUEUE_BYTES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            used.checked_add(bytes).filter(|next| *next <= MAX_DAEMON_GRAPHICS_QUEUE_BYTES)
+        }).ok()?;
+        let reservation = GraphicsQueueReservation(bytes);
+        let data = encode();
+        assert!(data.capacity() <= bytes, "graphics packet exceeded its preallocation reservation");
+        Some(Self(std::sync::Arc::new(GraphicsPacketInner { bytes: data, _reservation: Some(reservation) })))
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        match std::sync::Arc::try_unwrap(self.0) {
+            Ok(inner) => inner.bytes,
+            Err(inner) => inner.bytes.clone(),
+        }
+    }
+}
+
+impl From<Vec<u8>> for GraphicsPacket {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(std::sync::Arc::new(GraphicsPacketInner { bytes, _reservation: None }))
+    }
+}
+
+impl std::ops::Deref for GraphicsPacket {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.0.bytes }
+}
+
+impl PartialEq for GraphicsPacket {
+    fn eq(&self, other: &Self) -> bool { self.0.bytes == other.0.bytes }
+}
+impl Eq for GraphicsPacket {}
+
 /// A frame is a little-endian `u32` length, a one-byte kind, then the payload.
 const HEADER: usize = 5;
 
 /// v10 requires mutual version negotiation before opening a pane session.
 /// v11 distinguishes invisible virtual prototypes from direct placements.
-pub const PROTOCOL_VERSION: u32 = 11;
+/// v12 carries pixel-free eviction metadata and bounded desktop capacity.
+pub const PROTOCOL_VERSION: u32 = 12;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -96,7 +161,18 @@ pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersi
     .encode(stream)?;
     stream.flush()?;
     match DaemonMsg::read(stream)? {
-        DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION => Ok(version),
+        DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION => {
+            // Every session consumer, including CLI and routed clients, starts
+            // with a finite source allowance. Rendering consumers additionally
+            // grant each resource from their shared process-wide byte budget.
+            ClientMsg::GraphicsCapacity {
+                encoded_bytes: 64 << 20,
+                decoded_bytes: 128 << 20,
+                offers: false,
+            }.encode(stream)?;
+            stream.flush()?;
+            Ok(version)
+        }
         DaemonMsg::Version(version) => Err(io::Error::other(format!(
             "pane peer (build {}) speaks protocol v{}, this build speaks v{}; update lyrel or lyrel-server",
             version.build, version.protocol, PROTOCOL_VERSION
@@ -888,6 +964,23 @@ pub enum ClientMsg {
     Negotiate {
         protocol: u32,
     },
+    /// Finite authority-side allowance, with optional per-resource grants from
+    /// a rendering consumer's shared source and decoded-memory budgets.
+    GraphicsCapacity {
+        encoded_bytes: u64,
+        decoded_bytes: u64,
+        offers: bool,
+    },
+    GraphicsGrant {
+        token: u64,
+        accepted: bool,
+    },
+    /// Ask the authority to reclaim an eligible historical/unreferenced
+    /// resource for shared desktop pressure. Protected content is never removed
+    /// solely because a consumer requested it.
+    GraphicsPressure {
+        key: u64,
+    },
     Spawn {
         cwd: Option<PathBuf>,
         size: WinSize,
@@ -1020,7 +1113,21 @@ pub enum DaemonMsg {
     /// An authoritative pane-local graphics resource/placement update.
     /// [`crate::core::kitty_graphics::GraphicsUpdate`] carries compact metadata
     /// and unexpanded resource bytes outside terminal output and replay.
-    Graphics(Vec<u8>),
+    Graphics(GraphicsPacket),
+    /// A resource has not been accepted until every rendering consumer grants
+    /// its actual source/decode/GPU reservation. No pixel payload is sent here.
+    GraphicsOffer {
+        token: u64,
+        key: u64,
+        width: u32,
+        height: u32,
+        encoded_bytes: u64,
+        /// Zero-pixel offers reserve only this retained owner allocation.
+        metadata_bytes: u64,
+    },
+    GraphicsCancel {
+        token: u64,
+    },
     /// A completed OSC 5522 clipboard write. The daemon strips the control
     /// sequence from replay; the GUI decides whether it may touch the clipboard.
     ClipboardWrite(Vec<u8>),
@@ -1068,6 +1175,11 @@ mod kind {
     pub const INPUT: u8 = 3;
     pub const RESIZE: u8 = 4;
     pub const CLEAR_PRESENTATION: u8 = 63;
+    pub const GRAPHICS_CAPACITY: u8 = 64;
+    pub const GRAPHICS_GRANT: u8 = 65;
+    pub const GRAPHICS_OFFER: u8 = 66;
+    pub const GRAPHICS_CANCEL: u8 = 67;
+    pub const GRAPHICS_PRESSURE: u8 = 68;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1126,6 +1238,7 @@ mod kind {
     pub const GRAPHICS: u8 = 60;
     pub const CLIPBOARD_WRITE: u8 = 62;
 }
+
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
     let len = payload.len();
@@ -1190,6 +1303,10 @@ pub fn is_error_kind(kind: u8) -> bool {
     kind == kind::ERROR
 }
 
+pub fn is_graphics_admission_kind(kind: u8) -> bool {
+    kind == kind::GRAPHICS_OFFER || kind == kind::GRAPHICS_CANCEL
+}
+
 pub fn take_frame(buf: &mut Vec<u8>) -> io::Result<Option<(u8, Vec<u8>)>> {
     if buf.len() < HEADER {
         return Ok(None);
@@ -1205,6 +1322,15 @@ pub fn take_frame(buf: &mut Vec<u8>) -> io::Result<Option<(u8, Vec<u8>)>> {
         return Ok(None);
     }
     let kind = buf[4];
+    if kind == kind::GRAPHICS && len >= 64 << 10 {
+        // The receiving consumer already reserved this resource's incoming
+        // allocation. Transfer it instead of keeping a second large capacity
+        // in an otherwise idle reader after the payload has been consumed.
+        let mut payload = std::mem::take(buf);
+        *buf = payload.split_off(HEADER + len);
+        payload.drain(..HEADER);
+        return Ok(Some((kind, payload)));
+    }
     let payload = buf[HEADER..HEADER + len].to_vec();
     buf.drain(..HEADER + len);
     Ok(Some((kind, payload)))
@@ -1317,6 +1443,13 @@ impl ClientMsg {
             ClientMsg::Observe { pane_id, size } => {
                 write_frame(w, kind::OBSERVE, &to_json(&(pane_id, size))?)
             }
+            ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers } => {
+                write_frame(w, kind::GRAPHICS_CAPACITY, &to_json(&(encoded_bytes, decoded_bytes, offers))?)
+            }
+            ClientMsg::GraphicsGrant { token, accepted } => {
+                write_frame(w, kind::GRAPHICS_GRANT, &to_json(&(token, accepted))?)
+            }
+            ClientMsg::GraphicsPressure { key } => write_frame(w, kind::GRAPHICS_PRESSURE, &to_json(key)?),
             ClientMsg::Input(bytes) => write_frame(w, kind::INPUT, bytes),
             ClientMsg::ClearPresentation { history } => {
                 write_frame(w, kind::CLEAR_PRESENTATION, &to_json(history)?)
@@ -1457,6 +1590,15 @@ impl ClientMsg {
                 let (pane_id, size) = from_json(&payload)?;
                 ClientMsg::Observe { pane_id, size }
             }
+            kind::GRAPHICS_CAPACITY => {
+                let (encoded_bytes, decoded_bytes, offers) = from_json(&payload)?;
+                ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers }
+            }
+            kind::GRAPHICS_GRANT => {
+                let (token, accepted) = from_json(&payload)?;
+                ClientMsg::GraphicsGrant { token, accepted }
+            }
+            kind::GRAPHICS_PRESSURE => ClientMsg::GraphicsPressure { key: from_json(&payload)? },
             kind::INPUT => ClientMsg::Input(payload),
             kind::CLEAR_PRESENTATION => ClientMsg::ClearPresentation {
                 history: from_json(&payload)?,
@@ -1565,6 +1707,10 @@ impl DaemonMsg {
             DaemonMsg::Snapshot(bytes) => write_frame(w, kind::SNAPSHOT, bytes),
             DaemonMsg::Output(bytes) => write_frame(w, kind::OUTPUT, bytes),
             DaemonMsg::Graphics(frame) => write_frame(w, kind::GRAPHICS, frame),
+            DaemonMsg::GraphicsOffer { token, key, width, height, encoded_bytes, metadata_bytes } => {
+                write_frame(w, kind::GRAPHICS_OFFER, &to_json(&(token, key, width, height, encoded_bytes, metadata_bytes))?)
+            }
+            DaemonMsg::GraphicsCancel { token } => write_frame(w, kind::GRAPHICS_CANCEL, &to_json(token)?),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
@@ -1620,7 +1766,12 @@ impl DaemonMsg {
             kind::SIZE => DaemonMsg::Size(from_json(&payload)?),
             kind::SNAPSHOT => DaemonMsg::Snapshot(payload),
             kind::OUTPUT => DaemonMsg::Output(payload),
-            kind::GRAPHICS => DaemonMsg::Graphics(payload),
+            kind::GRAPHICS => DaemonMsg::Graphics(payload.into()),
+            kind::GRAPHICS_OFFER => {
+                let (token, key, width, height, encoded_bytes, metadata_bytes) = from_json(&payload)?;
+                DaemonMsg::GraphicsOffer { token, key, width, height, encoded_bytes, metadata_bytes }
+            }
+            kind::GRAPHICS_CANCEL => DaemonMsg::GraphicsCancel { token: from_json(&payload)? },
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {

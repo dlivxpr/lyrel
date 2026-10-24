@@ -136,7 +136,7 @@ fn graphics_assert_production_paint_at(
         drop(term);
         let images = graphics_visible_images(view);
         for image in &images {
-            let expected = images.iter().filter(|other| std::sync::Arc::ptr_eq(&image.data, &other.data)).any(|other| {
+            let expected = images.iter().filter(|other| std::sync::Arc::ptr_eq(&image.painted, &other.painted)).any(|other| {
                 let (crop, _) = other.paint_bounds(geom.origin, geom.cell_width, geom.line_height, 0, offset, scale);
                 let visible = crop.intersect(&viewport);
                 visible.size.width > px(0.) && visible.size.height > px(0.)
@@ -186,7 +186,7 @@ fn graphics_consumer_real_daemon_resize_keeps_clipped_texture_slice(cx: &mut Tes
             full,
             Bounds::new(point(px(0.), px(-20.)), gpui_kit::size(px(10.), px(100.)))
         );
-        assert_eq!(&images[0].data.as_bytes(0).unwrap()[..4], [0, 0, 255, 255]);
+        assert_eq!(&images[0].data.as_ref().unwrap().as_bytes(0).unwrap()[..4], [0, 0, 255, 255]);
     });
     graphics_assert_production_paint(window, &view, cx);
     graphics_send_fixture(&view, cx, 3, b"\x1b[24;1H\n\n\n\n");
@@ -300,7 +300,7 @@ fn graphics_consumer_real_daemon_anonymous_expiration_restores_admission(cx: &mu
         assert_eq!(images[0].placement.image_id, 2000);
         let (crop, _) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
         assert_eq!(crop.origin, point(px(10.), px(100.)));
-        assert_eq!(images[0].data.as_bytes(0).unwrap(), [0, 0, 255, 255]);
+        assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
     });
     graphics_assert_production_paint(window, &view, cx);
     daemon.panes().kill(pane).unwrap();

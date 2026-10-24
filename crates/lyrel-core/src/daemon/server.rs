@@ -9,9 +9,54 @@ use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion, RemoteKind};
 use crate::daemon::ssh::SshConnection;
 use crate::daemon::transport::{self, Stream};
 
+#[path = "graphics_session.rs"]
+mod graphics_session;
+
 struct Registry {
     panes: Mutex<HashMap<u64, Arc<DaemonPane>>>,
     next_id: AtomicU64,
+}
+
+/// A connection's declared capacity is a lifetime lease, not a mutable hint.
+/// This lock is acquired before a pane lock and is never acquired from a pane.
+struct GraphicsCapacityLease {
+    pane: Arc<DaemonPane>,
+    token: u64,
+}
+
+type GraphicsCapacities = HashMap<(u64, u64), (u64, u64)>;
+
+fn graphics_capacities() -> &'static Mutex<GraphicsCapacities> {
+    static CAPACITIES: std::sync::LazyLock<Mutex<GraphicsCapacities>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    &CAPACITIES
+}
+
+impl GraphicsCapacityLease {
+    fn reserve(pane: &Arc<DaemonPane>, capacity: (u64, u64), mut reply: &Stream) -> anyhow::Result<Option<Self>> {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let token = NEXT.fetch_add(1, Ordering::Relaxed);
+        let mut capacities = graphics_capacities().lock().unwrap();
+        let effective = capacities.iter().filter(|((id, _), _)| *id == pane.id)
+            .fold(capacity, |limit, (_, other)| (limit.0.min(other.0), limit.1.min(other.1)));
+        if !pane.set_graphics_capacity(effective.0, effective.1) {
+            DaemonMsg::Error("graphics capacity cannot hold this pane's retained images; existing session content was preserved".into()).encode(&mut reply)?;
+            return Ok(None);
+        }
+        capacities.insert((pane.id, token), capacity);
+        Ok(Some(Self { pane: pane.clone(), token }))
+    }
+}
+
+impl Drop for GraphicsCapacityLease {
+    fn drop(&mut self) {
+        let mut capacities = graphics_capacities().lock().unwrap();
+        capacities.remove(&(self.pane.id, self.token));
+        let effective = capacities.iter().filter(|((id, _), _)| *id == self.pane.id)
+            .fold((u64::MAX, u64::MAX), |limit, (_, other)| (limit.0.min(other.0), limit.1.min(other.1)));
+        // The authority clamps to its finite pane defaults after the last
+        // consumer leaves. Releasing a lease never revives evicted content.
+        let _ = self.pane.set_graphics_capacity(effective.0, effective.1);
+    }
 }
 
 impl Registry {
@@ -841,6 +886,23 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
     } else {
         false
     };
+    let mut graphics_capacity = None;
+    while let ClientMsg::GraphicsCapacity { encoded_bytes, decoded_bytes, offers } = first {
+        if !negotiated {
+            DaemonMsg::Error("pane protocol handshake required before graphics capacity".into()).encode(&mut &write_stream)?;
+            return Ok(());
+        }
+        graphics_capacity = Some((encoded_bytes, decoded_bytes, offers));
+        first = ClientMsg::read(&mut read_stream)?;
+    }
+    let graphics_offers = graphics_capacity.is_some_and(|capacity| capacity.2);
+    let graphics_capacity = graphics_capacity.map(|capacity| (capacity.0, capacity.1));
+    if matches!(&first, ClientMsg::Spawn { .. } | ClientMsg::SpawnNativeSsh { .. } | ClientMsg::Attach { .. } | ClientMsg::Observe { .. })
+        && negotiated && graphics_capacity.is_none()
+    {
+        DaemonMsg::Error("finite graphics capacity required before opening a pane session".into()).encode(&mut &write_stream)?;
+        return Ok(());
+    }
     if !negotiated
         && matches!(
             &first,
@@ -916,6 +978,10 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     return Err(e);
                 }
             };
+            let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else {
+                pane.kill();
+                return Ok(());
+            };
             log::info!("pane {id} spawned");
             publish_spawn(
                 pane,
@@ -924,6 +990,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 registry,
                 await_claim,
                 allow_remote_clipboard_write,
+                graphics_offers.then_some(_graphics_lease.token),
             )
         }
 
@@ -958,6 +1025,10 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     return Err(e);
                 }
             };
+            let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else {
+                pane.kill();
+                return Ok(());
+            };
             log::info!("pane {id} spawned");
             registry.insert(pane.clone());
             {
@@ -971,6 +1042,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 write_stream,
                 registry,
                 allow_remote_clipboard_write,
+                graphics_offers.then_some(_graphics_lease.token),
             )
         }
 
@@ -979,14 +1051,13 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             size: _,
             allow_remote_clipboard_write,
         } => match registry.get(pane_id) {
-            Some(pane) => stream_pane_with_attach(
-                pane,
-                pane_id,
-                read_stream,
-                write_stream,
-                registry,
-                allow_remote_clipboard_write,
-            ),
+            Some(pane) => {
+                let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else { return Ok(()); };
+                stream_pane_with_attach(
+                    pane, pane_id, read_stream, write_stream, registry,
+                    allow_remote_clipboard_write, graphics_offers.then_some(_graphics_lease.token),
+                )
+            }
             None => {
                 let mut w = write_stream;
                 DaemonMsg::Error(format!("no such pane {pane_id}")).encode(&mut w)?;
@@ -1000,7 +1071,10 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         // the field stays on the wire so a future observer-side viewport does
         // not need another message kind.
         ClientMsg::Observe { pane_id, size: _ } => match registry.get(pane_id) {
-            Some(pane) => stream_observer(pane, read_stream, write_stream),
+            Some(pane) => {
+                let Some(_graphics_lease) = GraphicsCapacityLease::reserve(&pane, graphics_capacity.unwrap(), &write_stream)? else { return Ok(()); };
+                stream_observer(pane, read_stream, write_stream, registry, graphics_offers.then_some(_graphics_lease.token))
+            }
             None => {
                 let mut w = write_stream;
                 DaemonMsg::Error(format!("no such pane {pane_id}")).encode(&mut w)?;
@@ -1313,6 +1387,7 @@ fn publish_spawn(
     registry: Arc<Registry>,
     await_claim: bool,
     allow_remote_clipboard_write: bool,
+    graphics_endpoint: Option<u64>,
 ) -> anyhow::Result<()> {
     let id = pane.id;
     let mut claim = UnclaimedSpawn {
@@ -1326,6 +1401,10 @@ fn publish_spawn(
             ClientMsg::Attach { pane_id, size, .. } if pane_id == id => pane.resize(size),
             _ => return Ok(()),
         }
+    }
+    if let Some(endpoint) = graphics_endpoint {
+        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, false,
+            allow_remote_clipboard_write, (!await_claim).then_some(DaemonMsg::Spawned { pane_id: id }), Some(claim));
     }
     // Attach the subscriber before publishing. If a short-lived child already
     // exited, replay still carries its final output/code, but it must not be
@@ -1352,7 +1431,11 @@ fn stream_pane_with_attach(
     write_stream: Stream,
     registry: Arc<Registry>,
     allow_remote_clipboard_write: bool,
+    graphics_endpoint: Option<u64>,
 ) -> anyhow::Result<()> {
+    if let Some(endpoint) = graphics_endpoint {
+        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, false, allow_remote_clipboard_write, None, None);
+    }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
@@ -1365,7 +1448,11 @@ fn stream_pane(
     write_stream: Stream,
     registry: Arc<Registry>,
     allow_remote_clipboard_write: bool,
+    graphics_endpoint: Option<u64>,
 ) -> anyhow::Result<()> {
+    if let Some(endpoint) = graphics_endpoint {
+        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, false, allow_remote_clipboard_write, None, None);
+    }
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let epoch = pane.attach_with_permissions(tx, allow_remote_clipboard_write);
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
@@ -1375,7 +1462,12 @@ fn stream_observer(
     pane: Arc<DaemonPane>,
     mut read_stream: Stream,
     write_stream: Stream,
+    registry: Arc<Registry>,
+    graphics_endpoint: Option<u64>,
 ) -> anyhow::Result<()> {
+    if let Some(endpoint) = graphics_endpoint {
+        return graphics_session::run(pane, read_stream, write_stream, registry, endpoint, true, false, None, None);
+    }
     // The pane holds the channel's only sender, and refusals go through it,
     // so an observer the pane drops at its budget loses its stream: the writer
     // runs dry and shuts the read below down, rather than the client sitting
@@ -1997,6 +2089,7 @@ mod spawn_claim_tests {
                         registry,
                         true,
                         false,
+                        None,
                     )
                 })
             };
@@ -2042,6 +2135,7 @@ mod spawn_claim_tests {
                     registry,
                     true,
                     false,
+                    None,
                 )
             })
         };
@@ -2078,6 +2172,7 @@ mod spawn_claim_tests {
                     registry,
                     true,
                     false,
+                    None,
                 )
             })
         };
@@ -2153,6 +2248,7 @@ mod spawn_claim_tests {
                 registry_task,
                 true,
                 false,
+                None,
             )
         });
         assert_eq!(

@@ -2557,6 +2557,7 @@ mod kitty_graphics {
     struct Consumer {
         session: lyrel_core::client::PaneSession,
         resources: BTreeMap<u64, Arc<Image>>,
+        evicted: BTreeMap<u64, (u32, u32)>,
         placements: BTreeMap<u64, Placement>,
         serial: usize,
         updates: Vec<GraphicsUpdate>,
@@ -2588,6 +2589,7 @@ mod kitty_graphics {
             Self {
                 session,
                 resources: BTreeMap::new(),
+                evicted: BTreeMap::new(),
                 placements: BTreeMap::new(),
                 serial: 0,
                 updates: Vec::new(),
@@ -2606,8 +2608,12 @@ mod kitty_graphics {
                     );
                     self.resources.insert(*key, image.clone());
                 }
+                GraphicsUpdate::Evicted { key, width, height } => {
+                    self.resources.remove(key);
+                    self.evicted.insert(*key, (*width, *height));
+                }
                 GraphicsUpdate::Place(placement) => {
-                    assert!(self.resources.contains_key(&placement.resource));
+                    assert!(self.resources.contains_key(&placement.resource) || self.evicted.contains_key(&placement.resource));
                     self.placements.insert(placement.key, placement.clone());
                 }
                 GraphicsUpdate::Screen {
@@ -2626,11 +2632,12 @@ mod kitty_graphics {
                     }
                     for key in resources {
                         self.resources.remove(key);
+                        self.evicted.remove(key);
                     }
                     assert!(
                         self.placements
                             .values()
-                            .all(|p| self.resources.contains_key(&p.resource))
+                            .all(|p| self.resources.contains_key(&p.resource) || self.evicted.contains_key(&p.resource))
                     );
                 }
             }
@@ -2661,7 +2668,7 @@ mod kitty_graphics {
                 match self.session.recv().expect("ordered daemon graphics stream") {
                     DaemonMsg::Graphics(frame) => {
                         self.apply(
-                            GraphicsUpdate::decode_frame_owned(frame)
+                            GraphicsUpdate::decode_frame_owned(frame.into_vec())
                                 .expect("valid graphics update"),
                         );
                     }
@@ -3080,12 +3087,13 @@ mod kitty_graphics {
         pane.red("a=T,i=1,p=1,C=1");
         let current = pane.placements.values().next().unwrap().clone();
         // Exercise the published 1,024-resource ceiling through the real PTY,
-        // in bounded batches rather than a test-only configurable state.
+        // Protect every accepted resource with a visible placement. Merely
+        // uploaded unreferenced images are now reclaimed before refusing data.
         for start in (2..=1024).step_by(64) {
             let mut upload = String::new();
             for id in start..=(start + 63).min(1024) {
                 use std::fmt::Write as _;
-                write!(upload, "\x1b_Ga=t,i={id},f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").unwrap();
+                write!(upload, "\x1b_Ga=T,i={id},C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").unwrap();
             }
             assert!(pane.send(upload.as_bytes(), 0).is_empty());
         }
@@ -3095,7 +3103,7 @@ mod kitty_graphics {
         assert_eq!(pane.pixel(&current), [255, 0, 0, 255]);
         let missing = pane.send(b"\x1b_Ga=p,i=2000,p=8,C=1\x1b\\", 1);
         assert!(missing[0].starts_with(b"\x1b_Gi=2000,p=8;ENOENT:"));
-        // An uppercase resource delete frees capacity even without a placement.
+        // Explicit deletion releases that image and its visible placement.
         pane.command("a=d,d=I,i=2");
         let accepted = pane.send(b"\x1b_Ga=t,i=2000,f=32,s=1,v=1;/wAA/w==\x1b\\", 1);
         assert_eq!(accepted, [b"\x1b_Gi=2000;OK\x1b\\".to_vec()]);
@@ -3582,7 +3590,7 @@ mod kitty_graphics {
             b"subsequent_input_and_text_survive"
         ));
         let oversized = pane.exchange("FLOOD", "00", 1, 0);
-        assert!(oversized[0].starts_with(b"\x1b_Gi=720;EINVAL:"));
+        assert!(oversized[0].starts_with(b"\x1b_Gi=720;ENOSPC:"));
         assert!(windows_contain(&pane.last_output, b"after_oversize"));
         pane.red("a=T,i=721,C=1");
         assert_eq!(
