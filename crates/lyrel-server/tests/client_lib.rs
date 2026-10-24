@@ -3387,8 +3387,17 @@ mod kitty_graphics {
             }
         }
         second.command("a=p,i=9,C=1");
-        assert_eq!(second.resources[&retained_key].to_rgba8().unwrap(), [0, 255, 0, 255], "without retransmission, replay restores the same pane-scoped resource identity and pixels");
-        assert!(second.placements.values().all(|placement| placement.resource == retained_key));
+        assert_eq!(
+            second.resources[&retained_key].to_rgba8().unwrap(),
+            [0, 255, 0, 255],
+            "without retransmission, replay restores the same pane-scoped resource identity and pixels"
+        );
+        assert!(
+            second
+                .placements
+                .values()
+                .all(|placement| placement.resource == retained_key)
+        );
         assert!(
             second
                 .placements

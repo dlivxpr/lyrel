@@ -218,7 +218,14 @@ impl Consumer {
     fn finish_exchange(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
         let marker = format!("KITTY_DONE_{}\r", self.serial);
         loop {
-            match self.session.recv().unwrap_or_else(|error| panic!("pane {} exchange {} failed for {:?}: {error}", self.session.pane_id(), self.serial, String::from_utf8_lossy(&bytes[..bytes.len().min(160)]))) {
+            match self.session.recv().unwrap_or_else(|error| {
+                panic!(
+                    "pane {} exchange {} failed for {:?}: {error}",
+                    self.session.pane_id(),
+                    self.serial,
+                    String::from_utf8_lossy(&bytes[..bytes.len().min(160)])
+                )
+            }) {
                 DaemonMsg::Graphics(frame) => self
                     .updates
                     .push(GraphicsUpdate::decode_frame_owned(frame.into_vec()).unwrap()),
@@ -244,9 +251,16 @@ impl Consumer {
     }
     fn exit(&mut self) {
         self.serial += 1;
-        self.session.input(format!("EXIT {} 0 00 0\n", self.serial).as_bytes()).unwrap();
+        self.session
+            .input(format!("EXIT {} 0 00 0\n", self.serial).as_bytes())
+            .unwrap();
         loop {
-            if matches!(self.session.recv().expect("the real child must report its ordered exit"), DaemonMsg::Exited { .. }) {
+            if matches!(
+                self.session
+                    .recv()
+                    .expect("the real child must report its ordered exit"),
+                DaemonMsg::Exited { .. }
+            ) {
                 break;
             }
         }
@@ -329,7 +343,16 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
     // PTY barrier completes, new input cannot be mistaken for that response.
     // Retain both phases so the fresh marker also fences all graphics replay.
     a.serial += 1;
-    a.session.input(format!("SEND {} 0 {} 0\n", a.serial, fixture::hex(b"reconnected_shell")).as_bytes()).unwrap();
+    a.session
+        .input(
+            format!(
+                "SEND {} 0 {} 0\n",
+                a.serial,
+                fixture::hex(b"reconnected_shell")
+            )
+            .as_bytes(),
+        )
+        .unwrap();
     let detached_reply = a.finish_exchange(b"reconnected_shell");
     assert!(
         detached_reply

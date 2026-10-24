@@ -733,14 +733,23 @@ pub(super) struct GraphicsViewportReporter {
     term: std::sync::Weak<FairMutex<Crosswords<EventProxy>>>,
     images: crate::terminal::images::ImageStore,
     displayed: Arc<AtomicBool>,
-    link: Arc<Mutex<(LinkSender, Option<crate::daemon::protocol::GraphicsViewport>)>>,
+    link: Arc<
+        Mutex<(
+            LinkSender,
+            Option<crate::daemon::protocol::GraphicsViewport>,
+        )>,
+    >,
 }
 
 impl GraphicsViewportReporter {
-    pub(super) fn displayed(&self) -> Arc<AtomicBool> { self.displayed.clone() }
+    pub(super) fn displayed(&self) -> Arc<AtomicBool> {
+        self.displayed.clone()
+    }
 
     pub(super) fn set_displayed(&self, on: bool) {
-        if self.displayed.swap(on, Ordering::Relaxed) == on { return; }
+        if self.displayed.swap(on, Ordering::Relaxed) == on {
+            return;
+        }
         if !on {
             let mut link = self.link.lock().unwrap();
             if let Some(mut viewport) = link.1 {
@@ -754,10 +763,22 @@ impl GraphicsViewportReporter {
     }
 
     pub(super) fn report(&self) {
-        let Some(term) = self.term.upgrade() else { return; };
-        let Some(term) = term.try_lock() else { return; };
+        let Some(term) = self.term.upgrade() else {
+            return;
+        };
+        let Some(term) = term.try_lock() else {
+            return;
+        };
         let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
-        let Some(viewport) = self.images.viewport(origin, term.display_offset(), term.screen_lines(), term.columns(), self.displayed.load(Ordering::Relaxed)) else { return; };
+        let Some(viewport) = self.images.viewport(
+            origin,
+            term.display_offset(),
+            term.screen_lines(),
+            term.columns(),
+            self.displayed.load(Ordering::Relaxed),
+        ) else {
+            return;
+        };
         // Keep grid -> store -> link ordering. Enqueue before releasing the
         // grid so a later user Input cannot overtake the viewport it observes.
         let mut link = self.link.lock().unwrap();
@@ -1532,13 +1553,23 @@ impl RemoteTerminal {
                 let offset = term.display_offset() as i32;
                 let rows: Vec<_> = (0..term.screen_lines())
                     .filter_map(|row| {
-                        let slices = placeholder_row(&term.grid, rio_vt::crosswords::pos::Line(row as i32 - offset));
+                        let slices = placeholder_row(
+                            &term.grid,
+                            rio_vt::crosswords::pos::Line(row as i32 - offset),
+                        );
                         (!slices.is_empty()).then_some((row as i32, slices))
                     })
                     .collect();
                 let displayed = pressure_displayed.load(Ordering::Relaxed);
                 let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
-                store.oldest_reclaimable(term.screen_lines(), term.columns(), origin, offset as usize, displayed, &rows)
+                store.oldest_reclaimable(
+                    term.screen_lines(),
+                    term.columns(),
+                    origin,
+                    offset as usize,
+                    displayed,
+                    &rows,
+                )
             },
             move |key| pressure_writer.send(ClientMsg::GraphicsPressure { key }),
         );
