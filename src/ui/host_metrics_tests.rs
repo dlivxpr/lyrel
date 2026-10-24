@@ -359,11 +359,14 @@ fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(
             MetricsSource::Remote(host) => HostLinks::insert(cx, host.clone(), host.home()),
         };
         cx.update(|cx| install(&source, cx));
-        let query = source.clone();
-        let snapshot = std::thread::spawn(move || query.sample().unwrap())
-            .join()
-            .unwrap();
-        // Complete the old request only after its control route was replaced.
+        // 此用例验证连接替换后的结果优先级，不依赖实时 OS 采样的耗时。
+        let snapshot: HostMetrics = serde_json::from_value(serde_json::json!({
+            "hostname": "metrics-completion-test",
+            "instance": source.instance(),
+            "state": "waiting",
+        }))
+        .unwrap();
+        // Deliver the old result only after its control route was replaced.
         // Both real connections reach the same server process, not the same Arc.
         assert_eq!(source.instance(), replacement.instance());
         cx.update(|cx| install(&replacement, cx));
