@@ -246,8 +246,8 @@ struct ReaderSignals {
     auth: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     phase: Arc<Mutex<Option<SshPhase>>>,
     /// Kitty-graphics images the daemon lifted out of the stream (issue #213),
-    /// anchored to the grid for the paint path to blit. Shared with the reader,
-    /// which places/deletes them as `DaemonMsg::Image`/`DeleteImage` frames land.
+    /// anchored to the grid for the paint path to blit. The reader applies
+    /// daemon-owned resource/placement updates in stream order.
     images: crate::terminal::images::ImageStore,
     clipboard_writes: Arc<Mutex<VecDeque<lyrel_core::core::clipboard::ClipboardWrite>>>,
     osc_notes: OscNotes,
@@ -1439,13 +1439,9 @@ impl RemoteTerminal {
                 // is a modes Snapshot plus one per ring segment.
                 let mut report_scheme = false;
                 let mut pending: Vec<u8> = buffered;
-                // Kitty-graphics decode runs on its own thread with newest-frame
-                // coalescing (issue #213): inflating a full-window browser frame
-                // is ~42 ms, and doing it inline here would block PTY output and
-                // scrolling for that long every frame. The worker owns the inflate
-                // + BGRA swap + placement; the reader only captures the grid
-                // anchor and hands off the still-compressed frame. Dropped when
-                // the loop ends, which joins the thread.
+                // A single worker decodes each retained resource version once.
+                // Placement anchors are captured here in stream order, never
+                // after an asynchronous decode has moved the cursor.
                 let image_decoder = {
                     let proxy = proxy.clone();
                     crate::terminal::images::DecodeWorker::spawn(images.clone(), move || {
@@ -1756,63 +1752,25 @@ impl RemoteTerminal {
                                 out_batch.extend_from_slice(&bytes);
                                 tr_frames += 1;
                             }
-                            // Kitty graphics (issue #213): the daemon lifted an
-                            // image out of the stream and forwarded it out-of-band,
-                            // interleaved *in stream order* with the Output frames
-                            // around it. Flush the pending text first so the grid
-                            // cursor sits where the sender drew the image, then
-                            // anchor the placement to that cell in scroll-stable
-                            // absolute-row coordinates (`history_size -
-                            // display_offset + cursor_line`), so it tracks
-                            // scrolling.
-                            DaemonMsg::Image(frame) => {
+                            DaemonMsg::Graphics(frame) => {
                                 flush_batch!();
-                                if let Some(img) =
-                                    lyrel_core::core::kitty_graphics::Image::decode_frame_owned(
-                                        frame,
-                                    )
+                                if let Some(update) =
+                                    lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame_owned(frame)
                                 {
-                                    // Capture the anchor *now*, at the cursor cell
-                                    // the transmission arrived on; the decode is
-                                    // deferred to the worker thread but must land
-                                    // at this position, not wherever the cursor has
-                                    // scrolled to by the time inflate finishes.
-                                    let (anchor_row, anchor_col) = {
+                                    let (row, col) = if matches!(update,
+                                        lyrel_core::core::kitty_graphics::GraphicsUpdate::Place(_))
+                                    {
                                         use rio_vt::crosswords::grid::Dimensions as _;
                                         let term = term.lock();
-                                        if quit.load(Ordering::SeqCst) {
-                                            return;
-                                        }
+                                        if quit.load(Ordering::SeqCst) { return; }
                                         let grid = &term.grid;
-                                        let row = grid.history_size() as i64
-                                            - grid.display_offset() as i64
-                                            + i64::from(grid.cursor.pos.row.0);
-                                        (row, grid.cursor.pos.col.0)
-                                    };
-                                    // Hand off without blocking the reader: the
-                                    // worker inflates, swaps, places, and wakes the
-                                    // view. Stale frames coalesce away there.
-                                    image_decoder.submit(
-                                        crate::terminal::images::PendingFrame {
-                                            img,
-                                            anchor_row,
-                                            anchor_col,
-                                        },
-                                    );
-                                }
-                            }
-                            // An `a=d` delete, lifted out the same way. Order with
-                            // the surrounding output does not matter for a delete
-                            // (it targets by id/placement, not cursor position),
-                            // but flushing keeps a delete-then-retransmit in the
-                            // same read from racing its own replacement.
-                            DaemonMsg::DeleteImage(sel) => {
-                                flush_batch!();
-                                if let Some(del) =
-                                    lyrel_core::core::kitty_graphics::ImageDelete::decode(&sel)
-                                {
-                                    image_decoder.delete(&del);
-                                    proxy.send(PaneEvent::Wakeup);
+                                        (grid.history_size() as i64
+                                            + i64::from(grid.cursor.pos.row.0),
+                                            grid.cursor.pos.col.0)
+                                    } else { (0, 0) };
+                                    if image_decoder.apply(update, row, col) {
+                                        proxy.send(PaneEvent::Wakeup);
+                                    }
                                 }
                             }
                             DaemonMsg::ClipboardWrite(frame) => {
@@ -4373,7 +4331,7 @@ mod replay_tests {
         let forward = std::thread::spawn(move || {
             while let Ok(msg) = rx.recv() {
                 let drained = match &msg {
-                    DaemonMsg::Output(b) | DaemonMsg::Image(b) => b.len(),
+                    DaemonMsg::Output(b) | DaemonMsg::Graphics(b) => b.len(),
                     _ => 0,
                 };
                 let ok = msg.encode(&mut daemon_write).is_ok();
