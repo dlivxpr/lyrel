@@ -14,7 +14,7 @@ use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
 use lyrel_core::core::kitty_graphics::{
-    GraphicsUpdate, Image, Placement, PlaceholderSlice, WireFormat, placeholder_prototype,
+    GraphicsUpdate, Image, PlaceholderSlice, Placement, WireFormat, placeholder_prototype,
 };
 
 #[derive(Clone)]
@@ -52,21 +52,34 @@ impl RenderPlacement {
         let placement = &self.placement;
         if let Some((row, slice)) = &self.placeholder {
             let geometry = rio_vt::ansi::kitty_virtual::compute_run_geometry(
-                &slice.run, placement.span_cols, placement.span_rows,
-                self.width_px, self.height_px,
+                &slice.run,
+                placement.span_cols,
+                placement.span_rows,
+                self.width_px,
+                self.height_px,
                 (placement.x, placement.y, placement.w, placement.h),
-                cell_width.as_f32(), line_height.as_f32(),
-                origin.x.as_f32(), origin.y.as_f32() + *row as f32 * line_height.as_f32(), 0, slice.column,
+                cell_width.as_f32(),
+                line_height.as_f32(),
+                origin.x.as_f32(),
+                origin.y.as_f32() + *row as f32 * line_height.as_f32(),
+                0,
+                slice.column,
             );
             let Some(geometry) = geometry else {
                 let empty = Bounds::new(origin, size(px(0.), px(0.)));
                 return (empty, empty);
             };
-            let crop = Bounds::new(point(px(geometry.x), px(geometry.y)), size(px(geometry.width), px(geometry.height)));
+            let crop = Bounds::new(
+                point(px(geometry.x), px(geometry.y)),
+                size(px(geometry.width), px(geometry.height)),
+            );
             let [u0, v0, u1, v1] = geometry.source_rect;
             let width = geometry.width / (u1 - u0);
             let height = geometry.height / (v1 - v0);
-            let full = Bounds::new(point(px(geometry.x - u0 * width), px(geometry.y - v0 * height)), size(px(width), px(height)));
+            let full = Bounds::new(
+                point(px(geometry.x - u0 * width), px(geometry.y - v0 * height)),
+                size(px(width), px(height)),
+            );
             return (crop, full);
         }
         let row = self.anchor_row - self.history_origin + display_offset as i64;
@@ -172,30 +185,54 @@ impl ImageStore {
 
     /// Runs are derived from the same locked grid snapshot as terminal text.
     /// A prototype itself never appears in the display list.
-    pub fn snapshot_with_placeholders(&self, rows: &[(i32, Vec<PlaceholderSlice>)]) -> Vec<RenderPlacement> {
+    pub fn snapshot_with_placeholders(
+        &self,
+        rows: &[(i32, Vec<PlaceholderSlice>)],
+    ) -> Vec<RenderPlacement> {
         let inner = self.0.state.lock().unwrap();
         let render = |anchored: &AnchoredPlacement, placeholder| {
-            let decoded = inner.resources.get(&anchored.placement.resource)?.decoded.as_ref()?;
+            let decoded = inner
+                .resources
+                .get(&anchored.placement.resource)?
+                .decoded
+                .as_ref()?;
             Some(RenderPlacement {
-                data: decoded.data.clone(), painted: decoded.painted.clone(),
+                data: decoded.data.clone(),
+                painted: decoded.painted.clone(),
                 placement: anchored.placement.clone(),
                 anchor_row: anchored.placement.anchor_row,
                 anchor_col: anchored.placement.anchor_col as usize,
-                width_px: decoded.width, height_px: decoded.height,
-                revision: anchored.revision, history_origin: inner.history_origin,
+                width_px: decoded.width,
+                height_px: decoded.height,
+                revision: anchored.revision,
+                history_origin: inner.history_origin,
                 placeholder,
             })
         };
-        let mut images: Vec<_> = inner.placements.values()
-            .filter(|anchored| anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement)
-            .filter_map(|anchored| render(anchored, None)).collect();
+        let mut images: Vec<_> = inner
+            .placements
+            .values()
+            .filter(|anchored| {
+                anchored.placement.screen == inner.screen && !anchored.placement.virtual_placement
+            })
+            .filter_map(|anchored| render(anchored, None))
+            .collect();
         for (row, slices) in rows {
             for slice in slices {
-                let Some(prototype) = placeholder_prototype(inner.placements.values().map(|p| &p.placement), inner.screen, &slice.run) else { continue; };
-                if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols { continue; }
+                let Some(prototype) = placeholder_prototype(
+                    inner.placements.values().map(|p| &p.placement),
+                    inner.screen,
+                    &slice.run,
+                ) else {
+                    continue;
+                };
+                if slice.run.row >= prototype.span_rows || slice.run.col >= prototype.span_cols {
+                    continue;
+                }
                 let mut slice = slice.clone();
                 slice.run.width = slice.run.width.min(prototype.span_cols - slice.run.col);
-                if let Some(image) = render(&inner.placements[&prototype.key], Some((*row, slice))) {
+                if let Some(image) = render(&inner.placements[&prototype.key], Some((*row, slice)))
+                {
                     images.push(image);
                 }
             }

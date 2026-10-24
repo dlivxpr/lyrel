@@ -2541,7 +2541,10 @@ mod kitty_graphics {
     use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement};
 
     mod fixture {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support/kitty_pty.rs"));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/kitty_pty.rs"
+        ));
     }
     use fixture::{hex, unhex};
 
@@ -2550,7 +2553,6 @@ mod kitty_graphics {
     fn pty_sender() {
         fixture::pty_sender();
     }
-
 
     struct Consumer {
         session: lyrel_core::client::PaneSession,
@@ -2721,13 +2723,28 @@ mod kitty_graphics {
         let prototype = pane.placements.values().next().unwrap().clone();
         assert!(prototype.virtual_placement);
         pane.command("a=p,i=7,p=3,c=2,r=1,C=1");
-        let direct = pane.placements.values().find(|p| !p.virtual_placement).unwrap().clone();
+        let direct = pane
+            .placements
+            .values()
+            .find(|p| !p.virtual_placement)
+            .unwrap()
+            .clone();
         assert_eq!(prototype.resource, direct.resource);
-        assert_eq!((direct.anchor_row, direct.anchor_col), (3, 4), "U=1 does not move the cursor");
+        assert_eq!(
+            (direct.anchor_row, direct.anchor_col),
+            (3, 4),
+            "U=1 does not move the cursor"
+        );
         pane.command("a=d,d=A");
-        assert_eq!(pane.placements.values().cloned().collect::<Vec<_>>(), [prototype.clone()]);
+        assert_eq!(
+            pane.placements.values().cloned().collect::<Vec<_>>(),
+            [prototype.clone()]
+        );
         assert_eq!(pane.pixel(&prototype), [255, 0, 0, 255]);
-        pane.send("\x1b[38;5;7m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes(), 0);
+        pane.send(
+            "\x1b[38;5;7m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes(),
+            0,
+        );
         pane.command("a=d,d=i,i=7,p=2");
         assert!(pane.placements.is_empty());
         pane.command("a=p,i=7,p=4,U=1,c=4,r=2");

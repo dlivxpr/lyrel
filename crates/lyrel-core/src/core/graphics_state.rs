@@ -596,7 +596,9 @@ impl GraphicsState {
         let mut removed = Vec::new();
         self.placements.retain(|key, p| {
             let p = &p.placement;
-            if p.screen != self.screen || (p.virtual_placement && !matches!(target, b'i' | b'n' | b'r')) {
+            if p.screen != self.screen
+                || (p.virtual_placement && !matches!(target, b'i' | b'n' | b'r'))
+            {
                 return true;
             }
             let row = if target == b'c' {

@@ -114,7 +114,7 @@ GPUI 测试窗口当前没有配置 `HeadlessRenderer`，不能读取最终 GPU 
 - 前景色编码图片 ID 低 24 位（indexed 模式使用色槽编号，true-color 模式使用 RGB 数值），第三个 diacritic 编码高 8 位；下划线颜色编码放置 ID，缺省或零时确定性选择该图片最小的虚拟放置 ID。首／次 diacritic 分别编码源行／列，按 Kitty 的三条左至右规则继承缺省坐标与高位；颜色属性变化、非连续显式坐标或普通文本会中断相关继承。无效 diacritic、缺失资源或放置不产生图片像素，PUA 字符及其组合符不进入普通字形绘制。
 - 真正显示的切片由真实 Rio 单元控制：文字插入、删除、擦除、区域滚动、历史截断、列重排及主备屏切换同步改变图片，最终仍受窗格裁切。虚拟 prototype 没有物理位置，只受 `d=i/I/n/N/r/R` 删除；`d=a/c/p/q/x/y/z` 及其大写形式仅影响直接放置，不删除占位符 prototype。普通文字擦除可消除占位符显示而保留 prototype，后续输出匹配单元可再次显示。
 - daemon 的资源引用查询与桌面视口使用共享行投影及 prototype 解析，不维护第二套占位符身份规则。桌面只投影当前 viewport 的真实行；隐藏窗格继续保留既有通知门控。当前 4,096 次放置上限合计计算直接放置和虚拟 prototype，不按显示单元扩增资源数。
-- 新增共享确定性 PTY fixture 的真实独立 daemon → `RemoteTerminal` → rooted `TerminalView`／production decoder／paint 回归，覆盖身份、继承、源切片、混合路径、单元擦除／移动和屏幕切换；实现阶段按要求未运行构建或测试，交由集成验证。测试窗口仍无 `HeadlessRenderer`，绘制 claim 不是最终 GPU 像素。Windows/macOS 原生窗口、正式 omp、真实 SSH→Linux 及重连恢复保持各自未验收边界；实现占位符不构成 tmux/screen 中转兼容承诺。
+- 共享确定性 PTY fixture 的真实独立 daemon → `RemoteTerminal` → rooted `TerminalView`／production decoder／paint 回归已在 Windows 集成分支通过，覆盖身份、继承、源切片、混合路径、单元擦除／移动和屏幕切换；真实 daemon 图片回归 14 项、GPUI graphics consumer 回归 7 项及 viewport 字形清理回归均通过。另以独立 CLI／ConPTY 发送器验证查询、仅上传、virtual prototype、单元输出、删除 prototype 后复用资源直接放置、删除资源后 `ENOENT` 及后续普通文字，发送器／CLI／临时 daemon 均正常退出。测试窗口仍无 `HeadlessRenderer`，绘制 claim 不是最终 GPU 像素。Windows/macOS 原生窗口、正式 omp、真实 SSH→Linux 及重连恢复保持各自未验收边界；实现占位符不构成 tmux/screen 中转兼容承诺。
 
 
 

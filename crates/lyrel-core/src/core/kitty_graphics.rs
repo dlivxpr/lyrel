@@ -34,7 +34,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
 pub use super::graphics_state::{
-    GraphicsEffect, GraphicsState, GraphicsUpdate, Placement, PlaceholderSlice,
+    GraphicsEffect, GraphicsState, GraphicsUpdate, PlaceholderSlice, Placement,
     placeholder_prototype, placeholder_row,
 };
 

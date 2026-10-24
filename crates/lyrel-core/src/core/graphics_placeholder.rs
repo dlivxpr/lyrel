@@ -31,17 +31,20 @@ pub fn placeholder_row(grid: &Grid<Square>, line: Line) -> Vec<PlaceholderSlice>
             previous = None;
             continue;
         }
-        let marks = cell.extras_id_checked()
+        let marks = cell
+            .extras_id_checked()
             .and_then(|id| grid.extras_table.get(id))
             .map(|extra| extra.zerowidth.as_slice())
             .unwrap_or(&[]);
         let mut decoded = IncompletePlacement::from_cell(style.fg, style.underline_color, marks);
         // Malformed marks are not omitted coordinates. In particular an invalid
         // high byte must not alias the low-24-bit image or inherit real pixels.
-        if marks.len() > 3 || marks.iter().enumerate().any(|(index, mark)| {
-            rio_vt::ansi::kitty_virtual::diacritic_to_index(*mark)
-                .is_none_or(|value| index == 2 && value > 255)
-        }) {
+        if marks.len() > 3
+            || marks.iter().enumerate().any(|(index, mark)| {
+                rio_vt::ansi::kitty_virtual::diacritic_to_index(*mark)
+                    .is_none_or(|value| index == 2 && value > 255)
+            })
+        {
             previous = None;
             continue;
         }
@@ -91,9 +94,13 @@ pub fn placeholder_prototype<'a>(
     screen: u64,
     run: &PlaceholderRun,
 ) -> Option<&'a Placement> {
-    placements.filter(|placement| {
-        placement.virtual_placement && placement.screen == screen
-            && run.image_id != 0 && placement.image_id == run.image_id
-            && (run.placement_id == 0 || run.placement_id == placement.placement_id)
-    }).min_by_key(|placement| (placement.placement_id, placement.key))
+    placements
+        .filter(|placement| {
+            placement.virtual_placement
+                && placement.screen == screen
+                && run.image_id != 0
+                && placement.image_id == run.image_id
+                && (run.placement_id == 0 || run.placement_id == placement.placement_id)
+        })
+        .min_by_key(|placement| (placement.placement_id, placement.key))
 }
