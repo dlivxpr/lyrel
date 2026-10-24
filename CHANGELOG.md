@@ -35,6 +35,7 @@
 
 - 修正 #44 真实 daemon 回归的同步边界：重连接收同时处理 Snapshot 与实时 Output，等待旧请求的 PTY 屏障后再发下一条输入，避免把新命令吞入尚未完成的应答；资源释放通过真实子进程 EXIT／有序 Exited 观察，不再等待主动 kill 路径刻意抑制的退出通知。保留元数据原子拒收、迟到 grant 取消及回收顺序断言，未扩大时限或预算；修复后的运行结果由集成验证另行记录。
 - server 的 pane 隔离／quiet 回归在重连时重建派生接收状态，并核验 daemon 恢复原资源身份与像素；保留单连接内重复 Resource 的唯一性断言，不把合法 replay 当作资源 key 重用，也不放宽隔离与应答语义。
+- 共享真实 PTY 夹具给 `KITTY_REPLY` 文本记录附加原请求 serial，core／server 消费者只将对应记录归为本次应答；完整 Snapshot 仍作为历史消费，quiet 的空应答断言不会被旧回复文本污染，失败时保留实际 unexpected bytes。
 - x86_64 musl 的 CI 与 Release C++ 构建统一使用上游 `SIMDUTF_IMPLEMENTATION_ICELAKE=0` 配置，避开正式 `simdutf 0.7.0` 可选 Ice Lake backend 的 `evex512` 编译错误；保留 Zig `0.16.0` 与 AVX2／SSE／scalar 运行时分派，不修改第三方源码或提高远端 CPU 要求。
 
 - 工作台标题栏的文档输入回归在操作前有界等待真实 Host 文件加载完成，避免将 GPUI 队列空闲误判为 I/O 已完成而在 macOS CI 偶发失败；保留侧栏切换、文档／终端焦点及按键隔离断言，不修改生产行为。

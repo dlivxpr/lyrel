@@ -236,10 +236,13 @@ impl Consumer {
                 _ => {}
             }
         }
-        String::from_utf8(self.text.clone())
+        // Snapshot is real terminal history, including older request logs.
+        // Only this request's tagged transcript is a fresh protocol response.
+        let prefix = format!("KITTY_REPLY {} ", self.serial);
+        std::str::from_utf8(&self.text)
             .unwrap()
             .lines()
-            .filter_map(|line| line.trim().strip_prefix("KITTY_REPLY ").map(fixture::unhex))
+            .filter_map(|line| line.trim().strip_prefix(prefix.as_str()).map(fixture::unhex))
             .collect()
     }
     fn exit(&mut self) {
@@ -270,7 +273,8 @@ impl Consumer {
             .expect("accepted source")
     }
     fn idle(&mut self, bytes: &[u8]) {
-        assert!(self.exchange(bytes, 0).is_empty());
+        let replies = self.exchange(bytes, 0);
+        assert!(replies.is_empty(), "quiet request {} received unexpected replies: {replies:?}", self.serial);
     }
     fn eviction(&mut self) -> GraphicsUpdate {
         loop {
@@ -324,13 +328,13 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
     a.updates.clear();
     a.text.clear();
     a.serial = 1000;
-    a.finish_exchange(b"detached i=99 transfer");
+    let detached_reply = a.finish_exchange(b"detached i=99 transfer");
     // The old response may be in Snapshot or still arriving live. Once its
     // PTY barrier completes, new input cannot be mistaken for that response.
     // Retain both phases so the fresh marker also fences all graphics replay.
     a.serial += 1;
     a.session.input(format!("SEND {} 0 {} 0\n", a.serial, fixture::hex(b"reconnected_shell")).as_bytes()).unwrap();
-    let detached_reply = a.finish_exchange(b"reconnected_shell");
+    assert!(a.finish_exchange(b"reconnected_shell").is_empty());
     assert!(
         detached_reply
             .iter()

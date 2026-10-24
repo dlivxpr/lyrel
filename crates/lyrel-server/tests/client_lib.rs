@@ -2691,11 +2691,12 @@ mod kitty_graphics {
                     _ => {}
                 }
             }
-            self.last_output = plain.clone();
-            String::from_utf8(plain)
+            self.last_output = plain;
+            let prefix = format!("KITTY_REPLY {} ", self.serial);
+            std::str::from_utf8(&self.last_output)
                 .unwrap()
                 .lines()
-                .filter_map(|line| line.trim().strip_prefix("KITTY_REPLY ").map(unhex))
+                .filter_map(|line| line.trim().strip_prefix(prefix.as_str()).map(unhex))
                 .collect()
         }
 

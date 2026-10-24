@@ -120,7 +120,7 @@ use std::io::{Read, Write};
                 }
                 write!(
                     output,
-                    "\x1b7\x1b[1;1H\r\nKITTY_REPLY {}\r\n\x1b8",
+                    "\x1b7\x1b[1;1H\r\nKITTY_REPLY {serial} {}\r\n\x1b8",
                     hex(&reply)
                 )
                 .unwrap();
