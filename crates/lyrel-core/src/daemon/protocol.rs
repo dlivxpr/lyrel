@@ -8,8 +8,9 @@ pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 /// A frame is a little-endian `u32` length, a one-byte kind, then the payload.
 const HEADER: usize = 5;
 
-/// v9 adds daemon-owned placement coordinates, screen state and clear commands.
-pub const PROTOCOL_VERSION: u32 = 9;
+/// v10 requires mutual version negotiation before opening a pane session.
+/// v11 distinguishes invisible virtual prototypes from direct placements.
+pub const PROTOCOL_VERSION: u32 = 11;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -81,6 +82,30 @@ impl DaemonVersion {
 
     pub fn has_feature(&self, name: &str) -> bool {
         self.features.iter().any(|f| f == name)
+    }
+}
+
+/// Negotiate on a fresh pane stream, after any routing prefix and before opening
+/// a session. The caller supplies its read deadline. Diagnostic Version probes
+/// remain separate; an older server can answer this probe and be refused before
+/// it is sent a Spawn/Attach request.
+pub fn negotiate_pane<S: Read + Write>(stream: &mut S) -> io::Result<DaemonVersion> {
+    ClientMsg::Negotiate {
+        protocol: PROTOCOL_VERSION,
+    }
+    .encode(stream)?;
+    stream.flush()?;
+    match DaemonMsg::read(stream)? {
+        DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION => Ok(version),
+        DaemonMsg::Version(version) => Err(io::Error::other(format!(
+            "pane peer (build {}) speaks protocol v{}, this build speaks v{}; update lyrel or lyrel-server",
+            version.build, version.protocol, PROTOCOL_VERSION
+        ))),
+        DaemonMsg::Error(message) => Err(io::Error::other(message)),
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected pane protocol negotiation, got {other:?}"),
+        )),
     }
 }
 
@@ -859,6 +884,10 @@ pub enum SshPhase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMsg {
+    /// Assert the client's dialect before a session is opened on this stream.
+    Negotiate {
+        protocol: u32,
+    },
     Spawn {
         cwd: Option<PathBuf>,
         size: WinSize,
@@ -1232,6 +1261,7 @@ pub struct RestoreFrom {
 impl ClientMsg {
     pub fn encode<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
+            ClientMsg::Negotiate { protocol } => write_frame(w, kind::VERSION, &to_json(protocol)?),
             ClientMsg::Spawn {
                 cwd,
                 size,
@@ -1364,6 +1394,9 @@ impl ClientMsg {
 
     pub fn from_frame(k: u8, payload: Vec<u8>) -> io::Result<Self> {
         Ok(match k {
+            kind::VERSION if !payload.is_empty() => ClientMsg::Negotiate {
+                protocol: from_json(&payload)?,
+            },
             kind::SPAWN => {
                 let (cwd, size) = from_json(&payload)?;
                 ClientMsg::Spawn {

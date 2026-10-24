@@ -99,6 +99,76 @@ fn size() -> WinSize {
     }
 }
 
+#[test]
+fn incompatible_pane_peers_are_refused_before_session_side_effects() {
+    use lyrel_core::daemon::protocol::ClientMsg;
+    use lyrel_core::daemon::transport;
+
+    let daemon = Daemon::start();
+    let mut legacy = transport::connect_endpoint_at(&daemon.pane_endpoint()).unwrap();
+    legacy.set_read_timeout(Some(STREAM_WITHIN)).unwrap();
+    ClientMsg::Spawn {
+        cwd: None,
+        size: size(),
+        shell: Some(interactive_shell()),
+        owner: None,
+        workspace: None,
+        restore: None,
+        allow_remote_clipboard_write: false,
+        await_claim: false,
+    }
+    .encode(&mut legacy)
+    .unwrap();
+    match DaemonMsg::read(&mut legacy).unwrap() {
+        DaemonMsg::Error(message) => assert!(message.contains("handshake required"), "{message}"),
+        other => panic!("legacy peer unexpectedly opened a session: {other:?}"),
+    }
+    assert!(
+        daemon.panes().list().unwrap().is_empty(),
+        "refused spawn created a shell"
+    );
+
+    let mut mismatch = transport::connect_endpoint_at(&daemon.pane_endpoint()).unwrap();
+    mismatch.set_read_timeout(Some(STREAM_WITHIN)).unwrap();
+    ClientMsg::Negotiate {
+        protocol: PROTOCOL_VERSION - 1,
+    }
+    .encode(&mut mismatch)
+    .unwrap();
+    assert!(
+        matches!(DaemonMsg::read(&mut mismatch).unwrap(), DaemonMsg::Version(version) if version.protocol == PROTOCOL_VERSION)
+    );
+    assert!(
+        DaemonMsg::read(&mut mismatch).is_err(),
+        "mismatched peer remained accepted"
+    );
+    assert!(daemon.panes().list().unwrap().is_empty());
+
+    // An unnegotiated observer must not subscribe or gain an alternate route to
+    // graphics frames. Matching production clients still open a usable shell.
+    let mut session = daemon
+        .panes()
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .unwrap();
+    session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let id = session.pane_id();
+    let mut observer = transport::connect_endpoint_at(&daemon.pane_endpoint()).unwrap();
+    observer.set_read_timeout(Some(STREAM_WITHIN)).unwrap();
+    ClientMsg::Observe {
+        pane_id: id,
+        size: size(),
+    }
+    .encode(&mut observer)
+    .unwrap();
+    assert!(
+        matches!(DaemonMsg::read(&mut observer).unwrap(), DaemonMsg::Error(message) if message.contains("handshake required"))
+    );
+    session.input(b"echo negotiated-shell-alive\r").unwrap();
+    let (output, _) = collect_until(&mut session, b"negotiated-shell-alive");
+    assert!(windows_contain(&output, b"negotiated-shell-alive"));
+    session.kill().unwrap();
+}
+
 fn one_shot_shell(command: &str) -> ShellSpec {
     if cfg!(windows) {
         ShellSpec {
