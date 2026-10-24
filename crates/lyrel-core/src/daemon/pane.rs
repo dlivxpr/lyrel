@@ -13,12 +13,11 @@ use crate::core::clipboard::{
     ClipboardSniffer, Event as ClipboardEvent, Segment as ClipboardSegment,
     Sniffed as ClipboardSniffed,
 };
-use crate::core::kitty_graphics::{GraphicsSniffer, Segment, Sniffed};
+use crate::core::kitty_graphics::{GraphicsEffect, GraphicsSniffer, GraphicsState, Segment, Sniffed};
 use crate::core::osc::OscTokenizer;
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
-    AuthResponse, DaemonMsg, MAX_FRAME, NativeSshSpec, PaneInfo, RemoteContext, RemoteKind,
-    ShellSpec, WinSize,
+    AuthResponse, DaemonMsg, NativeSshSpec, PaneInfo, RemoteContext, RemoteKind, ShellSpec, WinSize,
 };
 use crate::daemon::shell_integration;
 
@@ -699,7 +698,7 @@ pub(crate) fn gated_len(msg: &DaemonMsg) -> usize {
     match msg {
         DaemonMsg::Output(b) | DaemonMsg::Snapshot(b) => b.len(),
         // Lifted from the same PTY read as the output around them.
-        DaemonMsg::Image(b) | DaemonMsg::ClipboardWrite(b) => b.len(),
+        DaemonMsg::Graphics(b) | DaemonMsg::ClipboardWrite(b) => b.len(),
         _ => 0,
     }
 }
@@ -722,6 +721,9 @@ struct Observer {
 struct PaneState {
     id: u64,
     ring: ReplayRing,
+    /// Authoritative resources live with the pane, not its current controller.
+    /// Taken on exit even if a client keeps the dead pane's text attached.
+    graphics: Option<GraphicsState>,
     subscriber: Option<Sender<DaemonMsg>>,
     subscriber_epoch: u64,
     allow_remote_clipboard_write: bool,
@@ -826,6 +828,9 @@ fn send_to_observer(obs: &Observer, msg: &DaemonMsg, len: usize) -> bool {
 /// resize. The echo exists to close the 16 MiB window, not that one.
 fn resize_state(st: &mut PaneState, size: WinSize) {
     st.ring.resize(size);
+    if let Some(graphics) = &mut st.graphics {
+        graphics.resize(size);
+    }
     if let Some(sub) = &st.subscriber {
         let _ = sub.send(DaemonMsg::Size(size));
     }
@@ -852,11 +857,9 @@ fn fan_out_one(st: &mut PaneState, msg: DaemonMsg, len: usize, gate: &OutputGate
 /// Fan one PTY read out to the controller and every observer.
 ///
 /// On the no-graphics fast path `frames` is empty and the whole passthrough
-/// goes as a single `Output`. When a chunk carried graphics the frames are
-/// forwarded in stream order instead, so an image lands at the same cursor cell
-/// the sender drew it at. Each `Output` is gated on its own length; an image
-/// frame is gated too (it rode the same PTY read); a delete is tiny and
-/// ungated, matching the drain accounting in `server.rs`.
+/// goes as a single `Output`. Otherwise frames preserve PTY stream order.
+/// Every graphics update, including removals, uses its encoded byte length
+/// for both controller and observer flow control.
 fn fan_out_output(st: &mut PaneState, bytes: &[u8], frames: Vec<GraphicsFrame>, gate: &OutputGate) {
     if frames.is_empty() {
         if !bytes.is_empty() {
@@ -872,12 +875,10 @@ fn fan_out_output(st: &mut PaneState, bytes: &[u8], frames: Vec<GraphicsFrame>, 
                     fan_out_one(st, DaemonMsg::Output(b), len, gate);
                 }
             }
-            GraphicsFrame::Image(frame) => {
+            GraphicsFrame::Graphics(frame) => {
                 let len = frame.len();
-                fan_out_one(st, DaemonMsg::Image(frame), len, gate);
+                fan_out_one(st, DaemonMsg::Graphics(frame), len, gate);
             }
-            // Ungated, and `notify` already holds observers to their budget.
-            GraphicsFrame::Delete(sel) => notify(st, DaemonMsg::DeleteImage(sel)),
             // Clipboard writes are side effects for the controlling GUI only.
             // Observers must never overwrite their own machine's clipboard just
             // because they are watching this pane.
@@ -994,6 +995,7 @@ impl DeathReporter {
         let mut st = state.lock().unwrap();
         st.alive = false;
         st.exit_code = code;
+        st.graphics = None;
         let pane = st.id;
         log::info!(
             "pane {pane} exited; exit_code={code:?} shutdown_requested={}",
@@ -1073,31 +1075,12 @@ fn drain_then_report(
     death.report(&state, &shutting_down);
 }
 
-/// One out-of-band frame the reader forwards to the subscriber, kept in stream
-/// order so a kitty image lands at the cursor cell the sender drew it at: a chunk
-/// carrying graphics splits into `Output` runs interleaved with `Image`/`Delete`
-/// frames, and they must reach the client in that same order. `Output` becomes a
-/// `DaemonMsg::Output`, `Image` an encoded image frame, `Delete` a compact
-/// selector — see the reader loop's `sniff` handling.
+/// Out-of-band frames remain interleaved with plain output so placements
+/// reach the consumer at the same cursor position as in the PTY stream.
 enum GraphicsFrame {
     Output(Vec<u8>),
-    Image(Vec<u8>),
-    Delete(Vec<u8>),
+    Graphics(Vec<u8>),
     ClipboardWrite(Vec<u8>),
-}
-
-/// Queue an encoded image frame for the subscriber, dropping any frame larger
-/// than [`MAX_FRAME`]. The writer's `write_frame` rejects an oversize payload
-/// with an error the writer loop treats as *fatal* — it would tear the client
-/// off an otherwise-healthy pane. A single image that won't fit is not worth
-/// that: drop it here so the rest of the stream keeps flowing. The inline
-/// `t=d` path is bounded by `MAX_TRANSMISSION_BASE64` but that still admits
-/// ~72 MiB of raw pixels, and the local shm/file path has no cap of its own,
-/// so both can land here over the limit.
-fn push_image_frame(frames: &mut Vec<GraphicsFrame>, frame: Vec<u8>) {
-    if frame.len() <= MAX_FRAME {
-        frames.push(GraphicsFrame::Image(frame));
-    }
 }
 
 fn process_graphics_output(
@@ -1105,10 +1088,12 @@ fn process_graphics_output(
     ordered: bool,
     pass: &mut Vec<u8>,
     frames: &mut Vec<GraphicsFrame>,
+    state: &mut GraphicsState,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
 ) {
     match sniffed {
         Sniffed::Plain(bytes) => {
+            state.output(bytes);
             pass.extend_from_slice(bytes);
             if ordered && !bytes.is_empty() {
                 frames.push(GraphicsFrame::Output(bytes.to_vec()));
@@ -1118,29 +1103,38 @@ fn process_graphics_output(
             for segment in segments {
                 match segment {
                     Segment::Output(bytes) => {
+                        state.output(&bytes);
                         pass.extend_from_slice(&bytes);
                         frames.push(GraphicsFrame::Output(bytes));
                     }
-                    Segment::Query(reply) => {
-                        if let Ok(mut writer) = writer.lock() {
-                            let _ = writer.write_all(&reply);
-                            let _ = writer.flush();
+                    Segment::Reply(reply) => write_graphics_reply(writer, &reply),
+                    Segment::Command { control, image } => {
+                        for effect in state.apply(control, image) {
+                            match effect {
+                                GraphicsEffect::Update(update) => {
+                                    frames.push(GraphicsFrame::Graphics(update.encode_frame()));
+                                }
+                                GraphicsEffect::Reply(reply) => write_graphics_reply(writer, &reply),
+                                GraphicsEffect::Output(bytes) => {
+                                    // The state already applied its movement.
+                                    // Persist/forward it like ordinary output,
+                                    // without feeding it back to state.output.
+                                    pass.extend_from_slice(&bytes);
+                                    frames.push(GraphicsFrame::Output(bytes));
+                                }
+                            }
                         }
-                    }
-                    Segment::Image(image) => {
-                        push_image_frame(frames, image.encode_frame());
-                    }
-                    Segment::ImageFromMedium(transfer) => {
-                        if let Some(image) = transfer.resolve() {
-                            push_image_frame(frames, image.encode_frame());
-                        }
-                    }
-                    Segment::Delete(delete) => {
-                        frames.push(GraphicsFrame::Delete(delete.encode()));
                     }
                 }
             }
         }
+    }
+}
+
+fn write_graphics_reply(writer: &Arc<Mutex<Box<dyn Write + Send>>>, reply: &[u8]) {
+    if let Ok(mut writer) = writer.lock() {
+        let _ = writer.write_all(reply);
+        let _ = writer.flush();
     }
 }
 
@@ -1159,16 +1153,20 @@ fn lift_out_of_band<'a>(
     raw: &'a [u8],
     clipboard: &mut ClipboardSniffer,
     graphics: &mut GraphicsSniffer,
+    state: &mut GraphicsState,
     has_controller: bool,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     frames: &mut Vec<GraphicsFrame>,
 ) -> std::borrow::Cow<'a, [u8]> {
     match clipboard.sniff(raw) {
         ClipboardSniffed::Plain(b) => match graphics.sniff(b) {
-            Sniffed::Plain(b) => std::borrow::Cow::Borrowed(b),
+            Sniffed::Plain(b) => {
+                state.output(b);
+                std::borrow::Cow::Borrowed(b)
+            }
             sniffed @ Sniffed::Segments(_) => {
                 let mut pass = Vec::new();
-                process_graphics_output(sniffed, false, &mut pass, frames, writer);
+                process_graphics_output(sniffed, false, &mut pass, frames, state, writer);
                 std::borrow::Cow::Owned(pass)
             }
         },
@@ -1178,7 +1176,7 @@ fn lift_out_of_band<'a>(
                 match seg {
                     ClipboardSegment::Output(b) => {
                         let sniffed = graphics.sniff(&b);
-                        process_graphics_output(sniffed, true, &mut pass, frames, writer);
+                        process_graphics_output(sniffed, true, &mut pass, frames, state, writer);
                     }
                     ClipboardSegment::Event(ClipboardEvent::Reply(reply)) => {
                         if let Ok(mut w) = writer.lock() {
@@ -1680,6 +1678,7 @@ impl DaemonPane {
             PaneState {
                 id,
                 ring,
+                graphics: Some(GraphicsState::new(size)),
                 subscriber: None,
                 subscriber_epoch: 0,
                 allow_remote_clipboard_write,
@@ -1905,6 +1904,7 @@ impl DaemonPane {
             PaneState {
                 id: carried.id,
                 ring,
+                graphics: Some(GraphicsState::new(size)),
                 subscriber: None,
                 subscriber_epoch: 0,
                 allow_remote_clipboard_write: false,
@@ -1982,6 +1982,7 @@ impl DaemonPane {
         let state = Arc::new(Mutex::new(PaneState {
             id,
             ring: ReplayRing::new(size),
+            graphics: Some(GraphicsState::new(size)),
             subscriber: None,
             subscriber_epoch: 0,
             allow_remote_clipboard_write,
@@ -2166,29 +2167,31 @@ impl DaemonPane {
                                 tr_bytes += n as u64;
                             }
                             let raw = &buf[..n];
-                            let (controller, allowed) = state
-                                .lock()
-                                .map(|st| {
-                                    (
-                                        st.subscriber.as_ref().map(|_| st.subscriber_epoch),
-                                        st.allow_remote_clipboard_write,
-                                    )
-                                })
-                                .unwrap_or((None, false));
-                            clipboard.set_controller(controller, allowed);
+                            // Resize, graphics state and stream publication share
+                            // one lock. A Size echo must never overtake output
+                            // already applied to the authoritative cursor.
+                            let mut st = state.lock().unwrap();
+                            let controller = st.subscriber.as_ref().map(|_| st.subscriber_epoch);
+                            clipboard.set_controller(controller, st.allow_remote_clipboard_write);
+                            let Some(graphics_state) = st.graphics.as_mut() else {
+                                break;
+                            };
                             let mut frames: Vec<GraphicsFrame> = Vec::new();
                             let passthrough = lift_out_of_band(
                                 raw,
                                 &mut clipboard,
                                 &mut graphics,
+                                graphics_state,
                                 controller.is_some(),
                                 &writer,
                                 &mut frames,
                             );
                             let bytes: &[u8] = &passthrough;
-                            // Sniff first (cheap, over the same bytes); collect any
-                            // cwd/prompt change to emit while we hold the lock.
                             let mut signals = sniffer.feed(bytes);
+                            record_output(&mut st, bytes);
+                            fan_out_output(&mut st, bytes, frames, &gate);
+                            let da1_owed = detached_device_attribute_queries(&mut st);
+                            drop(st);
 
                             // `any` first: `foreground_running` is a syscall,
                             // and most reads carry no prompt mark at all.
@@ -2259,9 +2262,6 @@ impl DaemonPane {
                                 signals.shell.iter().any(|s| s.mark_at_prompt);
                             let mut st = state.lock().unwrap();
                             let facts_before = may_change_facts.then(|| observed_facts(&st));
-                            record_output(&mut st, bytes);
-                            fan_out_output(&mut st, bytes, frames, &gate);
-                            let da1_owed = detached_device_attribute_queries(&mut st);
                             apply_signals(&mut st, signals);
                             if let Some(remote) = remote {
                                 apply_remote_context(&mut st, remote);
@@ -4198,7 +4198,6 @@ mod tests {
         );
     }
     use super::*;
-    use crate::core::kitty_graphics::ImageDelete;
     use std::path::Path;
 
     #[test]
@@ -4734,6 +4733,7 @@ mod tests {
             let mut clipboard = ClipboardSniffer::default();
             clipboard.set_controller(Some(1), true);
             let mut graphics = GraphicsSniffer::new_local(true);
+            let mut graphics_state = GraphicsState::new(ws(80, 24));
             let (mut recorded, mut sent) = (Vec::new(), Vec::new());
             for chunk in chunks {
                 let mut frames = Vec::new();
@@ -4741,6 +4741,7 @@ mod tests {
                     chunk,
                     &mut clipboard,
                     &mut graphics,
+                    &mut graphics_state,
                     true,
                     &writer,
                     &mut frames,
@@ -5867,6 +5868,7 @@ mod tests {
         PaneState {
             id: 0,
             ring: ReplayRing::new(ws(80, 24)),
+            graphics: Some(GraphicsState::new(ws(80, 24))),
             subscriber: None,
             subscriber_epoch: 0,
             allow_remote_clipboard_write: false,
@@ -7546,14 +7548,11 @@ mod tests {
         reader.join().unwrap();
     }
 
-    /// Issue #213 end-to-end at the reader: a chunk carrying text plus a
-    /// kitty graphics query and a transmit-and-display must (1) keep only the
-    /// text in the replay ring and the `Output` frame, (2) write the `a=q` reply
-    /// back to the PTY writer, and (3) forward the image out-of-band as an
-    /// `Image` frame the client can decode.
+    /// A reader forwards authoritative resources and placements in stream
+    /// order, writes query replies to the PTY, and persists only plain text.
     #[test]
     fn reader_strips_graphics_and_forwards_them_out_of_band() {
-        use crate::core::kitty_graphics::Image;
+        use crate::core::kitty_graphics::GraphicsUpdate;
         use base64::Engine as _;
 
         let state = Arc::new(Mutex::new(test_state(true)));
@@ -7580,8 +7579,8 @@ mod tests {
         let pixel = [0xffu8, 0x00, 0x00, 0xff];
         let b64 = base64::engine::general_purpose::STANDARD.encode(pixel);
         let stream = format!(
-            "before\x1b_Gi=1,a=q,t=d,f=32,s=1,v=1;AAAA\x1b\\\
-             mid\x1b_Ga=T,f=32,t=d,s=1,v=1,i=1;{b64}\x1b\\after"
+            "before\x1b_Gi=1,a=q,t=d,f=32,s=1,v=1;{b64}\x1b\\\
+             mid\x1b_Ga=T,f=32,t=d,s=1,v=1,i=1,q=2,C=1;{b64}\x1b\\after"
         );
 
         let handle = DaemonPane::spawn_reader(
@@ -7612,13 +7611,24 @@ mod tests {
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"before"));
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"mid"));
         match sub_rx.try_recv() {
-            Ok(DaemonMsg::Image(frame)) => {
-                let img = Image::decode_frame(&frame).expect("decodable image frame");
-                assert_eq!(img.id, 1);
-                assert_eq!((img.width, img.height), (1, 1));
-                assert_eq!(img.to_rgba8().unwrap(), pixel);
+            Ok(DaemonMsg::Graphics(frame)) => {
+                let GraphicsUpdate::Resource { key, image } =
+                    GraphicsUpdate::decode_frame_owned(frame).expect("decodable resource")
+                else {
+                    panic!("expected a resource before the placement");
+                };
+                assert_eq!((image.width, image.height), (1, 1));
+                assert_eq!(image.to_rgba8().unwrap(), pixel);
+                let Ok(DaemonMsg::Graphics(frame)) = sub_rx.try_recv() else {
+                    panic!("expected the placement after its resource");
+                };
+                let Some(GraphicsUpdate::Place(placement)) = GraphicsUpdate::decode_frame_owned(frame) else {
+                    panic!("expected a placement");
+                };
+                assert_eq!(placement.resource, key);
+                assert_eq!(placement.image_id, 1);
             }
-            other => panic!("expected Image frame, got {other:?}"),
+            other => panic!("expected Graphics frame, got {other:?}"),
         }
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"after"));
     }
@@ -7796,19 +7806,21 @@ mod tests {
         );
     }
 
-    /// A kitty delete (`a=d`) is lifted out and forwarded as a `DeleteImage`
-    /// selector, leaving the surrounding text intact in the ring.
+    /// Delete selectors are applied daemon-side; consumers receive exact keys
+    /// to release, never selectors that depend on their own cursor or cache.
     #[test]
     fn reader_forwards_graphics_deletes() {
+        use crate::core::kitty_graphics::GraphicsUpdate;
+
         let state = Arc::new(Mutex::new(test_state(true)));
         let (sub_tx, sub_rx) = mpsc::channel();
         state.lock().unwrap().subscriber = Some(sub_tx);
-
+        let stream = b"x\x1b_Ga=T,i=7,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\\x1b_Ga=d,d=A,q=2\x1b\\y";
         let handle = DaemonPane::spawn_reader(
             state.clone(),
             Arc::new(AtomicBool::new(false)),
             Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(b"x\x1b_Ga=d,d=A\x1b\\y".to_vec())),
+            Box::new(std::io::Cursor::new(stream.to_vec())),
             null_writer(),
             || false,
             ForegroundProbes {
@@ -7822,28 +7834,30 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(state.lock().unwrap().ring.flatten(), b"xy");
-        // In stream order: text before the delete, the delete, then text after.
+        assert!(state.lock().unwrap().graphics.is_none(), "exit releases resources");
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"x"));
-        match sub_rx.try_recv() {
-            Ok(DaemonMsg::DeleteImage(sel)) => {
-                let d = ImageDelete::decode(&sel).unwrap();
-                assert_eq!(d.target, b'A');
+        let mut resource = None;
+        let mut placement = None;
+        for _ in 0..3 {
+            let Ok(DaemonMsg::Graphics(frame)) = sub_rx.try_recv() else {
+                panic!("expected an ordered graphics update");
+            };
+            match GraphicsUpdate::decode_frame_owned(frame).unwrap() {
+                GraphicsUpdate::Resource { key, image } => {
+                    assert_eq!(image.to_rgba8().unwrap(), [255, 0, 0, 255]);
+                    resource = Some(key);
+                }
+                GraphicsUpdate::Place(p) => {
+                    assert_eq!(Some(p.resource), resource);
+                    placement = Some(p.key);
+                }
+                GraphicsUpdate::Remove { placements, resources } => {
+                    assert_eq!(placements, [placement.unwrap()]);
+                    assert_eq!(resources, [resource.unwrap()]);
+                }
             }
-            other => panic!("expected DeleteImage, got {other:?}"),
         }
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"y"));
-    }
-
-    #[test]
-    fn push_image_frame_drops_over_max_frame() {
-        let mut frames = Vec::new();
-        // At the limit: queued.
-        push_image_frame(&mut frames, vec![0u8; MAX_FRAME]);
-        // Over the limit: dropped, so the writer's fatal `write_frame` error
-        // (which would disconnect the client) is never reached.
-        push_image_frame(&mut frames, vec![0u8; MAX_FRAME + 1]);
-        assert_eq!(frames.len(), 1, "only the in-budget frame is queued");
-        assert!(matches!(&frames[0], GraphicsFrame::Image(f) if f.len() == MAX_FRAME));
     }
 
     #[test]
