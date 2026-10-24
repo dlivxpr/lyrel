@@ -171,6 +171,18 @@ impl GraphicsDaemonProcess {
     }
 
     fn stream_with_capacity(&self, pane: u64, encoded_bytes: u64, decoded_bytes: u64) -> Stream {
+        self.stream_with_capacity_at(pane, encoded_bytes, decoded_bytes, crate::daemon::protocol::WinSize {
+            cols: 80, rows: 24, cell_w: 10, cell_h: 20,
+        })
+    }
+
+    fn stream_with_capacity_at(
+        &self,
+        pane: u64,
+        encoded_bytes: u64,
+        decoded_bytes: u64,
+        size: crate::daemon::protocol::WinSize,
+    ) -> Stream {
         let mut stream = crate::daemon::transport::connect_endpoint_at(&self.endpoint("daemon")).unwrap();
         stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
         crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
@@ -178,12 +190,7 @@ impl GraphicsDaemonProcess {
         stream.set_read_timeout(None).unwrap();
         ClientMsg::Attach {
             pane_id: pane,
-            size: crate::daemon::protocol::WinSize {
-                cols: 80,
-                rows: 24,
-                cell_w: 10,
-                cell_h: 20,
-            },
+            size,
             allow_remote_clipboard_write: false,
         }
         .encode(&mut stream)
@@ -255,18 +262,38 @@ fn graphics_rooted_consumer(
     pane: u64,
     stream: Stream,
 ) -> (Entity<TerminalView>, gpui_kit::AnyWindowHandle) {
+    let (view, window) = graphics_build_rooted_consumer(cx, pane, stream, Vec::new());
+    graphics_assert_production_paint_at(window, &view, cx, TermSize::new(80, 24));
+    graphics_send_fixture(&view, cx, 0, b"\x1b[0m");
+    (view, window)
+}
+
+fn graphics_build_rooted_consumer(
+    cx: &mut TestAppContext,
+    pane: u64,
+    stream: Stream,
+    buffered: Vec<u8>,
+) -> (Entity<TerminalView>, gpui_kit::AnyWindowHandle) {
+    graphics_build_rooted_consumer_at(cx, pane, stream, buffered, TermSize::new(80, 24))
+}
+
+fn graphics_build_rooted_consumer_at(
+    cx: &mut TestAppContext,
+    pane: u64,
+    stream: Stream,
+    buffered: Vec<u8>,
+    size: TermSize,
+) -> (Entity<TerminalView>, gpui_kit::AnyWindowHandle) {
     let built = std::rc::Rc::new(std::cell::RefCell::new(None));
     let out = built.clone();
     let window = cx.add_window(move |window, cx| {
         let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
-        let terminal = RemoteTerminal::from_stream_with(stream, TermSize::new(80, 24), Vec::new(), source).unwrap();
+        let terminal = RemoteTerminal::from_stream_with(stream, size, buffered, source).unwrap();
         let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
         *out.borrow_mut() = Some(view.clone());
         gpui_kit::component::Root::new(view, window, cx)
     });
     let view = built.borrow_mut().take().unwrap();
-    graphics_assert_production_paint_at(window.into(), &view, cx, TermSize::new(80, 24));
-    graphics_send_fixture(&view, cx, 0, b"\x1b[0m");
     (view, window.into())
 }
 

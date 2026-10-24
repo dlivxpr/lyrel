@@ -11927,6 +11927,7 @@ mod gpui_tests {
     include!("graphics_consumer_tests.rs");
     include!("graphics_resize_consumer_tests.rs");
     include!("graphics_layout_consumer_tests.rs");
+    include!("graphics_recovery_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
