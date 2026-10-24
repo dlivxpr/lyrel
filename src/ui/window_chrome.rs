@@ -19,6 +19,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let macos_fullscreen = cfg!(target_os = "macos") && window.is_fullscreen();
         let left_open = self.left_panel_open(cx);
         let right_open = self.right_panel_open(cx);
         let can_split = self
@@ -148,20 +149,22 @@ impl LyrelApp {
             .flex_none()
             .border_b_1()
             .border_color(cx.theme().transparent)
-            // 交通灯是原生平台几何，不随界面字体放大。
+            // 仅窗口模式保留原生交通灯几何；全屏恢复产品控件的边距。
             .pl(px(crate::ui::app::TITLE_BAR_LEAD))
+            .when(macos_fullscreen, |row| row.pl_3())
             .pr_1()
             .gap_2()
             .child(crate::ui::app::window_mark())
             .child(left);
         let left = crate::ui::app::title_bar_drag(left_row, "workbench-left-drag", window, cx)
             .into_any_element();
+        let trailing_inset = if macos_fullscreen { 0.75 } else { 0.25 };
         let strip = h_flex()
             .w_full()
             .min_w_0()
             .h_full()
             .justify_end()
-            .pr_1()
+            .pr(rems(trailing_inset))
             .child(right);
         let controls_drawn = window_controls_drawn(window.is_fullscreen());
         let native_width = if controls_drawn {
@@ -171,9 +174,9 @@ impl LyrelApp {
         } else {
             0.
         };
-        // 三按钮组占 6.5rem，右侧留白占 0.25rem；原生控件不随界面缩放。
-        let right_width = window.rem_size().as_f32() * 6.75 + native_width;
-        let right = if controls_drawn || cfg!(target_os = "macos") {
+        // 三按钮组与外边距共用宽度预算；原生控件不随界面缩放。
+        let right_width = window.rem_size().as_f32() * (6.5 + trailing_inset) + native_width;
+        let right = if !macos_fullscreen && (controls_drawn || cfg!(target_os = "macos")) {
             TitleBar::new()
                 .h(rems(3.))
                 .pl_0()
@@ -182,6 +185,7 @@ impl LyrelApp {
                 .child(strip)
                 .into_any_element()
         } else {
+            // 全屏无原生控件；避免 TitleBar 内部的全屏占位挤出按钮组。
             let row = h_flex()
                 .id("workbench-right-drag")
                 .h(rems(3.))
@@ -247,6 +251,61 @@ mod gpui_tests {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn macos_fullscreen_chrome_uses_compact_balanced_edge_insets(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        let edge_controls = ["titlebar-left-panel", "titlebar-right-panel"];
+        for (width, font_size) in [(1440., 16.), (760., 16.), (1440., 20.), (760., 20.)] {
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+                cx.notify();
+            });
+            vcx.simulate_resize(size(px(width), px(900.)));
+            settle(&mut vcx);
+            let windowed = vcx.update(|window, _| {
+                assert!(!window.is_fullscreen());
+                edge_controls.map(|id| window.find(id).bounds())
+            });
+            vcx.dispatch_action(crate::core::actions::ToggleFullscreen);
+            settle(&mut vcx);
+            let fullscreen = vcx.update(|window, _| {
+                assert!(window.is_fullscreen());
+                edge_controls.map(|id| window.find(id).bounds())
+            });
+            for (left_open, right_open) in
+                [(true, true), (false, true), (false, false), (true, false)]
+            {
+                app.update_in(&mut vcx, |app, _, cx| {
+                    app.sidebar_collapsed = !left_open;
+                    app.right_panel_visible = right_open;
+                    cx.notify();
+                });
+                settle(&mut vcx);
+                vcx.update(|window, _| {
+                    let [left, right] = edge_controls.map(|id| window.find(id).bounds());
+                    let right_gap = window.viewport_size().width - right.right();
+                    assert_eq!([left, right], fullscreen, "sidebars cannot move fullscreen controls");
+                    assert!(
+                        left.left() < window.rem_size() * 4.,
+                        "fullscreen must not reserve the hidden traffic lights' leading space: {left:?}"
+                    );
+                    assert!(left.left() < windowed[0].left());
+                    assert!(
+                        right_gap >= window.rem_size() * 0.75 && right_gap <= window.rem_size(),
+                        "fullscreen controls need a small trailing inset rather than hugging the window edge: {right_gap}"
+                    );
+                });
+            }
+            vcx.dispatch_action(crate::core::actions::ToggleFullscreen);
+            settle(&mut vcx);
+            vcx.update(|window, _| {
+                assert!(!window.is_fullscreen());
+                assert_eq!(edge_controls.map(|id| window.find(id).bounds()), windowed);
+            });
+        }
+    }
+
     #[gpui_kit::test]
     fn sidebar_toggles_preserve_titlebar_and_terminal_height(cx: &mut TestAppContext) {
         let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
