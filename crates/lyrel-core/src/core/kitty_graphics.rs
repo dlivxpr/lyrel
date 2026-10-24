@@ -416,7 +416,10 @@ impl GraphicsSniffer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
     Output(Vec<u8>),
-    Command { control: Control, image: Option<Image> },
+    Command {
+        control: Control,
+        image: Option<Image>,
+    },
     Reply(Vec<u8>),
 }
 
@@ -547,8 +550,16 @@ impl Default for Control {
             quiet: 0,
             offset: 0,
             size: 0,
-            x: 0, y: 0, w: 0, h: 0, offset_x: 0, offset_y: 0,
-            z: 0, no_move: false, invalid: false, unsupported: false,
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            offset_x: 0,
+            offset_y: 0,
+            z: 0,
+            no_move: false,
+            invalid: false,
+            unsupported: false,
         }
     }
 }
@@ -590,7 +601,10 @@ impl Control {
                         b"24" => WireFormat::Rgb,
                         b"32" => WireFormat::Rgba,
                         b"100" => WireFormat::Png,
-                        _ => { c.unsupported = true; WireFormat::Rgba }
+                        _ => {
+                            c.unsupported = true;
+                            WireFormat::Rgba
+                        }
                     }
                 }
                 b"t" => {
@@ -599,10 +613,16 @@ impl Control {
                         b"f" => Medium::File,
                         b"s" => Medium::Shared,
                         b"t" => Medium::TempFile,
-                        _ => { c.unsupported = true; Medium::Direct }
+                        _ => {
+                            c.unsupported = true;
+                            Medium::Direct
+                        }
                     }
                 }
-                b"o" => { c.compressed = val == b"z"; c.unsupported |= val != b"z"; }
+                b"o" => {
+                    c.compressed = val == b"z";
+                    c.unsupported |= val != b"z";
+                }
                 b"i" => c.id = num(),
                 b"I" => c.number = num(),
                 b"p" => c.placement = num(),
@@ -627,13 +647,36 @@ impl Control {
                     Some(z) => c.z = z,
                     None => c.invalid = true,
                 },
-                b"C" => { c.no_move = val == b"1"; c.invalid |= val != b"0" && val != b"1"; }
+                b"C" => {
+                    c.no_move = val == b"1";
+                    c.invalid |= val != b"0" && val != b"1";
+                }
                 b"U" | b"P" | b"Q" | b"H" | b"V" => c.unsupported |= val != b"0",
                 _ => {} // unknown key: ignore
             }
-            if matches!(key, b"i" | b"I" | b"p" | b"s" | b"v" | b"c" | b"r" | b"x" | b"y" | b"w" | b"h" | b"X" | b"Y" | b"O" | b"S")
-                && std::str::from_utf8(val).ok().and_then(|s| s.parse::<u32>().ok()).is_none()
-            { c.invalid = true; }
+            if matches!(
+                key,
+                b"i" | b"I"
+                    | b"p"
+                    | b"s"
+                    | b"v"
+                    | b"c"
+                    | b"r"
+                    | b"x"
+                    | b"y"
+                    | b"w"
+                    | b"h"
+                    | b"X"
+                    | b"Y"
+                    | b"O"
+                    | b"S"
+            ) && std::str::from_utf8(val)
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .is_none()
+            {
+                c.invalid = true;
+            }
         }
         c.invalid |= c.id != 0 && c.number != 0;
         Some(c)
@@ -701,25 +744,45 @@ impl Image {
     /// capping it up front costs nothing.
     pub fn to_rgba8(&self) -> Option<Vec<u8>> {
         let expected = self.decoded_len()?;
-        if expected > MAX_IMAGE_BYTES { return None; }
+        if expected > MAX_IMAGE_BYTES {
+            return None;
+        }
         let raw = if self.compressed {
             miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&self.data, expected).ok()?
-        } else { self.data.clone() };
-        if raw.len() != expected { return None; }
-        Some(if self.format == WireFormat::Rgb { rgb_to_rgba(&raw) } else { raw })
+        } else {
+            self.data.clone()
+        };
+        if raw.len() != expected {
+            return None;
+        }
+        Some(if self.format == WireFormat::Rgb {
+            rgb_to_rgba(&raw)
+        } else {
+            raw
+        })
     }
 
     /// Consume the pixel buffer on the uncompressed fast path. Normalization
     /// and all size checks stay off the UI thread in the desktop decode worker.
     pub fn take_rgba8(&mut self) -> Option<Vec<u8>> {
         let expected = self.decoded_len()?;
-        if expected > MAX_IMAGE_BYTES { return None; }
+        if expected > MAX_IMAGE_BYTES {
+            return None;
+        }
         let data = std::mem::take(&mut self.data);
         let raw = if self.compressed {
             miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&data, expected).ok()?
-        } else { data };
-        if raw.len() != expected { return None; }
-        Some(if self.format == WireFormat::Rgb { rgb_to_rgba(&raw) } else { raw })
+        } else {
+            data
+        };
+        if raw.len() != expected {
+            return None;
+        }
+        Some(if self.format == WireFormat::Rgb {
+            rgb_to_rgba(&raw)
+        } else {
+            raw
+        })
     }
 
     /// The byte length of this image's *decoded* (pre-`rgb_to_rgba`) pixels —
@@ -736,9 +799,7 @@ impl Image {
             .checked_mul(bpp)
             .filter(|&n| n != 0)
     }
-
 }
-
 
 impl MediumTransfer {
     /// Resolve the referenced bytes into an [`Image`] by reading the file or
@@ -936,7 +997,10 @@ fn shm_name_is_wellformed(name: &[u8]) -> bool {
 /// A complete request. GraphicsState owns identity and lifetime decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    Command { control: Control, image: Option<Image> },
+    Command {
+        control: Control,
+        image: Option<Image>,
+    },
     Reply(Vec<u8>),
 }
 
@@ -985,48 +1049,79 @@ pub struct GraphicsParser {
 }
 
 impl GraphicsParser {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn new_local(local: bool) -> Self { Self { local, ..Self::default() } }
+    pub fn new_local(local: bool) -> Self {
+        Self {
+            local,
+            ..Self::default()
+        }
+    }
 
     pub fn feed(&mut self, command: &[u8]) -> Option<Event> {
         let control = Control::parse(command)?;
         let data = payload_data(command);
         // A delete aborts a partial upload. Other complete commands must not be
         // accidentally swallowed as base64 continuation bytes.
-        if control.action == Action::Delete { self.pending = None; }
+        if control.action == Action::Delete {
+            self.pending = None;
+        }
         if control.invalid || control.unsupported || control.action == Action::Other {
             self.pending = None;
-            let status = if control.invalid { "EINVAL:Invalid control data" } else { "ENOTSUPPORTED:Unsupported operation" };
+            let status = if control.invalid {
+                "EINVAL:Invalid control data"
+            } else {
+                "ENOTSUPPORTED:Unsupported operation"
+            };
             return response(&control, control.id, status).map(Event::Reply);
         }
         if self.pending.is_some() {
             let header = command.split(|b| *b == b';').next().unwrap_or(command);
-            let continuation = header.strip_prefix(b"G").unwrap_or(header).split(|b| *b == b',')
+            let continuation = header
+                .strip_prefix(b"G")
+                .unwrap_or(header)
+                .split(|b| *b == b',')
                 .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
-            if continuation { return self.accept_chunk(control, data); }
+            if continuation {
+                return self.accept_chunk(control, data);
+            }
             self.pending = None;
         }
         match control.action {
-            Action::Transmit | Action::TransmitAndDisplay | Action::Query => self.accept_chunk(control, data),
+            Action::Transmit | Action::TransmitAndDisplay | Action::Query => {
+                self.accept_chunk(control, data)
+            }
             Action::Display | Action::Delete => {
                 if !data.is_empty() || control.more {
-                    response(&control, control.id, "EINVAL:Unexpected placement payload").map(Event::Reply)
-                } else { Some(Event::Command { control, image: None }) }
+                    response(&control, control.id, "EINVAL:Unexpected placement payload")
+                        .map(Event::Reply)
+                } else {
+                    Some(Event::Command {
+                        control,
+                        image: None,
+                    })
+                }
             }
             Action::Other => unreachable!(),
         }
     }
 
     fn accept_chunk(&mut self, control: Control, data: &[u8]) -> Option<Event> {
-        let pending = self.pending.get_or_insert_with(|| Pending { control, base64: Vec::new() });
+        let pending = self.pending.get_or_insert_with(|| Pending {
+            control,
+            base64: Vec::new(),
+        });
         if data.len() > MAX_TRANSMISSION_BASE64.saturating_sub(pending.base64.len()) {
             let first = pending.control;
             self.pending = None;
             return response(&first, first.id, "ENOSPC:Transfer too large").map(Event::Reply);
         }
         pending.base64.extend_from_slice(data);
-        if control.more { return None; }
+        if control.more {
+            return None;
+        }
         let Pending { control, base64 } = self.pending.take()?;
         self.finalize(control, &base64)
     }
@@ -1041,18 +1136,33 @@ impl GraphicsParser {
             Err(_) => return fail("EINVAL:Invalid base64 payload"),
         };
         let image = if control.medium == Medium::Direct {
-            Image { width: control.width, height: control.height, data,
-                format: control.format, compressed: control.compressed }
+            Image {
+                width: control.width,
+                height: control.height,
+                data,
+                format: control.format,
+                compressed: control.compressed,
+            }
         } else {
-            let transfer = MediumTransfer { medium: control.medium, name: data,
-                offset: control.offset, size: control.size, width: control.width,
-                height: control.height, format: control.format, compressed: control.compressed };
+            let transfer = MediumTransfer {
+                medium: control.medium,
+                name: data,
+                offset: control.offset,
+                size: control.size,
+                width: control.width,
+                height: control.height,
+                format: control.format,
+                compressed: control.compressed,
+            };
             match transfer.resolve() {
                 Some(image) => image,
                 None => return fail("EBADF:Failed to read image file"),
             }
         };
-        Some(Event::Command { control, image: Some(image) })
+        Some(Event::Command {
+            control,
+            image: Some(image),
+        })
     }
 }
 
@@ -1060,12 +1170,22 @@ impl GraphicsParser {
 /// transmissions do not inject unsolicited bytes into the shell's input.
 pub(crate) fn response(control: &Control, image_id: u32, status: &str) -> Option<Vec<u8>> {
     let success = status == "OK";
-    if control.quiet >= 2 || (success && control.quiet == 1) { return None; }
-    if success && control.action == Action::Delete { return None; }
-    if control.id == 0 && control.number == 0 && control.action != Action::Query { return None; }
+    if control.quiet >= 2 || (success && control.quiet == 1) {
+        return None;
+    }
+    if success && control.action == Action::Delete {
+        return None;
+    }
+    if control.id == 0 && control.number == 0 && control.action != Action::Query {
+        return None;
+    }
     let mut keys = Vec::with_capacity(3);
-    if image_id != 0 || control.number == 0 { keys.push(format!("i={image_id}")); }
-    if control.number != 0 { keys.push(format!("I={}", control.number)); }
+    if image_id != 0 || control.number == 0 {
+        keys.push(format!("i={image_id}"));
+    }
+    if control.number != 0 {
+        keys.push(format!("I={}", control.number));
+    }
     if control.placement != 0 && (image_id != 0 || control.number != 0) {
         keys.push(format!("p={}", control.placement));
     }
@@ -1190,7 +1310,9 @@ mod tests {
                 events.extend(sniffer.feed(chunk, |bytes| output.extend_from_slice(bytes)));
             }
             assert_eq!(output, b"beforeafterend");
-            assert!(matches!(&events[0], Event::Reply(reply) if reply.starts_with(b"\x1b_Gi=7;EINVAL:")));
+            assert!(
+                matches!(&events[0], Event::Reply(reply) if reply.starts_with(b"\x1b_Gi=7;EINVAL:"))
+            );
             assert!(matches!(&events[1], Event::Command { control, image: None }
                 if control.id == 8 && control.placement == 3 && control.action == Action::Display));
         }
@@ -1200,10 +1322,15 @@ mod tests {
     fn delete_aborts_a_partial_upload_without_consuming_its_own_selector() {
         let mut parser = GraphicsParser::new();
         assert_eq!(parser.feed(b"Ga=t,i=7,s=1,v=1,m=1;/wAA"), None);
-        assert!(matches!(parser.feed(b"Ga=d,d=i,i=7"), Some(Event::Command { control, image: None })
-            if control.action == Action::Delete && control.delete == b'i'));
+        assert!(
+            matches!(parser.feed(b"Ga=d,d=i,i=7"), Some(Event::Command { control, image: None })
+            if control.action == Action::Delete && control.delete == b'i')
+        );
         match parser.feed(b"Ga=t,i=8,s=1,v=1;/wAA/w==").unwrap() {
-            Event::Command { control, image: Some(image) } => {
+            Event::Command {
+                control,
+                image: Some(image),
+            } => {
                 assert_eq!(control.id, 8);
                 assert_eq!(image.to_rgba8().unwrap(), [255, 0, 0, 255]);
             }
@@ -1215,17 +1342,31 @@ mod tests {
     fn chunked_compressed_rgb_decodes_after_arbitrary_pty_boundaries() {
         let pixels = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
         let encoded = BASE64.encode(miniz_oxide::deflate::compress_to_vec_zlib(&pixels, 1));
-        let stream = format!("text\x1b_Ga=T,i=9,f=24,s=2,v=1,o=z,m=1;{}\x1b\\\x1b_Gm=0;{}\x1b\\tail", &encoded[..4], &encoded[4..]);
+        let stream = format!(
+            "text\x1b_Ga=T,i=9,f=24,s=2,v=1,o=z,m=1;{}\x1b\\\x1b_Gm=0;{}\x1b\\tail",
+            &encoded[..4],
+            &encoded[4..]
+        );
         for split_at in 0..=stream.len() {
             let mut sniffer = GraphicsSniffer::new();
             let mut text = Vec::new();
-            let mut events = sniffer.feed(&stream.as_bytes()[..split_at], |bytes| text.extend_from_slice(bytes));
-            events.extend(sniffer.feed(&stream.as_bytes()[split_at..], |bytes| text.extend_from_slice(bytes)));
+            let mut events = sniffer.feed(&stream.as_bytes()[..split_at], |bytes| {
+                text.extend_from_slice(bytes)
+            });
+            events.extend(sniffer.feed(&stream.as_bytes()[split_at..], |bytes| {
+                text.extend_from_slice(bytes)
+            }));
             assert_eq!(text, b"texttail");
             match &events[0] {
-                Event::Command { control, image: Some(image) } => {
+                Event::Command {
+                    control,
+                    image: Some(image),
+                } => {
                     assert_eq!(control.id, 9);
-                    assert_eq!(image.to_rgba8().unwrap(), [0x10, 0x20, 0x30, 255, 0x40, 0x50, 0x60, 255]);
+                    assert_eq!(
+                        image.to_rgba8().unwrap(),
+                        [0x10, 0x20, 0x30, 255, 0x40, 0x50, 0x60, 255]
+                    );
                 }
                 other => panic!("image did not survive stream boundaries: {other:?}"),
             }
@@ -1234,7 +1375,10 @@ mod tests {
 
     #[test]
     fn interrupted_and_oversized_apcs_preserve_following_text() {
-        for stream in [b"\x1b_Gxx\x1b[31mred".as_slice(), b"\x1b_foreign\x1b_Gbad\x1b[31mred"] {
+        for stream in [
+            b"\x1b_Gxx\x1b[31mred".as_slice(),
+            b"\x1b_foreign\x1b_Gbad\x1b[31mred",
+        ] {
             let (text, _) = split(&[stream]);
             assert!(text.ends_with(b"\x1b[31mred"));
         }
@@ -1249,10 +1393,22 @@ mod tests {
     #[test]
     fn inflation_is_bounded_before_a_claimed_huge_image_can_allocate() {
         let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0; 4096], 6);
-        let mut image = Image { width: 1, height: 1, data: compressed, format: WireFormat::Rgba, compressed: true };
+        let mut image = Image {
+            width: 1,
+            height: 1,
+            data: compressed,
+            format: WireFormat::Rgba,
+            compressed: true,
+        };
         assert_eq!(image.to_rgba8(), None);
         assert_eq!(image.take_rgba8(), None);
-        let mut exact = Image { width: 1, height: 1, data: vec![1, 2, 3, 4], format: WireFormat::Rgba, compressed: false };
+        let mut exact = Image {
+            width: 1,
+            height: 1,
+            data: vec![1, 2, 3, 4],
+            format: WireFormat::Rgba,
+            compressed: false,
+        };
         assert_eq!(exact.take_rgba8().unwrap(), [1, 2, 3, 4]);
         assert!(exact.data.is_empty());
     }
@@ -1263,23 +1419,40 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("image.rgba");
         std::fs::write(&path, [1, 2, 3, 4]).unwrap();
-        let mut transfer = MediumTransfer { medium: Medium::File,
-            name: path.clone().into_os_string().into_encoded_bytes(), offset: 0, size: 4096,
-            width: 1, height: 1, format: WireFormat::Rgba, compressed: false };
+        let mut transfer = MediumTransfer {
+            medium: Medium::File,
+            name: path.clone().into_os_string().into_encoded_bytes(),
+            offset: 0,
+            size: 4096,
+            width: 1,
+            height: 1,
+            format: WireFormat::Rgba,
+            compressed: false,
+        };
         assert_eq!(transfer.resolve().unwrap().data, [1, 2, 3, 4]);
         assert!(path.exists());
         transfer.medium = Medium::TempFile;
         assert_eq!(transfer.resolve().unwrap().data, [1, 2, 3, 4]);
         assert!(!path.exists());
-        assert!(!path_is_in_temp_dir(std::path::Path::new("/tmp/../etc/hosts")));
+        assert!(!path_is_in_temp_dir(std::path::Path::new(
+            "/tmp/../etc/hosts"
+        )));
         assert!(!path_is_in_temp_dir(&std::env::temp_dir()));
         transfer.name = b"/dev/zero".to_vec();
         assert!(transfer.resolve().is_none());
-        for name in [b"/../../etc/passwd".as_slice(), b"/sub/dir", b"no-leading-slash", b"/", b"/.."] {
+        for name in [
+            b"/../../etc/passwd".as_slice(),
+            b"/sub/dir",
+            b"no-leading-slash",
+            b"/",
+            b"/..",
+        ] {
             assert!(!shm_name_is_wellformed(name));
         }
         let mut parser = GraphicsParser::new();
-        assert!(matches!(parser.feed(b"Ga=t,i=7,t=f;L2V0Yy9ob3N0cw=="), Some(Event::Reply(reply))
-            if reply.starts_with(b"\x1b_Gi=7;ENOTSUPPORTED:")));
+        assert!(
+            matches!(parser.feed(b"Ga=t,i=7,t=f;L2V0Yy9ob3N0cw=="), Some(Event::Reply(reply))
+            if reply.starts_with(b"\x1b_Gi=7;ENOTSUPPORTED:"))
+        );
     }
 }

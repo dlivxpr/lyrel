@@ -13,7 +13,9 @@ use crate::core::clipboard::{
     ClipboardSniffer, Event as ClipboardEvent, Segment as ClipboardSegment,
     Sniffed as ClipboardSniffed,
 };
-use crate::core::kitty_graphics::{GraphicsEffect, GraphicsSniffer, GraphicsState, Segment, Sniffed};
+use crate::core::kitty_graphics::{
+    GraphicsEffect, GraphicsSniffer, GraphicsState, Segment, Sniffed,
+};
 use crate::core::osc::OscTokenizer;
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
@@ -1124,7 +1126,9 @@ fn process_graphics_output(
                                 GraphicsEffect::Update(update) => {
                                     frames.push(GraphicsFrame::Graphics(update.encode_frame()));
                                 }
-                                GraphicsEffect::Reply(reply) => write_graphics_reply(writer, &reply),
+                                GraphicsEffect::Reply(reply) => {
+                                    write_graphics_reply(writer, &reply)
+                                }
                                 GraphicsEffect::Output(bytes) => {
                                     // The state already applied its movement.
                                     // Persist/forward it like ordinary output,
@@ -1188,7 +1192,14 @@ fn lift_out_of_band<'a>(
                 match seg {
                     ClipboardSegment::Output(b) => {
                         let sniffed = graphics.sniff(&b);
-                        process_graphics_output(sniffed, true, &mut pass, frames, state.as_deref_mut(), writer);
+                        process_graphics_output(
+                            sniffed,
+                            true,
+                            &mut pass,
+                            frames,
+                            state.as_deref_mut(),
+                            writer,
+                        );
                     }
                     ClipboardSegment::Event(ClipboardEvent::Reply(reply)) => {
                         if let Ok(mut w) = writer.lock() {
@@ -7569,9 +7580,12 @@ mod tests {
                 if let Some(entered) = self.entered.take() {
                     entered.send(()).unwrap();
                 }
-                let bytes = self.chunks.recv_timeout(Duration::from_secs(5)).map_err(|error| {
-                    std::io::Error::other(format!("controlled reader: {error}"))
-                })?;
+                let bytes = self
+                    .chunks
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|error| {
+                        std::io::Error::other(format!("controlled reader: {error}"))
+                    })?;
                 assert!(bytes.len() <= buf.len());
                 buf[..bytes.len()].copy_from_slice(&bytes);
                 Ok(bytes.len())
@@ -7589,7 +7603,10 @@ mod tests {
             state.clone(),
             shutting_down.clone(),
             Arc::new(OutputGate::new()),
-            Box::new(ControlledReader { entered: Some(entered_tx), chunks: chunks_rx }),
+            Box::new(ControlledReader {
+                entered: Some(entered_tx),
+                chunks: chunks_rx,
+            }),
             null_writer(),
             || false,
             ForegroundProbes {
@@ -7605,9 +7622,14 @@ mod tests {
         // while the reader is blocked, then let pending PTY bytes arrive.
         death.report(&state, &shutting_down);
         assert!(state.lock().unwrap().graphics.is_none());
-        assert!(matches!(sub_rx.recv_timeout(Duration::from_secs(1)), Ok(DaemonMsg::Exited { .. })));
+        assert!(matches!(
+            sub_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(DaemonMsg::Exited { .. })
+        ));
         chunks_tx.send(b"late ".to_vec()).unwrap();
-        chunks_tx.send(b"\x1b_Ga=T,i=9,f=32,s=1,v=1,q=2;/wAA".to_vec()).unwrap();
+        chunks_tx
+            .send(b"\x1b_Ga=T,i=9,f=32,s=1,v=1,q=2;/wAA".to_vec())
+            .unwrap();
         chunks_tx.send(b"/w==\x1b\\final ".to_vec()).unwrap();
         chunks_tx.send(b"\x1b]5522;type=write:id=late\x1b\\\x1b]5522;type=wdata:mime=aW1hZ2UvcG5n;cG5nLWRhdGE=\x1b\\\x1b]5522;type=wdata\x1b\\tail".to_vec()).unwrap();
         chunks_tx.send(Vec::new()).unwrap();
@@ -7618,7 +7640,9 @@ mod tests {
             match message {
                 DaemonMsg::Output(bytes) => output.extend(bytes),
                 DaemonMsg::Graphics(_) => panic!("graphics cannot revive after the pane exits"),
-                DaemonMsg::ClipboardWrite(_) => panic!("clipboard permission must still be enforced"),
+                DaemonMsg::ClipboardWrite(_) => {
+                    panic!("clipboard permission must still be enforced")
+                }
                 DaemonMsg::Exited { .. } => panic!("exit reporting remains idempotent"),
                 _ => {}
             }
@@ -7703,7 +7727,9 @@ mod tests {
                 let Ok(DaemonMsg::Graphics(frame)) = sub_rx.try_recv() else {
                     panic!("expected the placement after its resource");
                 };
-                let Some(GraphicsUpdate::Place(placement)) = GraphicsUpdate::decode_frame_owned(frame) else {
+                let Some(GraphicsUpdate::Place(placement)) =
+                    GraphicsUpdate::decode_frame_owned(frame)
+                else {
                     panic!("expected a placement");
                 };
                 assert_eq!(placement.resource, key);
@@ -7915,7 +7941,10 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(state.lock().unwrap().ring.flatten(), b"xy");
-        assert!(state.lock().unwrap().graphics.is_none(), "exit releases resources");
+        assert!(
+            state.lock().unwrap().graphics.is_none(),
+            "exit releases resources"
+        );
         assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"x"));
         let mut resource = None;
         let mut placement = None;
@@ -7932,7 +7961,10 @@ mod tests {
                     assert_eq!(Some(p.resource), resource);
                     placement = Some(p.key);
                 }
-                GraphicsUpdate::Remove { placements, resources } => {
+                GraphicsUpdate::Remove {
+                    placements,
+                    resources,
+                } => {
                     assert_eq!(placements, [placement.unwrap()]);
                     assert_eq!(resources, [resource.unwrap()]);
                 }

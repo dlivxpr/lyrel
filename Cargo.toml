@@ -288,12 +288,8 @@ version = "0.2.0"
 # The public facade supplies component, base, assets and platform layers.
 gpui-kit = "=0.8.0"
 
-# The published Rio VT parser + grid (`Crosswords`/`ansi::Processor`). Two
-# packages read it and they must agree, hence this being a workspace pin rather
-# than one each — the GUI (`terminal::remote`) to render the live mirror, and
-# lyrel-cli to turn a captured pane back into text (`lyrel capture --plain`).
-# The daemon parses nothing; it is a byte pipe, and its PTY is driven by
-# `portable-pty`.
+# 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
+# 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。
 #
 # Only the parser/grid library is taken: Rio's own PTY, windowing and
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard

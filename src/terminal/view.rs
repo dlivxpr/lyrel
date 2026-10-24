@@ -11881,88 +11881,177 @@ mod gpui_tests {
         placement
     }
 
-    fn send_graphics(stream: &mut Stream, update: lyrel_core::core::kitty_graphics::GraphicsUpdate) {
-        DaemonMsg::Graphics(update.encode_frame()).encode(stream).unwrap();
+    fn send_graphics(
+        stream: &mut Stream,
+        update: lyrel_core::core::kitty_graphics::GraphicsUpdate,
+    ) {
+        DaemonMsg::Graphics(update.encode_frame())
+            .encode(stream)
+            .unwrap();
     }
 
     #[gpui_kit::test]
-    fn graphics_consumer_upload_places_shared_cropped_bgra_at_ordered_cursor(cx: &mut TestAppContext) {
+    fn graphics_consumer_upload_places_shared_cropped_bgra_at_ordered_cursor(
+        cx: &mut TestAppContext,
+    ) {
         use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
         use std::sync::Arc;
 
         let (window, mut daemon) = harness_on(cx, PtySource::Raw);
         let (other, mut other_daemon) = harness_on(cx, PtySource::Raw);
-        send_graphics(&mut daemon, GraphicsUpdate::Resource {
-            key: 11,
-            image: Arc::new(Image {
-                width: 2, height: 1, format: WireFormat::Rgba, compressed: false,
-                data: vec![255, 0, 0, 255, 10, 20, 30, 128],
-            }),
-        });
-        DaemonMsg::Output(b"\x1b[3;6Huploaded".to_vec()).encode(&mut daemon).unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Resource {
+                key: 11,
+                image: Arc::new(Image {
+                    width: 2,
+                    height: 1,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![255, 0, 0, 255, 10, 20, 30, 128],
+                }),
+            },
+        );
+        DaemonMsg::Output(b"\x1b[3;6Huploaded".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
         for _ in 0..200 {
-            if window.update(cx, |view, _, _| view.terminal.term.lock().grid.cursor.pos.col.0 == 13).unwrap() {
+            if window
+                .update(cx, |view, _, _| {
+                    view.terminal.term.lock().grid.cursor.pos.col.0 == 13
+                })
+                .unwrap()
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        window.update(cx, |view, _, _| {
-            assert!(view.terminal.images().snapshot().is_empty(), "upload is not a display command");
-        }).unwrap();
+        window
+            .update(cx, |view, _, _| {
+                assert!(
+                    view.terminal.images().snapshot().is_empty(),
+                    "upload is not a display command"
+                );
+            })
+            .unwrap();
 
-        send_graphics(&mut daemon, GraphicsUpdate::Place(graphics_placement(21, 11)));
-        DaemonMsg::Output(b"\x1b[5;9H".to_vec()).encode(&mut daemon).unwrap();
-        send_graphics(&mut daemon, GraphicsUpdate::Place(graphics_placement(22, 11)));
-        DaemonMsg::Output(b"\x1b[9;2H".to_vec()).encode(&mut daemon).unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(21, 11)),
+        );
+        DaemonMsg::Output(b"\x1b[5;9H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(22, 11)),
+        );
+        DaemonMsg::Output(b"\x1b[9;2H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
         for _ in 0..200 {
-            let ready = window.update(cx, |view, _, _| view.terminal.images().snapshot().len() == 2).unwrap();
-            if ready { break; }
+            let ready = window
+                .update(cx, |view, _, _| {
+                    view.terminal.images().snapshot().len() == 2
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        window.update(cx, |view, _, _| {
-            let images = view.terminal.images().snapshot();
-            assert_eq!(images.len(), 2);
-            let first = images.iter().find(|image| image.placement.key == 21).unwrap();
-            let second = images.iter().find(|image| image.placement.key == 22).unwrap();
-            assert_eq!((first.anchor_row, first.anchor_col), (2, 13));
-            assert_eq!((second.anchor_row, second.anchor_col), (4, 8));
-            assert_eq!(first.data.as_bytes(0).unwrap(), &[0, 0, 255, 255, 30, 20, 10, 128]);
-            assert!(Arc::ptr_eq(&first.data, &second.data));
-            assert!(Arc::ptr_eq(&first.painted, &second.painted));
-            let (crop, full) = first.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
-            assert_eq!(crop, Bounds::new(point(px(130.), px(40.)), gpui_kit::size(px(40.), px(40.))));
-            assert_eq!(full, Bounds::new(point(px(90.), px(40.)), gpui_kit::size(px(80.), px(40.))));
-            let mut natural = first.clone();
-            natural.placement.x = 0;
-            natural.placement.w = 2;
-            natural.placement.cols = 0;
-            natural.placement.rows = 0;
-            let (natural_bounds, _) = natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
-            assert_eq!(natural_bounds.size, gpui_kit::size(px(1.), px(0.5)));
-            natural.placement.cols = 3;
-            natural.placement.offset_x = 4;
-            let (width_only, _) = natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
-            assert_eq!(width_only.size, gpui_kit::size(px(28.), px(14.)));
-            assert_eq!(width_only.origin.x, px(132.));
-            natural.placement.cols = 0;
-            natural.placement.rows = 3;
-            natural.placement.offset_x = 0;
-            natural.placement.offset_y = 4;
-            let (height_only, _) = natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
-            assert_eq!(height_only.size, gpui_kit::size(px(116.), px(58.)));
-            natural.placement.cols = 2;
-            let (contained, _) = natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
-            assert_eq!(contained.size, gpui_kit::size(px(20.), px(10.)), "both spans contain rather than stretch the crop");
-        }).unwrap();
-        other.update(cx, |view, _, _| assert!(view.terminal.images().snapshot().is_empty())).unwrap();
-        send_graphics(&mut other_daemon, GraphicsUpdate::Resource {
-            key: 11,
-            image: Arc::new(Image { width: 2, height: 1, format: WireFormat::Rgb,
-                compressed: false, data: vec![40, 50, 60, 70, 80, 90] }),
-        });
-        send_graphics(&mut other_daemon, GraphicsUpdate::Place(graphics_placement(21, 11)));
+        window
+            .update(cx, |view, _, _| {
+                let images = view.terminal.images().snapshot();
+                assert_eq!(images.len(), 2);
+                let first = images
+                    .iter()
+                    .find(|image| image.placement.key == 21)
+                    .unwrap();
+                let second = images
+                    .iter()
+                    .find(|image| image.placement.key == 22)
+                    .unwrap();
+                assert_eq!((first.anchor_row, first.anchor_col), (2, 13));
+                assert_eq!((second.anchor_row, second.anchor_col), (4, 8));
+                assert_eq!(
+                    first.data.as_bytes(0).unwrap(),
+                    &[0, 0, 255, 255, 30, 20, 10, 128]
+                );
+                assert!(Arc::ptr_eq(&first.data, &second.data));
+                assert!(Arc::ptr_eq(&first.painted, &second.painted));
+                let (crop, full) =
+                    first.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+                assert_eq!(
+                    crop,
+                    Bounds::new(point(px(130.), px(40.)), gpui_kit::size(px(40.), px(40.)))
+                );
+                assert_eq!(
+                    full,
+                    Bounds::new(point(px(90.), px(40.)), gpui_kit::size(px(80.), px(40.)))
+                );
+                let mut natural = first.clone();
+                natural.placement.x = 0;
+                natural.placement.w = 2;
+                natural.placement.cols = 0;
+                natural.placement.rows = 0;
+                let (natural_bounds, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(natural_bounds.size, gpui_kit::size(px(1.), px(0.5)));
+                natural.placement.cols = 3;
+                natural.placement.offset_x = 4;
+                let (width_only, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(width_only.size, gpui_kit::size(px(28.), px(14.)));
+                assert_eq!(width_only.origin.x, px(132.));
+                natural.placement.cols = 0;
+                natural.placement.rows = 3;
+                natural.placement.offset_x = 0;
+                natural.placement.offset_y = 4;
+                let (height_only, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(height_only.size, gpui_kit::size(px(116.), px(58.)));
+                natural.placement.cols = 2;
+                let (contained, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(
+                    contained.size,
+                    gpui_kit::size(px(20.), px(10.)),
+                    "both spans contain rather than stretch the crop"
+                );
+            })
+            .unwrap();
+        other
+            .update(cx, |view, _, _| {
+                assert!(view.terminal.images().snapshot().is_empty())
+            })
+            .unwrap();
+        send_graphics(
+            &mut other_daemon,
+            GraphicsUpdate::Resource {
+                key: 11,
+                image: Arc::new(Image {
+                    width: 2,
+                    height: 1,
+                    format: WireFormat::Rgb,
+                    compressed: false,
+                    data: vec![40, 50, 60, 70, 80, 90],
+                }),
+            },
+        );
+        send_graphics(
+            &mut other_daemon,
+            GraphicsUpdate::Place(graphics_placement(21, 11)),
+        );
         for _ in 0..200 {
-            if other.update(cx, |view, _, _| !view.terminal.images().snapshot().is_empty()).unwrap() { break; }
+            if other
+                .update(cx, |view, _, _| {
+                    !view.terminal.images().snapshot().is_empty()
+                })
+                .unwrap()
+            {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
@@ -11970,99 +12059,190 @@ mod gpui_tests {
         replacement.x = 0;
         replacement.cols = 2;
         send_graphics(&mut daemon, GraphicsUpdate::Place(replacement));
-        send_graphics(&mut daemon, GraphicsUpdate::Remove { placements: vec![22], resources: vec![] });
-        DaemonMsg::Output(b"done".to_vec()).encode(&mut daemon).unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Remove {
+                placements: vec![22],
+                resources: vec![],
+            },
+        );
+        DaemonMsg::Output(b"done".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
         for _ in 0..200 {
-            let ready = window.update(cx, |view, _, _| {
-                let images = view.terminal.images().snapshot();
-                images.len() == 1 && images[0].placement.cols == 2
-            }).unwrap();
-            if ready { break; }
+            let ready = window
+                .update(cx, |view, _, _| {
+                    let images = view.terminal.images().snapshot();
+                    images.len() == 1 && images[0].placement.cols == 2
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        window.update(cx, |view, _, _| {
-            let images = view.terminal.images().snapshot();
-            assert_eq!(images.len(), 1);
-            assert_eq!((images[0].placement.key, images[0].placement.x, images[0].placement.cols), (21, 0, 2));
-            assert_eq!((images[0].anchor_row, images[0].anchor_col), (8, 1));
-            assert_eq!(images[0].data.as_bytes(0).unwrap(), &[0, 0, 255, 255, 30, 20, 10, 128]);
-        }).unwrap();
-        other.update(cx, |view, _, _| {
-            let images = view.terminal.images().snapshot();
-            assert_eq!(images.len(), 1);
-            assert_eq!(images[0].data.as_bytes(0).unwrap(), &[60, 50, 40, 255, 90, 80, 70, 255]);
-            assert_eq!(images[0].placement.cols, 4, "the other pane's same-key update must not leak here");
-        }).unwrap();
+        window
+            .update(cx, |view, _, _| {
+                let images = view.terminal.images().snapshot();
+                assert_eq!(images.len(), 1);
+                assert_eq!(
+                    (
+                        images[0].placement.key,
+                        images[0].placement.x,
+                        images[0].placement.cols
+                    ),
+                    (21, 0, 2)
+                );
+                assert_eq!((images[0].anchor_row, images[0].anchor_col), (8, 1));
+                assert_eq!(
+                    images[0].data.as_bytes(0).unwrap(),
+                    &[0, 0, 255, 255, 30, 20, 10, 128]
+                );
+            })
+            .unwrap();
+        other
+            .update(cx, |view, _, _| {
+                let images = view.terminal.images().snapshot();
+                assert_eq!(images.len(), 1);
+                assert_eq!(
+                    images[0].data.as_bytes(0).unwrap(),
+                    &[60, 50, 40, 255, 90, 80, 70, 255]
+                );
+                assert_eq!(
+                    images[0].placement.cols, 4,
+                    "the other pane's same-key update must not leak here"
+                );
+            })
+            .unwrap();
     }
 
     #[gpui_kit::test]
-    fn graphics_consumer_paint_uses_visible_crop_and_skips_resources_outside_pane(cx: &mut TestAppContext) {
+    fn graphics_consumer_paint_uses_visible_crop_and_skips_resources_outside_pane(
+        cx: &mut TestAppContext,
+    ) {
         use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
         use std::sync::{Arc, atomic::Ordering};
 
         let (window, view, mut daemon) = rooted_harness(cx);
         window.update(cx, |_, window, _| window.refresh()).unwrap();
-        cx.executor().advance_clock(std::time::Duration::from_millis(400));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
         cx.run_until_parked();
         for key in [61, 62] {
-            send_graphics(&mut daemon, GraphicsUpdate::Resource {
-                key,
-                image: Arc::new(Image { width: 2, height: 1, format: WireFormat::Rgba,
-                    compressed: false, data: vec![255, 0, 0, 255, 0, 200, 0, 80] }),
-            });
+            send_graphics(
+                &mut daemon,
+                GraphicsUpdate::Resource {
+                    key,
+                    image: Arc::new(Image {
+                        width: 2,
+                        height: 1,
+                        format: WireFormat::Rgba,
+                        compressed: false,
+                        data: vec![255, 0, 0, 255, 0, 200, 0, 80],
+                    }),
+                },
+            );
         }
-        send_graphics(&mut daemon, GraphicsUpdate::Place(graphics_placement(71, 61)));
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(71, 61)),
+        );
         let mut output = b"\r\n".repeat(200);
         output.extend_from_slice(b"\x1b[H");
         DaemonMsg::Output(output).encode(&mut daemon).unwrap();
-        send_graphics(&mut daemon, GraphicsUpdate::Place(graphics_placement(72, 62)));
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(72, 62)),
+        );
         // Hold the UI pump until both decodes finish, so the first resource
         // cannot have been submitted to the atlas before scrolling offscreen.
         for _ in 0..200 {
-            if view.read_with(cx, |view, _| view.terminal.images().snapshot().len() == 2) { break; }
+            if view.read_with(cx, |view, _| view.terminal.images().snapshot().len() == 2) {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         window.update(cx, |_, window, _| window.refresh()).unwrap();
-        cx.executor().advance_clock(std::time::Duration::from_millis(400));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             let images = view.terminal.images().snapshot();
-            let outside = images.iter().find(|image| image.placement.key == 71).unwrap();
-            let visible = images.iter().find(|image| image.placement.key == 72).unwrap();
-            assert!(!outside.painted.load(Ordering::Acquire), "fully clipped resources must not allocate atlas tiles");
-            assert!(visible.painted.load(Ordering::Acquire), "real TerminalElement paint must claim the visible resource");
-            assert_eq!(visible.data.as_bytes(0).unwrap(), &[0, 0, 255, 255, 0, 200, 0, 80]);
-            assert_eq!((visible.placement.x, visible.placement.w, visible.placement.h), (1, 1, 1));
+            let outside = images
+                .iter()
+                .find(|image| image.placement.key == 71)
+                .unwrap();
+            let visible = images
+                .iter()
+                .find(|image| image.placement.key == 72)
+                .unwrap();
+            assert!(
+                !outside.painted.load(Ordering::Acquire),
+                "fully clipped resources must not allocate atlas tiles"
+            );
+            assert!(
+                visible.painted.load(Ordering::Acquire),
+                "real TerminalElement paint must claim the visible resource"
+            );
+            assert_eq!(
+                visible.data.as_bytes(0).unwrap(),
+                &[0, 0, 255, 255, 0, 200, 0, 80]
+            );
+            assert_eq!(
+                (
+                    visible.placement.x,
+                    visible.placement.w,
+                    visible.placement.h
+                ),
+                (1, 1, 1)
+            );
         });
     }
 
     #[gpui_kit::test]
-    fn graphics_consumer_hidden_decode_keeps_pixels_without_notifying_window(cx: &mut TestAppContext) {
+    fn graphics_consumer_hidden_decode_keeps_pixels_without_notifying_window(
+        cx: &mut TestAppContext,
+    ) {
         use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
         use std::{cell::Cell, rc::Rc, sync::Arc};
 
         let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-        let pane = window.update(cx, |view, _, cx| {
-            view.displayed.store(false, std::sync::atomic::Ordering::Relaxed);
-            cx.entity()
-        }).unwrap();
+        let pane = window
+            .update(cx, |view, _, cx| {
+                view.displayed
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                cx.entity()
+            })
+            .unwrap();
         cx.run_until_parked();
         let notifications = Rc::new(Cell::new(0));
         let count = notifications.clone();
-        let _subscription = cx.update(|cx| cx.observe(&pane, move |_, _| {
-            count.set(count.get() + 1);
-        }));
-        send_graphics(&mut daemon, GraphicsUpdate::Resource {
-            key: 41,
-            image: Arc::new(Image { width: 1, height: 1, format: WireFormat::Rgba,
-                compressed: false, data: vec![1, 2, 3, 64] }),
+        let _subscription = cx.update(|cx| {
+            cx.observe(&pane, move |_, _| {
+                count.set(count.get() + 1);
+            })
         });
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Resource {
+                key: 41,
+                image: Arc::new(Image {
+                    width: 1,
+                    height: 1,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![1, 2, 3, 64],
+                }),
+            },
+        );
         let mut placement = graphics_placement(51, 41);
         placement.x = 0;
         send_graphics(&mut daemon, GraphicsUpdate::Place(placement));
         for _ in 0..200 {
             cx.run_until_parked();
-            if pane.read_with(cx, |view, _| !view.terminal.images().snapshot().is_empty()) { break; }
+            if pane.read_with(cx, |view, _| !view.terminal.images().snapshot().is_empty()) {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         cx.run_until_parked();
@@ -12071,18 +12251,36 @@ mod gpui_tests {
             assert_eq!(images[0].data.as_bytes(0).unwrap(), &[3, 2, 1, 64]);
             assert!(!images[0].painted.load(std::sync::atomic::Ordering::Acquire));
         });
-        assert_eq!(notifications.get(), 0, "decoded hidden output must not dirty the window");
-        window.update(cx, |view, _, _| view.displayed.store(true, std::sync::atomic::Ordering::Relaxed)).unwrap();
-        send_graphics(&mut daemon, GraphicsUpdate::Remove { placements: vec![51], resources: vec![41] });
+        assert_eq!(
+            notifications.get(),
+            0,
+            "decoded hidden output must not dirty the window"
+        );
+        window
+            .update(cx, |view, _, _| {
+                view.displayed
+                    .store(true, std::sync::atomic::Ordering::Relaxed)
+            })
+            .unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Remove {
+                placements: vec![51],
+                resources: vec![41],
+            },
+        );
         for _ in 0..200 {
             cx.run_until_parked();
-            if notifications.get() > 0 { break; }
+            if notifications.get() > 0 {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(notifications.get() > 0, "a visible removal must repaint");
-        pane.read_with(cx, |view, _| assert!(view.terminal.images().snapshot().is_empty()));
+        pane.read_with(cx, |view, _| {
+            assert!(view.terminal.images().snapshot().is_empty())
+        });
     }
-
 
     #[gpui_kit::test]
     fn clearing_the_scrollback_drops_the_selection_anchored_in_it(cx: &mut TestAppContext) {

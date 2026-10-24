@@ -2500,11 +2500,14 @@ mod kitty_graphics {
         unsafe {
             use windows_sys::Win32::System::Console::{
                 ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
-                ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-                GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
+                ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetStdHandle, STD_INPUT_HANDLE,
+                STD_OUTPUT_HANDLE, SetConsoleMode,
             };
             assert_ne!(
-                SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), ENABLE_VIRTUAL_TERMINAL_INPUT),
+                SetConsoleMode(
+                    GetStdHandle(STD_INPUT_HANDLE),
+                    ENABLE_VIRTUAL_TERMINAL_INPUT
+                ),
                 0
             );
             assert_ne!(
@@ -2606,21 +2609,31 @@ mod kitty_graphics {
         fn apply(&mut self, update: GraphicsUpdate) {
             match &update {
                 GraphicsUpdate::Resource { key, image } => {
-                    assert!(!self.resources.contains_key(key), "resource keys cannot be reused");
+                    assert!(
+                        !self.resources.contains_key(key),
+                        "resource keys cannot be reused"
+                    );
                     self.resources.insert(*key, image.clone());
                 }
                 GraphicsUpdate::Place(placement) => {
                     assert!(self.resources.contains_key(&placement.resource));
                     self.placements.insert(placement.key, placement.clone());
                 }
-                GraphicsUpdate::Remove { placements, resources } => {
+                GraphicsUpdate::Remove {
+                    placements,
+                    resources,
+                } => {
                     for key in placements {
                         self.placements.remove(key);
                     }
                     for key in resources {
                         self.resources.remove(key);
                     }
-                    assert!(self.placements.values().all(|p| self.resources.contains_key(&p.resource)));
+                    assert!(
+                        self.placements
+                            .values()
+                            .all(|p| self.resources.contains_key(&p.resource))
+                    );
                 }
             }
             self.updates.push(update);
@@ -2636,10 +2649,16 @@ mod kitty_graphics {
             loop {
                 match self.session.recv().expect("ordered daemon graphics stream") {
                     DaemonMsg::Graphics(frame) => {
-                        self.apply(GraphicsUpdate::decode_frame_owned(frame).expect("valid graphics update"));
+                        self.apply(
+                            GraphicsUpdate::decode_frame_owned(frame)
+                                .expect("valid graphics update"),
+                        );
                     }
                     DaemonMsg::Output(bytes) => {
-                        assert!(!windows_contain(&bytes, b"\x1b_G"), "pixels must not enter text output");
+                        assert!(
+                            !windows_contain(&bytes, b"\x1b_G"),
+                            "pixels must not enter text output"
+                        );
                         plain.extend(bytes);
                         if windows_contain(&plain, marker.as_bytes()) {
                             break;
@@ -2657,16 +2676,23 @@ mod kitty_graphics {
         }
 
         fn command(&mut self, control: &str) {
-            assert!(self.send(format!("\x1b_G{control},q=2\x1b\\").as_bytes(), 0).is_empty());
+            assert!(
+                self.send(format!("\x1b_G{control},q=2\x1b\\").as_bytes(), 0)
+                    .is_empty()
+            );
         }
 
         fn red(&mut self, control: &str) {
-            self.send(format!("\x1b_G{control},f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").as_bytes(), 0);
+            self.send(
+                format!("\x1b_G{control},f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").as_bytes(),
+                0,
+            );
         }
 
         fn red_at(&mut self, row: u32, col: u32, control: &str) {
             self.send(
-                format!("\x1b[{row};{col}H\x1b_G{control},f=32,s=1,v=1,q=2;/wAA/w==\x1b\\").as_bytes(),
+                format!("\x1b[{row};{col}H\x1b_G{control},f=32,s=1,v=1,q=2;/wAA/w==\x1b\\")
+                    .as_bytes(),
                 0,
             );
         }
@@ -2704,7 +2730,11 @@ mod kitty_graphics {
         let accepted = pane.send(b"\x1b_Ga=t,i=2000,f=32,s=1,v=1;/wAA/w==\x1b\\", 1);
         assert_eq!(accepted, [b"\x1b_Gi=2000;OK\x1b\\".to_vec()]);
         pane.command("a=p,i=2000,p=8,C=1");
-        let newly_placed = pane.placements.values().find(|p| p.image_id == 2000).unwrap();
+        let newly_placed = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 2000)
+            .unwrap();
         assert_eq!(pane.pixel(newly_placed), [255, 0, 0, 255]);
         assert_eq!(pane.pixel(&current), [255, 0, 0, 255]);
     }
@@ -2719,51 +2749,98 @@ mod kitty_graphics {
         assert_eq!(reply, [b"\x1b_Gi=11;OK\x1b\\".to_vec()]);
         assert!(pane.placements.is_empty(), "a=t only stores the resource");
         let resource = *pane.resources.keys().next().unwrap();
-        assert_eq!(pane.resources[&resource].to_rgba8().unwrap(), [255, 0, 0, 255, 0, 255, 0, 255]);
+        assert_eq!(
+            pane.resources[&resource].to_rgba8().unwrap(),
+            [255, 0, 0, 255, 0, 255, 0, 255]
+        );
         pane.command("a=p,i=11,p=8,x=1,y=0,w=99,h=1,c=3,r=2,X=1,Y=2,z=-2,C=1");
         let placed = pane.placements.values().next().unwrap().clone();
         assert_eq!(placed.resource, resource);
         assert_eq!((placed.image_id, placed.placement_id), (11, 8));
         assert_eq!((placed.x, placed.y, placed.w, placed.h), (1, 0, 1, 1));
-        assert_eq!((placed.cols, placed.rows, placed.offset_x, placed.offset_y, placed.z), (3, 2, 1, 2, -2));
+        assert_eq!(
+            (
+                placed.cols,
+                placed.rows,
+                placed.offset_x,
+                placed.offset_y,
+                placed.z
+            ),
+            (3, 2, 1, 2, -2)
+        );
         assert_eq!(&pane.pixel(&placed)[4..8], &[0, 255, 0, 255]);
         pane.command("a=p,i=11,p=8,c=2,r=1,C=1");
         assert_eq!(pane.placements.len(), 1);
-        assert_eq!(pane.placements[&placed.key].cols, 2, "explicit p replaces only that placement");
+        assert_eq!(
+            pane.placements[&placed.key].cols, 2,
+            "explicit p replaces only that placement"
+        );
         pane.command("a=p,i=11,C=1");
         pane.command("a=p,i=11,C=1");
-        assert_eq!(pane.placements.len(), 3, "p=0 creates independent placements");
+        assert_eq!(
+            pane.placements.len(),
+            3,
+            "p=0 creates independent placements"
+        );
         assert!(pane.placements.values().all(|p| p.resource == resource));
         pane.command("a=d,d=I,i=11,p=8");
         assert_eq!(pane.placements.len(), 2);
-        assert!(pane.resources.contains_key(&resource), "other placements keep a scoped-deleted resource alive");
+        assert!(
+            pane.resources.contains_key(&resource),
+            "other placements keep a scoped-deleted resource alive"
+        );
         pane.red("a=t,i=11");
-        assert!(pane.placements.is_empty(), "retransmission removes the old placements");
+        assert!(
+            pane.placements.is_empty(),
+            "retransmission removes the old placements"
+        );
         assert!(!pane.resources.contains_key(&resource));
         let replacement = *pane.resources.keys().next().unwrap();
         assert_ne!(replacement, resource);
         pane.command("a=p,i=11,C=1");
-        assert_eq!(pane.pixel(pane.placements.values().next().unwrap()), [255, 0, 0, 255]);
+        assert_eq!(
+            pane.pixel(pane.placements.values().next().unwrap()),
+            [255, 0, 0, 255]
+        );
         pane.red("a=T,C=1");
         pane.red("a=T,C=1");
-        assert_eq!(pane.placements.len(), 3, "anonymous images must not replace one another");
+        assert_eq!(
+            pane.placements.len(),
+            3,
+            "anonymous images must not replace one another"
+        );
         assert_eq!(pane.resources.len(), 3);
         pane.red("a=t,I=77");
         let older = *pane.resources.keys().max().unwrap();
         pane.command("a=p,I=77,p=4,C=1");
-        let older_placement = pane.placements.values().find(|p| p.resource == older).unwrap().clone();
+        let older_placement = pane
+            .placements
+            .values()
+            .find(|p| p.resource == older)
+            .unwrap()
+            .clone();
         pane.red("a=t,I=77");
         let newest = *pane.resources.keys().max().unwrap();
         pane.command("a=p,I=77,p=4,C=1");
-        let numbered = pane.placements.values().find(|p| p.resource == newest).unwrap();
+        let numbered = pane
+            .placements
+            .values()
+            .find(|p| p.resource == newest)
+            .unwrap();
         assert_ne!(numbered.image_id, 0);
-        assert_ne!(numbered.image_id, older_placement.image_id, "repeated I allocates independent identities");
+        assert_ne!(
+            numbered.image_id, older_placement.image_id,
+            "repeated I allocates independent identities"
+        );
         assert_ne!(numbered.resource, older_placement.resource);
         assert_eq!(pane.placements[&older_placement.key], older_placement);
         assert_eq!(pane.pixel(numbered), [255, 0, 0, 255]);
         // Control remains the same production dialect while pane v8 streams
         // authoritative updates; no testing API is exported by the daemon.
-        assert!(matches!(control.request(ControlRequest::MachineGet).unwrap(), ReplyOk::MachineTree(_)));
+        assert!(matches!(
+            control.request(ControlRequest::MachineGet).unwrap(),
+            ReplyOk::MachineTree(_)
+        ));
     }
 
     #[test]
@@ -2778,8 +2855,18 @@ mod kitty_graphics {
                 // following text barrier deliberately moves the cursor.
                 pane.red_at(2, 3, "a=T,I=81,p=1,c=2,r=2,z=-2,C=1");
                 pane.red_at(6, 7, "a=T,I=82,p=2,c=2,r=2,z=4,C=1");
-                let first = pane.placements.values().find(|p| p.placement_id == 1).unwrap().clone();
-                let second = pane.placements.values().find(|p| p.placement_id == 2).unwrap().clone();
+                let first = pane
+                    .placements
+                    .values()
+                    .find(|p| p.placement_id == 1)
+                    .unwrap()
+                    .clone();
+                let second = pane
+                    .placements
+                    .values()
+                    .find(|p| p.placement_id == 2)
+                    .unwrap()
+                    .clone();
                 let parameters = match target {
                     "i" => format!(",i={},p=1", first.image_id),
                     "n" => ",I=81".into(),
@@ -2791,20 +2878,43 @@ mod kitty_graphics {
                     "r" => format!(",x={0},y={0}", first.image_id),
                     _ => String::new(),
                 };
-                let target_case = if release { target.to_ascii_uppercase() } else { target.into() };
+                let target_case = if release {
+                    target.to_ascii_uppercase()
+                } else {
+                    target.into()
+                };
                 let selector = format!("d={target_case}{parameters}");
-                pane.send(format!("\x1b[2;3H\x1b_Ga=d,{selector},q=2\x1b\\").as_bytes(), 0);
+                pane.send(
+                    format!("\x1b[2;3H\x1b_Ga=d,{selector},q=2\x1b\\").as_bytes(),
+                    0,
+                );
                 assert!(!pane.placements.contains_key(&first.key), "{selector}");
                 let all = target == "a";
-                assert_eq!(pane.placements.contains_key(&second.key), !all, "{selector}");
-                assert_eq!(pane.resources.contains_key(&first.resource), !release, "{selector}");
-                assert_eq!(pane.resources.contains_key(&second.resource), !(release && all), "{selector}");
+                assert_eq!(
+                    pane.placements.contains_key(&second.key),
+                    !all,
+                    "{selector}"
+                );
+                assert_eq!(
+                    pane.resources.contains_key(&first.resource),
+                    !release,
+                    "{selector}"
+                );
+                assert_eq!(
+                    pane.resources.contains_key(&second.resource),
+                    !(release && all),
+                    "{selector}"
+                );
                 if !all {
                     assert_eq!(pane.pixel(&second), [255, 0, 0, 255]);
                 }
                 if !release {
                     pane.command(&format!("a=p,i={},C=1", first.image_id));
-                    assert!(pane.placements.values().any(|p| p.resource == first.resource));
+                    assert!(
+                        pane.placements
+                            .values()
+                            .any(|p| p.resource == first.resource)
+                    );
                 }
             }
         }
@@ -2826,15 +2936,23 @@ mod kitty_graphics {
         second.send(b"\x1b_Ga=t,i=9,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\", 0);
         first.command("a=p,i=9,C=1");
         second.command("a=p,i=9,C=1");
-        assert_eq!(first.pixel(first.placements.values().next().unwrap()), [255, 0, 0, 255]);
-        assert_eq!(second.pixel(second.placements.values().next().unwrap()), [0, 255, 0, 255]);
+        assert_eq!(
+            first.pixel(first.placements.values().next().unwrap()),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            second.pixel(second.placements.values().next().unwrap()),
+            [0, 255, 0, 255]
+        );
         let quiet = first.send(
-            b"\x1b_Ga=p,i=9,q=1,C=1\x1b\\\x1b_Ga=p,i=404,p=12,q=1\x1b\\", 1,
+            b"\x1b_Ga=p,i=9,q=1,C=1\x1b\\\x1b_Ga=p,i=404,p=12,q=1\x1b\\",
+            1,
         );
         assert_eq!(quiet.len(), 1, "q=1 suppresses success, not errors");
         assert!(quiet[0].starts_with(b"\x1b_Gi=404,p=12;ENOENT"));
         let silent = first.send(
-            b"\x1b_Ga=p,i=405,p=13,q=2\x1b\\\x1b_Ga=p,i=406,p=14\x1b\\", 1,
+            b"\x1b_Ga=p,i=405,p=13,q=2\x1b\\\x1b_Ga=p,i=406,p=14\x1b\\",
+            1,
         );
         assert_eq!(silent.len(), 1, "q=2 suppresses errors as well");
         assert!(silent[0].starts_with(b"\x1b_Gi=406,p=14;ENOENT"));
@@ -2845,17 +2963,28 @@ mod kitty_graphics {
         let crop = first.send(b"\x1b_Ga=p,i=9,p=16,x=99,w=1\x1b\\", 1);
         assert_eq!(crop.len(), 1);
         assert!(crop[0].starts_with(b"\x1b_Gi=9,p=16;EINVAL"));
-        assert_eq!(first.placements, before, "an invalid crop cannot mutate accepted placements");
+        assert_eq!(
+            first.placements, before,
+            "an invalid crop cannot mutate accepted placements"
+        );
         first.command("a=d,d=I,i=9");
         assert!(first.resources.is_empty());
         assert!(first.placements.is_empty());
         second.command("a=p,i=9,C=1");
-        assert!(second.placements.values().all(|p| second.pixel(p) == [0, 255, 0, 255]));
+        assert!(
+            second
+                .placements
+                .values()
+                .all(|p| second.pixel(p) == [0, 255, 0, 255])
+        );
         // A text-only reattach must not persist APC/base64 pixels into scrollback.
         let id = second.session.pane_id();
         second.session.detach().unwrap();
         second.session = daemon.panes().attach(id, size()).unwrap();
-        second.session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+        second
+            .session
+            .set_recv_timeout(Some(STREAM_WITHIN))
+            .unwrap();
         loop {
             if let DaemonMsg::Snapshot(bytes) = second.session.recv().unwrap() {
                 assert!(!windows_contain(&bytes, b"\x1b_G"));
@@ -2864,7 +2993,12 @@ mod kitty_graphics {
             }
         }
         second.command("a=p,i=9,C=1");
-        assert!(second.placements.values().all(|p| second.pixel(p) == [0, 255, 0, 255]));
+        assert!(
+            second
+                .placements
+                .values()
+                .all(|p| second.pixel(p) == [0, 255, 0, 255])
+        );
     }
 
     #[test]
@@ -2879,26 +3013,68 @@ mod kitty_graphics {
             b"\x1b[3;4H\x1b_Ga=T,i=5,f=32,s=1,v=1,c=2,r=2,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=6,f=32,s=1,v=1,c=1,r=1,C=1,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=7,f=32,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\\x1b_Ga=T,i=10,f=32,s=1,v=1,c=1,r=1,C=1,q=2;/wAA/w==\x1b\\",
             0,
         );
-        let moved = pane.placements.values().find(|p| p.image_id == 6).unwrap().clone();
-        let stationary = pane.placements.values().find(|p| p.image_id == 5).unwrap().clone();
-        let same_row = pane.placements.values().find(|p| p.image_id == 10).unwrap().clone();
+        let moved = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 6)
+            .unwrap()
+            .clone();
+        let stationary = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 5)
+            .unwrap()
+            .clone();
+        let same_row = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 10)
+            .unwrap()
+            .clone();
         pane.command("a=d,d=p,x=6,y=4");
-        assert!(!pane.placements.contains_key(&moved.key), "placement sees movement exactly once");
+        assert!(
+            !pane.placements.contains_key(&moved.key),
+            "placement sees movement exactly once"
+        );
         assert!(pane.placements.contains_key(&stationary.key));
         assert_eq!(pane.pixel(&stationary), [255, 0, 0, 255]);
         pane.command("a=d,d=p,x=7,y=4");
-        assert!(!pane.placements.contains_key(&same_row.key), "a one-row placement moves right without moving down");
+        assert!(
+            !pane.placements.contains_key(&same_row.key),
+            "a one-row placement moves right without moving down"
+        );
 
-        pane.session.resize(WinSize { cell_w: 1, cell_h: 1, ..size() }).unwrap();
+        pane.session
+            .resize(WinSize {
+                cell_w: 1,
+                cell_h: 1,
+                ..size()
+            })
+            .unwrap();
         pane.send(
             b"\x1b[3;4H\x1b_Ga=T,i=8,f=32,s=2,v=1,C=1,q=2;/wAA/wD/AP8=\x1b\\",
             0,
         );
-        let natural = pane.placements.values().find(|p| p.image_id == 8).unwrap().clone();
-        assert_eq!((natural.cols, natural.rows), (0, 0), "wire retains natural-size request");
+        let natural = pane
+            .placements
+            .values()
+            .find(|p| p.image_id == 8)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (natural.cols, natural.rows),
+            (0, 0),
+            "wire retains natural-size request"
+        );
         pane.command("a=d,d=p,x=5,y=3");
-        assert!(!pane.placements.contains_key(&natural.key), "resized cell pixels determine occupied span");
-        assert_eq!(pane.resources[&natural.resource].to_rgba8().unwrap(), [255, 0, 0, 255, 0, 255, 0, 255]);
+        assert!(
+            !pane.placements.contains_key(&natural.key),
+            "resized cell pixels determine occupied span"
+        );
+        assert_eq!(
+            pane.resources[&natural.resource].to_rgba8().unwrap(),
+            [255, 0, 0, 255, 0, 255, 0, 255]
+        );
 
         let id = pane.session.pane_id();
         pane.session.detach().unwrap();
@@ -2906,9 +3082,18 @@ mod kitty_graphics {
         attached.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
         loop {
             if let DaemonMsg::Snapshot(bytes) = attached.recv().unwrap() {
-                assert!(windows_contain(&bytes, b"\x1b[2C"), "horizontal cursor effect is ordinary replay output");
-                assert!(windows_contain(&bytes, b"\x1b[1B"), "vertical cursor effect is ordinary replay output");
-                assert!(!windows_contain(&bytes, b"\x1b[0B"), "zero vertical movement must not become CSI 0 B");
+                assert!(
+                    windows_contain(&bytes, b"\x1b[2C"),
+                    "horizontal cursor effect is ordinary replay output"
+                );
+                assert!(
+                    windows_contain(&bytes, b"\x1b[1B"),
+                    "vertical cursor effect is ordinary replay output"
+                );
+                assert!(
+                    !windows_contain(&bytes, b"\x1b[0B"),
+                    "zero vertical movement must not become CSI 0 B"
+                );
                 assert!(!windows_contain(&bytes, b"/wAA/wD/AP8="));
                 break;
             }

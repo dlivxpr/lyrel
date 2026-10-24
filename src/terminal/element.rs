@@ -2487,20 +2487,33 @@ impl Element for TerminalElement {
         let paint_images = |window: &mut Window, z: std::ops::Range<i64>| {
             // Separate crop/full-texture bounds select atlas UVs; no placement
             // owns a copied pixel buffer. The enclosing pane mask still applies.
-            for img in images.iter().filter(|image| z.contains(&i64::from(image.placement.z))) {
+            for img in images
+                .iter()
+                .filter(|image| z.contains(&i64::from(image.placement.z)))
+            {
                 let (bounds, image_bounds) = img.paint_bounds(
-                    geom.origin, geom.cell_width, geom.line_height,
-                    snap.history_size, snap.display_offset, window.scale_factor(),
+                    geom.origin,
+                    geom.cell_width,
+                    geom.line_height,
+                    snap.history_size,
+                    snap.display_offset,
+                    window.scale_factor(),
                 );
                 let visible = bounds.intersect(&window.content_mask().bounds);
-                if visible.size.width <= px(0.) || visible.size.height <= px(0.)
+                if visible.size.width <= px(0.)
+                    || visible.size.height <= px(0.)
                     || !image_store.claim_for_paint(img)
                 {
                     continue;
                 }
                 window.paint_layer(visible, |window| {
                     let _ = window.paint_image(
-                        bounds, image_bounds, Corners::default(), img.data.clone(), 0, false,
+                        bounds,
+                        image_bounds,
+                        Corners::default(),
+                        img.data.clone(),
+                        0,
+                        false,
                     );
                     if dim < 1. {
                         let mut c: Hsla = under.into();
@@ -2511,11 +2524,16 @@ impl Element for TerminalElement {
             }
         };
         let below_background = -(1_i64 << 30);
-        let sliver = sliver.map(|row| (CellGeom {
-            origin: point(geom.origin.x, geom.origin.y - geom.line_height),
-            rows: 1,
-            ..geom
-        }, row));
+        let sliver = sliver.map(|row| {
+            (
+                CellGeom {
+                    origin: point(geom.origin.x, geom.origin.y - geom.line_height),
+                    rows: 1,
+                    ..geom
+                },
+                row,
+            )
+        });
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             paint_images(window, i64::from(i32::MIN)..below_background);
