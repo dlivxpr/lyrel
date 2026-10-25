@@ -1749,7 +1749,7 @@ impl TerminalView {
                 // out of the frame loop entirely: refreshing the window
                 // directly from here pinned the visible tab at full frame
                 // rate whenever any hidden pane was producing output.
-                let res = this.update(cx, |view, cx| {
+                let res = this.update_in(cx, |view, window, cx| {
                     let mut woke = false;
                     for ev in batch.drain(..) {
                         if matches!(ev, PaneEvent::Wakeup) && std::mem::replace(&mut woke, true) {
@@ -1757,6 +1757,10 @@ impl TerminalView {
                         }
                         view.handle_event(ev, cx);
                     }
+                    // A daemon may be waiting for this exact GPU lease before
+                    // it can ACK new graphics. Do not depend on a later frame
+                    // or the periodic cleanup to return retired atlas pages.
+                    view.terminal.images().release_retired(window, cx);
                 });
                 if res.is_err() {
                     break;

@@ -1045,12 +1045,15 @@ impl ImageStore {
 
     /// Check both placement revision and resource revision under the same lock
     /// that removal/completion uses, before allocating an atlas tile.
+    /// Resource/placement replay precedes the authoritative Screen. Decoding
+    /// may finish in that interval, but the default origin is not paintable.
     pub fn claim_for_paint(&self, image: &RenderPlacement) -> bool {
         let inner = self.0.state.lock().unwrap();
-        let current = inner
-            .placements
-            .get(&image.placement.key)
-            .is_some_and(|placement| placement.revision == image.revision)
+        let current = inner.viewport_known
+            && inner
+                .placements
+                .get(&image.placement.key)
+                .is_some_and(|placement| placement.revision == image.revision)
             && inner.screen == image.placement.screen
             && inner.history_origin == image.history_origin
             && inner
@@ -1221,6 +1224,7 @@ impl ImageStore {
             .checked_add(1)
             .expect("graphics reader generation exhausted");
         inner.closed = true;
+        inner.viewport_known = false;
         inner.offers.retain(|_, offer| offer.generation.is_none());
         for resource in inner.resources.values_mut() {
             resource.pending.take();
@@ -1361,7 +1365,8 @@ impl ImageStore {
             } => {
                 let changed = inner.screen != screen
                     || inner.history_origin != history_origin
-                    || inner.viewport_epoch != epoch;
+                    || inner.viewport_epoch != epoch
+                    || !inner.viewport_known;
                 inner.screen = screen;
                 inner.history_origin = history_origin;
                 inner.viewport_epoch = epoch;
@@ -1715,6 +1720,14 @@ mod tests {
         GraphicsUpdate::Place(placement)
     }
 
+    fn establish_screen(worker: &DecodeWorker) {
+        worker.apply(GraphicsUpdate::Screen {
+            screen: 0,
+            history_origin: 0,
+            epoch: 0,
+        });
+    }
+
     fn wait_for(store: &ImageStore, predicate: impl Fn(&[RenderPlacement]) -> bool) {
         for _ in 0..200 {
             if predicate(&store.snapshot()) {
@@ -1723,6 +1736,30 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(predicate(&store.snapshot()), "decode did not complete");
+    }
+
+    #[test]
+    fn unknown_replay_origin_cannot_claim_a_decoded_placement_for_paint() {
+        let store = ImageStore::new();
+        let worker = DecodeWorker::spawn(store.clone(), || {});
+        apply_resource(&worker, 1, 50);
+        apply_placement(&worker, placement(10, 1, 10_005, 3));
+        wait_for(&store, |images| images.len() == 1);
+        let images = store.snapshot();
+        assert!(
+            !store.claim_for_paint(&images[0]),
+            "a replayed resource cannot use the default origin before its authoritative Screen"
+        );
+        worker.apply(GraphicsUpdate::Screen {
+            screen: 0,
+            history_origin: 10_003,
+            epoch: 0,
+        });
+        let current = store.snapshot();
+        assert!(store.claim_for_paint(&current[0]));
+        let (bounds, _) =
+            current[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+        assert_eq!(bounds.origin, point(px(30.), px(40.)));
     }
 
     #[test]
@@ -1874,7 +1911,13 @@ mod tests {
                 .bytes,
             12
         );
-        let new = DecodeWorker::spawn(store.clone(), || {});
+        let screen_wakes = Arc::new(AtomicUsize::new(0));
+        let new = DecodeWorker::spawn(store.clone(), {
+            let wakes = screen_wakes.clone();
+            move || {
+                wakes.fetch_add(1, Ordering::SeqCst);
+            }
+        });
         apply_resource(&new, 2, 90);
         apply_placement(&new, placement(2, 2, 4, 5));
         assert!(
@@ -1884,6 +1927,17 @@ mod tests {
         assert!(store.0.decode_scratch.decoder.try_lock().is_err());
         release.wait();
         wait_for(&store, |images| images.len() == 1);
+        let replaying = store.snapshot();
+        assert!(
+            !store.claim_for_paint(&replaying[0]),
+            "relink invalidates the old reader's coordinates until its fresh Screen"
+        );
+        establish_screen(&new);
+        assert_eq!(
+            screen_wakes.load(Ordering::SeqCst),
+            1,
+            "the first zero-valued Screen wakes painting after relink"
+        );
         let current = store.snapshot();
         assert_eq!(
             current[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
@@ -2012,6 +2066,7 @@ mod tests {
     fn shared_resource_has_one_atlas_retirement_and_stale_placement_cannot_paint() {
         let store = ImageStore::new();
         let worker = DecodeWorker::spawn(store.clone(), || {});
+        establish_screen(&worker);
         apply_resource(&worker, 1, 50);
         apply_placement(&worker, placement(10, 1, 1, 0));
         apply_placement(&worker, placement(11, 1, 2, 0));

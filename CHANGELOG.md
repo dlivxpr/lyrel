@@ -43,6 +43,8 @@
 - 修复三张合法 4K PNG 在 live 可显示、fresh replay 却因重复预留解码峰值而失败的问题：每资源保留 CPU／source／完整 GPU page 票，同 store 的 decoder 跨代次串行执行并共享最大 scratch，取消不提前返还活动票；384 MiB／1,024 MiB 上限不变。真实 daemon→fresh rooted GPUI 回归核对完整 BGRA、paint、同 pane、生产者 PID／上传数／字节数；附着失败仅在精确确认 pane 不存在时允许替代 shell。
 - 修正 Kitty 续块 `q=0` 错误解除首块 quiet 的行为，仅非零 `q` 可以覆盖；真实 daemon 覆盖键顺序、成功／错误静默、非法 quiet 与后续输入。
 - 外层 zlib PNG 改按实际 inflate、增长和逐行校验阶段预留工作空间，保留 parser 输入与 normalized source 的真实占账，不再因固定 100 MiB scratch 错拒合法大 PNG。真实约 30 MiB PNG 经分块／单 APC、任意 PTY 切片、完整 PNG 像素解码及坏流／超限后的恢复回归已在 Windows 通过；128 MiB 每 pane 工作上限不变。
+- 修复 fresh 图片恢复在权威 `Screen` 到达前短暂使用默认 history origin 绘制的问题；首个零值 `Screen` 也会唤醒待绘制资源，重连后旧坐标代次不再可绘制。图片事件批次现在立即归还 retired atlas lease，避免跨 daemon／主备屏压力只能等待周期清理后错误拒绝合法图片。
+
 
 ### 维护
 
