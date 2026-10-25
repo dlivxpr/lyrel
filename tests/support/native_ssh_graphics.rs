@@ -16,6 +16,20 @@ use lyrel_core::host::remote::RemoteHost;
 
 pub const STREAM_WITHIN: Duration = Duration::from_secs(90);
 
+struct RestoreRouteAuth(Arc<dyn router::RouteAuthResponder>);
+
+impl Drop for RestoreRouteAuth {
+    fn drop(&mut self) { router::set_route_auth_responder(self.0.clone()); }
+}
+
+fn strict_route(stream: &mut transport::Stream, header: &RouteHeader) -> std::io::Result<router::RouteAck> {
+    // Live-endpoint cases are run explicitly with --test-threads=1. Never let
+    // an application-installed responder accept a changed fixture host key.
+    let _restore = RestoreRouteAuth(router::route_auth_responder());
+    router::set_route_auth_responder(Arc::new(router::CancelAuth));
+    router::negotiate(stream, header)
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut result = String::with_capacity(bytes.len() * 2);
@@ -168,7 +182,7 @@ impl NativeSshFixture {
         stream.set_write_timeout(Some(STREAM_WITHIN)).unwrap();
         let header = RouteHeader::ssh(self.spec());
         let header = if pane { header.for_pane() } else { header };
-        let ack = router::negotiate(&mut stream, &header).expect("strict pinned native SSH route (no interactive trust/auth fallback)");
+        let ack = strict_route(&mut stream, &header).expect("strict pinned native SSH route (no interactive trust/auth fallback)");
         assert!(ack.ok);
         assert!(matches!(ack.link.as_deref(), Some("streamlocal" | "session-exec")), "not a real SSH route: {ack:?}");
         stream
@@ -190,7 +204,29 @@ impl NativeSshFixture {
         assert_eq!(remote.protocol_version, protocol::PROTOCOL_VERSION);
         assert_eq!(remote.control_version, lyrel_core::daemon::control::CONTROL_VERSION);
         *self.control.lock().unwrap() = Some(host.clone());
+        self.assert_sftp_home();
         host
+    }
+
+    fn assert_sftp_home(&self) {
+        use lyrel_core::daemon::protocol::{DaemonMsg, SftpOp, SftpOpResult, WorkspaceOp, WorkspaceRequest};
+        // The workspace SFTP command reuses the SSH engine connection held by
+        // the real local router. Even quick_prove's hot-server shortcut cannot
+        // bypass this independent check of SFTP Realpath(".").
+        let mut stream = transport::connect_endpoint_at(&self.endpoint("daemon")).unwrap();
+        stream.set_read_timeout(Some(STREAM_WITHIN)).unwrap();
+        stream.set_write_timeout(Some(STREAM_WITHIN)).unwrap();
+        protocol::negotiate_pane(&mut stream).unwrap();
+        ClientMsg::OnWorkspace(Box::new(WorkspaceRequest {
+            workspace: lyrel_core::core::session::WorkspaceId::new(),
+            spec: Box::new(self.spec()),
+            view_pane: 0,
+            op: WorkspaceOp::SftpOp { op: SftpOp::Realpath { path: ".".into() } },
+        })).encode(&mut stream).unwrap();
+        match DaemonMsg::read(&mut stream).expect("real native SSH workspace SFTP response") {
+            DaemonMsg::SftpOpResult(SftpOpResult::Link(home)) => assert_eq!(home, self.remote_home, "SFTP and control/shell HOME must share the private Linux fixture namespace"),
+            other => panic!("real SFTP home proof failed: {other:?}"),
+        }
     }
 
     pub fn connect_pane(&self) -> (transport::Stream, DaemonVersion) {
@@ -241,7 +277,7 @@ impl Drop for NativeSshFixture {
         if let Ok(mut stream) = transport::connect_endpoint_at(&self.endpoint("daemon")) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-            if router::negotiate(&mut stream, &RouteHeader::ssh(self.spec()).for_pane()).is_ok() {
+            if strict_route(&mut stream, &RouteHeader::ssh(self.spec()).for_pane()).is_ok() {
                 let _ = protocol::negotiate_pane(&mut stream);
                 // Kill requests use a fresh connection per pane below; first
                 // stream is only the first one because a command ends it.
@@ -250,7 +286,7 @@ impl Drop for NativeSshFixture {
                     if index == 0 { let _ = ClientMsg::Kill { pane_id: pane }.encode(&mut stream); }
                     else if let Ok(mut next) = transport::connect_endpoint_at(&self.endpoint("daemon")) {
                         let _ = next.set_read_timeout(Some(Duration::from_secs(5)));
-                        if router::negotiate(&mut next, &RouteHeader::ssh(self.spec()).for_pane()).is_ok() {
+                        if strict_route(&mut next, &RouteHeader::ssh(self.spec()).for_pane()).is_ok() {
                             let _ = protocol::negotiate_pane(&mut next);
                             let _ = ClientMsg::Kill { pane_id: pane }.encode(&mut next);
                         }
