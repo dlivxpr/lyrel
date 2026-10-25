@@ -450,7 +450,7 @@ impl GraphicsSniffer {
     /// low-level primitive the unit tests drive.
     pub fn feed(&mut self, bytes: &[u8], on_passthrough: impl FnMut(&[u8])) -> Vec<Event> {
         self.begin_read();
-        let Self { tokenizer, parser } = self;
+        let Self { tokenizer, parser, .. } = self;
         let mut events = Vec::new();
         tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted, exhausted| {
             if let Some(ev) = if aborted {
