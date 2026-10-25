@@ -3139,6 +3139,106 @@ mod kitty_graphics {
     }
 
     #[test]
+    fn daemon_graphics_recovery_graphics_controller_takeover_closes_stream_and_releases_live_endpoint() {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-offered-takeover");
+        let mut source = Consumer::spawn(&daemon);
+        source.red_at(6, 3, "a=T,i=1,p=1,C=1");
+        let expected = source.placements.clone();
+        let identity = source.stats();
+        let (pane, serial) = (source.session.pane_id(), source.serial);
+        detach_consumer(source);
+
+        // This consumer can hold exactly one decoded pixel. After takeover its
+        // capacity lease must leave the daemon even if this client stays alive.
+        let mut old = lyrel_core::daemon::transport::connect_endpoint_at(&daemon.pane_endpoint()).unwrap();
+        old.set_read_timeout(Some(STREAM_WITHIN)).unwrap();
+        lyrel_core::daemon::protocol::negotiate_pane(&mut old).unwrap();
+        ClientMsg::GraphicsCapacity {
+            encoded_bytes: 1024,
+            decoded_bytes: 4,
+            offers: true,
+        }.encode(&mut old).unwrap();
+        ClientMsg::Attach {
+            pane_id: pane,
+            size: size(),
+            allow_remote_clipboard_write: false,
+        }.encode(&mut old).unwrap();
+        loop {
+            match DaemonMsg::read(&mut old).expect("graphics controller replay") {
+                DaemonMsg::GraphicsOffer { token, .. } => {
+                    ClientMsg::GraphicsGrant { token, accepted: true }.encode(&mut old).unwrap();
+                }
+                DaemonMsg::Graphics(frame) => {
+                    if matches!(GraphicsUpdate::decode_frame_owned(frame.into_vec()), Some(GraphicsUpdate::Screen { .. })) {
+                        break;
+                    }
+                }
+                DaemonMsg::Error(error) => panic!("graphics controller admission failed: {error}"),
+                _ => {}
+            }
+        }
+        let old_serial = serial + 1;
+        ClientMsg::Input(format!("STAT {old_serial} 0 00 0\n").into_bytes()).encode(&mut old).unwrap();
+        let old_done = format!("KITTY_DONE_{old_serial}\r");
+        let mut old_text = Vec::new();
+        while !windows_contain(&old_text, old_done.as_bytes()) {
+            match DaemonMsg::read(&mut old).expect("offered controller must really retain input ownership") {
+                DaemonMsg::Output(bytes) => old_text.extend(bytes),
+                DaemonMsg::Error(error) => panic!("offered controller input failed: {error}"),
+                _ => {}
+            }
+        }
+        assert!(windows_contain(&old_text, format!("KITTY_STATS_{old_serial} {identity}").as_bytes()));
+
+        let mut fresh = Consumer::from_session(daemon.panes().attach(pane, size()).unwrap(), old_serial);
+        assert_eq!(fresh.stats(), identity);
+        assert_eq!(fresh.placements, expected);
+        let fresh_marker = format!("KITTY_STATS_{} ", fresh.serial);
+        let deadline = Instant::now() + STREAM_WITHIN;
+        loop {
+            assert!(Instant::now() < deadline, "offered controller retained a live sender");
+            match DaemonMsg::read(&mut old) {
+                Ok(DaemonMsg::Output(bytes)) => {
+                    old_text.extend(bytes);
+                    assert!(!windows_contain(&old_text, fresh_marker.as_bytes()), "new controller marker leaked to displaced graphics endpoint");
+                }
+                Ok(DaemonMsg::GraphicsOffer { .. }) | Ok(DaemonMsg::Graphics(_)) => {
+                    panic!("displaced endpoint still received graphics work");
+                }
+                Ok(DaemonMsg::Error(error)) => panic!("offered controller failed instead of closing: {error}"),
+                Ok(DaemonMsg::Exited { code }) => panic!("takeover terminated the application: {code:?}"),
+                Ok(_) => {}
+                Err(error) => {
+                    assert!(matches!(error.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected), "offered controller did not actually disconnect: {error}");
+                    break;
+                }
+            }
+        }
+        // Keep the displaced peer's socket object alive: daemon-side teardown,
+        // not dropping the test client, must remove it from live admission.
+        let release_deadline = Instant::now() + STREAM_WITHIN;
+        loop {
+            let reply = fresh.send(b"\x1b[9;3H\x1b_Ga=T,i=2,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1);
+            assert_eq!(reply.len(), 1);
+            if reply[0] == b"\x1b_Gi=2,p=1;OK\x1b\\" {
+                break;
+            }
+            // Peer FIN and the server's final lease drop are distinct events.
+            // Until real release, the existing four-byte limit still applies.
+            assert!(reply[0].starts_with(b"\x1b_Gi=2,p=1;ENOSPC:"));
+            assert_eq!(fresh.placements, expected);
+            assert!(Instant::now() < release_deadline, "displaced connection's capacity lease remained pinned");
+            std::thread::yield_now();
+        }
+        let added = fresh.placements.values().find(|p| p.image_id == 2).expect("obsolete graphics endpoint cannot veto a later upload");
+        assert_eq!(fresh.pixel(added), [255, 0, 0, 255]);
+        drop(old);
+        fresh.exit();
+    }
+
+    #[test]
     fn daemon_graphics_recovery_pending_subscriber_does_not_cancel_an_existing_live_upload() {
         use lyrel_core::daemon::protocol::ClientMsg;
         let daemon = Daemon::start();
