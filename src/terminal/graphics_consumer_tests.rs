@@ -586,13 +586,10 @@ fn graphics_consumer_real_pty_daemon_unicode_pixels_follow_cells_and_share_direc
         "\x1b[2J\x1b[3J\x1b[6;50H\x1b[38;5;42;58;5;6m\u{10eeee}\u{30d}\u{305}\u{10eeee}\x1b[0m"
             .as_bytes(),
     );
-    // The wait loop runs real UI layout as well as the daemon reader. Resize
-    // the rooted window first, so its next prepaint cannot restore 80 columns
-    // over the explicit 40-column terminal resize below.
+    // Resize through the rooted window so prepaint owns both the grid and cell
+    // metrics. A second, synthetic cell resize would be undone by the next
+    // frame and could cancel the sender's in-flight Kitty query barrier.
     graphics_assert_production_paint_at(window.into(), &view, cx, TermSize::new(40, 24));
-    view.update(cx, |view, _| {
-        view.terminal.resize(TermSize::new(40, 24), 15, 30)
-    });
     graphics_send_fixture(&view, cx, 19, b"\x1b[0m");
     view.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
