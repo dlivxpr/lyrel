@@ -26,28 +26,26 @@ impl GraphicsState {
         self.placements.values().map(|p| &p.placement)
     }
 
-    /// Resource keys referenced by actual placeholder text on the active grid.
-    /// Retention callers choose live rows or retained history; no pixels or
-    /// second placement model are allocated. Inactive-screen resources remain
-    /// screen-owned and must be protected separately while their grid is hidden.
-    pub fn placeholder_resources(&self, history: bool) -> BTreeSet<u64> {
-        let resources = BTreeSet::new();
+    /// Prototype keys referenced by actual placeholder text on the active grid.
+    /// Keep distinct prototypes even when they share one image resource.
+    pub(super) fn placeholder_placements(&self, history: bool) -> BTreeSet<u64> {
+        let placements = BTreeSet::new();
         if !self
             .placements()
             .any(|p| p.virtual_placement && p.screen == self.screen)
         {
-            return resources;
+            return placements;
         }
         let start = if history {
             -(self.term.grid.history_size() as i32)
         } else {
             0
         };
-        self.placeholder_resources_in(start, self.term.screen_lines() as i32)
+        self.placeholder_placements_in(start, self.term.screen_lines() as i32)
     }
 
-    pub(super) fn placeholder_resources_in(&self, start: i32, end: i32) -> BTreeSet<u64> {
-        let mut resources = BTreeSet::new();
+    pub(super) fn placeholder_placements_in(&self, start: i32, end: i32) -> BTreeSet<u64> {
+        let mut placements = BTreeSet::new();
         for row in start..end {
             for slice in placeholder_row(&self.term.grid, Line(row)) {
                 if let Some(prototype) =
@@ -74,12 +72,12 @@ impl GraphicsState {
                     )
                     .is_some()
                     {
-                        resources.insert(prototype.resource);
+                        placements.insert(prototype.key);
                     }
                 }
             }
         }
-        resources
+        placements
     }
     /// Explicit user clear also releases the active screen's retained uploads
     /// when history is discarded; a plain ED2 retains upload identity.
@@ -533,6 +531,9 @@ impl Handler for GraphicsState {
         self.region = 0..i32::from(self.size.rows.max(1));
     }
     fn set_private_mode(&mut self, mode: PrivateMode) {
+        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) && self.screen == 0 {
+            self.refresh_retention();
+        }
         self.term.set_private_mode(mode);
         if mode == PrivateMode::Named(NamedPrivateMode::ColumnMode) {
             self.region = 0..i32::from(self.size.rows.max(1));
@@ -540,6 +541,9 @@ impl Handler for GraphicsState {
         self.sync_screen();
     }
     fn unset_private_mode(&mut self, mode: PrivateMode) {
+        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) && self.screen == 1 {
+            self.refresh_retention();
+        }
         self.term.unset_private_mode(mode);
         if mode == PrivateMode::Named(NamedPrivateMode::ColumnMode) {
             self.region = 0..i32::from(self.size.rows.max(1));

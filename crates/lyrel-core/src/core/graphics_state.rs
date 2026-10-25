@@ -36,6 +36,9 @@ pub struct Placement {
     pub clip_bottom: u32,
     /// Invisible prototype; grid cells, not this anchor, select its display.
     pub virtual_placement: bool,
+    /// This placement/prototype itself referenced real live content the last
+    /// time its screen was active. Observer viewports never enter this fact.
+    pub live: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,12 +273,14 @@ struct Resource {
     id: u32,
     number: u32,
     screen: u64,
+    priority: retention::Priority,
     _metadata: retention::MetadataTicket,
 }
 
 struct AnchoredPlacement {
     placement: Placement,
     _metadata: retention::MetadataTicket,
+    retained: bool,
     // Geometry is carried by Placement; no client-captured second anchor.
 }
 
@@ -544,7 +549,7 @@ impl GraphicsState {
         } else {
             Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");
         }
-        self.refresh_retention();
+        effects.extend(self.finish_layout(false));
         effects
     }
 
@@ -693,74 +698,80 @@ impl GraphicsState {
 
     fn refresh_retention(&mut self) {
         use retention::Priority;
-        self.viewports
-            .retain(|_, (owner, _)| owner.strong_count() != 0);
-        let mut visible_placeholders = self.placeholder_resources(false);
-        let retained_placeholders = self.placeholder_resources(true);
+        self.viewports.retain(|_, (owner, _)| owner.strong_count() != 0);
+        let live_placeholders = self.placeholder_placements(false);
+        let retained_placeholders = self.placeholder_placements(true);
         let top = self.history_origin();
         let bottom = top + i64::from(self.size.rows.max(1));
         let oldest = self.term.grid.lines_evicted() as i64;
-        let visible_ranges: Vec<_> = self
-            .viewports
-            .values()
-            .filter_map(|(_, viewport)| {
-                if viewport.epoch != self.viewport_epoch
-                    || viewport.screen != self.screen
-                    || viewport.rows == 0
-                {
-                    return None;
-                }
-                let start = viewport.top.unwrap_or(top).clamp(oldest, top);
-                Some((start, start + i64::from(viewport.rows), viewport.cols))
-            })
-            .collect();
-        for &(start, end, _) in &visible_ranges {
-            visible_placeholders.extend(
-                self.placeholder_resources_in((start - top) as i32, (end.min(bottom) - top) as i32),
-            );
+        let screen = self.screen;
+        let epoch = self.viewport_epoch;
+        let visible_range = |viewport: &crate::daemon::protocol::GraphicsViewport| {
+            if viewport.epoch != epoch || viewport.screen != screen || viewport.rows == 0 {
+                return None;
+            }
+            let start = viewport.top.unwrap_or(top).clamp(oldest, top);
+            Some((start, start + i64::from(viewport.rows), viewport.cols))
+        };
+        let mut observed_placeholders = BTreeSet::new();
+        for (start, end, _) in self.viewports.values().filter_map(|(_, viewport)| visible_range(viewport)) {
+            observed_placeholders.extend(self.placeholder_placements_in(
+                (start - top) as i32, (end.min(bottom) - top) as i32,
+            ));
         }
-        for (&key, resource) in &self.resources {
-            let mut priority = if self
-                .placements()
-                .any(|p| p.resource == key && p.screen != self.screen)
-            {
+        for resource in self.resources.values_mut() {
+            resource.priority = Priority::Unreferenced;
+        }
+        for (&key, anchored) in &mut self.placements {
+            let p = &mut anchored.placement;
+            if p.screen == screen {
+                let live = if p.virtual_placement {
+                    anchored.retained = retained_placeholders.contains(&key);
+                    live_placeholders.contains(&key)
+                } else {
+                    p.anchor_col < u32::from(self.size.cols.max(1))
+                        && p.anchor_row + i64::from(p.clip_top) < bottom
+                        && p.anchor_row + i64::from(p.clip_bottom) > top
+                };
+                if p.live != live {
+                    p.live = live;
+                    self.dirty.insert(key);
+                }
+            }
+            // Inactive screens keep each placement's last real live fact,
+            // not an observer's transient protection or another placement's.
+            let mut priority = if p.live {
                 Priority::Protected
+            } else if !p.virtual_placement || anchored.retained {
+                Priority::History
             } else {
                 Priority::Unreferenced
             };
-            if retained_placeholders.contains(&key) {
-                priority = priority.max(Priority::History);
-            }
-            if visible_placeholders.contains(&key) {
+            if p.screen == screen && (if p.virtual_placement {
+                observed_placeholders.contains(&key)
+            } else {
+                self.viewports.values().filter_map(|(_, viewport)| visible_range(viewport)).any(|(start, end, cols)| {
+                    p.anchor_col < u32::from(cols)
+                        && p.anchor_row + i64::from(p.clip_top) < end
+                        && p.anchor_row + i64::from(p.clip_bottom) > start
+                })
+            }) {
                 priority = Priority::Protected;
             }
-            for p in self
-                .placements()
-                .filter(|p| p.resource == key && !p.virtual_placement)
-            {
-                let visible = p.screen != self.screen
-                    || (p.anchor_col < u32::from(self.size.cols.max(1))
-                        && p.anchor_row + i64::from(p.clip_top) < bottom
-                        && p.anchor_row + i64::from(p.clip_bottom) > top)
-                    || visible_ranges.iter().any(|&(start, end, cols)| {
-                        p.anchor_col < u32::from(cols)
-                            && p.anchor_row + i64::from(p.clip_top) < end
-                            && p.anchor_row + i64::from(p.clip_bottom) > start
-                    });
-                priority = priority.max(if visible {
-                    Priority::Protected
-                } else {
-                    Priority::History
-                });
+            if let Some(resource) = self.resources.get_mut(&p.resource) {
+                resource.priority = resource.priority.max(priority);
             }
-            resource.resident.lock().unwrap().priority = priority;
+        }
+        // Publish only complete reductions: another pane's admission must not
+        // observe a live resource temporarily downgraded during the scan.
+        for resource in self.resources.values() {
+            resource.resident.lock().unwrap().priority = resource.priority;
         }
     }
 
     /// Drain under the pane output lock before any later mutation. A removed
     /// resource has no slot here, so a queued wake cannot resurrect it.
     pub(crate) fn drain_evictions(&mut self) -> Vec<GraphicsEffect> {
-        let retained = self.placeholder_resources(true);
         let mut effects = Vec::new();
         let mut obsolete = Vec::new();
         for (&key, resource) in &self.resources {
@@ -768,11 +779,7 @@ impl GraphicsState {
             if resident.packet.is_some() {
                 continue;
             }
-            let has_position = self.placements().any(|p| {
-                p.resource == key
-                    && (!p.virtual_placement || retained.contains(&key) || p.screen != self.screen)
-            });
-            if !has_position {
+            if resource.priority == retention::Priority::Unreferenced {
                 obsolete.push(key);
             } else if !resident.announced {
                 resident.announced = true;
@@ -994,6 +1001,7 @@ impl GraphicsState {
                         id,
                         number: control.number,
                         screen: self.screen,
+                        priority: retention::Priority::Unreferenced,
                         _metadata: metadata_lease,
                     },
                 );
@@ -1018,8 +1026,7 @@ impl GraphicsState {
             Action::Delete => self.delete(&control, &mut effects),
             Action::Other => unreachable!(),
         }
-        self.refresh_retention();
-        effects.extend(self.drain_evictions());
+        effects.extend(self.finish_layout(false));
         effects
     }
 
@@ -1135,12 +1142,14 @@ impl GraphicsState {
             clip_top: 0,
             clip_bottom: span_rows,
             virtual_placement: control.virtual_placement,
+            live: !control.virtual_placement,
         };
         self.placements.insert(
             key,
             AnchoredPlacement {
                 placement: placement.clone(),
                 _metadata: metadata,
+                retained: !control.virtual_placement,
             },
         );
         effects.push(GraphicsEffect::Update(GraphicsUpdate::Place(placement)));

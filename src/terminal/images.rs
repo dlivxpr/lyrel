@@ -815,8 +815,9 @@ impl ImageStore {
             let row =
                 placement.anchor_row - inner.history_origin - (local_origin - inner.local_origin)
                     + display_offset as i64;
-            if placement.screen != inner.screen
-                || (displayed
+            if (placement.screen != inner.screen && placement.live)
+                || (placement.screen == inner.screen
+                    && displayed
                     && !placement.virtual_placement
                     && placement.anchor_col < live_cols as u32
                     && row + i64::from(placement.clip_top) < live_rows as i64

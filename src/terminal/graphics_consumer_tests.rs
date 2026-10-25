@@ -1027,3 +1027,56 @@ fn graphics_consumer_preempted_scroll_viewport_cannot_pin_replayed_history(cx: &
     prior_window.update(cx, |_, window, _| window.remove_window()).unwrap();
     daemon.panes().kill(pane).unwrap();
 }
+
+#[gpui_kit::test]
+fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last_live_pixels(cx: &mut TestAppContext) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    const GPU_PAGE: usize = 4 << 20;
+    crate::terminal::images::with_test_cache_limits(2 * GPU_PAGE + 1024, 2 * GPU_PAGE + 1024, || {
+        for placeholder in [false, true] {
+            let daemon = GraphicsDaemonProcess::start();
+            let pane = daemon.spawn();
+            let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 1024, 8));
+            let first = if placeholder {
+                "\x1b[2J\x1b[3J\x1b_Ga=T,i=7,p=1,U=1,c=2,r=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b[6;5H\x1b[38;5;7;58;5;1m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m"
+            } else {
+                "\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\"
+            };
+            graphics_send_fixture(&view, cx, 1, first.as_bytes());
+            graphics_layout_wait_image(&view, cx, 7);
+            graphics_send_fixture(&view, cx, 2, &b"\r\n".repeat(80));
+            graphics_send_fixture(&view, cx, 3, b"\x1b[6;5H\x1b_Ga=T,i=8,p=2,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\");
+            graphics_layout_wait_image(&view, cx, 8);
+            graphics_send_fixture(&view, cx, 4, b"\x1b[?1049h\x1b[6;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+            graphics_layout_wait_image(&view, cx, 9);
+            graphics_assert_production_paint(window, &view, cx);
+            view.read_with(cx, |view, _| {
+                let images = graphics_visible_images(view);
+                assert_eq!(images.len(), 1);
+                assert_eq!(images[0].placement.image_id, 9);
+                assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 255, 0, 255]);
+            });
+            graphics_send_fixture(&view, cx, 5, b"\x1b[?1049l");
+            graphics_layout_wait_image(&view, cx, 8);
+            view.read_with(cx, |view, _| {
+                let images = graphics_visible_images(view);
+                let live = images.iter().find(|image| image.placement.image_id == 8).unwrap();
+                assert!(!live.evicted);
+                assert_eq!(live.data.as_ref().unwrap().as_bytes(0).unwrap(), [255, 0, 0, 255]);
+            });
+            view.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+            graphics_assert_production_paint(window, &view, cx);
+            view.read_with(cx, |view, _| {
+                let images = graphics_visible_images(view);
+                let history = images.iter().find(|image| image.placement.image_id == 7).unwrap();
+                assert!(history.evicted && history.data.is_none());
+                assert!(history.painted.load(std::sync::atomic::Ordering::Acquire), "the retained main history paints its notice, not resurrected pixels");
+                assert!(!images.iter().any(|image| image.placement.image_id == 9), "alternate resources never leak back into main");
+            });
+            graphics_recovery_destroy(view, window, cx);
+            daemon.panes().kill(pane).unwrap();
+        }
+    });
+}

@@ -458,11 +458,89 @@ fn retention_daemon_alt_screen_reclaims_main_history_but_preserves_last_live_con
         assert!(!consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == live)));
         let refused = consumer.exchange(b"\x1b_Ga=T,i=104,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1);
         assert!(refused[0].starts_with(b"\x1b_Gi=104;ENOSPC:"), "last live main content and live alt content remain protected");
+        consumer.session.resize(WinSize { cols: 40, rows: 16, ..size() }).unwrap();
+        consumer.idle(b"resized_alt_barrier");
         consumer.idle(b"\x1b[?1049l");
         let reply = consumer.exchange(b"\x1b_Ga=p,i=102,p=4,c=1,r=1,C=1\x1b\\", 1);
         assert_eq!(reply, [b"\x1b_Gi=102,p=4;OK\x1b\\".to_vec()], "returning to main reuses the original live pixels without retransmission");
         let expired = consumer.exchange(b"\x1b_Ga=p,i=101,p=5,c=1,r=1,C=1\x1b\\", 1);
         assert!(expired[0].starts_with(b"\x1b_Gi=101,p=5;ENOENT:"), "returning does not revive evicted history");
+        consumer.idle(&b"\r\n".repeat(40));
+        consumer.red("a=T,i=105,c=1,r=1,C=1");
+        consumer.red("a=T,i=106,c=1,r=1,C=1");
+        assert!(consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == live)), "after returning, actual scrolling replaces the frozen last-active live fact");
+        daemon.panes().kill(consumer.session.pane_id()).unwrap();
+    }
+}
+
+#[test]
+fn retention_daemon_removed_observer_cannot_freeze_history_as_inactive_live() {
+    let daemon = Daemon::start();
+    let mut consumer = daemon.spawn();
+    let history = consumer.red("a=T,i=1,p=1,c=1,r=1,C=1");
+    let anchor = consumer.updates.iter().find_map(|update| match update {
+        GraphicsUpdate::Place(p) if p.resource == history => Some(p.anchor_row),
+        _ => None,
+    }).unwrap();
+    consumer.idle(&b"\r\n".repeat(40));
+    let live = consumer.red("a=T,i=2,p=2,c=1,r=1,C=1");
+    let mut observer = daemon.capacity_attach(consumer.session.pane_id(), 8, true);
+    let epoch = loop {
+        if let DaemonMsg::Graphics(frame) = DaemonMsg::read(&mut observer).unwrap() {
+            if let Some(GraphicsUpdate::Screen { screen: 0, epoch, .. }) = GraphicsUpdate::decode_frame_owned(frame.into_vec()) {
+                break epoch;
+            }
+        }
+    };
+    ClientMsg::GraphicsViewport(crate::daemon::protocol::GraphicsViewport {
+        screen: 0, epoch, top: Some(anchor), rows: 1, cols: 80,
+    }).encode(&mut observer).unwrap();
+    // An observer's ordinary input is rejected only after its preceding
+    // viewport has been applied by the production input pump.
+    ClientMsg::Input(Vec::new()).encode(&mut observer).unwrap();
+    loop {
+        if let DaemonMsg::Error(error) = DaemonMsg::read(&mut observer).unwrap() {
+            assert!(error.contains("read-only observer"));
+            break;
+        }
+    }
+    let refused = consumer.exchange(b"\x1b_Ga=T,i=3,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1);
+    assert!(refused[0].starts_with(b"\x1b_Gi=3;ENOSPC:"), "the attached observer protects the historical image it is actually viewing");
+    ClientMsg::Detach.encode(&mut observer).unwrap();
+    while DaemonMsg::read(&mut observer).is_ok() {}
+    consumer.idle(b"\x1b[?1049h");
+    consumer.red("a=T,i=3,c=1,r=1,C=1");
+    assert!(consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == history)));
+    assert!(!consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == live)));
+    daemon.panes().kill(consumer.session.pane_id()).unwrap();
+}
+
+#[test]
+fn retention_daemon_shared_resource_prototypes_keep_independent_last_live_facts() {
+    for virtual_placement in [false, true] {
+        let daemon = Daemon::start();
+        let mut consumer = daemon.spawn();
+        let mode = if virtual_placement { ",U=1" } else { "" };
+        let resource = consumer.red(&format!("a=T,i=1,p=1,c=1,r=1,C=1{mode}"));
+        if virtual_placement {
+            consumer.idle("\x1b[6;5H\x1b[38;5;1;58;5;1m\u{10eeee}\u{305}\u{305}\x1b[0m".as_bytes());
+        }
+        consumer.idle(&b"\r\n".repeat(40));
+        consumer.idle(format!("\x1b[6;5H\x1b_Ga=p,i=1,p=2,c=1,r=1,C=1,q=2{mode}\x1b\\").as_bytes());
+        if virtual_placement {
+            consumer.idle("\x1b[6;5H\x1b[38;5;1;58;5;2m\u{10eeee}\u{305}\u{305}\x1b[0m".as_bytes());
+        }
+        consumer.idle(b"\x1b[?1049h");
+        consumer.red("a=T,i=2,c=1,r=1,C=1");
+        assert!(!consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == resource)));
+        consumer.idle(b"\x1b[?1049l\x1b_Ga=d,d=i,i=1,p=2,q=2\x1b\\");
+        if virtual_placement {
+            consumer.idle(b"\x1b[6;1H\x1b[2K");
+        }
+        consumer.idle(b"\x1b[?1049h");
+        consumer.red("a=T,i=3,c=1,r=1,C=1");
+        consumer.red("a=T,i=4,c=1,r=1,C=1");
+        assert!(consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == resource)), "removing the live placement cannot transfer its protection to a history placement/prototype sharing the resource");
         daemon.panes().kill(consumer.session.pane_id()).unwrap();
     }
 }

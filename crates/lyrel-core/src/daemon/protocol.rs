@@ -93,7 +93,8 @@ const HEADER: usize = 5;
 /// v11 distinguishes invisible virtual prototypes from direct placements.
 /// v12 carries pixel-free eviction metadata and bounded desktop capacity.
 /// v13 reports connection-local absolute viewports with layout epochs.
-pub const PROTOCOL_VERSION: u32 = 13;
+/// v14 carries each placement/prototype's own last-active live protection.
+pub const PROTOCOL_VERSION: u32 = 14;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
