@@ -140,9 +140,9 @@ fn graphics_recovery_pixels(
                 let term = view.terminal.term.lock();
                 let grid = (term.mode().contains(Mode::ALT_SCREEN), term.columns(), term.screen_lines(), term.display_offset());
                 drop(term);
-                (images, grid, view.terminal.exited, view.terminal.child_exited(), view.scrollback_text())
+                (images, grid, view.terminal.exited, view.terminal.child_exited(), view.scrollback_text(), view.terminal.images().recovery_diagnostics())
             });
-            panic!("retained image i={id} did not decode expected BGRA={expected:?}; phase={caller}; actual (placements [image_id, placement_id, screen, row, col, evicted, (pixel bytes, prefix)], grid [alt, cols, rows, offset], exited, child_exited, text)={state:?}");
+            panic!("retained image i={id} did not decode expected BGRA={expected:?}; phase={caller}; actual (placements [image_id, placement_id, screen, row, col, evicted, (pixel bytes, prefix)], grid [alt, cols, rows, offset], exited, child_exited, text, complete cache state)={state:?}");
         }
         cx.executor().advance_clock(std::time::Duration::from_millis(5));
         cx.run_until_parked();
@@ -218,20 +218,31 @@ fn graphics_recovery_detached_request(
     serial: usize,
     bytes: &[u8],
 ) -> String {
+    graphics_recovery_detached_request_with_replies(daemon, pane, operation, serial, bytes, 0)
+}
+
+fn graphics_recovery_detached_request_with_replies(
+    daemon: &GraphicsDaemonProcess,
+    pane: u64,
+    operation: &str,
+    serial: usize,
+    bytes: &[u8],
+    replies: usize,
+) -> String {
     let mut observer = daemon.panes().observe(pane, crate::daemon::protocol::WinSize {
         cols: 80, rows: 24, cell_w: 10, cell_h: 20,
     }).unwrap();
     observer.set_recv_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
     let hex = graphics_pty_fixture::hex(bytes);
-    let request = format!("{operation} {serial} 0 {hex} 0\n");
+    let request = format!("{operation} {serial} {replies} {hex} 0\n");
     daemon.panes().send_input(pane, request.as_bytes()).unwrap();
     let marker = format!("KITTY_DONE_{serial}");
     let mut text = Vec::new();
     while !text.windows(marker.len()).any(|part| part == marker.as_bytes()) {
         match observer.recv().unwrap() {
             DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
-            DaemonMsg::Error(error) => panic!("detached output barrier failed: {error}"),
-            DaemonMsg::Exited { .. } => panic!("recovery cannot restart or end the real sender"),
+            DaemonMsg::Error(error) => panic!("detached output barrier failed: {error}; actual PTY output={}", String::from_utf8_lossy(&text)),
+            DaemonMsg::Exited { .. } => panic!("recovery cannot restart or end the real sender; actual PTY output={}", String::from_utf8_lossy(&text)),
             _ => {}
         }
     }
@@ -253,7 +264,11 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
     graphics_assert_production_paint(prior_window, &prior, cx);
     graphics_recovery_destroy(prior, prior_window, cx);
     // There is no TerminalView, ImageStore or decoder during this production.
-    graphics_recovery_detached_request(&daemon, pane, "SEND", 202, "\x1b[6;5H\x1b_Ga=T,i=21,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\\x1b_Ga=T,i=22,p=2,U=1,c=2,r=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\\x1b[9;5H\x1b[38;5;22;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m\x1b_Ga=d,d=I,i=24\x1b\\\x1b[16;1HDETACHED-MAIN".as_bytes());
+    let detached = graphics_recovery_detached_request_with_replies(&daemon, pane, "SEND_OK", 202, "\x1b[6;5H\x1b_Ga=T,i=21,p=1,c=2,r=1,C=1,f=32,s=1,v=1;AP8A/w==\x1b\\\x1b_Ga=T,i=22,p=2,U=1,c=2,r=1,f=32,s=1,v=1;AAD//w==\x1b\\\x1b[9;5H\x1b[38;5;22;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m\x1b_Ga=d,d=I,i=24\x1b\\\x1b[16;1HDETACHED-MAIN".as_bytes(), 2);
+    for reply in [b"\x1b_Gi=21,p=1;OK\x1b\\".as_slice(), b"\x1b_Gi=22,p=2;OK\x1b\\".as_slice()] {
+        assert!(detached.contains(&format!("KITTY_REPLY 202 {}", graphics_pty_fixture::hex(reply))),
+            "detached uploads must be admitted before they can be claimed as restoration: {detached}");
+    }
 
     let mut stream = daemon.stream(pane);
     stream.set_read_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
@@ -267,7 +282,11 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
     }
     // The real attach is now awaiting its first desktop grant. Mutate actual
     // PTY output before any replay resource can enter the new ImageStore.
-    graphics_recovery_detached_request(&daemon, pane, "SEND", 203, b"\x1b[6;5H\x1b_Ga=T,i=21,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP///w==\x1b\\\x1b_Ga=d,d=I,i=24\x1b\\\x1b[?1049h\x1b[2J\x1b[4;1HLIVE-ALT\x1b[7;5H\x1b_Ga=T,i=23,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/////w==\x1b\\");
+    let admitted = graphics_recovery_detached_request_with_replies(&daemon, pane, "SEND_OK", 203, b"\x1b[6;5H\x1b_Ga=T,i=21,p=1,c=2,r=1,C=1,f=32,s=1,v=1;AP///w==\x1b\\\x1b_Ga=d,d=I,i=24\x1b\\\x1b[?1049h\x1b[2J\x1b[4;1HLIVE-ALT\x1b[7;5H\x1b_Ga=T,i=23,p=3,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\", 2);
+    for reply in [b"\x1b_Gi=21,p=1;OK\x1b\\".as_slice(), b"\x1b_Gi=23,p=3;OK\x1b\\".as_slice()] {
+        assert!(admitted.contains(&format!("KITTY_REPLY 203 {}", graphics_pty_fixture::hex(reply))),
+            "concurrent replay uploads must be accepted with their own image and placement identities: {admitted}");
+    }
     stream.set_read_timeout(None).unwrap();
     let (view, window) = graphics_build_rooted_consumer(cx, pane, stream, buffered);
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(80, 24));
