@@ -8041,10 +8041,15 @@ mod tests {
     #[cfg(unix)]
     fn reader_gates_indirect_media_before_first_ssh_bytes_and_restores_local_queries() {
         use base64::Engine as _;
-        struct Chunks(std::collections::VecDeque<Vec<u8>>);
+        use std::sync::atomic::AtomicUsize;
+        struct Chunks {
+            chunks: std::collections::VecDeque<(usize, Vec<u8>)>,
+            phase: Arc<AtomicUsize>,
+        }
         impl Read for Chunks {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                let Some(chunk) = self.0.pop_front() else { return Ok(0) };
+                let Some((phase, chunk)) = self.chunks.pop_front() else { return Ok(0) };
+                self.phase.store(phase, Ordering::SeqCst);
                 buf[..chunk.len()].copy_from_slice(&chunk);
                 Ok(chunk.len())
             }
@@ -8062,33 +8067,58 @@ mod tests {
         std::fs::write(&path, [255, 0, 0, 255]).unwrap();
         let name = base64::engine::general_purpose::STANDARD.encode(path.as_os_str().as_encoded_bytes());
         let query = |id| format!("\x1b_Ga=q,i={id},t=f,f=32,s=1,v=1;{name}\x1b\\").into_bytes();
-        let groups = Mutex::new([10, 11, 11, 10].into_iter());
-        let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = probes.clone();
-        let sink = Arc::new(Mutex::new(Vec::new()));
-        DaemonPane::spawn_reader(
-            Arc::new(Mutex::new(test_state(true))),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(OutputGate::new()),
-            Box::new(Chunks([query(1), query(2), query(3), query(4)].into_iter().collect())),
-            Arc::new(Mutex::new(Box::new(Replies(sink.clone())))),
-            || false,
-            ForegroundProbes {
-                group: Box::new(move || groups.lock().unwrap().next()),
-                remote: Box::new(move || {
-                    (counted.fetch_add(1, Ordering::SeqCst) == 1).then(|| RemoteContext {
-                        kind: RemoteKind::Ssh,
-                        argv: vec!["ssh".into(), "other-host".into()],
-                        target: "other-host".into(),
-                    })
-                }),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-            },
-            Arc::new(DeathReporter::new(|| {})),
-        ).join().unwrap();
-        assert_eq!(*sink.lock().unwrap(), b"\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=3;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\");
-        assert_eq!(probes.load(Ordering::SeqCst), 3, "unchanged foreground groups use the cached context");
+        let run = |chunks: Vec<(usize, Vec<u8>)>, same_group: bool, unknown: bool| {
+            let phase = Arc::new(AtomicUsize::new(0));
+            let group_phase = phase.clone();
+            let remote_phase = phase.clone();
+            let sink = Arc::new(Mutex::new(Vec::new()));
+            DaemonPane::spawn_reader(
+                Arc::new(Mutex::new(test_state(true))),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(OutputGate::new()),
+                Box::new(Chunks { chunks: chunks.into_iter().filter(|(_, bytes)| !bytes.is_empty()).collect(), phase }),
+                Arc::new(Mutex::new(Box::new(Replies(sink.clone())))),
+                || false,
+                ForegroundProbes {
+                    group: Box::new(move || {
+                        let remote = matches!(group_phase.load(Ordering::SeqCst), 1 | 2);
+                        if unknown && remote { None } else { Some(if remote && !same_group { 11 } else { 10 }) }
+                    }),
+                    remote: Box::new(move || {
+                        (!unknown && matches!(remote_phase.load(Ordering::SeqCst), 1 | 2)).then(|| RemoteContext {
+                            kind: RemoteKind::Ssh,
+                            argv: vec!["ssh".into(), "other-host".into()],
+                            target: "other-host".into(),
+                        })
+                    }),
+                    agent: Box::new(|| None),
+                    cwd: Box::new(|| None),
+                },
+                Arc::new(DeathReporter::new(|| {})),
+            ).join().unwrap();
+            let replies = sink.lock().unwrap().clone();
+            replies
+        };
+        let remote_query = query(2);
+        for same_group in [false, true] {
+            for cut in 0..=remote_query.len() {
+                let replies = run(vec![
+                    (0, query(1)), (1, remote_query[..cut].to_vec()),
+                    (2, remote_query[cut..].to_vec()), (2, query(3)), (3, query(4)),
+                ], same_group, false);
+                assert_eq!(replies, b"\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=3;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\", "same_group={same_group}, split={cut}");
+            }
+        }
+        let split = (name.len() / 8) * 4;
+        for unknown in [false, true] {
+            let replies = run(vec![
+                (0, format!("\x1b_Ga=q,i=9,t=f,f=32,s=1,v=1,m=1;{}\x1b\\", &name[..split]).into_bytes()),
+                (1, b"\x1b_Gm=0;".to_vec()),
+                (3, format!("{}\x1b\\", &name[split..]).into_bytes()),
+                (3, query(4)),
+            ], false, unknown);
+            assert_eq!(replies, b"\x1b_Gi=9;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\", "a pending transfer that crossed remote/unknown cannot become local again: unknown={unknown}");
+        }
         assert!(path.exists(), "query does not delete a plain file");
     }
 
