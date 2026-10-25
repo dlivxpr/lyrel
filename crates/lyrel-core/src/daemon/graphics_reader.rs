@@ -1,6 +1,7 @@
 //! Ordered PTY consumption with desktop admission outside the pane lock.
 use super::*;
-use crate::core::kitty_graphics::{Action, Control, Image, response};
+use crate::core::clipboard::{Event as ClipboardEvent, Segment as ClipboardSegment, Sniffed as ClipboardSniffed};
+use crate::core::kitty_graphics::{Action, Control, Image, Segment, Sniffed, response};
 use std::borrow::Cow;
 
 enum Part {

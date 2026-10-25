@@ -9,13 +9,8 @@ use std::time::Duration;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::core::clipboard::{
-    ClipboardSniffer, Event as ClipboardEvent, Segment as ClipboardSegment,
-    Sniffed as ClipboardSniffed,
-};
-use crate::core::kitty_graphics::{
-    GraphicsEffect, GraphicsSniffer, GraphicsState, Segment, Sniffed,
-};
+use crate::core::clipboard::ClipboardSniffer;
+use crate::core::kitty_graphics::{GraphicsEffect, GraphicsSniffer, GraphicsState};
 use crate::core::osc::OscTokenizer;
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{
@@ -1159,55 +1154,6 @@ enum GraphicsFrame {
     ClipboardWrite(Vec<u8>),
 }
 
-#[cfg(test)]
-fn process_graphics_output(
-    sniffed: Sniffed<'_>,
-    ordered: bool,
-    pass: &mut Vec<u8>,
-    frames: &mut Vec<GraphicsFrame>,
-    mut state: Option<&mut GraphicsState>,
-    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
-) {
-    match sniffed {
-        Sniffed::Plain(bytes) => {
-            let effects = state
-                .as_deref_mut()
-                .map(|state| state.output(bytes))
-                .unwrap_or_default();
-            pass.extend_from_slice(bytes);
-            if (ordered || !effects.is_empty()) && !bytes.is_empty() {
-                frames.push(GraphicsFrame::Output(bytes.to_vec()));
-            }
-            append_graphics_effects(effects, pass, frames, writer);
-        }
-        Sniffed::Segments(segments) => {
-            for segment in segments {
-                match segment {
-                    Segment::Output(bytes) => {
-                        let effects = state
-                            .as_deref_mut()
-                            .map(|state| state.output(&bytes))
-                            .unwrap_or_default();
-                        pass.extend_from_slice(&bytes);
-                        frames.push(GraphicsFrame::Output(bytes));
-                        append_graphics_effects(effects, pass, frames, writer);
-                    }
-                    Segment::Reply(reply) => write_graphics_reply(writer, &reply),
-                    Segment::Command { control, image } => {
-                        // The exit monitor may have released graphics before
-                        // PTY EOF. Still strip commands from late output, but
-                        // never recreate resources for the exited pane.
-                        let Some(state) = state.as_deref_mut() else {
-                            continue;
-                        };
-                        append_graphics_effects(state.apply(control, image), pass, frames, writer);
-                    }
-                }
-            }
-        }
-    }
-}
-
 fn append_graphics_effects(
     effects: Vec<GraphicsEffect>,
     pass: &mut Vec<u8>,
@@ -1237,83 +1183,6 @@ fn write_graphics_reply(writer: &Arc<Mutex<Box<dyn Write + Send>>>, reply: &[u8]
     if let Ok(mut writer) = writer.lock() {
         let _ = writer.write_all(reply);
         let _ = writer.flush();
-    }
-}
-
-#[cfg(test)]
-/// Strip OSC 5522 clipboard writes and Kitty graphics out of one PTY read
-/// before anything else sees it. On the common path the original slice is
-/// borrowed unchanged; protocol payloads are decoded into out-of-band frames
-/// and never enter the replay ring.
-///
-/// `frames` receives the ordered list of out-of-band frames to forward *in
-/// stream position*: a kitty image anchors to the cursor cell as it stood when
-/// its command appeared, so the client must apply the text before an image,
-/// then the image, then the text after it, in that order. On the no-graphics
-/// fast path `frames` stays empty and the whole chunk is sent as one `Output`;
-/// only a chunk with graphics splits into interleaved frames.
-fn lift_out_of_band<'a>(
-    raw: &'a [u8],
-    clipboard: &mut ClipboardSniffer,
-    graphics: &mut GraphicsSniffer,
-    mut state: Option<&mut GraphicsState>,
-    has_controller: bool,
-    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
-    frames: &mut Vec<GraphicsFrame>,
-) -> std::borrow::Cow<'a, [u8]> {
-    match clipboard.sniff(raw) {
-        ClipboardSniffed::Plain(b) => match graphics.sniff(b) {
-            Sniffed::Plain(b) => {
-                if let Some(state) = state.as_deref_mut() {
-                    let effects = state.output(b);
-                    if !effects.is_empty() {
-                        frames.push(GraphicsFrame::Output(b.to_vec()));
-                        append_graphics_effects(effects, &mut Vec::new(), frames, writer);
-                    }
-                }
-                std::borrow::Cow::Borrowed(b)
-            }
-            sniffed @ Sniffed::Segments(_) => {
-                let mut pass = Vec::new();
-                process_graphics_output(sniffed, false, &mut pass, frames, state, writer);
-                std::borrow::Cow::Owned(pass)
-            }
-        },
-        ClipboardSniffed::Segments(segs) => {
-            let mut pass = Vec::new();
-            for seg in segs {
-                match seg {
-                    ClipboardSegment::Output(b) => {
-                        let sniffed = graphics.sniff(&b);
-                        process_graphics_output(
-                            sniffed,
-                            true,
-                            &mut pass,
-                            frames,
-                            state.as_deref_mut(),
-                            writer,
-                        );
-                    }
-                    ClipboardSegment::Event(ClipboardEvent::Reply(reply)) => {
-                        if let Ok(mut w) = writer.lock() {
-                            let _ = w.write_all(&reply);
-                            let _ = w.flush();
-                        }
-                    }
-                    ClipboardSegment::Event(ClipboardEvent::Write(write)) => {
-                        if has_controller {
-                            frames.push(GraphicsFrame::ClipboardWrite(write.encode_frame()));
-                        } else if let Ok(mut w) = writer.lock() {
-                            let reply =
-                                crate::core::clipboard::response(write.id.as_deref(), "EBUSY");
-                            let _ = w.write_all(&reply);
-                            let _ = w.flush();
-                        }
-                    }
-                }
-            }
-            std::borrow::Cow::Owned(pass)
-        }
     }
 }
 
@@ -5124,28 +4993,31 @@ mod tests {
             let mut clipboard = ClipboardSniffer::default();
             clipboard.set_controller(Some(1), true);
             let mut graphics = GraphicsSniffer::new_local(true);
-            let mut graphics_state = GraphicsState::new(ws(80, 24));
-            let (mut recorded, mut sent) = (Vec::new(), Vec::new());
+            let mut pane = test_state(true);
+            let (sender, receiver) = mpsc::channel();
+            pane.subscriber = Some(Arc::new(sender));
+            pane.subscriber_epoch = 1;
+            let state = Arc::new(Mutex::new(pane));
+            let gate = OutputGate::new();
+            let mut passthrough = Vec::new();
             for chunk in chunks {
-                let mut frames = Vec::new();
-                let pass = lift_out_of_band(
+                passthrough.extend_from_slice(&graphics_reader::consume(
                     chunk,
                     &mut clipboard,
                     &mut graphics,
-                    Some(&mut graphics_state),
-                    true,
+                    &state,
+                    &gate,
                     &writer,
-                    &mut frames,
-                );
-                recorded.extend_from_slice(&pass);
-                if frames.is_empty() {
-                    sent.extend_from_slice(&pass);
-                }
-                for f in frames {
-                    match f {
-                        GraphicsFrame::Output(b) => sent.extend(b),
-                        _ => panic!("no out-of-band frame in a plain stream"),
-                    }
+                    Some(1),
+                ));
+            }
+            let recorded = state.lock().unwrap().ring.flatten();
+            assert_eq!(passthrough, recorded, "the signals parser sees the recorded stream");
+            let mut sent = Vec::new();
+            for message in receiver.try_iter() {
+                match message {
+                    DaemonMsg::Output(bytes) => sent.extend(bytes),
+                    _ => panic!("no out-of-band frame in a plain stream"),
                 }
             }
             (recorded, sent)
