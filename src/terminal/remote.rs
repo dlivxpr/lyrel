@@ -6157,6 +6157,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn graphics_budget_refusal_is_not_evidence_that_the_pane_is_gone() {
+        for message in [
+            "Desktop graphics budget cannot admit retained session content",
+            "Graphics replay connection closed during admission",
+            "Graphics replay failed",
+        ] {
+            let (mut client_side, mut daemon_side) = UnixStream::pair().unwrap();
+            DaemonMsg::Error(message.into()).encode(&mut daemon_side).unwrap();
+            daemon_side.flush().unwrap();
+            let error = attach_reply_prefix(&mut client_side, 7,
+                std::time::Duration::from_millis(200)).expect_err("admission refused");
+            assert!(!attach_refused(&error),
+                "only an explicit missing-pane verdict can abandon the original session: {error:#}");
+            assert!(format!("{error:#}").contains(message));
+        }
+    }
+
     /// The other side of the rule above: the frame a quiet pane does send is
     /// enough. Nothing else is required of the daemon for the attach to stand.
     #[test]
