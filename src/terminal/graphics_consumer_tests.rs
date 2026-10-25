@@ -237,6 +237,7 @@ fn graphics_send_fixture_with_replies(
 ) {
     let operation = if replies == 0 { "SEND" } else { "SEND_OK" };
     let request = format!("{operation} {serial} {replies} {} 0\n", graphics_pty_fixture::hex(bytes));
+    let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     let marker = format!("KITTY_DONE_{serial}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -246,7 +247,10 @@ fn graphics_send_fixture_with_replies(
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "PTY round trip did not finish: {serial}"
+            "PTY round trip did not finish: {serial}; Input bytes={input_bytes}; child_exited={}; disconnected={}; tail={:?}",
+            view.read_with(cx, |view, _| view.terminal.child_exited()),
+            view.read_with(cx, |view, _| view.terminal.exited),
+            view.read_with(cx, |view, _| view.scrollback_text().chars().rev().take(256).collect::<String>())
         );
         // Admission may await a painted texture's real window-owned atlas
         // release. Keep the production UI tasks and their 300 ms timer alive

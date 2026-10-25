@@ -832,10 +832,33 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
     // More than the real 8 MiB ring cap, but fewer than 10,000 text rows.
     // SGR bytes consume replay capacity without wrapping or inventing rows.
     let padding = b"\x1b[0m".repeat(250);
-    for batch in 0..72 {
+    let mut observer = daemon.panes().observe(pane, crate::daemon::protocol::WinSize {
+        cols: 80, rows: 24, cell_w: 10, cell_h: 20,
+    }).unwrap();
+    observer.set_recv_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
+    let monitor = std::thread::spawn(move || {
+        let mut bytes_seen = 0usize;
+        let mut tail = Vec::new();
+        loop {
+            match observer.recv().unwrap() {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                    bytes_seen += bytes.len();
+                    tail.extend(bytes);
+                    if tail.windows(b"RING_LOAD_DONE".len()).any(|bytes| bytes == b"RING_LOAD_DONE") { break; }
+                    tail.drain(..tail.len().saturating_sub(b"RING_LOAD_DONE".len()));
+                }
+                DaemonMsg::Error(error) => panic!("replay load observer failed: {error}"),
+                DaemonMsg::Exited { code } => panic!("replay sender exited: {code:?}"),
+                _ => {}
+            }
+        }
+        observer.detach().unwrap();
+        bytes_seen
+    });
+    for batch in 0..288 {
         let mut output = Vec::new();
-        for line in 0..128 {
-            let row = batch * 128 + line;
+        for line in 0..32 {
+            let row = batch * 32 + line;
             output.extend_from_slice(&padding);
             output.extend_from_slice(b"\r\n");
             if row == 2048 {
@@ -846,6 +869,9 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
         }
         graphics_send_fixture(&prior, cx, batch + 2, &output);
     }
+    graphics_send_fixture(&prior, cx, 899, b"RING_LOAD_DONE");
+    let pty_bytes = monitor.join().unwrap();
+    assert!(pty_bytes > 8 * 1024 * 1024, "actual daemon Snapshot/Output bytes, not producer bytes, must exceed the ring cap: {pty_bytes}");
     let stopped = graphics_recovery_stats(&prior, cx, 900);
     let sent = stopped.split_whitespace().find_map(|field| field.strip_prefix("bytes=")).unwrap().parse::<usize>().unwrap();
     assert!(sent > 8 * 1024 * 1024);
