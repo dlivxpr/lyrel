@@ -1224,7 +1224,6 @@ impl ImageStore {
             .checked_add(1)
             .expect("graphics reader generation exhausted");
         inner.closed = true;
-        inner.viewport_known = false;
         inner.offers.retain(|_, offer| offer.generation.is_none());
         for resource in inner.resources.values_mut() {
             resource.pending.take();
@@ -1418,6 +1417,9 @@ impl DecodeWorker {
                 .checked_add(1)
                 .expect("graphics reader generation exhausted");
             inner.closed = false;
+            // A retired view keeps its known coordinates for local history
+            // paint; a new reader must wait for its own authoritative Screen.
+            inner.viewport_known = false;
             let generation = inner.reader_generation;
             for offer in inner.offers.values_mut() {
                 if offer.generation.is_none() {

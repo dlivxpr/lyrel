@@ -1302,6 +1302,25 @@ fn graphics_retained_pane_clear(cx: &mut TestAppContext, child_exit: bool, histo
         })
         .unwrap();
     graphics_assert_production_paint(window, &view, cx);
+    if !history {
+        view.update(cx, |view, cx| {
+            view.scroll(10_000, None, &Modifiers::default(), cx)
+        });
+        graphics_assert_production_paint(window, &view, cx);
+        view.read_with(cx, |view, _| {
+            let retained = graphics_visible_images(view)
+                .into_iter()
+                .find(|image| image.placement.image_id == 101)
+                .expect("the retained historical placement must remain visible on scrollback");
+            assert!(
+                retained.painted.load(Ordering::Acquire),
+                "local clear must not permanently fence the retained historical texture"
+            );
+        });
+        view.update(cx, |view, cx| {
+            view.scroll(-10_000, None, &Modifiers::default(), cx)
+        });
+    }
     if !child_exit {
         let mut session = daemon
             .panes()

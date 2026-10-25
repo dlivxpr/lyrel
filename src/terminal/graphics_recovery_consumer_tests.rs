@@ -48,9 +48,11 @@ fn graphics_recovery_fresh_at(
     );
     let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
     let (view, window) = graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), size, source);
-    graphics_assert_production_paint_at(window, &view, cx, size);
     // A unique real-text barrier, never a KITTY_DONE_0 left in old replay.
+    // Resource decoding may finish before replay's authoritative Screen;
+    // observe the ordered live reply before asserting fresh paint geometry.
     graphics_recovery_stats(&view, cx, serial);
+    graphics_assert_production_paint_at(window, &view, cx, size);
     (view, window)
 }
 

@@ -44,6 +44,7 @@
 - 修正 Kitty 续块 `q=0` 错误解除首块 quiet 的行为，仅非零 `q` 可以覆盖；真实 daemon 覆盖键顺序、成功／错误静默、非法 quiet 与后续输入。
 - 外层 zlib PNG 改按实际 inflate、增长和逐行校验阶段预留工作空间，保留 parser 输入与 normalized source 的真实占账，不再因固定 100 MiB scratch 错拒合法大 PNG。真实约 30 MiB PNG 经分块／单 APC、任意 PTY 切片、完整 PNG 像素解码及坏流／超限后的恢复回归已在 Windows 通过；128 MiB 每 pane 工作上限不变。
 - 修复 fresh 图片恢复在权威 `Screen` 到达前短暂使用默认 history origin 绘制的问题；首个零值 `Screen` 也会唤醒待绘制资源，重连后旧坐标代次不再可绘制。图片事件批次现在立即归还 retired atlas lease，避免跨 daemon／主备屏压力只能等待周期清理后错误拒绝合法图片。
+- 修复退出／断链保留窗格本地清屏后，历史图片虽保留却无法继续重绘的问题：退休 reader 保留已知权威坐标，本地清理原子更新 history origin；新 reader 仍须等待自己的首个权威 `Screen`，不借旧坐标提前绘制。
 
 
 ### 维护
@@ -63,6 +64,7 @@
 - fresh GPUI 恢复夹具通过公开 deactivate 完成 headless active-window／input-handler owner 释放，再正常销毁实体、图片 store 和 texture；首帧先测实际字体并设置物理尺寸，再挂载终端，避免默认最大化首绘改写存活备用屏。保留三重弱引用、真实上传 ACK、权威 observer 顺序、像素与 resize 断言；不以测试平台生命周期问题掩盖丢图。
 - 真实 daemon resize 回归先按实际字体计算目标窗口尺寸，等待权威 `Size` 时只读 reader 共享网格，不推进仍为 24 行的旧测试窗口；消费后先同步物理窗口再走 PTY 屏障，避免旧 surface 回写尺寸并扰乱历史锚点。保留 ConPTY／标准 PTY 的不同预期及最后写入行断言；Windows 7 项真实 daemon／rooted paint 回归通过，macOS 完整结果以匹配提交的 CI 为准，不以 Windows 代替。
 - 桌面测试明确声明 `base64` dev-dependency，修复 macOS 仅因 Windows 生产依赖可见性而编译失败；移除固定内部三帧排列的旧 resize wiring 测试，真实 daemon／GPUI 尺寸与图片顺序回归继续执行，不把新 `Screen` 元数据当作异常。
+- Darwin 共享内存回归按 `fstat` 返回的页对齐实际长度映射，并将完整像素放在对象末尾；保留 `S=0` 的实际读取及区域越界拒绝断言，非法请求偏移不再用于夹具自身写入。fresh GPUI 恢复夹具先等待唯一 replay／live 文字屏障再断言生产绘制，避免资源已解码、权威 `Screen` 尚未到达时提前验图；不放宽 fence、预算或绘制／几何断言。macOS 与完整套件结果仍以匹配提交的实际 CI 为准。
 - x86_64 musl 的 CI 与 Release C++ 构建统一使用上游 `SIMDUTF_IMPLEMENTATION_ICELAKE=0` 配置，避开正式 `simdutf 0.7.0` 可选 Ice Lake backend 的 `evex512` 编译错误；保留 Zig `0.16.0` 与 AVX2／SSE／scalar 运行时分派，不修改第三方源码或提高远端 CPU 要求。
 
 - 工作台标题栏的文档输入回归在操作前有界等待真实 Host 文件加载完成，避免将 GPUI 队列空闲误判为 I/O 已完成而在 macOS CI 偶发失败；保留侧栏切换、文档／终端焦点及按键隔离断言，不修改生产行为。
