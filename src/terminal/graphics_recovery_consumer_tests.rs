@@ -105,6 +105,7 @@ fn graphics_recovery_destroy(
     }
 }
 
+#[track_caller]
 fn graphics_recovery_stats(
     view: &Entity<TerminalView>,
     cx: &mut TestAppContext,
@@ -114,16 +115,26 @@ fn graphics_recovery_stats(
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     let marker = format!("KITTY_STATS_{serial} ");
     let done = format!("KITTY_DONE_{serial};");
-    graphics_recovery_wait(
-        cx,
-        "real sender statistics and ordered text barrier did not arrive",
-        |cx| {
-            view.read_with(cx, |view, _| {
-                let text = view.scrollback_text();
-                text.contains(&marker) && text.contains(&done)
-            })
-        },
-    );
+    let caller = std::panic::Location::caller();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let ready = view.read_with(cx, |view, _| {
+            let text = view.scrollback_text();
+            text.contains(&marker) && text.contains(&done)
+        });
+        if ready {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let state = view.update(cx, |view, _| {
+                view.terminal.poll_exited();
+                (view.pane_id, view.terminal.exited, view.terminal.child_exited(),
+                    view.scrollback_text(), view.terminal.images().recovery_diagnostics())
+            });
+            panic!("real sender statistics barrier serial={serial}, marker={marker:?}, done={done:?}, caller={caller} did not arrive; (pane, disconnected, child_exited, text, cache)={state:?}");
+        }
+        graphics_consumer_progress(cx);
+    }
     view.read_with(cx, |view, _| {
         let text = view.scrollback_text();
         text.split_once(&marker)
