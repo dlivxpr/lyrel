@@ -2676,7 +2676,7 @@ mod kitty_graphics {
         }
 
         fn finish_exchange(&mut self) -> Vec<Vec<u8>> {
-            let marker = format!("KITTY_DONE_{}\r", self.serial);
+            let marker = format!("KITTY_DONE_{};\r", self.serial);
             let mut plain = Vec::new();
             loop {
                 match self.session.recv().expect("ordered daemon graphics stream") {
@@ -2862,7 +2862,7 @@ mod kitty_graphics {
             .panes()
             .send_input(pane, format!("STAT {marker_serial} 0 00 0\n").as_bytes())
             .unwrap();
-        let marker = format!("KITTY_DONE_{marker_serial}\r");
+        let marker = format!("KITTY_DONE_{marker_serial};\r");
         let mut text = Vec::new();
         let mut updates = Vec::new();
         let mut latest_size = None;
@@ -3202,7 +3202,7 @@ mod kitty_graphics {
         ClientMsg::Input(format!("STAT {old_serial} 0 00 0\n").into_bytes())
             .encode(&mut old)
             .unwrap();
-        let old_done = format!("KITTY_DONE_{old_serial}\r");
+        let old_done = format!("KITTY_DONE_{old_serial};\r");
         let mut old_text = Vec::new();
         while !windows_contain(&old_text, old_done.as_bytes()) {
             match DaemonMsg::read(&mut old)
@@ -3350,7 +3350,7 @@ mod kitty_graphics {
                 .as_bytes(),
             )
             .unwrap();
-        let marker = b"KITTY_DONE_5000\r";
+        let marker = b"KITTY_DONE_5000;\r";
         let mut text = Vec::new();
         let mut offered = None;
         let mut cancelled = false;
@@ -3382,7 +3382,7 @@ mod kitty_graphics {
         assert!(windows_contain(&text, b"after_offer_timeout"));
         controller.write_all(&partial[3..]).unwrap();
         let mut completed = Vec::new();
-        while !windows_contain(&completed, b"KITTY_DONE_5001\r") {
+        while !windows_contain(&completed, b"KITTY_DONE_5001;\r") {
             match DaemonMsg::read(&mut controller)
                 .expect("remaining input header and payload must retain their framing")
             {
@@ -3477,7 +3477,7 @@ mod kitty_graphics {
         }
         .encode(&mut active)
         .unwrap();
-        let marker = format!("KITTY_DONE_{}\r", controller.serial);
+        let marker = format!("KITTY_DONE_{};\r", controller.serial);
         let mut text = Vec::new();
         loop {
             match DaemonMsg::read(&mut active).unwrap() {

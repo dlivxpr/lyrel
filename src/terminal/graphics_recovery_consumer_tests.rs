@@ -111,7 +111,7 @@ fn graphics_recovery_stats(
     let request = format!("STAT {serial} 0 00 0\n");
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     let marker = format!("KITTY_STATS_{serial} ");
-    let done = format!("KITTY_DONE_{serial}");
+    let done = format!("KITTY_DONE_{serial};");
     graphics_recovery_wait(
         cx,
         "real sender statistics and ordered text barrier did not arrive",
@@ -385,7 +385,7 @@ fn graphics_recovery_collect(
     mut observer: lyrel_core::client::PaneSession,
     serial: usize,
 ) -> (String, Vec<DaemonMsg>) {
-    let marker = format!("KITTY_DONE_{serial}");
+    let marker = format!("KITTY_DONE_{serial};");
     let mut text = Vec::new();
     let mut trace = Vec::new();
     while !text

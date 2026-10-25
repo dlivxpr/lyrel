@@ -219,7 +219,7 @@ impl Consumer {
     }
 
     fn finish_exchange(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
-        let marker = format!("KITTY_DONE_{}\r", self.serial);
+        let marker = format!("KITTY_DONE_{};\r", self.serial);
         loop {
             match self.session.recv().unwrap_or_else(|error| {
                 panic!(
@@ -517,7 +517,7 @@ fn retention_daemon_removed_observer_cannot_freeze_history_as_inactive_live() {
             break;
         }
     }
-    let marker = format!("KITTY_DONE_{}\r", consumer.serial + 1).into_bytes();
+    let marker = format!("KITTY_DONE_{};\r", consumer.serial + 1).into_bytes();
     let refused = std::thread::scope(|scope| {
         let drain = scope.spawn(|| {
             let mut output = Vec::new();

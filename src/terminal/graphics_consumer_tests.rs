@@ -239,10 +239,10 @@ fn graphics_send_fixture_with_replies(
     let request = format!("{operation} {serial} {replies} {} 0\n", graphics_pty_fixture::hex(bytes));
     let input_bytes = request.len();
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
-    let marker = format!("KITTY_DONE_{serial}");
+    let marker = format!("KITTY_DONE_{serial};");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if view.read_with(cx, |view, _| view.scrollback_text().lines().any(|line| line.trim() == marker)) {
+        if view.read_with(cx, |view, _| view.scrollback_text().contains(&marker)) {
             break;
         }
         assert!(!view.read_with(cx, |view, _| view.terminal.child_exited()), "PTY sender exited before serial {serial}; Input bytes={input_bytes}");
