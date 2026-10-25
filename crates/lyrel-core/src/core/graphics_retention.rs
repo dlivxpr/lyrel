@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc::SyncSender};
 
-use super::{Image, MAX_PANE_DECODED_BYTES, MAX_PANE_ENCODED_BYTES};
+use super::{MAX_PANE_DECODED_BYTES, MAX_PANE_ENCODED_BYTES};
 
 pub const MAX_DAEMON_ENCODED_BYTES: usize = 128 << 20;
 pub const MAX_DAEMON_DECODED_BYTES: usize = 256 << 20;
@@ -50,7 +50,6 @@ pub(super) enum Priority {
 }
 
 pub(super) struct Resident {
-    pub image: Option<Arc<Image>>,
     pub packet: Option<crate::daemon::protocol::GraphicsPacket>,
     pub decoded: usize,
     pub priority: Priority,
@@ -103,10 +102,9 @@ impl Retention {
     pub(super) fn reclaim_specific(&self, slot: &Arc<Mutex<Resident>>) -> bool {
         let _registry = self.registry.lock().unwrap();
         let mut resident = slot.lock().unwrap();
-        if resident.priority == Priority::Protected || resident.image.is_none() {
+        if resident.priority == Priority::Protected || resident.packet.is_none() {
             return false;
         }
-        resident.image = None;
         resident.packet = None;
         if let Some(wake) = &resident.wake {
             let _ = wake.try_send(());
@@ -116,7 +114,6 @@ impl Retention {
     pub(super) fn admit(
         &self,
         owner: u64,
-        image: Arc<Image>,
         decoded: usize,
         replacement: Option<&Arc<Mutex<Resident>>>,
         wake: Option<SyncSender<()>>,
@@ -127,7 +124,7 @@ impl Retention {
         registry
             .entries
             .retain(|_, entry| entry.resident.strong_count() != 0);
-        let mut total = (image.data.capacity(), decoded);
+        let mut total = (packet.len(), decoded);
         let mut pane = total;
         let mut candidates = Vec::new();
         for (&sequence, entry) in &registry.entries {
@@ -138,11 +135,11 @@ impl Retention {
                 continue;
             }
             let resident = slot.lock().unwrap();
-            if let Some(image) = &resident.image {
-                total.0 += image.data.capacity();
+            if let Some(packet) = &resident.packet {
+                total.0 += packet.len();
                 total.1 += resident.decoded;
                 if entry.owner == owner {
-                    pane.0 += image.data.capacity();
+                    pane.0 += packet.len();
                     pane.1 += resident.decoded;
                 }
                 if resident.priority != Priority::Protected {
@@ -150,7 +147,7 @@ impl Retention {
                         resident.priority,
                         sequence,
                         entry.owner,
-                        image.data.capacity(),
+                        packet.len(),
                         resident.decoded,
                         slot.clone(),
                     ));
@@ -202,7 +199,6 @@ impl Retention {
         }
         for slot in victims {
             let mut resident = slot.lock().unwrap();
-            resident.image = None;
             resident.packet = None;
             if let Some(wake) = &resident.wake {
                 let _ = wake.try_send(());
@@ -214,7 +210,6 @@ impl Retention {
             .expect("graphics sequence exhausted");
         let sequence = registry.sequence;
         let slot = Arc::new(Mutex::new(Resident {
-            image: Some(image),
             packet: Some(packet),
             decoded,
             priority: Priority::Protected,

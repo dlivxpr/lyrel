@@ -487,7 +487,7 @@ impl GraphicsState {
     ) -> Result<PreparedPlacement, &'static str> {
         let resource = self
             .lookup(control)
-            .filter(|key| self.resources[key].resident.lock().unwrap().image.is_some())
+            .filter(|key| self.resources[key].resident.lock().unwrap().packet.is_some())
             .ok_or("ENOENT:Image not found")?;
         self.geometry(control, &self.resources[&resource].image)
             .ok_or("EINVAL:Invalid placement rectangle")?;
@@ -533,7 +533,7 @@ impl GraphicsState {
         if self
             .resources
             .get(&placement.resource)
-            .is_some_and(|r| r.resident.lock().unwrap().image.is_some())
+            .is_some_and(|r| r.resident.lock().unwrap().packet.is_some())
         {
             self.place(
                 placement.resource,
@@ -643,8 +643,8 @@ impl GraphicsState {
             .filter(|(key, _)| Some(**key) != excluding)
             .fold((0, 0), |mut usage, (_, resource)| {
                 let resident = resource.resident.lock().unwrap();
-                if let Some(image) = &resident.image {
-                    usage.0 += image.data.capacity();
+                if let Some(packet) = &resident.packet {
+                    usage.0 += packet.len();
                     usage.1 += resident.decoded;
                 }
                 usage
@@ -765,7 +765,7 @@ impl GraphicsState {
         let mut obsolete = Vec::new();
         for (&key, resource) in &self.resources {
             let mut resident = resource.resident.lock().unwrap();
-            if resident.image.is_some() {
+            if resident.packet.is_some() {
                 continue;
             }
             let has_position = self.placements().any(|p| {
@@ -951,7 +951,6 @@ impl GraphicsState {
                 let packet = packet.expect("transmit preparation encodes its resource packet");
                 let Some(resident) = self.retention.admit(
                     self.owner,
-                    image.clone(),
                     decoded_bytes,
                     replacement.as_ref(),
                     self.wake.clone(),
@@ -1009,7 +1008,7 @@ impl GraphicsState {
                 self.protect_resources();
                 if let Some(key) = self
                     .lookup(&control)
-                    .filter(|key| self.resources[key].resident.lock().unwrap().image.is_some())
+                    .filter(|key| self.resources[key].resident.lock().unwrap().packet.is_some())
                 {
                     self.place(key, &control, &mut effects, None);
                 } else {
