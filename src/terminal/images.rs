@@ -350,8 +350,13 @@ struct Residency {
     registered: AtomicBool,
 }
 
+struct WindowImage {
+    residency: Weak<Residency>,
+    displayed: Weak<AtomicBool>,
+}
+
 thread_local! {
-    static WINDOW_IMAGES: std::cell::RefCell<HashMap<gpui_kit::WindowId, Vec<Weak<Residency>>>> = std::cell::RefCell::new(HashMap::new());
+    static WINDOW_IMAGES: std::cell::RefCell<HashMap<gpui_kit::WindowId, Vec<WindowImage>>> = std::cell::RefCell::new(HashMap::new());
 }
 
 struct OfferedResource {
@@ -477,6 +482,26 @@ fn retire(resource: Resource, retired: &mut Vec<Arc<Residency>>) {
         && resource.painted.load(Ordering::Acquire)
     {
         retired.push(decoded.residency);
+    }
+}
+
+fn rearm_pressure_after_live_reference(inner: &mut StoreInner, placement: &Placement) {
+    // A hidden consumer can request pressure while the daemon still protects
+    // live content. Only losing the last authoritative live reference rearms
+    // a refused request; failed offers and historical updates do not retry it.
+    if !placement.live
+        || !inner
+            .resources
+            .get(&placement.resource)
+            .is_some_and(|resource| resource.pressure_requested)
+        || inner.placements.values().any(|anchored| {
+            anchored.placement.resource == placement.resource && anchored.placement.live
+        })
+    {
+        return;
+    }
+    if let Some(resource) = inner.resources.get_mut(&placement.resource) {
+        resource.pressure_requested = false;
     }
 }
 
@@ -1097,44 +1122,46 @@ impl ImageStore {
         if retired.is_empty() {
             return;
         }
-        // A small surviving tile can pin a page created for an older large
-        // image. Actually remove every terminal tile before returning the old
-        // page's ticket; current CPU images re-upload on the refreshed frame.
+        // Compaction must remove every terminal tile before returning an old
+        // page's ticket. Hidden tiles still release immediately, but only a
+        // displayed owner needs a new frame. Surviving CPU images register
+        // again when painted, including after their hidden pane returns.
+        let mut invalidated_visible = false;
         WINDOW_IMAGES.with(|windows| {
-            let mut windows = windows.borrow_mut();
-            if let Some(images) = windows.get_mut(&window.window_handle().window_id()) {
-                images.retain(|image| {
-                    let Some(image) = image.upgrade() else {
-                        return false;
-                    };
-                    if image.gpu.lock().unwrap().is_none() {
-                        return false;
-                    }
-                    cx.drop_image(image.data.clone(), Some(window));
-                    true
-                });
+            let images = windows
+                .borrow_mut()
+                .remove(&window.window_handle().window_id());
+            for entry in images.into_iter().flatten() {
+                let Some(image) = entry.residency.upgrade() else {
+                    continue;
+                };
+                image.registered.store(false, Ordering::Release);
+                if image.gpu.lock().unwrap().is_none() {
+                    continue;
+                }
+                invalidated_visible |= entry
+                    .displayed
+                    .upgrade()
+                    .is_some_and(|displayed| displayed.load(Ordering::Relaxed));
+                cx.drop_image(image.data.clone(), Some(window));
             }
-            windows.retain(|_, images| !images.is_empty());
         });
         for retired in retired {
             cx.drop_image(retired.data.clone(), Some(window));
             retired.gpu.lock().unwrap().take();
         }
-        WINDOW_IMAGES.with(|windows| {
-            windows.borrow_mut().retain(|_, images| {
-                images.retain(|image| {
-                    image
-                        .upgrade()
-                        .is_some_and(|image| image.gpu.lock().unwrap().is_some())
-                });
-                !images.is_empty()
-            })
-        });
-        window.refresh();
+        if invalidated_visible {
+            window.refresh();
+        }
         self.0.ready.notify_all();
     }
 
-    pub fn register_for_paint(&self, image: &RenderPlacement, window: &gpui_kit::Window) {
+    pub fn register_for_paint(
+        &self,
+        image: &RenderPlacement,
+        window: &gpui_kit::Window,
+        displayed: &Arc<AtomicBool>,
+    ) {
         let Some(residency) = &image._residency else {
             return;
         };
@@ -1144,13 +1171,16 @@ impl ImageStore {
         WINDOW_IMAGES.with(|windows| {
             let mut windows = windows.borrow_mut();
             windows.retain(|_, images| {
-                images.retain(|image| image.strong_count() > 0);
+                images.retain(|image| image.residency.strong_count() > 0);
                 !images.is_empty()
             });
             windows
                 .entry(window.window_handle().window_id())
                 .or_default()
-                .push(Arc::downgrade(residency));
+                .push(WindowImage {
+                    residency: Arc::downgrade(residency),
+                    displayed: Arc::downgrade(displayed),
+                });
         });
     }
 
@@ -1347,7 +1377,7 @@ impl ImageStore {
                 };
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
-                inner.placements.insert(
+                let old = inner.placements.insert(
                     placement.key,
                     AnchoredPlacement {
                         placement,
@@ -1355,6 +1385,9 @@ impl ImageStore {
                         metadata,
                     },
                 );
+                if let Some(old) = old {
+                    rearm_pressure_after_live_reference(&mut inner, &old.placement);
+                }
                 true
             }
             GraphicsUpdate::Screen {
@@ -1378,7 +1411,9 @@ impl ImageStore {
             } => {
                 // Never interpret kitty selectors or remove unnamed placements.
                 for key in placements {
-                    inner.placements.remove(&key);
+                    if let Some(old) = inner.placements.remove(&key) {
+                        rearm_pressure_after_live_reference(&mut inner, &old.placement);
+                    }
                 }
                 for key in resources {
                     if let Some(resource) = inner.resources.remove(&key) {

@@ -265,7 +265,11 @@ fn graphics_send_fixture_with_replies(
         if view.read_with(cx, |view, _| view.scrollback_text().contains(&marker)) {
             break;
         }
-        assert!(!view.read_with(cx, |view, _| view.terminal.child_exited()), "PTY sender exited before serial {serial}; Input bytes={input_bytes}; output={}", view.read_with(cx, |view, _| view.scrollback_text()));
+        assert!(
+            !view.read_with(cx, |view, _| view.terminal.child_exited()),
+            "PTY sender exited before serial {serial}; Input bytes={input_bytes}; output={}",
+            view.read_with(cx, |view, _| view.scrollback_text())
+        );
         assert!(
             std::time::Instant::now() < deadline,
             "PTY round trip did not finish: {serial}; Input bytes={input_bytes}; child_exited={}; disconnected={}; tail={:?}",
@@ -884,7 +888,12 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                 // The viewport and pressure travel to different daemons. Complete
                 // a real round trip on the history owner before the new offer.
                 graphics_send_fixture(&terminals[0].1, cx, 41, b"\x1b[0m");
-                let request = format!("SEND_OK 5 1 {} 0\n", graphics_pty_fixture::hex(b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\"));
+                let request = format!(
+                    "SEND_OK 5 1 {} 0\n",
+                    graphics_pty_fixture::hex(
+                        b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\"
+                    )
+                );
                 terminals[2]
                     .1
                     .read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
@@ -899,7 +908,11 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
                             .unwrap();
                     }
                     terminals[2].1.read_with(cx, |view, _| {
-                        assert!(!view.terminal.child_exited(), "PTY sender exited before serial 5; output={}", view.scrollback_text());
+                        assert!(
+                            !view.terminal.child_exited(),
+                            "PTY sender exited before serial 5; output={}",
+                            view.scrollback_text()
+                        );
                         view.scrollback_text().contains("KITTY_DONE_5;")
                     })
                 });
@@ -1514,6 +1527,223 @@ fn graphics_consumer_scrolled_history_survives_new_output_and_hidden_viewport_wi
     }
 }
 
+#[gpui_kit::test]
+fn graphics_consumer_hidden_live_pressure_retries_only_after_last_live_placement_leaves(
+    cx: &mut TestAppContext,
+) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    const GPU_PAGE: usize = 4 << 20;
+    crate::terminal::images::with_test_cache_limits(GPU_PAGE + 1024, GPU_PAGE + 1024, || {
+        cx.update(|cx| {
+            gpui_kit::component::init(cx);
+            cx.set_global(Config::default());
+        });
+        for remove in [false, true] {
+            let owner = GraphicsDaemonProcess::start();
+            let requester = GraphicsDaemonProcess::start();
+            let old_pane = owner.spawn();
+            let new_pane = requester.spawn();
+            let (old, old_window) = graphics_rooted_consumer(cx, old_pane, owner.stream(old_pane));
+            let (new, new_window) =
+                graphics_rooted_consumer(cx, new_pane, requester.stream(new_pane));
+            graphics_send_fixture(&old, cx, 1, b"\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b[24;5H\x1b_Ga=p,i=7,p=2,c=2,r=1,C=1,q=2\x1b\\");
+            graphics_layout_wait_image(&old, cx, 7);
+            graphics_assert_production_paint(old_window, &old, cx);
+            cx.update(|cx| declare_displayed(cx, [(old.entity_id(), false)]));
+            old_window
+                .update(cx, |_, window, cx| {
+                    window.replace_root(cx, |_, _| gpui_kit::EmptyView);
+                })
+                .unwrap();
+            graphics_send_fixture(&old, cx, 2, b"\x1b[0m");
+            let upload = b"\x1b[6;5H\x1b_Ga=T,i=8,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\";
+            graphics_send_fixture(&new, cx, 3, upload);
+            assert!(
+                new.read_with(cx, |view, _| graphics_visible_images(view).is_empty()),
+                "the daemon legitimately protects hidden content still in the live grid"
+            );
+            graphics_send_fixture(&old, cx, 4, &b"\r\n".repeat(10));
+            old.read_with(cx, |view, _| {
+                let images = graphics_visible_images(view);
+                assert!(images.iter().any(|image| image.placement.live));
+                assert!(images.iter().any(|image| !image.placement.live));
+                assert!(images.iter().all(|image| !image.evicted));
+            });
+            graphics_send_fixture(&new, cx, 5, upload);
+            assert!(
+                new.read_with(cx, |view, _| graphics_visible_images(view).is_empty()),
+                "one historical placement cannot unprotect another live reference"
+            );
+            if remove {
+                graphics_send_fixture(&old, cx, 6, b"\x1b_Ga=d,d=i,i=7\x1b\\");
+            } else {
+                graphics_send_fixture(&old, cx, 6, &b"\r\n".repeat(80));
+            }
+            old.read_with(cx, |view, _| {
+                assert!(
+                    graphics_visible_images(view)
+                        .iter()
+                        .all(|image| !image.placement.live)
+                )
+            });
+            graphics_send_fixture(&new, cx, 7, upload);
+            assert!(
+                new.read_with(cx, |view, _| graphics_visible_images(view)
+                    .iter()
+                    .any(|image| image.placement.image_id == 8)),
+                "a refused pressure request must become retryable after authoritative live protection ends"
+            );
+            graphics_layout_wait_image(&new, cx, 8);
+            old.read_with(cx, |view, _| {
+                let images = graphics_visible_images(view);
+                assert_eq!(images.len(), if remove { 0 } else { 2 });
+                assert!(
+                    images
+                        .iter()
+                        .all(|image| image.evicted && image.data.is_none()),
+                    "authoritative eviction retains both historical notice positions"
+                );
+            });
+            owner.panes().kill(old_pane).unwrap();
+            requester.panes().kill(new_pane).unwrap();
+            graphics_recovery_destroy(old, old_window, cx);
+            graphics_recovery_destroy(new, new_window, cx);
+        }
+    });
+}
+
+struct GraphicsWindowRenderProbe {
+    renders: std::rc::Rc<std::cell::Cell<usize>>,
+    terminal: Option<Entity<TerminalView>>,
+}
+
+impl Render for GraphicsWindowRenderProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.renders.set(self.renders.get() + 1);
+        gpui_kit::div().size_full().children(self.terminal.clone())
+    }
+}
+
+#[gpui_kit::test]
+fn graphics_consumer_hidden_retired_atlas_does_not_wake_window_and_returns_current_pixels(
+    cx: &mut TestAppContext,
+) {
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        let mut config = Config::default();
+        config.cursor_blink = false;
+        cx.set_global(config);
+    });
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream(pane));
+    graphics_send_fixture(&view, cx, 1, b"\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\\x1b[8;5H\x1b_Ga=T,i=8,p=2,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\");
+    graphics_layout_wait_image(&view, cx, 7);
+    graphics_layout_wait_image(&view, cx, 8);
+    graphics_assert_production_paint(window, &view, cx);
+    cx.update(|cx| declare_displayed(cx, [(view.entity_id(), false)]));
+    let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+    let probe = window
+        .update(cx, |_, window, cx| {
+            let probe = cx.new(|_| GraphicsWindowRenderProbe {
+                renders: renders.clone(),
+                terminal: None,
+            });
+            window.replace_root(cx, |window, cx| {
+                gpui_kit::component::Root::new(probe.clone(), window, cx)
+            });
+            window.blur(cx);
+            probe
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let baseline = renders.get();
+    // Do not use graphics_send_fixture here: its global refresh is deliberate
+    // paint-driver machinery and would conceal a hidden-output invalidation.
+    let request = format!(
+        "SEND 2 0 {} 0\n",
+        graphics_pty_fixture::hex(
+            b"\x1b[6;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\"
+        )
+    );
+    view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        cx.run_until_parked();
+        let ready = view.read_with(cx, |view, _| {
+            view.scrollback_text().contains("KITTY_DONE_2;")
+                && graphics_visible_images(view).iter().any(|image| {
+                    image.placement.image_id == 7
+                        && image
+                            .data
+                            .as_ref()
+                            .is_some_and(|data| data.as_bytes(0).unwrap() == [0, 255, 0, 255])
+                })
+        });
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "hidden replacement did not complete"
+        );
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(350));
+    cx.run_until_parked();
+    assert_eq!(
+        renders.get(),
+        baseline,
+        "retiring previously painted hidden images must not invalidate an unrelated window surface"
+    );
+    cx.update(|cx| declare_displayed(cx, [(view.entity_id(), true)]));
+    probe.update(cx, |probe, cx| {
+        probe.terminal = Some(view.clone());
+        cx.notify();
+    });
+    graphics_assert_production_paint(window, &view, cx);
+    view.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        assert_eq!(images.len(), 2);
+        for (id, pixels) in [(7, [0, 255, 0, 255]), (8, [255, 0, 0, 255])] {
+            let image = images
+                .iter()
+                .find(|image| image.placement.image_id == id)
+                .unwrap();
+            assert_eq!(image.data.as_ref().unwrap().as_bytes(0).unwrap(), pixels);
+            assert!(image.painted.load(std::sync::atomic::Ordering::Acquire));
+        }
+    });
+    cx.run_until_parked();
+    let baseline = renders.get();
+    let request = format!(
+        "SEND 3 0 {} 0\n",
+        graphics_pty_fixture::hex(b"\x1b_Ga=d,d=I,i=8\x1b\\")
+    );
+    view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+    while view.read_with(cx, |view, _| {
+        !view.scrollback_text().contains("KITTY_DONE_3;")
+    }) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "visible removal did not complete"
+        );
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cx.run_until_parked();
+    assert!(
+        renders.get() > baseline,
+        "visible atlas invalidation must still repaint"
+    );
+    daemon.panes().kill(pane).unwrap();
+}
 #[gpui_kit::test]
 fn graphics_consumer_preempted_scroll_viewport_cannot_pin_replayed_history(
     cx: &mut TestAppContext,

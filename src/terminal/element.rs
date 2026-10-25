@@ -2496,6 +2496,7 @@ impl Element for TerminalElement {
         // map that back to a screen row with the snapshot's scroll state and
         // drop anything scrolled out of the viewport.
         let image_store = self.view.read(cx).terminal.images();
+        let displayed = self.view.read(cx).displayed.clone();
         let images = image_store.snapshot_with_placeholders(&snap.placeholders);
         let notice = images.iter().any(|image| image.evicted).then(|| {
             let text = SharedString::new_static(t(L10nKey::TerminalImageEvicted));
@@ -2535,7 +2536,7 @@ impl Element for TerminalElement {
                 {
                     continue;
                 }
-                image_store.register_for_paint(img, window);
+                image_store.register_for_paint(img, window, &displayed);
                 window.paint_layer(visible, |window| {
                     if let Some(data) = &img.data {
                         let _ = window.paint_image(
