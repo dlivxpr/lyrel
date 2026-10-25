@@ -921,3 +921,77 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
     graphics_recovery_destroy(fresh, fresh_window, cx);
     daemon.panes().kill(pane).unwrap();
 }
+
+#[gpui_kit::test]
+fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
+    cx: &mut TestAppContext,
+) {
+    use base64::Engine as _;
+
+    crate::core::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
+    // No reduced test limits or pre-decoded resource frames: all three real
+    // PNG uploads traverse PTY validation, daemon offers and the desktop decoder.
+    let daemon = GraphicsDaemonProcess::start();
+    let pane = daemon.spawn();
+    let (prior, prior_window) = graphics_recovery_fresh(&daemon, pane, cx, 1000);
+    for (index, rgba) in [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]]
+        .into_iter()
+        .enumerate()
+    {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(3840, 2160, image::Rgba(rgba))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+        let chunks: Vec<_> = encoded.as_bytes().chunks(4096).collect();
+        let mut command = format!("\x1b[{};5H", 6 + index * 3);
+        for (chunk, payload) in chunks.iter().enumerate() {
+            let more = usize::from(chunk + 1 != chunks.len());
+            if chunk == 0 {
+                command.push_str(&format!(
+                    "\x1b_Ga=T,i={},p=1,c=2,r=1,C=1,f=100,m={more};",
+                    500 + index
+                ));
+            } else {
+                command.push_str(&format!("\x1b_Gm={more};"));
+            }
+            command.push_str(std::str::from_utf8(payload).unwrap());
+            command.push_str("\x1b\\");
+        }
+        graphics_send_fixture_with_replies(&prior, cx, 1001 + index, command.as_bytes(), 1);
+        let bgra = [rgba[2], rgba[1], rgba[0], rgba[3]].repeat(3840 * 2160);
+        graphics_recovery_pixels(&prior, cx, 500 + index as u32, &bgra);
+        graphics_assert_production_paint(prior_window, &prior, cx);
+    }
+    let stopped = graphics_recovery_stats(&prior, cx, 1004);
+    assert!(stopped.contains("uploads=3"), "{stopped}");
+    assert!(stopped.split_whitespace().any(|field| field
+        .strip_prefix("pid=")
+        .is_some_and(|pid| pid.parse::<u32>().is_ok_and(|pid| pid != 0))));
+    graphics_recovery_destroy(prior, prior_window, cx);
+
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1005);
+    for (index, bgra) in [[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255]]
+        .into_iter()
+        .enumerate()
+    {
+        graphics_recovery_pixels(&fresh, cx, 500 + index as u32, &bgra.repeat(3840 * 2160));
+    }
+    graphics_assert_production_paint(fresh_window, &fresh, cx);
+    fresh.read_with(cx, |view, _| {
+        assert_eq!(view.pane_id, pane);
+        let images = graphics_visible_images(view);
+        assert_eq!(images.len(), 3);
+        assert!(images.iter().all(|image| !image.evicted
+            && image.painted.load(std::sync::atomic::Ordering::Acquire)));
+    });
+    assert_eq!(graphics_recovery_stats(&fresh, cx, 1006), stopped,
+        "fresh replay must keep the real sender PID, upload and byte counters unchanged");
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    daemon.panes().kill(pane).unwrap();
+}
