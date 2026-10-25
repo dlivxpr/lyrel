@@ -3,7 +3,7 @@
 #[path = "../../../tests/support/native_ssh_graphics.rs"]
 mod fixture;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -24,6 +24,13 @@ fn next_serial() -> u64 {
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|part| part == needle)
+}
+
+fn trace_event(trace: &mut VecDeque<String>, event: String) {
+    if trace.len() == 96 {
+        trace.pop_front();
+    }
+    trace.push_back(event);
 }
 
 #[derive(Default)]
@@ -88,6 +95,7 @@ struct Consumer {
     state: State,
     serial: u64,
     text: Vec<u8>,
+    needs_replay: bool,
 }
 
 impl Consumer {
@@ -110,25 +118,41 @@ impl Consumer {
             other => panic!("expected real remote Spawned, got {other:?}"),
         };
         fixture.track_pane(pane);
-        let mut consumer = Self::new(stream, pane);
+        let mut consumer = Self::new(stream, pane, false);
         consumer.until(b"KITTY_READY");
         consumer
     }
 
-    fn new(stream: Stream, pane: u64) -> Self {
+    fn new(stream: Stream, pane: u64, needs_replay: bool) -> Self {
         Self {
             stream,
             pane,
             state: State::default(),
             serial: 0,
             text: Vec::new(),
+            needs_replay,
         }
     }
 
     fn until(&mut self, marker: &[u8]) {
+        self.collect_until(marker);
+    }
+
+    fn collect_until(&mut self, marker: &[u8]) -> VecDeque<String> {
         self.text.clear();
+        let mut trace = VecDeque::new();
+        let mut replayed = !self.needs_replay;
         loop {
-            match DaemonMsg::read(&mut self.stream).expect("bounded real SSH consumer stream") {
+            let message = DaemonMsg::read(&mut self.stream)
+                .unwrap_or_else(|error| panic!("bounded real SSH consumer stream: {error}; events={trace:#?}"));
+            let event = match &message {
+                DaemonMsg::Graphics(frame) => format!("Graphics bytes={}", frame.len()),
+                DaemonMsg::Snapshot(bytes) => format!("Snapshot bytes={} marker={} tail(hex)={}", bytes.len(), contains(bytes, marker), hex(&bytes[bytes.len().saturating_sub(256)..])),
+                DaemonMsg::Output(bytes) => format!("Output bytes={} marker={} tail(hex)={}", bytes.len(), contains(bytes, marker), hex(&bytes[bytes.len().saturating_sub(256)..])),
+                other => format!("{other:?}"),
+            };
+            trace_event(&mut trace, event);
+            match message {
                 DaemonMsg::GraphicsOffer {
                     token,
                     encoded_bytes,
@@ -147,10 +171,18 @@ impl Consumer {
                 }
                 DaemonMsg::Graphics(frame) => {
                     assert!(frame.len() <= protocol::MAX_FRAME);
-                    self.state.apply(
-                        GraphicsUpdate::decode_frame_owned(frame.into_vec())
-                            .expect("valid production graphics packet"),
-                    );
+                    let update = GraphicsUpdate::decode_frame_owned(frame.into_vec())
+                        .expect("valid production graphics packet");
+                    let event = match &update {
+                        GraphicsUpdate::Resource { key, image } => format!("Resource key={key} size={}x{}", image.width, image.height),
+                        other => format!("{other:?}"),
+                    };
+                    trace_event(&mut trace, event);
+                    // The ring's Snapshot may already contain the new DONE
+                    // while replay admission is being retried. GraphicsState's
+                    // final Screen follows its Resource/Place replay packets.
+                    replayed |= matches!(&update, GraphicsUpdate::Screen { .. });
+                    self.state.apply(update);
                 }
                 DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
                     assert!(
@@ -158,13 +190,14 @@ impl Consumer {
                         "pixel APC entered text replay"
                     );
                     self.text.extend(bytes);
-                    if contains(&self.text, marker) {
-                        return;
-                    }
                 }
                 DaemonMsg::Error(error) => panic!("remote consumer refused: {error}"),
                 DaemonMsg::Exited { code } => panic!("real Linux sender exited: {code:?}"),
                 _ => {}
+            }
+            if replayed && contains(&self.text, marker) {
+                self.needs_replay = false;
+                return trace;
             }
         }
     }
@@ -223,7 +256,7 @@ fn attach(fixture: &NativeSshFixture, pane: u64) -> Consumer {
     }
     .encode(&mut stream)
     .unwrap();
-    Consumer::new(stream, pane)
+    Consumer::new(stream, pane, true)
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -453,9 +486,10 @@ fn native_ssh_graphics_replies_recovery_limits_and_host_local_media() {
     assert!(
         matches!(DaemonMsg::read(&mut input).unwrap(), DaemonMsg::InputAck { pane_id: id } if id == pane_id)
     );
-    let mut fresh = Consumer::new(observer, pane_id);
-    fresh.until(format!("KITTY_DONE_{serial}\r").as_bytes());
-    assert_eq!(fresh.state.placements, current);
+    let mut fresh = Consumer::new(observer, pane_id, true);
+    let trace = fresh.collect_until(format!("KITTY_DONE_{serial}\r").as_bytes());
+    assert_eq!(fresh.state.placements, current, "ordered replay events={trace:#?}");
+    assert_eq!(fresh.state.pixels(fresh.state.placement(8, 8)), [0, 255, 0, 255]);
     assert!(fresh.state.placements.values().all(|p| p.image_id != 7));
     assert!(contains(&fresh.text, b"LIVE_NATIVE_SSH_ORDER"));
     assert!(contains(
