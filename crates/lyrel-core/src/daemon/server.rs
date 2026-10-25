@@ -1566,7 +1566,13 @@ fn read_active_input<R: std::io::Read>(
         match stream.read(&mut chunk) {
             Ok(0) => return Ok(None),
             Ok(n) => pending.extend_from_slice(&chunk[..n]),
-            Err(error) if matches!(error.kind(), std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                ) => {}
             Err(error) => return Err(error),
         }
         // Keep the partial header/payload across timeout. Retrying read_exact
@@ -1604,20 +1610,26 @@ fn stream_observer(
     let observer_id = pane.observe(tx, gate.clone());
     let writer = spawn_writer(rx, write_stream, gate);
 
-    observe_loop(&mut read_stream, || !writer.is_finished(), |msg| pane.tell_observer(observer_id, msg));
+    observe_loop(
+        &mut read_stream,
+        || !writer.is_finished(),
+        |msg| pane.tell_observer(observer_id, msg),
+    );
 
     pane.unobserve(observer_id);
     let _ = writer.join();
     Ok(())
 }
 
-fn observe_loop<R: std::io::Read>(read_stream: &mut R, active: impl Fn() -> bool, mut refuse: impl FnMut(DaemonMsg) -> bool) {
+fn observe_loop<R: std::io::Read>(
+    read_stream: &mut R,
+    active: impl Fn() -> bool,
+    mut refuse: impl FnMut(DaemonMsg) -> bool,
+) {
     let mut pending = Vec::new();
     while let Ok(Some(message)) = read_active_input(read_stream, &mut pending, &active) {
         match message {
-            ClientMsg::Input(_)
-            | ClientMsg::Resize(_)
-            | ClientMsg::ClearPresentation { .. } => {
+            ClientMsg::Input(_) | ClientMsg::Resize(_) | ClientMsg::ClearPresentation { .. } => {
                 if !refuse(DaemonMsg::Error(
                     "this connection is a read-only observer; attach to write".to_string(),
                 )) {
@@ -1649,40 +1661,42 @@ fn run_stream(
 
     let mut killed = false;
     let mut pending: Vec<u8> = Vec::new();
-    'conn: while let Ok(Some(msg)) = read_active_input(&mut read_stream, &mut pending, || pane.controls(epoch)) {
-            match msg {
-                ClientMsg::Input(bytes) => {
-                    if !pane.controls(epoch) {
-                        break 'conn;
-                    }
-                    pane.write_input(&bytes);
+    'conn: while let Ok(Some(msg)) =
+        read_active_input(&mut read_stream, &mut pending, || pane.controls(epoch))
+    {
+        match msg {
+            ClientMsg::Input(bytes) => {
+                if !pane.controls(epoch) {
+                    break 'conn;
                 }
-                ClientMsg::ClearPresentation { history } => {
-                    if !pane.controls(epoch) {
-                        break 'conn;
-                    }
-                    pane.clear_presentation(history);
-                }
-                ClientMsg::Resize(size) => {
-                    if !pane.controls(epoch) {
-                        break 'conn;
-                    }
-                    pane.resize(size);
-                }
-                ClientMsg::AuthResponse {
-                    request_id,
-                    response,
-                } => pane.deliver_auth_response(request_id, response),
-                ClientMsg::Detach => break 'conn,
-                ClientMsg::Kill { pane_id } => {
-                    if pane_id == id {
-                        killed = true;
-                        break 'conn;
-                    }
-                    kill_pane(&registry, pane_id);
-                }
-                _ => {}
+                pane.write_input(&bytes);
             }
+            ClientMsg::ClearPresentation { history } => {
+                if !pane.controls(epoch) {
+                    break 'conn;
+                }
+                pane.clear_presentation(history);
+            }
+            ClientMsg::Resize(size) => {
+                if !pane.controls(epoch) {
+                    break 'conn;
+                }
+                pane.resize(size);
+            }
+            ClientMsg::AuthResponse {
+                request_id,
+                response,
+            } => pane.deliver_auth_response(request_id, response),
+            ClientMsg::Detach => break 'conn,
+            ClientMsg::Kill { pane_id } => {
+                if pane_id == id {
+                    killed = true;
+                    break 'conn;
+                }
+                kill_pane(&registry, pane_id);
+            }
+            _ => {}
+        }
     }
 
     // Asked after the loop, before detach clears the seat: whoever no longer
@@ -1840,7 +1854,11 @@ mod tests {
             .unwrap();
 
         let (tx, rx) = std::sync::mpsc::channel();
-        observe_loop(&mut std::io::Cursor::new(wire), || true, |m| tx.send(m).is_ok());
+        observe_loop(
+            &mut std::io::Cursor::new(wire),
+            || true,
+            |m| tx.send(m).is_ok(),
+        );
         drop(tx);
 
         assert!(
@@ -1864,9 +1882,11 @@ mod tests {
     #[test]
     fn the_observer_loop_ends_at_stream_eof() {
         let (tx, rx) = std::sync::mpsc::channel();
-        observe_loop(&mut std::io::Cursor::new(Vec::<u8>::new()), || true, |m| {
-            tx.send(m).is_ok()
-        });
+        observe_loop(
+            &mut std::io::Cursor::new(Vec::<u8>::new()),
+            || true,
+            |m| tx.send(m).is_ok(),
+        );
         drop(tx);
         assert!(rx.try_recv().is_err());
     }
