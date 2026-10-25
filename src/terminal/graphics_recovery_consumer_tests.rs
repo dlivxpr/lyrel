@@ -56,6 +56,11 @@ fn graphics_recovery_destroy(
         (store.release_probe(), pixels)
     });
     view.update(cx, |view, _| view.terminal.detach_link());
+    // The headless platform keeps its active TestWindow (and that window's
+    // production IME handler, which owns a strong TerminalView) independently
+    // of App's window map. Simulate the native blur before removing the window
+    // so the test platform cannot keep the closed consumer alive forever.
+    gpui_kit::VisualTestContext::from_window(window, cx).deactivate_window();
     window.update(cx, |_, window, _| window.remove_window()).unwrap();
     drop(view);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
