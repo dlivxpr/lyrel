@@ -108,7 +108,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 非活动屏不等于全部受保护：进入备用屏后，主屏仍属实时屏的图片保持保护，已离开实时屏且未被真实滚动视口引用的旧历史仍可回收。daemon 向桌面传递这一权威引用事实，避免跨 pane／跨 daemon 的桌面压力错误钉住非活动屏全部历史；direct 与 placeholder 使用相同优先级。
 
-最新集成已运行完整默认成员检查：Windows 的 25 个 Rust suite 共 4,701 项通过，另有 CLI E2E 24 项通过，合计 4,725 项；默认运行仍有 34 项 ignored，随后显式执行的原生 SSH transport 1 项及 rooted consumer 2 项单独通过，不将其他 ignored 归为通过。Linux 原生 headless workspace 默认检查的 24 个 Rust suite 共 2,284 项通过，另有 CLI E2E 24 项，合计 2,308 项，30 项 ignored；这不是 Linux 桌面或本地 `--all-features` 证据。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。macOS CI、原生窗口／GPU／SSH 仍须分别取证，headless paint 不等同于最终 GPU 像素。
+最新集成已运行完整默认成员检查：Windows 的 25 个 Rust suite 共 4,701 项通过，另有 CLI E2E 24 项通过，合计 4,725 项；默认运行仍有 34 项 ignored，随后显式执行的原生 SSH transport 1 项及 rooted consumer 2 项单独通过，不将其他 ignored 归为通过。Linux 原生 headless workspace 默认检查的 24 个 Rust suite 共 2,284 项通过，另有 CLI E2E 24 项，合计 2,308 项，30 项 ignored；这不是 Linux 桌面或本地 `--all-features` 证据。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。macOS 自动化以匹配提交的 CI 为准；原生窗口／GPU／SSH 仍须分别取证，headless paint 不等同于最终 GPU 像素。
 
 本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
 
