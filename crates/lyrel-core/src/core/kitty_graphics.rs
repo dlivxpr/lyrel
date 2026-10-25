@@ -975,7 +975,11 @@ impl MediumTransfer {
         let len = if self.size == 0 {
             available
         } else {
-            available.min(self.size as usize)
+            let len = self.size as usize;
+            if len > available {
+                return None;
+            }
+            len
         };
         Some(start..start + len)
     }
@@ -1735,7 +1739,7 @@ mod tests {
             medium: Medium::File,
             name: path.clone().into_os_string().into_encoded_bytes(),
             offset: 0,
-            size: 4096,
+            size: 4,
             width: 1,
             height: 1,
             format: WireFormat::Rgba,
