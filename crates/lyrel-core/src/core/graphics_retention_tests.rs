@@ -435,6 +435,39 @@ fn retention_daemon_protects_live_direct_and_placeholder_evicts_global_oldest_an
 }
 
 #[test]
+fn retention_daemon_alt_screen_reclaims_main_history_but_preserves_last_live_content() {
+    for virtual_placement in [false, true] {
+        let daemon = Daemon::start();
+        let mut consumer = daemon.spawn();
+        let mode = if virtual_placement { ",U=1" } else { "" };
+        consumer.idle(b"\x1b[2J\x1b[3J\x1b[6;5H");
+        let history = consumer.red(&format!("a=T,i=101,p=1,c=1,r=1,C=1{mode}"));
+        if virtual_placement {
+            consumer.idle("\x1b[6;5H\x1b[38;5;101;58;5;1m\u{10eeee}\u{305}\u{305}\x1b[0m".as_bytes());
+        }
+        consumer.idle(&b"\r\n".repeat(40));
+        consumer.idle(b"\x1b[6;5H");
+        let live = consumer.red(&format!("a=T,i=102,p=2,c=1,r=1,C=1{mode}"));
+        if virtual_placement {
+            consumer.idle("\x1b[6;5H\x1b[38;5;102;58;5;2m\u{10eeee}\u{305}\u{305}\x1b[0m".as_bytes());
+        }
+        consumer.idle(b"\x1b[?1049h");
+        let reply = consumer.exchange(b"\x1b_Ga=T,i=103,p=3,c=1,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\", 1);
+        assert_eq!(reply, [b"\x1b_Gi=103,p=3;OK\x1b\\".to_vec()], "inactive history is not a live viewport");
+        assert!(consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == history)));
+        assert!(!consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Evicted { key, .. } if *key == live)));
+        let refused = consumer.exchange(b"\x1b_Ga=T,i=104,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1);
+        assert!(refused[0].starts_with(b"\x1b_Gi=104;ENOSPC:"), "last live main content and live alt content remain protected");
+        consumer.idle(b"\x1b[?1049l");
+        let reply = consumer.exchange(b"\x1b_Ga=p,i=102,p=4,c=1,r=1,C=1\x1b\\", 1);
+        assert_eq!(reply, [b"\x1b_Gi=102,p=4;OK\x1b\\".to_vec()], "returning to main reuses the original live pixels without retransmission");
+        let expired = consumer.exchange(b"\x1b_Ga=p,i=101,p=5,c=1,r=1,C=1\x1b\\", 1);
+        assert!(expired[0].starts_with(b"\x1b_Gi=101,p=5;ENOENT:"), "returning does not revive evicted history");
+        daemon.panes().kill(consumer.session.pane_id()).unwrap();
+    }
+}
+
+#[test]
 fn retention_daemon_capacity_rejects_inadequate_attach_and_refuses_new_input() {
     let daemon = Daemon::start();
     let mut a = daemon.spawn();
