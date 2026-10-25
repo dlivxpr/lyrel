@@ -47,10 +47,11 @@
 - server 的 pane 隔离／quiet 回归在重连时重建派生接收状态，并核验 daemon 恢复原资源身份与像素；保留单连接内重复 Resource 的唯一性断言，不把合法 replay 当作资源 key 重用，也不放宽隔离与应答语义。
 - 共享真实 PTY 夹具给 `KITTY_REPLY` 文本记录附加原请求 serial，core／server 消费者只将对应记录归为本次应答；完整 Snapshot 仍作为历史消费，quiet 的空应答断言不会被旧回复文本污染，失败时保留实际 unexpected bytes。
 - 共享 Rust／Node PTY 夹具统一使用带非数字终止符的 `KITTY_DONE_<serial>;`，避免覆写旧文字行后将 serial 2 残留成 serial 20、提前注入下一条命令；不清行或改变图片生命周期。真实超过 8 MiB 重放尾部的 fresh GPUI 图片／文字投影回归已在 Windows 通过；废弃的测试专用输出解析副本改为生产 `graphics_reader::consume` 的任意 split 字节透明性回归。
-- 备用屏图片压力回归在 PTY 有序屏障后显式请求窗口帧并推进现有 GPUI 任务与纹理 compaction 时钟，等待真实 decoder 结果，不以只读 `sleep` 阻塞后续完成；保留两页缓存预算、30 秒期限、`q=2`、direct／placeholder、live 像素及历史 notice 断言，平台结果以对应 CI 为准。
+- 备用屏图片压力回归显式请求窗口帧并推进现有 GPUI 任务与纹理 compaction 时钟，等待真实 decoder 结果，不以只读 `sleep` 阻塞后续完成；成功路径另要求真实关联 `OK`，避免将准入拒绝误报为解码超时。两页缓存、30 秒期限、direct／placeholder、live 像素及历史 notice 断言保持；quiet 的独立回归继续执行，平台结果以对应 CI 为准。
 - 跨 daemon 压力回归在进入／离开历史视口后，先通过原 daemon 的真实 PTY 屏障确认视口更新，再让另一 daemon 施压；等待准入期间刷新旧 atlas 所属窗口和新图窗口，保留原 1 秒准入窗口及历史保护、权威回收、拒替换与关闭后释放断言。
 - 真实 resize 回归复用首次挂载前已按实际字体设为 80×24 的共享工厂，避免默认窗口首绘向 ConPTY 发送意外 resize；正式收缩前核对 cursor、anchor 与 `row=23` 的 `LAST_WRITTEN`，保留 Windows 收缩后锚点 `row=3`／尾文 `row=17`（均从零起算）及 macOS 的原几何预期。Windows 7项真实布局回归与完整默认成员检查通过，macOS 完整结果以对应 CI 为准。
 - 真实图片夹具的 PTY、decoder 与恢复等待统一推进所有测试窗口的实际帧、执行器和时钟，使原窗口 atlas 可在既有准入期限内释放；保留接收 Size 前禁止旧 surface 回写的边界，不调整预算、quiet 或等待期限。布局夹具复用预挂载工厂，字体裁切回归通过真实字体／窗口及测得的设备像素构造五行自然图片，不再把仅注入后端的虚假 cell 尺寸当作实际呈现。
+- 光标不变与真实 ConPTY resize 前提等待完成标记之后的实际光标恢复，避免将暂时位于诊断文字行的 cursor 当作命令最终状态；保持原光标坐标、最后写入行和几何断言，不重新提交被拒的请求。图片等待失败保留现有资源／放置诊断，真实发送器退出保留原始拒收输出。
 - rooted GPUI 图片夹具在 PTY 等待期间推进真实 UI 任务及测试时钟，使已绘制纹理经现有窗口 compaction 归还 GPU 票；历史 notice 回归通过生产滚动入口同步视口并核验 placeholder notice 的实际 paint。大文字恢复用合法的小于 1 MiB 的 Input 分批构造原总量 Snapshot，不放宽输入、图片预算或等待期限；修复后的 23 项 graphics consumer 回归已在 Windows 通过。
 - GPUI 回归先同步 rooted 窗口的实际列数再修改终端尺寸，避免推进 UI 时由旧窗口布局回写覆盖 reflow；Screen／原点回归等待其后有序文本 marker 与实际解码状态，不以一张图片已出现替代 Screen 已消费。
 - 原生 SSH 夹具的请求 serial 跨 fresh consumer 不复用，避免旧 Snapshot 回复被误归为当前请求；恢复等待唯一文本屏障及权威最终 `Screen`，不在先到的 Snapshot 上提前返回。GUI 从不接管／不 resize 的真实 Observe raw Output 核对应用收到的全部关联 ACK，保留有限预算、像素与 placement 断言，不依赖终端网格保存已被覆盖的诊断文字。

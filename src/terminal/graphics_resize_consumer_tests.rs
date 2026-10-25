@@ -116,6 +116,14 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
     });
     graphics_assert_production_paint(_window.into(), &view, cx);
     graphics_send_fixture(&view, cx, 424, b"\x1b[0m");
+    if !grow {
+        graphics_recovery_wait(cx, "shrink setup cursor restore was not consumed", |cx| {
+            view.read_with(cx, |view, _| {
+                let term = view.terminal.term.lock();
+                term.grid.cursor.pos.row == Line(9) && term.grid.cursor.pos.col.0 == 13
+            })
+        });
+    }
     view.read_with(cx, |view, _| {
         graphics_resize_assert_geometry(view, image_id, label, anchor - 1);
         let term = view.terminal.term.lock();

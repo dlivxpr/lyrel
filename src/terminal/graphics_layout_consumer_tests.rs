@@ -1,4 +1,6 @@
-fn graphics_layout_harness(cx: &mut TestAppContext,) -> (
+fn graphics_layout_harness(
+    cx: &mut TestAppContext,
+) -> (
     GraphicsDaemonProcess,
     u64,
     Entity<TerminalView>,
@@ -29,7 +31,8 @@ fn graphics_layout_wait_image(view: &Entity<TerminalView>, cx: &mut TestAppConte
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "production image decoder did not finish for {id}"
+            "production image i={id} did not become visible; {}",
+            view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics())
         );
         graphics_consumer_progress(cx);
     }
@@ -54,33 +57,35 @@ fn graphics_window_geometry(
     size: TermSize,
 ) -> (gpui_kit::Size<Pixels>, usize, usize, f32) {
     use gpui_kit::{Hsla, SharedString, TextRun};
-    window.update(cx, |_, window, cx| {
-        let view = view.read(cx);
-        let sample = window.text_system().shape_line(
-            SharedString::new_static("M"),
-            view.font_size,
-            &[TextRun {
-                len: 1,
-                font: view.font.clone(),
-                color: Hsla::default(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
-            None,
-        );
-        let width = sample.width.max(px(1.));
-        let height = px((view.font_size.as_f32() * view.line_height_mul).round()).max(px(1.));
-        (
-            gpui_kit::size(
-                width * size.cols as f32 + px(2. * GRID_PAD_X + 0.5),
-                height * size.rows as f32 + px(2. * GRID_PAD_Y + 0.5),
-            ),
-            size.cols,
-            size.rows,
-            window.scale_factor(),
-        )
-    }).unwrap()
+    window
+        .update(cx, |_, window, cx| {
+            let view = view.read(cx);
+            let sample = window.text_system().shape_line(
+                SharedString::new_static("M"),
+                view.font_size,
+                &[TextRun {
+                    len: 1,
+                    font: view.font.clone(),
+                    color: Hsla::default(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let width = sample.width.max(px(1.));
+            let height = px((view.font_size.as_f32() * view.line_height_mul).round()).max(px(1.));
+            (
+                gpui_kit::size(
+                    width * size.cols as f32 + px(2. * GRID_PAD_X + 0.5),
+                    height * size.rows as f32 + px(2. * GRID_PAD_Y + 0.5),
+                ),
+                size.cols,
+                size.rows,
+                window.scale_factor(),
+            )
+        })
+        .unwrap()
 }
 
 fn graphics_assert_production_paint_at(
@@ -151,12 +156,32 @@ fn graphics_consumer_real_daemon_resize_keeps_clipped_texture_slice(cx: &mut Tes
     graphics_send_fixture(&view, cx, 2, b"\x1b[0m");
     view.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
-        assert_eq!(images.len(), 1, "resizing a partially clipped placement must not expire its retained rows");
-        assert_eq!((images[0].placement.clip_top, images[0].placement.clip_bottom), (1, 5));
-        let (crop, full) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
-        assert_eq!(crop, Bounds::new(point(px(0.), px(0.)), gpui_kit::size(px(10.), px(80.))));
-        assert_eq!(full, Bounds::new(point(px(0.), px(-20.)), gpui_kit::size(px(10.), px(100.))));
-        assert_eq!(&images[0].data.as_ref().unwrap().as_bytes(0).unwrap()[..4], [0, 0, 255, 255]);
+        assert_eq!(
+            images.len(),
+            1,
+            "resizing a partially clipped placement must not expire its retained rows"
+        );
+        assert_eq!(
+            (
+                images[0].placement.clip_top,
+                images[0].placement.clip_bottom
+            ),
+            (1, 5)
+        );
+        let (crop, full) =
+            images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+        assert_eq!(
+            crop,
+            Bounds::new(point(px(0.), px(0.)), gpui_kit::size(px(10.), px(80.)))
+        );
+        assert_eq!(
+            full,
+            Bounds::new(point(px(0.), px(-20.)), gpui_kit::size(px(10.), px(100.)))
+        );
+        assert_eq!(
+            &images[0].data.as_ref().unwrap().as_bytes(0).unwrap()[..4],
+            [0, 0, 255, 255]
+        );
     });
     graphics_assert_production_paint(window, &view, cx);
     graphics_send_fixture(&view, cx, 3, b"\x1b[24;1H\n\n\n\n");
@@ -168,18 +193,29 @@ fn graphics_consumer_real_daemon_resize_keeps_clipped_texture_slice(cx: &mut Tes
     });
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
     {
-            use base64::Engine as _;
-            let height = window.update(cx, |_, window, cx| {
-                (view.read(cx).line_height.as_f32() * window.scale_factor()).round().max(1.) as u32 * 5
-            }).unwrap();
-            let payload = base64::engine::general_purpose::STANDARD.encode([255u8, 0, 0, 255].repeat(height as usize));
-            let bytes = format!("\x1b[1;1H\x1b_Ga=T,i=2,C=1,f=32,s=1,v={height},q=2;{payload}\x1b\\\x1b[24;1H\n");
-            graphics_send_fixture(&view, cx, 4, bytes.as_bytes());
-        };
+        use base64::Engine as _;
+        let height = window
+            .update(cx, |_, window, cx| {
+                (view.read(cx).line_height.as_f32() * window.scale_factor())
+                    .round()
+                    .max(1.) as u32
+                    * 5
+            })
+            .unwrap();
+        let payload = base64::engine::general_purpose::STANDARD
+            .encode([255u8, 0, 0, 255].repeat(height as usize));
+        let bytes = format!(
+            "\x1b[1;1H\x1b_Ga=T,i=2,C=1,f=32,s=1,v={height},q=2;{payload}\x1b\\\x1b[24;1H\n"
+        );
+        graphics_send_fixture(&view, cx, 4, bytes.as_bytes());
+    };
     graphics_layout_wait_image(&view, cx, 2);
     view.read_with(cx, |view, _| {
         let image = graphics_visible_images(view).remove(0);
-        assert_eq!((image.placement.clip_top, image.placement.clip_bottom), (1, 5));
+        assert_eq!(
+            (image.placement.clip_top, image.placement.clip_bottom),
+            (1, 5)
+        );
     });
     view.update(cx, |view, _| {
         view.font_size = original_font.0;
@@ -187,7 +223,10 @@ fn graphics_consumer_real_daemon_resize_keeps_clipped_texture_slice(cx: &mut Tes
     });
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(40, 24));
     graphics_send_fixture(&view, cx, 5, b"\x1b[0m");
-    assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "a font change cannot retain an empty or inverted slice");
+    assert!(
+        view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()),
+        "a font change cannot retain an empty or inverted slice"
+    );
     graphics_assert_production_paint(window, &view, cx);
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(30, 24));
     graphics_send_fixture(&view, cx, 6, b"\x1b[0m");
@@ -244,21 +283,36 @@ fn graphics_consumer_real_daemon_anonymous_expiration_restores_admission(cx: &mu
     cx.executor().allow_parking();
     let daemon = GraphicsDaemonProcess::start();
     let pane = daemon.spawn();
-    cx.update(|cx| { gpui_kit::component::init(cx); cx.set_global(Config::default()); });
+    cx.update(|cx| {
+        gpui_kit::component::init(cx);
+        cx.set_global(Config::default());
+    });
     // Exactly one decoded RGBA pixel fits, independently of Base64 scratch.
-    let (view, window) = graphics_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 1024, 4));
+    let (view, window) =
+        graphics_rooted_consumer(cx, pane, daemon.stream_with_capacity(pane, 1024, 4));
     graphics_send_fixture(&view, cx, 1, b"\x1b[?1049h\x1b[2J\x1b[H");
     for serial in 2..5 {
-        graphics_send_fixture(&view, cx, serial * 2, b"\x1b[1;1H\x1b_Ga=T,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\");
+        graphics_send_fixture(
+            &view,
+            cx,
+            serial * 2,
+            b"\x1b[1;1H\x1b_Ga=T,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\",
+        );
         graphics_layout_wait_image(&view, cx, 0);
         graphics_assert_production_paint(window, &view, cx);
         view.read_with(cx, |view, _| {
             let images = graphics_visible_images(view);
             assert_eq!(images.len(), 1);
-            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
+            assert_eq!(
+                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                [0, 0, 255, 255]
+            );
         });
         graphics_send_fixture(&view, cx, serial * 2 + 1, b"\x1b[24;1H\n");
-        assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "expired anonymous content must release the sole resource allowance without a notice");
+        assert!(
+            view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()),
+            "expired anonymous content must release the sole resource allowance without a notice"
+        );
     }
     graphics_send_fixture(&view, cx, 18, b"\x1b[24;1H\n");
     view.read_with(cx, |view, _| {
@@ -284,7 +338,10 @@ fn graphics_consumer_real_daemon_anonymous_expiration_restores_admission(cx: &mu
         assert_eq!(images[0].placement.image_id, 2000);
         let (crop, _) = images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
         assert_eq!(crop.origin, point(px(10.), px(100.)));
-        assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
+        assert_eq!(
+            images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+            [0, 0, 255, 255]
+        );
     });
     graphics_assert_production_paint(window, &view, cx);
     daemon.panes().kill(pane).unwrap();
