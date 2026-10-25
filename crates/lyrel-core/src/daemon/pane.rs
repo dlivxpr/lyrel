@@ -8173,6 +8173,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn reader_gates_indirect_media_before_first_ssh_bytes_and_restores_local_queries() {
+        use base64::Engine as _;
+        struct Chunks(std::collections::VecDeque<Vec<u8>>);
+        impl Read for Chunks {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let Some(chunk) = self.0.pop_front() else { return Ok(0) };
+                buf[..chunk.len()].copy_from_slice(&chunk);
+                Ok(chunk.len())
+            }
+        }
+        struct Replies(Arc<Mutex<Vec<u8>>>);
+        impl Write for Replies {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tty-graphics-protocol-host-only.rgba");
+        std::fs::write(&path, [255, 0, 0, 255]).unwrap();
+        let name = base64::engine::general_purpose::STANDARD.encode(path.as_os_str().as_encoded_bytes());
+        let query = |id| format!("\x1b_Ga=q,i={id},t=f,f=32,s=1,v=1;{name}\x1b\\").into_bytes();
+        let groups = Mutex::new([10, 11, 11, 10].into_iter());
+        let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = probes.clone();
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        DaemonPane::spawn_reader(
+            Arc::new(Mutex::new(test_state(true))),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(OutputGate::new()),
+            Box::new(Chunks([query(1), query(2), query(3), query(4)].into_iter().collect())),
+            Arc::new(Mutex::new(Box::new(Replies(sink.clone())))),
+            || false,
+            ForegroundProbes {
+                group: Box::new(move || groups.lock().unwrap().next()),
+                remote: Box::new(move || {
+                    (counted.fetch_add(1, Ordering::SeqCst) == 1).then(|| RemoteContext {
+                        kind: RemoteKind::Ssh,
+                        argv: vec!["ssh".into(), "other-host".into()],
+                        target: "other-host".into(),
+                    })
+                }),
+                agent: Box::new(|| None),
+                cwd: Box::new(|| None),
+            },
+            Arc::new(DeathReporter::new(|| {})),
+        ).join().unwrap();
+        assert_eq!(*sink.lock().unwrap(), b"\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=3;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\");
+        assert_eq!(probes.load(Ordering::SeqCst), 3, "unchanged foreground groups use the cached context");
+        assert!(path.exists(), "query does not delete a plain file");
+    }
+
+    #[test]
     fn reader_poll_applies_the_probed_cwd() {
         let state = Arc::new(Mutex::new(test_state(true)));
         let (sub_tx, sub_rx) = mpsc::channel();
