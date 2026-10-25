@@ -262,6 +262,14 @@ impl Reservation {
         self.bytes = bytes;
     }
 
+    fn grow(&mut self, bytes: usize) -> Option<()> {
+        let additional = bytes.saturating_sub(self.bytes);
+        let mut extra = Self::new(&self.pane, &self.aggregate, additional)?;
+        self.bytes += extra.bytes;
+        extra.bytes = 0;
+        Some(())
+    }
+
     fn split(&mut self, bytes: usize) -> Self {
         self.bytes -= bytes;
         Self {
@@ -276,6 +284,59 @@ impl Drop for Reservation {
     fn drop(&mut self) {
         self.pane.used.fetch_sub(self.bytes, Ordering::AcqRel);
         self.aggregate.used.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+// Offers reserve every retained CPU/GPU footprint atomically, but only one
+// decoder runs per store, including across reader generations. Each pending or
+// active decode owns a claim on the largest scratch requirement. Cancellation
+// cannot return the active decoder's claim before its buffers have been freed.
+struct DecodeScratchBudget {
+    state: Mutex<DecodeScratchState>,
+    decoder: Mutex<()>,
+}
+
+struct DecodeScratchState {
+    claims: BTreeMap<usize, usize>,
+    reservation: Reservation,
+}
+
+struct DecodeScratch {
+    budget: Arc<DecodeScratchBudget>,
+    bytes: usize,
+}
+
+impl DecodeScratchBudget {
+    fn new(pane: &Arc<Budget>, aggregate: &Arc<Budget>) -> Self {
+        Self {
+            state: Mutex::new(DecodeScratchState {
+                claims: BTreeMap::new(),
+                reservation: Reservation::new(pane, aggregate, 0).unwrap(),
+            }),
+            decoder: Mutex::new(()),
+        }
+    }
+
+    fn claim(self: &Arc<Self>, bytes: usize) -> Option<DecodeScratch> {
+        let mut state = self.state.lock().unwrap();
+        if bytes > state.reservation.bytes {
+            state.reservation.grow(bytes)?;
+        }
+        *state.claims.entry(bytes).or_default() += 1;
+        Some(DecodeScratch { budget: self.clone(), bytes })
+    }
+}
+
+impl Drop for DecodeScratch {
+    fn drop(&mut self) {
+        let mut state = self.budget.state.lock().unwrap();
+        let count = state.claims.get_mut(&self.bytes).unwrap();
+        *count -= 1;
+        if *count == 0 {
+            state.claims.remove(&self.bytes);
+        }
+        let maximum = state.claims.last_key_value().map_or(0, |(&bytes, _)| bytes);
+        state.reservation.shrink(maximum);
     }
 }
 
@@ -296,6 +357,7 @@ struct OfferedResource {
     height: u32,
     encoded_bytes: usize,
     peak: Option<Reservation>,
+    scratch: Option<DecodeScratch>,
     source: Option<Reservation>,
     metadata: Option<Arc<Reservation>>,
     generation: Option<u64>,
@@ -314,6 +376,7 @@ struct Resource {
     revision: u64,
     painted: Arc<AtomicBool>,
     peak: Option<Reservation>,
+    scratch: Option<DecodeScratch>,
     source: Option<Reservation>,
     received: u64,
     pressure_requested: bool,
@@ -343,6 +406,7 @@ struct SharedStore {
     ready: Condvar,
     pane_budget: Arc<Budget>,
     aggregate_budget: Arc<Budget>,
+    decode_scratch: Arc<DecodeScratchBudget>,
     pane_source: Arc<Budget>,
     aggregate_source: Arc<Budget>,
     pane_metadata: Arc<Budget>,
@@ -390,6 +454,7 @@ impl Default for SharedStore {
         Self {
             state: Mutex::default(),
             ready: Condvar::new(),
+            decode_scratch: Arc::new(DecodeScratchBudget::new(&pane_budget, &aggregate_budget)),
             pane_budget,
             aggregate_budget,
             pane_source: Arc::new(Budget::new(PANE_SOURCE_BYTES)),
@@ -613,6 +678,7 @@ impl ImageStore {
                 height,
                 encoded_bytes,
                 peak: None,
+                scratch: None,
                 source: None,
                 metadata,
                 generation: None,
@@ -632,8 +698,10 @@ impl ImageStore {
         }
         let source_bytes = encoded_bytes.checked_mul(2)?.checked_add(256 * 1024)?;
         let source = Reservation::new(&self.0.pane_source, &self.0.aggregate_source, source_bytes)?;
+        // Preserve the original 4×RGBA decoder bound: one retained output per
+        // resource plus 3×RGBA shared scratch, never simultaneous decodes.
+        let scratch = self.0.decode_scratch.claim(pixels.checked_mul(3)?)?;
         let bytes = pixels
-            .checked_mul(4)?
             .checked_add(encoded_bytes)?
             .checked_add(gpu_page_bytes(width, height)?)?;
         let peak = Reservation::new(&self.0.pane_budget, &self.0.aggregate_budget, bytes)?;
@@ -643,6 +711,7 @@ impl ImageStore {
             height,
             encoded_bytes,
             peak: Some(peak),
+            scratch: Some(scratch),
             source: Some(source),
             metadata,
             generation: None,
@@ -701,6 +770,11 @@ impl ImageStore {
         {
             return;
         }
+        let scratch = self.0.decode_scratch.state.lock().unwrap().reservation.bytes;
+        let peak = pixels
+            .saturating_add(encoded)
+            .saturating_add(gpu_page_bytes(width, height).unwrap_or(usize::MAX))
+            .saturating_add(pixels.saturating_mul(3).saturating_sub(scratch));
         let local_only = source
             > self
                 .0
@@ -1141,6 +1215,7 @@ impl ImageStore {
         for resource in inner.resources.values_mut() {
             resource.pending.take();
             resource.peak.take();
+            resource.scratch.take();
             resource.source.take();
         }
         drop(inner);
@@ -1198,6 +1273,7 @@ impl ImageStore {
                     evicted: false,
                     painted: Arc::new(AtomicBool::new(false)),
                     peak: Some(peak),
+                    scratch: offered.scratch.take(),
                     source: Some(source),
                     metadata,
                     received: RECEIVE_SEQUENCE
@@ -1235,6 +1311,7 @@ impl ImageStore {
                     revision,
                     painted: Arc::new(AtomicBool::new(false)),
                     peak: None,
+                    scratch: None,
                     source: None,
                     received: 0,
                     pressure_requested: false,
@@ -1422,7 +1499,7 @@ impl DecodeWorker {
         decoder: impl Fn(&mut Image) -> Option<(Arc<RenderImage>, u32, u32, usize)>,
     ) {
         loop {
-            let (key, revision, image, mut reservation, source) = {
+            let (key, revision, image, mut reservation, scratch, source) = {
                 let mut inner = store.0.state.lock().unwrap();
                 loop {
                     if inner.closed || inner.reader_generation != generation {
@@ -1437,6 +1514,7 @@ impl DecodeWorker {
                             resource.revision,
                             resource.pending.take().unwrap(),
                             resource.peak.take().unwrap(),
+                            resource.scratch.take().unwrap(),
                             resource.source.take(),
                         ))
                     });
@@ -1446,6 +1524,10 @@ impl DecodeWorker {
                     inner = store.0.ready.wait(inner).unwrap();
                 }
             };
+            // This lock is independent of the store lock. In particular an old
+            // generation may finish decoding while its successor queues work,
+            // but cannot overlap the successor's decoder peak.
+            let _decoder = store.0.decode_scratch.decoder.lock().unwrap();
             let mut image = Arc::unwrap_or_clone(image);
             let decoded = decoder(&mut image);
             drop(image);
@@ -1480,6 +1562,7 @@ impl DecodeWorker {
                     false
                 }
             };
+            drop(scratch);
             if visible_change {
                 wake();
             }
@@ -1497,6 +1580,7 @@ impl Drop for DecodeWorker {
                 for resource in inner.resources.values_mut() {
                     resource.pending.take();
                     resource.peak.take();
+                    resource.scratch.take();
                     resource.source.take();
                 }
             }
@@ -1764,13 +1848,18 @@ mod tests {
         apply_resource(&old, 1, 10);
         apply_placement(&old, placement(1, 1, 1, 2));
         entered.wait();
-        // Relink retires the reader synchronously, but never joins its decoder
-        // on the UI thread. Hold the old real decode until the new one paints.
+        // Relink retires the reader without joining it on the UI thread. Its
+        // active decoder still owns the shared peak until real decode exits.
         store.retire_reader();
         store.clear();
+        assert!(store.0.decode_scratch.decoder.try_lock().is_err());
+        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 12);
         let new = DecodeWorker::spawn(store.clone(), || {});
         apply_resource(&new, 2, 90);
         apply_placement(&new, placement(2, 2, 4, 5));
+        assert!(store.snapshot().is_empty(), "successor cannot overlap the retired decoder");
+        assert!(store.0.decode_scratch.decoder.try_lock().is_err());
+        release.wait();
         wait_for(&store, |images| images.len() == 1);
         let current = store.snapshot();
         assert_eq!(
@@ -1787,7 +1876,6 @@ mod tests {
         );
         apply_resource(&old, 3, 11);
         apply_placement(&old, placement(3, 3, 9, 9));
-        release.wait();
         drop(old);
         // Old Drop occurs after the successor is usable. It must neither land
         // its stale pixel nor close the new worker's wake/admission gate.
@@ -1808,6 +1896,47 @@ mod tests {
             store.snapshot().is_empty(),
             "successor deletion remains live"
         );
+    }
+
+    #[test]
+    fn failed_real_decode_releases_peak_source_and_cancelled_offer_tickets() {
+        let store = ImageStore::new();
+        let (completed, completion) = std::sync::mpsc::channel();
+        let worker = DecodeWorker::spawn_with_decoder(store.clone(), || {}, move |image| {
+            let decoded = decode(image);
+            assert!(decoded.is_none(), "the real PNG decoder must reject invalid bytes");
+            completed.send(()).unwrap();
+            decoded
+        });
+        let failed = GraphicsUpdate::Resource {
+            key: 1,
+            image: Arc::new(Image {
+                width: 1,
+                height: 1,
+                format: WireFormat::Png,
+                compressed: false,
+                data: vec![0; 8],
+            }),
+        };
+        assert!(worker.offer(1, 1, 1, 1, failed.encode_frame().len() as u64, OWNER_METADATA_BYTES));
+        worker.apply(failed);
+        completion.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        drop(worker); // join proves every real decoder buffer has died
+        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 0);
+        assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+        assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
+        store.clear();
+        assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);
+
+        assert!(store.offer(2, 2, 3840, 2160, 1000, OWNER_METADATA_BYTES));
+        assert!(store.offer(3, 3, 1920, 1080, 1000, OWNER_METADATA_BYTES));
+        store.cancel_offer(2);
+        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 24_883_200);
+        store.cancel_unclaimed_offers();
+        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 0);
+        assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+        assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
+        assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);
     }
 
     #[test]

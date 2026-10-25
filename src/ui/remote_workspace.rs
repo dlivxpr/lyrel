@@ -2376,6 +2376,8 @@ fn relink_dead_panes(
                     }
                 }
                 Err(e) if crate::terminal::attach_refused(&e) => {
+                    // Only an explicit missing-pane reply is final; graphics
+                    // admission refusals retain the original pane and retry.
                     view.update(cx, |view, _| view.abandon_relink());
                     log::warn!("pane {pane_id} is gone on its machine ({e}); not asking again");
                 }

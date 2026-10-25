@@ -1132,41 +1132,12 @@ impl RemoteTerminal {
             allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
         }
         .encode(&mut stream)?;
-        let buffered = match attach_reply_prefix_with_images(
+        let buffered = attach_reply_prefix_with_images(
             &mut stream,
             pane_id,
             attach_reply_wait(route),
             &images,
-        ) {
-            Ok(buffered) => buffered,
-            Err(e) if route.is_local() && attach_unanswered(&e) => {
-                // Silence on the attach socket has two readings, and only one
-                // of them is safe to act on. Ask the daemon on a fresh
-                // connection: if it answers `Version` there, it is up and
-                // serving, and the attach connection is one it will never
-                // serve — a socket some process holds open, or one from a
-                // listener no longer drained — so the verdict stands and the
-                // caller spawns fresh. If it does not answer there either, it
-                // is not serving anyone yet — mid-restart, mid-handoff — and
-                // a fresh pane spawned now would land on a live one the moment
-                // it comes up (its history carried across, its agent session
-                // resumed twice). There is no third path from a synchronous
-                // UI-thread call, so the attach still fails, but says which
-                // silence it was: the log line someone reads while diagnosing
-                // an orphaned shell must not claim the pane was gone.
-                //
-                // Only local routes probe: a remote attach already waits 15 s
-                // and a second routed connection is a second bridge process.
-                if local_daemon_answers() {
-                    return Err(e);
-                }
-                return Err(e.context(
-                    "the daemon answered nothing on a fresh connection either — it is not \
-                     serving yet (restarting?), so this pane may still be alive",
-                ));
-            }
-            Err(e) => return Err(e),
-        };
+        )?;
         let mut term = Self::from_stream_parts(
             stream,
             size,
@@ -3030,10 +3001,9 @@ pub fn attach_unanswered(err: &anyhow::Error) -> bool {
         .any(|cause| cause.downcast_ref::<AttachUnanswered>().is_some())
 }
 
-/// An `Attach` the daemon answered with an `Error` frame — it heard us and
-/// said no, which for a relink means the pane is gone on its machine. Typed so
-/// a retry loop can tell this apart from the failures worth retrying: silence
-/// and transport trouble pass, a refusal repeats identically forever.
+/// The daemon explicitly reported that the requested pane does not exist.
+/// Other Error frames (including graphics admission failures) are retryable
+/// attach failures, not evidence that the original session is gone.
 #[derive(Debug)]
 struct AttachRefused {
     message: String,
@@ -3047,8 +3017,8 @@ impl std::fmt::Display for AttachRefused {
 
 impl std::error::Error for AttachRefused {}
 
-/// Whether `err` is an `Attach` the daemon explicitly refused. Retrying one of
-/// these can only produce the same refusal.
+/// Whether the daemon explicitly reported the requested pane missing. Only
+/// this verdict permits abandoning a relink or spawning a replacement shell.
 pub fn attach_refused(err: &anyhow::Error) -> bool {
     err.chain()
         .any(|cause| cause.downcast_ref::<AttachRefused>().is_some())
@@ -3065,8 +3035,8 @@ pub fn attach_refused(err: &anyhow::Error) -> bool {
 /// process that will never read it. Taken for success it gave the window a
 /// pane drawn as restored whose every keystroke went into that socket — no
 /// fresh shell, no restored-screen banner, no agent resume, and Ctrl-C did
-/// nothing (#673). Taken for the failure it is, the caller spawns fresh and
-/// asks for the old screen back.
+/// nothing (#673). Treat it as an attach failure and retain the pane identity;
+/// only an explicit missing-pane reply allows a replacement shell.
 #[cfg(test)]
 fn attach_reply_prefix(
     stream: &mut Stream,
@@ -3144,8 +3114,12 @@ fn attach_reply_prefix_inner(
         return Ok(buffered);
     }
     let message = read_error_frame(stream, &mut buffered, wait)
-        .unwrap_or_else(|| format!("no such pane {pane_id}"));
-    Err(anyhow::Error::new(AttachRefused { message }))
+        .ok_or_else(|| anyhow::anyhow!("incomplete daemon error answering Attach for pane {pane_id}"))?;
+    if message == format!("no such pane {pane_id}") {
+        Err(anyhow::Error::new(AttachRefused { message }))
+    } else {
+        Err(anyhow::anyhow!("daemon refused Attach: {message}"))
+    }
 }
 
 fn read_error_frame(
@@ -3747,30 +3721,6 @@ fn connect() -> anyhow::Result<Stream> {
             transport::endpoint_display()
         ))
     })
-}
-
-/// Whether the local daemon answers `Version` on a fresh connection right now.
-///
-/// The one question a silent `Attach` leaves open — is the daemon serving and
-/// this socket orphaned, or is nobody serving yet? A daemon answers `Version`
-/// before it touches any state, so this is the cheapest thing it can say. One
-/// second is the same budget `spawn` gives the same handshake; a healthy
-/// daemon answers in microseconds.
-fn local_daemon_answers() -> bool {
-    use std::io::Write as _;
-
-    let Ok(mut stream) = transport::connect() else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(1)));
-    if ClientMsg::Version
-        .encode(&mut stream)
-        .and_then(|()| stream.flush())
-        .is_err()
-    {
-        return false;
-    }
-    matches!(DaemonMsg::read(&mut stream), Ok(DaemonMsg::Version(_)))
 }
 
 fn connect_routed(route: &PaneRoute) -> anyhow::Result<Stream> {
