@@ -1733,14 +1733,13 @@ pub(crate) fn spawn_writer(
                 }
                 let _ = write_stream.flush();
             }
-            // This half and the connection's read half are try_clone'd views of
-            // one socket, so shutting the read side down here unblocks whoever
-            // is parked in read() on the other handle. The writer's channel
-            // closing IS the handover signal — a new controller replaces the
-            // subscriber, the old Sender drops, rx.recv() fails, and we land
-            // here — so the displaced reader wakes at once and nobody has to
-            // poll for it.
-            let _ = write_stream.shutdown(std::net::Shutdown::Read);
+            // End both directions after channel closure or a write failure.
+            // Closing only Read leaves the peer waiting for FIN until the
+            // other clone's blocked reader exits, which can itself wait for
+            // the peer (notably on Windows). On normal closure the queue has
+            // drained; closing Write sends the already-flushed frames' orderly
+            // end without depending on that read thread.
+            let _ = write_stream.shutdown(std::net::Shutdown::Both);
         })
         .expect("spawn daemon writer thread")
 }

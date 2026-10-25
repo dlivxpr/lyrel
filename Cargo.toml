@@ -263,6 +263,7 @@ futures-channel = "0.3"
 
 # The Kit test-support feature enables its real App/Window test harness.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
+base64 = "0.23.1"
 gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]
