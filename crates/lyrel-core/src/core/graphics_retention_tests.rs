@@ -1439,3 +1439,93 @@ fn retention_daemon_recovery_fresh_subscribers_keep_refusal_notices_and_detached
     daemon.panes().kill(pane).unwrap();
     daemon.panes().kill(b.session.pane_id()).unwrap();
 }
+
+#[test]
+fn retention_daemon_large_outer_zlib_png_uses_bounded_live_work_and_recovers() {
+    use base64::Engine as _;
+    use std::io::Write as _;
+
+    fn png_bytes(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::NoCompression);
+        encoder.write_header().unwrap().write_image_data(pixels).unwrap();
+        bytes
+    }
+
+    fn send_file(
+        consumer: &mut Consumer,
+        file: &std::path::Path,
+        control: &str,
+        data: &[u8],
+        block: usize,
+        fragment: usize,
+    ) -> Vec<Vec<u8>> {
+        let mut output = std::io::BufWriter::new(std::fs::File::create(file).unwrap());
+        let chunks = data.len().div_ceil(block);
+        for (index, chunk) in data.chunks(block).enumerate() {
+            let header = if index == 0 { control } else { "" };
+            let more = usize::from(index + 1 != chunks);
+            write!(output, "\x1b_G{header}m={more};{}\x1b\\", base64::engine::general_purpose::STANDARD.encode(chunk)).unwrap();
+        }
+        output.write_all(b"after_large_png").unwrap();
+        output.flush().unwrap();
+        drop(output);
+        consumer.serial += 1;
+        consumer.updates.clear();
+        consumer.text.clear();
+        consumer.session.input(format!(
+            "FILE_SEND {} 1 {} {fragment}\n",
+            consumer.serial,
+            fixture::hex(file.to_str().unwrap().as_bytes()),
+        ).as_bytes()).unwrap();
+        consumer.finish_exchange(control.as_bytes())
+    }
+
+    let daemon = Daemon::with_limits(0, true);
+    let mut consumer = daemon.spawn();
+    let pane = consumer.session.pane_id();
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("large-png.apc");
+    // Real, independently decodable RGBA PNG pixels; stored DEFLATE blocks
+    // make the outer zlib transfer deterministically larger than 28 MiB.
+    let pixels: Vec<u8> = (0..3072 * 2560 * 4).map(|index| (index % 251) as u8).collect();
+    let png = png_bytes(3072, 2560, &pixels);
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&png, 0);
+    assert!(compressed.len() > 28 << 20 && compressed.len() < MAX_IMAGE_BYTES);
+    assert!(png.len() < MAX_IMAGE_BYTES);
+    for (block, fragment) in [(3072, 4093), (compressed.len(), 65_521)] {
+        assert_eq!(
+            send_file(&mut consumer, &file, "a=T,i=81,p=3,f=100,o=z,C=1,", &compressed, block, fragment),
+            [b"\x1b_Gi=81,p=3;OK\x1b\\".to_vec()],
+            "a valid >28 MiB outer zlib PNG must fit the production 128 MiB work limit",
+        );
+        let image = consumer.updates.iter().find_map(|update| match update {
+            GraphicsUpdate::Resource { image, .. } => Some(image),
+            _ => None,
+        }).expect("validated source reaches the actual daemon stream");
+        assert_eq!((image.width, image.height), (3072, 2560));
+        assert!(!image.compressed);
+        assert_eq!(image.data, png);
+        assert_eq!(image.to_rgba8().unwrap(), pixels);
+        assert!(consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Place(p) if p.image_id == 81 && p.placement_id == 3)));
+        assert!(consumer.text.windows(15).any(|part| part == b"after_large_png"));
+    }
+    let mut invalid = compressed.clone();
+    *invalid.last_mut().unwrap() ^= 1; // Broken outer zlib Adler-32, still a real PNG input.
+    let excessive_png = png_bytes(3072, 2816, &vec![0; 3072 * 2816 * 4]);
+    let excessive = miniz_oxide::deflate::compress_to_vec_zlib(&excessive_png, 1);
+    assert!(excessive_png.len() > MAX_IMAGE_BYTES);
+    for data in [&invalid, &excessive] {
+        let replies = send_file(&mut consumer, &file, "a=T,i=82,p=4,f=100,o=z,", data, 3072, 4093);
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].starts_with(b"\x1b_Gi=82,p=4;EINVAL:"));
+        assert!(!consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Resource { .. })));
+        assert!(consumer.text.windows(15).any(|part| part == b"after_large_png"));
+        assert_eq!(consumer.exchange(b"\x1b_Ga=q,i=83,f=32,s=1,v=1;/wAA/w==\x1b\\", 1), [b"\x1b_Gi=83;OK\x1b\\".to_vec()]);
+        assert_eq!(consumer.session.pane_id(), pane);
+    }
+    consumer.exit();
+}

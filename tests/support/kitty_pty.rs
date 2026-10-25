@@ -151,6 +151,23 @@ use std::io::{Read, Write};
                         output.flush().unwrap();
                     }
                 }
+                "FILE_SEND" => {
+                    // The file contains real APC bytes, not a synthetic daemon
+                    // event. Keep large regressions off the child's input line.
+                    let mut file = std::fs::File::open(
+                        String::from_utf8(bytes).unwrap()
+                    ).unwrap();
+                    let mut buffer = vec![0; fragment.max(1)];
+                    loop {
+                        let count = file.read(&mut buffer).unwrap();
+                        if count == 0 {
+                            break;
+                        }
+                        stats.record(&buffer[..count]);
+                        output.write_all(&buffer[..count]).unwrap();
+                        output.flush().unwrap();
+                    }
+                }
                 "FLOOD" => {
                     stats.bytes += 49 * 1024 * 1024;
                     stats.record(b"\x1b_Ga=T,i=720,s=1,v=1;");

@@ -4699,7 +4699,18 @@ mod kitty_graphics {
             (0, "q=2,m=0", "!", 0),
             (0, "m=0,q=2", "!", 0),
             (0, "q=1,m=0", "!", 1),
-            (2, "q=0,m=0", "!", 1),
+            // Kitty only lets a nonzero continuation quiet override the first.
+            (2, "q=0,m=0", "!", 0),
+            (2, "m=0,q=0", "gA==", 0),
+            (1, "q=0,m=0", "gA==", 0),
+            (1, "q=0,m=0", "!", 1),
+            (2, "q=1,m=0", "!", 1),
+            (1, "m=0,q=2", "gA==", 0),
+            (2, "q=bad,m=0", "gA==", 0),
+            (2, "q=0,m=9", "gA==", 0),
+            (2, "q=1,m=9", "gA==", 1),
+            (0, "q=2,m=9", "gA==", 0),
+            (0, "q=256,m=0", "!", 0),
         ] {
             let request = format!(
                 "\x1b_Ga=q,i=739,p=7,s=1,v=1,q={initial_quiet},m=1;/wAA\x1b\\\x1b_G{continuation};{payload}\x1b\\after_continuation"
