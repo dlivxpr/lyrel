@@ -1787,9 +1787,11 @@ impl DaemonMsg {
             DaemonMsg::GraphicsCancel { token } => {
                 write_frame(w, kind::GRAPHICS_CANCEL, &to_json(token)?)
             }
-            DaemonMsg::GraphicsPressureResult { key, reclaimed } => {
-                write_frame(w, kind::GRAPHICS_PRESSURE_RESULT, &to_json(&(key, reclaimed))?)
-            }
+            DaemonMsg::GraphicsPressureResult { key, reclaimed } => write_frame(
+                w,
+                kind::GRAPHICS_PRESSURE_RESULT,
+                &to_json(&(key, reclaimed))?,
+            ),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {

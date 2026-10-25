@@ -739,27 +739,60 @@ pub(super) struct GraphicsViewportReporter {
             Option<crate::daemon::protocol::GraphicsViewport>,
         )>,
     >,
+    retry: std::sync::mpsc::SyncSender<()>,
 }
 
 impl GraphicsViewportReporter {
+    fn new(
+        term: &Arc<FairMutex<Crosswords<EventProxy>>>,
+        images: crate::terminal::images::ImageStore,
+        sender: LinkSender,
+    ) -> std::io::Result<Self> {
+        let (retry, pending) = std::sync::mpsc::sync_channel(1);
+        let reporter = Self {
+            term: Arc::downgrade(term),
+            images,
+            displayed: Arc::new(AtomicBool::new(true)),
+            link: Arc::new(Mutex::new((sender, None))),
+            retry,
+        };
+        let term = reporter.term.clone();
+        let images = reporter.images.clone();
+        let displayed = reporter.displayed.clone();
+        let link = reporter.link.clone();
+        // One bounded wake, not queued viewport snapshots. The worker may wait
+        // for a PTY reader or UI grid guard, then samples the latest state under
+        // grid -> store -> link ordering. It owns no retry sender, so dropping
+        // the last reporter closes the channel and retires the worker.
+        std::thread::Builder::new()
+            .name("lyrel-graphics-viewport".into())
+            .spawn(move || {
+                while pending.recv().is_ok() {
+                    let Some(term) = term.upgrade() else { return };
+                    let term = term.lock();
+                    Self::publish(&term, &images, &displayed, &link);
+                }
+            })?;
+        Ok(reporter)
+    }
+
     pub(super) fn displayed(&self) -> Arc<AtomicBool> {
         self.displayed.clone()
     }
 
     pub(super) fn set_displayed(&self, on: bool) {
-        if self.displayed.swap(on, Ordering::Relaxed) == on {
-            return;
-        }
-        if !on {
+        {
             let mut link = self.link.lock().unwrap();
-            if let Some(mut viewport) = link.1 {
+            if self.displayed.swap(on, Ordering::Relaxed) == on {
+                return;
+            }
+            if !on && let Some(mut viewport) = link.1 {
                 viewport.rows = 0;
                 link.0.send(ClientMsg::GraphicsViewport(viewport));
                 link.1 = Some(viewport);
             }
-        } else {
-            self.report();
         }
+        self.report();
     }
 
     pub(super) fn report(&self) {
@@ -767,21 +800,41 @@ impl GraphicsViewportReporter {
             return;
         };
         let Some(term) = term.try_lock() else {
+            // A scroll already changed the grid. Never discard its final
+            // desired viewport just because the reader currently owns it.
+            let _ = self.retry.try_send(());
             return;
         };
+        Self::publish(&term, &self.images, &self.displayed, &self.link);
+    }
+
+    fn publish(
+        term: &Crosswords<EventProxy>,
+        images: &crate::terminal::images::ImageStore,
+        displayed: &AtomicBool,
+        link: &Mutex<(
+            LinkSender,
+            Option<crate::daemon::protocol::GraphicsViewport>,
+        )>,
+    ) {
         let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
-        let Some(viewport) = self.images.viewport(
+        let Some(mut viewport) = images.viewport(
             origin,
             term.display_offset(),
             term.screen_lines(),
             term.columns(),
-            self.displayed.load(Ordering::Relaxed),
+            true,
         ) else {
             return;
         };
-        // Keep grid -> store -> link ordering. Enqueue before releasing the
-        // grid so a later user Input cannot overtake the viewport it observes.
-        let mut link = self.link.lock().unwrap();
+        // Sampling and enqueueing stay inside the grid guard. A queued retry
+        // cannot publish an old snapshot after a newer synchronous report.
+        let mut link = link.lock().unwrap();
+        // Visibility changes also hold this lock. A report sampled before a
+        // hide must not restore visible rows after its withdrawal was sent.
+        if !displayed.load(Ordering::Relaxed) {
+            viewport.rows = 0;
+        }
         if link.1 != Some(viewport) {
             link.0.send(ClientMsg::GraphicsViewport(viewport));
             link.1 = Some(viewport);
@@ -1268,7 +1321,7 @@ impl RemoteTerminal {
                 color_scheme_updates: self.color_scheme_updates.clone(),
             },
             link.sender(),
-            self.viewport_reporter.displayed(),
+            self.viewport_reporter.clone(),
         );
         self.reader_thread = Some(reader);
         self.reader_quit = quit;
@@ -1277,6 +1330,9 @@ impl RemoteTerminal {
         // `LinkWriter` through its `Drop`, which is what closes the old socket.
         self.link = link;
         *self.viewport_reporter.link.lock().unwrap() = (self.link.sender(), None);
+        // The new reader can establish its Screen before the sender swap.
+        // Re-publish on this link even when the pane stays hidden afterward.
+        self.viewport_reporter.report();
         self.route = route.clone();
         self.synced_size = false;
         self.resize(size, cell_w, cell_h);
@@ -1381,12 +1437,8 @@ impl RemoteTerminal {
             write_half,
             InputLoss::new(reader_quit.clone(), exited_flag.clone(), proxy.clone()),
         )?;
-        let viewport_reporter = GraphicsViewportReporter {
-            term: Arc::downgrade(&term),
-            images: images.clone(),
-            displayed: Arc::new(AtomicBool::new(true)),
-            link: Arc::new(Mutex::new((link.sender(), None))),
-        };
+        let viewport_reporter =
+            GraphicsViewportReporter::new(&term, images.clone(), link.sender())?;
         let reader_thread = Self::spawn_reader(
             term.clone(),
             proxy.clone(),
@@ -1415,7 +1467,7 @@ impl RemoteTerminal {
                 color_scheme_updates: color_scheme_updates.clone(),
             },
             link.sender(),
-            viewport_reporter.displayed(),
+            viewport_reporter.clone(),
         );
 
         Ok(Self {
@@ -1512,8 +1564,9 @@ impl RemoteTerminal {
         quit: Arc<AtomicBool>,
         signals: ReaderSignals,
         writer: LinkSender,
-        pressure_displayed: Arc<AtomicBool>,
+        viewport_reporter: GraphicsViewportReporter,
     ) -> JoinHandle<()> {
+        let pressure_displayed = viewport_reporter.displayed();
         let pressure_term = Arc::downgrade(&term);
         let pressure_writer = writer.clone();
         signals.images.register_pressure(
@@ -1934,6 +1987,11 @@ impl RemoteTerminal {
                                         let changed = image_decoder.apply(update);
                                         image_decoder.sync_local_origin(term.grid.lines_evicted() as i64 + term.grid.history_size() as i64);
                                         if changed { proxy.send(PaneEvent::Wakeup); }
+                                        drop(term);
+                                        // A hidden/startup report may have preceded the
+                                        // first Screen that establishes its epoch. Retry
+                                        // that desired viewport without waiting for paint.
+                                        viewport_reporter.report();
                                     } else if image_decoder.apply(update) {
                                         proxy.send(PaneEvent::Wakeup);
                                     }
@@ -1945,6 +2003,7 @@ impl RemoteTerminal {
                                 writer.send(ClientMsg::GraphicsGrant { token, accepted });
                             }
                             DaemonMsg::GraphicsCancel { token } => image_decoder.cancel_offer(token),
+                            DaemonMsg::GraphicsPressureResult { key, .. } => image_decoder.complete_pressure(key),
                             DaemonMsg::ClipboardWrite(frame) => {
                                 flush_batch!();
                                 if let Some(write) =

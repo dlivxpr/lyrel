@@ -106,6 +106,13 @@ fn a_routed_pane_spawns_takes_input_and_survives_a_reconnect() {
     std::fs::create_dir_all(&config).unwrap();
 
     let (mut sock, hub_thread) = routed(dir.path(), "pane-1.sock", &config);
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: true,
+    }
+    .encode(&mut sock)
+    .unwrap();
     ClientMsg::Spawn {
         cwd: Some(dir.path().to_path_buf()),
         size: win(),

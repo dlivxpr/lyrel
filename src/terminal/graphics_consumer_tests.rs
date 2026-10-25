@@ -1528,7 +1528,7 @@ fn graphics_consumer_scrolled_history_survives_new_output_and_hidden_viewport_wi
 }
 
 #[gpui_kit::test]
-fn graphics_consumer_hidden_live_pressure_retries_only_after_last_live_placement_leaves(
+fn graphics_consumer_hidden_live_pressure_refuses_until_last_live_placement_leaves(
     cx: &mut TestAppContext,
 ) {
     crate::core::config::pin_test_config_dir();
@@ -1921,8 +1921,7 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
         let old_pane = owner.spawn();
         let new_pane = requester.spawn();
         let (old, old_window) = graphics_rooted_consumer(cx, old_pane, owner.stream(old_pane));
-        let (new, new_window) =
-            graphics_rooted_consumer(cx, new_pane, requester.stream(new_pane));
+        let (new, new_window) = graphics_rooted_consumer(cx, new_pane, requester.stream(new_pane));
         // Keep the production consumer alive without another paint/scrollbar
         // report concealing the one contended report below. No atlas lease is
         // acquired for the image, so retirement does not require a new frame.
@@ -1931,7 +1930,12 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
                 window.replace_root(cx, |_, _| gpui_kit::EmptyView);
             })
             .unwrap();
-        graphics_send_fixture(&old, cx, 1, b"\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+        graphics_send_fixture(
+            &old,
+            cx,
+            1,
+            b"\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=7,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\",
+        );
         graphics_layout_wait_image(&old, cx, 7);
         graphics_send_fixture(&old, cx, 2, &b"\r\n".repeat(80));
         old.update(cx, |view, cx| {
@@ -1939,7 +1943,10 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
         });
         graphics_send_fixture(&old, cx, 3, b"viewport_barrier");
         let (term, reporter) = old.read_with(cx, |view, _| {
-            (view.terminal.term.clone(), view.terminal.viewport_reporter())
+            (
+                view.terminal.term.clone(),
+                view.terminal.viewport_reporter(),
+            )
         });
         // The scroll has changed the real grid but its report has not run yet.
         // Admission now sees historical pixels while the authority still sees
@@ -1952,7 +1959,10 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
             let images = graphics_visible_images(view);
             assert_eq!(images.len(), 1);
             assert!(!images[0].evicted);
-            assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
+            assert_eq!(
+                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                [0, 0, 255, 255]
+            );
         });
         // Deterministically contend at the existing reporter/grid seam. There
         // is no later old-pane text, Place/Remove, repaint, or report to rescue
@@ -1963,7 +1973,8 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
         graphics_send_fixture(&new, cx, 5, upload);
         assert!(
             new.read_with(cx, |view, _| graphics_visible_images(view)
-                .iter().any(|image| image.placement.image_id == 8)),
+                .iter()
+                .any(|image| image.placement.image_id == 8)),
             "a contended viewport and an earlier pressure refusal must not permanently pin history"
         );
         graphics_layout_wait_image(&new, cx, 8);
@@ -1975,6 +1986,7 @@ fn graphics_consumer_contended_viewport_retries_refused_history_without_new_outp
         });
         owner.panes().kill(old_pane).unwrap();
         requester.panes().kill(new_pane).unwrap();
+        drop((term, reporter));
         graphics_recovery_destroy(old, old_window, cx);
         graphics_recovery_destroy(new, new_window, cx);
     });

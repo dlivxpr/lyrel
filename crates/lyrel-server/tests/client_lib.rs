@@ -2831,9 +2831,7 @@ mod kitty_graphics {
         }
     }
 
-    fn pressure_replay(
-        stream: &mut lyrel_core::daemon::transport::Stream,
-    ) -> Vec<GraphicsUpdate> {
+    fn pressure_replay(stream: &mut lyrel_core::daemon::transport::Stream) -> Vec<GraphicsUpdate> {
         use lyrel_core::daemon::protocol::ClientMsg;
         let mut updates = Vec::new();
         loop {
@@ -2882,9 +2880,15 @@ mod kitty_graphics {
                         _ => {}
                     }
                 }
-                DaemonMsg::GraphicsPressureResult { key: actual, reclaimed: result } => {
+                DaemonMsg::GraphicsPressureResult {
+                    key: actual,
+                    reclaimed: result,
+                } => {
                     assert_eq!((actual, result), (key, reclaimed));
-                    assert_eq!(evicted, reclaimed, "eviction must precede successful completion");
+                    assert_eq!(
+                        evicted, reclaimed,
+                        "eviction must precede successful completion"
+                    );
                     return;
                 }
                 DaemonMsg::Error(error) => panic!("pressure failed: {error}"),
@@ -2911,23 +2915,28 @@ mod kitty_graphics {
     }
 
     #[test]
-    fn daemon_pressure_completion_retries_after_observer_hides_or_detaches_without_placement_changes() {
+    fn daemon_pressure_completion_retries_after_observer_hides_or_detaches_without_placement_changes()
+     {
         use lyrel_core::daemon::protocol::{ClientMsg, GraphicsViewport};
         for detach in [false, true] {
             let daemon = Daemon::start();
             let _control = daemon.control("graphics-pressure-completion");
             let mut controller = Consumer::spawn(&daemon);
             controller.red("a=T,i=1,p=1,c=1,r=1,C=1");
-            let placement = controller.placements.values().next().unwrap().clone();
-            let key = placement.resource;
             controller.send(&b"\r\n".repeat(40), 0);
+            let placement = controller.placements.values().next().unwrap().clone();
+            assert!(!placement.live, "pressure fixture must be historical");
+            let key = placement.resource;
             let pane = controller.session.pane_id();
             let mut protector = offered_recovery(&daemon, pane, true);
             let replay = pressure_replay(&mut protector);
-            let (screen, epoch) = replay.iter().find_map(|update| match update {
-                GraphicsUpdate::Screen { screen, epoch, .. } => Some((*screen, *epoch)),
-                _ => None,
-            }).unwrap();
+            let (screen, epoch) = replay
+                .iter()
+                .find_map(|update| match update {
+                    GraphicsUpdate::Screen { screen, epoch, .. } => Some((*screen, *epoch)),
+                    _ => None,
+                })
+                .unwrap();
             let viewport = GraphicsViewport {
                 screen,
                 epoch,
@@ -2935,7 +2944,9 @@ mod kitty_graphics {
                 rows: 1,
                 cols: size().cols,
             };
-            ClientMsg::GraphicsViewport(viewport).encode(&mut protector).unwrap();
+            ClientMsg::GraphicsViewport(viewport)
+                .encode(&mut protector)
+                .unwrap();
             observer_barrier(&mut protector);
             let mut requester = offered_recovery(&daemon, pane, true);
             pressure_replay(&mut requester);
@@ -2958,37 +2969,42 @@ mod kitty_graphics {
             // An unrelated live transfer still receives valid per-resource grants
             // after refusal; pressure completion must not consume grant traffic.
             let marker = format!("KITTY_DONE_{};\r", controller.serial + 1);
-            std::thread::scope(|scope| {
-                let mut drain = |stream: &mut lyrel_core::daemon::transport::Stream| {
-                    let mut text = Vec::new();
-                    let mut granted = false;
-                    loop {
-                        match DaemonMsg::read(stream).unwrap() {
-                            DaemonMsg::GraphicsOffer { token, .. } => {
-                                granted = true;
-                                ClientMsg::GraphicsGrant { token, accepted: true }
-                                    .encode(stream).unwrap();
+            let drain = |stream: &mut lyrel_core::daemon::transport::Stream| {
+                let mut text = Vec::new();
+                let mut granted = false;
+                loop {
+                    match DaemonMsg::read(stream).unwrap() {
+                        DaemonMsg::GraphicsOffer { token, .. } => {
+                            granted = true;
+                            ClientMsg::GraphicsGrant {
+                                token,
+                                accepted: true,
                             }
-                            DaemonMsg::Output(bytes) => {
-                                text.extend(bytes);
-                                if windows_contain(&text, marker.as_bytes()) {
-                                    assert!(granted, "live resource must pass real admission");
-                                    break;
-                                }
-                            }
-                            DaemonMsg::GraphicsPressureResult { .. } => {
-                                panic!("duplicate or broadcast pressure completion")
-                            }
-                            DaemonMsg::Error(error) => panic!("valid grant failed: {error}"),
-                            _ => {}
+                            .encode(stream)
+                            .unwrap();
                         }
+                        DaemonMsg::Output(bytes) => {
+                            text.extend(bytes);
+                            if windows_contain(&text, marker.as_bytes()) {
+                                assert!(granted, "live resource must pass real admission");
+                                break;
+                            }
+                        }
+                        DaemonMsg::GraphicsPressureResult { .. } => {
+                            panic!("duplicate or broadcast pressure completion")
+                        }
+                        DaemonMsg::Error(error) => panic!("valid grant failed: {error}"),
+                        _ => {}
                     }
-                };
+                }
+            };
+            std::thread::scope(|scope| {
                 let protecting = scope.spawn(|| drain(&mut protector));
                 let requesting = scope.spawn(|| drain(&mut requester));
-                assert_eq!(controller.send(
-                    b"\x1b_Ga=T,i=2,p=2,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1
-                ), [b"\x1b_Gi=2,p=2;OK\x1b\\".to_vec()]);
+                assert_eq!(
+                    controller.send(b"\x1b_Ga=T,i=2,p=2,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1),
+                    [b"\x1b_Gi=2,p=2;OK\x1b\\".to_vec()]
+                );
                 protecting.join().unwrap();
                 requesting.join().unwrap();
             });
@@ -2996,8 +3012,12 @@ mod kitty_graphics {
                 ClientMsg::Detach.encode(&mut protector).unwrap();
                 while DaemonMsg::read(&mut protector).is_ok() {}
             } else {
-                ClientMsg::GraphicsViewport(GraphicsViewport { rows: 0, ..viewport })
-                    .encode(&mut protector).unwrap();
+                ClientMsg::GraphicsViewport(GraphicsViewport {
+                    rows: 0,
+                    ..viewport
+                })
+                .encode(&mut protector)
+                .unwrap();
                 observer_barrier(&mut protector);
             }
             pressure_result(&mut requester, key, true);
@@ -3006,7 +3026,8 @@ mod kitty_graphics {
             assert!(!controller.resources.contains_key(&key));
             assert_eq!(controller.placements[&placement.key], placement);
             assert!(!controller.updates.iter().any(|update| matches!(
-                update, GraphicsUpdate::Place(_) | GraphicsUpdate::Remove { .. }
+                update,
+                GraphicsUpdate::Place(_) | GraphicsUpdate::Remove { .. }
             )));
             if !detach {
                 observer_barrier(&mut protector);
