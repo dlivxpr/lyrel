@@ -274,7 +274,8 @@ fn graphics_build_rooted_consumer(
     stream: Stream,
     buffered: Vec<u8>,
 ) -> (Entity<TerminalView>, gpui_kit::AnyWindowHandle) {
-    graphics_build_rooted_consumer_at(cx, pane, stream, buffered, TermSize::new(80, 24))
+    let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
+    graphics_build_rooted_consumer_at(cx, pane, stream, buffered, TermSize::new(80, 24), source)
 }
 
 fn graphics_build_rooted_consumer_at(
@@ -283,13 +284,13 @@ fn graphics_build_rooted_consumer_at(
     stream: Stream,
     buffered: Vec<u8>,
     size: TermSize,
+    source: PtySource,
 ) -> (Entity<TerminalView>, gpui_kit::AnyWindowHandle) {
     // App::open_window draws its root before returning. Mounting the terminal
     // in a default maximized window would already resize the living pane once
     // before the requested 80/40-column physical geometry can be installed.
     let window: gpui_kit::AnyWindowHandle = cx.add_window(|_, _| gpui_kit::EmptyView).into();
     let view = window.update(cx, |_, window, cx| {
-        let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
         let terminal = RemoteTerminal::from_stream_with(stream, size, buffered, source).unwrap();
         cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx))
     }).unwrap();
