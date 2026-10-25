@@ -78,7 +78,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 - 同一资源的多次放置共享解码像素。`x/y/w/h` 指定源裁剪，`c/r` 指定显示区域；只指定一轴时按比例推导，指定两轴时保持比例放入区域。`X/Y` 为单元内像素偏移，`C=1` 禁止本次放置移动光标。
 - 图片 ID 在窗格内独立。非零图片 ID 与非零放置 ID 的组合替换同次放置；省略 `p` 或 `p=0` 时，每次放置独立。`I` 分配新的图片 ID，并让后续按编号的命令选择该编号最新的资源；同一命令不能同时指定 `i` 与 `I`。重新传输同一个 `i` 会移除其旧资源与全部旧放置，不会让旧位置显示新内容。
 - 静态删除支持 `a/i/n/c/p/q/r/x/y/z` 及大写形式。`d=p` 是按 `x/y` 指定的单元删除，不是按放置 ID 删除；定位单次放置使用 `d=i,i=…,p=…`。小写保留可复用资源；大写只在资源没有其他放置引用时回收数据。缺资源、非法放置和不支持的操作返回带身份的错误，并遵守 `q=1/2`。
-- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `14`（无像素回收元数据、消费者容量授权、连接视口及非活动屏实时引用），control 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
+- daemon 持有唯一资源／放置状态，桌面只持有派生解码及绘制缓存。像素不进入持久文字回滚文件，不新增图片磁盘缓存。当前 pane 协议为 `15`（无像素回收元数据、消费者容量授权、连接视口、非活动屏实时引用及逐请求压力完成结果），`CONTROL_VERSION` 保持 `16`；新连接先在实际 pane endpoint 双向协商版本及有限容量，再新建、附着或观察会话；路由前缀先于协商。旧客户端在创建 shell／订阅输出前被明确拒绝，新客户端遇到旧 daemon／远端 server 报告版本并要求更新，不能静默忽略图片消息。独立版本探测不要求开启会话。
 - `a=q` 对实际图片内容进行校验，不存储、不替换资源；坏 PNG／zlib、无效像素长度、超限尺寸及不支持的操作不会回报成功。直接传输可跨主机；文件、临时文件及 POSIX shared memory 只在发送方确实共享负责 daemon 的 Unix 主机时接受，Windows 或跨主机上下文明确拒绝，不把远端路径解析到桌面。文件必须是 regular file，临时文件仅在临时目录且路径包含 `tty-graphics-protocol` 时允许协议删除；间接媒体按下述平台规则有界读取。
 - 应答关联 `i/I/p` 并写回 PTY，不作为终端文本显示；`q=1` 只保留失败，`q=2` 全部静默，没有图片身份的请求不注入应答。续块仅以非零 `q` 覆盖首块的 quiet，显式 `q=0` 不解除此前的静默。删除中止未完成上传；损坏或取消的 APC 不会与后续命令拼成图片。拒收不创建放置、不移动光标，也不删除其他已接受资源。
 
@@ -102,13 +102,13 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 终端视图释放时，无条件从应用级可见性注册表移除其连接事实并退休 reader，不能把这两步依附在仍然有效的窗口 handle 上。仍存活的窗口负责实际 atlas 清理；窗口先关闭时，其 atlas 随窗口销毁，派生 cache 与在途任务的最后 owner 释放后才归还各自信用，注册表不能继续强持有已关闭窗格的图片池。
 
-`GraphicsOffer` 的零像素形式只申请资源或放置的元数据，不分配 source／GPU 票；`a=T` 在改变权威内容或回复成功前须同时获得资源与首次放置的授权，任一失败都会取消此前授权。GUI session 的独立输入 pump 优先处理授权、视口及压力请求；同一连接先应用视口，再处理其后的压力请求，不能让压力越过尚在普通输入队列中的视口。普通输入待处理队列最多 64 条、每条最多 1 MiB；超限明确断连而不静默丢弃。这一普通输入边界不属于上述图片分配池合计。
+`GraphicsOffer` 的零像素形式只申请资源或放置的元数据，不分配 source／GPU 票；`a=T` 在改变权威内容或回复成功前须同时获得资源与首次放置的授权，任一失败都会取消此前授权。GUI session 的独立输入 pump 优先处理授权、视口及压力请求；同一连接先应用视口，再处理其后的压力请求，不能让压力越过尚待发送或尚未应用的视口。视口报告合并为最新状态；发送队列暂满时保留待发送的最新值，只有成功入队才视为已发送，不能丢掉最终滚动位置或隐藏报告，也不逐条积压过时位置。普通输入待处理队列最多 64 条、每条最多 1 MiB；超限明确断连而不静默丢弃。这一普通输入边界不属于上述图片分配池合计。
 
 回收优先级为无引用、非可见历史、受保护内容；同级按原有准入顺序确定。可见历史不是“实时屏幕之外”的同义词：渲染连接通过 `GraphicsViewport { screen, epoch, top, rows, cols }` 报告真实滚动视口，`top` 是绝对文本行锚点，`None` 跟随实时屏，`rows=0` 撤销隐藏窗格的视口保护。`GraphicsUpdate::Screen` 携带对应 `epoch`；resize 行重排、主备屏切换、reset 和历史清理使旧代次失效。daemon 直接在自身资源／网格上核验 direct 放置与实际 placeholder 单元，不复制资源模型；同批新输出推进实时原点时，用户仍在看的历史锚点不随相对 offset 漂移。detach、控制器抢占及 observer 移除同步撤销相应连接事实；桌面跨 pane／跨 daemon 压力选择同样读取真实视口，最终仍由负责 daemon 决定能否回收。普通文字输出的准入屏障只访问当前 pane 已有资源，不扫描全 daemon 注册表。
 
 非活动屏不等于全部受保护：进入备用屏后，主屏仍属实时屏的图片保持保护，已离开实时屏且未被真实滚动视口引用的旧历史仍可回收。daemon 向桌面传递这一权威引用事实，避免跨 pane／跨 daemon 的桌面压力错误钉住非活动屏全部历史；direct 与 placeholder 使用相同优先级。
 
-最新集成已运行完整默认成员检查：Windows 的 25 个 Rust suite 共 4,701 项通过，另有 CLI E2E 24 项通过，合计 4,725 项；默认运行仍有 34 项 ignored，随后显式执行的原生 SSH transport 1 项及 rooted consumer 2 项单独通过，不将其他 ignored 归为通过。Linux 原生 headless workspace 默认检查的 24 个 Rust suite 共 2,284 项通过，另有 CLI E2E 24 项，合计 2,308 项，30 项 ignored；这不是 Linux 桌面或本地 `--all-features` 证据。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。macOS 自动化以匹配提交的 CI 为准；原生窗口／GPU／SSH 仍须分别取证，headless paint 不等同于最终 GPU 像素。
+本次视口／压力完成修复前的历史集成已运行完整默认成员检查：Windows 的 25 个 Rust suite 共 4,701 项通过，另有 CLI E2E 24 项通过，合计 4,725 项；默认运行仍有 34 项 ignored，随后显式执行的原生 SSH transport 1 项及 rooted consumer 2 项单独通过，不将其他 ignored 归为通过。Linux 原生 headless workspace 默认检查的 24 个 Rust suite 共 2,284 项通过，另有 CLI E2E 24 项，合计 2,308 项，30 项 ignored；这不是 Linux 桌面或本地 `--all-features` 证据。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。这些历史结果不覆盖本次 pane `15` 的视口合并与压力完成修复。macOS 自动化以匹配提交的 CI 为准；原生窗口／GPU／SSH 仍须分别取证，headless paint 不等同于最终 GPU 像素。
 
 本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
 
@@ -167,8 +167,8 @@ Windows 协议冒烟已在 pane `13` 的生产 CLI／daemon 上复验，使用�
 #### 当前实现：预算与历史回收（#44）
 
 - **最旧**在同一 daemon 内按资源准入单调序号确定，不按 GUI 最近访问时间、图片 ID 或墙钟排序；替换后是一个新版本。跨 daemon 的共享桌面池按资源首次成功接收的进程内单调序号排序，不假设远端主机共享墙钟。先回收无引用资源，再按对应范围的序号回收非可见历史。direct 的真实保留片段和 placeholder 的共享文本投影合并判定；活动屏 live rows 及必须保留的非活动主／备用屏内容受保护，隐藏或无 GUI 不会绕过预算。
-- 多窗格共用聚合池。跨窗格回收只锁预算注册表和资源 slot，再通过合并唤醒让各 pane 按原输出顺序公布变更，不在持有某个 pane 锁时反向锁其他 pane。跨 daemon 桌面压力通过资源所属连接请求权威回收，daemon 必须重新核验 direct／placeholder 可见性及 screen；客户端不能要求删除受保护图。若保护内容已耗尽任一适用预算，新图按 `ENOSPC` 及 `q=1/2` 规则拒收，不替换旧图、不改变文字或光标。
-- 桌面压力请求若因 daemon 的 live 保护被拒，不反复重发同一候选；该资源最后一个 live 放置经权威更新转为历史或被删除后，才重新允许压力回收。一个放置离开 live 不会解除同一资源其他 live 放置的保护。隐藏本身不等于 live 内容已成为可回收历史。
+- 多窗格共用聚合池。跨窗格回收只锁预算注册表和资源 slot，再通过合并唤醒让各 pane 按原输出顺序公布变更，不在持有某个 pane 锁时反向锁其他 pane。跨 daemon 桌面压力通过资源所属连接请求权威回收，daemon 必须重新核验 direct／placeholder 可见性及 screen；客户端不能要求删除受保护图。daemon 先有序公布本次权威回收效果，再仅向发起请求的 endpoint 发送 `DaemonMsg::GraphicsPressureResult { key: u64, reclaimed: bool }`，不向同 pane 的其他消费者广播完成结果；`reclaimed=false` 明确结束本次未能回收的请求。若保护内容已耗尽任一适用预算，新图按 `ENOSPC` 及 `q=1/2` 规则拒收，不替换旧图、不改变文字或光标。
+- 每份资源最多有一个未完成的桌面压力请求；重复需求不能叠加在途请求。客户端只在收到匹配资源 `key` 的完成结果时解除在途锁，不用其他资源的结果或普通图形更新冒充完成。拒绝只结束本次尝试，不永久禁止该资源：后续新的准入需求可重新请求，由 daemon 按届时全部消费者的最新视口决定。另一消费者滚离历史、隐藏或 detach 后，即使没有新 PTY 文字、资源变更或本窗格重绘，也不必等待这些事件才允许后续需求重试。不新增自动重试定时器，不在收到拒绝后立即循环重发。一个放置离开 live 不解除同资源其他 live 放置或消费者历史视口的保护；隐藏只撤销该连接的视口事实，不把 live 内容变成可回收历史。
 - 只有预算回收留下无像素元数据。重访仍保留的原位置时，用界面语言在原区域内绘制 `Image evicted`／“图片已淘汰”；颜色使用 `muted_foreground`，保持原裁切。它不是终端文本，不进入选择内容，不插入行、不写 PTY、不发 toast。应用删除、clear／reset、历史过期会删除相应位置，不留下回收提示；拒收且未创建放置的新图不获得假位置。
 - 删除、替换、回收、连接退休及 pane 关闭都会使旧 completion 失效；CPU／GPU 信用在实际持有者释放后才归还。图片事件批次在窗口上下文立即回收 retired atlas，已有周期后台 UI 更新继续兜底隐藏 pane，不必等它重新 paint。为避免旧大 page 被后续小 tile 长期钉住，必要时对同一窗口的终端 atlas 做实际 compaction：批量释放旧 tile，保留当前 CPU 图片，并使存活图片在下次 paint 重新注册／上传。只有被失效 tile 的 owner 当前已显示时才安排整窗重绘；仅有隐藏 pane 的旧 tile 被释放不会唤醒无关可见面。隐藏 pane 返回时仍显示当前像素，不会永久钉住退休 GPU 票。daemon 不保留像素的隐藏备份以伪装可恢复。
 - 真实 daemon-session 与生产 GPUI consumer 的确定性小预算回归已在 Windows 集成分支运行通过，覆盖可见保护、跨 pane／daemon 压力、回收提示、容量拒收及关闭后再次准入。另有下述 daemon CPU 冒烟；原生压力下的 Shell、Windows／macOS 桌面／GPU 峰值、真实 SSH→Linux 与正式 omp 原生图片仍待各自验收。
@@ -186,7 +186,7 @@ node scripts/kitty-pressure.mjs --images 12 --width 3840 --height 2160 --path di
 
 记录每次夹具参数、GUI／daemon 进程身份、空闲基线、连续输出和清理后的工作集／私有字节峰值，以及平台可观测的 GPU memory。Windows 可对隔离实例的 PID 使用 `Get-Process -Id <GUI_PID>,<DAEMON_PID> | Select-Object Id,WorkingSet64,PrivateMemorySize64,PeakWorkingSet64`；macOS 可用 `ps -o pid,rss,vsz,command -p <GUI_PID>,<DAEMON_PID>`，并通过各平台原生 GPU 工具补充观测。单次快照不是峰值采样；须持续记录，且不能拿夹具自身的 Node 内存充当 GUI／daemon 会计。当前没有这些压力峰值或原生截图证据，默认值不能标为“已按实测调优”。
 
-**pane `14` 的 Windows daemon CPU 实测，不是原生压力验收：**以独立临时配置和生产 CLI → ConPTY 分块上传两张 `3840 × 2160` raw RGBA（各 33,177,600 bytes）与一张同尺寸 PNG（37,485 bytes），三份均收到关联 `i=901/902/903;OK`。编码合计 66,392,685 bytes，RGBA 准入权重 99,532,800 bytes；本次只上传、不放置，不启动桌面消费者。对同一 daemon PID 使用 Windows `Get-Process` 读取进程计数，单位为 bytes：
+**历史 pane `14` 的 Windows daemon CPU 实测，不覆盖本次 pane `15` 修复，也不是原生压力验收：**以独立临时配置和生产 CLI → ConPTY 分块上传两张 `3840 × 2160` raw RGBA（各 33,177,600 bytes）与一张同尺寸 PNG（37,485 bytes），三份均收到关联 `i=901/902/903;OK`。编码合计 66,392,685 bytes，RGBA 准入权重 99,532,800 bytes；本次只上传、不放置，不启动桌面消费者。对同一 daemon PID 使用 Windows `Get-Process` 读取进程计数，单位为 bytes：
 
 | 阶段 | WorkingSet64 | PeakWorkingSet64 | PrivateMemorySize64 |
 | --- | ---: | ---: | ---: |
