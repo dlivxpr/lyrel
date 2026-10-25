@@ -1535,7 +1535,12 @@ fn retention_daemon_large_outer_zlib_png_uses_bounded_live_work_and_recovers() {
         assert_eq!((image.width, image.height), (3072, 2560));
         assert!(!image.compressed);
         assert_eq!(image.data, png);
-        assert_eq!(image.to_rgba8().unwrap(), pixels);
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&image.data))
+            .read_info()
+            .unwrap();
+        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut decoded).unwrap();
+        assert_eq!(&decoded[..frame.buffer_size()], pixels.as_slice());
         assert!(consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Place(p) if p.image_id == 81 && p.placement_id == 3)));
         assert!(
             consumer

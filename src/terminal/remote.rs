@@ -3113,8 +3113,9 @@ fn attach_reply_prefix_inner(
     if !kind.is_some_and(crate::daemon::protocol::is_error_kind) {
         return Ok(buffered);
     }
-    let message = read_error_frame(stream, &mut buffered, wait)
-        .ok_or_else(|| anyhow::anyhow!("incomplete daemon error answering Attach for pane {pane_id}"))?;
+    let message = read_error_frame(stream, &mut buffered, wait).ok_or_else(|| {
+        anyhow::anyhow!("incomplete daemon error answering Attach for pane {pane_id}")
+    })?;
     if message == format!("no such pane {pane_id}") {
         Err(anyhow::Error::new(AttachRefused { message }))
     } else {
@@ -6115,12 +6116,17 @@ mod tests {
             "Graphics replay failed",
         ] {
             let (mut client_side, mut daemon_side) = UnixStream::pair().unwrap();
-            DaemonMsg::Error(message.into()).encode(&mut daemon_side).unwrap();
+            DaemonMsg::Error(message.into())
+                .encode(&mut daemon_side)
+                .unwrap();
             daemon_side.flush().unwrap();
-            let error = attach_reply_prefix(&mut client_side, 7,
-                std::time::Duration::from_millis(200)).expect_err("admission refused");
-            assert!(!attach_refused(&error),
-                "only an explicit missing-pane verdict can abandon the original session: {error:#}");
+            let error =
+                attach_reply_prefix(&mut client_side, 7, std::time::Duration::from_millis(200))
+                    .expect_err("admission refused");
+            assert!(
+                !attach_refused(&error),
+                "only an explicit missing-pane verdict can abandon the original session: {error:#}"
+            );
             assert!(format!("{error:#}").contains(message));
         }
     }

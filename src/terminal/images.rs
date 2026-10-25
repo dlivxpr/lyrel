@@ -323,7 +323,10 @@ impl DecodeScratchBudget {
             state.reservation.grow(bytes)?;
         }
         *state.claims.entry(bytes).or_default() += 1;
-        Some(DecodeScratch { budget: self.clone(), bytes })
+        Some(DecodeScratch {
+            budget: self.clone(),
+            bytes,
+        })
     }
 }
 
@@ -770,7 +773,14 @@ impl ImageStore {
         {
             return;
         }
-        let scratch = self.0.decode_scratch.state.lock().unwrap().reservation.bytes;
+        let scratch = self
+            .0
+            .decode_scratch
+            .state
+            .lock()
+            .unwrap()
+            .reservation
+            .bytes;
         let peak = pixels
             .saturating_add(encoded)
             .saturating_add(gpu_page_bytes(width, height).unwrap_or(usize::MAX))
@@ -1853,11 +1863,24 @@ mod tests {
         store.retire_reader();
         store.clear();
         assert!(store.0.decode_scratch.decoder.try_lock().is_err());
-        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 12);
+        assert_eq!(
+            store
+                .0
+                .decode_scratch
+                .state
+                .lock()
+                .unwrap()
+                .reservation
+                .bytes,
+            12
+        );
         let new = DecodeWorker::spawn(store.clone(), || {});
         apply_resource(&new, 2, 90);
         apply_placement(&new, placement(2, 2, 4, 5));
-        assert!(store.snapshot().is_empty(), "successor cannot overlap the retired decoder");
+        assert!(
+            store.snapshot().is_empty(),
+            "successor cannot overlap the retired decoder"
+        );
         assert!(store.0.decode_scratch.decoder.try_lock().is_err());
         release.wait();
         wait_for(&store, |images| images.len() == 1);
@@ -1902,12 +1925,19 @@ mod tests {
     fn failed_real_decode_releases_peak_source_and_cancelled_offer_tickets() {
         let store = ImageStore::new();
         let (completed, completion) = std::sync::mpsc::channel();
-        let worker = DecodeWorker::spawn_with_decoder(store.clone(), || {}, move |image| {
-            let decoded = decode(image);
-            assert!(decoded.is_none(), "the real PNG decoder must reject invalid bytes");
-            completed.send(()).unwrap();
-            decoded
-        });
+        let worker = DecodeWorker::spawn_with_decoder(
+            store.clone(),
+            || {},
+            move |image| {
+                let decoded = decode(image);
+                assert!(
+                    decoded.is_none(),
+                    "the real PNG decoder must reject invalid bytes"
+                );
+                completed.send(()).unwrap();
+                decoded
+            },
+        );
         let failed = GraphicsUpdate::Resource {
             key: 1,
             image: Arc::new(Image {
@@ -1918,11 +1948,30 @@ mod tests {
                 data: vec![0; 8],
             }),
         };
-        assert!(worker.offer(1, 1, 1, 1, failed.encode_frame().len() as u64, OWNER_METADATA_BYTES));
+        assert!(worker.offer(
+            1,
+            1,
+            1,
+            1,
+            failed.encode_frame().len() as u64,
+            OWNER_METADATA_BYTES
+        ));
         worker.apply(failed);
-        completion.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        completion
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
         drop(worker); // join proves every real decoder buffer has died
-        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 0);
+        assert_eq!(
+            store
+                .0
+                .decode_scratch
+                .state
+                .lock()
+                .unwrap()
+                .reservation
+                .bytes,
+            0
+        );
         assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
         assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
         store.clear();
@@ -1931,9 +1980,29 @@ mod tests {
         assert!(store.offer(2, 2, 3840, 2160, 1000, OWNER_METADATA_BYTES));
         assert!(store.offer(3, 3, 1920, 1080, 1000, OWNER_METADATA_BYTES));
         store.cancel_offer(2);
-        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 24_883_200);
+        assert_eq!(
+            store
+                .0
+                .decode_scratch
+                .state
+                .lock()
+                .unwrap()
+                .reservation
+                .bytes,
+            24_883_200
+        );
         store.cancel_unclaimed_offers();
-        assert_eq!(store.0.decode_scratch.state.lock().unwrap().reservation.bytes, 0);
+        assert_eq!(
+            store
+                .0
+                .decode_scratch
+                .state
+                .lock()
+                .unwrap()
+                .reservation
+                .bytes,
+            0
+        );
         assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
         assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
         assert_eq!(store.0.pane_metadata.used.load(Ordering::Acquire), 0);

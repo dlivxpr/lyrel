@@ -40,6 +40,9 @@
 - 修复普通 SSH 间接媒体的主机判断：只在媒体接受／读取点重新核验整个前景进程组，拒绝同组本地父进程后的 SSH 远端命令及未知来源；跨片段已拒权限不能因后片段回到本地而升级，后续独立本地请求仍可恢复。真实 Linux CLI／PTY／OpenSSH 同进程组冒烟已验证远端拒绝与本地恢复，不给普通文字或 direct 传输增加全进程扫描。
 - 修复非活动主屏历史被全部保护而阻塞备用屏新图片的问题；daemon 与桌面共享真正实时引用，保留仍可见内容与 observer 历史视口，优先回收旧非可见历史。移除 daemon 冗余的常驻图片体副本，保留唯一 packet 与在途租约；普通输出的保留优先级更新不再逐资源反复扫描全部 placement。
 - 拒绝文件／POSIX shm 短于显式声明长度的间接媒体请求，保留 offset、quiet、身份及临时文件删除边界，不以有效的短 raw 像素内容掩盖 `EBADF`。
+- 修复三张合法 4K PNG 在 live 可显示、fresh replay 却因重复预留解码峰值而失败的问题：每资源保留 CPU／source／完整 GPU page 票，同 store 的 decoder 跨代次串行执行并共享最大 scratch，取消不提前返还活动票；384 MiB／1,024 MiB 上限不变。真实 daemon→fresh rooted GPUI 回归核对完整 BGRA、paint、同 pane、生产者 PID／上传数／字节数；附着失败仅在精确确认 pane 不存在时允许替代 shell。
+- 修正 Kitty 续块 `q=0` 错误解除首块 quiet 的行为，仅非零 `q` 可以覆盖；真实 daemon 覆盖键顺序、成功／错误静默、非法 quiet 与后续输入。
+- 外层 zlib PNG 改按实际 inflate、增长和逐行校验阶段预留工作空间，保留 parser 输入与 normalized source 的真实占账，不再因固定 100 MiB scratch 错拒合法大 PNG。真实约 30 MiB PNG 经分块／单 APC、任意 PTY 切片、完整 PNG 像素解码及坏流／超限后的恢复回归已在 Windows 通过；128 MiB 每 pane 工作上限不变。
 
 ### 维护
 
