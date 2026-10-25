@@ -13,7 +13,10 @@ fn native_ssh_consumer_fixture() -> native_ssh_graphics_fixture::NativeSshFixtur
         "native SSH GPUI prerequisite: LYREL_TEST_SSH_LOCAL_SERVER must name the same-commit desktop lyrel-server binary; also provide the explicit LYREL_TEST_SSH_* fixture endpoint, key, fixed host pin, remote home and Linux Node",
     );
     let binary = std::path::PathBuf::from(binary);
-    assert!(binary.is_file(), "LYREL_TEST_SSH_LOCAL_SERVER must be an existing server binary");
+    assert!(
+        binary.is_file(),
+        "LYREL_TEST_SSH_LOCAL_SERVER must be an existing server binary"
+    );
     native_ssh_graphics_fixture::NativeSshFixture::start(&binary)
 }
 
@@ -40,14 +43,19 @@ fn native_ssh_consumer_spawn(
         restore: None,
         allow_remote_clipboard_write: false,
         await_claim: false,
-    }.encode(&mut stream).unwrap();
+    }
+    .encode(&mut stream)
+    .unwrap();
     let pane = match DaemonMsg::read(&mut stream).unwrap() {
         DaemonMsg::Spawned { pane_id } => pane_id,
         other => panic!("real Linux PTY spawn failed: {other:?}"),
     };
     fixture.track_pane(pane);
     let mut text = Vec::new();
-    while !text.windows(b"KITTY_READY".len()).any(|part| part == b"KITTY_READY") {
+    while !text
+        .windows(b"KITTY_READY".len())
+        .any(|part| part == b"KITTY_READY")
+    {
         match DaemonMsg::read(&mut stream).unwrap() {
             DaemonMsg::Output(bytes) => text.extend(bytes),
             DaemonMsg::Error(error) => panic!("remote sender failed: {error}"),
@@ -71,14 +79,15 @@ fn native_ssh_consumer_fresh(
         pane_id: pane,
         size: native_ssh_graphics_fixture::win_size(),
         allow_remote_clipboard_write: false,
-    }.encode(&mut stream).unwrap();
+    }
+    .encode(&mut stream)
+    .unwrap();
     stream.set_read_timeout(None).unwrap();
     // Linux owns this PTY even when the desktop runs on Windows. Reuse the
     // same measured physical-grid-before-mount factory as local recovery.
     let size = TermSize::new(80, 24);
-    let (view, window) = graphics_build_rooted_consumer_at(
-        cx, pane, stream, Vec::new(), size, PtySource::Raw,
-    );
+    let (view, window) =
+        graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), size, PtySource::Raw);
     graphics_assert_production_paint_at(window, &view, cx, size);
     // Unique post-attach query ACK + actual later text, not replay byte count.
     graphics_recovery_stats(&view, cx, serial);
@@ -92,12 +101,18 @@ fn native_ssh_consumer_send(
     bytes: &[u8],
     expected_replies: &[&[u8]],
 ) {
-    let request = format!("SEND {serial} {} {} 7\n", expected_replies.len(), native_ssh_graphics_fixture::hex(bytes));
+    let request = format!(
+        "SEND {serial} {} {} 7\n",
+        expected_replies.len(),
+        native_ssh_graphics_fixture::hex(bytes)
+    );
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
     let done = format!("KITTY_DONE_{serial}");
-    graphics_recovery_wait(cx, "real remote sender query ACK/text barrier did not arrive", |cx| {
-        view.read_with(cx, |view, _| view.scrollback_text().contains(&done))
-    });
+    graphics_recovery_wait(
+        cx,
+        "real remote sender query ACK/text barrier did not arrive",
+        |cx| view.read_with(cx, |view, _| view.scrollback_text().contains(&done)),
+    );
     view.read_with(cx, |view, _| {
         let text = view.scrollback_text();
         for reply in expected_replies {
@@ -110,33 +125,65 @@ fn native_ssh_consumer_send(
 fn native_ssh_consumer_identity(
     fixture: &native_ssh_graphics_fixture::NativeSshFixture,
     pane: u64,
-) -> (String, u32, String) {
+) -> (String, String, u32, String) {
     use lyrel_core::host::Host;
     let host = fixture.connect_control();
     let peer = host.peer();
-    assert_eq!(peer.protocol_version, crate::daemon::protocol::PROTOCOL_VERSION);
-    assert!(!peer.instance.is_empty(), "remote daemon must identify its living instance");
+    assert_eq!(
+        peer.protocol_version,
+        crate::daemon::protocol::PROTOCOL_VERSION
+    );
+    assert!(
+        !peer.instance.is_empty(),
+        "remote daemon must identify its living instance"
+    );
     assert_eq!(host.home().to_string_lossy(), fixture.remote_home());
     let status = native_ssh_graphics_fixture::status(&host);
     assert_eq!(status.protocol_version, peer.protocol_version);
     assert!(status.pid > 0 && !status.socket.is_empty());
-    let procs = host.pane_procs(pane).expect("Linux daemon must describe its actual PTY");
-    assert!(procs.context.local_pty, "PTY must belong to the Linux daemon, not local SpawnNativeSsh");
-    assert!(procs.context.remote.is_none(), "ordinary SSH shell bridging is not a native workspace pane");
+    let procs = host
+        .pane_procs(pane)
+        .expect("Linux daemon must describe its actual PTY");
+    let context = procs
+        .context
+        .as_ref()
+        .expect("Linux daemon must expose its actual pane context");
+    assert!(
+        context.local_pty,
+        "PTY must belong to the Linux daemon, not local SpawnNativeSsh"
+    );
+    assert!(
+        context.remote.is_none(),
+        "ordinary SSH shell bridging is not a native workspace pane"
+    );
     let (_, version) = fixture.connect_pane();
     assert_eq!(version.protocol, peer.protocol_version);
-    assert_eq!(version.instance, peer.instance);
-    (peer.instance.clone(), status.pid, status.socket)
+    assert!(
+        !version.instance.is_empty(),
+        "pane protocol must identify its living instance"
+    );
+    (
+        peer.instance.clone(),
+        version.instance,
+        status.pid,
+        status.socket,
+    )
 }
 
 fn native_ssh_consumer_stat_counter(stats: &str, name: &str) -> u64 {
     let prefix = format!("{name}=");
-    stats.split_whitespace().find_map(|field| field.strip_prefix(&prefix))
+    stats
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix(&prefix))
         .unwrap_or_else(|| panic!("sender counter {name} missing: {stats}"))
-        .parse().unwrap()
+        .parse()
+        .unwrap()
 }
 
-fn native_ssh_consumer_assert_shared_geometry(view: &Entity<TerminalView>, cx: &mut TestAppContext) {
+fn native_ssh_consumer_assert_shared_geometry(
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+) {
     view.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
         let shared: Vec<_> = images.iter().filter(|image| image.placement.image_id == 7).collect();
@@ -169,16 +216,30 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     let pane = native_ssh_consumer_spawn(&fixture, shell);
     let identity = native_ssh_consumer_identity(&fixture, pane);
     let (view, window) = native_ssh_consumer_fresh(&fixture, pane, cx, 4600, 128 << 20);
-    native_ssh_consumer_send(&view, cx, 4601, b"\x1b[2J\x1b[3J\x1b_Ga=t,i=7,f=32,s=4,v=1;/wAA/wD/AP8AAP///////w==\x1b\\", &[b"\x1b_Gi=7;OK\x1b\\"]);
-    assert!(view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "transmit-only cannot paint");
+    native_ssh_consumer_send(
+        &view,
+        cx,
+        4601,
+        b"\x1b[2J\x1b[3J\x1b_Ga=t,i=7,f=32,s=4,v=1;/wAA/wD/AP8AAP///////w==\x1b\\",
+        &[b"\x1b_Gi=7;OK\x1b\\"],
+    );
+    assert!(
+        view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()),
+        "transmit-only cannot paint"
+    );
     graphics_assert_production_paint(window, &view, cx);
     native_ssh_consumer_send(&view, cx, 4602, "\x1b[6;5H\x1b_Ga=p,i=7,p=11,c=2,r=1,x=1,y=0,w=2,h=1,C=1,q=2\x1b\\\x1b_Ga=p,i=7,p=12,U=1,c=4,r=1,q=2\x1b\\\x1b[8;5H\x1b[38;5;7;58;5;12m\u{10eeee}\u{305}\u{305}\u{10eeee}\u{10eeee}\u{10eeee}\x1b[0m".as_bytes(), &[]);
-    let pixels = [0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255];
+    let pixels = [
+        0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255,
+    ];
     graphics_recovery_pixels(&view, cx, 7, &pixels);
     graphics_assert_production_paint(window, &view, cx);
     native_ssh_consumer_assert_shared_geometry(&view, cx);
     let stopped = graphics_recovery_stats(&view, cx, 4603);
-    assert!(stopped.contains("uploads=1") && stopped.contains("placements=2"), "actual sender command accounting: {stopped}");
+    assert!(
+        stopped.contains("uploads=1") && stopped.contains("placements=2"),
+        "actual sender command accounting: {stopped}"
+    );
     // Triple-weak destruction includes real blur/remove/App update, preserving
     // the #45 active TestWindow -> input_handler ownership regression guard.
     graphics_recovery_destroy(view, window, cx);
@@ -186,37 +247,68 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     graphics_recovery_pixels(&soft, cx, 7, &pixels);
     graphics_assert_production_paint(soft_window, &soft, cx);
     native_ssh_consumer_assert_shared_geometry(&soft, cx);
-    assert_eq!(graphics_recovery_stats(&soft, cx, 4605), stopped, "fresh soft attach must not request a producer resend");
+    assert_eq!(
+        graphics_recovery_stats(&soft, cx, 4605),
+        stopped,
+        "fresh soft attach must not request a producer resend"
+    );
     assert_eq!(native_ssh_consumer_identity(&fixture, pane), identity);
-    native_ssh_consumer_send(&soft, cx, 4606, b"\x1b[12;5H\x1b_Ga=T,i=8,p=8,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\", &[b"\x1b_Gi=8,p=8;OK\x1b\\"]);
+    native_ssh_consumer_send(
+        &soft,
+        cx,
+        4606,
+        b"\x1b[12;5H\x1b_Ga=T,i=8,p=8,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\",
+        &[b"\x1b_Gi=8,p=8;OK\x1b\\"],
+    );
     graphics_recovery_pixels(&soft, cx, 8, &[0, 0, 255, 255]);
-    native_ssh_consumer_send(&soft, cx, 4607, b"\x1b[12;5H\x1b_Ga=T,i=8,p=8,c=2,r=1,C=1,f=32,s=1,v=1;AAD//w==\x1b\\", &[b"\x1b_Gi=8,p=8;OK\x1b\\"]);
+    native_ssh_consumer_send(
+        &soft,
+        cx,
+        4607,
+        b"\x1b[12;5H\x1b_Ga=T,i=8,p=8,c=2,r=1,C=1,f=32,s=1,v=1;AAD//w==\x1b\\",
+        &[b"\x1b_Gi=8,p=8;OK\x1b\\"],
+    );
     graphics_recovery_pixels(&soft, cx, 8, &[255, 0, 0, 255]);
     native_ssh_consumer_send(&soft, cx, 4608, b"\x1b_Ga=d,d=I,i=8\x1b\\\x1b[?1049h\x1b[2J\x1b[6;5H\x1b_Ga=T,i=9,p=9,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\", &[b"\x1b_Gi=9,p=9;OK\x1b\\"]);
     graphics_recovery_pixels(&soft, cx, 9, &[255, 255, 255, 255]);
     graphics_assert_production_paint(soft_window, &soft, cx);
     soft.read_with(cx, |view, _| {
         assert!(view.terminal.term.lock().mode().contains(Mode::ALT_SCREEN));
-        assert!(graphics_visible_images(view).iter().all(|image| image.placement.image_id == 9));
+        assert!(
+            graphics_visible_images(view)
+                .iter()
+                .all(|image| image.placement.image_id == 9)
+        );
     });
     let alt_stopped = graphics_recovery_stats(&soft, cx, 4609);
     graphics_recovery_destroy(soft, soft_window, cx);
     drop(host);
     fixture.restart_router();
-    assert_eq!(native_ssh_consumer_identity(&fixture, pane), identity, "router restart must not restart the remote daemon/PTY");
+    assert_eq!(
+        native_ssh_consumer_identity(&fixture, pane),
+        identity,
+        "router restart must not restart the remote daemon/PTY"
+    );
     let (mut stream, _) = fixture.connect_pane();
     ClientMsg::Attach {
         pane_id: pane,
         size: native_ssh_graphics_fixture::win_size(),
         allow_remote_clipboard_write: false,
-    }.encode(&mut stream).unwrap();
+    }
+    .encode(&mut stream)
+    .unwrap();
     let mut buffered = Vec::new();
     loop {
         let message = DaemonMsg::read(&mut stream).unwrap();
-        assert!(!matches!(message, DaemonMsg::Error(_) | DaemonMsg::Exited { .. }), "real replay admission failed: {message:?}");
+        assert!(
+            !matches!(message, DaemonMsg::Error(_) | DaemonMsg::Exited { .. }),
+            "real replay admission failed: {message:?}"
+        );
         let offered = matches!(message, DaemonMsg::GraphicsOffer { .. });
         message.encode(&mut buffered).unwrap();
-        if offered { break; }
+        if offered {
+            break;
+        }
     }
     // Replay is now stopped at a real resource offer, before the new desktop
     // grants or decodes it. A separate production connection drives live PTY
@@ -227,30 +319,70 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     let live = b"\x1b_Ga=d,d=I,i=9\x1b\\\x1b[?1049l\x1b[18;1HREMOTE-MAIN-DURING-HARD";
     let gate = fixture.remote_path("consumer-live-gate");
     let done = fixture.remote_path("consumer-live-gate.done");
-    let request = format!("WAIT 4610 0 {} 7 {}\n", native_ssh_graphics_fixture::hex(live), native_ssh_graphics_fixture::hex(gate.to_str().unwrap().as_bytes()));
+    let request = format!(
+        "WAIT 4610 0 {} 7 {}\n",
+        native_ssh_graphics_fixture::hex(live),
+        native_ssh_graphics_fixture::hex(gate.to_str().unwrap().as_bytes())
+    );
     let (mut input, _) = fixture.connect_pane();
-    ClientMsg::SendInput { pane_id: pane, bytes: request.into_bytes() }.encode(&mut input).unwrap();
-    assert!(matches!(DaemonMsg::read(&mut input).unwrap(), DaemonMsg::InputAck { pane_id } if pane_id == pane));
+    ClientMsg::SendInput {
+        pane_id: pane,
+        bytes: request.into_bytes(),
+    }
+    .encode(&mut input)
+    .unwrap();
+    assert!(
+        matches!(DaemonMsg::read(&mut input).unwrap(), DaemonMsg::InputAck { pane_id } if pane_id == pane)
+    );
     host.write_file(&gate, b"release").unwrap();
-    graphics_recovery_wait(cx, "remote live output must finish its actual query ACK while replay is awaiting the desktop grant", |_| host.exists(&done));
+    graphics_recovery_wait(
+        cx,
+        "remote live output must finish its actual query ACK while replay is awaiting the desktop grant",
+        |_| host.exists(&done),
+    );
     stream.set_read_timeout(None).unwrap();
     let (hard, hard_window) = graphics_build_rooted_consumer_at(
-        cx, pane, stream, buffered, TermSize::new(80, 24), PtySource::Raw,
+        cx,
+        pane,
+        stream,
+        buffered,
+        TermSize::new(80, 24),
+        PtySource::Raw,
     );
-    graphics_recovery_wait(cx, "fresh consumer must receive actual post-cutover output, not just a replay prefix", |cx| {
-        hard.read_with(cx, |view, _| view.scrollback_text().contains("KITTY_DONE_4610") && view.scrollback_text().contains("REMOTE-MAIN-DURING-HARD"))
-    });
+    graphics_recovery_wait(
+        cx,
+        "fresh consumer must receive actual post-cutover output, not just a replay prefix",
+        |cx| {
+            hard.read_with(cx, |view, _| {
+                view.scrollback_text().contains("KITTY_DONE_4610")
+                    && view.scrollback_text().contains("REMOTE-MAIN-DURING-HARD")
+            })
+        },
+    );
     let hard_stopped = graphics_recovery_stats(&hard, cx, 4611);
     for name in ["pid", "uploads", "placements"] {
-        assert_eq!(native_ssh_consumer_stat_counter(&hard_stopped, name), native_ssh_consumer_stat_counter(&alt_stopped, name), "hard cutover cannot restart or request image retransmission: {name}");
+        assert_eq!(
+            native_ssh_consumer_stat_counter(&hard_stopped, name),
+            native_ssh_consumer_stat_counter(&alt_stopped, name),
+            "hard cutover cannot restart or request image retransmission: {name}"
+        );
     }
-    assert_eq!(native_ssh_consumer_stat_counter(&hard_stopped, "bytes"), native_ssh_consumer_stat_counter(&alt_stopped, "bytes") + live.len() as u64, "only the explicitly ordered live screen/delete/text bytes may be emitted");
+    assert_eq!(
+        native_ssh_consumer_stat_counter(&hard_stopped, "bytes"),
+        native_ssh_consumer_stat_counter(&alt_stopped, "bytes") + live.len() as u64,
+        "only the explicitly ordered live screen/delete/text bytes may be emitted"
+    );
     graphics_recovery_pixels(&hard, cx, 7, &pixels);
     graphics_assert_production_paint(hard_window, &hard, cx);
     native_ssh_consumer_assert_shared_geometry(&hard, cx);
     hard.read_with(cx, |view, _| {
         assert!(!view.terminal.term.lock().mode().contains(Mode::ALT_SCREEN));
-        assert!(!graphics_visible_images(view).iter().any(|image| matches!(image.placement.image_id, 8 | 9)), "deleted main image and inactive alternate image cannot leak into the shell");
+        assert!(
+            !graphics_visible_images(view)
+                .iter()
+                .any(|image| matches!(image.placement.image_id, 8 | 9)),
+            "deleted main image and inactive alternate image cannot leak into the shell"
+        );
         assert!(view.scrollback_text().contains("REMOTE-MAIN-DURING-HARD"));
     });
     graphics_recovery_destroy(hard, hard_window, cx);
@@ -259,7 +391,9 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
 
 #[gpui_kit::test]
 #[ignore = "requires explicit isolated native SSH-to-Linux fixture and same-commit desktop server; not native GPU evidence"]
-fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend(cx: &mut TestAppContext) {
+fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend(
+    cx: &mut TestAppContext,
+) {
     native_ssh_consumer_init(cx);
     let fixture = native_ssh_consumer_fixture();
     let host = fixture.connect_control();
@@ -273,27 +407,67 @@ fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend
     graphics_assert_production_paint(prior_window, &prior, cx);
     let placeholder_area = prior.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
-        let image = images.iter().find(|image| image.placement.image_id == 32).unwrap();
+        let image = images
+            .iter()
+            .find(|image| image.placement.image_id == 32)
+            .unwrap();
         let area = image.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
-        assert_eq!(area.0, Bounds::new(point(px(45.), px(70.)), gpui_kit::size(px(10.), px(10.))));
+        assert_eq!(
+            area.0,
+            Bounds::new(point(px(45.), px(70.)), gpui_kit::size(px(10.), px(10.)))
+        );
         area
     });
     native_ssh_consumer_send(&prior, cx, 4632, &b"\r\n".repeat(80), &[]);
-    native_ssh_consumer_send(&prior, cx, 4633, b"\x1b[10;5H\x1b_Ga=T,i=33,p=3,c=2,r=1,C=1,f=32,s=1,v=1;AP8A/w==\x1b\\", &[b"\x1b_Gi=33,p=3;OK\x1b\\"]);
+    native_ssh_consumer_send(
+        &prior,
+        cx,
+        4633,
+        b"\x1b[10;5H\x1b_Ga=T,i=33,p=3,c=2,r=1,C=1,f=32,s=1,v=1;AP8A/w==\x1b\\",
+        &[b"\x1b_Gi=33,p=3;OK\x1b\\"],
+    );
     graphics_recovery_pixels(&prior, cx, 33, &[0, 255, 0, 255]);
-    prior.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+    prior.update(cx, |view, cx| {
+        view.scroll(10_000, None, &Modifiers::default(), cx)
+    });
     graphics_assert_production_paint(prior_window, &prior, cx);
     prior.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
-        let oldest = images.iter().find(|image| image.placement.image_id == 31).unwrap();
+        let oldest = images
+            .iter()
+            .find(|image| image.placement.image_id == 31)
+            .unwrap();
         assert!(oldest.evicted && oldest.data.is_none());
-        assert!(oldest.painted.load(std::sync::atomic::Ordering::Acquire), "oldest remote history paints its real notice area");
-        assert!(!images.iter().find(|image| image.placement.image_id == 32).unwrap().evicted);
+        assert!(
+            oldest.painted.load(std::sync::atomic::Ordering::Acquire),
+            "oldest remote history paints its real notice area"
+        );
+        assert!(
+            !images
+                .iter()
+                .find(|image| image.placement.image_id == 32)
+                .unwrap()
+                .evicted
+        );
     });
-    prior.update(cx, |view, cx| view.scroll(-10_000, None, &Modifiers::default(), cx));
-    native_ssh_consumer_send(&prior, cx, 4634, b"\x1b[12;5H\x1b_Ga=T,i=34,p=4,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\", &[b"\x1b_Gi=34,p=4;OK\x1b\\"]);
+    prior.update(cx, |view, cx| {
+        view.scroll(-10_000, None, &Modifiers::default(), cx)
+    });
+    native_ssh_consumer_send(
+        &prior,
+        cx,
+        4634,
+        b"\x1b[12;5H\x1b_Ga=T,i=34,p=4,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\",
+        &[b"\x1b_Gi=34,p=4;OK\x1b\\"],
+    );
     graphics_recovery_pixels(&prior, cx, 34, &[255, 255, 255, 255]);
-    native_ssh_consumer_send(&prior, cx, 4635, b"\x1b_Ga=d,d=I,i=31\x1b\\\x1b[18;1HREMOTE-PRESSURE-SHELL-ALIVE", &[]);
+    native_ssh_consumer_send(
+        &prior,
+        cx,
+        4635,
+        b"\x1b_Ga=d,d=I,i=31\x1b\\\x1b[18;1HREMOTE-PRESSURE-SHELL-ALIVE",
+        &[],
+    );
     graphics_assert_production_paint(prior_window, &prior, cx);
     let stopped = graphics_recovery_stats(&prior, cx, 4636);
     graphics_recovery_destroy(prior, prior_window, cx);
@@ -301,20 +475,44 @@ fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend
     graphics_recovery_pixels(&fresh, cx, 33, &[0, 255, 0, 255]);
     graphics_recovery_pixels(&fresh, cx, 34, &[255, 255, 255, 255]);
     assert_eq!(native_ssh_consumer_identity(&fixture, pane), identity);
-    assert_eq!(graphics_recovery_stats(&fresh, cx, 4638), stopped, "pressure recovery must not bypass the budget with a producer resend");
-    fresh.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+    assert_eq!(
+        graphics_recovery_stats(&fresh, cx, 4638),
+        stopped,
+        "pressure recovery must not bypass the budget with a producer resend"
+    );
+    fresh.update(cx, |view, cx| {
+        view.scroll(10_000, None, &Modifiers::default(), cx)
+    });
     graphics_assert_production_paint(fresh_window, &fresh, cx);
     fresh.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
-        assert!(!images.iter().any(|image| image.placement.image_id == 31), "application deletion must remove even an evicted notice");
-        let notice = images.iter().find(|image| image.placement.image_id == 32).unwrap();
-        assert!(notice.evicted && notice.data.is_none(), "fresh recovery cannot resurrect evicted remote pixels");
-        assert!(notice.painted.load(std::sync::atomic::Ordering::Acquire), "the restored Unicode cells must paint a localized notice, not the private-use glyph");
+        assert!(
+            !images.iter().any(|image| image.placement.image_id == 31),
+            "application deletion must remove even an evicted notice"
+        );
+        let notice = images
+            .iter()
+            .find(|image| image.placement.image_id == 32)
+            .unwrap();
+        assert!(
+            notice.evicted && notice.data.is_none(),
+            "fresh recovery cannot resurrect evicted remote pixels"
+        );
+        assert!(
+            notice.painted.load(std::sync::atomic::Ordering::Acquire),
+            "the restored Unicode cells must paint a localized notice, not the private-use glyph"
+        );
         let offset = view.terminal.term.lock().display_offset() as i32;
-        assert_eq!(notice.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.), placeholder_area);
+        assert_eq!(
+            notice.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.),
+            placeholder_area
+        );
         let text = view.scrollback_text();
         assert!(text.contains("REMOTE-PRESSURE-SHELL-ALIVE"));
-        assert!(!text.contains("Image evicted") && !text.contains("图片已淘汰"), "localized notices are paint-only and cannot manufacture terminal text");
+        assert!(
+            !text.contains("Image evicted") && !text.contains("图片已淘汰"),
+            "localized notices are paint-only and cannot manufacture terminal text"
+        );
     });
     graphics_recovery_destroy(fresh, fresh_window, cx);
     fixture.kill_pane(pane);

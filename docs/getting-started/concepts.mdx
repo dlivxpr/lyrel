@@ -67,7 +67,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 一份**图片资源**可以对应多次**图片放置**：前者是图片内容，后者是它在终端中的一次显示及其裁剪范围。传输资源不等于立即显示；删除某次放置也不必删除图片资源。
 
 <Note>
-  图片功能按 [#40–#47](https://github.com/dlivxpr/lyrel/issues/40) 分阶段实现。#40／#41 已接入资源、独立放置及有界传输校验，#42 接入终端布局与屏幕生命周期，#43 接入真实网格的 Unicode 占位符投影，#44 加入聚合预算、历史回收与原区域提示。完整恢复顺序（#45）及跨平台原生验收仍未全部交付，不能将本节当作已通过的完整兼容性声明。
+  图片功能按 [#40–#47](https://github.com/dlivxpr/lyrel/issues/40) 分阶段实现。#40／#41 接入资源、独立放置及有界传输校验，#42 接入终端布局与屏幕生命周期，#43 接入真实网格的 Unicode 占位符投影，#44 加入聚合预算、历史回收与原区域提示，#45 接入存活会话的有序图片恢复并通过真实 daemon 与桌面消费者自动化。原生窗口／GPU、真实 SSH 及 macOS 的完整验收仍未完成，不能将本节当作已通过的完整兼容性声明。
 </Note>
 
 完整实现规格与测试契约见 [GitHub Issue #39](https://github.com/dlivxpr/lyrel/issues/39)。
@@ -106,7 +106,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 回收优先级为无引用、非可见历史、受保护内容；同级按原有准入顺序确定。可见历史不是“实时屏幕之外”的同义词：渲染连接通过 `GraphicsViewport { screen, epoch, top, rows, cols }` 报告真实滚动视口，`top` 是绝对文本行锚点，`None` 跟随实时屏，`rows=0` 撤销隐藏窗格的视口保护。`GraphicsUpdate::Screen` 携带对应 `epoch`；resize 行重排、主备屏切换、reset 和历史清理使旧代次失效。daemon 直接在自身资源／网格上核验 direct 放置与实际 placeholder 单元，不复制资源模型；同批新输出推进实时原点时，用户仍在看的历史锚点不随相对 offset 漂移。detach、控制器抢占及 observer 移除同步撤销相应连接事实；桌面跨 pane／跨 daemon 压力选择同样读取真实视口，最终仍由负责 daemon 决定能否回收。普通文字输出的准入屏障只访问当前 pane 已有资源，不扫描全 daemon 注册表。
 
-上述审查修复的 Windows 集成验证已通过：core 图片回归 21 项（含 7 项真实 daemon 保留用例）、server Kitty 回归 17 项、rooted GPUI graphics consumer 23 项、decoder 4 项、reader 48 项及 CLI E2E 24 项。core／server 的 ignored 项是父用例按需启动的私有子进程入口，不代表缺少运行时而跳过验收。`cargo fmt --check`、压力脚本语法检查及 Host 边界检查也通过。macOS fixture re-exec、原生窗口／GPU／SSH 与完整 #45 恢复验收仍须分别取证；测试窗口的 paint claim 不等同于最终 GPU 像素。
+#40–#45 的 Windows 集成已运行完整默认成员 `cargo test --locked`：桌面主套件 2,643 项通过、6 项 ignored，core 主套件 1,719 项通过、22 项 ignored，server client-library 43 项通过、1 个私有 sender 入口 ignored；CLI E2E 24 项也通过。主套件中的 ignored 还包括独立 native／正式 agent 用例，不把缺少外部前提视为通过。Linux 原生默认 core 1,839 项与 server Kitty 25 项通过；本地 Linux `--all-features` 未执行，`pkg-config` 前提缺失。压力脚本语法与 Host 边界检查通过；macOS CI、原生窗口／GPU／SSH 仍须分别取证，headless paint claim 不等同于最终 GPU 像素。
 
 本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
 
@@ -194,10 +194,21 @@ node scripts/kitty-pressure.mjs --images 12 --width 3840 --height 2160 --path di
 
 
 
+#### 当前实现：存活会话的图片恢复（#45）
+
+- 图片资源与放置保留在仍运行的 pane daemon 内，不依赖旧窗口缓存。销毁旧消费者后，新消费者重新接收仍被保留的资源版本、直接放置与 Unicode 占位符 prototype，并结合文字、历史锚点及当前主／备用屏恢复；无 GUI 时产生、替换或删除的内容也进入同一权威状态，不要求应用重传。
+- 恢复先按实际资源成本与元数据身份申请容量，再在 pane 锁内把最新文字、尺寸、模式、screen／history 和图片状态作为同一次快照接入 live。普通文字或纯几何变化不撤销仍适用的资源授权；资源集合变化时先释放旧授权，再在有限期限内重新准入。持续变更或容量不足导致明确附着失败，不静默漏图、不启动替代 shell，也不借恢复绕过预算。
+- 已删除或离开历史范围的位置不会复活。被预算回收的历史资源只恢复无像素提示及仍有效的位置；新消费者不能从旧 window／decoder／texture 中取回隐藏副本。控制器接管与 observer 权限沿用原会话规则，daemon／pane／生产者身份保持连续。
+- 断连、接管或 observer 失效后，旧 writer 关闭双向连接，输入 reader 以有界接收检查既有 owner，并保留跨读取的半帧。活连接空闲或尚未收齐 Input 不被当作新命令或断链；reader、Session 及容量票在实际退休后释放，不提前归还仍被持有的资源。
+
+真实 daemon 回归覆盖共享资源、多个裁剪放置、两屏与历史、detached 修改、replay／live 并发、部分授权拒绝、控制器抢占及跨接收期限的半帧；真实 rooted GPUI 回归覆盖旧 view／store／texture 全部释放后的 fresh 恢复、像素与几何、无重传、回收提示和容量不足的明确断连。测试先按实际字体测量并设置窗口物理尺寸，再挂载终端，避免 headless 默认最大化首绘意外 resize 正在恢复的备用屏。
+
+另以独立生产 CLI／ConPTY／daemon 冒烟验证：首客户端销毁后，同一生产者在 detached 状态替换一份资源、删除另一份并创建新占位符；新 `PaneClient::observe` 只恢复新资源版本及同代文字，恢复前后上传计数不变，随后普通输入仍可到达。以上不是原生 GUI 关闭／重开、GPU 或 SSH 的完成证明；这些路径仍分别验收。daemon 终止后不保留图片，未新增图片磁盘缓存。
+
 #### 完整功能的已确认能力边界
 
 
-以下是 #39 的完整目标，不代表 #40 已全部实现：
+以下是 #39 的完整目标；尚未完成的平台与原生验收不能由局部实现或自动化结果替代：
 
 - 显示静态图片、透明背景及应用连续替换的画面，正确处理终端滚动、裁剪和重绘；不包含图片查看器、点击放大、复制／另存为或动画播放。
 - 图片属于窗格会话，不属于某个窗口。在历史保留范围和资源预算内，切换工作区、关闭后重开 GUI，以及重新连接同一存活 daemon 后，图片应恢复，无需应用重新发送。
