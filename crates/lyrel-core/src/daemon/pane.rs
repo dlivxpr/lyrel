@@ -2396,14 +2396,20 @@ impl DaemonPane {
                                 (st.remote.as_ref().is_some_and(|remote| remote.kind != RemoteKind::Ssh), st.remote.is_none())
                             };
                             let mut remote = (poll_before && !managed).then(&foreground_remote);
-                            graphics.set_local(remote.as_ref().map_or(cached_local, Option::is_none));
+                            graphics.set_local(group.is_some() && remote.as_ref().map_or(cached_local, Option::is_none));
                             let controller = {
                                 let st = state.lock().unwrap();
                                 let controller = st.subscriber.as_ref().map(|_| st.subscriber_epoch);
                                 clipboard.set_controller(controller, st.allow_remote_clipboard_write);
                                 controller
                             };
-                            let passthrough = graphics_reader::consume(raw, &mut clipboard, &mut graphics, &state, &gate, &writer, controller);
+                            // Cached process groups are facts, not permission:
+                            // exec ssh can keep the same pgid. Probe afresh only
+                            // when the parser is accepting an indirect medium.
+                            let mut media_locality = || {
+                                if managed { Some(false) } else { foreground_group().map(|_| foreground_remote().is_none()) }
+                            };
+                            let passthrough = graphics_reader::consume(raw, &mut clipboard, &mut graphics, &state, &gate, &writer, controller, &mut media_locality);
                             let bytes: &[u8] = &passthrough;
                             let mut signals = sniffer.feed(bytes);
                             let mut st = state.lock().unwrap();
@@ -5002,6 +5008,7 @@ mod tests {
                     &gate,
                     &writer,
                     Some(1),
+                    &mut || panic!("plain output must not probe host-media locality"),
                 ));
             }
             let recorded = state.lock().unwrap().ring.flatten();
@@ -8110,14 +8117,14 @@ mod tests {
             }
         }
         let split = (name.len() / 8) * 4;
-        for unknown in [false, true] {
+        for (same_group, unknown) in [(false, false), (true, false), (false, true)] {
             let replies = run(vec![
                 (0, format!("\x1b_Ga=q,i=9,t=f,f=32,s=1,v=1,m=1;{}\x1b\\", &name[..split]).into_bytes()),
                 (1, b"\x1b_Gm=0;".to_vec()),
                 (3, format!("{}\x1b\\", &name[split..]).into_bytes()),
                 (3, query(4)),
-            ], false, unknown);
-            assert_eq!(replies, b"\x1b_Gi=9;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\", "a pending transfer that crossed remote/unknown cannot become local again: unknown={unknown}");
+            ], same_group, unknown);
+            assert_eq!(replies, b"\x1b_Gi=9;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\", "a pending transfer that crossed remote/unknown cannot become local again: same_group={same_group}, unknown={unknown}");
         }
         assert!(path.exists(), "query does not delete a plain file");
     }

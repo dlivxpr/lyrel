@@ -17,10 +17,11 @@ fn extract<'a>(
     raw: &'a [u8],
     clipboard: &mut ClipboardSniffer,
     graphics: &mut GraphicsSniffer,
+    locality: &mut impl FnMut() -> Option<bool>,
 ) -> Extracted<'a> {
     graphics.begin_read();
     match clipboard.sniff(raw) {
-        ClipboardSniffed::Plain(bytes) => match graphics.sniff_part(bytes) {
+        ClipboardSniffed::Plain(bytes) => match graphics.sniff_part(bytes, locality) {
             Sniffed::Plain(bytes) => Extracted::Plain(bytes),
             Sniffed::Segments(segments) => {
                 Extracted::Parts(segments.into_iter().map(Part::Graphics).collect())
@@ -30,7 +31,7 @@ fn extract<'a>(
             let mut parts = Vec::new();
             for segment in segments {
                 match segment {
-                    ClipboardSegment::Output(bytes) => match graphics.sniff_part(&bytes) {
+                    ClipboardSegment::Output(bytes) => match graphics.sniff_part(&bytes, locality) {
                         Sniffed::Plain(_) => parts.push(Part::Graphics(Segment::Output(bytes))),
                         Sniffed::Segments(segments) => {
                             parts.extend(segments.into_iter().map(Part::Graphics))
@@ -333,8 +334,9 @@ pub(super) fn consume<'a>(
     gate: &OutputGate,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     controller: Option<u64>,
+    locality: &mut impl FnMut() -> Option<bool>,
 ) -> Cow<'a, [u8]> {
-    match extract(raw, clipboard, graphics) {
+    match extract(raw, clipboard, graphics, locality) {
         Extracted::Plain(bytes) => {
             text(state, bytes, gate, writer);
             Cow::Borrowed(bytes)

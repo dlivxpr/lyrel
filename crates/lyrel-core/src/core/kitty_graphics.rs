@@ -386,6 +386,8 @@ impl ApcTokenizer {
 pub struct GraphicsSniffer {
     tokenizer: ApcTokenizer,
     parser: GraphicsParser,
+    /// A non-local/unknown read tainted this APC before its terminator arrived.
+    locality_denied: bool,
 }
 
 impl GraphicsSniffer {
@@ -399,6 +401,7 @@ impl GraphicsSniffer {
         Self {
             tokenizer: ApcTokenizer::new(),
             parser: GraphicsParser::new_local(local),
+            locality_denied: false,
         }
     }
 
@@ -422,11 +425,19 @@ impl GraphicsSniffer {
         }
     }
 
-    /// Update whether the sender currently shares this host's filesystem. A pane
-    /// is local when lyrel spawned a local shell and no foreground `ssh` owns the
-    /// PTY; that can flip mid-session, and it gates whether the next `a=q` probe
-    /// is answered `OK` for file/shm transfer. Cheap enough to call per chunk.
+    /// Cache this PTY read's locality and irreversibly taint pending indirect
+    /// data on remote/unknown reads. A later local read cannot promote it.
     pub fn set_local(&mut self, local: bool) {
+        if !local {
+            if let Some(pending) = &mut self.parser.pending
+                && pending.control.medium != Medium::Direct
+            {
+                pending.local = false;
+            }
+            if matches!(self.tokenizer.state, State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc) {
+                self.locality_denied = true;
+            }
+        }
         self.parser.local = local;
     }
 
@@ -472,17 +483,30 @@ impl GraphicsSniffer {
     /// slow path, where the held-`ESC` state carries it across correctly.
     pub fn sniff<'a>(&mut self, bytes: &'a [u8]) -> Sniffed<'a> {
         self.begin_read();
-        self.sniff_part(bytes)
+        let local = self.parser.local;
+        self.sniff_part(bytes, &mut || Some(local))
     }
 
-    pub(crate) fn sniff_part<'a>(&mut self, bytes: &'a [u8]) -> Sniffed<'a> {
+    /// Request fresh proof only for an indirect command or an existing indirect
+    /// transfer; ordinary plain/direct reads never invoke this borrowed callback.
+    pub(crate) fn sniff_part<'a>(
+        &mut self,
+        bytes: &'a [u8],
+        locality: &mut impl FnMut() -> Option<bool>,
+    ) -> Sniffed<'a> {
         if matches!(self.tokenizer.state, State::Ground)
             && bytes.last() != Some(&0x1b)
             && memchr::memmem::find(bytes, b"\x1b_").is_none()
         {
             return Sniffed::Plain(bytes);
         }
-        let Self { tokenizer, parser } = self;
+        if let Some(pending) = self.parser.pending.as_mut()
+            && pending.control.medium != Medium::Direct && pending.local
+        {
+            pending.local = locality() == Some(true);
+        }
+        let Self { tokenizer, parser, locality_denied } = self;
+        let denied = std::cell::Cell::new(*locality_denied);
         // Both tokenizer callbacks push onto the same segment list; `RefCell`
         // lets the passthrough and command sinks share it without either taking
         // a lasting mutable borrow the borrow checker would reject.
@@ -490,6 +514,7 @@ impl GraphicsSniffer {
         tokenizer.tokenize(
             bytes,
             |run| {
+                denied.set(false);
                 // Coalesce adjacent passthrough runs into one output segment so
                 // the client applies them in a single `advance`.
                 let mut segs = segments.borrow_mut();
@@ -500,15 +525,19 @@ impl GraphicsSniffer {
                 }
             },
             |cmd, aborted, exhausted| {
+                let blocked = denied.replace(false);
                 if let Some(ev) = if aborted {
                     parser.abort(cmd, exhausted)
                 } else {
-                    parser.feed(cmd)
+                    parser.feed_with_locality(cmd, &mut || if blocked { Some(false) } else { locality() })
                 } {
                     segments.borrow_mut().push(Segment::from(ev));
                 }
             },
         );
+        *locality_denied = denied.get() || (!parser.local && matches!(
+            tokenizer.state, State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc,
+        ));
         Sniffed::Segments(segments.into_inner())
     }
 }
@@ -1204,6 +1233,9 @@ struct Pending {
     /// that pad each chunk independently without retaining two full encodings.
     data: Vec<u8>,
     encoded_bytes: usize,
+    /// Once a pending indirect transfer sees remote/unknown, it cannot regain
+    /// permission merely because a later fragment arrives after a local return.
+    local: bool,
 }
 
 /// Reassembles and decodes kitty graphics commands emitted by [`ApcTokenizer`].
@@ -1261,6 +1293,15 @@ impl GraphicsParser {
     }
 
     pub fn feed(&mut self, command: &[u8]) -> Option<Event> {
+        let local = self.local;
+        self.feed_with_locality(command, &mut || Some(local))
+    }
+
+    fn feed_with_locality(
+        &mut self,
+        command: &[u8],
+        locality: &mut impl FnMut() -> Option<bool>,
+    ) -> Option<Event> {
         let control = Control::parse(command)?;
         let data = payload_data(command);
         // A delete aborts a partial upload. Other complete commands must not be
@@ -1287,7 +1328,7 @@ impl GraphicsParser {
                     return response(&first, first.id, "EINVAL:Invalid continuation control")
                         .map(Event::Reply);
                 }
-                return self.accept_chunk(control, data);
+                return self.accept_chunk(control, data, locality);
             }
             self.cancel_pending();
         }
@@ -1302,7 +1343,7 @@ impl GraphicsParser {
         }
         match control.action {
             Action::Transmit | Action::TransmitAndDisplay | Action::Query => {
-                self.accept_chunk(control, data)
+                self.accept_chunk(control, data, locality)
             }
             Action::Display | Action::Delete => {
                 if !data.is_empty() || control.more {
@@ -1319,10 +1360,12 @@ impl GraphicsParser {
         }
     }
 
-    fn accept_chunk(&mut self, control: Control, data: &[u8]) -> Option<Event> {
+    fn accept_chunk(&mut self, control: Control, data: &[u8], locality: &mut impl FnMut() -> Option<bool>) -> Option<Event> {
         let first = self.pending.as_ref().map_or(control, |p| p.control);
         let fail = |status| response(&first, first.id, status).map(Event::Reply);
-        if first.medium != Medium::Direct && !(self.local && cfg!(unix)) {
+        if first.medium != Medium::Direct
+            && (!cfg!(unix) || self.pending.as_ref().is_some_and(|pending| !pending.local) || locality() != Some(true))
+        {
             self.cancel_pending();
             return fail("ENOTSUPPORTED:Host-local transfer unavailable");
         }
@@ -1400,6 +1443,7 @@ impl GraphicsParser {
             control,
             data: Vec::new(),
             encoded_bytes: 0,
+            local: true,
         });
         let start = pending.data.len();
         let required = start + decoded_capacity;
