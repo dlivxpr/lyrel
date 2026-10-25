@@ -730,10 +730,28 @@ fn retention_daemon_indirect_queries_reject_short_claims_and_preserve_quiet_iden
                 assert!(fd >= 0, "{}", std::io::Error::last_os_error());
                 let file = unsafe { std::fs::File::from_raw_fd(fd) };
                 file.set_len(6).unwrap();
+                // Darwin fstat reports a page-rounded shm length. Place a
+                // complete pixel at that actual end for S=0, and start two
+                // bytes before it for the explicit short-region rejection.
+                let object_len = usize::try_from(file.metadata().unwrap().len()).unwrap();
+                let mapped_len = if cfg!(target_os = "macos") {
+                    object_len
+                } else {
+                    6
+                };
+                let offset = if cfg!(target_os = "macos") {
+                    if offset == 7 {
+                        object_len.checked_sub(2).unwrap()
+                    } else {
+                        object_len.checked_sub(4).unwrap()
+                    }
+                } else {
+                    offset
+                };
                 let mapped = unsafe {
                     libc::mmap(
                         std::ptr::null_mut(),
-                        6,
+                        mapped_len,
                         libc::PROT_READ | libc::PROT_WRITE,
                         libc::MAP_SHARED,
                         file.as_raw_fd(),
@@ -743,16 +761,17 @@ fn retention_daemon_indirect_queries_reject_short_claims_and_preserve_quiet_iden
                 assert_ne!(mapped, libc::MAP_FAILED);
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        [8_u8, 9, 0, 255, 0, 255].as_ptr(),
-                        mapped.cast::<u8>(),
-                        6,
+                        [0_u8, 255, 0, 255].as_ptr(),
+                        mapped.cast::<u8>().add(mapped_len - 4),
+                        4,
                     );
-                    assert_eq!(libc::munmap(mapped, 6), 0);
+                    assert_eq!(libc::munmap(mapped, mapped_len), 0);
                 }
-                object
+                (object, offset)
             });
+            let offset = shared.as_ref().map_or(offset, |shared| shared.1);
             let name = if let Some(shared) = &shared {
-                shared.0.as_bytes()
+                shared.0.0.as_bytes()
             } else {
                 std::fs::write(&path, [8, 9, 0, 255, 0, 255]).unwrap();
                 path.as_os_str().as_encoded_bytes()
@@ -782,7 +801,7 @@ fn retention_daemon_indirect_queries_reject_short_claims_and_preserve_quiet_iden
                 "query cannot replace the original resource"
             );
             if let Some(shared) = &shared {
-                let fd = unsafe { libc::shm_open(shared.0.as_ptr(), libc::O_RDONLY, 0) };
+                let fd = unsafe { libc::shm_open(shared.0.0.as_ptr(), libc::O_RDONLY, 0) };
                 if fd >= 0 {
                     unsafe {
                         libc::close(fd);
