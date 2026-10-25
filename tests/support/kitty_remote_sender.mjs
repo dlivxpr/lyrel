@@ -96,7 +96,7 @@ for (;;) {
   }
   await out(barrier);
   if (!(await reply()).equals(expected)) throw new Error('query barrier mismatch');
-  await out(`\x1b7\x1b[1;1H\r\nKITTY_DONE_${serial}\r\n\x1b8`);
+  await out(`\x1b7\x1b[1;1H\r\nKITTY_DONE_${serial};\r\n\x1b8`);
   if (gate) fs.writeFileSync(`${gate}.done`, '');
 }
 process.stdin.setRawMode(false);

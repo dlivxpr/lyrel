@@ -228,7 +228,7 @@ impl Consumer {
         ClientMsg::Input(request.into_bytes())
             .encode(&mut self.stream)
             .unwrap();
-        self.until(format!("KITTY_DONE_{serial}\r").as_bytes());
+        self.until(format!("KITTY_DONE_{serial};\r").as_bytes());
         let prefix = format!("KITTY_REPLY {serial} ");
         String::from_utf8_lossy(&self.text)
             .lines()
@@ -506,7 +506,7 @@ fn native_ssh_graphics_replies_recovery_limits_and_host_local_media() {
         matches!(DaemonMsg::read(&mut input).unwrap(), DaemonMsg::InputAck { pane_id: id } if id == pane_id)
     );
     let mut fresh = Consumer::new(observer, pane_id, true);
-    let trace = fresh.collect_until(format!("KITTY_DONE_{serial}\r").as_bytes());
+    let trace = fresh.collect_until(format!("KITTY_DONE_{serial};\r").as_bytes());
     assert_eq!(
         fresh.state.placements, current,
         "ordered replay events={trace:#?}"

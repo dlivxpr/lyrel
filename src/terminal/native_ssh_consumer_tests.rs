@@ -126,7 +126,7 @@ fn native_ssh_consumer_observe_ack(
     );
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + native_ssh_graphics_fixture::STREAM_WITHIN;
-        let done = format!("KITTY_DONE_{serial}");
+        let done = format!("KITTY_DONE_{serial};");
         let mut first = Some(first);
         let mut text = Vec::new();
         loop {
@@ -174,7 +174,7 @@ fn native_ssh_consumer_send(
         native_ssh_graphics_fixture::hex(bytes)
     );
     view.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
-    let done = format!("KITTY_DONE_{serial}");
+    let done = format!("KITTY_DONE_{serial};");
     graphics_recovery_wait(
         cx,
         "real remote sender query ACK/text barrier did not arrive",
@@ -426,7 +426,7 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
         "fresh consumer must receive actual post-cutover output, not just a replay prefix",
         |cx| {
             hard.read_with(cx, |view, _| {
-                view.scrollback_text().contains("KITTY_DONE_4610")
+                view.scrollback_text().contains("KITTY_DONE_4610;")
                     && view.scrollback_text().contains("REMOTE-MAIN-DURING-HARD")
             })
         },
