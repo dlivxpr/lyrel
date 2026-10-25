@@ -106,20 +106,48 @@ fn graphics_recovery_stats(
     })
 }
 
+#[track_caller]
 fn graphics_recovery_pixels(
     view: &Entity<TerminalView>,
     cx: &mut TestAppContext,
     id: u32,
     expected: &[u8],
 ) {
-    graphics_recovery_wait(cx, "retained resource did not finish production decoding with the expected pixels", |cx| {
-        view.read_with(cx, |view, _| {
+    let caller = std::panic::Location::caller();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let matched = view.read_with(cx, |view, _| {
             graphics_visible_images(view).iter().any(|image| {
                 image.placement.image_id == id && !image.evicted
                     && image.data.as_ref().is_some_and(|data| data.as_bytes(0).unwrap() == expected)
             })
-        })
-    });
+        });
+        if matched { break; }
+        if std::time::Instant::now() >= deadline {
+            let state = view.read_with(cx, |view, _| {
+                let images: Vec<_> = graphics_visible_images(view).iter().map(|image| (
+                    image.placement.image_id,
+                    image.placement.placement_id,
+                    image.placement.screen,
+                    image.anchor_row,
+                    image.anchor_col,
+                    image.evicted,
+                    image.data.as_ref().map(|data| {
+                        let bytes = data.as_bytes(0).unwrap();
+                        (bytes.len(), bytes[..bytes.len().min(32)].to_vec())
+                    }),
+                )).collect();
+                let term = view.terminal.term.lock();
+                let grid = (term.mode().contains(Mode::ALT_SCREEN), term.columns(), term.screen_lines(), term.display_offset());
+                drop(term);
+                (images, grid, view.terminal.exited, view.terminal.child_exited(), view.scrollback_text())
+            });
+            panic!("retained image i={id} did not decode expected BGRA={expected:?}; phase={caller}; actual (placements [image_id, placement_id, screen, row, col, evicted, (pixel bytes, prefix)], grid [alt, cols, rows, offset], exited, child_exited, text)={state:?}");
+        }
+        cx.executor().advance_clock(std::time::Duration::from_millis(5));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 #[gpui_kit::test]
@@ -273,7 +301,7 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
         assert!(images.iter().all(|image| ![23, 24].contains(&image.placement.image_id)));
         let placeholder = images.iter().find(|image| image.placement.image_id == 22).unwrap();
         assert_eq!(placeholder.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.).0,
-            Bounds::new(point(px(40.), px(80.)), gpui_kit::size(px(20.), px(10.))));
+            Bounds::new(point(px(45.), px(80.)), gpui_kit::size(px(10.), px(10.))));
         assert!(images.iter().all(|image| image.painted.load(std::sync::atomic::Ordering::Acquire)));
     });
     let stopped = graphics_recovery_stats(&view, cx, 207);
@@ -311,6 +339,15 @@ fn graphics_consumer_fresh_replays_eviction_notice_but_not_deleted_or_expired_pi
     graphics_recovery_pixels(&prior, cx, 31, &[0, 0, 255, 255]);
     graphics_recovery_pixels(&prior, cx, 32, &[255, 0, 0, 255]);
     graphics_assert_production_paint(prior_window, &prior, cx);
+    let placeholder_area = prior.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        let placeholder = images.iter().find(|image| image.placement.image_id == 32).unwrap();
+        let area = placeholder.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, 0, 1.);
+        // The square source fits centered inside a two-column placeholder;
+        // the notice must keep that real image area, not stretch to its cells.
+        assert_eq!(area.0, Bounds::new(point(px(45.), px(70.)), gpui_kit::size(px(10.), px(10.))));
+        area
+    });
     graphics_send_fixture(&prior, cx, 302, &b"\r\n".repeat(80));
     graphics_send_fixture(&prior, cx, 303, b"\x1b[10;5H\x1b_Ga=T,i=33,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
     graphics_recovery_pixels(&prior, cx, 33, &[0, 255, 0, 255]);
@@ -335,8 +372,8 @@ fn graphics_consumer_fresh_replays_eviction_notice_but_not_deleted_or_expired_pi
         assert!(notice.evicted && notice.data.is_none(), "recovery must not find an unaccounted pixel copy for the evicted placeholder");
         assert!(notice.painted.load(std::sync::atomic::Ordering::Acquire), "production paint must claim the restored notice");
         let offset = view.terminal.term.lock().display_offset() as i32;
-        assert_eq!(notice.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.).0,
-            Bounds::new(point(px(40.), px(70.)), gpui_kit::size(px(20.), px(10.))));
+        assert_eq!(notice.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.),
+            placeholder_area, "eviction and fresh recovery must preserve the exact pre-eviction crop and texture area");
         assert!(!view.scrollback_text().contains("Image evicted") && !view.scrollback_text().contains("图片已淘汰"));
     });
     assert_eq!(graphics_recovery_stats(&view, cx, 308), stopped);
