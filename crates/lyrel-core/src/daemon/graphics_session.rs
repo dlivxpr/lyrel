@@ -53,6 +53,7 @@ pub(super) fn run(
     mut ready: Option<DaemonMsg>,
     mut claim: Option<UnclaimedSpawn>,
 ) -> anyhow::Result<()> {
+    read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
     let broker = pane.graphics_admission_broker();
     let (tx, output) = mpsc::channel();
     let sender = Arc::new(tx);
@@ -68,7 +69,8 @@ pub(super) fn run(
     let input_pane = pane.clone();
     let input_sender = Arc::downgrade(&sender);
     let reader = std::thread::Builder::new().name("lyrel-graphics-grants".into()).spawn(move || {
-        while let Ok(message) = ClientMsg::read(&mut read_stream) {
+        let mut pending = Vec::new();
+        while let Ok(Some(message)) = read_active_input(&mut read_stream, &mut pending, || input_sender.strong_count() != 0) {
             match message {
                 ClientMsg::GraphicsGrant { token, accepted } => input_broker.grant(endpoint, token, accepted),
                 // Apply this connection's viewport before its following

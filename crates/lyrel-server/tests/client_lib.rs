@@ -3296,6 +3296,124 @@ mod kitty_graphics {
     }
 
     #[test]
+    fn daemon_graphics_recovery_partial_input_survives_a_live_offer_timeout_without_restarting_child()
+     {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        use std::io::Write as _;
+        let daemon = Daemon::start();
+        let _control = daemon.control("graphics-recovery-partial-input");
+        let mut source = Consumer::spawn(&daemon);
+        source.red_at(6, 3, "a=T,i=1,p=1,C=1");
+        let identity = source.stats();
+        let pid = identity
+            .split_whitespace()
+            .find(|field| field.starts_with("pid="))
+            .unwrap();
+        let pane = source.session.pane_id();
+        detach_consumer(source);
+        let mut controller = offered_recovery(&daemon, pane, false);
+        loop {
+            match DaemonMsg::read(&mut controller).expect("initial offered controller replay") {
+                DaemonMsg::GraphicsOffer { token, .. } => ClientMsg::GraphicsGrant {
+                    token,
+                    accepted: true,
+                }
+                .encode(&mut controller)
+                .unwrap(),
+                DaemonMsg::Graphics(frame) => {
+                    if matches!(
+                        GraphicsUpdate::decode_frame_owned(frame.into_vec()),
+                        Some(GraphicsUpdate::Screen { .. })
+                    ) {
+                        break;
+                    }
+                }
+                DaemonMsg::Error(error) => panic!("initial controller refused: {error}"),
+                _ => {}
+            }
+        }
+        let mut partial = Vec::new();
+        ClientMsg::Input(b"STAT 5001 0 00 0\n".to_vec())
+            .encode(&mut partial)
+            .unwrap();
+        controller.write_all(&partial[..3]).unwrap();
+        // No grant can be sent on this partially written input frame. The real
+        // admission timeout provides an observable clock boundary, not a sleep.
+        daemon
+            .panes()
+            .send_input(
+                pane,
+                format!(
+                    "SEND 5000 1 {} 0\n",
+                    hex(b"\x1b_Ga=T,i=2,p=1,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\after_offer_timeout")
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let marker = b"KITTY_DONE_5000\r";
+        let mut text = Vec::new();
+        let mut offered = None;
+        let mut cancelled = false;
+        while !windows_contain(&text, marker) {
+            match DaemonMsg::read(&mut controller)
+                .expect("real offer timeout must leave the child responsive")
+            {
+                DaemonMsg::GraphicsOffer { token, .. } => offered = Some(token),
+                DaemonMsg::GraphicsCancel { token } => cancelled |= offered == Some(token),
+                DaemonMsg::Output(bytes) => text.extend(bytes),
+                DaemonMsg::Graphics(_) => panic!("ungranted upload leaked a resource or placement"),
+                DaemonMsg::Error(error) => {
+                    panic!("partial input broke the current controller: {error}")
+                }
+                DaemonMsg::Exited { code } => {
+                    panic!("partial frame restarted/exited the application: {code:?}")
+                }
+                _ => {}
+            }
+        }
+        assert!(offered.is_some() && cancelled);
+        let replies: Vec<_> = std::str::from_utf8(&text)
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("KITTY_REPLY 5000 ").map(unhex))
+            .collect();
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].starts_with(b"\x1b_Gi=2,p=1;ENOSPC:"));
+        assert!(windows_contain(&text, b"after_offer_timeout"));
+        controller.write_all(&partial[3..]).unwrap();
+        let mut completed = Vec::new();
+        while !windows_contain(&completed, b"KITTY_DONE_5001\r") {
+            match DaemonMsg::read(&mut controller)
+                .expect("remaining input header and payload must retain their framing")
+            {
+                DaemonMsg::Output(bytes) => completed.extend(bytes),
+                DaemonMsg::Error(error) => panic!("timeout discarded part of Input: {error}"),
+                DaemonMsg::Exited { code } => {
+                    panic!("same real child must consume completed Input: {code:?}")
+                }
+                _ => {}
+            }
+        }
+        assert!(windows_contain(
+            &completed,
+            format!("KITTY_STATS_5001 {pid} ").as_bytes()
+        ));
+        assert!(windows_contain(&completed, b"uploads=2 placements=0"));
+        ClientMsg::Input(b"EXIT 5002 0 00 0\n".to_vec())
+            .encode(&mut controller)
+            .unwrap();
+        loop {
+            if let DaemonMsg::Exited { .. } =
+                DaemonMsg::read(&mut controller).expect("ordered real child cleanup")
+            {
+                break;
+            }
+        }
+        ClientMsg::Detach.encode(&mut controller).unwrap();
+        while DaemonMsg::read(&mut controller).is_ok() {}
+    }
+
+    #[test]
     fn daemon_graphics_recovery_pending_subscriber_does_not_cancel_an_existing_live_upload() {
         use lyrel_core::daemon::protocol::ClientMsg;
         let daemon = Daemon::start();

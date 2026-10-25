@@ -1545,6 +1545,41 @@ fn stream_pane(
     run_stream(pane, id, epoch, rx, read_stream, write_stream, registry)
 }
 
+// Winsock shutdown does not reliably cancel a receive already in progress on
+// another cloned handle. A bounded wait lets ownership loss retire that reader
+// and its capacity lease even when the peer keeps its socket object alive.
+const INPUT_RETIRE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn read_active_input<R: std::io::Read>(
+    stream: &mut R,
+    pending: &mut Vec<u8>,
+    active: impl Fn() -> bool,
+) -> std::io::Result<Option<ClientMsg>> {
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        if !active() {
+            return Ok(None);
+        }
+        if let Some((kind, payload)) = crate::daemon::protocol::take_frame(pending)? {
+            return ClientMsg::from_frame(kind, payload).map(Some);
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => return Ok(None),
+            Ok(n) => pending.extend_from_slice(&chunk[..n]),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error),
+        }
+        // Keep the partial header/payload across timeout. Retrying read_exact
+        // from a new frame would interpret its remaining bytes as a new header.
+    }
+}
+
 fn stream_observer(
     pane: Arc<DaemonPane>,
     mut read_stream: Stream,
@@ -1565,6 +1600,7 @@ fn stream_observer(
             None,
         );
     }
+    read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT))?;
     // The pane holds the channel's only sender, and refusals go through it,
     // so an observer the pane drops at its budget loses its stream: the writer
     // runs dry and shuts the read below down, rather than the client sitting
@@ -1574,28 +1610,34 @@ fn stream_observer(
     let observer_id = pane.observe(tx, gate.clone());
     let writer = spawn_writer(rx, write_stream, gate);
 
-    observe_loop(&mut read_stream, |msg| pane.tell_observer(observer_id, msg));
+    observe_loop(
+        &mut read_stream,
+        || !writer.is_finished(),
+        |msg| pane.tell_observer(observer_id, msg),
+    );
 
     pane.unobserve(observer_id);
     let _ = writer.join();
     Ok(())
 }
 
-fn observe_loop<R: std::io::Read>(read_stream: &mut R, mut refuse: impl FnMut(DaemonMsg) -> bool) {
-    loop {
-        match ClientMsg::read(read_stream) {
-            Ok(ClientMsg::Input(_))
-            | Ok(ClientMsg::Resize(_))
-            | Ok(ClientMsg::ClearPresentation { .. }) => {
+fn observe_loop<R: std::io::Read>(
+    read_stream: &mut R,
+    active: impl Fn() -> bool,
+    mut refuse: impl FnMut(DaemonMsg) -> bool,
+) {
+    let mut pending = Vec::new();
+    while let Ok(Some(message)) = read_active_input(read_stream, &mut pending, &active) {
+        match message {
+            ClientMsg::Input(_) | ClientMsg::Resize(_) | ClientMsg::ClearPresentation { .. } => {
                 if !refuse(DaemonMsg::Error(
                     "this connection is a read-only observer; attach to write".to_string(),
                 )) {
                     break;
                 }
             }
-            Ok(ClientMsg::Detach) => break,
-            Ok(_) => {}
-            Err(_) => break,
+            ClientMsg::Detach => break,
+            _ => {}
         }
     }
 }
@@ -1609,65 +1651,51 @@ fn run_stream(
     write_stream: Stream,
     registry: Arc<Registry>,
 ) -> anyhow::Result<()> {
-    use std::io::Read as _;
-
-    // Blocking reads: when this controller is displaced its writer's channel
-    // closes, and the writer shuts our read side down on its way out (see
-    // spawn_writer), so the read below returns instead of hanging.
+    if let Err(error) = read_stream.set_read_timeout(Some(INPUT_RETIRE_WAIT)) {
+        pane.detach(epoch);
+        return Err(error.into());
+    }
+    // Ownership is checked after each bounded read as well as before applying
+    // input, so Windows cannot leave a displaced reader and lease parked.
     let writer = spawn_writer(rx, write_stream, pane.gate());
 
     let mut killed = false;
     let mut pending: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 65536];
-    'conn: loop {
-        loop {
-            let (kind, payload) = match crate::daemon::protocol::take_frame(&mut pending) {
-                Ok(Some(frame)) => frame,
-                Ok(None) => break,
-                Err(_) => break 'conn,
-            };
-            let Ok(msg) = ClientMsg::from_frame(kind, payload) else {
-                break 'conn;
-            };
-            match msg {
-                ClientMsg::Input(bytes) => {
-                    if !pane.controls(epoch) {
-                        break 'conn;
-                    }
-                    pane.write_input(&bytes);
+    'conn: while let Ok(Some(msg)) =
+        read_active_input(&mut read_stream, &mut pending, || pane.controls(epoch))
+    {
+        match msg {
+            ClientMsg::Input(bytes) => {
+                if !pane.controls(epoch) {
+                    break 'conn;
                 }
-                ClientMsg::ClearPresentation { history } => {
-                    if !pane.controls(epoch) {
-                        break 'conn;
-                    }
-                    pane.clear_presentation(history);
-                }
-                ClientMsg::Resize(size) => {
-                    if !pane.controls(epoch) {
-                        break 'conn;
-                    }
-                    pane.resize(size);
-                }
-                ClientMsg::AuthResponse {
-                    request_id,
-                    response,
-                } => pane.deliver_auth_response(request_id, response),
-                ClientMsg::Detach => break 'conn,
-                ClientMsg::Kill { pane_id } => {
-                    if pane_id == id {
-                        killed = true;
-                        break 'conn;
-                    }
-                    kill_pane(&registry, pane_id);
-                }
-                _ => {}
+                pane.write_input(&bytes);
             }
-        }
-        match read_stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => pending.extend_from_slice(&chunk[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            ClientMsg::ClearPresentation { history } => {
+                if !pane.controls(epoch) {
+                    break 'conn;
+                }
+                pane.clear_presentation(history);
+            }
+            ClientMsg::Resize(size) => {
+                if !pane.controls(epoch) {
+                    break 'conn;
+                }
+                pane.resize(size);
+            }
+            ClientMsg::AuthResponse {
+                request_id,
+                response,
+            } => pane.deliver_auth_response(request_id, response),
+            ClientMsg::Detach => break 'conn,
+            ClientMsg::Kill { pane_id } => {
+                if pane_id == id {
+                    killed = true;
+                    break 'conn;
+                }
+                kill_pane(&registry, pane_id);
+            }
+            _ => {}
         }
     }
 
@@ -1826,7 +1854,11 @@ mod tests {
             .unwrap();
 
         let (tx, rx) = std::sync::mpsc::channel();
-        observe_loop(&mut std::io::Cursor::new(wire), |m| tx.send(m).is_ok());
+        observe_loop(
+            &mut std::io::Cursor::new(wire),
+            || true,
+            |m| tx.send(m).is_ok(),
+        );
         drop(tx);
 
         assert!(
@@ -1850,9 +1882,11 @@ mod tests {
     #[test]
     fn the_observer_loop_ends_at_stream_eof() {
         let (tx, rx) = std::sync::mpsc::channel();
-        observe_loop(&mut std::io::Cursor::new(Vec::<u8>::new()), |m| {
-            tx.send(m).is_ok()
-        });
+        observe_loop(
+            &mut std::io::Cursor::new(Vec::<u8>::new()),
+            || true,
+            |m| tx.send(m).is_ok(),
+        );
         drop(tx);
         assert!(rx.try_recv().is_err());
     }
