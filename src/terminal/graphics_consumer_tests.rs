@@ -1055,13 +1055,14 @@ fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last
                     graphics_send_fixture(&view, cx, 3, b"\x1b[6;5H\x1b_Ga=T,i=8,p=2,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\");
                     graphics_layout_wait_image(&view, cx, 8);
                     graphics_send_fixture(&view, cx, 4, b"\x1b[?1049h\x1b[6;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
-                    graphics_recovery_wait(cx, "alternate image decoder did not finish", |cx| {
-                        view.read_with(cx, |view, _| {
-                            graphics_visible_images(view)
-                                .iter()
-                                .any(|image| image.placement.image_id == 9)
-                        })
-                    });
+                    graphics_recovery_wait(cx, if placeholder { "placeholder alternate image decoder did not finish" } else { "direct alternate image decoder did not finish" }, |cx| {
+                                    window.update(cx, |_, window, _| window.refresh()).unwrap();
+                                    view.read_with(cx, |view, _| {
+                                        graphics_visible_images(view)
+                                            .iter()
+                                            .any(|image| image.placement.image_id == 9)
+                                    })
+                                });
                     graphics_assert_production_paint(window, &view, cx);
                     view.read_with(cx, |view, _| {
                         let images = graphics_visible_images(view);
