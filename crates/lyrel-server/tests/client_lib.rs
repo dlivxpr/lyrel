@@ -2712,6 +2712,9 @@ mod kitty_graphics {
                         self.serial,
                         String::from_utf8_lossy(&plain)
                     ),
+                    DaemonMsg::GraphicsPressureResult { .. } => {
+                        panic!("pressure completion leaked to the non-requesting controller")
+                    }
                     _ => {}
                 }
             }
@@ -2825,6 +2828,192 @@ mod kitty_graphics {
         match DaemonMsg::read(stream).expect("pending replay's first retained-source offer") {
             DaemonMsg::GraphicsOffer { token, key, .. } => (token, key),
             other => panic!("replay leaked or failed before admission: {other:?}"),
+        }
+    }
+
+    fn pressure_replay(
+        stream: &mut lyrel_core::daemon::transport::Stream,
+    ) -> Vec<GraphicsUpdate> {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        let mut updates = Vec::new();
+        loop {
+            match DaemonMsg::read(stream).expect("ordered observer recovery") {
+                DaemonMsg::GraphicsOffer { token, .. } => ClientMsg::GraphicsGrant {
+                    token,
+                    accepted: true,
+                }
+                .encode(stream)
+                .unwrap(),
+                DaemonMsg::Graphics(frame) => {
+                    let update = GraphicsUpdate::decode_frame_owned(frame.into_vec()).unwrap();
+                    let ready = matches!(update, GraphicsUpdate::Screen { .. });
+                    updates.push(update);
+                    if ready {
+                        return updates;
+                    }
+                }
+                DaemonMsg::Error(error) => panic!("recovery failed: {error}"),
+                DaemonMsg::GraphicsPressureResult { .. } => {
+                    panic!("unsolicited pressure completion during recovery")
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn pressure_result(
+        stream: &mut lyrel_core::daemon::transport::Stream,
+        key: u64,
+        reclaimed: bool,
+    ) {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        ClientMsg::GraphicsPressure { key }.encode(stream).unwrap();
+        let mut evicted = false;
+        loop {
+            match DaemonMsg::read(stream).expect("bounded pressure completion") {
+                DaemonMsg::Graphics(frame) => {
+                    match GraphicsUpdate::decode_frame_owned(frame.into_vec()).unwrap() {
+                        GraphicsUpdate::Evicted { key: actual, .. } if actual == key => {
+                            evicted = true;
+                        }
+                        GraphicsUpdate::Place(_) | GraphicsUpdate::Remove { .. } => {
+                            panic!("pressure must not require a placement mutation")
+                        }
+                        _ => {}
+                    }
+                }
+                DaemonMsg::GraphicsPressureResult { key: actual, reclaimed: result } => {
+                    assert_eq!((actual, result), (key, reclaimed));
+                    assert_eq!(evicted, reclaimed, "eviction must precede successful completion");
+                    return;
+                }
+                DaemonMsg::Error(error) => panic!("pressure failed: {error}"),
+                _ => {}
+            }
+        }
+    }
+
+    fn observer_barrier(stream: &mut lyrel_core::daemon::transport::Stream) {
+        use lyrel_core::daemon::protocol::ClientMsg;
+        ClientMsg::Input(Vec::new()).encode(stream).unwrap();
+        loop {
+            match DaemonMsg::read(stream).expect("observer input-pump barrier") {
+                DaemonMsg::Error(error) => {
+                    assert!(error.contains("read-only observer"), "{error}");
+                    return;
+                }
+                DaemonMsg::GraphicsPressureResult { .. } => {
+                    panic!("pressure completion leaked to a different observer")
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn daemon_pressure_completion_retries_after_observer_hides_or_detaches_without_placement_changes() {
+        use lyrel_core::daemon::protocol::{ClientMsg, GraphicsViewport};
+        for detach in [false, true] {
+            let daemon = Daemon::start();
+            let _control = daemon.control("graphics-pressure-completion");
+            let mut controller = Consumer::spawn(&daemon);
+            controller.red("a=T,i=1,p=1,c=1,r=1,C=1");
+            let placement = controller.placements.values().next().unwrap().clone();
+            let key = placement.resource;
+            controller.send(&b"\r\n".repeat(40), 0);
+            let pane = controller.session.pane_id();
+            let mut protector = offered_recovery(&daemon, pane, true);
+            let replay = pressure_replay(&mut protector);
+            let (screen, epoch) = replay.iter().find_map(|update| match update {
+                GraphicsUpdate::Screen { screen, epoch, .. } => Some((*screen, *epoch)),
+                _ => None,
+            }).unwrap();
+            let viewport = GraphicsViewport {
+                screen,
+                epoch,
+                top: Some(placement.anchor_row),
+                rows: 1,
+                cols: size().cols,
+            };
+            ClientMsg::GraphicsViewport(viewport).encode(&mut protector).unwrap();
+            observer_barrier(&mut protector);
+            let mut requester = offered_recovery(&daemon, pane, true);
+            pressure_replay(&mut requester);
+            pressure_result(&mut requester, key, false);
+            observer_barrier(&mut protector);
+            controller.stats();
+            assert_eq!(controller.pixel(&placement), [255, 0, 0, 255]);
+            assert!(!controller.evicted.contains_key(&key));
+
+            // A fresh production PaneClient still recovers the protected bytes,
+            // not merely a stale copy held by the original consumer.
+            let session = daemon.panes().observe(pane, size()).unwrap();
+            let mut recovered = Consumer::from_session(session, controller.serial);
+            controller.stats();
+            recovered.serial = controller.serial;
+            recovered.finish_exchange();
+            assert_eq!(recovered.pixel(&placement), [255, 0, 0, 255]);
+            detach_consumer(recovered);
+
+            // An unrelated live transfer still receives valid per-resource grants
+            // after refusal; pressure completion must not consume grant traffic.
+            let marker = format!("KITTY_DONE_{};\r", controller.serial + 1);
+            std::thread::scope(|scope| {
+                let mut drain = |stream: &mut lyrel_core::daemon::transport::Stream| {
+                    let mut text = Vec::new();
+                    let mut granted = false;
+                    loop {
+                        match DaemonMsg::read(stream).unwrap() {
+                            DaemonMsg::GraphicsOffer { token, .. } => {
+                                granted = true;
+                                ClientMsg::GraphicsGrant { token, accepted: true }
+                                    .encode(stream).unwrap();
+                            }
+                            DaemonMsg::Output(bytes) => {
+                                text.extend(bytes);
+                                if windows_contain(&text, marker.as_bytes()) {
+                                    assert!(granted, "live resource must pass real admission");
+                                    break;
+                                }
+                            }
+                            DaemonMsg::GraphicsPressureResult { .. } => {
+                                panic!("duplicate or broadcast pressure completion")
+                            }
+                            DaemonMsg::Error(error) => panic!("valid grant failed: {error}"),
+                            _ => {}
+                        }
+                    }
+                };
+                let protecting = scope.spawn(|| drain(&mut protector));
+                let requesting = scope.spawn(|| drain(&mut requester));
+                assert_eq!(controller.send(
+                    b"\x1b_Ga=T,i=2,p=2,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1
+                ), [b"\x1b_Gi=2,p=2;OK\x1b\\".to_vec()]);
+                protecting.join().unwrap();
+                requesting.join().unwrap();
+            });
+            if detach {
+                ClientMsg::Detach.encode(&mut protector).unwrap();
+                while DaemonMsg::read(&mut protector).is_ok() {}
+            } else {
+                ClientMsg::GraphicsViewport(GraphicsViewport { rows: 0, ..viewport })
+                    .encode(&mut protector).unwrap();
+                observer_barrier(&mut protector);
+            }
+            pressure_result(&mut requester, key, true);
+            controller.stats();
+            assert_eq!(controller.evicted.get(&key), Some(&(1, 1)));
+            assert!(!controller.resources.contains_key(&key));
+            assert_eq!(controller.placements[&placement.key], placement);
+            assert!(!controller.updates.iter().any(|update| matches!(
+                update, GraphicsUpdate::Place(_) | GraphicsUpdate::Remove { .. }
+            )));
+            if !detach {
+                observer_barrier(&mut protector);
+                ClientMsg::Detach.encode(&mut protector).unwrap();
+            }
+            ClientMsg::Detach.encode(&mut requester).unwrap();
+            controller.exit();
         }
     }
 

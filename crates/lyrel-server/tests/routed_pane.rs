@@ -129,6 +129,23 @@ fn a_routed_pane_spawns_takes_input_and_survives_a_reconnect() {
         .unwrap();
     read_until(&mut sock, "routed-pane-alive");
 
+    // A routed live session must preserve a refused request's identity and
+    // result even when there is no graphics mutation to carry it back.
+    ClientMsg::GraphicsPressure { key: u64::MAX }
+        .encode(&mut sock)
+        .unwrap();
+    loop {
+        match DaemonMsg::read(&mut sock).expect("routed pressure completion") {
+            DaemonMsg::GraphicsPressureResult { key, reclaimed } => {
+                assert_eq!(key, u64::MAX);
+                assert!(!reclaimed);
+                break;
+            }
+            DaemonMsg::Error(error) => panic!("pressure broke routed session: {error}"),
+            _ => {}
+        }
+    }
+
     ClientMsg::Detach.encode(&mut sock).unwrap();
     drop(sock);
     let _ = hub_thread.join();

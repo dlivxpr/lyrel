@@ -2195,6 +2195,14 @@ mod tests {
             DaemonMsg::Size(SIZE),
             DaemonMsg::Snapshot(vec![1, 2, 3, 0, 255]),
             DaemonMsg::Output((0u8..=255).collect()),
+            DaemonMsg::GraphicsPressureResult {
+                key: u64::MAX,
+                reclaimed: false,
+            },
+            DaemonMsg::GraphicsPressureResult {
+                key: 42,
+                reclaimed: true,
+            },
             DaemonMsg::Cwd(PathBuf::from("/home/u/dev")),
             DaemonMsg::Prompt {
                 active: true,
