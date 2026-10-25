@@ -102,6 +102,65 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。
 
 所有留空的字段都表示“使用库的默认值”，因此只需填写确实需要覆盖的选项。
 
+<a id="inline-images"></a>
+## 终端内联图片
+
+原生 SSH 工作区复用本地 pane 的 Kitty 图片协议、放置、Unicode 占位符与恢复状态，
+不另建 SSH 图片模型。远端应用应优先直接传输像素或 PNG；文件／共享内存请求由
+负责 PTY 的远端 daemon 按自己的能力与路径读取，不在桌面文件系统上查找同名路径。
+这与下方 OSC 5522 **剪贴板**功能不同，也不要求开启远程剪贴板权限。
+
+远端 daemon 的编码资源、元数据、partial／校验工作，与桌面的 source、派生像素、
+解码工作及 atlas／GPU 分别计账；SSH 重连不豁免任何预算。恢复仅限同一存活 daemon
+仍保留的内容，不恢复已删除／淘汰的像素，也不新增图片磁盘持久化。
+[预算和历史提示规则 →](/getting-started/concepts)
+
+### 重现真实 SSH 回归
+
+以下 opt-in 用例经过生产 SSH 引擎、原生 router、真实 Linux PTY 与同一 pane 协议，
+不是本地 socket 替身。维护者须先准备独立 Linux 账号或隔离 HOME 的 SSH 服务，
+预部署匹配当前版本／方言的 `lyrel-server`，并提供 Linux Node 22.19+。
+shell／control 报告的 HOME 与 SFTP `Realpath(".")` 必须同属该隔离目录；
+仅在 shell 中修改 `HOME` 不足以隔离 SFTP。不要指向真实工作账号的 HOME。
+
+先构建 `cargo build --locked -p lyrel-server`，然后在启动测试的进程环境中设置：
+
+| 环境变量 | 内容 |
+| --- | --- |
+| `LYREL_TEST_SSH_HOST` | 专用测试服务的主机地址 |
+| `LYREL_TEST_SSH_PORT` | SSH 端口，必须显式提供 |
+| `LYREL_TEST_SSH_USER` | 隔离测试账号 |
+| `LYREL_TEST_SSH_IDENTITY` | 专用私钥的本机绝对路径；不要把私钥正文写入命令或日志 |
+| `LYREL_TEST_SSH_KNOWN_HOSTS` | 仅含该端点一条 `ssh-ed25519` 固定公钥记录的文件；非 22 端口使用 `[host]:port` |
+| `LYREL_TEST_SSH_REMOTE_HOME` | shell／control／SFTP 共用的隔离 Linux HOME 绝对路径 |
+| `LYREL_TEST_SSH_NODE` | 该 Linux 主机上 Node 可执行文件的绝对路径 |
+| `LYREL_TEST_SSH_LOCAL_SERVER` | rooted GPUI 用例所需的同一提交本机 `lyrel-server` 绝对路径 |
+
+```bash
+cargo test --locked -p lyrel-server --test native_ssh_graphics \
+  native_ssh_graphics_replies_recovery_limits_and_host_local_media \
+  -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked -p lyrel --bin lyrel-app native_ssh_consumer_ \
+  -- --ignored --nocapture --test-threads=1
+```
+
+夹具使用临时本机配置、固定主机公钥和明确的测试身份；未知主机不会自动接受，
+缺少前提会使显式用例失败。结束时仅移除本次创建的 pane 与唯一生产者目录；
+远端 daemon 由测试端点的维护者管理，用例不停止它或删除整个远端 HOME。
+
+**2026-10-25 已验证的自动化范围：**Windows `10.0.26300` → WSL2 Ubuntu
+`26.04.1 LTS`（Linux `6.18.54.1-microsoft-standard-WSL2`、Node `22.23.4`）；
+本机与远端 server 均为 `0.2.0`，实际协商 pane `13`／control `16`。
+真实 transport 用例 1 项、rooted GPUI consumer 用例 2 项通过，覆盖直接放置、
+Unicode 占位符、裁剪／替换／删除、滚动与 screen、有限预算拒收／历史提示、
+本地 router 重启后的 fresh 恢复，以及发送计数不变的同一远端 daemon／生产者。
+超限请求后的普通输入仍可用；远端文件／共享内存不会误读本机同名路径。
+
+这些 rooted 测试推进生产 decoder／paint 路径并核对像素、几何和权威状态，
+**不是原生 GPU 窗口截图或压力峰值证据**。Windows 原生窗口及正式 omp 实窗、
+macOS → Linux 的实连／原生呈现仍待验收，#46／#47 不据此关闭。
+tmux/screen、多级中转、Linux 桌面 UI 与移动访问不在本次兼容承诺内。
+
 <a id="copying-a-remote-image-to-this-machine"></a>
 ## 将远程图像复制到本机
 

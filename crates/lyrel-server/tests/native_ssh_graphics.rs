@@ -143,12 +143,23 @@ impl Consumer {
         let mut trace = VecDeque::new();
         let mut replayed = !self.needs_replay;
         loop {
-            let message = DaemonMsg::read(&mut self.stream)
-                .unwrap_or_else(|error| panic!("bounded real SSH consumer stream: {error}; events={trace:#?}"));
+            let message = DaemonMsg::read(&mut self.stream).unwrap_or_else(|error| {
+                panic!("bounded real SSH consumer stream: {error}; events={trace:#?}")
+            });
             let event = match &message {
                 DaemonMsg::Graphics(frame) => format!("Graphics bytes={}", frame.len()),
-                DaemonMsg::Snapshot(bytes) => format!("Snapshot bytes={} marker={} tail(hex)={}", bytes.len(), contains(bytes, marker), hex(&bytes[bytes.len().saturating_sub(256)..])),
-                DaemonMsg::Output(bytes) => format!("Output bytes={} marker={} tail(hex)={}", bytes.len(), contains(bytes, marker), hex(&bytes[bytes.len().saturating_sub(256)..])),
+                DaemonMsg::Snapshot(bytes) => format!(
+                    "Snapshot bytes={} marker={} tail(hex)={}",
+                    bytes.len(),
+                    contains(bytes, marker),
+                    hex(&bytes[bytes.len().saturating_sub(256)..])
+                ),
+                DaemonMsg::Output(bytes) => format!(
+                    "Output bytes={} marker={} tail(hex)={}",
+                    bytes.len(),
+                    contains(bytes, marker),
+                    hex(&bytes[bytes.len().saturating_sub(256)..])
+                ),
                 other => format!("{other:?}"),
             };
             trace_event(&mut trace, event);
@@ -174,7 +185,9 @@ impl Consumer {
                     let update = GraphicsUpdate::decode_frame_owned(frame.into_vec())
                         .expect("valid production graphics packet");
                     let event = match &update {
-                        GraphicsUpdate::Resource { key, image } => format!("Resource key={key} size={}x{}", image.width, image.height),
+                        GraphicsUpdate::Resource { key, image } => {
+                            format!("Resource key={key} size={}x{}", image.width, image.height)
+                        }
                         other => format!("{other:?}"),
                     };
                     trace_event(&mut trace, event);
@@ -233,7 +246,13 @@ impl Consumer {
 
     fn stats(&mut self) -> String {
         let replies = self.exchange("STAT", b"\0", 0, 0);
-        assert!(replies.is_empty(), "STAT serial={} unexpectedly matched replies(hex)={:?}; output_tail(hex)={}", self.serial, replies.iter().map(|reply| hex(reply)).collect::<Vec<_>>(), hex(&self.text[self.text.len().saturating_sub(4096)..]));
+        assert!(
+            replies.is_empty(),
+            "STAT serial={} unexpectedly matched replies(hex)={:?}; output_tail(hex)={}",
+            self.serial,
+            replies.iter().map(|reply| hex(reply)).collect::<Vec<_>>(),
+            hex(&self.text[self.text.len().saturating_sub(4096)..])
+        );
         let prefix = format!("KITTY_STATS_{} ", self.serial);
         String::from_utf8_lossy(&self.text)
             .lines()
@@ -488,8 +507,14 @@ fn native_ssh_graphics_replies_recovery_limits_and_host_local_media() {
     );
     let mut fresh = Consumer::new(observer, pane_id, true);
     let trace = fresh.collect_until(format!("KITTY_DONE_{serial}\r").as_bytes());
-    assert_eq!(fresh.state.placements, current, "ordered replay events={trace:#?}");
-    assert_eq!(fresh.state.pixels(fresh.state.placement(8, 8)), [0, 255, 0, 255]);
+    assert_eq!(
+        fresh.state.placements, current,
+        "ordered replay events={trace:#?}"
+    );
+    assert_eq!(
+        fresh.state.pixels(fresh.state.placement(8, 8)),
+        [0, 255, 0, 255]
+    );
     assert!(fresh.state.placements.values().all(|p| p.image_id != 7));
     assert!(contains(&fresh.text, b"LIVE_NATIVE_SSH_ORDER"));
     assert!(contains(

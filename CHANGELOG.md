@@ -10,7 +10,7 @@
 ### 新增
 
 - 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。当前数值预算见下述 #44；pane 协议为 `13`，control 保持 `16`，旧 daemon／远端 server 需要更新。
-- #40–#45 的核心、真实 daemon-session、GPUI 消费者与 reader／decoder 代次回归已接入；Windows 完整默认成员测试通过，Linux 默认 core 与图片 daemon 回归通过。Windows/macOS 原生像素、真实 SSH→Linux、正式 omp 实窗与最终资源峰值仍待完成，不据此宣称 #39 已交付。
+- #40–#46 的核心、真实 daemon-session、GPUI 消费者与 reader／decoder 代次回归已接入；Windows 完整默认成员测试通过，Linux 默认 core 与图片 daemon 回归通过，另有真实 Windows→Linux 原生 SSH transport／rooted consumer 通过。Windows/macOS 原生像素、SSH 原生窗口、正式 omp 实窗与最终资源峰值仍待完成，不据此宣称 #39 已交付。
 - 加固 Kitty 流式传输与拒收（#41）：支持 PNG 的外层 `o=z`，分块逐次解码并限制 partial／APC 分配；对 PNG 做有界逐行真实校验，对 raw／zlib 检查尺寸、精确字节数及展开上限后才应答、保留或创建放置。查询不保存资源，文件／共享内存能力按负责主机与实际读取结果应答；临时文件删除要求标记路径。Linux POSIX shm 使用有界 descriptor read；macOS 使用不可重复截断对象的受限只读共享映射，复制后立即释放并预留映射加副本的峰值。中断、取消、删除与下一条完整命令保持有序，匿名／quiet 请求不污染后续输入。
 - 隔离异步图片 reader／decoder 的代次：退休连接不能应用迟到帧或解码完成，也不能在延迟退出时关闭新连接的图片队列。新增真实 daemon 的格式、压缩、拒收、49 MiB 超限与输入存活回归，GPUI 实际 decoder／paint 回归，以及生产 decoder 的受控代次竞态回归。
 - 修正分块续传首个键为 `q` 时 quiet 模式被忽略的问题；`q=1/2` 与 `m` 的排列顺序不再改变应答，真实 daemon 的成功／失败静默、恢复应答及后续输入回归已通过。
@@ -23,6 +23,7 @@
 - 真实 daemon-session／GPUI consumer 小预算回归已在 Windows 通过，并提供 `scripts/kitty-pressure.mjs` 原生压力夹具；原生 Shell／GPU、macOS 与真实 SSH 峰值仍未测。文档公布每进程会计和组合范围，不把桌面 1,296 MiB 会计或 daemon 656 MiB 会计当作 RSS／驱动峰值实测，不提前关闭 #44／#39。
 - 在 pane `13`／Windows Debug 上重测独立生产 CLI → ConPTY 的两张 4K raw RGBA 加一张 PNG：均收到关联成功应答，daemon 工作集在保留时为 152,096,768 bytes，内核高水位为 153,255,936 bytes，pane 正常退出后回落到 19,349,504 bytes；普通输入可用，CLI／发送器／私有 daemon 正常退出。此结果仅覆盖 daemon CPU，不包含桌面／GPU 或原生压力验收，不能替代 #44 平台证据。
 - 接入存活会话的有序图片恢复（#45）：新消费者从同一 pane daemon 恢复保留资源、多放置／裁剪、占位符、历史与 screen；detached 产生／替换／删除和 replay 到 live 的并发保持一致。纯文字／几何变化不重复取消适用资源授权，资源集合变化先释放旧授权再有限重取；容量不足明确拒绝附着，不复活已删除／回收像素，不要求应用重传，也不新增图片落盘。
+- 接入真实 native SSH→Linux 图片回归（#46）：生产 router／SSH 引擎／Linux PTY 到 rooted GPUI 共用 pane `13`，核对直接及 Unicode 放置、像素与几何、拒收／历史提示、本地 router 重启后的同 daemon fresh 恢复及无重传。Windows `10.0.26300`→WSL2 Ubuntu `26.04.1` 的 1 项 transport、2 项 rooted consumer 已通过；文档列出固定主机公钥、隔离 HOME／SFTP 和复现命令，不将此结果冒充原生 GPU 或 macOS→Linux 验收。
 - 验证正式 `omp/18.12.6` 的公开图片选项：保持 `TERM_PROGRAM=lyrel`，`PI_FORCE_IMAGE_PROTOCOL=kitty` 配合 `PI_KITTY_PLACEHOLDERS=0/1`，真实交互 TUI 在 Windows ConPTY 中发送 SVG 栅格 PNG 与合成 toolResult PNG，独立 daemon／生产 `PaneClient` 收到对应资源和直接／虚拟放置。隔离会话未提交新 prompt，`/exit` 正常退出；此结果不替代原生像素、真实桌面截图、GUI 关开或 SSH 验收。
 
 ### 修复
@@ -42,6 +43,7 @@
 - 共享真实 PTY 夹具给 `KITTY_REPLY` 文本记录附加原请求 serial，core／server 消费者只将对应记录归为本次应答；完整 Snapshot 仍作为历史消费，quiet 的空应答断言不会被旧回复文本污染，失败时保留实际 unexpected bytes。
 - rooted GPUI 图片夹具在 PTY 等待期间推进真实 UI 任务及测试时钟，使已绘制纹理经现有窗口 compaction 归还 GPU 票；历史 notice 回归通过生产滚动入口同步视口并核验 placeholder notice 的实际 paint。大文字恢复用合法的小于 1 MiB 的 Input 分批构造原总量 Snapshot，不放宽输入、图片预算或等待期限；修复后的 23 项 graphics consumer 回归已在 Windows 通过。
 - GPUI 回归先同步 rooted 窗口的实际列数再修改终端尺寸，避免推进 UI 时由旧窗口布局回写覆盖 reflow；Screen／原点回归等待其后有序文本 marker 与实际解码状态，不以一张图片已出现替代 Screen 已消费。
+- 原生 SSH 夹具的请求 serial 跨 fresh consumer 不复用，避免旧 Snapshot 回复被误归为当前请求；恢复等待唯一文本屏障及权威最终 `Screen`，不在先到的 Snapshot 上提前返回。GUI 从不接管／不 resize 的真实 Observe raw Output 核对应用收到的全部关联 ACK，保留有限预算、像素与 placement 断言，不依赖终端网格保存已被覆盖的诊断文字。
 - fresh GPUI 恢复夹具通过公开 deactivate 完成 headless active-window／input-handler owner 释放，再正常销毁实体、图片 store 和 texture；首帧先测实际字体并设置物理尺寸，再挂载终端，避免默认最大化首绘改写存活备用屏。保留三重弱引用、真实上传 ACK、权威 observer 顺序、像素与 resize 断言；不以测试平台生命周期问题掩盖丢图。
 - 桌面测试明确声明 `base64` dev-dependency，修复 macOS 仅因 Windows 生产依赖可见性而编译失败；移除固定内部三帧排列的旧 resize wiring 测试，真实 daemon／GPUI 尺寸与图片顺序回归继续执行，不把新 `Screen` 元数据当作异常。
 - x86_64 musl 的 CI 与 Release C++ 构建统一使用上游 `SIMDUTF_IMPLEMENTATION_ICELAKE=0` 配置，避开正式 `simdutf 0.7.0` 可选 Ice Lake backend 的 `evex512` 编译错误；保留 Zig `0.16.0` 与 AVX2／SSE／scalar 运行时分派，不修改第三方源码或提高远端 CPU 要求。

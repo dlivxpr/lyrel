@@ -205,6 +205,17 @@ node scripts/kitty-pressure.mjs --images 12 --width 3840 --height 2160 --path di
 
 另以独立生产 CLI／ConPTY／daemon 冒烟验证：首客户端销毁后，同一生产者在 detached 状态替换一份资源、删除另一份并创建新占位符；新 `PaneClient::observe` 只恢复新资源版本及同代文字，恢复前后上传计数不变，随后普通输入仍可到达。以上不是原生 GUI 关闭／重开、GPU 或 SSH 的完成证明；这些路径仍分别验收。daemon 终止后不保留图片，未新增图片磁盘缓存。
 
+#### 当前实现：原生 SSH 的图片与恢复（#46）
+
+Windows 经生产原生 SSH router 连接真实 Linux daemon 的 transport 与 rooted GPUI
+回归已通过，复用本地资源、placement、占位符及预算模型；fresh 消费者在同一远端
+daemon／生产者身份下恢复保留内容，上传计数不变。文本 Snapshot 的 marker 不代表
+图形 replay 已结束，回归同时等待权威最终 Screen；应用 ACK 从真实 Observe raw
+Output 核验，不把可被后续输出覆盖的终端网格当作日志。
+
+[实测平台、独立资源会计、复现前提及命令 →](/remote/ssh#inline-images)
+此证据不替代 Windows 原生 GPU 窗口、macOS → Linux 或正式 omp 的平台验收。
+
 #### 完整功能的已确认能力边界
 
 
