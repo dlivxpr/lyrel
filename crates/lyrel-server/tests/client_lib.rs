@@ -2679,7 +2679,13 @@ mod kitty_graphics {
             let marker = format!("KITTY_DONE_{};\r", self.serial);
             let mut plain = Vec::new();
             loop {
-                match self.session.recv().expect("ordered daemon graphics stream") {
+                match self.session.recv().unwrap_or_else(|error| {
+                    panic!(
+                        "ordered daemon graphics stream exchange {}: {error}; PTY output: {:?}",
+                        self.serial,
+                        String::from_utf8_lossy(&plain)
+                    )
+                }) {
                     DaemonMsg::Graphics(frame) => {
                         self.apply(
                             GraphicsUpdate::decode_frame_owned(frame.into_vec())
@@ -2696,8 +2702,16 @@ mod kitty_graphics {
                             break;
                         }
                     }
-                    DaemonMsg::Exited { code } => panic!("PTY fixture exited: {code:?}"),
-                    DaemonMsg::Error(error) => panic!("graphics consumer refused: {error}"),
+                    DaemonMsg::Exited { code } => panic!(
+                        "PTY fixture exited: {code:?}; exchange {}; PTY output: {:?}",
+                        self.serial,
+                        String::from_utf8_lossy(&plain)
+                    ),
+                    DaemonMsg::Error(error) => panic!(
+                        "graphics consumer refused: {error}; exchange {}; PTY output: {:?}",
+                        self.serial,
+                        String::from_utf8_lossy(&plain)
+                    ),
                     _ => {}
                 }
             }
