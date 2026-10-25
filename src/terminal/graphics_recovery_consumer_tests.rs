@@ -58,9 +58,26 @@ fn graphics_recovery_destroy(
     view.update(cx, |view, _| view.terminal.detach_link());
     window.update(cx, |_, window, _| window.remove_window()).unwrap();
     drop(view);
-    graphics_recovery_wait(cx, "old view, ImageStore and window-owned textures must actually die before recovery", |_| {
-        weak_view.upgrade().is_none() && store_released() && pixels.iter().all(|pixel| pixel.upgrade().is_none())
-    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        // Dropping the final Entity handle queues its value for release. The
+        // normal App::update turn flushes that queue and invokes on_release;
+        // running the test dispatcher alone does not drop the entity value.
+        cx.update(|_| {});
+        let view_alive = weak_view.upgrade().is_some();
+        let store_alive = !store_released();
+        let textures_alive = pixels.iter().filter(|pixel| pixel.upgrade().is_some()).count();
+        if !view_alive && !store_alive && textures_alive == 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "old consumer did not actually die: view_alive={view_alive}, store_alive={store_alive}, textures_alive={textures_alive}"
+        );
+        cx.executor().advance_clock(std::time::Duration::from_millis(5));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 fn graphics_recovery_stats(

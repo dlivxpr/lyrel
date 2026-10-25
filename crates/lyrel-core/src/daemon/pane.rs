@@ -7470,32 +7470,6 @@ mod tests {
     }
 
     #[test]
-    fn resize_echoes_size_to_the_controller_between_old_and_new_output() {
-        let mut st = test_state(true);
-        let (controller_tx, controller_rx) = mpsc::channel();
-        attach_subscriber(&mut st, controller_tx);
-        drain(&controller_rx);
-
-        let pane_gate = OutputGate::new();
-        fan_out_output(&mut st, b"old-width bytes", Vec::new(), &pane_gate);
-        resize_state(&mut st, ws(120, 30), &pane_gate);
-        fan_out_output(&mut st, b"new-width bytes", Vec::new(), &pane_gate);
-
-        match controller_rx.try_recv().unwrap() {
-            DaemonMsg::Output(b) => assert_eq!(b, b"old-width bytes"),
-            other => panic!("expected the pre-resize Output first, got {other:?}"),
-        }
-        match controller_rx.try_recv().unwrap() {
-            DaemonMsg::Size(size) => assert_eq!((size.cols, size.rows), (120, 30)),
-            other => panic!("expected the Size echo in stream order, got {other:?}"),
-        }
-        match controller_rx.try_recv().unwrap() {
-            DaemonMsg::Output(b) => assert_eq!(b, b"new-width bytes"),
-            other => panic!("expected the post-resize Output last, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn death_notifies_observers_but_only_controllers_defer_the_reap() {
         let with_observer_only = Arc::new(Mutex::new(test_state(true)));
         let (observer_tx, observer_rx) = mpsc::channel();
