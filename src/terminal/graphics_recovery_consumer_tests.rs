@@ -229,6 +229,17 @@ fn graphics_recovery_detached_request_with_replies(
     bytes: &[u8],
     replies: usize,
 ) -> String {
+    graphics_recovery_exchange(daemon, pane, operation, serial, bytes, replies).0
+}
+
+fn graphics_recovery_exchange(
+    daemon: &GraphicsDaemonProcess,
+    pane: u64,
+    operation: &str,
+    serial: usize,
+    bytes: &[u8],
+    replies: usize,
+) -> (String, Vec<DaemonMsg>) {
     let mut observer = daemon.panes().observe(pane, crate::daemon::protocol::WinSize {
         cols: 80, rows: 24, cell_w: 10, cell_h: 20,
     }).unwrap();
@@ -236,18 +247,37 @@ fn graphics_recovery_detached_request_with_replies(
     let hex = graphics_pty_fixture::hex(bytes);
     let request = format!("{operation} {serial} {replies} {hex} 0\n");
     daemon.panes().send_input(pane, request.as_bytes()).unwrap();
+    graphics_recovery_collect(observer, serial)
+}
+
+fn graphics_recovery_collect(
+    mut observer: lyrel_core::client::PaneSession,
+    serial: usize,
+) -> (String, Vec<DaemonMsg>) {
     let marker = format!("KITTY_DONE_{serial}");
     let mut text = Vec::new();
+    let mut trace = Vec::new();
     while !text.windows(marker.len()).any(|part| part == marker.as_bytes()) {
-        match observer.recv().unwrap() {
-            DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend(bytes),
+        let message = observer.recv().unwrap();
+        match &message {
+            DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => text.extend_from_slice(bytes),
             DaemonMsg::Error(error) => panic!("detached output barrier failed: {error}; actual PTY output={}", String::from_utf8_lossy(&text)),
             DaemonMsg::Exited { .. } => panic!("recovery cannot restart or end the real sender; actual PTY output={}", String::from_utf8_lossy(&text)),
             _ => {}
         }
+        trace.push(message);
     }
     observer.detach().unwrap();
-    String::from_utf8_lossy(&text).into_owned()
+    (String::from_utf8_lossy(&text).into_owned(), trace)
+}
+
+fn graphics_recovery_trace(messages: &[DaemonMsg]) -> Vec<String> {
+    messages.iter().map(|message| match message {
+        DaemonMsg::Graphics(frame) => format!("Graphics {:?}", lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame(frame)),
+        DaemonMsg::Snapshot(bytes) => format!("Snapshot {:?}", String::from_utf8_lossy(bytes)),
+        DaemonMsg::Output(bytes) => format!("Output {:?}", String::from_utf8_lossy(bytes)),
+        other => format!("{other:?}"),
+    }).collect()
 }
 
 #[gpui_kit::test]
@@ -282,15 +312,37 @@ fn graphics_consumer_detached_changes_and_replay_live_cutover_keep_screen_resize
     }
     // The real attach is now awaiting its first desktop grant. Mutate actual
     // PTY output before any replay resource can enter the new ImageStore.
-    let admitted = graphics_recovery_detached_request_with_replies(&daemon, pane, "SEND_OK", 203, b"\x1b[6;5H\x1b_Ga=T,i=21,p=1,c=2,r=1,C=1,f=32,s=1,v=1;AP///w==\x1b\\\x1b_Ga=d,d=I,i=24\x1b\\\x1b[?1049h\x1b[2J\x1b[4;1HLIVE-ALT\x1b[7;5H\x1b_Ga=T,i=23,p=3,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\", 2);
+    let (admitted, produced) = graphics_recovery_exchange(&daemon, pane, "SEND_OK", 203, b"\x1b[6;5H\x1b_Ga=T,i=21,p=1,c=2,r=1,C=1,f=32,s=1,v=1;AP///w==\x1b\\\x1b_Ga=d,d=I,i=24\x1b\\\x1b[?1049h\x1b[2J\x1b[4;1HLIVE-ALT\x1b[7;5H\x1b_Ga=T,i=23,p=3,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\", 2);
     for reply in [b"\x1b_Gi=21,p=1;OK\x1b\\".as_slice(), b"\x1b_Gi=23,p=3;OK\x1b\\".as_slice()] {
         assert!(admitted.contains(&format!("KITTY_REPLY 203 {}", graphics_pty_fixture::hex(reply))),
             "concurrent replay uploads must be accepted with their own image and placement identities: {admitted}");
     }
+    // Keep a production observer across the actual GPUI prepaint/resize, so
+    // a lost placement is diagnosed against the daemon's ordered state rather
+    // than mistaken for a decoder delay or a desktop screen projection.
+    let mut cutover_observer = daemon.panes().observe(pane, crate::daemon::protocol::WinSize {
+        cols: 80, rows: 24, cell_w: 10, cell_h: 20,
+    }).unwrap();
+    cutover_observer.set_recv_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
     stream.set_read_timeout(None).unwrap();
     let (view, window) = graphics_build_rooted_consumer(cx, pane, stream, buffered);
     graphics_assert_production_paint_at(window, &view, cx, TermSize::new(80, 24));
     graphics_recovery_stats(&view, cx, 204);
+    daemon.panes().send_input(pane, b"STAT 214 0 00 0\n").unwrap();
+    let (_, cutover) = graphics_recovery_collect(cutover_observer, 214);
+    let updates: Vec<_> = cutover.iter().filter_map(|message| match message {
+        DaemonMsg::Graphics(frame) => lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame(frame),
+        _ => None,
+    }).collect();
+    let accepted = updates.iter().find_map(|update| match update {
+        lyrel_core::core::kitty_graphics::GraphicsUpdate::Place(placement) if placement.image_id == 23 && placement.screen == 1 => Some(placement.key),
+        _ => None,
+    });
+    let removed = accepted.is_some_and(|key| updates.iter().any(|update| matches!(update,
+        lyrel_core::core::kitty_graphics::GraphicsUpdate::Remove { placements, .. } if placements.contains(&key))));
+    assert!(accepted.is_some() && !removed,
+        "accepted alternate-screen placement was removed by authoritative output before paint; sender exchange={:?}; replay-to-live={:?}; desktop={}",
+        graphics_recovery_trace(&produced), graphics_recovery_trace(&cutover), view.read_with(cx, |view, _| view.terminal.images().recovery_diagnostics()));
     graphics_recovery_pixels(&view, cx, 23, &[255, 255, 255, 255]);
     graphics_assert_production_paint(window, &view, cx);
     view.read_with(cx, |view, _| {
