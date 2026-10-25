@@ -546,6 +546,72 @@ fn retention_daemon_shared_resource_prototypes_keep_independent_last_live_facts(
 }
 
 #[test]
+#[cfg(unix)]
+fn retention_daemon_indirect_queries_reject_short_claims_and_preserve_quiet_identity() {
+    use base64::Engine as _;
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+    struct Shared(std::ffi::CString);
+    impl Drop for Shared {
+        fn drop(&mut self) { unsafe { libc::shm_unlink(self.0.as_ptr()); } }
+    }
+    let daemon = Daemon::start();
+    let mut consumer = daemon.spawn();
+    let original = consumer.red("a=T,i=71,p=1,c=1,r=1,C=1");
+    let dir = tempfile::tempdir().unwrap();
+    for medium in ['f', 't', 's'] {
+        for (claimed, offset, quiet, success) in [
+            (5, 2, 0, false), (4, 2, 0, true), (0, 2, 0, true),
+            (4, 7, 0, false), (4, 2, 1, true), (5, 2, 1, false), (5, 2, 2, false),
+        ] {
+            let path = dir.path().join("tty-graphics-protocol-query.rgba");
+            let shared = (medium == 's').then(|| {
+                let name = std::ffi::CString::new(format!("/lyrel-{:016x}", uuid::Uuid::new_v4().as_u128() as u64)).unwrap();
+                let object = Shared(name);
+                let fd = unsafe { libc::shm_open(object.0.as_ptr(), libc::O_CREAT | libc::O_EXCL | libc::O_RDWR, 0o600) };
+                assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+                let file = unsafe { std::fs::File::from_raw_fd(fd) };
+                file.set_len(6).unwrap();
+                let mapped = unsafe { libc::mmap(std::ptr::null_mut(), 6, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+                assert_ne!(mapped, libc::MAP_FAILED);
+                unsafe {
+                    std::ptr::copy_nonoverlapping([8_u8, 9, 0, 255, 0, 255].as_ptr(), mapped.cast::<u8>(), 6);
+                    assert_eq!(libc::munmap(mapped, 6), 0);
+                }
+                object
+            });
+            let name = if let Some(shared) = &shared {
+                shared.0.as_bytes()
+            } else {
+                std::fs::write(&path, [8, 9, 0, 255, 0, 255]).unwrap();
+                path.as_os_str().as_encoded_bytes()
+            };
+            let name = base64::engine::general_purpose::STANDARD.encode(name);
+            let request = format!("\x1b_Ga=q,i=71,p=9,t={medium},f=32,s=1,v=1,S={claimed},O={offset},q={quiet};{name}\x1b\\");
+            let suppressed = quiet == 2 || quiet == 1 && success;
+            let replies = consumer.exchange(request.as_bytes(), usize::from(!suppressed));
+            let expected = if suppressed { Vec::new() } else if success {
+                vec![b"\x1b_Gi=71,p=9;OK\x1b\\".to_vec()]
+            } else {
+                vec![b"\x1b_Gi=71,p=9;EBADF:Failed to read image file\x1b\\".to_vec()]
+            };
+            assert_eq!(replies, expected, "medium={medium}, S={claimed}, O={offset}, q={quiet}");
+            assert!(!consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Resource { .. } | GraphicsUpdate::Remove { .. })), "query cannot replace the original resource");
+            if let Some(shared) = &shared {
+                let fd = unsafe { libc::shm_open(shared.0.as_ptr(), libc::O_RDONLY, 0) };
+                if fd >= 0 { unsafe { libc::close(fd); } }
+                assert!(fd < 0, "every attempted shm handoff is unlinked");
+            } else {
+                assert_eq!(path.exists(), medium == 'f' || !success, "only a successfully read marked tempfile is removed");
+            }
+        }
+    }
+    let reply = consumer.exchange(b"\x1b_Ga=p,i=71,p=2,c=1,r=1,C=1\x1b\\", 1);
+    assert_eq!(reply, [b"\x1b_Gi=71,p=2;OK\x1b\\".to_vec()]);
+    assert!(consumer.updates.iter().any(|update| matches!(update, GraphicsUpdate::Place(p) if p.resource == original)), "queries keep the original reusable identity");
+    daemon.panes().kill(consumer.session.pane_id()).unwrap();
+}
+
+#[test]
 fn retention_daemon_capacity_rejects_inadequate_attach_and_refuses_new_input() {
     let daemon = Daemon::start();
     let mut a = daemon.spawn();
