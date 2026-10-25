@@ -155,7 +155,7 @@ tui:
 
 `PI_KITTY_PLACEHOLDERS=1` 选择 Unicode 占位符；改为 `0` 验证直接放置。如果另有 `PI_NO_KITTY_PLACEHOLDERS=1`，它会优先硬关闭占位符。不要使用不存在的 `--image-protocol` 参数，也不要使用已移除的 `PI_KITTY_IMAGE_TRANSMISSION`。选项来源为该正式版本的 [environment-variables.md](https://github.com/can1357/oh-my-pi/blob/v18.12.6/docs/environment-variables.md) 与 [settings.md](https://github.com/can1357/oh-my-pi/blob/v18.12.6/docs/settings.md)。
 
-Windows 协议冒烟使用完全临时的 home／profile／overlay 与合成 version 3 JSONL，通过公开 `--resume <path>` 启动真实交互 TUI。直接放置和占位符两轮均经真实 ConPTY、独立 daemon 与生产 `PaneClient` 收到 SVG 栅格 PNG 和 toolResult PNG 的独立资源／放置；后者的内容指纹与输入一致，占位符轮另有真实 `U+10EEEE` 单元。保留 `TERM_PROGRAM=lyrel`，未修改 omp 源码，也未使用丢弃图片字节的 `omp render` 或 gallery 代替。发送 `/exit` 后进程正常退出，合成会话没有新增 assistant、`model_usage` 或 `title_change`；没有提交新 prompt。
+Windows 协议冒烟已在 pane `13` 的生产 CLI／daemon 上复验，使用完全临时的 home／profile／overlay 与合成 version 3 JSONL，通过公开 `--resume <path>` 启动真实 `omp/18.12.6` 交互 TUI。直接放置和占位符两轮均经真实 ConPTY、独立 daemon 与生产 `PaneClient` 收到 `240 × 80` SVG 栅格 PNG 和 `64 × 64` 合成 toolResult PNG 的独立资源／放置；后者的内容指纹与输入一致，占位符轮另有真实 `U+10EEEE` 单元。保留 `TERM_PROGRAM=lyrel`，未修改 omp 源码，也未使用丢弃图片字节的 `omp render` 或 gallery 代替。发送 `/exit` 后两轮进程及私有 daemon 均正常退出，无 socket 错误；合成会话没有新增 assistant、`model_usage` 或 `title_change`，没有提交新 prompt。临时 home／profile／会话／端点及冒烟脚本均已清理。
 
 这只证明正式应用的渲染／协议发送路径；合成 PNG 不是真实桌面截图，旁路帧记录不是原生像素。正式 omp 的 Windows/macOS 实窗、真实截图、滚动／裁剪及 GUI 关开／SSH 恢复仍待分别验收。隔离进程未传入用户凭据；公开 catalog 刷新或无凭据的连接预热不等同于模型推理，也不应把本次验证写成完全断网。
 
