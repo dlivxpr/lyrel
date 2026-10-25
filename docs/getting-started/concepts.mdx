@@ -108,15 +108,15 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 非活动屏不等于全部受保护：进入备用屏后，主屏仍属实时屏的图片保持保护，已离开实时屏且未被真实滚动视口引用的旧历史仍可回收。daemon 向桌面传递这一权威引用事实，避免跨 pane／跨 daemon 的桌面压力错误钉住非活动屏全部历史；direct 与 placeholder 使用相同优先级。
 
-本次视口／压力完成修复前的历史集成已运行完整默认成员检查：Windows 的 25 个 Rust suite 共 4,701 项通过，另有 CLI E2E 24 项通过，合计 4,725 项；默认运行仍有 34 项 ignored，随后显式执行的原生 SSH transport 1 项及 rooted consumer 2 项单独通过，不将其他 ignored 归为通过。Linux 原生 headless workspace 默认检查的 24 个 Rust suite 共 2,284 项通过，另有 CLI E2E 24 项，合计 2,308 项，30 项 ignored；这不是 Linux 桌面或本地 `--all-features` 证据。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。这些历史结果不覆盖本次 pane `15` 的视口合并与压力完成修复。macOS 自动化以匹配提交的 CI 为准；原生窗口／GPU／SSH 仍须分别取证，headless paint 不等同于最终 GPU 像素。
+本次 pane `15` 修复已通过完整默认成员检查：Windows 的 25 个 Rust suite 共 4,709 项通过，另有 CLI E2E 24 项通过，合计 4,733 项，34 项 ignored；Linux 原生 headless workspace 的 `--all-features` 检查中，24 个 Rust suite 共 2,286 项通过，另有 CLI E2E 24 项，合计 2,310 项，30 项 ignored。计数不重复包含子进程内部重跑的单个用例。随后显式执行真实 Windows→Linux SSH transport 1 项及 rooted consumer 2 项，均通过，不将其他 ignored 归为通过。Windows 使用已准备的官方 ConPTY，Linux 与 Host 边界检查使用原生 Node 22.23.4；格式及 Host 边界检查通过。以上覆盖集成 `a75257d` 的同一代码；macOS 自动化以匹配提交的 CI 为准。原生窗口／GPU 仍须分别取证，headless paint 不等同于最终 GPU 像素。
 
-本次 pane `15` 修复的定向验证：Windows 真实 `client_lib` 44 项通过（1 项夹具 ignored）、桌面 graphics 34 项通过（2 项真实 SSH 用例 ignored）、image worker 6 项通过；Linux 原生 routed 4 项、daemon graphics 26 项（1 项夹具 ignored）、protocol 36 项通过。独立 Windows 生产 CLI／ConPTY 冒烟在私有 daemon 中发送 24 张 4K direct／placeholder 混合历史图片，普通输入仍可达，发送器与 daemon 均以 0 退出；此冒烟没有桌面消费者，不证明原生像素、GPU 峰值或全部图片均被保留。原生窗口控制请求未获回应，未操作用户桌面。
+独立 Windows 生产 CLI／ConPTY 冒烟在私有 daemon 中发送 24 张 4K direct／placeholder 混合历史图片，普通输入仍可达，发送器与 daemon 均以 0 退出；此冒烟没有桌面消费者，不证明原生像素、GPU 峰值或全部图片均被保留。原生窗口控制请求未获回应，未操作用户桌面。
 
 本地主机的间接传输仍有平台边界：Linux 文件／POSIX shm 通过有界 descriptor read，普通文件不使用可能因并发截断触发 `SIGBUS` 的映射。macOS 的 POSIX shm FD 不提供 `read`／`write`，且对象仅允许初次 `ftruncate`；因此使用最多 32 MiB 的只读 `MAP_SHARED` 范围，复制所请求字节后立即释放映射，映射与副本合计先预留 64 MiB 临时工作额度。macOS 对象名最多 31 bytes，Linux 最多 255 bytes。以上不启用 Windows 间接传输，也不将远端路径解析到桌面主机。平台依据为 [Apple XNU 的 POSIX shm 实现](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/posix_shm.c)。
 
 普通 SSH 子进程的间接媒体在接受及实际读取前重新核验前景进程组；同组本地父进程不能掩盖带远端命令的 SSH 子进程，无法证明本地时拒绝该传输。跨片段传输一旦经历远端或未知来源，后续本地片段不能恢复其读取权限；后续独立本地请求仍可正常使用。普通文字与直接传输不触发这项进程组扫描。文件／共享内存显式声明的读取长度超过偏移后实际可用范围时返回 `EBADF`，不将短内容截取成成功请求。
 
-#41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、既有 GPUI consumer 的真实 PNG／raw 解码与 paint 回归，以及受控退休 worker 与继任连接回归已在 Windows 集成分支运行通过。Windows/macOS 原生窗口仍需分别观察有效图片、无效／超限拒收后已有图片、文字与交互输入继续可用，并验证裁剪、透明、替换、删除及隐藏窗格表现；真实 SSH→Linux 路径及正式 omp 的原生 SVG／真实截图呈现也尚待分别验收。没有发起前台权限审批；仅收到 frame 或观察到派生状态不等同于原生像素验收。
+#41 的真实 daemon-session 格式／压缩／应答／中断／49 MiB APC 拒收及后续输入回归、既有 GPUI consumer 的真实 PNG／raw 解码与 paint 回归，以及受控退休 worker 与继任连接回归已在 Windows 集成分支运行通过。Windows/macOS 原生窗口仍需分别观察有效图片、无效／超限拒收后已有图片、文字与交互输入继续可用，并验证裁剪、透明、替换、删除及隐藏窗格表现；真实 SSH→Linux 及正式 omp 的原生 SVG／真实截图呈现也尚待分别验收。前台控制尚未获授权；仅收到 frame 或观察到派生状态不等同于原生像素验收。
 
 #### 当前实现：终端布局与屏幕生命周期（#42）
 
@@ -130,7 +130,7 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 
 #42 审查补充了真实 daemon 到生产 GPUI 消费者的高度增长／收缩、部分裁切及历史过期后的尺寸调整、匿名资源容量恢复、`DECCOLM` 后 LF／RI／S／T，以及退出／断链用户清理回归。测试 fixture 的 control／pane 就绪握手具有 socket 读写期限；关键图片移动、屏幕切换、尺寸变化与清理后重新绘制 rooted 生产视图，观察当帧几何与实际 paint claim，不只读取图片投影。初始测试视口显式固定，并以真实 PTY 屏障等待重绘触发的 resize，避免测试窗口布局污染协议几何。Windows 核心、8 项真实 daemon 布局回归、16 项 graphics consumer 和 14 项 prompt reflow 回归已通过；以上不是原生 GPU 或其他平台的通过证据。
 
-GPUI 测试窗口当前没有配置 `HeadlessRenderer`，不能读取最终 GPU 像素；解码数据、几何或已提交绘制标记都不替代原生合成证据。按用户安排，原生验收延后且未请求任何前台权限：Windows 的 100%／125%／150%／200% 显示缩放、macOS 的 1×／2× 显示器及跨显示器移动，默认／更改后的终端字体与字号，宽窄分屏、滚动区域、主备屏往返、双色源裁剪、透明／z 合成和清理后重绘均待分别观察。正式 omp、真实 SSH→Linux、Unicode 占位符及重连恢复不能据此宣称通过。
+GPUI 测试窗口当前没有配置 `HeadlessRenderer`，不能读取最终 GPU 像素；解码数据、几何或已提交绘制标记都不替代原生合成证据。前台控制尚未获授权，以下原生验收仍待执行：Windows 的 100%／125%／150%／200% 显示缩放、macOS 的 1×／2× 显示器及跨显示器移动，默认／更改后的终端字体与字号，宽窄分屏、滚动区域、主备屏往返、双色源裁剪、透明／z 合成和清理后重绘。正式 omp、真实 SSH→Linux、Unicode 占位符及重连恢复的原生呈现不能据此宣称通过。
 
 #### 当前实现：Unicode 占位符（#43）
 

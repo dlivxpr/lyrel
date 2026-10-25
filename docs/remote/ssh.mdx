@@ -150,13 +150,14 @@ cargo test --locked -p lyrel --bin lyrel-app native_ssh_consumer_ \
 缺少前提会使显式用例失败。结束时仅移除本次创建的 pane 与唯一生产者目录；
 远端 daemon 由测试端点的维护者管理，用例不停止它或删除整个远端 HOME。
 
-**2026-10-25 的历史自动化证据，不覆盖本次 pane `15` 视口／压力完成修复：**Windows `10.0.26300` → WSL2 Ubuntu
+**2026-10-25 已验证 pane `15` 自动化：**Windows `10.0.26300` → WSL2 Ubuntu
 `26.04.1 LTS`（Linux `6.18.54.1-microsoft-standard-WSL2`、Node `22.23.4`）；
-当时本机与远端 server 均为 `0.2.0`，实际协商 pane `14`／control `16`。
+本机与远端 server 均为 `0.2.1`，实际协商 pane `15`／control `16`。
 真实 transport 用例 1 项、rooted GPUI consumer 用例 2 项通过，覆盖直接放置、
 Unicode 占位符、裁剪／替换／删除、滚动与 screen、有限预算拒收／历史提示、
 本地 router 重启后的 fresh 恢复，以及发送计数不变的同一远端 daemon／生产者。
 超限请求后的普通输入仍可用；远端文件／共享内存不会误读本机同名路径。
+本轮针对集成 `a75257d` 的同一代码再次执行：transport 1 项、rooted consumer 2 项均通过；检查远端状态确认 `0.2.1`／pane `15`／control `16`，随后停止本轮隔离 daemon 和 SSH 服务。
 
 本地终端内直接启动的普通 SSH 也不能借同进程组的本地父进程读取本机图片路径。独立 Linux CLI／PTY／真实 OpenSSH 冒烟已验证：同一前景进程组下，本地查询成功、远端带命令的查询返回 `ENOTSUPPORTED:Host-local transfer unavailable`，SSH 退出后的独立本地查询恢复成功；无法确定来源时拒绝间接媒体。远端程序仍应优先直接传输像素或 PNG，这不构成任意多层代理链的兼容保证。
 

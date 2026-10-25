@@ -12,6 +12,7 @@
 - 修复终端 grid 锁竞争导致最终滚动视口丢失的问题：至多保留一个后台唤醒，取得锁后采样最新状态；隐藏撤销已有视口，首次 Screen 与重连后重新报告，不积压过时快照。发送连接仍使用既有积压错误边界，不将其描述为无限重试或可靠送达。
 - 修复桌面图片压力请求被 daemon 拒绝后永久锁住的问题：每资源只允许一个未完成请求，daemon 在有序公布权威回收效果后，仅向请求 endpoint 返回 `DaemonMsg::GraphicsPressureResult { key: u64, reclaimed: bool }`；客户端只按匹配 `key` 解锁。另一消费者滚离历史、隐藏或 detach 后，即使没有新文字或资源更新，后续准入需求仍可重新请求，不新增自动重试定时器、不循环重发，也不回收仍受保护的图片。pane 协议升至 `15`，`CONTROL_VERSION` 保持 `16`；此修复不新增原生窗口／GPU 或 macOS 验收声明。
 - 修复隐藏 pane 退休 atlas 无条件刷新整窗的问题：旧 tile 与 GPU 票仍及时释放，仅实际失效的已显示 owner 触发整窗重绘；存活图片在后续 paint 重新注册，隐藏后返回保留当前像素。真实 daemon／生产 GPUI headless 回归覆盖后台窗口 render 次数、拒收后的再准入和可见删除；不将其作为原生 GPU 像素或 macOS 验收。
+- 本次 pane `15` 代码通过 Windows 完整默认成员测试及 Linux 原生 headless `--all-features`；真实 Windows→Linux SSH transport 1 项、rooted GPUI consumer 2 项通过。独立私有 daemon 的 24 张 4K 混合路径 CLI／ConPTY 冒烟中，普通输入及退出正常；不将这些结果作为原生窗口、GPU 峰值或 macOS 验收。
 
 ## [0.2.1] - 2026-10-25
 
