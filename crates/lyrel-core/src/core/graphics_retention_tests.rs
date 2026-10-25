@@ -484,12 +484,22 @@ fn retention_daemon_removed_observer_cannot_freeze_history_as_inactive_live() {
     }).unwrap();
     consumer.idle(&b"\r\n".repeat(40));
     let live = consumer.red("a=T,i=2,p=2,c=1,r=1,C=1");
-    let mut observer = daemon.capacity_attach(consumer.session.pane_id(), 8, true);
+    let mut observer = crate::daemon::transport::connect_endpoint_at(&daemon.endpoint("daemon")).unwrap();
+    observer.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    crate::daemon::protocol::negotiate_pane(&mut observer).unwrap();
+    ClientMsg::GraphicsCapacity { encoded_bytes: 1024, decoded_bytes: 32, offers: true }.encode(&mut observer).unwrap();
+    ClientMsg::Observe { pane_id: consumer.session.pane_id(), size: size() }.encode(&mut observer).unwrap();
     let epoch = loop {
-        if let DaemonMsg::Graphics(frame) = DaemonMsg::read(&mut observer).unwrap() {
-            if let Some(GraphicsUpdate::Screen { screen: 0, epoch, .. }) = GraphicsUpdate::decode_frame_owned(frame.into_vec()) {
-                break epoch;
+        match DaemonMsg::read(&mut observer).unwrap() {
+            DaemonMsg::GraphicsOffer { token, .. } => {
+                ClientMsg::GraphicsGrant { token, accepted: true }.encode(&mut observer).unwrap();
             }
+            DaemonMsg::Graphics(frame) => {
+                if let Some(GraphicsUpdate::Screen { screen: 0, epoch, .. }) = GraphicsUpdate::decode_frame_owned(frame.into_vec()) {
+                    break epoch;
+                }
+            }
+            _ => {}
         }
     };
     ClientMsg::GraphicsViewport(crate::daemon::protocol::GraphicsViewport {
@@ -504,8 +514,28 @@ fn retention_daemon_removed_observer_cannot_freeze_history_as_inactive_live() {
             break;
         }
     }
-    let refused = consumer.exchange(b"\x1b_Ga=T,i=3,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1);
-    assert!(refused[0].starts_with(b"\x1b_Gi=3;ENOSPC:"), "the attached observer protects the historical image it is actually viewing");
+    let marker = format!("KITTY_DONE_{}\r", consumer.serial + 1).into_bytes();
+    let refused = std::thread::scope(|scope| {
+        let drain = scope.spawn(|| {
+            let mut output = Vec::new();
+            loop {
+                match DaemonMsg::read(&mut observer).unwrap() {
+                    DaemonMsg::GraphicsOffer { token, .. } => {
+                        ClientMsg::GraphicsGrant { token, accepted: true }.encode(&mut observer).unwrap();
+                    }
+                    DaemonMsg::Output(bytes) => {
+                        output.extend(bytes);
+                        if output.windows(marker.len()).any(|bytes| bytes == marker) { break; }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let replies = consumer.exchange(b"\x1b_Ga=T,i=3,f=32,s=1,v=1,C=1;/wAA/w==\x1b\\", 1);
+        drain.join().unwrap();
+        replies
+    });
+    assert_eq!(refused, [b"\x1b_Gi=3;ENOSPC:Graphics retention budget exhausted\x1b\\".to_vec()], "the attached observer protects its historical image even after granting the new transfer");
     ClientMsg::Detach.encode(&mut observer).unwrap();
     while DaemonMsg::read(&mut observer).is_ok() {}
     consumer.idle(b"\x1b[?1049h");
