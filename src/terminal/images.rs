@@ -485,26 +485,6 @@ fn retire(resource: Resource, retired: &mut Vec<Arc<Residency>>) {
     }
 }
 
-fn rearm_pressure_after_live_reference(inner: &mut StoreInner, placement: &Placement) {
-    // A hidden consumer can request pressure while the daemon still protects
-    // live content. Only losing the last authoritative live reference rearms
-    // a refused request; failed offers and historical updates do not retry it.
-    if !placement.live
-        || !inner
-            .resources
-            .get(&placement.resource)
-            .is_some_and(|resource| resource.pressure_requested)
-        || inner.placements.values().any(|anchored| {
-            anchored.placement.resource == placement.resource && anchored.placement.live
-        })
-    {
-        return;
-    }
-    if let Some(resource) = inner.resources.get_mut(&placement.resource) {
-        resource.pressure_requested = false;
-    }
-}
-
 fn take_metadata_offer(
     inner: &mut StoreInner,
     generation: u64,
@@ -909,7 +889,7 @@ impl ImageStore {
         displayed: bool,
         rows: &[(i32, Vec<PlaceholderSlice>)],
     ) -> Option<(u64, u64, bool)> {
-        let mut inner = self.0.state.lock().unwrap();
+        let inner = self.0.state.lock().unwrap();
         if inner.closed {
             return None;
         }
@@ -977,13 +957,9 @@ impl ImageStore {
         }
         inner
             .resources
-            .iter_mut()
+            .iter()
             .filter_map(|(&key, resource)| {
-                if protected.contains(&key) {
-                    resource.pressure_requested = false;
-                    return None;
-                }
-                if resource.evicted || resource.pressure_requested {
+                if protected.contains(&key) || resource.evicted || resource.pressure_requested {
                     return None;
                 }
                 Some((key, resource.received, !referenced.contains(&key)))
@@ -1377,7 +1353,7 @@ impl ImageStore {
                 };
                 inner.next_revision = inner.next_revision.wrapping_add(1);
                 let revision = inner.next_revision;
-                let old = inner.placements.insert(
+                inner.placements.insert(
                     placement.key,
                     AnchoredPlacement {
                         placement,
@@ -1385,9 +1361,6 @@ impl ImageStore {
                         metadata,
                     },
                 );
-                if let Some(old) = old {
-                    rearm_pressure_after_live_reference(&mut inner, &old.placement);
-                }
                 true
             }
             GraphicsUpdate::Screen {
@@ -1411,9 +1384,7 @@ impl ImageStore {
             } => {
                 // Never interpret kitty selectors or remove unnamed placements.
                 for key in placements {
-                    if let Some(old) = inner.placements.remove(&key) {
-                        rearm_pressure_after_live_reference(&mut inner, &old.placement);
-                    }
+                    inner.placements.remove(&key);
                 }
                 for key in resources {
                     if let Some(resource) = inner.resources.remove(&key) {
@@ -1541,6 +1512,20 @@ impl DecodeWorker {
         let mut inner = self.store.0.state.lock().unwrap();
         if inner.reader_generation == self.generation {
             inner.offers.remove(&token);
+        }
+    }
+
+    pub(super) fn complete_pressure(&self, key: u64) {
+        let mut inner = self.store.0.state.lock().unwrap();
+        if !inner.closed
+            && inner.reader_generation == self.generation
+            && let Some(resource) = inner.resources.get_mut(&key)
+        {
+            // Success already arrived as an ordered Evicted mutation. Refusal
+            // is also complete: later admission demand may try again after
+            // any authority protection change, including another viewport.
+            // Neither completion schedules work or retries by itself.
+            resource.pressure_requested = false;
         }
     }
 

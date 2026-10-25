@@ -76,7 +76,12 @@ pub(super) fn run(
                 // Apply this connection's viewport before its following
                 // pressure request, not behind the ordinary-input queue.
                 ClientMsg::GraphicsViewport(viewport) => input_pane.graphics_viewport(endpoint, &input_sender, viewport),
-                ClientMsg::GraphicsPressure { key } => input_pane.pressure_graphics(key),
+                ClientMsg::GraphicsPressure { key } => {
+                    let reclaimed = input_pane.pressure_graphics(key);
+                    if let Some(sender) = input_sender.upgrade() {
+                        let _ = sender.send(DaemonMsg::GraphicsPressureResult { key, reclaimed });
+                    }
+                }
                 ClientMsg::Detach => {
                     input_broker.unregister(endpoint);
                     let _ = input.try_send(ClientMsg::Detach);

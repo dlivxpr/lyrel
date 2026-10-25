@@ -1647,14 +1647,15 @@ impl DaemonPane {
         }
     }
 
-    pub fn pressure_graphics(&self, key: u64) {
+    pub(crate) fn pressure_graphics(&self, key: u64) -> bool {
         let mut state = self.state.lock().unwrap();
-        let effects = state
+        let (reclaimed, effects) = state
             .graphics
             .as_mut()
             .map(|graphics| graphics.pressure_resource(key))
             .unwrap_or_default();
         publish_graphics_effects(&mut state, effects, &self.gate);
+        reclaimed
     }
 
     pub fn prepare_graphics_replay(

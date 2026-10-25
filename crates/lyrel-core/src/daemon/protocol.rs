@@ -94,7 +94,8 @@ const HEADER: usize = 5;
 /// v12 carries pixel-free eviction metadata and bounded desktop capacity.
 /// v13 reports connection-local absolute viewports with layout epochs.
 /// v14 carries each placement/prototype's own last-active live protection.
-pub const PROTOCOL_VERSION: u32 = 14;
+/// v15 completes each graphics pressure request on its requesting endpoint.
+pub const PROTOCOL_VERSION: u32 = 15;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -1161,6 +1162,12 @@ pub enum DaemonMsg {
     GraphicsCancel {
         token: u64,
     },
+    /// Sent only to the requesting connection, after authoritative eviction
+    /// effects. `false` also completes requests for protected or absent pixels.
+    GraphicsPressureResult {
+        key: u64,
+        reclaimed: bool,
+    },
     /// A completed OSC 5522 clipboard write. The daemon strips the control
     /// sequence from replay; the GUI decides whether it may touch the clipboard.
     ClipboardWrite(Vec<u8>),
@@ -1214,6 +1221,7 @@ mod kind {
     pub const GRAPHICS_CANCEL: u8 = 67;
     pub const GRAPHICS_PRESSURE: u8 = 68;
     pub const GRAPHICS_VIEWPORT: u8 = 69;
+    pub const GRAPHICS_PRESSURE_RESULT: u8 = 70;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1779,6 +1787,11 @@ impl DaemonMsg {
             DaemonMsg::GraphicsCancel { token } => {
                 write_frame(w, kind::GRAPHICS_CANCEL, &to_json(token)?)
             }
+            DaemonMsg::GraphicsPressureResult { key, reclaimed } => write_frame(
+                w,
+                kind::GRAPHICS_PRESSURE_RESULT,
+                &to_json(&(key, reclaimed))?,
+            ),
             DaemonMsg::ClipboardWrite(frame) => write_frame(w, kind::CLIPBOARD_WRITE, frame),
             DaemonMsg::Cwd(path) => write_frame(w, kind::CWD, &to_json(path)?),
             DaemonMsg::Prompt {
@@ -1850,6 +1863,10 @@ impl DaemonMsg {
             kind::GRAPHICS_CANCEL => DaemonMsg::GraphicsCancel {
                 token: from_json(&payload)?,
             },
+            kind::GRAPHICS_PRESSURE_RESULT => {
+                let (key, reclaimed) = from_json(&payload)?;
+                DaemonMsg::GraphicsPressureResult { key, reclaimed }
+            }
             kind::CLIPBOARD_WRITE => DaemonMsg::ClipboardWrite(payload),
             kind::CWD => DaemonMsg::Cwd(from_json(&payload)?),
             kind::PROMPT => {
@@ -2195,6 +2212,14 @@ mod tests {
             DaemonMsg::Size(SIZE),
             DaemonMsg::Snapshot(vec![1, 2, 3, 0, 255]),
             DaemonMsg::Output((0u8..=255).collect()),
+            DaemonMsg::GraphicsPressureResult {
+                key: u64::MAX,
+                reclaimed: false,
+            },
+            DaemonMsg::GraphicsPressureResult {
+                key: 42,
+                reclaimed: true,
+            },
             DaemonMsg::Cwd(PathBuf::from("/home/u/dev")),
             DaemonMsg::Prompt {
                 active: true,

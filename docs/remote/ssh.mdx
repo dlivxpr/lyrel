@@ -110,6 +110,8 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。
 负责 PTY 的远端 daemon 按自己的能力与路径读取，不在桌面文件系统上查找同名路径。
 这与下方 OSC 5522 **剪贴板**功能不同，也不要求开启远程剪贴板权限。
 
+当前本地与远端共用 pane 协议 `15`，`CONTROL_VERSION` 保持 `16`；连接前须双向确认匹配方言，旧 daemon／远端 server 需要更新。桌面视口在 grid 锁竞争时保留一个合并唤醒，取得锁后重新采样最新状态；首次 Screen 与重连后重新报告，发送积压仍按既有连接错误边界处理。桌面压力由资源所属 daemon 核验全部消费者保护后逐请求完成，只向请求 endpoint 返回结果。拒绝后可由后续准入需求重新请求，不依赖另一消费者隐藏／detach 后的新文字，也不新增自动重试定时器。
+
 远端 daemon 的编码资源、元数据、partial／校验工作，与桌面的 source、派生像素、
 解码工作及 atlas／GPU 分别计账；SSH 重连不豁免任何预算。恢复仅限同一存活 daemon
 仍保留的内容，不恢复已删除／淘汰的像素，也不新增图片磁盘持久化。
@@ -148,9 +150,9 @@ cargo test --locked -p lyrel --bin lyrel-app native_ssh_consumer_ \
 缺少前提会使显式用例失败。结束时仅移除本次创建的 pane 与唯一生产者目录；
 远端 daemon 由测试端点的维护者管理，用例不停止它或删除整个远端 HOME。
 
-**2026-10-25 已验证的自动化范围：**Windows `10.0.26300` → WSL2 Ubuntu
+**2026-10-25 的历史自动化证据，不覆盖本次 pane `15` 视口／压力完成修复：**Windows `10.0.26300` → WSL2 Ubuntu
 `26.04.1 LTS`（Linux `6.18.54.1-microsoft-standard-WSL2`、Node `22.23.4`）；
-本机与远端 server 均为 `0.2.0`，实际协商 pane `14`／control `16`。
+当时本机与远端 server 均为 `0.2.0`，实际协商 pane `14`／control `16`。
 真实 transport 用例 1 项、rooted GPUI consumer 用例 2 项通过，覆盖直接放置、
 Unicode 占位符、裁剪／替换／删除、滚动与 screen、有限预算拒收／历史提示、
 本地 router 重启后的 fresh 恢复，以及发送计数不变的同一远端 daemon／生产者。

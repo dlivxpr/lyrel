@@ -9,14 +9,15 @@
 
 ### 修复
 
-- 修复隐藏 pane 的桌面图片压力请求在 daemon 因 live 保护拒绝后永久锁住的问题：最后一个 live 放置经权威更新成为历史或被删除后才重新允许请求，保留多放置保护及回收后的历史提示，不新增重试定时器、应答或协议字段。
+- 修复终端 grid 锁竞争导致最终滚动视口丢失的问题：至多保留一个后台唤醒，取得锁后采样最新状态；隐藏撤销已有视口，首次 Screen 与重连后重新报告，不积压过时快照。发送连接仍使用既有积压错误边界，不将其描述为无限重试或可靠送达。
+- 修复桌面图片压力请求被 daemon 拒绝后永久锁住的问题：每资源只允许一个未完成请求，daemon 在有序公布权威回收效果后，仅向请求 endpoint 返回 `DaemonMsg::GraphicsPressureResult { key: u64, reclaimed: bool }`；客户端只按匹配 `key` 解锁。另一消费者滚离历史、隐藏或 detach 后，即使没有新文字或资源更新，后续准入需求仍可重新请求，不新增自动重试定时器、不循环重发，也不回收仍受保护的图片。pane 协议升至 `15`，`CONTROL_VERSION` 保持 `16`；此修复不新增原生窗口／GPU 或 macOS 验收声明。
 - 修复隐藏 pane 退休 atlas 无条件刷新整窗的问题：旧 tile 与 GPU 票仍及时释放，仅实际失效的已显示 owner 触发整窗重绘；存活图片在后续 paint 重新注册，隐藏后返回保留当前像素。真实 daemon／生产 GPUI headless 回归覆盖后台窗口 render 次数、拒收后的再准入和可见删除；不将其作为原生 GPU 像素或 macOS 验收。
 
 ## [0.2.1] - 2026-10-25
 
 ### 新增
 
-- 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。当前数值预算见下述 #44；pane 协议为 `14`，control 保持 `16`，旧 daemon／远端 server 需要更新。
+- 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。当前数值预算见下述 #44；当前 pane 协议为 `15`，control 保持 `16`，旧 daemon／远端 server 需要更新。
 - #40–#46 的核心、真实 daemon-session、GPUI 消费者与 reader／decoder 代次回归已接入；Windows 完整默认成员测试通过，Linux 默认 core 与图片 daemon 回归通过，另有真实 Windows→Linux 原生 SSH transport／rooted consumer 通过。Windows/macOS 原生像素、SSH 原生窗口、正式 omp 实窗与最终资源峰值仍待完成，不据此宣称 #39 已交付。
 - 加固 Kitty 流式传输与拒收（#41）：支持 PNG 的外层 `o=z`，分块逐次解码并限制 partial／APC 分配；对 PNG 做有界逐行真实校验，对 raw／zlib 检查尺寸、精确字节数及展开上限后才应答、保留或创建放置。查询不保存资源，文件／共享内存能力按负责主机与实际读取结果应答；临时文件删除要求标记路径。Linux POSIX shm 使用有界 descriptor read；macOS 使用不可重复截断对象的受限只读共享映射，复制后立即释放并预留映射加副本的峰值。中断、取消、删除与下一条完整命令保持有序，匿名／quiet 请求不污染后续输入。
 - 隔离异步图片 reader／decoder 的代次：退休连接不能应用迟到帧或解码完成，也不能在延迟退出时关闭新连接的图片队列。新增真实 daemon 的格式、压缩、拒收、49 MiB 超限与输入存活回归，GPUI 实际 decoder／paint 回归，以及生产 decoder 的受控代次竞态回归。
@@ -28,9 +29,9 @@
 - 图片预算默认：单图编码／RGBA 权重各 32 MiB（容纳约 31.64 MiB 的常规 4K RGBA 截图）；daemon 每 pane 编码 64／RGBA 权重 128／工作 128 MiB，全 daemon 分别 128／256／256 MiB，图形 packet 聚合另限 256 MiB。桌面 source 字节池合计 256 MiB，派生 CPU／GPU／解码工作合计 1,024 MiB；按实际图片与至少 `1024×1024` 的 atlas page rounding 预留，空 pane 不占整额 lease，小图没有“两张”或“四个窗格”的计数限制。资源 offer／grant 在成功准入前获取真实 source／decode／GPU 额度；不持 pane 锁等待，新桌面装不下保留图片时明确拒绝附着而不丢权威内容。
 - 图片及无像素回收提示的元数据也持有真实 byte ticket：每 owner 512 B，每 pane 4 MiB，daemon／桌面各自 aggregate 16 MiB；像素回收不释放 notice 票，snapshot 实际释放前继续占账。新独立放置及 replay notice 通过零像素 offer 准入，`a=T` 的资源与放置授权全部成功后才修改内容。
 - 真实 daemon-session／GPUI consumer 小预算回归已在 Windows 通过，并提供 `scripts/kitty-pressure.mjs` 原生压力夹具；原生 Shell／GPU、macOS 与真实 SSH 峰值仍未测。文档公布每进程会计和组合范围，不把桌面 1,296 MiB 会计或 daemon 656 MiB 会计当作 RSS／驱动峰值实测，不提前关闭 #44／#39。
-- 在 pane `14`／Windows Debug 上重测独立生产 CLI → ConPTY 的两张 4K raw RGBA 加一张 PNG：均收到关联成功应答，daemon 工作集在保留时为 85,999,616 bytes，内核高水位为 118,820,864 bytes，pane 正常退出后回落到 19,660,800 bytes；普通输入可用，CLI／发送器／私有 daemon 正常退出。此结果仅覆盖 daemon CPU，不包含桌面／GPU 或原生压力验收，不能替代 #44 平台证据。
+- 历史 pane `14`／Windows Debug 的独立生产 CLI → ConPTY 实测：两张 4K raw RGBA 加一张 PNG 均收到关联成功应答，daemon 工作集在保留时为 85,999,616 bytes，内核高水位为 118,820,864 bytes，pane 正常退出后回落到 19,660,800 bytes；普通输入可用，CLI／发送器／私有 daemon 正常退出。此结果仅覆盖当时的 daemon CPU，不覆盖本次 pane `15` 修复，不包含桌面／GPU 或原生压力验收，不能替代 #44 平台证据。
 - 接入存活会话的有序图片恢复（#45）：新消费者从同一 pane daemon 恢复保留资源、多放置／裁剪、占位符、历史与 screen；detached 产生／替换／删除和 replay 到 live 的并发保持一致。纯文字／几何变化不重复取消适用资源授权，资源集合变化先释放旧授权再有限重取；容量不足明确拒绝附着，不复活已删除／回收像素，不要求应用重传，也不新增图片落盘。
-- 接入真实 native SSH→Linux 图片回归（#46）：生产 router／SSH 引擎／Linux PTY 到 rooted GPUI 共用 pane `14`，核对直接及 Unicode 放置、像素与几何、拒收／历史提示、本地 router 重启后的同 daemon fresh 恢复及无重传。Windows `10.0.26300`→WSL2 Ubuntu `26.04.1` 的 1 项 transport、2 项 rooted consumer 已通过；文档列出固定主机公钥、隔离 HOME／SFTP 和复现命令，不将此结果冒充原生 GPU 或 macOS→Linux 验收。
+- 接入真实 native SSH→Linux 图片回归（#46）：生产 router／SSH 引擎／Linux PTY 到 rooted GPUI 共用 pane 协议，核对直接及 Unicode 放置、像素与几何、拒收／历史提示、本地 router 重启后的同 daemon fresh 恢复及无重传。历史 pane `14` 的 Windows `10.0.26300`→WSL2 Ubuntu `26.04.1` 实测中，1 项 transport、2 项 rooted consumer 已通过；文档列出固定主机公钥、隔离 HOME／SFTP 和复现命令。此历史结果不覆盖本次 pane `15` 修复，不将其冒充原生 GPU 或 macOS→Linux 验收。
 - 验证正式 `omp/18.12.6` 的公开图片选项：保持 `TERM_PROGRAM=lyrel`，`PI_FORCE_IMAGE_PROTOCOL=kitty` 配合 `PI_KITTY_PLACEHOLDERS=0/1`，真实交互 TUI 在 Windows ConPTY 中发送 SVG 栅格 PNG 与合成 toolResult PNG，独立 daemon／生产 `PaneClient` 收到对应资源和直接／虚拟放置。隔离会话未提交新 prompt，`/exit` 正常退出；此结果不替代原生像素、真实桌面截图、GUI 关开或 SSH 验收。
 
 ### 修复
