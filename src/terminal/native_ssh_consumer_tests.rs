@@ -94,13 +94,80 @@ fn native_ssh_consumer_fresh(
     (view, window)
 }
 
+fn native_ssh_consumer_observe_ack(
+    fixture: &native_ssh_graphics_fixture::NativeSshFixture,
+    pane: u64,
+    serial: usize,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    let (mut stream, _) = fixture.connect_pane();
+    // A read-only wire observer must not await desktop texture grants, resize
+    // the Linux PTY, or replace the controlling view's small pressure budget.
+    // The daemon takes the minimum of observer/controller capacity leases.
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: false,
+    }
+    .encode(&mut stream)
+    .unwrap();
+    ClientMsg::Observe {
+        pane_id: pane,
+        size: native_ssh_graphics_fixture::win_size(),
+    }
+    .encode(&mut stream)
+    .unwrap();
+    // The production observer writer starts only after pane.observe registers
+    // its subscription. Receive its first replay frame before sending input,
+    // so the live ACK cannot race ahead of this read-only subscription.
+    let first = DaemonMsg::read(&mut stream).unwrap();
+    assert!(
+        !matches!(first, DaemonMsg::Error(_) | DaemonMsg::Exited { .. }),
+        "real ACK observer could not subscribe: {first:?}"
+    );
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + native_ssh_graphics_fixture::STREAM_WITHIN;
+        let done = format!("KITTY_DONE_{serial}");
+        let mut first = Some(first);
+        let mut text = Vec::new();
+        loop {
+            let remaining = deadline.checked_duration_since(std::time::Instant::now())
+                .filter(|wait| !wait.is_zero())
+                .expect("real ACK observer deadline expired");
+            stream.set_read_timeout(Some(remaining)).unwrap();
+            let message = first.take().unwrap_or_else(|| DaemonMsg::read(&mut stream).unwrap());
+            match message {
+                DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
+                    assert!(text.len() + bytes.len() <= 1 << 20, "ACK observer text exceeds bounded fixture capture");
+                    text.extend(bytes);
+                }
+                DaemonMsg::Error(error) => panic!("real ACK observer failed: {error}"),
+                DaemonMsg::Exited { .. } => panic!("Linux sender exited before its correlated ACK/text barrier"),
+                _ => {}
+            }
+            if text.windows(done.len()).any(|part| part == done.as_bytes()) {
+                ClientMsg::Detach.encode(&mut stream).unwrap();
+                return text;
+            }
+        }
+    })
+}
+
 fn native_ssh_consumer_send(
+    fixture: &native_ssh_graphics_fixture::NativeSshFixture,
     view: &Entity<TerminalView>,
     cx: &mut TestAppContext,
     serial: usize,
     bytes: &[u8],
     expected_replies: &[&[u8]],
 ) {
+    // ACK/DONE reports deliberately reuse a fixed saved-cursor area. Grid
+    // text is therefore not an ACK log: later reports overwrite earlier ones.
+    // Observe their actual ordered PTY Output without changing producer bytes
+    // or the geometry/scrolling exercised by the real TerminalView.
+    let observer = (!expected_replies.is_empty()).then(|| {
+        let pane = view.read_with(cx, |view, _| view.pane_id);
+        native_ssh_consumer_observe_ack(fixture, pane, serial)
+    });
     let request = format!(
         "SEND {serial} {} {} 7\n",
         expected_replies.len(),
@@ -113,13 +180,15 @@ fn native_ssh_consumer_send(
         "real remote sender query ACK/text barrier did not arrive",
         |cx| view.read_with(cx, |view, _| view.scrollback_text().contains(&done)),
     );
-    view.read_with(cx, |view, _| {
-        let text = view.scrollback_text();
+    if let Some(observer) = observer {
+        graphics_recovery_wait(cx, "real ACK observer did not receive the sender's ordered output barrier", |_| observer.is_finished());
+        let bytes = observer.join().expect("real ACK observer failed");
+        let text = String::from_utf8_lossy(&bytes);
         for reply in expected_replies {
             let marker = format!("KITTY_REPLY {serial} {}", native_ssh_graphics_fixture::hex(reply));
-            assert!(text.contains(&marker), "remote application did not receive its correlated reply: expected {marker}; text={text}");
+            assert!(text.contains(&marker), "remote application did not receive its correlated reply in real PTY Output: expected {marker}; output={text}");
         }
-    });
+    }
 }
 
 fn native_ssh_consumer_identity(
@@ -217,6 +286,7 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     let identity = native_ssh_consumer_identity(&fixture, pane);
     let (view, window) = native_ssh_consumer_fresh(&fixture, pane, cx, 4600, 128 << 20);
     native_ssh_consumer_send(
+        &fixture,
         &view,
         cx,
         4601,
@@ -228,7 +298,7 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
         "transmit-only cannot paint"
     );
     graphics_assert_production_paint(window, &view, cx);
-    native_ssh_consumer_send(&view, cx, 4602, "\x1b[6;5H\x1b_Ga=p,i=7,p=11,c=2,r=1,x=1,y=0,w=2,h=1,C=1,q=2\x1b\\\x1b_Ga=p,i=7,p=12,U=1,c=4,r=1,q=2\x1b\\\x1b[8;5H\x1b[38;5;7;58;5;12m\u{10eeee}\u{305}\u{305}\u{10eeee}\u{10eeee}\u{10eeee}\x1b[0m".as_bytes(), &[]);
+    native_ssh_consumer_send(&fixture, &view, cx, 4602, "\x1b[6;5H\x1b_Ga=p,i=7,p=11,c=2,r=1,x=1,y=0,w=2,h=1,C=1,q=2\x1b\\\x1b_Ga=p,i=7,p=12,U=1,c=4,r=1,q=2\x1b\\\x1b[8;5H\x1b[38;5;7;58;5;12m\u{10eeee}\u{305}\u{305}\u{10eeee}\u{10eeee}\u{10eeee}\x1b[0m".as_bytes(), &[]);
     let pixels = [
         0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255,
     ];
@@ -254,6 +324,7 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     );
     assert_eq!(native_ssh_consumer_identity(&fixture, pane), identity);
     native_ssh_consumer_send(
+        &fixture,
         &soft,
         cx,
         4606,
@@ -262,6 +333,7 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
     );
     graphics_recovery_pixels(&soft, cx, 8, &[0, 0, 255, 255]);
     native_ssh_consumer_send(
+        &fixture,
         &soft,
         cx,
         4607,
@@ -269,7 +341,7 @@ fn native_ssh_consumer_linux_pixels_geometry_and_fresh_soft_hard_recovery(cx: &m
         &[b"\x1b_Gi=8,p=8;OK\x1b\\"],
     );
     graphics_recovery_pixels(&soft, cx, 8, &[255, 0, 0, 255]);
-    native_ssh_consumer_send(&soft, cx, 4608, b"\x1b_Ga=d,d=I,i=8\x1b\\\x1b[?1049h\x1b[2J\x1b[6;5H\x1b_Ga=T,i=9,p=9,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\", &[b"\x1b_Gi=9,p=9;OK\x1b\\"]);
+    native_ssh_consumer_send(&fixture, &soft, cx, 4608, b"\x1b_Ga=d,d=I,i=8\x1b\\\x1b[?1049h\x1b[2J\x1b[6;5H\x1b_Ga=T,i=9,p=9,c=2,r=1,C=1,f=32,s=1,v=1;/////w==\x1b\\", &[b"\x1b_Gi=9,p=9;OK\x1b\\"]);
     graphics_recovery_pixels(&soft, cx, 9, &[255, 255, 255, 255]);
     graphics_assert_production_paint(soft_window, &soft, cx);
     soft.read_with(cx, |view, _| {
@@ -401,7 +473,7 @@ fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend
     let pane = native_ssh_consumer_spawn(&fixture, shell);
     let identity = native_ssh_consumer_identity(&fixture, pane);
     let (prior, prior_window) = native_ssh_consumer_fresh(&fixture, pane, cx, 4630, 8);
-    native_ssh_consumer_send(&prior, cx, 4631, "\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=31,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\\x1b_Ga=T,i=32,p=2,U=1,c=2,r=1,f=32,s=1,v=1;AAD//w==\x1b\\\x1b[8;5H\x1b[38;5;32;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes(), &[b"\x1b_Gi=31,p=1;OK\x1b\\", b"\x1b_Gi=32,p=2;OK\x1b\\"]);
+    native_ssh_consumer_send(&fixture, &prior, cx, 4631, "\x1b[2J\x1b[3J\x1b[6;5H\x1b_Ga=T,i=31,p=1,c=2,r=1,C=1,f=32,s=1,v=1;/wAA/w==\x1b\\\x1b_Ga=T,i=32,p=2,U=1,c=2,r=1,f=32,s=1,v=1;AAD//w==\x1b\\\x1b[8;5H\x1b[38;5;32;58;5;2m\u{10eeee}\u{305}\u{305}\u{10eeee}\x1b[0m".as_bytes(), &[b"\x1b_Gi=31,p=1;OK\x1b\\", b"\x1b_Gi=32,p=2;OK\x1b\\"]);
     graphics_recovery_pixels(&prior, cx, 31, &[0, 0, 255, 255]);
     graphics_recovery_pixels(&prior, cx, 32, &[255, 0, 0, 255]);
     graphics_assert_production_paint(prior_window, &prior, cx);
@@ -418,8 +490,9 @@ fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend
         );
         area
     });
-    native_ssh_consumer_send(&prior, cx, 4632, &b"\r\n".repeat(80), &[]);
+    native_ssh_consumer_send(&fixture, &prior, cx, 4632, &b"\r\n".repeat(80), &[]);
     native_ssh_consumer_send(
+        &fixture,
         &prior,
         cx,
         4633,
@@ -454,6 +527,7 @@ fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend
         view.scroll(-10_000, None, &Modifiers::default(), cx)
     });
     native_ssh_consumer_send(
+        &fixture,
         &prior,
         cx,
         4634,
@@ -462,6 +536,7 @@ fn native_ssh_consumer_remote_pressure_notices_scroll_and_recover_without_resend
     );
     graphics_recovery_pixels(&prior, cx, 34, &[255, 255, 255, 255]);
     native_ssh_consumer_send(
+        &fixture,
         &prior,
         cx,
         4635,
