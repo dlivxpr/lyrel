@@ -228,13 +228,11 @@ fn graphics_send_fixture(
     graphics_send_fixture_with_replies(view, cx, serial, bytes, 0);
 }
 
-fn graphics_send_fixture_with_replies(
-    view: &Entity<TerminalView>,
-    cx: &mut TestAppContext,
-    serial: usize,
-    bytes: &[u8],
-    replies: usize,
-) {
+fn graphics_send_fixture_with_replies(view: &Entity<TerminalView>,
+cx: &mut TestAppContext,
+serial: usize,
+bytes: &[u8],
+replies: usize,) {
     let operation = if replies == 0 { "SEND" } else { "SEND_OK" };
     let request = format!("{operation} {serial} {replies} {} 0\n", graphics_pty_fixture::hex(bytes));
     let input_bytes = request.len();
@@ -253,12 +251,7 @@ fn graphics_send_fixture_with_replies(
             view.read_with(cx, |view, _| view.terminal.exited),
             view.read_with(cx, |view, _| view.scrollback_text().chars().rev().take(256).collect::<Vec<_>>().into_iter().rev().collect::<String>())
         );
-        // Admission may await a painted texture's real window-owned atlas
-        // release. Keep the production UI tasks and their 300 ms timer alive
-        // while the background daemon/reader complete this PTY round trip.
-        cx.executor().advance_clock(std::time::Duration::from_millis(5));
-        cx.run_until_parked();
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        graphics_consumer_progress(cx);
     }
 }
 
@@ -656,10 +649,7 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
             let (view, window) = graphics_rooted_consumer(cx, pane, stream);
             graphics_send_fixture(&view, cx, serial + 1, b"\x1b[5;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
             if serial < 2 {
-                            graphics_recovery_wait(cx, "accepted image must use the real decoder", |cx| {
-                                window.update(cx, |_, window, _| window.refresh()).unwrap();
-                                !view.read_with(cx, |view, _| graphics_visible_images(view).is_empty())
-                            });
+                            graphics_layout_wait_image(&view, cx, 7);
                         }
             terminals.push((window, view, pane, serial));
         }
@@ -1082,14 +1072,7 @@ fn graphics_consumer_inactive_main_history_yields_to_alt_without_reclaiming_last
                     graphics_send_fixture(&view, cx, 3, b"\x1b[6;5H\x1b_Ga=T,i=8,p=2,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AAD//w==\x1b\\");
                     graphics_layout_wait_image(&view, cx, 8);
                     graphics_send_fixture(&view, cx, 4, b"\x1b[?1049h\x1b[6;5H\x1b_Ga=T,i=9,p=3,c=2,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
-                    graphics_recovery_wait(cx, if placeholder { "placeholder alternate image decoder did not finish" } else { "direct alternate image decoder did not finish" }, |cx| {
-                                    window.update(cx, |_, window, _| window.refresh()).unwrap();
-                                    view.read_with(cx, |view, _| {
-                                        graphics_visible_images(view)
-                                            .iter()
-                                            .any(|image| image.placement.image_id == 9)
-                                    })
-                                });
+                    graphics_layout_wait_image(&view, cx, 9);
                     graphics_assert_production_paint(window, &view, cx);
                     view.read_with(cx, |view, _| {
                         let images = graphics_visible_images(view);

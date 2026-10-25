@@ -2,18 +2,20 @@
 // decoder output and TerminalElement paint/geometry. The headless GPUI window
 // does not certify final GPU pixels or replace the native reopen acceptance.
 
-fn graphics_recovery_wait(
-    cx: &mut TestAppContext,
-    reason: &str,
-    mut ready: impl FnMut(&mut TestAppContext) -> bool,
-) {
+fn graphics_consumer_progress(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.refresh_windows());
+    cx.executor().advance_clock(std::time::Duration::from_millis(5));
+    cx.run_until_parked();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+}
+
+fn graphics_recovery_wait(cx: &mut TestAppContext,
+reason: &str,
+mut ready: impl FnMut(&mut TestAppContext) -> bool,) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !ready(cx) {
         assert!(std::time::Instant::now() < deadline, "{reason}");
-        cx.executor()
-            .advance_clock(std::time::Duration::from_millis(5));
-        cx.run_until_parked();
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        graphics_consumer_progress(cx);
     }
 }
 

@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-25
+
 ### 新增
 
 - 接入 Kitty 图片资源与独立放置（#40）：`a=t` 只上传，`a=p` 独立／重复显示，`a=T` 保持上传并显示；多次放置共享像素，并支持源裁剪、透明背景、身份替换、资源重传、静态删除选择器及带身份的错误／quiet 模式。资源与放置由 daemon 的共享核心状态管理，桌面保留异步解码、旧工作取消及 atlas 释放，不新增图片落盘。当前数值预算见下述 #44；pane 协议为 `14`，control 保持 `16`，旧 daemon／远端 server 需要更新。
@@ -48,6 +50,7 @@
 - 备用屏图片压力回归在 PTY 有序屏障后显式请求窗口帧并推进现有 GPUI 任务与纹理 compaction 时钟，等待真实 decoder 结果，不以只读 `sleep` 阻塞后续完成；保留两页缓存预算、30 秒期限、`q=2`、direct／placeholder、live 像素及历史 notice 断言，平台结果以对应 CI 为准。
 - 跨 daemon 压力回归在进入／离开历史视口后，先通过原 daemon 的真实 PTY 屏障确认视口更新，再让另一 daemon 施压；等待准入期间刷新旧 atlas 所属窗口和新图窗口，保留原 1 秒准入窗口及历史保护、权威回收、拒替换与关闭后释放断言。
 - 真实 resize 回归复用首次挂载前已按实际字体设为 80×24 的共享工厂，避免默认窗口首绘向 ConPTY 发送意外 resize；正式收缩前核对 cursor、anchor 与 `row=23` 的 `LAST_WRITTEN`，保留 Windows 收缩后锚点 `row=3`／尾文 `row=17`（均从零起算）及 macOS 的原几何预期。Windows 7项真实布局回归与完整默认成员检查通过，macOS 完整结果以对应 CI 为准。
+- 真实图片夹具的 PTY、decoder 与恢复等待统一推进所有测试窗口的实际帧、执行器和时钟，使原窗口 atlas 可在既有准入期限内释放；保留接收 Size 前禁止旧 surface 回写的边界，不调整预算、quiet 或等待期限。布局夹具复用预挂载工厂，字体裁切回归通过真实字体／窗口及测得的设备像素构造五行自然图片，不再把仅注入后端的虚假 cell 尺寸当作实际呈现。
 - rooted GPUI 图片夹具在 PTY 等待期间推进真实 UI 任务及测试时钟，使已绘制纹理经现有窗口 compaction 归还 GPU 票；历史 notice 回归通过生产滚动入口同步视口并核验 placeholder notice 的实际 paint。大文字恢复用合法的小于 1 MiB 的 Input 分批构造原总量 Snapshot，不放宽输入、图片预算或等待期限；修复后的 23 项 graphics consumer 回归已在 Windows 通过。
 - GPUI 回归先同步 rooted 窗口的实际列数再修改终端尺寸，避免推进 UI 时由旧窗口布局回写覆盖 reflow；Screen／原点回归等待其后有序文本 marker 与实际解码状态，不以一张图片已出现替代 Screen 已消费。
 - 原生 SSH 夹具的请求 serial 跨 fresh consumer 不复用，避免旧 Snapshot 回复被误归为当前请求；恢复等待唯一文本屏障及权威最终 `Screen`，不在先到的 Snapshot 上提前返回。GUI 从不接管／不 resize 的真实 Observe raw Output 核对应用收到的全部关联 ACK，保留有限预算、像素与 placement 断言，不依赖终端网格保存已被覆盖的诊断文字。
