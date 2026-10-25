@@ -8,6 +8,7 @@ pub mod crash;
 pub mod git;
 pub mod github;
 pub mod gitignore;
+pub mod graphics_state;
 pub mod group_key;
 #[allow(dead_code)]
 pub mod keychain;
@@ -26,6 +27,7 @@ pub mod shells;
 pub mod ssh_profile;
 pub mod tab_view;
 pub mod term_modes;
+pub mod terminal_resize;
 pub mod threads;
 pub mod window_state;
 pub mod worktree;

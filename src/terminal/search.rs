@@ -444,6 +444,7 @@ impl TerminalView {
             scroll_match_into_view(&mut term, &m, hidden);
         }
         drop(term);
+        self.terminal.viewport_reporter().report();
         cx.notify();
     }
 
@@ -466,6 +467,7 @@ impl TerminalView {
         };
         let hidden = self.rows_behind_the_search_bar();
         scroll_match_into_view(&mut self.terminal.term.lock(), &current, hidden);
+        self.terminal.viewport_reporter().report();
         cx.notify();
     }
 
