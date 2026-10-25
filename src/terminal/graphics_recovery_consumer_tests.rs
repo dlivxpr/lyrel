@@ -845,10 +845,10 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
                     bytes_seen += bytes.len();
                     tail.extend(bytes);
                     if tail.windows(b"RING_LOAD_DONE".len()).any(|bytes| bytes == b"RING_LOAD_DONE") { break; }
-                    tail.drain(..tail.len().saturating_sub(b"RING_LOAD_DONE".len()));
+                    tail.drain(..tail.len().saturating_sub(8192));
                 }
-                DaemonMsg::Error(error) => panic!("replay load observer failed: {error}"),
-                DaemonMsg::Exited { code } => panic!("replay sender exited: {code:?}"),
+                DaemonMsg::Error(error) => panic!("replay load observer failed: {error}; raw_output_tail={:?}", String::from_utf8_lossy(&tail)),
+                DaemonMsg::Exited { code } => panic!("replay sender exited: {code:?}; raw_output_tail={:?}", String::from_utf8_lossy(&tail)),
                 _ => {}
             }
         }

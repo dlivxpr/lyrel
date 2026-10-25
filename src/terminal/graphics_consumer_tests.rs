@@ -245,12 +245,13 @@ fn graphics_send_fixture_with_replies(
         if view.read_with(cx, |view, _| view.scrollback_text().contains(&marker)) {
             break;
         }
+        assert!(!view.read_with(cx, |view, _| view.terminal.child_exited()), "PTY sender exited before serial {serial}; Input bytes={input_bytes}");
         assert!(
             std::time::Instant::now() < deadline,
             "PTY round trip did not finish: {serial}; Input bytes={input_bytes}; child_exited={}; disconnected={}; tail={:?}",
             view.read_with(cx, |view, _| view.terminal.child_exited()),
             view.read_with(cx, |view, _| view.terminal.exited),
-            view.read_with(cx, |view, _| view.scrollback_text().chars().rev().take(256).collect::<String>())
+            view.read_with(cx, |view, _| view.scrollback_text().chars().rev().take(256).collect::<Vec<_>>().into_iter().rev().collect::<String>())
         );
         // Admission may await a painted texture's real window-owned atlas
         // release. Keep the production UI tasks and their 300 ms timer alive
