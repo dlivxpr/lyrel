@@ -66,43 +66,50 @@ fn graphics_assert_production_paint(
     graphics_assert_production_paint_at(window, view, cx, size);
 }
 
+fn graphics_window_geometry(
+    window: gpui_kit::AnyWindowHandle,
+    view: &Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    size: TermSize,
+) -> (gpui_kit::Size<Pixels>, usize, usize, f32) {
+    use gpui_kit::{Hsla, SharedString, TextRun};
+    window.update(cx, |_, window, cx| {
+        let view = view.read(cx);
+        let sample = window.text_system().shape_line(
+            SharedString::new_static("M"),
+            view.font_size,
+            &[TextRun {
+                len: 1,
+                font: view.font.clone(),
+                color: Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        );
+        let width = sample.width.max(px(1.));
+        let height = px((view.font_size.as_f32() * view.line_height_mul).round()).max(px(1.));
+        (
+            gpui_kit::size(
+                width * size.cols as f32 + px(2. * GRID_PAD_X + 0.5),
+                height * size.rows as f32 + px(2. * GRID_PAD_Y + 0.5),
+            ),
+            size.cols,
+            size.rows,
+            window.scale_factor(),
+        )
+    }).unwrap()
+}
+
 fn graphics_assert_production_paint_at(
     window: gpui_kit::AnyWindowHandle,
     view: &Entity<TerminalView>,
     cx: &mut TestAppContext,
     size: TermSize,
 ) {
-    use gpui_kit::{Hsla, SharedString, TextRun};
     use std::sync::atomic::Ordering;
-    let (target, cols, rows, scale) = window
-        .update(cx, |_, window, cx| {
-            let view = view.read(cx);
-            let sample = window.text_system().shape_line(
-                SharedString::new_static("M"),
-                view.font_size,
-                &[TextRun {
-                    len: 1,
-                    font: view.font.clone(),
-                    color: Hsla::default(),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                }],
-                None,
-            );
-            let width = sample.width.max(px(1.));
-            let height = px((view.font_size.as_f32() * view.line_height_mul).round()).max(px(1.));
-            (
-                gpui_kit::size(
-                    width * size.cols as f32 + px(2. * GRID_PAD_X + 0.5),
-                    height * size.rows as f32 + px(2. * GRID_PAD_Y + 0.5),
-                ),
-                size.cols,
-                size.rows,
-                window.scale_factor(),
-            )
-        })
-        .unwrap();
+    let (target, cols, rows, scale) = graphics_window_geometry(window, view, cx, size);
     // Preserve the requested grid through the actual prepaint sizing callback;
     // otherwise a default test window would silently resize the real daemon.
     cx.simulate_window_resize(window, target);

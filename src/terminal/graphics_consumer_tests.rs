@@ -284,17 +284,21 @@ fn graphics_build_rooted_consumer_at(
     buffered: Vec<u8>,
     size: TermSize,
 ) -> (Entity<TerminalView>, gpui_kit::AnyWindowHandle) {
-    let built = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let out = built.clone();
-    let window = cx.add_window(move |window, cx| {
+    // App::open_window draws its root before returning. Mounting the terminal
+    // in a default maximized window would already resize the living pane once
+    // before the requested 80/40-column physical geometry can be installed.
+    let window: gpui_kit::AnyWindowHandle = cx.add_window(|_, _| gpui_kit::EmptyView).into();
+    let view = window.update(cx, |_, window, cx| {
         let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
         let terminal = RemoteTerminal::from_stream_with(stream, size, buffered, source).unwrap();
-        let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
-        *out.borrow_mut() = Some(view.clone());
-        gpui_kit::component::Root::new(view, window, cx)
-    });
-    let view = built.borrow_mut().take().unwrap();
-    (view, window.into())
+        cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx))
+    }).unwrap();
+    let (target, _, _, _) = graphics_window_geometry(window, &view, cx, size);
+    cx.simulate_window_resize(window, target);
+    window.update(cx, |_, window, cx| {
+        window.replace_root(cx, |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx));
+    }).unwrap();
+    (view, window)
 }
 
 #[gpui_kit::test]
