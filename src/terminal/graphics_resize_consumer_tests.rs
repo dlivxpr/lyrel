@@ -65,27 +65,10 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
         gpui_kit::component::init(cx);
         cx.set_global(Config::default());
     });
-    let built = std::rc::Rc::new(std::cell::RefCell::new(None));
-    let out = built.clone();
-    let _window = cx.add_window(move |window, cx| {
-        let terminal = RemoteTerminal::from_stream_with(
-            stream,
-            TermSize::new(80, 24),
-            Vec::new(),
-            if cfg!(windows) {
-                PtySource::LocalConpty
-            } else {
-                PtySource::Raw
-            },
-        )
-        .unwrap();
-        let view = cx.new(|cx| TerminalView::with_terminal(terminal, pane, window, cx));
-        *out.borrow_mut() = Some(view.clone());
-        gpui_kit::component::Root::new(view, window, cx)
-    });
-    let view = built.borrow_mut().take().unwrap();
-    graphics_assert_production_paint_at(_window.into(), &view, cx, TermSize::new(80, 24));
-    graphics_send_fixture(&view, cx, 0, b"\x1b[0m");
+    // Install the real 80x24 surface before mounting TerminalView. Mounting in
+    // the default test window first can enqueue another ConPTY resize whose
+    // redraw races the history and last-written-row fixture below.
+    let (view, _window) = graphics_rooted_consumer(cx, pane, stream);
     let mut bytes = graphics_resize_history();
     let (anchor, label, image_id, rows, expected) = if grow {
         (
@@ -133,6 +116,17 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
     });
     graphics_assert_production_paint(_window.into(), &view, cx);
     graphics_send_fixture(&view, cx, 424, b"\x1b[0m");
+    view.read_with(cx, |view, _| {
+        graphics_resize_assert_geometry(view, image_id, label, anchor - 1);
+        let term = view.terminal.term.lock();
+        assert_eq!((term.columns(), term.screen_lines()), (80, 24));
+        if !grow {
+            assert_eq!(term.grid.cursor.pos.row, Line(9));
+            assert_eq!(term.grid.cursor.pos.col.0, 13);
+            drop(term);
+            assert_eq!(graphics_resize_text_row(view, "LAST_WRITTEN"), Some(23));
+        }
+    });
     let target_window_size = graphics_window_geometry(
         _window.into(),
         &view,
