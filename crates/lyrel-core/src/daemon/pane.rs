@@ -2382,6 +2382,21 @@ impl DaemonPane {
                                 tr_bytes += n as u64;
                             }
                             let raw = &buf[..n];
+                            // The foreground-group ioctl is cheap; full process
+                            // probing still runs only on a hop or the interval.
+                            // Resolve locality before parsing this batch: its
+                            // first APC can already name a remote file or shm.
+                            let group = foreground_group();
+                            let group_changed = group != last_group;
+                            last_group = group;
+                            let poll_before = group_changed
+                                || std::time::Instant::now() >= next_remote_check;
+                            let (managed, cached_local) = {
+                                let st = state.lock().unwrap();
+                                (st.remote.as_ref().is_some_and(|remote| remote.kind != RemoteKind::Ssh), st.remote.is_none())
+                            };
+                            let mut remote = (poll_before && !managed).then(&foreground_remote);
+                            graphics.set_local(remote.as_ref().map_or(cached_local, Option::is_none));
                             let controller = {
                                 let st = state.lock().unwrap();
                                 let controller = st.subscriber.as_ref().map(|_| st.subscriber_epoch);
@@ -2416,36 +2431,14 @@ impl DaemonPane {
                             // reads, most visibly) stayed on the far end until
                             // some unrelated output arrived (#817).
                             let back_at_prompt = signals.shell.iter().any(|s| s.at_prompt);
-                            // A new foreground group is a new program in front
-                            // — probe for it on its first output. The interval
-                            // alone missed an agent that drew its whole first
-                            // screen within it of the prompt it was typed at
-                            // and then sat waiting for a key: a launch that
-                            // types the command the moment the shell is up
-                            // did that every time, and the pane never learned
-                            // it was running an agent until something else
-                            // printed.
-                            let group = foreground_group();
-                            let group_changed = group != last_group;
-                            last_group = group;
-                            let poll_now = back_at_prompt
-                                || group_changed
-                                || std::time::Instant::now() >= next_remote_check;
+                            let poll_now = back_at_prompt || poll_before;
                             if poll_now {
                                 next_remote_check =
                                     std::time::Instant::now() + REMOTE_CONTEXT_POLL_INTERVAL;
                             }
-                            let remote = if poll_now {
-                                let managed = {
-                                    let st = state.lock().unwrap();
-                                    st.remote
-                                        .as_ref()
-                                        .is_some_and(|remote| remote.kind != RemoteKind::Ssh)
-                                };
-                                (!managed).then(&foreground_remote)
-                            } else {
-                                None
-                            };
+                            if back_at_prompt && !poll_before && !managed {
+                                remote = Some(foreground_remote());
+                            }
                             let agent = poll_now.then(&foreground_agent_fn).flatten();
                             let probed_cwd = poll_now.then(&foreground_cwd_fn).flatten();
 
