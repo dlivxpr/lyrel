@@ -330,6 +330,9 @@ jobs:
         if: steps.ci-server.outputs.reused != 'true'
         working-directory: lyrel
         run: cargo zigbuild --release --locked -p lyrel-server --target ${{ matrix.target }}
+        env:
+          # 与 CI 使用同一上游 SIMD 配置，不修改 registry 源码或全局启用 AVX-512。
+          CXXFLAGS_x86_64_unknown_linux_musl: -DSIMDUTF_IMPLEMENTATION_ICELAKE=0
 
       - name: Assert the binary is static
         working-directory: lyrel

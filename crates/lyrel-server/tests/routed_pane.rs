@@ -61,6 +61,8 @@ fn routed(dir: &Path, name: &str, config_dir: &Path) -> (UnixStream, std::thread
     let mut sock = UnixStream::connect(&path).unwrap();
     let ack = negotiate(&mut sock, &pane_header(config_dir)).expect("the route should be accepted");
     assert_eq!(ack.link.as_deref(), Some("local-stdio"));
+    sock.set_read_timeout(Some(OUTPUT_TIMEOUT)).unwrap();
+    lyrel_core::daemon::protocol::negotiate_pane(&mut sock).expect("matching routed pane protocol");
     (sock, thread)
 }
 
@@ -104,6 +106,13 @@ fn a_routed_pane_spawns_takes_input_and_survives_a_reconnect() {
     std::fs::create_dir_all(&config).unwrap();
 
     let (mut sock, hub_thread) = routed(dir.path(), "pane-1.sock", &config);
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: true,
+    }
+    .encode(&mut sock)
+    .unwrap();
     ClientMsg::Spawn {
         cwd: Some(dir.path().to_path_buf()),
         size: win(),
@@ -126,6 +135,23 @@ fn a_routed_pane_spawns_takes_input_and_survives_a_reconnect() {
         .encode(&mut sock)
         .unwrap();
     read_until(&mut sock, "routed-pane-alive");
+
+    // A routed live session must preserve a refused request's identity and
+    // result even when there is no graphics mutation to carry it back.
+    ClientMsg::GraphicsPressure { key: u64::MAX }
+        .encode(&mut sock)
+        .unwrap();
+    loop {
+        match DaemonMsg::read(&mut sock).expect("routed pressure completion") {
+            DaemonMsg::GraphicsPressureResult { key, reclaimed } => {
+                assert_eq!(key, u64::MAX);
+                assert!(!reclaimed);
+                break;
+            }
+            DaemonMsg::Error(error) => panic!("pressure broke routed session: {error}"),
+            _ => {}
+        }
+    }
 
     ClientMsg::Detach.encode(&mut sock).unwrap();
     drop(sock);

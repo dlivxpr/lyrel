@@ -95,8 +95,10 @@ toml_edit = "0.25.17"
 # via the GUI, so this pins no new code.
 smallvec.workspace = true
 
-# 只给 GUI 输入栏与 CLI 表格启用；独立 server 不链接 VT parser。
-rio-vt = { workspace = true, optional = true }
+# daemon 的图片状态使用同一正式 VT 网格；不引入窗口、GPU 或 Rio 自有 PTY。
+rio-vt.workspace = true
+# 图片滚动挂接使用与 VT 相同的零宽字符判定；不新增版本或后端。
+rio-unicode.workspace = true
 
 # Cross-platform PTY for the daemon: a Unix pty on Unix, ConPTY on Windows,
 # behind one blocking `Read`/`Write`/`resize` API. This is what lets
@@ -177,6 +179,10 @@ base64 = "0.23.1"
 # payloads (`core::kitty_graphics`). Pure Rust, no native code; decoding remains
 # compatible with kitty's zlib wire format independently of the encoder library.
 miniz_oxide = "0.9.1"
+
+# Validate PNG streams row-by-row before acknowledging or retaining them. Reuse
+# the published version already locked for the desktop image decoder.
+png = "0.18.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
@@ -268,8 +274,8 @@ tokio = { version = "1.53.3", features = ["test-util", "macros", "rt"] }
 [features]
 default = []
 gssapi = ["dep:libgssapi"]
-# 两个文本消费者复用正式 Rio 的 mode-2027 测宽 API。
-terminal-width = ["dep:rio-vt"]
+# 只控制 GUI 输入栏与 CLI 表格的测宽 API；VT 网格本身也是 daemon 的必需依赖。
+terminal-width = []
 # Lets this build download a `lyrel-server` release asset over HTTPS and push it
 # onto a remote machine. Off by default so `lyrel-server` — which is
 # the thing being downloaded, and never the thing doing the downloading — links

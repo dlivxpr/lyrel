@@ -183,6 +183,7 @@ windows-sys = { version = "0.61", features = [
     # module the binding needs — nothing here pulls in dbghelp.
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Threading",
+    "Win32_System_Console",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -262,6 +263,7 @@ futures-channel = "0.3"
 
 # The Kit test-support feature enables its real App/Window test harness.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dev-dependencies]
+base64 = "0.23.1"
 gpui-kit = { workspace = true, features = ["test-support"] }
 
 [lints]
@@ -282,18 +284,14 @@ default-members = [".", "crates/lyrel-core", "crates/lyrel-server", "crates/lyre
 edition = "2024"
 # 所有一起发布的 workspace 成员通过 version.workspace 继承此版本。
 # 发布时只修改这一处，不将应用版本与 IPC 协议版本混用。
-version = "0.2.0"
+version = "0.2.1"
 
 [workspace.dependencies]
 # The public facade supplies component, base, assets and platform layers.
 gpui-kit = "=0.8.0"
 
-# The published Rio VT parser + grid (`Crosswords`/`ansi::Processor`). Two
-# packages read it and they must agree, hence this being a workspace pin rather
-# than one each — the GUI (`terminal::remote`) to render the live mirror, and
-# lyrel-cli to turn a captured pane back into text (`lyrel capture --plain`).
-# The daemon parses nothing; it is a byte pipe, and its PTY is driven by
-# `portable-pty`.
+# 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
+# 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。
 #
 # Only the parser/grid library is taken: Rio's own PTY, windowing and
 # Sugarloaf renderer stay out (`default-features = false`), and the keyboard

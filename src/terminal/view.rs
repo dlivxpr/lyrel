@@ -79,9 +79,7 @@ fn input_caret_paint(
 /// In the shipped binary there is exactly one `App`, so the two are the same.
 #[derive(Default)]
 struct DisplayedRegistry(
-    std::sync::Mutex<
-        std::collections::HashMap<EntityId, std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    >,
+    std::sync::Mutex<std::collections::HashMap<EntityId, super::remote::GraphicsViewportReporter>>,
 );
 
 impl gpui_kit::Global for DisplayedRegistry {}
@@ -93,8 +91,8 @@ pub fn declare_displayed(cx: &App, panes: impl IntoIterator<Item = (EntityId, bo
     };
     let map = registry.0.lock().unwrap();
     for (id, on) in panes {
-        if let Some(flag) = map.get(&id) {
-            flag.store(on, std::sync::atomic::Ordering::Relaxed);
+        if let Some(reporter) = map.get(&id) {
+            reporter.set_displayed(on);
         }
     }
 }
@@ -108,7 +106,11 @@ pub(crate) fn displayed_for_test(cx: &App, id: EntityId) -> Option<bool> {
         .lock()
         .unwrap()
         .get(&id)
-        .map(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        .map(|reporter| {
+            reporter
+                .displayed()
+                .load(std::sync::atomic::Ordering::Relaxed)
+        })
 }
 
 actions!(
@@ -314,7 +316,7 @@ pub struct TerminalView {
     pub focus_handle: FocusHandle,
     /// See [`displayed_registry`]. Shared with the registry so the app can
     /// flip it during a draw without an entity access.
-    displayed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(super) displayed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub font: Font,
     pub font_bold: Option<Font>,
     pub font_italic: Option<Font>,
@@ -1578,32 +1580,18 @@ impl TerminalView {
         let attached = match restore_pane {
             Some(id) => match RemoteTerminal::attach_on(&route, TermSize::new(80, 24), 8, 17, id) {
                 Ok(terminal) => Some((terminal, id, None)),
-                Err(e) if crate::terminal::attach_unanswered(&e) => {
-                    // Not "gone": nobody answered, which a daemon still coming
-                    // up also does. Whoever finds an orphaned shell later
-                    // reads this line.
-                    log::warn!("attach to pane {id} went unanswered ({e:#}); spawning fresh");
-                    None
-                }
                 Err(e) if crate::terminal::attach_refused(&e) => {
                     log::info!("pane {id} is gone on its machine ({e:#}); spawning fresh");
                     None
                 }
-                // The daemon never got to say either way: the link to its
-                // machine would not open, or broke before it answered. The pane
-                // is most likely still running over there, so a fresh shell in
-                // its place would orphan it — its scrollback, its agent session,
-                // whatever it was doing — and put a stranger in its tab. Fail,
-                // and let a retry reach the pane itself.
-                Err(e) if !route.is_local() => {
+                // A refused graphics replay, unanswered attach or broken link
+                // does not mean the pane is gone, even for a local daemon.
+                // Keep its identity and let retry reach the original session.
+                Err(e) => {
                     log::info!("pane {id} could not be reached to reattach ({e:#})");
                     return Err(e.context(format!(
                         "could not reach pane {id}, which may still be running"
                     )));
-                }
-                Err(e) => {
-                    log::info!("pane {id} is gone ({e:#}); spawning fresh");
-                    None
                 }
             },
             None => None,
@@ -1761,7 +1749,7 @@ impl TerminalView {
                 // out of the frame loop entirely: refreshing the window
                 // directly from here pinned the visible tab at full frame
                 // rate whenever any hidden pane was producing output.
-                let res = this.update(cx, |view, cx| {
+                let res = this.update_in(cx, |view, window, cx| {
                     let mut woke = false;
                     for ev in batch.drain(..) {
                         if matches!(ev, PaneEvent::Wakeup) && std::mem::replace(&mut woke, true) {
@@ -1769,6 +1757,10 @@ impl TerminalView {
                         }
                         view.handle_event(ev, cx);
                     }
+                    // A daemon may be waiting for this exact GPU lease before
+                    // it can ACK new graphics. Do not depend on a later frame
+                    // or the periodic cleanup to return retired atlas pages.
+                    view.terminal.images().release_retired(window, cx);
                 });
                 if res.is_err() {
                     break;
@@ -1833,7 +1825,10 @@ impl TerminalView {
                     .timer(std::time::Duration::from_millis(300))
                     .await;
                 if this
-                    .update_in(cx, |view, window, cx| view.poll_foreground(window, cx))
+                    .update_in(cx, |view, window, cx| {
+                        view.terminal.images().release_retired(window, cx);
+                        view.poll_foreground(window, cx);
+                    })
                     .is_err()
                 {
                     break;
@@ -1844,22 +1839,26 @@ impl TerminalView {
 
         super::color_scheme::watch(cx);
 
-        let displayed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let viewport_reporter = terminal.viewport_reporter();
+        let displayed = viewport_reporter.displayed();
         let entity_id = cx.entity().entity_id();
         cx.default_global::<DisplayedRegistry>()
             .0
             .lock()
             .unwrap()
-            .insert(entity_id, displayed.clone());
+            .insert(entity_id, viewport_reporter);
 
-        cx.on_release_in(window, move |view, window, cx| {
+        // The window may be gone before this entity is released. These owners
+        // must be removed even when on_release_in cannot update that window.
+        cx.on_release(move |view, cx| {
             if let Some(registry) = cx.try_global::<DisplayedRegistry>() {
                 registry.0.lock().unwrap().remove(&entity_id);
             }
             view.terminal.detach_link();
-            for image in view.terminal.images().take_for_release() {
-                cx.drop_image(image, Some(window));
-            }
+        })
+        .detach();
+        cx.on_release_in(window, |view, window, cx| {
+            view.terminal.images().release_all(window, cx);
         })
         .detach();
 
@@ -3409,6 +3408,7 @@ impl TerminalView {
         term.selection = None;
         term.scroll_display(Scroll::Bottom);
         drop(term);
+        self.terminal.viewport_reporter().report();
         self.scroll_frac = 0.;
     }
 
@@ -3637,6 +3637,7 @@ impl TerminalView {
                     .term
                     .lock()
                     .scroll_display(Scroll::Delta(lines));
+                self.terminal.viewport_reporter().report();
                 cx.notify();
             }
         }
@@ -4091,38 +4092,21 @@ impl TerminalView {
     }
 
     /// Clear presentation without discarding retained history or restarting
-    /// the process. Ctrl+L is sent through this pane's own transport.
+    /// the process. Only a live pane receives Ctrl+L through its own transport.
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
-        use rio_vt::ansi::ClearMode;
-        use rio_vt::performer::handler::Handler as _;
         self.cancel_scroll_anim();
-        self.terminal.term.lock().clear_screen(ClearMode::All);
-        self.terminal.write(vec![0x0c_u8]);
+        if self.terminal.clear_presentation(false) {
+            self.terminal.write(vec![0x0c_u8]);
+        }
         cx.notify();
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
-        use rio_vt::ansi::ClearMode;
-        use rio_vt::performer::handler::Handler as _;
-
         self.cancel_scroll_anim();
-        // Go through `clear_screen` rather than `grid_mut().clear_history()`:
-        // it drops a selection anchored in the rows we are about to discard and
-        // clamps the vi cursor back into the grid, which purging the history
-        // behind the term's back would leave pointing at rows that no longer
-        // exist.
-        {
-            let mut term = self.terminal.term.lock();
-            term.clear_screen(ClearMode::All);
-            term.clear_screen(ClearMode::Saved);
+        if self.terminal.clear_presentation(true) {
+            self.terminal.write(vec![0x0c_u8]);
         }
-        // Image placements are anchored in absolute scrollback rows, so the
-        // rows we just discarded moved every anchor. Drop them; the daemon does
-        // not replay out-of-band image frames, so a browser redraws on its next
-        // transmit (same reasoning as the reattach path in `adopt_relink`).
-        self.terminal.images().clear();
         self.scroll_frac = 0.;
-        self.terminal.write(vec![0x0c_u8]);
         cx.notify();
     }
 
@@ -6158,6 +6142,7 @@ impl TerminalView {
             sel.update(point, ds.side);
         }
         drop(term);
+        self.terminal.viewport_reporter().report();
         if offset != before {
             self.scroll_frac = 0.;
             cx.notify();
@@ -6396,6 +6381,7 @@ impl TerminalView {
             term.scroll_display(Scroll::Delta(jump));
         }
         drop(term);
+        self.terminal.viewport_reporter().report();
         if jump != 0 || frac != self.scroll_frac {
             self.scroll_frac = frac;
             cx.notify();
@@ -6438,6 +6424,7 @@ impl TerminalView {
         };
         drop(term);
         self.scroll_handle.sync(grid);
+        self.terminal.viewport_reporter().report();
     }
 
     /// Re-read the two things the frame itself declares — the terminal mode its
@@ -11050,7 +11037,7 @@ mod gpui_tests {
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
     use crate::daemon::transport::Stream;
     use crate::terminal::remote::PtySource;
-    use gpui_kit::{Entity, TestAppContext, point};
+    use gpui_kit::{Bounds, Entity, TestAppContext, point};
 
     fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
         let pty = if cfg!(windows) {
@@ -11872,40 +11859,842 @@ mod gpui_tests {
             .unwrap();
     }
 
-    /// A 1x1 red placement anchored at an absolute scrollback row, built the way
-    /// the decode worker hands one to the store.
-    fn placed_at(anchor_row: i64) -> crate::terminal::images::PlacedImage {
-        use lyrel_core::core::kitty_graphics::{Image, WireFormat};
+    fn graphics_placement(
+        key: u64,
+        resource: u64,
+        row: i64,
+        col: u32,
+    ) -> lyrel_core::core::kitty_graphics::Placement {
+        let mut placement = lyrel_core::core::kitty_graphics::Placement::default();
+        placement.key = key;
+        placement.resource = resource;
+        placement.image_id = 7;
+        placement.placement_id = key as u32;
+        placement.cols = 4;
+        placement.rows = 2;
+        placement.x = 1;
+        placement.w = 1;
+        placement.h = 1;
+        placement.anchor_row = row;
+        placement.anchor_col = col;
+        placement.span_cols = 4;
+        placement.span_rows = 2;
+        placement.clip_bottom = 2;
+        placement
+    }
 
-        let mut img = Image {
-            id: 1,
-            number: 0,
-            placement: 0,
-            width: 1,
-            height: 1,
-            cols: 0,
-            rows: 0,
-            data: vec![0xff, 0x00, 0x00, 0xff],
-            format: WireFormat::Rgba,
-            compressed: false,
+    fn send_graphics(
+        stream: &mut Stream,
+        update: lyrel_core::core::kitty_graphics::GraphicsUpdate,
+    ) {
+        assert!(
+            !matches!(
+                &update,
+                lyrel_core::core::kitty_graphics::GraphicsUpdate::Resource { .. }
+                    | lyrel_core::core::kitty_graphics::GraphicsUpdate::Place(_)
+                    | lyrel_core::core::kitty_graphics::GraphicsUpdate::Evicted { .. }
+            ),
+            "owner fixture must explicitly reserve before transmitting"
+        );
+        DaemonMsg::Graphics(update.encode_frame().into())
+            .encode(stream)
+            .unwrap();
+    }
+
+    fn send_admitted_graphics(
+        images: &crate::terminal::images::ImageStore,
+        stream: &mut Stream,
+        update: lyrel_core::core::kitty_graphics::GraphicsUpdate,
+    ) {
+        let frame = update.encode_frame();
+        assert!(
+            images.admit_test_resource(&update, frame.len()),
+            "fixture resource must fit the production offer budget"
+        );
+        DaemonMsg::Graphics(frame.into()).encode(stream).unwrap();
+    }
+
+    include!("graphics_consumer_tests.rs");
+    include!("graphics_resize_consumer_tests.rs");
+    include!("graphics_layout_consumer_tests.rs");
+    include!("graphics_recovery_consumer_tests.rs");
+    include!("native_ssh_consumer_tests.rs");
+
+    #[gpui_kit::test]
+    fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{
+            GraphicsEffect, GraphicsSniffer, GraphicsState, Segment, Sniffed,
         };
-        let (data, width_px, height_px) = crate::terminal::images::decode(&mut img).unwrap();
-        crate::terminal::images::PlacedImage {
-            data,
-            anchor_row,
-            anchor_col: 0,
-            width_px,
-            height_px,
-            cols: 0,
-            rows: 0,
-            id: 1,
-            placement: 0,
-            painted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        let (window, view, mut daemon) = rooted_harness(cx);
+        let images = view.read_with(cx, |view, _| view.terminal.images());
+        let mut state = GraphicsState::new(crate::daemon::protocol::WinSize {
+            cols: 80,
+            rows: 24,
+            cell_w: 10,
+            cell_h: 20,
+        });
+        let mut sniffer = GraphicsSniffer::new();
+        // Use the production parser and admission path for source bytes. The
+        // existing GPUI seam receives real resource frames, never fake pixels.
+        let mut deliver = |bytes: &[u8]| {
+            for byte in bytes.chunks(1) {
+                let segments = match sniffer.sniff(byte) {
+                    Sniffed::Plain(output) => vec![Segment::Output(output.to_vec())],
+                    Sniffed::Segments(segments) => segments,
+                };
+                for segment in segments {
+                    let effects = match segment {
+                        Segment::Output(output) => {
+                            let effects = state.output(&output);
+                            DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+                            effects
+                        }
+                        Segment::Command { control, image } => state.apply(control, image),
+                        Segment::Reply(_) => panic!("q=2 must suppress malformed replies"),
+                    };
+                    for effect in effects {
+                        match effect {
+                            GraphicsEffect::Update(update) => {
+                                send_admitted_graphics(&images, &mut daemon, update)
+                            }
+                            GraphicsEffect::Frame(frame) => send_admitted_graphics(
+                                &images,
+                                &mut daemon,
+                                lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame_owned(
+                                    frame.into_vec(),
+                                )
+                                .expect("daemon encoded a valid graphics update"),
+                            ),
+                            GraphicsEffect::Output(output) => {
+                                DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+                            }
+                            GraphicsEffect::Reply(_) => panic!("q=2 must suppress replies"),
+                        }
+                    }
+                }
+            }
+        };
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DQAAAEgQGALFXOsAAAAABJRU5ErkJggg==";
+        let compressed_png = "eJzrDPBz5+WS4mJgYOD19HAJYmBgYARhDjYGBgZ50SOdYAkXx5CKOck/zh+4wMDA0sjYoBN6bgMDAwODp6ufyzqnhCYAzeMQYw==";
+        for (id, format, compression, payload) in [
+            (810, 100, "", png),
+            (811, 100, ",o=z", compressed_png),
+            (812, 32, ",o=z", "eJz7z8DQAAAEgAGA"),
+        ] {
+            deliver(format!("\x1b[3;4H\x1b_Ga=T,i={id},f={format},s=1,v=1,C=1,q=2{compression},m=1;{}\x1b\\\x1b_Gm=0;{}\x1b\\", &payload[..4], &payload[4..]).as_bytes());
         }
+        // Invalid retransmissions cannot remove any accepted placement or move
+        // the cursor. The final marker observes the real reader's text order.
+        deliver(b"\x1b[7;9H\x1b_Ga=T,i=810,f=100,q=2;iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB\x1b\\\x1b_Ga=T,i=811,s=4294967295,v=4294967295,q=2;AAAA\x1b\\safe");
+        for _ in 0..200 {
+            if view.read_with(cx, |view, _| {
+                view.terminal.images().snapshot().len() == 3
+                    && view.terminal.term.lock().grid.cursor.pos.col.0 == 12
+            }) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let images = view.terminal.images().snapshot();
+            assert_eq!(images.len(), 3);
+            for image in images {
+                assert_eq!(
+                    image.data.as_ref().unwrap().as_bytes(0).unwrap(),
+                    &[0, 0, 255, 128]
+                );
+                assert_eq!((image.anchor_row, image.anchor_col), (2, 3));
+                assert!(
+                    image.painted.load(std::sync::atomic::Ordering::Acquire),
+                    "validated PNG/raw pixels reach the terminal paint path"
+                );
+            }
+            let term = view.terminal.term.lock();
+            assert_eq!(
+                (term.grid.cursor.pos.row.0, term.grid.cursor.pos.col.0),
+                (6, 12)
+            );
+        });
     }
 
     #[gpui_kit::test]
-    fn clearing_the_scrollback_drops_what_was_anchored_in_it(cx: &mut TestAppContext) {
+    fn graphics_consumer_region_slice_preserves_texture_and_scales_with_device_cell_geometry(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+        use std::sync::Arc;
+        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        let images = window
+            .update(cx, |view, _, _| view.terminal.images())
+            .unwrap();
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Resource {
+                key: 801,
+                image: Arc::new(Image {
+                    width: 1,
+                    height: 2,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![255, 0, 0, 255, 0, 0, 255, 80],
+                }),
+            },
+        );
+        let mut placement = graphics_placement(802, 801, 2, 3);
+        placement.x = 0;
+        placement.w = 1;
+        placement.h = 2;
+        placement.cols = 2;
+        placement.rows = 4;
+        placement.span_rows = 4;
+        placement.clip_top = 1;
+        placement.clip_bottom = 3;
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.terminal.images().snapshot().len() == 1
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                let images = view.terminal.images().snapshot();
+                let image = &images[0];
+                assert_eq!(
+                    image.data.as_ref().unwrap().as_bytes(0).unwrap(),
+                    &[0, 0, 255, 255, 255, 0, 0, 80]
+                );
+                let (crop, full) =
+                    image.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+                assert_eq!(
+                    crop,
+                    Bounds::new(point(px(30.), px(60.)), gpui_kit::size(px(20.), px(20.)))
+                );
+                assert_eq!(
+                    full,
+                    Bounds::new(point(px(30.), px(40.)), gpui_kit::size(px(20.), px(40.)))
+                );
+                let (crop, full) =
+                    image.paint_bounds(point(px(0.), px(0.)), px(15.), px(30.), 0, 0, 1.5);
+                assert_eq!(
+                    crop,
+                    Bounds::new(point(px(45.), px(90.)), gpui_kit::size(px(30.), px(30.)))
+                );
+                assert_eq!(
+                    full,
+                    Bounds::new(point(px(45.), px(60.)), gpui_kit::size(px(30.), px(60.)))
+                );
+            })
+            .unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Remove {
+                placements: vec![802],
+                resources: vec![],
+            },
+        );
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.terminal.images().snapshot().is_empty()
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, window, _| {
+                window.refresh();
+                assert!(
+                    view.terminal.images().snapshot().is_empty(),
+                    "permanently clipped/deleted slices cannot return on paint"
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn graphics_consumer_uses_session_history_origin_and_screen_not_local_cursor(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+        use std::sync::Arc;
+
+        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        let images = window
+            .update(cx, |view, _, _| view.terminal.images())
+            .unwrap();
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Resource {
+                key: 901,
+                image: Arc::new(Image {
+                    width: 1,
+                    height: 1,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![200, 40, 10, 80],
+                }),
+            },
+        );
+        let mut placement = graphics_placement(902, 901, 0, 0);
+        placement.anchor_row = 10_005;
+        placement.anchor_col = 3;
+        placement.x = 0;
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Screen {
+                screen: 0,
+                history_origin: 10_003,
+                epoch: 0,
+            },
+        );
+        // A decoded resource can exist before its following Screen frame.
+        // The later text marker fences the production reader's ordered stream.
+        DaemonMsg::Output(b"\x1b[20;60HMAIN-READY\x1b[20;60H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.scrollback_text().contains("MAIN-READY")
+                        && view.terminal.images().snapshot().len() == 1
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.scrollback_text().contains("MAIN-READY"));
+                let images = view.terminal.images().snapshot();
+                assert_eq!(images.len(), 1);
+                let (bounds, _) =
+                    images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+                assert_eq!(bounds.origin, point(px(30.), px(40.)));
+                let (history, _) =
+                    images[0].paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 3, 1.);
+                assert_eq!(history.origin.y, px(100.));
+            })
+            .unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Screen {
+                screen: 1,
+                history_origin: 0,
+                epoch: 1,
+            },
+        );
+        DaemonMsg::Output(b"ALT-READY".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.scrollback_text().contains("ALT-READY")
+                        && view.terminal.images().snapshot().is_empty()
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.scrollback_text().contains("ALT-READY"));
+                assert!(view.terminal.images().snapshot().is_empty())
+            })
+            .unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Screen {
+                screen: 0,
+                history_origin: 10_003,
+                epoch: 2,
+            },
+        );
+        DaemonMsg::Output(b"\x1b[20;60HMAIN-RESTORED\x1b[20;60H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.scrollback_text().contains("MAIN-RESTORED")
+                        && view.terminal.images().snapshot().len() == 1
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.scrollback_text().contains("MAIN-RESTORED"));
+                assert_eq!(view.terminal.images().snapshot().len(), 1)
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn graphics_consumer_upload_places_shared_cropped_bgra_at_session_coordinates(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+        use std::sync::Arc;
+
+        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        let (other, mut other_daemon) = harness_on(cx, PtySource::Raw);
+        let images = window
+            .update(cx, |view, _, _| view.terminal.images())
+            .unwrap();
+        let other_images = other
+            .update(cx, |view, _, _| view.terminal.images())
+            .unwrap();
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Resource {
+                key: 11,
+                image: Arc::new(Image {
+                    width: 2,
+                    height: 1,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![255, 0, 0, 255, 10, 20, 30, 128],
+                }),
+            },
+        );
+        DaemonMsg::Output(b"\x1b[3;6Huploaded".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.terminal.term.lock().grid.cursor.pos.col.0 == 13
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                assert!(
+                    view.terminal.images().snapshot().is_empty(),
+                    "upload is not a display command"
+                );
+            })
+            .unwrap();
+
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(21, 11, 2, 13)),
+        );
+        DaemonMsg::Output(b"\x1b[5;9H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(22, 11, 4, 8)),
+        );
+        DaemonMsg::Output(b"\x1b[9;2H".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            let ready = window
+                .update(cx, |view, _, _| {
+                    view.terminal.images().snapshot().len() == 2
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                let images = view.terminal.images().snapshot();
+                assert_eq!(images.len(), 2);
+                let first = images
+                    .iter()
+                    .find(|image| image.placement.key == 21)
+                    .unwrap();
+                let second = images
+                    .iter()
+                    .find(|image| image.placement.key == 22)
+                    .unwrap();
+                assert_eq!((first.anchor_row, first.anchor_col), (2, 13));
+                assert_eq!((second.anchor_row, second.anchor_col), (4, 8));
+                assert_eq!(
+                    first.data.as_ref().unwrap().as_bytes(0).unwrap(),
+                    &[0, 0, 255, 255, 30, 20, 10, 128]
+                );
+                assert!(Arc::ptr_eq(
+                    first.data.as_ref().unwrap(),
+                    second.data.as_ref().unwrap()
+                ));
+                assert!(Arc::ptr_eq(&first.painted, &second.painted));
+                let (crop, full) =
+                    first.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 1.);
+                assert_eq!(
+                    crop,
+                    Bounds::new(point(px(130.), px(40.)), gpui_kit::size(px(40.), px(40.)))
+                );
+                assert_eq!(
+                    full,
+                    Bounds::new(point(px(90.), px(40.)), gpui_kit::size(px(80.), px(40.)))
+                );
+                let mut natural = first.clone();
+                natural.placement.x = 0;
+                natural.placement.w = 2;
+                natural.placement.cols = 0;
+                natural.placement.rows = 0;
+                let (natural_bounds, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(natural_bounds.size, gpui_kit::size(px(1.), px(0.5)));
+                natural.placement.cols = 3;
+                natural.placement.offset_x = 4;
+                let (width_only, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(width_only.size, gpui_kit::size(px(28.), px(14.)));
+                assert_eq!(width_only.origin.x, px(132.));
+                natural.placement.cols = 0;
+                natural.placement.rows = 3;
+                natural.placement.clip_bottom = 3;
+                natural.placement.offset_x = 0;
+                natural.placement.offset_y = 4;
+                let (height_only, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(height_only.size, gpui_kit::size(px(116.), px(58.)));
+                natural.placement.cols = 2;
+                let (contained, _) =
+                    natural.paint_bounds(point(px(0.), px(0.)), px(10.), px(20.), 0, 0, 2.);
+                assert_eq!(
+                    contained.size,
+                    gpui_kit::size(px(20.), px(10.)),
+                    "both spans contain rather than stretch the crop"
+                );
+            })
+            .unwrap();
+        other
+            .update(cx, |view, _, _| {
+                assert!(view.terminal.images().snapshot().is_empty())
+            })
+            .unwrap();
+        send_admitted_graphics(
+            &other_images,
+            &mut other_daemon,
+            GraphicsUpdate::Resource {
+                key: 11,
+                image: Arc::new(Image {
+                    width: 2,
+                    height: 1,
+                    format: WireFormat::Rgb,
+                    compressed: false,
+                    data: vec![40, 50, 60, 70, 80, 90],
+                }),
+            },
+        );
+        send_admitted_graphics(
+            &other_images,
+            &mut other_daemon,
+            GraphicsUpdate::Place(graphics_placement(21, 11, 0, 0)),
+        );
+        for _ in 0..200 {
+            if other
+                .update(cx, |view, _, _| {
+                    !view.terminal.images().snapshot().is_empty()
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let mut replacement = graphics_placement(21, 11, 8, 1);
+        replacement.x = 0;
+        replacement.cols = 2;
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(replacement));
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Remove {
+                placements: vec![22],
+                resources: vec![],
+            },
+        );
+        DaemonMsg::Output(b"done".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            let ready = window
+                .update(cx, |view, _, _| {
+                    let images = view.terminal.images().snapshot();
+                    images.len() == 1 && images[0].placement.cols == 2
+                })
+                .unwrap();
+            if ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
+                let images = view.terminal.images().snapshot();
+                assert_eq!(images.len(), 1);
+                assert_eq!(
+                    (
+                        images[0].placement.key,
+                        images[0].placement.x,
+                        images[0].placement.cols
+                    ),
+                    (21, 0, 2)
+                );
+                assert_eq!((images[0].anchor_row, images[0].anchor_col), (8, 1));
+                assert_eq!(
+                    images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                    &[0, 0, 255, 255, 30, 20, 10, 128]
+                );
+            })
+            .unwrap();
+        other
+            .update(cx, |view, _, _| {
+                let images = view.terminal.images().snapshot();
+                assert_eq!(images.len(), 1);
+                assert_eq!(
+                    images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                    &[60, 50, 40, 255, 90, 80, 70, 255]
+                );
+                assert_eq!(
+                    images[0].placement.cols, 4,
+                    "the other pane's same-key update must not leak here"
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn graphics_consumer_paint_uses_visible_crop_and_skips_resources_outside_pane(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+        use std::sync::{Arc, atomic::Ordering};
+
+        let (window, view, mut daemon) = rooted_harness(cx);
+        let images = view.read_with(cx, |view, _| view.terminal.images());
+        window.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        for key in [61, 62] {
+            send_admitted_graphics(
+                &images,
+                &mut daemon,
+                GraphicsUpdate::Resource {
+                    key,
+                    image: Arc::new(Image {
+                        width: 2,
+                        height: 1,
+                        format: WireFormat::Rgba,
+                        compressed: false,
+                        data: vec![255, 0, 0, 255, 0, 200, 0, 80],
+                    }),
+                },
+            );
+        }
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(71, 61, 0, 0)),
+        );
+        let mut output = b"\r\n".repeat(200);
+        output.extend_from_slice(b"\x1b[H");
+        DaemonMsg::Output(output).encode(&mut daemon).unwrap();
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Screen {
+                screen: 0,
+                history_origin: 200,
+                epoch: 0,
+            },
+        );
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Place(graphics_placement(72, 62, 200, 0)),
+        );
+        // Hold the UI pump until both decodes finish, so the first resource
+        // cannot have been submitted to the atlas before scrolling offscreen.
+        for _ in 0..200 {
+            if view.read_with(cx, |view, _| view.terminal.images().snapshot().len() == 2) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(400));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let images = view.terminal.images().snapshot();
+            let outside = images
+                .iter()
+                .find(|image| image.placement.key == 71)
+                .unwrap();
+            let visible = images
+                .iter()
+                .find(|image| image.placement.key == 72)
+                .unwrap();
+            assert!(
+                !outside.painted.load(Ordering::Acquire),
+                "fully clipped resources must not allocate atlas tiles"
+            );
+            assert!(
+                visible.painted.load(Ordering::Acquire),
+                "real TerminalElement paint must claim the visible resource"
+            );
+            assert_eq!(
+                visible.data.as_ref().unwrap().as_bytes(0).unwrap(),
+                &[0, 0, 255, 255, 0, 200, 0, 80]
+            );
+            assert_eq!(
+                (
+                    visible.placement.x,
+                    visible.placement.w,
+                    visible.placement.h
+                ),
+                (1, 1, 1)
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn graphics_consumer_hidden_decode_keeps_pixels_without_notifying_window(
+        cx: &mut TestAppContext,
+    ) {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
+        use std::{cell::Cell, rc::Rc, sync::Arc};
+
+        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
+        let images = window
+            .update(cx, |view, _, _| view.terminal.images())
+            .unwrap();
+        let pane = window
+            .update(cx, |view, _, cx| {
+                view.displayed
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                cx.entity()
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let notifications = Rc::new(Cell::new(0));
+        let count = notifications.clone();
+        let _subscription = cx.update(|cx| {
+            cx.observe(&pane, move |_, _| {
+                count.set(count.get() + 1);
+            })
+        });
+        send_admitted_graphics(
+            &images,
+            &mut daemon,
+            GraphicsUpdate::Resource {
+                key: 41,
+                image: Arc::new(Image {
+                    width: 1,
+                    height: 1,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![1, 2, 3, 64],
+                }),
+            },
+        );
+        let mut placement = graphics_placement(51, 41, 0, 0);
+        placement.x = 0;
+        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if pane.read_with(cx, |view, _| !view.terminal.images().snapshot().is_empty()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        cx.run_until_parked();
+        pane.read_with(cx, |view, _| {
+            let images = view.terminal.images().snapshot();
+            assert_eq!(
+                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                &[3, 2, 1, 64]
+            );
+            assert!(!images[0].painted.load(std::sync::atomic::Ordering::Acquire));
+        });
+        assert_eq!(
+            notifications.get(),
+            0,
+            "decoded hidden output must not dirty the window"
+        );
+        window
+            .update(cx, |view, _, _| {
+                view.displayed
+                    .store(true, std::sync::atomic::Ordering::Relaxed)
+            })
+            .unwrap();
+        pane.read_with(cx, |view, _| {
+            let images = view.terminal.images().snapshot();
+            assert_eq!(
+                images.len(),
+                1,
+                "returning to the pane retains its current image without a resend"
+            );
+            assert_eq!(
+                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+                &[3, 2, 1, 64]
+            );
+        });
+        send_graphics(
+            &mut daemon,
+            GraphicsUpdate::Remove {
+                placements: vec![51],
+                resources: vec![41],
+            },
+        );
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if notifications.get() > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(notifications.get() > 0, "a visible removal must repaint");
+        pane.read_with(cx, |view, _| {
+            assert!(view.terminal.images().snapshot().is_empty())
+        });
+    }
+
+    #[gpui_kit::test]
+    fn clearing_the_scrollback_drops_the_selection_anchored_in_it(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
 
         // Overflow the 24-row viewport so there is a scrollback to purge.
@@ -11931,10 +12720,7 @@ mod gpui_tests {
                 let history = view.terminal.term.lock().grid.history_size();
                 assert!(history > 0, "the test needs a scrollback to clear");
 
-                // Both of these address rows `clear_history` is about to drop:
-                // an image anchored by absolute row, and a selection reaching up
-                // into the history.
-                view.terminal.images().place(placed_at(history as i64));
+                // A selection reaching into history must not survive its purge.
                 view.terminal.term.lock().selection = Some(Selection::new(
                     SelectionType::Simple,
                     Pos::new(Line(-1), Column(0)),
@@ -11942,17 +12728,42 @@ mod gpui_tests {
                 ));
 
                 view.clear_scrollback(cx);
-
-                assert!(
-                    view.terminal.images().snapshot().is_empty(),
-                    "a stale anchor blits the frame over live output, or off-screen \
-                     entirely — the daemon never replays the frame to correct it"
-                );
+            })
+            .unwrap();
+        daemon
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        loop {
+            if let crate::daemon::protocol::ClientMsg::ClearPresentation { history } =
+                crate::daemon::protocol::ClientMsg::read(&mut daemon).unwrap()
+            {
+                assert!(history);
+                break;
+            }
+        }
+        // The real daemon applies this in its output lock and emits this same
+        // text sequence before graphics removals. The consumer must wait for it.
+        DaemonMsg::Output(b"\x1b[2J\x1b[3J".to_vec())
+            .encode(&mut daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if window
+                .update(cx, |view, _, _| {
+                    view.terminal.term.lock().selection.is_none()
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        window
+            .update(cx, |view, _, _| {
                 assert!(
                     view.terminal.term.lock().selection.is_none(),
-                    "a selection left pointing at purged rows clamps onto the \
-                     viewport and copies whatever text moved into them"
+                    "purged history cannot retain its selection"
                 );
+                assert_eq!(view.terminal.term.lock().grid.history_size(), 0);
             })
             .unwrap();
     }

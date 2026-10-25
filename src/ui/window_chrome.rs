@@ -224,6 +224,22 @@ mod gpui_tests {
         vcx.run_until_parked();
     }
 
+    fn wait_for_editor(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
+        // HostOps 的真实线程池不随 GPUI executor 一起排空。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            settle(vcx);
+            if app.read_with(vcx, |app, _| app.editor_active_local_file().is_some()) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the document did not finish opening"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     fn terminal_focused(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
         app.update_in(vcx, |app, window, cx| {
             app.tabs[app.active]
@@ -450,7 +466,7 @@ mod gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_file_in_editor(&path, window, cx)
         });
-        settle(&mut vcx);
+        wait_for_editor(&app, &mut vcx);
         let editor = app.read_with(&vcx, |app, _| app.editor_active_local_file().unwrap().input);
         assert!(app.update_in(&mut vcx, |app, window, cx| {
             app.document_dock_px(window, cx).is_some()
@@ -729,7 +745,7 @@ mod gpui_tests {
             app.update_in(&mut vcx, |app, window, cx| {
                 app.open_file_in_editor(&path, window, cx)
             });
-            settle(&mut vcx);
+            wait_for_editor(&app, &mut vcx);
             vcx.dispatch_action(ToggleDocumentFill);
             settle(&mut vcx);
             let editor =

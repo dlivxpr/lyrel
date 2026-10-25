@@ -22,13 +22,10 @@ impl TermSize {
     }
 }
 
-/// Cell-pixel accessors stay at their `Default` zero: no client of this
-/// terminal can see pixels (there is no window, the grid is mirrored over a
-/// socket), and `rio-vt` keys its graphics-plane cursor math off these being
-/// nonzero — leaving them zero is what keeps a parsed sixel/iTerm2/kitty
-/// payload from moving the text cursor or reserving cells. `CSI 16 t` (the
-/// cell-pixel query) is answered with silence by the bridge for the same
-/// reason: the truthful answer is "not applicable", not "0x0".
+/// The desktop mirror deliberately leaves graphics cell accessors at zero:
+/// unsupported sixel/iTerm2 payloads still cannot reserve cells or move its
+/// cursor. Kitty geometry and CSI 14t/16t replies use the daemon's ordered
+/// `WinSize`, populated with the controller's measured device-pixel cell size.
 impl Dimensions for TermSize {
     fn total_lines(&self) -> usize {
         self.rows

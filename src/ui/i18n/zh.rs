@@ -2,6 +2,7 @@ use super::L10nKey;
 
 pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
     Some(match key {
+        L10nKey::TerminalImageEvicted => "图片已淘汰",
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",
         L10nKey::NotificationScope => "本机已收到的应用通知 · 最近 500 条",

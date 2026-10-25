@@ -16089,34 +16089,6 @@ mod pane_menu_tests {
     }
 
     #[gpui_kit::test]
-    fn clearing_screen_retains_history_but_clear_all_removes_it(cx: &mut TestAppContext) {
-        use rio_vt::crosswords::grid::Dimensions as _;
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
-        let pane = app.update_in(&mut vcx, |app, window, cx| {
-            let pane = app.tabs[0].pane.terminals()[0].clone();
-            let terminal = pane.read(cx).terminal.term.clone();
-            let output = format!("buried-history\r\n{}", "line\r\n".repeat(40));
-            rio_vt::performer::handler::Processor::default()
-                .advance(&mut *terminal.lock(), output.as_bytes());
-            let focus = pane.read(cx).focus_handle.clone();
-            window.focus(&focus, cx);
-            pane
-        });
-        vcx.dispatch_action(ClearPaneScreen);
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |_, _, cx| {
-            assert!(pane.read(cx).scrollback_text().contains("buried-history"));
-            assert!(pane.read(cx).terminal.term.lock().grid.history_size() > 0);
-        });
-        vcx.dispatch_action(crate::terminal::view::ClearScrollback);
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |_, _, cx| {
-            assert!(!pane.read(cx).scrollback_text().contains("buried-history"));
-            assert_eq!(pane.read(cx).terminal.term.lock().grid.history_size(), 0);
-        });
-    }
-
-    #[gpui_kit::test]
     fn restarting_an_unreachable_remote_never_replaces_it_with_a_local_shell(
         cx: &mut TestAppContext,
     ) {

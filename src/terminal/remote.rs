@@ -10,6 +10,7 @@ use rio_vt::clipboard::ClipboardType;
 use rio_vt::config::colors::ColorRgb;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::Mode;
+use rio_vt::crosswords::grid::Dimensions as _;
 use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::{Handler as _, Processor};
 
@@ -246,8 +247,8 @@ struct ReaderSignals {
     auth: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>>,
     phase: Arc<Mutex<Option<SshPhase>>>,
     /// Kitty-graphics images the daemon lifted out of the stream (issue #213),
-    /// anchored to the grid for the paint path to blit. Shared with the reader,
-    /// which places/deletes them as `DaemonMsg::Image`/`DeleteImage` frames land.
+    /// anchored to the grid for the paint path to blit. The reader applies
+    /// daemon-owned resource/placement updates in stream order.
     images: crate::terminal::images::ImageStore,
     clipboard_writes: Arc<Mutex<VecDeque<lyrel_core::core::clipboard::ClipboardWrite>>>,
     osc_notes: OscNotes,
@@ -542,6 +543,54 @@ struct LinkWriter {
     thread: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+struct LinkSender {
+    queue: Arc<(Mutex<SendQueue>, std::sync::Condvar)>,
+    loss: InputLoss,
+}
+
+impl LinkSender {
+    fn send(&self, msg: ClientMsg) {
+        Self::enqueue(&self.queue, &self.loss, msg);
+    }
+
+    fn enqueue(
+        queue: &Arc<(Mutex<SendQueue>, std::sync::Condvar)>,
+        loss: &InputLoss,
+        msg: ClientMsg,
+    ) {
+        let mut frame = Vec::new();
+        if let Err(error) = msg.encode(&mut frame) {
+            log::warn!("could not encode a frame for this pane's link: {error}");
+            return;
+        }
+        let (lock, wake) = &**queue;
+        let Ok(mut q) = lock.lock() else {
+            return;
+        };
+        if q.closing {
+            return;
+        }
+        let oversize = frame.len() > MAX_BACKLOG && q.bytes == 0;
+        if !oversize && q.bytes + frame.len() > MAX_BACKLOG + q.oversize {
+            drop(q);
+            loss.note(&std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                format!("nothing has drained this pane's link for {MAX_BACKLOG} bytes of input"),
+            ));
+            return;
+        }
+        if oversize {
+            q.oversize = frame.len();
+        }
+        q.bytes += frame.len();
+        q.frames.push_back(frame);
+        q.drained = false;
+        drop(q);
+        wake.notify_one();
+    }
+}
+
 impl LinkWriter {
     fn new(stream: Stream, loss: InputLoss) -> std::io::Result<LinkWriter> {
         let closer = stream.try_clone()?;
@@ -562,45 +611,14 @@ impl LinkWriter {
     /// Queues a frame. Never blocks: the socket belongs to the sender thread,
     /// and the only thing that happens here is a push onto a `VecDeque`.
     fn send(&self, msg: ClientMsg) {
-        let mut frame = Vec::new();
-        if let Err(e) = msg.encode(&mut frame) {
-            log::warn!("could not encode a frame for this pane's link: {e}");
-            return;
+        LinkSender::enqueue(&self.queue, &self.loss, msg);
+    }
+
+    fn sender(&self) -> LinkSender {
+        LinkSender {
+            queue: self.queue.clone(),
+            loss: self.loss.clone(),
         }
-        let (lock, wake) = &*self.queue;
-        let Ok(mut q) = lock.lock() else { return };
-        if q.closing {
-            return;
-        }
-        // A frame over the bound all by itself is not a backlog — a paste is
-        // whatever the clipboard holds, and refusing a big one would kill a
-        // perfectly healthy pane. Onto an empty queue it goes through anyway,
-        // and lifts the bound by its own size for as long as it is outstanding,
-        // so what piles up behind it is still held to the same four megabytes.
-        // Onto a queue that already has something on it, the ordinary bound
-        // applies: one such frame is a paste, a second one arriving before the
-        // first has moved is a link that is not moving.
-        let oversize = frame.len() > MAX_BACKLOG && q.bytes == 0;
-        if !oversize && q.bytes + frame.len() > MAX_BACKLOG + q.oversize {
-            // Dropped rather than queued: a backlog this deep is a link nothing
-            // is reading, and growing it only trades a frozen window for an
-            // exhausted heap. Reported in the same words, and once, as a write
-            // the link refuses outright — the pane is gone either way.
-            drop(q);
-            self.loss.note(&std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                format!("nothing has drained this pane's link for {MAX_BACKLOG} bytes of input"),
-            ));
-            return;
-        }
-        if oversize {
-            q.oversize = frame.len();
-        }
-        q.bytes += frame.len();
-        q.frames.push_back(frame);
-        q.drained = false;
-        drop(q);
-        wake.notify_one();
     }
 
     /// Retires the sender and cuts the link. Gives what is queued `DRAIN_GRACE`
@@ -710,6 +728,120 @@ fn send_loop(
     }
 }
 
+#[derive(Clone)]
+pub(super) struct GraphicsViewportReporter {
+    term: std::sync::Weak<FairMutex<Crosswords<EventProxy>>>,
+    images: crate::terminal::images::ImageStore,
+    displayed: Arc<AtomicBool>,
+    link: Arc<
+        Mutex<(
+            LinkSender,
+            Option<crate::daemon::protocol::GraphicsViewport>,
+        )>,
+    >,
+    retry: std::sync::mpsc::SyncSender<()>,
+}
+
+impl GraphicsViewportReporter {
+    fn new(
+        term: &Arc<FairMutex<Crosswords<EventProxy>>>,
+        images: crate::terminal::images::ImageStore,
+        sender: LinkSender,
+    ) -> std::io::Result<Self> {
+        let (retry, pending) = std::sync::mpsc::sync_channel(1);
+        let reporter = Self {
+            term: Arc::downgrade(term),
+            images,
+            displayed: Arc::new(AtomicBool::new(true)),
+            link: Arc::new(Mutex::new((sender, None))),
+            retry,
+        };
+        let term = reporter.term.clone();
+        let images = reporter.images.clone();
+        let displayed = reporter.displayed.clone();
+        let link = reporter.link.clone();
+        // One bounded wake, not queued viewport snapshots. The worker may wait
+        // for a PTY reader or UI grid guard, then samples the latest state under
+        // grid -> store -> link ordering. It owns no retry sender, so dropping
+        // the last reporter closes the channel and retires the worker.
+        std::thread::Builder::new()
+            .name("lyrel-graphics-viewport".into())
+            .spawn(move || {
+                while pending.recv().is_ok() {
+                    let Some(term) = term.upgrade() else { return };
+                    let term = term.lock();
+                    Self::publish(&term, &images, &displayed, &link);
+                }
+            })?;
+        Ok(reporter)
+    }
+
+    pub(super) fn displayed(&self) -> Arc<AtomicBool> {
+        self.displayed.clone()
+    }
+
+    pub(super) fn set_displayed(&self, on: bool) {
+        {
+            let mut link = self.link.lock().unwrap();
+            if self.displayed.swap(on, Ordering::Relaxed) == on {
+                return;
+            }
+            if !on && let Some(mut viewport) = link.1 {
+                viewport.rows = 0;
+                link.0.send(ClientMsg::GraphicsViewport(viewport));
+                link.1 = Some(viewport);
+            }
+        }
+        self.report();
+    }
+
+    pub(super) fn report(&self) {
+        let Some(term) = self.term.upgrade() else {
+            return;
+        };
+        let Some(term) = term.try_lock() else {
+            // A scroll already changed the grid. Never discard its final
+            // desired viewport just because the reader currently owns it.
+            let _ = self.retry.try_send(());
+            return;
+        };
+        Self::publish(&term, &self.images, &self.displayed, &self.link);
+    }
+
+    fn publish(
+        term: &Crosswords<EventProxy>,
+        images: &crate::terminal::images::ImageStore,
+        displayed: &AtomicBool,
+        link: &Mutex<(
+            LinkSender,
+            Option<crate::daemon::protocol::GraphicsViewport>,
+        )>,
+    ) {
+        let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
+        let Some(mut viewport) = images.viewport(
+            origin,
+            term.display_offset(),
+            term.screen_lines(),
+            term.columns(),
+            true,
+        ) else {
+            return;
+        };
+        // Sampling and enqueueing stay inside the grid guard. A queued retry
+        // cannot publish an old snapshot after a newer synchronous report.
+        let mut link = link.lock().unwrap();
+        // Visibility changes also hold this lock. A report sampled before a
+        // hide must not restore visible rows after its withdrawal was sent.
+        if !displayed.load(Ordering::Relaxed) {
+            viewport.rows = 0;
+        }
+        if link.1 != Some(viewport) {
+            link.0.send(ClientMsg::GraphicsViewport(viewport));
+            link.1 = Some(viewport);
+        }
+    }
+}
+
 pub struct RemoteTerminal {
     pub term: Arc<FairMutex<Crosswords<EventProxy>>>,
     pub events: smol::channel::Receiver<PaneEvent>,
@@ -754,11 +886,12 @@ pub struct RemoteTerminal {
     auto_supplied_password: bool,
     agent: Arc<Mutex<Option<CLIAgent>>>,
     agent_session: Arc<Mutex<AgentSlot>>,
-    /// Kitty-graphics images placed on this pane's grid (issue #213).
-    /// Written by the reader thread from out-of-band `Image`/`DeleteImage`
-    /// frames, read by the paint path — only the client holds the grid the
-    /// anchors are relative to, so the store lives here rather than in the daemon.
+    /// Derived decode/render cache for the daemon's authoritative graphics state.
+    /// The reader applies ordered out-of-band `Graphics` updates and captures
+    /// client-grid placement anchors; protocol identities and resource lifetimes
+    /// remain owned by the living daemon pane.
     images: crate::terminal::images::ImageStore,
+    viewport_reporter: GraphicsViewportReporter,
     clipboard_writes: Arc<Mutex<VecDeque<lyrel_core::core::clipboard::ClipboardWrite>>>,
     osc_notes: OscNotes,
     /// On the pane rather than its view so it survives a relink; only the
@@ -890,6 +1023,10 @@ impl RemoteTerminal {
         cancellation: Option<&SpawnCancellation>,
     ) -> anyhow::Result<(Self, u64)> {
         let mut stream = connect_routed(route)?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
+        let images = crate::terminal::images::ImageStore::new();
+        images.set_cell_metrics(cell_w, cell_h);
+        Self::send_graphics_capacity(&mut stream, &images)?;
         let await_claim = route.is_local() && cancellation.is_some();
         if await_claim
             && !crate::daemon::spawn::local_daemon_supports(
@@ -950,9 +1087,9 @@ impl RemoteTerminal {
         }
         .encode(&mut stream)?;
         let reply = if let Some(cancellation) = cancellation.filter(|_| await_claim) {
-            cancellable_spawn_reply(&mut stream, cancellation)?
+            cancellable_spawn_reply_with_images(&mut stream, cancellation, &images)?
         } else {
-            spawn_reply(&mut stream, attach_reply_wait(route), "Spawn")?
+            spawn_reply(&mut stream, attach_reply_wait(route), "Spawn", &images)?
         };
         let pane_id = match reply {
             DaemonMsg::Spawned { pane_id } => pane_id,
@@ -966,12 +1103,42 @@ impl RemoteTerminal {
             }
         };
 
-        let mut term =
-            Self::from_stream_with(stream, size, Vec::new(), PtySource::for_route(route))?;
+        let mut term = Self::from_stream_parts(
+            stream,
+            size,
+            Vec::new(),
+            PtySource::for_route(route),
+            false,
+            images,
+        )?;
         term.route = route.clone();
         term.spawn_claim = await_claim.then_some((pane_id, win));
         term.seed_cwd(spawned_in);
         Ok((term, pane_id))
+    }
+
+    fn negotiate_pane_protocol(
+        stream: &mut Stream,
+        wait: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let _ = stream.set_read_timeout(Some(wait));
+        let result = crate::daemon::protocol::negotiate_pane(stream);
+        let _ = stream.set_read_timeout(None);
+        result?;
+        Ok(())
+    }
+    fn send_graphics_capacity(
+        stream: &mut Stream,
+        images: &crate::terminal::images::ImageStore,
+    ) -> anyhow::Result<()> {
+        let (encoded_bytes, decoded_bytes) = images.graphics_capacity();
+        ClientMsg::GraphicsCapacity {
+            encoded_bytes,
+            decoded_bytes,
+            offers: true,
+        }
+        .encode(stream)?;
+        Ok(())
     }
 
     pub(crate) fn claim_spawn(&mut self) {
@@ -1006,6 +1173,10 @@ impl RemoteTerminal {
         pane_id: u64,
     ) -> anyhow::Result<Self> {
         let mut stream = connect_routed(route)?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
+        let images = crate::terminal::images::ImageStore::new();
+        images.set_cell_metrics(cell_w, cell_h);
+        Self::send_graphics_capacity(&mut stream, &images)?;
         let win = win_size(size, cell_w, cell_h);
 
         ClientMsg::Attach {
@@ -1014,38 +1185,20 @@ impl RemoteTerminal {
             allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
         }
         .encode(&mut stream)?;
-        let buffered = match attach_reply_prefix(&mut stream, pane_id, attach_reply_wait(route)) {
-            Ok(buffered) => buffered,
-            Err(e) if route.is_local() && attach_unanswered(&e) => {
-                // Silence on the attach socket has two readings, and only one
-                // of them is safe to act on. Ask the daemon on a fresh
-                // connection: if it answers `Version` there, it is up and
-                // serving, and the attach connection is one it will never
-                // serve — a socket some process holds open, or one from a
-                // listener no longer drained — so the verdict stands and the
-                // caller spawns fresh. If it does not answer there either, it
-                // is not serving anyone yet — mid-restart, mid-handoff — and
-                // a fresh pane spawned now would land on a live one the moment
-                // it comes up (its history carried across, its agent session
-                // resumed twice). There is no third path from a synchronous
-                // UI-thread call, so the attach still fails, but says which
-                // silence it was: the log line someone reads while diagnosing
-                // an orphaned shell must not claim the pane was gone.
-                //
-                // Only local routes probe: a remote attach already waits 15 s
-                // and a second routed connection is a second bridge process.
-                if local_daemon_answers() {
-                    return Err(e);
-                }
-                return Err(e.context(
-                    "the daemon answered nothing on a fresh connection either — it is not \
-                     serving yet (restarting?), so this pane may still be alive",
-                ));
-            }
-            Err(e) => return Err(e),
-        };
-        let mut term =
-            Self::from_stream_parts(stream, size, buffered, PtySource::for_route(route), true)?;
+        let buffered = attach_reply_prefix_with_images(
+            &mut stream,
+            pane_id,
+            attach_reply_wait(route),
+            &images,
+        )?;
+        let mut term = Self::from_stream_parts(
+            stream,
+            size,
+            buffered,
+            PtySource::for_route(route),
+            true,
+            images,
+        )?;
         term.route = route.clone();
         Ok(term)
     }
@@ -1062,15 +1215,23 @@ impl RemoteTerminal {
         size: TermSize,
         cell_w: u16,
         cell_h: u16,
+        images: crate::terminal::images::ImageStore,
     ) -> anyhow::Result<(Stream, Vec<u8>)> {
         let mut stream = connect_routed(route)?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(route))?;
+        Self::send_graphics_capacity(&mut stream, &images)?;
         ClientMsg::Attach {
             pane_id,
             size: win_size(size, cell_w, cell_h),
             allow_remote_clipboard_write: route.allow_remote_clipboard_write(),
         }
         .encode(&mut stream)?;
-        let buffered = attach_reply_prefix(&mut stream, pane_id, attach_reply_wait(route))?;
+        let buffered = attach_reply_prefix_with_images(
+            &mut stream,
+            pane_id,
+            attach_reply_wait(route),
+            &images,
+        )?;
         Ok((stream, buffered))
     }
 
@@ -1118,9 +1279,13 @@ impl RemoteTerminal {
         // The grid was just reset, so every image anchor now points nowhere.
         // Drop them; the daemon does not replay out-of-band image frames, so a
         // browser redraws on its next transmit (see issue #213's reattach note).
-        self.images.clear();
+        self.images.clear_for_relink();
 
         let quit = Arc::new(AtomicBool::new(false));
+        let link = LinkWriter::new(
+            stream,
+            InputLoss::new(quit.clone(), self.exited_flag.clone(), self.proxy.clone()),
+        )?;
         let reader = Self::spawn_reader(
             self.term.clone(),
             self.proxy.clone(),
@@ -1155,13 +1320,19 @@ impl RemoteTerminal {
                 local_conpty: self.local_conpty.clone(),
                 color_scheme_updates: self.color_scheme_updates.clone(),
             },
+            link.sender(),
+            self.viewport_reporter.clone(),
         );
         self.reader_thread = Some(reader);
         self.reader_quit = quit;
         // Installed after `reader_quit`, so the sender reports a refusal
         // against the reader this link actually has. Assigning retires the old
         // `LinkWriter` through its `Drop`, which is what closes the old socket.
-        self.link = LinkWriter::new(stream, self.input_loss())?;
+        self.link = link;
+        *self.viewport_reporter.link.lock().unwrap() = (self.link.sender(), None);
+        // The new reader can establish its Screen before the sender swap.
+        // Re-publish on this link even when the pane stays hidden afterward.
+        self.viewport_reporter.report();
         self.route = route.clone();
         self.synced_size = false;
         self.resize(size, cell_w, cell_h);
@@ -1179,6 +1350,7 @@ impl RemoteTerminal {
             Vec::new(),
             PtySource::for_route(&PaneRoute::Local),
             true,
+            crate::terminal::images::ImageStore::new(),
         )
     }
 
@@ -1193,13 +1365,21 @@ impl RemoteTerminal {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn from_stream_with(
         stream: Stream,
         size: TermSize,
         buffered: Vec<u8>,
         pty: PtySource,
     ) -> anyhow::Result<Self> {
-        Self::from_stream_parts(stream, size, buffered, pty, false)
+        Self::from_stream_parts(
+            stream,
+            size,
+            buffered,
+            pty,
+            false,
+            crate::terminal::images::ImageStore::new(),
+        )
     }
 
     /// `awaiting_replay` says this link is an attach rather than a spawn, and
@@ -1214,6 +1394,7 @@ impl RemoteTerminal {
         buffered: Vec<u8>,
         pty: PtySource,
         awaiting_replay: bool,
+        images: crate::terminal::images::ImageStore,
     ) -> anyhow::Result<Self> {
         let read_half = stream.try_clone()?;
         let write_half = stream;
@@ -1245,7 +1426,6 @@ impl RemoteTerminal {
         let auth_prompts: Arc<Mutex<VecDeque<(u64, AuthPromptKind)>>> =
             Arc::new(Mutex::new(VecDeque::new()));
         let ssh_phase: Arc<Mutex<Option<SshPhase>>> = Arc::new(Mutex::new(None));
-        let images = crate::terminal::images::ImageStore::new();
         let clipboard_writes = Arc::new(Mutex::new(VecDeque::new()));
         let osc_notes = OscNotes::default();
         let clipboard_write_busy = Arc::new(AtomicBool::new(false));
@@ -1253,6 +1433,12 @@ impl RemoteTerminal {
         let reader_quit = Arc::new(AtomicBool::new(false));
         let local_conpty = Arc::new(AtomicBool::new(pty == PtySource::LocalConpty));
         let color_scheme_updates = Arc::new(AtomicBool::new(false));
+        let link = LinkWriter::new(
+            write_half,
+            InputLoss::new(reader_quit.clone(), exited_flag.clone(), proxy.clone()),
+        )?;
+        let viewport_reporter =
+            GraphicsViewportReporter::new(&term, images.clone(), link.sender())?;
         let reader_thread = Self::spawn_reader(
             term.clone(),
             proxy.clone(),
@@ -1280,14 +1466,12 @@ impl RemoteTerminal {
                 local_conpty: local_conpty.clone(),
                 color_scheme_updates: color_scheme_updates.clone(),
             },
+            link.sender(),
+            viewport_reporter.clone(),
         );
 
-        let link = LinkWriter::new(
-            write_half,
-            InputLoss::new(reader_quit.clone(), exited_flag.clone(), proxy.clone()),
-        )?;
-
         Ok(Self {
+            viewport_reporter,
             term,
             events: rx,
             palette: super::palette::build(),
@@ -1355,6 +1539,7 @@ impl RemoteTerminal {
     /// touching the grid again.
     fn stop_reader(&mut self) {
         self.reader_quit.store(true, Ordering::SeqCst);
+        self.images.retire_reader();
         // The sender owns the socket now, and closing it is its job: `close`
         // gives whatever is queued a brief moment to go out and then shuts the
         // socket down regardless, which is also what wakes the reader.
@@ -1378,7 +1563,48 @@ impl RemoteTerminal {
         buffered: Vec<u8>,
         quit: Arc<AtomicBool>,
         signals: ReaderSignals,
+        writer: LinkSender,
+        viewport_reporter: GraphicsViewportReporter,
     ) -> JoinHandle<()> {
+        let pressure_displayed = viewport_reporter.displayed();
+        let pressure_term = Arc::downgrade(&term);
+        let pressure_writer = writer.clone();
+        signals.images.register_pressure(
+            move |store| {
+                use lyrel_core::core::kitty_graphics::placeholder_row;
+                let term = pressure_term.upgrade()?;
+                let term = term.lock();
+                let offset = term.display_offset() as i32;
+                let rows: Vec<_> = (0..term.screen_lines())
+                    .filter_map(|row| {
+                        let slices = placeholder_row(
+                            &term.grid,
+                            rio_vt::crosswords::pos::Line(row as i32 - offset),
+                        );
+                        (!slices.is_empty()).then_some((row as i32, slices))
+                    })
+                    .collect();
+                let displayed = pressure_displayed.load(Ordering::Relaxed);
+                let origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
+                store.oldest_reclaimable(
+                    term.screen_lines(),
+                    term.columns(),
+                    origin,
+                    offset as usize,
+                    displayed,
+                    &rows,
+                )
+            },
+            move |key| pressure_writer.send(ClientMsg::GraphicsPressure { key }),
+        );
+        // Establish the decoder generation before scheduling the reader. An old
+        // thread starting late must not become the successor's image authority.
+        let image_decoder = {
+            let wake = proxy.clone();
+            crate::terminal::images::DecodeWorker::spawn(signals.images.clone(), move || {
+                wake.send(PaneEvent::Wakeup);
+            })
+        };
         std::thread::Builder::new()
             .name("lyrel-remote-reader".to_string())
             .spawn(move || {
@@ -1396,7 +1622,7 @@ impl RemoteTerminal {
                     running_command,
                     auth,
                     phase,
-                    images,
+                    images: _,
                     clipboard_writes,
                     osc_notes,
                     clipboard_write_busy,
@@ -1439,19 +1665,6 @@ impl RemoteTerminal {
                 // is a modes Snapshot plus one per ring segment.
                 let mut report_scheme = false;
                 let mut pending: Vec<u8> = buffered;
-                // Kitty-graphics decode runs on its own thread with newest-frame
-                // coalescing (issue #213): inflating a full-window browser frame
-                // is ~42 ms, and doing it inline here would block PTY output and
-                // scrolling for that long every frame. The worker owns the inflate
-                // + BGRA swap + placement; the reader only captures the grid
-                // anchor and hands off the still-compressed frame. Dropped when
-                // the loop ends, which joins the thread.
-                let image_decoder = {
-                    let proxy = proxy.clone();
-                    crate::terminal::images::DecodeWorker::spawn(images.clone(), move || {
-                        proxy.send(PaneEvent::Wakeup);
-                    })
-                };
                 let mut scratch = vec![0u8; 256 * 1024];
 
                 let trace = std::env::var("LYREL_TRACE").is_ok_and(|v| !v.is_empty() && v != "0");
@@ -1657,6 +1870,7 @@ impl RemoteTerminal {
                             // being old-width — everything still queued before
                             // this frame must be parsed into the old grid.
                             DaemonMsg::Size(ws) => {
+                                image_decoder.store_metrics(ws.cell_w, ws.cell_h);
                                 flush_batch!();
                                 *proxy.parse_state.paint_cursor.lock().unwrap() = None;
                                 // A live echo lands just before the shell's
@@ -1756,65 +1970,40 @@ impl RemoteTerminal {
                                 out_batch.extend_from_slice(&bytes);
                                 tr_frames += 1;
                             }
-                            // Kitty graphics (issue #213): the daemon lifted an
-                            // image out of the stream and forwarded it out-of-band,
-                            // interleaved *in stream order* with the Output frames
-                            // around it. Flush the pending text first so the grid
-                            // cursor sits where the sender drew the image, then
-                            // anchor the placement to that cell in scroll-stable
-                            // absolute-row coordinates (`history_size -
-                            // display_offset + cursor_line`), so it tracks
-                            // scrolling.
-                            DaemonMsg::Image(frame) => {
+                            DaemonMsg::Graphics(frame) => {
                                 flush_batch!();
-                                if let Some(img) =
-                                    lyrel_core::core::kitty_graphics::Image::decode_frame_owned(
-                                        frame,
-                                    )
+                                if let Some(update) =
+                                    lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame_owned(frame.into_vec())
                                 {
-                                    // Capture the anchor *now*, at the cursor cell
-                                    // the transmission arrived on; the decode is
-                                    // deferred to the worker thread but must land
-                                    // at this position, not wherever the cursor has
-                                    // scrolled to by the time inflate finishes.
-                                    let (anchor_row, anchor_col) = {
-                                        use rio_vt::crosswords::grid::Dimensions as _;
+                                    if !image_decoder.has_resource_grant(&update) {
+                                        teardown(Some("graphics update arrived without its matching admission grant"));
+                                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                                        return;
+                                    }
+                                    let screen = matches!(&update, lyrel_core::core::kitty_graphics::GraphicsUpdate::Screen { .. });
+                                    if screen {
                                         let term = term.lock();
-                                        if quit.load(Ordering::SeqCst) {
-                                            return;
-                                        }
-                                        let grid = &term.grid;
-                                        let row = grid.history_size() as i64
-                                            - grid.display_offset() as i64
-                                            + i64::from(grid.cursor.pos.row.0);
-                                        (row, grid.cursor.pos.col.0)
-                                    };
-                                    // Hand off without blocking the reader: the
-                                    // worker inflates, swaps, places, and wakes the
-                                    // view. Stale frames coalesce away there.
-                                    image_decoder.submit(
-                                        crate::terminal::images::PendingFrame {
-                                            img,
-                                            anchor_row,
-                                            anchor_col,
-                                        },
-                                    );
+                                        if quit.load(Ordering::SeqCst) { return; }
+                                        let changed = image_decoder.apply(update);
+                                        image_decoder.sync_local_origin(term.grid.lines_evicted() as i64 + term.grid.history_size() as i64);
+                                        if changed { proxy.send(PaneEvent::Wakeup); }
+                                        drop(term);
+                                        // A hidden/startup report may have preceded the
+                                        // first Screen that establishes its epoch. Retry
+                                        // that desired viewport without waiting for paint.
+                                        viewport_reporter.report();
+                                    } else if image_decoder.apply(update) {
+                                        proxy.send(PaneEvent::Wakeup);
+                                    }
                                 }
                             }
-                            // An `a=d` delete, lifted out the same way. Order with
-                            // the surrounding output does not matter for a delete
-                            // (it targets by id/placement, not cursor position),
-                            // but flushing keeps a delete-then-retransmit in the
-                            // same read from racing its own replacement.
-                            DaemonMsg::DeleteImage(sel) => {
+                            DaemonMsg::GraphicsOffer { token, key, width, height, encoded_bytes, metadata_bytes } => {
                                 flush_batch!();
-                                if let Some(del) =
-                                    lyrel_core::core::kitty_graphics::ImageDelete::decode(&sel)
-                                {
-                                    image_decoder.delete(&del);
-                                    proxy.send(PaneEvent::Wakeup);
-                                }
+                                let accepted = image_decoder.offer(token, key, width, height, encoded_bytes, metadata_bytes);
+                                writer.send(ClientMsg::GraphicsGrant { token, accepted });
                             }
+                            DaemonMsg::GraphicsCancel { token } => image_decoder.cancel_offer(token),
+                            DaemonMsg::GraphicsPressureResult { key, .. } => image_decoder.complete_pressure(key),
                             DaemonMsg::ClipboardWrite(frame) => {
                                 flush_batch!();
                                 if let Some(write) =
@@ -2018,7 +2207,16 @@ impl RemoteTerminal {
                                 tr_reads += 1;
                                 tr_bytes += n as u64;
                             }
-                            pending.extend_from_slice(&scratch[..n]);
+                            let header = 4usize.saturating_sub(pending.len()).min(n);
+                            pending.extend_from_slice(&scratch[..header]);
+                            if pending.len() >= 4 {
+                                let payload = u32::from_le_bytes(pending[..4].try_into().unwrap()) as usize;
+                                if payload <= crate::daemon::protocol::MAX_FRAME {
+                                    let target = (5 + payload).max(pending.len() + n - header);
+                                    pending.reserve_exact(target.saturating_sub(pending.len()));
+                                }
+                            }
+                            pending.extend_from_slice(&scratch[header..n]);
                         }
                         Err(e)
                             if matches!(
@@ -2099,7 +2297,38 @@ impl RemoteTerminal {
         }
     }
 
+    /// Live panes clear only through the daemon's ordered output stream. Once
+    /// the reader has observed exit/EOF, the retained presentation belongs to
+    /// this client and must remain clearable without a functioning transport.
+    /// Returns whether the caller should ask the live child to redraw.
+    pub fn clear_presentation(&mut self, history: bool) -> bool {
+        self.poll_exited();
+        if !self.exited && !self.child_exited() {
+            self.link.send(ClientMsg::ClearPresentation { history });
+            return true;
+        }
+
+        // A writer may notice failure before the reader. Retire it before
+        // touching either cache, so buffered frames and late decode completions
+        // cannot restore a presentation the user has just cleared.
+        self.stop_reader();
+        let mut term = self.term.lock();
+        let rows = term.screen_lines();
+        term.clear_screen(rio_vt::ansi::ClearMode::All);
+        if history {
+            term.clear_screen(rio_vt::ansi::ClearMode::Saved);
+        }
+        term.selection = None;
+        term.scroll_display(rio_vt::crosswords::grid::Scroll::Bottom);
+        let history_origin = term.grid.lines_evicted() as i64 + term.grid.history_size() as i64;
+        self.images
+            .clear_presentation(history, rows, history_origin);
+        *self.proxy.parse_state.paint_cursor.lock().unwrap() = None;
+        false
+    }
+
     pub fn resize(&mut self, size: TermSize, cell_w: u16, cell_h: u16) {
+        self.images.set_cell_metrics(cell_w, cell_h);
         let echoed = self.resize_echoed();
         // The cell size has to be part of the early-out, not just cols/rows: it
         // is reported in *device* pixels, so moving the window between a 2x and
@@ -2194,6 +2423,10 @@ impl RemoteTerminal {
 
     pub fn foreground_agent(&self) -> Option<CLIAgent> {
         self.agent.lock().ok().and_then(|g| *g)
+    }
+
+    pub(super) fn viewport_reporter(&self) -> GraphicsViewportReporter {
+        self.viewport_reporter.clone()
     }
 
     /// The kitty-graphics image store for this pane. Cheap handle clone — the
@@ -2365,6 +2598,10 @@ impl RemoteTerminal {
         spec: Box<NativeSshSpec>,
     ) -> anyhow::Result<(Self, u64)> {
         let mut stream = connect()?;
+        Self::negotiate_pane_protocol(&mut stream, attach_reply_wait(&PaneRoute::Local))?;
+        let images = crate::terminal::images::ImageStore::new();
+        images.set_cell_metrics(cell_w, cell_h);
+        Self::send_graphics_capacity(&mut stream, &images)?;
         let win = win_size(size, cell_w, cell_h);
         let endpoint = (spec.host.clone(), spec.port);
         let user = spec.user.clone();
@@ -2382,6 +2619,7 @@ impl RemoteTerminal {
             &mut stream,
             attach_reply_wait(&PaneRoute::Local),
             "SpawnNativeSsh",
+            &images,
         )? {
             DaemonMsg::Spawned { pane_id } => pane_id,
             DaemonMsg::Error(msg) => {
@@ -2397,7 +2635,8 @@ impl RemoteTerminal {
         // The local daemon dialled this one, but it opened no pty for it: the
         // pane is an ssh channel bridged straight through, so the bytes are the
         // far host's raw pty and no conhost ever sees them.
-        let mut term = Self::from_stream_with(stream, size, Vec::new(), PtySource::Raw)?;
+        let mut term =
+            Self::from_stream_parts(stream, size, Vec::new(), PtySource::Raw, false, images)?;
         term.ssh_endpoint = Some(endpoint);
         term.ssh_user = Some(user);
         term.auto_supplied_password = auto_supplied_password;
@@ -2667,11 +2906,53 @@ fn attach_reply_wait(route: &PaneRoute) -> std::time::Duration {
     }
 }
 
-/// Polling only bounds cancellation latency, not pane creation. Read's caller
-/// retains partial frames, so a delayed or split Spawned frame is never lost.
+fn graphics_admission_reply(
+    message: DaemonMsg,
+    stream: &mut Stream,
+    images: &crate::terminal::images::ImageStore,
+) -> std::io::Result<Option<DaemonMsg>> {
+    match message {
+        DaemonMsg::GraphicsOffer {
+            token,
+            key,
+            width,
+            height,
+            encoded_bytes,
+            metadata_bytes,
+        } => {
+            let accepted = images.offer(token, key, width, height, encoded_bytes, metadata_bytes);
+            if let Err(error) = (ClientMsg::GraphicsGrant { token, accepted }).encode(stream) {
+                images.cancel_offer(token);
+                return Err(error);
+            }
+            Ok(None)
+        }
+        DaemonMsg::GraphicsCancel { token } => {
+            images.cancel_offer(token);
+            Ok(None)
+        }
+        message => Ok(Some(message)),
+    }
+}
+
+#[cfg(test)]
 fn cancellable_spawn_reply(
     stream: &mut Stream,
     cancellation: &SpawnCancellation,
+) -> anyhow::Result<DaemonMsg> {
+    cancellable_spawn_reply_with_images(
+        stream,
+        cancellation,
+        &crate::terminal::images::ImageStore::new(),
+    )
+}
+
+/// Polling only bounds cancellation latency, not pane creation. Read's caller
+/// retains partial frames, so a delayed or split Spawned frame is never lost.
+fn cancellable_spawn_reply_with_images(
+    stream: &mut Stream,
+    cancellation: &SpawnCancellation,
+    images: &crate::terminal::images::ImageStore,
 ) -> anyhow::Result<DaemonMsg> {
     struct Reader<'a> {
         stream: &'a mut Stream,
@@ -2691,16 +2972,27 @@ fn cancellable_spawn_reply(
         }
     }
     stream.set_read_timeout(Some(std::time::Duration::from_millis(100)))?;
-    let reply = DaemonMsg::read(&mut Reader {
-        stream: &mut *stream,
-        cancellation,
-    });
+    let reply = loop {
+        let message = DaemonMsg::read(&mut Reader {
+            stream: &mut *stream,
+            cancellation,
+        });
+        match message.and_then(|message| graphics_admission_reply(message, stream, images)) {
+            Ok(Some(message)) => break Ok(message),
+            Ok(None) => continue,
+            Err(error) => break Err(error),
+        }
+    };
     let reset = stream.set_read_timeout(None);
     if cancellation.cancelled() {
         let _ = stream.shutdown(std::net::Shutdown::Both);
+        images.cancel_unclaimed_offers();
         anyhow::bail!("pane spawn cancelled");
     }
     reset?;
+    if reply.is_err() {
+        images.cancel_unclaimed_offers();
+    }
     reply.map_err(|error| anyhow::Error::new(error).context("reading the daemon's answer to Spawn"))
 }
 
@@ -2711,10 +3003,22 @@ fn spawn_reply(
     stream: &mut Stream,
     wait: std::time::Duration,
     what: &str,
+    images: &crate::terminal::images::ImageStore,
 ) -> anyhow::Result<DaemonMsg> {
     let _ = stream.set_read_timeout(Some(wait));
-    let reply = DaemonMsg::read(stream);
+    let reply = loop {
+        match DaemonMsg::read(stream)
+            .and_then(|message| graphics_admission_reply(message, stream, images))
+        {
+            Ok(Some(message)) => break Ok(message),
+            Ok(None) => continue,
+            Err(error) => break Err(error),
+        }
+    };
     let _ = stream.set_read_timeout(None);
+    if reply.is_err() {
+        images.cancel_unclaimed_offers();
+    }
     match reply {
         Ok(msg) => Ok(msg),
         Err(e) if would_block(&e) => {
@@ -2756,10 +3060,9 @@ pub fn attach_unanswered(err: &anyhow::Error) -> bool {
         .any(|cause| cause.downcast_ref::<AttachUnanswered>().is_some())
 }
 
-/// An `Attach` the daemon answered with an `Error` frame — it heard us and
-/// said no, which for a relink means the pane is gone on its machine. Typed so
-/// a retry loop can tell this apart from the failures worth retrying: silence
-/// and transport trouble pass, a refusal repeats identically forever.
+/// The daemon explicitly reported that the requested pane does not exist.
+/// Other Error frames (including graphics admission failures) are retryable
+/// attach failures, not evidence that the original session is gone.
 #[derive(Debug)]
 struct AttachRefused {
     message: String,
@@ -2773,8 +3076,8 @@ impl std::fmt::Display for AttachRefused {
 
 impl std::error::Error for AttachRefused {}
 
-/// Whether `err` is an `Attach` the daemon explicitly refused. Retrying one of
-/// these can only produce the same refusal.
+/// Whether the daemon explicitly reported the requested pane missing. Only
+/// this verdict permits abandoning a relink or spawning a replacement shell.
 pub fn attach_refused(err: &anyhow::Error) -> bool {
     err.chain()
         .any(|cause| cause.downcast_ref::<AttachRefused>().is_some())
@@ -2791,12 +3094,41 @@ pub fn attach_refused(err: &anyhow::Error) -> bool {
 /// process that will never read it. Taken for success it gave the window a
 /// pane drawn as restored whose every keystroke went into that socket — no
 /// fresh shell, no restored-screen banner, no agent resume, and Ctrl-C did
-/// nothing (#673). Taken for the failure it is, the caller spawns fresh and
-/// asks for the old screen back.
+/// nothing (#673). Treat it as an attach failure and retain the pane identity;
+/// only an explicit missing-pane reply allows a replacement shell.
+#[cfg(test)]
 fn attach_reply_prefix(
     stream: &mut Stream,
     pane_id: u64,
     wait: std::time::Duration,
+) -> anyhow::Result<Vec<u8>> {
+    attach_reply_prefix_with_images(
+        stream,
+        pane_id,
+        wait,
+        &crate::terminal::images::ImageStore::new(),
+    )
+}
+
+fn attach_reply_prefix_with_images(
+    stream: &mut Stream,
+    pane_id: u64,
+    wait: std::time::Duration,
+    images: &crate::terminal::images::ImageStore,
+) -> anyhow::Result<Vec<u8>> {
+    let result = attach_reply_prefix_inner(stream, pane_id, wait, images);
+    if result.is_err() {
+        images.cancel_unclaimed_offers();
+        let _ = stream.set_read_timeout(None);
+    }
+    result
+}
+
+fn attach_reply_prefix_inner(
+    stream: &mut Stream,
+    pane_id: u64,
+    wait: std::time::Duration,
+    images: &crate::terminal::images::ImageStore,
 ) -> anyhow::Result<Vec<u8>> {
     use std::io::Read as _;
 
@@ -2822,6 +3154,16 @@ fn attach_reply_prefix(
             }
         }
         kind = crate::daemon::protocol::peek_frame_kind(&buffered);
+        while kind.is_some_and(crate::daemon::protocol::is_graphics_admission_kind) {
+            let Some((frame_kind, payload)) = crate::daemon::protocol::take_frame(&mut buffered)?
+            else {
+                kind = None;
+                break;
+            };
+            let message = DaemonMsg::from_frame(frame_kind, payload)?;
+            graphics_admission_reply(message, stream, images)?;
+            kind = crate::daemon::protocol::peek_frame_kind(&buffered);
+        }
     }
     let _ = stream.set_read_timeout(None);
     if buffered.is_empty() {
@@ -2830,9 +3172,14 @@ fn attach_reply_prefix(
     if !kind.is_some_and(crate::daemon::protocol::is_error_kind) {
         return Ok(buffered);
     }
-    let message = read_error_frame(stream, &mut buffered, wait)
-        .unwrap_or_else(|| format!("no such pane {pane_id}"));
-    Err(anyhow::Error::new(AttachRefused { message }))
+    let message = read_error_frame(stream, &mut buffered, wait).ok_or_else(|| {
+        anyhow::anyhow!("incomplete daemon error answering Attach for pane {pane_id}")
+    })?;
+    if message == format!("no such pane {pane_id}") {
+        Err(anyhow::Error::new(AttachRefused { message }))
+    } else {
+        Err(anyhow::anyhow!("daemon refused Attach: {message}"))
+    }
 }
 
 fn read_error_frame(
@@ -3436,30 +3783,6 @@ fn connect() -> anyhow::Result<Stream> {
     })
 }
 
-/// Whether the local daemon answers `Version` on a fresh connection right now.
-///
-/// The one question a silent `Attach` leaves open — is the daemon serving and
-/// this socket orphaned, or is nobody serving yet? A daemon answers `Version`
-/// before it touches any state, so this is the cheapest thing it can say. One
-/// second is the same budget `spawn` gives the same handshake; a healthy
-/// daemon answers in microseconds.
-fn local_daemon_answers() -> bool {
-    use std::io::Write as _;
-
-    let Ok(mut stream) = transport::connect() else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(1)));
-    if ClientMsg::Version
-        .encode(&mut stream)
-        .and_then(|()| stream.flush())
-        .is_err()
-    {
-        return false;
-    }
-    matches!(DaemonMsg::read(&mut stream), Ok(DaemonMsg::Version(_)))
-}
-
 fn connect_routed(route: &PaneRoute) -> anyhow::Result<Stream> {
     if let PaneRoute::Unroutable(reason) = route {
         return Err(anyhow::anyhow!("{reason}"));
@@ -3542,7 +3865,6 @@ fn apply_config(term: &mut Crosswords<EventProxy>, user_config: &crate::core::co
 #[cfg(test)]
 mod chunking_tests {
     use super::*;
-    use rio_vt::crosswords::grid::Dimensions as _;
     use rio_vt::crosswords::pos::{Column, Line};
     use rio_vt::event::VoidListener;
 
@@ -4373,7 +4695,8 @@ mod replay_tests {
         let forward = std::thread::spawn(move || {
             while let Ok(msg) = rx.recv() {
                 let drained = match &msg {
-                    DaemonMsg::Output(b) | DaemonMsg::Image(b) => b.len(),
+                    DaemonMsg::Output(b) => b.len(),
+                    DaemonMsg::Graphics(b) => b.len(),
                     _ => 0,
                 };
                 let ok = msg.encode(&mut daemon_write).is_ok();
@@ -4765,6 +5088,118 @@ mod windows_tests {
             !term.exited_flag.load(Ordering::SeqCst),
             "the abandoned link must not tear the adopted pane down"
         );
+    }
+
+    #[test]
+    fn adopted_reader_still_places_and_deletes_after_retired_reader_finishes() {
+        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement, WireFormat};
+        crate::core::config::pin_test_config_dir();
+        let (old_client, mut old_daemon) = tcp_pair();
+        let (new_client, mut new_daemon) = tcp_pair();
+        let mut term = RemoteTerminal::from_stream(old_client, TermSize::new(80, 24)).unwrap();
+        // Keep the real retired reader handle solely to establish its completed
+        // teardown boundary. Decode scheduling itself is synchronized by the
+        // focused real-decoder generation regression in images.rs.
+        let old_reader = term.reader_thread.take().unwrap();
+        term.adopt_relink(
+            new_client,
+            Vec::new(),
+            &PaneRoute::Local,
+            TermSize::new(80, 24),
+            8,
+            16,
+        )
+        .unwrap();
+        let send_image = |stream: &mut Stream, key, red| {
+            let update = GraphicsUpdate::Resource {
+                key,
+                image: Arc::new(Image {
+                    width: 1,
+                    height: 1,
+                    format: WireFormat::Rgba,
+                    compressed: false,
+                    data: vec![red, 20, 30, 128],
+                }),
+            };
+            let frame = update.encode_frame();
+            assert!(term.images.admit_test_resource(&update, frame.len()));
+            DaemonMsg::Graphics(frame.into()).encode(stream).unwrap();
+            let mut placement = Placement::default();
+            placement.key = key;
+            placement.resource = key;
+            placement.w = 1;
+            placement.h = 1;
+            placement.span_cols = 1;
+            placement.span_rows = 1;
+            placement.clip_bottom = 1;
+            let update = GraphicsUpdate::Place(placement);
+            assert!(term.images.admit_test_resource(&update, 0));
+            DaemonMsg::Graphics(update.encode_frame().into())
+                .encode(stream)
+                .unwrap();
+        };
+        let wait_pixel = |term: &RemoteTerminal, red| {
+            for _ in 0..200 {
+                let images = term.images.snapshot();
+                if images.len() == 1
+                    && images[0].data.as_ref().unwrap().as_bytes(0).unwrap() == [30, 20, red, 128]
+                {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("adopted link did not decode its real image");
+        };
+        send_image(&mut new_daemon, 11, 90);
+        wait_pixel(&term, 90);
+        let _ = DaemonMsg::Graphics(
+            GraphicsUpdate::Remove {
+                placements: vec![11],
+                resources: vec![11],
+            }
+            .encode_frame()
+            .into(),
+        )
+        .encode(&mut old_daemon);
+        drop(old_daemon);
+        old_reader.join().unwrap();
+        wait_pixel(&term, 90);
+        send_image(&mut new_daemon, 12, 100);
+        DaemonMsg::Graphics(
+            GraphicsUpdate::Remove {
+                placements: vec![11],
+                resources: vec![11],
+            }
+            .encode_frame()
+            .into(),
+        )
+        .encode(&mut new_daemon)
+        .unwrap();
+        wait_pixel(&term, 100);
+        DaemonMsg::Graphics(
+            GraphicsUpdate::Remove {
+                placements: vec![12],
+                resources: vec![12],
+            }
+            .encode_frame()
+            .into(),
+        )
+        .encode(&mut new_daemon)
+        .unwrap();
+        DaemonMsg::Output(b"after_graphics_relink".to_vec())
+            .encode(&mut new_daemon)
+            .unwrap();
+        for _ in 0..200 {
+            if term.term.lock().grid.cursor.pos.col.0 == 21 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            term.images.snapshot().is_empty(),
+            "new link deletion remains active"
+        );
+        assert_eq!(term.term.lock().grid.cursor.pos.col.0, 21);
     }
 
     /// What the daemon replays into a pane restored from a stored screen, in
@@ -5732,6 +6167,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn graphics_budget_refusal_is_not_evidence_that_the_pane_is_gone() {
+        for message in [
+            "Desktop graphics budget cannot admit retained session content",
+            "Graphics replay connection closed during admission",
+            "Graphics replay failed",
+        ] {
+            let (mut client_side, mut daemon_side) = UnixStream::pair().unwrap();
+            DaemonMsg::Error(message.into())
+                .encode(&mut daemon_side)
+                .unwrap();
+            daemon_side.flush().unwrap();
+            let error =
+                attach_reply_prefix(&mut client_side, 7, std::time::Duration::from_millis(200))
+                    .expect_err("admission refused");
+            assert!(
+                !attach_refused(&error),
+                "only an explicit missing-pane verdict can abandon the original session: {error:#}"
+            );
+            assert!(format!("{error:#}").contains(message));
+        }
+    }
+
     /// The other side of the rule above: the frame a quiet pane does send is
     /// enough. Nothing else is required of the daemon for the attach to stand.
     #[test]
@@ -6142,10 +6600,9 @@ mod tests {
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
         let term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
 
-        // `CSI 14t` is the one query the emulator hands out as its own event
-        // (the pixel size lives with the view) rather than as a `PtyWrite`;
-        // answered from a replay, its `CSI 4;h;w t` lands on whatever reads
-        // the pane now — a shell prompt, once the TUI that asked has quit.
+        // Replaying queries or side effects must never send fresh input to a
+        // later shell. Device-pixel queries are now owned solely by the daemon;
+        // live cursor reports below still belong to the desktop terminal grid.
         DaemonMsg::Snapshot(
             b"\x1b[6n\x1b]11;?\x07\x1b[14t\x1b[16t\x1b[18t\x1b]52;c;aGk=\x07\x07replayed".to_vec(),
         )
@@ -6178,27 +6635,6 @@ mod tests {
                     | PaneEvent::Bell
             )),
             "replayed history must not re-answer queries or replay side effects"
-        );
-
-        DaemonMsg::Output(b"\x1b[14t".to_vec())
-            .encode(&mut daemon_side)
-            .unwrap();
-        daemon_side.flush().unwrap();
-        let mut got_size_request = false;
-        for _ in 0..200 {
-            while let Ok(ev) = term.events.try_recv() {
-                if matches!(ev, PaneEvent::TextAreaSizeRequest(_)) {
-                    got_size_request = true;
-                }
-            }
-            if got_size_request {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(
-            got_size_request,
-            "a live pixel-size query must still be answered"
         );
 
         DaemonMsg::Output(b"\x1b[6n".to_vec())
@@ -7733,7 +8169,6 @@ mod osc_tests {
 #[cfg(test)]
 mod live_history_config_tests {
     use super::*;
-    use rio_vt::crosswords::grid::Dimensions as _;
     use rio_vt::crosswords::pos::{Column, Line, Pos};
 
     fn wait_for(term: &RemoteTerminal, ready: impl Fn(&Crosswords<EventProxy>) -> bool) {

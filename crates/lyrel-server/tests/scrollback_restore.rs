@@ -172,6 +172,7 @@ impl Instance {
     fn spawn_restoring(&self, dead: u64) -> (u64, Vec<u8>) {
         let mut stream =
             transport::connect_endpoint_at(&self.endpoint()).expect("connect to spawn");
+        lyrel_core::daemon::protocol::negotiate_pane(&mut stream).expect("matching pane protocol");
         ClientMsg::Spawn {
             cwd: None,
             size: size(),

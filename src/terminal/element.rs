@@ -20,6 +20,7 @@ use rio_vt::selection::SelectionRange;
 
 use super::view::{TerminalView, should_show_context_menu};
 use crate::core::config::Config;
+use crate::ui::i18n::{L10nKey, t};
 
 mod osc8_underline;
 
@@ -297,6 +298,14 @@ impl<'a, T: rio_vt::event::EventListener> CellPainter<'a, T> {
             .map(|extra| extra.zerowidth.as_slice())
             .filter(|marks| !marks.is_empty())
             .map(Box::from);
+        // Placeholder identity is terminal data, not a font glyph. Even a
+        // missing/deleted prototype leaves its cell background but no PUA ink.
+        if rendered.c == '\u{10eeee}' {
+            rendered.c = ' ';
+            rendered.marks = None;
+            rendered.underline = UnderlineKind::None;
+            rendered.strikeout = false;
+        }
         rendered.selected = self
             .selection
             .is_some_and(|selection| selection.contains(position));
@@ -1856,6 +1865,7 @@ pub(super) struct GridSnapshot {
     /// anchor_row - history_size + display_offset.
     display_offset: i32,
     history_size: usize,
+    placeholders: Vec<(i32, Vec<lyrel_core::core::kitty_graphics::PlaceholderSlice>)>,
 }
 
 impl GridSnapshot {
@@ -1901,6 +1911,7 @@ impl TerminalElement {
         let mut any_selected = false;
         let display_offset;
         let history_size;
+        let mut placeholders = Vec::new();
         let prompt_shape = self.prompt_cursor_shape(cx);
         {
             let mut palette = self.view.read(cx).terminal.palette;
@@ -1960,6 +1971,10 @@ impl TerminalElement {
             for row in 0..rendered_rows {
                 let line = Line(row as i32 - display_offset);
                 let source = &term.grid[line][..];
+                let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
+                if !slices.is_empty() {
+                    placeholders.push((row as i32, slices));
+                }
                 let source_cols = rendered_cols.min(source.len());
                 for (col, cell) in source.iter().copied().take(source_cols).enumerate() {
                     let position = Pos::new(line, Column(col));
@@ -1993,6 +2008,10 @@ impl TerminalElement {
 
             if want_sliver && (display_offset as usize) < term.grid.history_size() {
                 let line = Line(-display_offset - 1);
+                let slices = lyrel_core::core::kitty_graphics::placeholder_row(&term.grid, line);
+                if !slices.is_empty() {
+                    placeholders.push((-1, slices));
+                }
                 let mut row_buf = vec![RenderCell::default(); cols];
                 for (col, (slot, &cell)) in row_buf
                     .iter_mut()
@@ -2045,6 +2064,7 @@ impl TerminalElement {
             any_current,
             display_offset,
             history_size,
+            placeholders,
         })
     }
 
@@ -2476,16 +2496,91 @@ impl Element for TerminalElement {
         // map that back to a screen row with the snapshot's scroll state and
         // drop anything scrolled out of the viewport.
         let image_store = self.view.read(cx).terminal.images();
-        // Take the retired list *before* the snapshot. The decode worker runs on
-        // its own thread and can retire a frame between the two calls; taking
-        // retired second would hand us a list containing an image the snapshot
-        // still says to paint, and `sprite_atlas.remove` takes effect
-        // immediately — so the frame would paint and then vanish. In this order
-        // the worst case is evicting one paint late, which is invisible.
-        let retired_images = image_store.take_retired();
-        let images = image_store.snapshot();
+        let displayed = self.view.read(cx).displayed.clone();
+        let images = image_store.snapshot_with_placeholders(&snap.placeholders);
+        let notice = images.iter().any(|image| image.evicted).then(|| {
+            let text = SharedString::new_static(t(L10nKey::TerminalImageEvicted));
+            window.text_system().shape_line(
+                text.clone(),
+                font_size,
+                &[TextRun {
+                    len: text.len(),
+                    font: base_font.clone(),
+                    color: cx.theme().muted_foreground,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            )
+        });
+        let paint_images = |window: &mut Window, cx: &mut App, z: std::ops::Range<i64>| {
+            // Separate crop/full-texture bounds select atlas UVs; no placement
+            // owns a copied pixel buffer. The enclosing pane mask still applies.
+            for img in images
+                .iter()
+                .filter(|image| z.contains(&i64::from(image.placement.z)))
+            {
+                let (bounds, image_bounds) = img.paint_bounds(
+                    geom.origin,
+                    geom.cell_width,
+                    geom.line_height,
+                    snap.history_size,
+                    snap.display_offset,
+                    window.scale_factor(),
+                );
+                let visible = bounds.intersect(&window.content_mask().bounds);
+                if visible.size.width <= px(0.)
+                    || visible.size.height <= px(0.)
+                    || !image_store.claim_for_paint(img)
+                {
+                    continue;
+                }
+                image_store.register_for_paint(img, window, &displayed);
+                window.paint_layer(visible, |window| {
+                    if let Some(data) = &img.data {
+                        let _ = window.paint_image(
+                            bounds,
+                            image_bounds,
+                            Corners::default(),
+                            data.clone(),
+                            0,
+                            false,
+                        );
+                    } else if let Some(notice) = notice.as_ref().filter(|_| img.evicted) {
+                        window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
+                            let _ = notice.paint(
+                                visible.origin,
+                                geom.line_height,
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        });
+                    }
+                    if dim < 1. {
+                        let mut c: Hsla = under.into();
+                        c.a = 1. - dim;
+                        window.paint_quad(fill(bounds, c));
+                    }
+                });
+            }
+        };
+        let below_background = -(1_i64 << 30);
+        let sliver = sliver.map(|row| {
+            (
+                CellGeom {
+                    origin: point(geom.origin.x, geom.origin.y - geom.line_height),
+                    rows: 1,
+                    ..geom
+                },
+                row,
+            )
+        });
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            paint_images(window, cx, i64::from(i32::MIN)..below_background);
             paint_backgrounds(window, &geom, &buf);
             if snap.any_selected {
                 paint_cell_runs(window, &geom, &buf, colors.selection_bg, |c| c.selected);
@@ -2505,6 +2600,13 @@ impl Element for TerminalElement {
                     c.match_current
                 });
             }
+            if let Some((sg, row)) = &sliver {
+                paint_backgrounds(window, sg, row);
+                if snap.any_selected {
+                    paint_cell_runs(window, sg, row, colors.selection_bg, |c| c.selected);
+                }
+            }
+            paint_images(window, cx, below_background..0);
             paint_glyphs(
                 window,
                 cx,
@@ -2517,104 +2619,20 @@ impl Element for TerminalElement {
             );
             let scale = window.scale_factor();
             paint_special_underlines(window, &geom, &buf, scale);
-            // Kitty-graphics images, painted over the placeholder cells they
-            // occupy. `anchor_row` is absolute (measured from the top of
-            // scrollback); convert it to a screen row with the same scroll state
-            // `build_grid` captured. Rows spanning past the viewport top/bottom
-            // are clipped by the surrounding content mask.
-            //
-            // Sizing: per the kitty spec, an image with no `c=`/`r=` is shown at
-            // its natural size — one image pixel per terminal *device* pixel. A
-            // sender like terminal-browser renders its frame to exactly fill the
-            // pixel area we reported to the child via `ws_xpixel`/`ws_ypixel`,
-            // which the daemon sets to `cols × round(cell_w × scale)` /
-            // `rows × round(cell_h × scale)` — the cell size in *device* pixels
-            // (see `set_grid_size`). So the frame is at device resolution; to map
-            // it back to a cell span we divide by that *same* device cell size,
-            // `round(cell_logical × scale)`. Painting the resulting cell-span
-            // bounds (in logical px) lets gpui blit the device-resolution bitmap
-            // ~1:1 on the framebuffer — sharp, and the right size — instead of
-            // upscaling a half-resolution one. Deriving here, not at placement,
-            // keeps it correct across font-size / zoom / display-scale changes.
-            let scale = window.scale_factor();
-            let scale = if scale.is_finite() && scale > 0. {
-                scale
-            } else {
-                1.
-            };
-            for img in &images {
-                let round_w = (geom.cell_width.as_f32() * scale).round().max(1.);
-                let round_h = (geom.line_height.as_f32() * scale).round().max(1.);
-                let span_cols = if img.cols > 0 {
-                    img.cols as f32
-                } else {
-                    (img.width_px as f32 / round_w).round().max(1.)
-                };
-                let span_rows = if img.rows > 0 {
-                    img.rows as f32
-                } else {
-                    (img.height_px as f32 / round_h).round().max(1.)
-                };
-                let screen_row =
-                    img.anchor_row - snap.history_size as i64 + snap.display_offset as i64;
-                // Fully above or below the viewport: nothing visible to paint.
-                if screen_row + span_rows as i64 <= 0 || screen_row >= geom.rows as i64 {
-                    continue;
-                }
-                if !image_store.claim_for_paint(img) {
-                    continue;
-                }
-                let top = geom.origin.y + geom.line_height * screen_row as f32;
-                let left = geom.origin.x + geom.cell_width * img.anchor_col as f32;
-                let bounds = Bounds {
-                    origin: point(left, top),
-                    size: size(geom.cell_width * span_cols, geom.line_height * span_rows),
-                };
-                let _ = window.paint_image(
-                    bounds,
-                    bounds,
-                    Corners::default(),
-                    img.data.clone(),
-                    0,
-                    false,
-                );
-                // A bitmap is a single layer, so its dim cannot come from the
-                // pre-blended palette; blend the image itself toward the under
-                // the same way the surrounding cells are blended.
-                if dim < 1. {
-                    let mut c: Hsla = under.into();
-                    c.a = 1. - dim;
-                    window.paint_quad(fill(bounds, c));
-                }
-            }
-            // Evict superseded / deleted frames from the sprite atlas. Without
-            // this a browser re-transmitting at 60fps would leak one GPU tile per
-            // frame, growing the atlas without bound until the compositor stalls.
-            for retired in &retired_images {
-                let _ = window.drop_image(retired.clone());
-            }
-            if let Some(row) = sliver {
-                let sg = CellGeom {
-                    origin: point(geom.origin.x, geom.origin.y - geom.line_height),
-                    rows: 1,
-                    ..geom
-                };
-                paint_backgrounds(window, &sg, row);
-                if snap.any_selected {
-                    paint_cell_runs(window, &sg, row, colors.selection_bg, |c| c.selected);
-                }
+            if let Some((sg, row)) = &sliver {
                 paint_glyphs(
                     window,
                     cx,
-                    &sg,
+                    sg,
                     row,
                     font_size,
                     &base_font,
                     bold_font.as_ref(),
                     italic_font.as_ref(),
                 );
-                paint_special_underlines(window, &sg, row, scale);
+                paint_special_underlines(window, sg, row, scale);
             }
+            paint_images(window, cx, 0..i64::from(i32::MAX) + 1);
             if !editor_active {
                 paint_cursor(
                     window,
@@ -4784,8 +4802,10 @@ mod tests {
         let terminal = cx.update(|cx| view.read(cx).terminal.term.clone());
         let (rows, cols) = {
             let mut term = terminal.lock();
-            rio_vt::performer::handler::Processor::default()
-                .advance(&mut *term, "\x1b[H\x1b[31mA\u{301}".as_bytes());
+            rio_vt::performer::handler::Processor::default().advance(
+                &mut *term,
+                "\x1b[H\x1b[31mA\u{301}\x1b[4;58;5;9m\u{10eeee}\u{305}\u{305}".as_bytes(),
+            );
             (term.screen_lines(), term.columns())
         };
         let element = TerminalElement::new(view);
@@ -4813,6 +4833,12 @@ mod tests {
         build(&mut buf, cx);
         assert_eq!(buf[0].c, 'A');
         assert_eq!(buf[0].marks.as_deref(), Some(&['\u{301}'][..]));
+        assert_eq!(
+            buf[1].c, ' ',
+            "unresolved image placeholders never render PUA glyphs"
+        );
+        assert!(buf[1].marks.is_none());
+        assert_eq!(buf[1].underline, UnderlineKind::None);
         // Simulate content left by a formerly wider/taller source grid.
         let old = buf[0].clone();
         buf[cols] = old.clone();

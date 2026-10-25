@@ -277,6 +277,10 @@ jobs:
       # 链接依赖系统 MIT/Heimdal Kerberos 的 libgssapi。
       - name: Build static lyrel-server
         run: cargo zigbuild --release --locked -p lyrel-server --target ${{ matrix.target }}
+        env:
+          # simdutf 的可选 Ice Lake backend 与 Zig 的 evex512 目标属性不兼容。
+          # 仅对 x86_64 musl 使用上游配置，保留 AVX2/SSE/scalar 运行时分派。
+          CXXFLAGS_x86_64_unknown_linux_musl: -DSIMDUTF_IMPLEMENTATION_ICELAKE=0
 
       - name: Assert the binary is static
         run: bash .github/scripts/assert-static.sh "target/${{ matrix.target }}/release/lyrel-server"

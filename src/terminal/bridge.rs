@@ -18,9 +18,9 @@
 //!   bytes the pane has always answered rather than Rio's version number.
 //! - `report_version` (XTVERSION): previously met with silence, and a pane
 //!   does not start answering "rio 0.5.28" because the parser changed.
-//! - `cells_size_pixels` (`CSI 16 t`): the mirror has no cell pixel size —
-//!   [`super::size::TermSize`] deliberately reports zero — and answering
-//!   `6;0;0t` would be a lie where silence was the old answer too.
+//! - `cells_size_pixels` / `text_area_size_pixels`: geometry is answered once
+//!   by the daemon using the controller's device-pixel resize metrics, including
+//!   when no GUI is attached. A local mirror must not send a second reply.
 //! - `graphics_attribute`: the reply would describe sixel geometry this
 //!   terminal does not render; previously silence.
 //! - `xtgettcap_response`, `kitty_graphics_response`,
@@ -418,12 +418,8 @@ impl<T: EventListener> Handler for ParseBridge<'_, T> {
         self.inner.pop_title();
     }
 
-    fn text_area_size_pixels(&mut self) {
-        self.inner.text_area_size_pixels();
-    }
+    fn text_area_size_pixels(&mut self) {}
 
-    /// `CSI 16 t` asks for cell pixels, which a windowless mirror does not
-    /// have; the honest answer is the silence it has always been, not `0;0`.
     fn cells_size_pixels(&mut self) {}
 
     fn text_area_size_chars(&mut self) {

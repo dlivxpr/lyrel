@@ -198,6 +198,13 @@ pub struct PaneSession {
 }
 
 impl PaneSession {
+    fn negotiate(stream: &mut transport::Stream, wait: Duration) -> io::Result<()> {
+        let _ = stream.set_read_timeout(Some(wait));
+        let result = crate::daemon::protocol::negotiate_pane(stream).map(|_| ());
+        let _ = stream.set_read_timeout(None);
+        result
+    }
+
     pub(crate) fn spawn_over(
         mut stream: transport::Stream,
         cwd: Option<PathBuf>,
@@ -207,6 +214,7 @@ impl PaneSession {
         workspace: Option<String>,
         reply_wait: Duration,
     ) -> io::Result<PaneSession> {
+        Self::negotiate(&mut stream, reply_wait)?;
         ClientMsg::Spawn {
             cwd,
             size,
@@ -251,6 +259,7 @@ impl PaneSession {
         size: WinSize,
         reply_wait: Duration,
     ) -> io::Result<PaneSession> {
+        Self::negotiate(&mut stream, reply_wait)?;
         ClientMsg::Attach {
             pane_id,
             size,
@@ -266,6 +275,7 @@ impl PaneSession {
         size: WinSize,
         reply_wait: Duration,
     ) -> io::Result<PaneSession> {
+        Self::negotiate(&mut stream, reply_wait)?;
         ClientMsg::Observe { pane_id, size }.encode(&mut stream)?;
         PaneSession::checked(stream, "Observe", pane_id, reply_wait)
     }
@@ -318,6 +328,10 @@ impl PaneSession {
         self.input.resize(size)
     }
 
+    pub fn clear_presentation(&mut self, history: bool) -> io::Result<()> {
+        self.input.clear_presentation(history)
+    }
+
     pub fn detach(self) -> io::Result<()> {
         self.input.detach()
     }
@@ -356,6 +370,10 @@ impl PaneInput {
 
     pub fn resize(&mut self, size: WinSize) -> io::Result<()> {
         ClientMsg::Resize(size).encode(&mut self.writer)
+    }
+
+    pub fn clear_presentation(&mut self, history: bool) -> io::Result<()> {
+        ClientMsg::ClearPresentation { history }.encode(&mut self.writer)
     }
 
     pub fn detach(mut self) -> io::Result<()> {
@@ -469,12 +487,29 @@ mod tests {
         }
     }
 
+    fn accept_protocol(reader: &mut transport::Stream, writer: &mut transport::Stream) {
+        match ClientMsg::read(reader).expect("read pane negotiation") {
+            ClientMsg::Negotiate { protocol } => {
+                assert_eq!(protocol, crate::daemon::protocol::PROTOCOL_VERSION);
+            }
+            other => panic!("expected pane negotiation, got {other:?}"),
+        }
+        DaemonMsg::Version(DaemonVersion::current())
+            .encode(writer)
+            .unwrap();
+        assert!(matches!(
+            ClientMsg::read(reader).unwrap(),
+            ClientMsg::GraphicsCapacity { offers: false, .. }
+        ));
+    }
+
     #[test]
     fn a_session_speaks_the_pane_protocol_end_to_end() {
         let (client_end, server_end) = stream_pair();
         let server = std::thread::spawn(move || {
             let mut r = server_end.try_clone().expect("clone server end");
             let mut w = server_end;
+            accept_protocol(&mut r, &mut w);
 
             match ClientMsg::read(&mut r).expect("read Spawn") {
                 ClientMsg::Spawn {
@@ -544,6 +579,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let mut r = server_end.try_clone().expect("clone server end");
             let mut w = server_end;
+            accept_protocol(&mut r, &mut w);
             match ClientMsg::read(&mut r).expect("read Attach") {
                 ClientMsg::Attach { pane_id, .. } => assert_eq!(pane_id, 42),
                 other => panic!("expected Attach, got {other:?}"),
@@ -568,6 +604,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let mut r = server_end.try_clone().expect("clone server end");
             let mut w = server_end;
+            accept_protocol(&mut r, &mut w);
             match ClientMsg::read(&mut r).expect("read Observe") {
                 ClientMsg::Observe { pane_id, .. } => assert_eq!(pane_id, 9),
                 other => panic!("expected Observe, got {other:?}"),
@@ -597,6 +634,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let mut r = server_end.try_clone().expect("clone server end");
             let mut w = server_end;
+            accept_protocol(&mut r, &mut w);
             match ClientMsg::read(&mut r).expect("read Observe") {
                 ClientMsg::Observe { pane_id, .. } => assert_eq!(pane_id, 42),
                 other => panic!("expected Observe, got {other:?}"),
@@ -621,6 +659,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let mut r = server_end.try_clone().expect("clone server end");
             let mut w = server_end;
+            accept_protocol(&mut r, &mut w);
             match ClientMsg::read(&mut r).expect("read Attach") {
                 ClientMsg::Attach { pane_id, .. } => assert_eq!(pane_id, 9),
                 other => panic!("expected Attach, got {other:?}"),
