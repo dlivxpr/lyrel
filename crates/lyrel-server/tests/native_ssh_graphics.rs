@@ -7,12 +7,20 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fixture::{NativeSshFixture, hex, status, unhex, win_size};
 use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement};
 use lyrel_core::daemon::protocol::{self, ClientMsg, DaemonMsg, ShellSpec};
 use lyrel_core::daemon::transport::Stream;
 use lyrel_core::host::Host;
+
+fn next_serial() -> u64 {
+    // A fresh consumer receives the sender's old DONE/REPLY lines in Snapshot.
+    // Request IDs belong to the living sender, not the replaceable consumer.
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|part| part == needle)
@@ -168,7 +176,7 @@ impl Consumer {
         replies: usize,
         fragment: usize,
     ) -> Vec<Vec<u8>> {
-        self.serial += 1;
+        self.serial = next_serial();
         let serial = self.serial;
         let request = format!("{operation} {serial} {replies} {} {fragment}\n", hex(bytes));
         ClientMsg::Input(request.into_bytes())
@@ -191,7 +199,8 @@ impl Consumer {
     }
 
     fn stats(&mut self) -> String {
-        assert!(self.exchange("STAT", b"\0", 0, 0).is_empty());
+        let replies = self.exchange("STAT", b"\0", 0, 0);
+        assert!(replies.is_empty(), "STAT serial={} unexpectedly matched replies(hex)={:?}; output_tail(hex)={}", self.serial, replies.iter().map(|reply| hex(reply)).collect::<Vec<_>>(), hex(&self.text[self.text.len().saturating_sub(4096)..]));
         let prefix = format!("KITTY_STATS_{} ", self.serial);
         String::from_utf8_lossy(&self.text)
             .lines()
@@ -433,7 +442,7 @@ fn native_ssh_graphics_replies_recovery_limits_and_host_local_media() {
     .unwrap();
     // STAT arrives from a separate production input command while recovery is
     // pending. It changes no upload/placement/byte counters.
-    let serial = 900_001;
+    let serial = next_serial();
     let (mut input, _) = fixture.connect_pane();
     ClientMsg::SendInput {
         pane_id,
