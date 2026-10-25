@@ -1,6 +1,8 @@
 //! Ordered PTY consumption with desktop admission outside the pane lock.
 use super::*;
-use crate::core::clipboard::{Event as ClipboardEvent, Segment as ClipboardSegment, Sniffed as ClipboardSniffed};
+use crate::core::clipboard::{
+    Event as ClipboardEvent, Segment as ClipboardSegment, Sniffed as ClipboardSniffed,
+};
 use crate::core::kitty_graphics::{Action, Control, Image, Segment, Sniffed, response};
 use std::borrow::Cow;
 
@@ -31,12 +33,14 @@ fn extract<'a>(
             let mut parts = Vec::new();
             for segment in segments {
                 match segment {
-                    ClipboardSegment::Output(bytes) => match graphics.sniff_part(&bytes, locality) {
-                        Sniffed::Plain(_) => parts.push(Part::Graphics(Segment::Output(bytes))),
-                        Sniffed::Segments(segments) => {
-                            parts.extend(segments.into_iter().map(Part::Graphics))
+                    ClipboardSegment::Output(bytes) => {
+                        match graphics.sniff_part(&bytes, locality) {
+                            Sniffed::Plain(_) => parts.push(Part::Graphics(Segment::Output(bytes))),
+                            Sniffed::Segments(segments) => {
+                                parts.extend(segments.into_iter().map(Part::Graphics))
+                            }
                         }
-                    },
+                    }
                     ClipboardSegment::Event(event) => parts.push(Part::Clipboard(event)),
                 }
             }

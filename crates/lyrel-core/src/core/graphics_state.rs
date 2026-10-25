@@ -492,7 +492,14 @@ impl GraphicsState {
     ) -> Result<PreparedPlacement, &'static str> {
         let resource = self
             .lookup(control)
-            .filter(|key| self.resources[key].resident.lock().unwrap().packet.is_some())
+            .filter(|key| {
+                self.resources[key]
+                    .resident
+                    .lock()
+                    .unwrap()
+                    .packet
+                    .is_some()
+            })
             .ok_or("ENOENT:Image not found")?;
         self.geometry(control, &self.resources[&resource].image)
             .ok_or("EINVAL:Invalid placement rectangle")?;
@@ -698,7 +705,8 @@ impl GraphicsState {
 
     fn refresh_retention(&mut self) {
         use retention::Priority;
-        self.viewports.retain(|_, (owner, _)| owner.strong_count() != 0);
+        self.viewports
+            .retain(|_, (owner, _)| owner.strong_count() != 0);
         let live_placeholders = self.placeholder_placements(false);
         let retained_placeholders = self.placeholder_placements(true);
         let top = self.history_origin();
@@ -714,10 +722,17 @@ impl GraphicsState {
             Some((start, start + i64::from(viewport.rows), viewport.cols))
         };
         let mut observed_placeholders = BTreeSet::new();
-        for (start, end, _) in self.viewports.values().filter_map(|(_, viewport)| visible_range(viewport)) {
-            observed_placeholders.extend(self.placeholder_placements_in(
-                (start - top) as i32, (end.min(bottom) - top) as i32,
-            ));
+        for (start, end, _) in self
+            .viewports
+            .values()
+            .filter_map(|(_, viewport)| visible_range(viewport))
+        {
+            observed_placeholders.extend(
+                self.placeholder_placements_in(
+                    (start - top) as i32,
+                    (end.min(bottom) - top) as i32,
+                ),
+            );
         }
         for resource in self.resources.values_mut() {
             resource.priority = Priority::Unreferenced;
@@ -747,15 +762,20 @@ impl GraphicsState {
             } else {
                 Priority::Unreferenced
             };
-            if p.screen == screen && (if p.virtual_placement {
-                observed_placeholders.contains(&key)
-            } else {
-                self.viewports.values().filter_map(|(_, viewport)| visible_range(viewport)).any(|(start, end, cols)| {
-                    p.anchor_col < u32::from(cols)
-                        && p.anchor_row + i64::from(p.clip_top) < end
-                        && p.anchor_row + i64::from(p.clip_bottom) > start
+            if p.screen == screen
+                && (if p.virtual_placement {
+                    observed_placeholders.contains(&key)
+                } else {
+                    self.viewports
+                        .values()
+                        .filter_map(|(_, viewport)| visible_range(viewport))
+                        .any(|(start, end, cols)| {
+                            p.anchor_col < u32::from(cols)
+                                && p.anchor_row + i64::from(p.clip_top) < end
+                                && p.anchor_row + i64::from(p.clip_bottom) > start
+                        })
                 })
-            }) {
+            {
                 priority = Priority::Protected;
             }
             if let Some(resource) = self.resources.get_mut(&p.resource) {
@@ -1014,10 +1034,14 @@ impl GraphicsState {
             }
             Action::Display => {
                 self.protect_resources();
-                if let Some(key) = self
-                    .lookup(&control)
-                    .filter(|key| self.resources[key].resident.lock().unwrap().packet.is_some())
-                {
+                if let Some(key) = self.lookup(&control).filter(|key| {
+                    self.resources[key]
+                        .resident
+                        .lock()
+                        .unwrap()
+                        .packet
+                        .is_some()
+                }) {
                     self.place(key, &control, &mut effects, None);
                 } else {
                     Self::reply(&mut effects, &control, control.id, "ENOENT:Image not found");

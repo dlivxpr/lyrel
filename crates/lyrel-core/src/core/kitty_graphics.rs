@@ -434,7 +434,10 @@ impl GraphicsSniffer {
             {
                 pending.local = false;
             }
-            if matches!(self.tokenizer.state, State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc) {
+            if matches!(
+                self.tokenizer.state,
+                State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc
+            ) {
                 self.locality_denied = true;
             }
         }
@@ -450,7 +453,9 @@ impl GraphicsSniffer {
     /// low-level primitive the unit tests drive.
     pub fn feed(&mut self, bytes: &[u8], on_passthrough: impl FnMut(&[u8])) -> Vec<Event> {
         self.begin_read();
-        let Self { tokenizer, parser, .. } = self;
+        let Self {
+            tokenizer, parser, ..
+        } = self;
         let mut events = Vec::new();
         tokenizer.tokenize(bytes, on_passthrough, |cmd, aborted, exhausted| {
             if let Some(ev) = if aborted {
@@ -501,11 +506,16 @@ impl GraphicsSniffer {
             return Sniffed::Plain(bytes);
         }
         if let Some(pending) = self.parser.pending.as_mut()
-            && pending.control.medium != Medium::Direct && pending.local
+            && pending.control.medium != Medium::Direct
+            && pending.local
         {
             pending.local = locality() == Some(true);
         }
-        let Self { tokenizer, parser, locality_denied } = self;
+        let Self {
+            tokenizer,
+            parser,
+            locality_denied,
+        } = self;
         let denied = std::cell::Cell::new(*locality_denied);
         // Both tokenizer callbacks push onto the same segment list; `RefCell`
         // lets the passthrough and command sinks share it without either taking
@@ -529,15 +539,20 @@ impl GraphicsSniffer {
                 if let Some(ev) = if aborted {
                     parser.abort(cmd, exhausted)
                 } else {
-                    parser.feed_with_locality(cmd, &mut || if blocked { Some(false) } else { locality() })
+                    parser.feed_with_locality(cmd, &mut || {
+                        if blocked { Some(false) } else { locality() }
+                    })
                 } {
                     segments.borrow_mut().push(Segment::from(ev));
                 }
             },
         );
-        *locality_denied = denied.get() || (!parser.local && matches!(
-            tokenizer.state, State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc,
-        ));
+        *locality_denied = denied.get()
+            || (!parser.local
+                && matches!(
+                    tokenizer.state,
+                    State::Esc | State::ApcStart | State::ApcGraphics | State::ApcGraphicsEsc,
+                ));
         Sniffed::Segments(segments.into_inner())
     }
 }
@@ -1360,11 +1375,18 @@ impl GraphicsParser {
         }
     }
 
-    fn accept_chunk(&mut self, control: Control, data: &[u8], locality: &mut impl FnMut() -> Option<bool>) -> Option<Event> {
+    fn accept_chunk(
+        &mut self,
+        control: Control,
+        data: &[u8],
+        locality: &mut impl FnMut() -> Option<bool>,
+    ) -> Option<Event> {
         let first = self.pending.as_ref().map_or(control, |p| p.control);
         let fail = |status| response(&first, first.id, status).map(Event::Reply);
         if first.medium != Medium::Direct
-            && (!cfg!(unix) || self.pending.as_ref().is_some_and(|pending| !pending.local) || locality() != Some(true))
+            && (!cfg!(unix)
+                || self.pending.as_ref().is_some_and(|pending| !pending.local)
+                || locality() != Some(true))
         {
             self.cancel_pending();
             return fail("ENOTSUPPORTED:Host-local transfer unavailable");

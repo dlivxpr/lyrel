@@ -1039,37 +1039,72 @@ mod tests {
     #[test]
     fn foreground_group_media_rejects_ssh_command_child_not_just_local_leader() {
         let mut table = HashMap::from([(100, row(1, "python3")), (200, row(100, "ssh"))]);
-        for process in table.values_mut() { process.pgid = 100; }
+        for process in table.values_mut() {
+            process.pgid = 100;
+        }
         let commands = HashMap::from([
             (100, vec!["python3".into(), "controller.py".into()]),
-            (200, vec!["/usr/bin/ssh".into(), "host".into(), "python3".into(), "-c".into(), "query".into()]),
+            (
+                200,
+                vec![
+                    "/usr/bin/ssh".into(),
+                    "host".into(),
+                    "python3".into(),
+                    "-c".into(),
+                    "query".into(),
+                ],
+            ),
         ]);
-        assert_eq!(group_media_locality(100, &table, |pid| commands.get(&pid).cloned()), Some(false));
+        assert_eq!(
+            group_media_locality(100, &table, |pid| commands.get(&pid).cloned()),
+            Some(false)
+        );
     }
 
     #[test]
     fn foreground_group_media_unknown_argv_or_missing_group_cannot_prove_local() {
         let mut table = HashMap::from([(100, row(1, "python3")), (200, row(100, "unknown"))]);
-        for process in table.values_mut() { process.pgid = 100; }
-        for unknown in [None, Some(Vec::<String>::new())] {
-            assert_eq!(group_media_locality(100, &table, |pid| {
-                if pid == 100 { Some(vec!["python3".into()]) } else { unknown.clone() }
-            }), None);
+        for process in table.values_mut() {
+            process.pgid = 100;
         }
-        assert_eq!(group_media_locality(999, &table, |_| panic!("a missing group has no members to classify")), None);
+        for unknown in [None, Some(Vec::<String>::new())] {
+            assert_eq!(
+                group_media_locality(100, &table, |pid| {
+                    if pid == 100 {
+                        Some(vec!["python3".into()])
+                    } else {
+                        unknown.clone()
+                    }
+                }),
+                None
+            );
+        }
+        assert_eq!(
+            group_media_locality(999, &table, |_| panic!(
+                "a missing group has no members to classify"
+            )),
+            None
+        );
     }
 
     #[test]
     fn foreground_group_media_accepts_known_local_members_ignores_other_ssh_groups() {
-        let mut table = HashMap::from([(100, row(1, "python3")), (200, row(100, "cat")), (900, row(1, "ssh"))]);
+        let mut table = HashMap::from([
+            (100, row(1, "python3")),
+            (200, row(100, "cat")),
+            (900, row(1, "ssh")),
+        ]);
         table.get_mut(&100).unwrap().pgid = 100;
         table.get_mut(&200).unwrap().pgid = 100;
         table.get_mut(&900).unwrap().pgid = 900;
-        assert_eq!(group_media_locality(100, &table, |pid| match pid {
-            100 => Some(vec!["python3".into(), "controller.py".into()]),
-            200 => Some(vec!["cat".into()]),
-            _ => panic!("SSH in another terminal group cannot disable local media"),
-        }), Some(true));
+        assert_eq!(
+            group_media_locality(100, &table, |pid| match pid {
+                100 => Some(vec!["python3".into(), "controller.py".into()]),
+                200 => Some(vec!["cat".into()]),
+                _ => panic!("SSH in another terminal group cannot disable local media"),
+            }),
+            Some(true)
+        );
     }
 
     #[test]

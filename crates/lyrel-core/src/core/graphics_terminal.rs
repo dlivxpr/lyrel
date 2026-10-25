@@ -531,7 +531,9 @@ impl Handler for GraphicsState {
         self.region = 0..i32::from(self.size.rows.max(1));
     }
     fn set_private_mode(&mut self, mode: PrivateMode) {
-        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) && self.screen == 0 {
+        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor)
+            && self.screen == 0
+        {
             self.refresh_retention();
         }
         self.term.set_private_mode(mode);
@@ -541,7 +543,9 @@ impl Handler for GraphicsState {
         self.sync_screen();
     }
     fn unset_private_mode(&mut self, mode: PrivateMode) {
-        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor) && self.screen == 1 {
+        if mode == PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor)
+            && self.screen == 1
+        {
             self.refresh_retention();
         }
         self.term.unset_private_mode(mode);

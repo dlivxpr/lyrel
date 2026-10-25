@@ -5020,7 +5020,10 @@ mod tests {
                 ));
             }
             let recorded = state.lock().unwrap().ring.flatten();
-            assert_eq!(passthrough, recorded, "the signals parser sees the recorded stream");
+            assert_eq!(
+                passthrough, recorded,
+                "the signals parser sees the recorded stream"
+            );
             let mut sent = Vec::new();
             for message in receiver.try_iter() {
                 match message {
@@ -8074,7 +8077,9 @@ mod tests {
         }
         impl Read for Chunks {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                let Some((phase, chunk)) = self.chunks.pop_front() else { return Ok(0) };
+                let Some((phase, chunk)) = self.chunks.pop_front() else {
+                    return Ok(0);
+                };
                 self.phase.store(phase, Ordering::SeqCst);
                 buf[..chunk.len()].copy_from_slice(&chunk);
                 Ok(chunk.len())
@@ -8086,12 +8091,15 @@ mod tests {
                 self.0.lock().unwrap().extend_from_slice(bytes);
                 Ok(bytes.len())
             }
-            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tty-graphics-protocol-host-only.rgba");
         std::fs::write(&path, [255, 0, 0, 255]).unwrap();
-        let name = base64::engine::general_purpose::STANDARD.encode(path.as_os_str().as_encoded_bytes());
+        let name =
+            base64::engine::general_purpose::STANDARD.encode(path.as_os_str().as_encoded_bytes());
         let query = |id| format!("\x1b_Ga=q,i={id},t=f,f=32,s=1,v=1;{name}\x1b\\").into_bytes();
         let run = |chunks: Vec<(usize, Vec<u8>)>, same_group: bool, unknown: bool| {
             let phase = Arc::new(AtomicUsize::new(0));
@@ -8102,49 +8110,85 @@ mod tests {
                 Arc::new(Mutex::new(test_state(true))),
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(OutputGate::new()),
-                Box::new(Chunks { chunks: chunks.into_iter().filter(|(_, bytes)| !bytes.is_empty()).collect(), phase }),
+                Box::new(Chunks {
+                    chunks: chunks
+                        .into_iter()
+                        .filter(|(_, bytes)| !bytes.is_empty())
+                        .collect(),
+                    phase,
+                }),
                 Arc::new(Mutex::new(Box::new(Replies(sink.clone())))),
                 || false,
                 ForegroundProbes {
                     group: Box::new(move || {
                         let remote = matches!(group_phase.load(Ordering::SeqCst), 1 | 2);
-                        if unknown && remote { None } else { Some(if remote && !same_group { 11 } else { 10 }) }
+                        if unknown && remote {
+                            None
+                        } else {
+                            Some(if remote && !same_group { 11 } else { 10 })
+                        }
                     }),
                     remote: Box::new(move || {
-                        (!unknown && matches!(remote_phase.load(Ordering::SeqCst), 1 | 2)).then(|| RemoteContext {
-                            kind: RemoteKind::Ssh,
-                            argv: vec!["ssh".into(), "other-host".into()],
-                            target: "other-host".into(),
-                        })
+                        (!unknown && matches!(remote_phase.load(Ordering::SeqCst), 1 | 2)).then(
+                            || RemoteContext {
+                                kind: RemoteKind::Ssh,
+                                argv: vec!["ssh".into(), "other-host".into()],
+                                target: "other-host".into(),
+                            },
+                        )
                     }),
                     agent: Box::new(|| None),
                     cwd: Box::new(|| None),
                     local_group: |_| Some(true),
                 },
                 Arc::new(DeathReporter::new(|| {})),
-            ).join().unwrap();
+            )
+            .join()
+            .unwrap();
             let replies = sink.lock().unwrap().clone();
             replies
         };
         let remote_query = query(2);
         for same_group in [false, true] {
             for cut in 0..=remote_query.len() {
-                let replies = run(vec![
-                    (0, query(1)), (1, remote_query[..cut].to_vec()),
-                    (2, remote_query[cut..].to_vec()), (2, query(3)), (3, query(4)),
-                ], same_group, false);
+                let replies = run(
+                    vec![
+                        (0, query(1)),
+                        (1, remote_query[..cut].to_vec()),
+                        (2, remote_query[cut..].to_vec()),
+                        (2, query(3)),
+                        (3, query(4)),
+                    ],
+                    same_group,
+                    false,
+                );
                 assert_eq!(replies, b"\x1b_Gi=1;OK\x1b\\\x1b_Gi=2;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=3;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\", "same_group={same_group}, split={cut}");
             }
         }
         let split = (name.len() / 8) * 4;
         for (same_group, unknown) in [(false, false), (true, false), (false, true)] {
-            let replies = run(vec![
-                (0, format!("\x1b_Ga=q,i=9,t=f,f=32,s=1,v=1,m=1;{}\x1b\\", &name[..split]).into_bytes()),
-                (1, b"\x1b_Gm=0;".to_vec()),
-                (3, format!("{}\x1b\\", &name[split..]).into_bytes()),
-                (3, query(4)),
-            ], same_group, unknown);
-            assert_eq!(replies, b"\x1b_Gi=9;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\", "a pending transfer that crossed remote/unknown cannot become local again: same_group={same_group}, unknown={unknown}");
+            let replies = run(
+                vec![
+                    (
+                        0,
+                        format!(
+                            "\x1b_Ga=q,i=9,t=f,f=32,s=1,v=1,m=1;{}\x1b\\",
+                            &name[..split]
+                        )
+                        .into_bytes(),
+                    ),
+                    (1, b"\x1b_Gm=0;".to_vec()),
+                    (3, format!("{}\x1b\\", &name[split..]).into_bytes()),
+                    (3, query(4)),
+                ],
+                same_group,
+                unknown,
+            );
+            assert_eq!(
+                replies,
+                b"\x1b_Gi=9;ENOTSUPPORTED:Host-local transfer unavailable\x1b\\\x1b_Gi=4;OK\x1b\\",
+                "a pending transfer that crossed remote/unknown cannot become local again: same_group={same_group}, unknown={unknown}"
+            );
         }
         assert!(path.exists(), "query does not delete a plain file");
     }
