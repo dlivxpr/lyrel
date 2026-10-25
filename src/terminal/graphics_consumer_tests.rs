@@ -656,12 +656,11 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
             let (view, window) = graphics_rooted_consumer(cx, pane, stream);
             graphics_send_fixture(&view, cx, serial + 1, b"\x1b[5;5H\x1b_Ga=T,i=7,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
             if serial < 2 {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-                while view.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
-                    assert!(std::time::Instant::now() < deadline, "accepted image must use the real decoder");
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-            }
+                            graphics_recovery_wait(cx, "accepted image must use the real decoder", |cx| {
+                                window.update(cx, |_, window, _| window.refresh()).unwrap();
+                                !view.read_with(cx, |view, _| graphics_visible_images(view).is_empty())
+                            });
+                        }
             terminals.push((window, view, pane, serial));
         }
         assert!(terminals[2].1.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "aggregate admission rejects a third resource before accepting pixels, not an unfinishable decode queue");
@@ -676,7 +675,12 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
         // daemon from the new offer, but both compete for the desktop pool.
         graphics_send_fixture(&terminals[0].1, cx, 4, &b"\r\n".repeat(80));
         terminals[0].1.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
-        graphics_send_fixture(&terminals[2].1, cx, 40, b"\x1b[5;5H\x1b_Ga=T,i=9,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+        {
+                    // Confirm the history owner's viewport before another daemon
+                    // attempts pressure; the two pane links have no shared ordering.
+                    graphics_send_fixture(&terminals[0].1, cx, 39, b"\x1b[0m");
+                    graphics_send_fixture(&terminals[2].1, cx, 40, b"\x1b[5;5H\x1b_Ga=T,i=9,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+                };
         assert!(terminals[2].1.read_with(cx, |view, _| graphics_visible_images(view).is_empty()), "another daemon cannot reclaim history the user is actually viewing");
         terminals[0].1.read_with(cx, |view, _| {
             let images = graphics_visible_images(view);
@@ -684,12 +688,35 @@ fn graphics_consumer_cross_daemon_aggregate_rejects_without_losing_pixels_then_r
             assert_eq!(images[0].data.as_ref().unwrap().as_bytes(0).unwrap(), [0, 0, 255, 255]);
         });
         terminals[0].1.update(cx, |view, cx| view.scroll(-10_000, None, &Modifiers::default(), cx));
-        graphics_send_fixture(&terminals[2].1, cx, 5, b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+        {
+                    // The viewport and pressure travel to different daemons. Complete
+                    // a real round trip on the history owner before the new offer.
+                    graphics_send_fixture(&terminals[0].1, cx, 41, b"\x1b[0m");
+                    let request = format!("SEND 5 0 {} 0\n", graphics_pty_fixture::hex(b"\x1b[5;5H\x1b_Ga=T,i=8,p=1,c=2,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\"));
+                    terminals[2].1.read_with(cx, |view, _| view.terminal.write(request.into_bytes()));
+                    // Pump the old window's atlas retirement while the offering
+                    // daemon is still inside its bounded admission wait, not after
+                    // KITTY_DONE_5 has already certified a possibly refused upload.
+                    graphics_recovery_wait(cx, "PTY round trip did not finish: 5", |cx| {
+                        for index in [0, 2] {
+                            terminals[index].0.update(cx, |_, window, _| window.refresh()).unwrap();
+                        }
+                        terminals[2].1.read_with(cx, |view, _| {
+                            assert!(!view.terminal.child_exited(), "PTY sender exited before serial 5");
+                            view.scrollback_text().contains("KITTY_DONE_5;")
+                        })
+                    });
+                };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while terminals[2].1.read_with(cx, |view, _| graphics_visible_images(view).is_empty()) {
-            assert!(std::time::Instant::now() < deadline, "cross-source pressure must reclaim eligible history before refusing usable capacity");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+                    assert!(std::time::Instant::now() < deadline, "cross-source pressure must reclaim eligible history before refusing usable capacity");
+                    for index in [0, 2] {
+                        terminals[index].0.update(cx, |_, window, _| window.refresh()).unwrap();
+                    }
+                    cx.executor().advance_clock(std::time::Duration::from_millis(5));
+                    cx.run_until_parked();
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
         terminals[0].1.read_with(cx, |view, _| {
             let images = graphics_visible_images(view);
             assert!(images[0].evicted && images[0].data.is_none(), "the other daemon must authoritatively announce historical eviction");
