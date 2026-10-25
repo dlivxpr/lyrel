@@ -4,14 +4,17 @@
 
 fn graphics_consumer_progress(cx: &mut TestAppContext) {
     cx.update(|cx| cx.refresh_windows());
-    cx.executor().advance_clock(std::time::Duration::from_millis(5));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(5));
     cx.run_until_parked();
     std::thread::sleep(std::time::Duration::from_millis(5));
 }
 
-fn graphics_recovery_wait(cx: &mut TestAppContext,
-reason: &str,
-mut ready: impl FnMut(&mut TestAppContext) -> bool,) {
+fn graphics_recovery_wait(
+    cx: &mut TestAppContext,
+    reason: &str,
+    mut ready: impl FnMut(&mut TestAppContext) -> bool,
+) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !ready(cx) {
         assert!(std::time::Instant::now() < deadline, "{reason}");
@@ -46,8 +49,13 @@ fn graphics_recovery_fresh_at(
             cell_h: 20,
         },
     );
-    let source = if cfg!(windows) { PtySource::LocalConpty } else { PtySource::Raw };
-    let (view, window) = graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), size, source);
+    let source = if cfg!(windows) {
+        PtySource::LocalConpty
+    } else {
+        PtySource::Raw
+    };
+    let (view, window) =
+        graphics_build_rooted_consumer_at(cx, pane, stream, Vec::new(), size, source);
     // A unique real-text barrier, never a KITTY_DONE_0 left in old replay.
     // Resource decoding may finish before replay's authoritative Screen;
     // observe the ordered live reply before asserting fresh paint geometry.
@@ -130,10 +138,17 @@ fn graphics_recovery_stats(
         if std::time::Instant::now() >= deadline {
             let state = view.update(cx, |view, _| {
                 view.terminal.poll_exited();
-                (view.pane_id, view.terminal.exited, view.terminal.child_exited(),
-                    view.scrollback_text(), view.terminal.images().recovery_diagnostics())
+                (
+                    view.pane_id,
+                    view.terminal.exited,
+                    view.terminal.child_exited(),
+                    view.scrollback_text(),
+                    view.terminal.images().recovery_diagnostics(),
+                )
             });
-            panic!("real sender statistics barrier serial={serial}, marker={marker:?}, done={done:?}, caller={caller} did not arrive; (pane, disconnected, child_exited, text, cache)={state:?}");
+            panic!(
+                "real sender statistics barrier serial={serial}, marker={marker:?}, done={done:?}, caller={caller} did not arrive; (pane, disconnected, child_exited, text, cache)={state:?}"
+            );
         }
         graphics_consumer_progress(cx);
     }
@@ -840,17 +855,30 @@ fn graphics_consumer_fresh_restore_budget_refusal_disconnects_without_discarding
 }
 
 #[gpui_kit::test]
-fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_reviving_missing_text(cx: &mut TestAppContext) {
+fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_reviving_missing_text(
+    cx: &mut TestAppContext,
+) {
     let (daemon, pane, prior, prior_window) = graphics_layout_harness(cx);
     graphics_send_fixture(&prior, cx, 1, b"\x1b[2J\x1b[3J\x1b[6;1HLOST_ANCHOR\r\x1b_Ga=T,i=401,p=1,c=1,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
     graphics_layout_wait_image(&prior, cx, 401);
     // More than the real 8 MiB ring cap, but fewer than 10,000 text rows.
     // SGR bytes consume replay capacity without wrapping or inventing rows.
     let padding = b"\x1b[0m".repeat(250);
-    let mut observer = daemon.panes().observe(pane, crate::daemon::protocol::WinSize {
-        cols: 80, rows: 24, cell_w: 10, cell_h: 20,
-    }).unwrap();
-    observer.set_recv_timeout(Some(std::time::Duration::from_secs(30))).unwrap();
+    let mut observer = daemon
+        .panes()
+        .observe(
+            pane,
+            crate::daemon::protocol::WinSize {
+                cols: 80,
+                rows: 24,
+                cell_w: 10,
+                cell_h: 20,
+            },
+        )
+        .unwrap();
+    observer
+        .set_recv_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
     let monitor = std::thread::spawn(move || {
         let mut bytes_seen = 0usize;
         let mut tail = Vec::new();
@@ -859,11 +887,22 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
                 DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
                     bytes_seen += bytes.len();
                     tail.extend(bytes);
-                    if tail.windows(b"RING_LOAD_DONE".len()).any(|bytes| bytes == b"RING_LOAD_DONE") { break; }
+                    if tail
+                        .windows(b"RING_LOAD_DONE".len())
+                        .any(|bytes| bytes == b"RING_LOAD_DONE")
+                    {
+                        break;
+                    }
                     tail.drain(..tail.len().saturating_sub(8192));
                 }
-                DaemonMsg::Error(error) => panic!("replay load observer failed: {error}; raw_output_tail={:?}", String::from_utf8_lossy(&tail)),
-                DaemonMsg::Exited { code } => panic!("replay sender exited: {code:?}; raw_output_tail={:?}", String::from_utf8_lossy(&tail)),
+                DaemonMsg::Error(error) => panic!(
+                    "replay load observer failed: {error}; raw_output_tail={:?}",
+                    String::from_utf8_lossy(&tail)
+                ),
+                DaemonMsg::Exited { code } => panic!(
+                    "replay sender exited: {code:?}; raw_output_tail={:?}",
+                    String::from_utf8_lossy(&tail)
+                ),
                 _ => {}
             }
         }
@@ -886,9 +925,17 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
     }
     graphics_send_fixture(&prior, cx, 899, b"RING_LOAD_DONE");
     let pty_bytes = monitor.join().unwrap();
-    assert!(pty_bytes > 8 * 1024 * 1024, "actual daemon Snapshot/Output bytes, not producer bytes, must exceed the ring cap: {pty_bytes}");
+    assert!(
+        pty_bytes > 8 * 1024 * 1024,
+        "actual daemon Snapshot/Output bytes, not producer bytes, must exceed the ring cap: {pty_bytes}"
+    );
     let stopped = graphics_recovery_stats(&prior, cx, 900);
-    let sent = stopped.split_whitespace().find_map(|field| field.strip_prefix("bytes=")).unwrap().parse::<usize>().unwrap();
+    let sent = stopped
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("bytes="))
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
     assert!(sent > 8 * 1024 * 1024);
     assert!(stopped.contains("uploads=2"));
     graphics_recovery_destroy(prior, prior_window, cx);
@@ -897,20 +944,37 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
     let marker_row = fresh.read_with(cx, |view, _| {
         assert!(!view.scrollback_text().contains("LOST_ANCHOR"));
         let term = view.terminal.term.lock();
-        assert!(term.grid.history_size() < 10_000, "the real replay tail is shorter than the daemon's retained grid");
-        (-(term.grid.history_size() as i32)..term.screen_lines() as i32).find(|&row| {
-            let text: String = term.grid[Line(row)][..].iter().map(|cell| cell.c()).collect();
-            text.contains("RECOVERABLE_ANCHOR")
-        }).expect("a still-replayable history marker cannot be discarded")
+        assert!(
+            term.grid.history_size() < 10_000,
+            "the real replay tail is shorter than the daemon's retained grid"
+        );
+        (-(term.grid.history_size() as i32)..term.screen_lines() as i32)
+            .find(|&row| {
+                let text: String = term.grid[Line(row)][..]
+                    .iter()
+                    .map(|cell| cell.c())
+                    .collect();
+                text.contains("RECOVERABLE_ANCHOR")
+            })
+            .expect("a still-replayable history marker cannot be discarded")
     });
-    fresh.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+    fresh.update(cx, |view, cx| {
+        view.scroll(10_000, None, &Modifiers::default(), cx)
+    });
     graphics_assert_production_paint(fresh_window, &fresh, cx);
     fresh.read_with(cx, |view, _| {
         let images = graphics_visible_images(view);
-        let missing = images.iter().find(|image| image.placement.image_id == 401).unwrap();
+        let missing = images
+            .iter()
+            .find(|image| image.placement.image_id == 401)
+            .unwrap();
         let offset = view.terminal.term.lock().display_offset() as i32;
-        let (crop, _) = missing.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.);
-        assert!(crop.origin.y + crop.size.height <= px(0.), "missing text cannot acquire a visible direct image at the oldest replayable row");
+        let (crop, _) =
+            missing.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.);
+        assert!(
+            crop.origin.y + crop.size.height <= px(0.),
+            "missing text cannot acquire a visible direct image at the oldest replayable row"
+        );
         assert!(!missing.painted.load(std::sync::atomic::Ordering::Acquire));
     });
     fresh.update(cx, |view, cx| {
@@ -921,16 +985,31 @@ fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_re
     fresh.read_with(cx, |view, _| {
         let term = view.terminal.term.lock();
         let offset = term.display_offset() as i32;
-        let text: String = term.grid[Line(-offset)][..].iter().map(|cell| cell.c()).collect();
+        let text: String = term.grid[Line(-offset)][..]
+            .iter()
+            .map(|cell| cell.c())
+            .collect();
         assert!(text.contains("RECOVERABLE_ANCHOR"));
         drop(term);
         let images = graphics_visible_images(view);
-        let retained = images.iter().find(|image| image.placement.image_id == 402).unwrap();
-        let (crop, _) = retained.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.);
-        assert_eq!(crop.origin, point(px(0.), px(0.)), "global image anchors and local replay rows must project to the same real text row");
+        let retained = images
+            .iter()
+            .find(|image| image.placement.image_id == 402)
+            .unwrap();
+        let (crop, _) =
+            retained.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.);
+        assert_eq!(
+            crop.origin,
+            point(px(0.), px(0.)),
+            "global image anchors and local replay rows must project to the same real text row"
+        );
         assert!(retained.painted.load(std::sync::atomic::Ordering::Acquire));
     });
-    assert_eq!(graphics_recovery_stats(&fresh, cx, 902), stopped, "fresh replay must not ask the real sender to retransmit either image");
+    assert_eq!(
+        graphics_recovery_stats(&fresh, cx, 902),
+        stopped,
+        "fresh replay must not ask the real sender to retransmit either image"
+    );
     graphics_recovery_destroy(fresh, fresh_window, cx);
     daemon.panes().kill(pane).unwrap();
 }
@@ -983,9 +1062,11 @@ fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
     }
     let stopped = graphics_recovery_stats(&prior, cx, 1004);
     assert!(stopped.contains("uploads=3"), "{stopped}");
-    assert!(stopped.split_whitespace().any(|field| field
-        .strip_prefix("pid=")
-        .is_some_and(|pid| pid.parse::<u32>().is_ok_and(|pid| pid != 0))));
+    assert!(stopped.split_whitespace().any(|field| {
+        field
+            .strip_prefix("pid=")
+            .is_some_and(|pid| pid.parse::<u32>().is_ok_and(|pid| pid != 0))
+    }));
     graphics_recovery_destroy(prior, prior_window, cx);
 
     let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 1005);
@@ -1000,11 +1081,15 @@ fn graphics_consumer_three_4k_pngs_live_then_fresh_replay_without_sender_redraw(
         assert_eq!(view.pane_id, pane);
         let images = graphics_visible_images(view);
         assert_eq!(images.len(), 3);
-        assert!(images.iter().all(|image| !image.evicted
-            && image.painted.load(std::sync::atomic::Ordering::Acquire)));
+        assert!(images.iter().all(
+            |image| !image.evicted && image.painted.load(std::sync::atomic::Ordering::Acquire)
+        ));
     });
-    assert_eq!(graphics_recovery_stats(&fresh, cx, 1006), stopped,
-        "fresh replay must keep the real sender PID, upload and byte counters unchanged");
+    assert_eq!(
+        graphics_recovery_stats(&fresh, cx, 1006),
+        stopped,
+        "fresh replay must keep the real sender PID, upload and byte counters unchanged"
+    );
     graphics_recovery_destroy(fresh, fresh_window, cx);
     daemon.panes().kill(pane).unwrap();
 }

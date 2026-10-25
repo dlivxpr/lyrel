@@ -130,18 +130,26 @@ fn native_ssh_consumer_observe_ack(
         let mut first = Some(first);
         let mut text = Vec::new();
         loop {
-            let remaining = deadline.checked_duration_since(std::time::Instant::now())
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
                 .filter(|wait| !wait.is_zero())
                 .expect("real ACK observer deadline expired");
             stream.set_read_timeout(Some(remaining)).unwrap();
-            let message = first.take().unwrap_or_else(|| DaemonMsg::read(&mut stream).unwrap());
+            let message = first
+                .take()
+                .unwrap_or_else(|| DaemonMsg::read(&mut stream).unwrap());
             match message {
                 DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) => {
-                    assert!(text.len() + bytes.len() <= 1 << 20, "ACK observer text exceeds bounded fixture capture");
+                    assert!(
+                        text.len() + bytes.len() <= 1 << 20,
+                        "ACK observer text exceeds bounded fixture capture"
+                    );
                     text.extend(bytes);
                 }
                 DaemonMsg::Error(error) => panic!("real ACK observer failed: {error}"),
-                DaemonMsg::Exited { .. } => panic!("Linux sender exited before its correlated ACK/text barrier"),
+                DaemonMsg::Exited { .. } => {
+                    panic!("Linux sender exited before its correlated ACK/text barrier")
+                }
                 _ => {}
             }
             if text.windows(done.len()).any(|part| part == done.as_bytes()) {
@@ -181,12 +189,22 @@ fn native_ssh_consumer_send(
         |cx| view.read_with(cx, |view, _| view.scrollback_text().contains(&done)),
     );
     if let Some(observer) = observer {
-        graphics_recovery_wait(cx, "real ACK observer did not receive the sender's ordered output barrier", |_| observer.is_finished());
+        graphics_recovery_wait(
+            cx,
+            "real ACK observer did not receive the sender's ordered output barrier",
+            |_| observer.is_finished(),
+        );
         let bytes = observer.join().expect("real ACK observer failed");
         let text = String::from_utf8_lossy(&bytes);
         for reply in expected_replies {
-            let marker = format!("KITTY_REPLY {serial} {}", native_ssh_graphics_fixture::hex(reply));
-            assert!(text.contains(&marker), "remote application did not receive its correlated reply in real PTY Output: expected {marker}; output={text}");
+            let marker = format!(
+                "KITTY_REPLY {serial} {}",
+                native_ssh_graphics_fixture::hex(reply)
+            );
+            assert!(
+                text.contains(&marker),
+                "remote application did not receive its correlated reply in real PTY Output: expected {marker}; output={text}"
+            );
         }
     }
 }

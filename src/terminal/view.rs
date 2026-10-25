@@ -316,7 +316,7 @@ pub struct TerminalView {
     pub focus_handle: FocusHandle,
     /// See [`displayed_registry`]. Shared with the registry so the app can
     /// flip it during a draw without an entity access.
-    displayed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(super) displayed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub font: Font,
     pub font_bold: Option<Font>,
     pub font_italic: Option<Font>,
