@@ -823,3 +823,73 @@ fn graphics_consumer_fresh_restore_budget_refusal_disconnects_without_discarding
     graphics_recovery_destroy(fresh, fresh_window, cx);
     daemon.panes().kill(pane).unwrap();
 }
+
+#[gpui_kit::test]
+fn graphics_consumer_fresh_ring_tail_projects_retained_direct_anchors_without_reviving_missing_text(cx: &mut TestAppContext) {
+    let (daemon, pane, prior, prior_window) = graphics_layout_harness(cx);
+    graphics_send_fixture(&prior, cx, 1, b"\x1b[2J\x1b[3J\x1b[6;1HLOST_ANCHOR\r\x1b_Ga=T,i=401,p=1,c=1,r=1,C=1,f=32,s=1,v=1,q=2;/wAA/w==\x1b\\");
+    graphics_layout_wait_image(&prior, cx, 401);
+    // More than the real 8 MiB ring cap, but fewer than 10,000 text rows.
+    // SGR bytes consume replay capacity without wrapping or inventing rows.
+    let padding = b"\x1b[0m".repeat(250);
+    for batch in 0..72 {
+        let mut output = Vec::new();
+        for line in 0..128 {
+            let row = batch * 128 + line;
+            output.extend_from_slice(&padding);
+            output.extend_from_slice(b"\r\n");
+            if row == 2048 {
+                output.extend_from_slice(b"RECOVERABLE_ANCHOR\r\x1b_Ga=T,i=402,p=2,c=1,r=1,C=1,f=32,s=1,v=1,q=2;AP8A/w==\x1b\\");
+            } else {
+                output.extend_from_slice(format!("REPLAY_ROW_{row:05}").as_bytes());
+            }
+        }
+        graphics_send_fixture(&prior, cx, batch + 2, &output);
+    }
+    let stopped = graphics_recovery_stats(&prior, cx, 900);
+    let sent = stopped.split_whitespace().find_map(|field| field.strip_prefix("bytes=")).unwrap().parse::<usize>().unwrap();
+    assert!(sent > 8 * 1024 * 1024);
+    assert!(stopped.contains("uploads=2"));
+    graphics_recovery_destroy(prior, prior_window, cx);
+    let (fresh, fresh_window) = graphics_recovery_fresh(&daemon, pane, cx, 901);
+    graphics_recovery_pixels(&fresh, cx, 402, &[0, 255, 0, 255]);
+    let marker_row = fresh.read_with(cx, |view, _| {
+        assert!(!view.scrollback_text().contains("LOST_ANCHOR"));
+        let term = view.terminal.term.lock();
+        assert!(term.grid.history_size() < 10_000, "the real replay tail is shorter than the daemon's retained grid");
+        (-(term.grid.history_size() as i32)..term.screen_lines() as i32).find(|&row| {
+            let text: String = term.grid[Line(row)][..].iter().map(|cell| cell.c()).collect();
+            text.contains("RECOVERABLE_ANCHOR")
+        }).expect("a still-replayable history marker cannot be discarded")
+    });
+    fresh.update(cx, |view, cx| view.scroll(10_000, None, &Modifiers::default(), cx));
+    graphics_assert_production_paint(fresh_window, &fresh, cx);
+    fresh.read_with(cx, |view, _| {
+        let images = graphics_visible_images(view);
+        let missing = images.iter().find(|image| image.placement.image_id == 401).unwrap();
+        let offset = view.terminal.term.lock().display_offset() as i32;
+        let (crop, _) = missing.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.);
+        assert!(crop.origin.y + crop.size.height <= px(0.), "missing text cannot acquire a visible direct image at the oldest replayable row");
+        assert!(!missing.painted.load(std::sync::atomic::Ordering::Acquire));
+    });
+    fresh.update(cx, |view, cx| {
+        view.scroll(-10_000, None, &Modifiers::default(), cx);
+        view.scroll(-marker_row, None, &Modifiers::default(), cx);
+    });
+    graphics_assert_production_paint(fresh_window, &fresh, cx);
+    fresh.read_with(cx, |view, _| {
+        let term = view.terminal.term.lock();
+        let offset = term.display_offset() as i32;
+        let text: String = term.grid[Line(-offset)][..].iter().map(|cell| cell.c()).collect();
+        assert!(text.contains("RECOVERABLE_ANCHOR"));
+        drop(term);
+        let images = graphics_visible_images(view);
+        let retained = images.iter().find(|image| image.placement.image_id == 402).unwrap();
+        let (crop, _) = retained.paint_bounds(point(px(0.), px(0.)), px(10.), px(10.), 0, offset, 1.);
+        assert_eq!(crop.origin, point(px(0.), px(0.)), "global image anchors and local replay rows must project to the same real text row");
+        assert!(retained.painted.load(std::sync::atomic::Ordering::Acquire));
+    });
+    assert_eq!(graphics_recovery_stats(&fresh, cx, 902), stopped, "fresh replay must not ask the real sender to retransmit either image");
+    graphics_recovery_destroy(fresh, fresh_window, cx);
+    daemon.panes().kill(pane).unwrap();
+}
