@@ -22,7 +22,9 @@ fn retention_fixture_daemon() {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
-    retention::inject_limits(retention::Limits {
+    retention::inject_limits(if std::env::var("LYREL_RETENTION_TEST_DEFAULT_LIMITS").is_ok_and(|value| value == "true") {
+        retention::Limits::default()
+    } else { retention::Limits {
         pane_encoded: 1024,
         pane_decoded: 8,
         daemon_encoded: 4096,
@@ -39,7 +41,7 @@ fn retention_fixture_daemon() {
         } else {
             retention::MAX_DAEMON_METADATA_BYTES
         },
-    });
+    }});
     crate::core::config::set_config_dir(dir.into());
     crate::daemon::server::run_daemon().unwrap();
 }
@@ -59,9 +61,9 @@ impl Daemon {
         Self::with_metadata_pressure(false)
     }
     fn with_metadata_pressure(metadata: bool) -> Self {
-        Self::with_metadata_limit(if metadata { 4096 } else { 0 })
+        Self::with_limits(if metadata { 4096 } else { 0 }, false)
     }
-    fn with_metadata_limit(metadata: usize) -> Self {
+    fn with_limits(metadata: usize, production_defaults: bool) -> Self {
         let dir = tempfile::TempDir::new().unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -75,6 +77,7 @@ impl Daemon {
             .arg("--")
             .env("LYREL_RETENTION_TEST_DAEMON", dir.path())
             .env("LYREL_RETENTION_TEST_METADATA", metadata.to_string())
+            .env("LYREL_RETENTION_TEST_DEFAULT_LIMITS", production_defaults.to_string())
             .env("LYREL_CONFIG_DIR", dir.path())
             .env("LYREL_DATA_DIR", dir.path())
             .env("LYREL_CONTROL_SOCK", dir.path().join("control.sock"))
@@ -584,7 +587,10 @@ fn retention_daemon_indirect_queries_reject_short_claims_and_preserve_quiet_iden
     impl Drop for Shared {
         fn drop(&mut self) { unsafe { libc::shm_unlink(self.0.as_ptr()); } }
     }
-    let daemon = Daemon::start();
+    // The tiny retention fixture's 256 KiB work pool deliberately cannot
+    // reserve the production host-media IO bound (32 MiB, 64 MiB on Darwin).
+    // Exercise this IO contract with the unchanged production default limits.
+    let daemon = Daemon::with_limits(0, true);
     let mut consumer = daemon.spawn();
     let original = consumer.red("a=T,i=71,p=1,c=1,r=1,C=1");
     let dir = tempfile::tempdir().unwrap();
@@ -1034,7 +1040,7 @@ fn retention_daemon_metadata_budget_keeps_notice_owners_until_history_or_close_r
 
 #[test]
 fn retention_daemon_one_kib_metadata_refuses_atomic_image_without_moving_cursor_and_releases() {
-    let daemon = Daemon::with_metadata_limit(1024);
+    let daemon = Daemon::with_limits(1024, false);
     let mut a = daemon.spawn();
     a.red("a=T,i=1,p=1,c=1,r=1,C=1");
     let original = a
