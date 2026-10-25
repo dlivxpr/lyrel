@@ -386,12 +386,13 @@ impl GraphicsState {
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
-    pub(crate) fn pressure_resource(&mut self, key: u64) -> Vec<GraphicsEffect> {
+    pub(crate) fn pressure_resource(&mut self, key: u64) -> (bool, Vec<GraphicsEffect>) {
         self.refresh_retention();
-        if let Some(resource) = self.resources.get(&key) {
-            self.retention.reclaim_specific(&resource.resident);
-        }
-        self.drain_evictions()
+        let reclaimed = self
+            .resources
+            .get(&key)
+            .is_some_and(|resource| self.retention.reclaim_specific(&resource.resident));
+        (reclaimed, self.drain_evictions())
     }
     pub(crate) fn reserve_resource_key(&mut self) -> u64 {
         self.key()
