@@ -200,7 +200,7 @@ use std::io::{Read, Write};
                 barrier.push(byte[0]);
             }
             assert_eq!(barrier, b"\x1b_Gi=4294967294;OK\x1b\\");
-            write!(output, "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial}\r\n\x1b8").unwrap();
+            write!(output, "\x1b7\x1b[1;1H\r\n\x1b[2KKITTY_DONE_{serial}\r\n\x1b8").unwrap();
             output.flush().unwrap();
             if let Some(gate) = gate {
                 std::fs::write(gate.with_extension("done"), []).unwrap();

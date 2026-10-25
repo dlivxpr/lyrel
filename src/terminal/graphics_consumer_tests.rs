@@ -242,7 +242,7 @@ fn graphics_send_fixture_with_replies(
     let marker = format!("KITTY_DONE_{serial}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if view.read_with(cx, |view, _| view.scrollback_text().contains(&marker)) {
+        if view.read_with(cx, |view, _| view.scrollback_text().lines().any(|line| line.trim() == marker)) {
             break;
         }
         assert!(!view.read_with(cx, |view, _| view.terminal.child_exited()), "PTY sender exited before serial {serial}; Input bytes={input_bytes}");
