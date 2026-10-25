@@ -3095,7 +3095,10 @@ mod kitty_graphics {
         let mut old_output = Vec::new();
         let deadline = Instant::now() + STREAM_WITHIN;
         loop {
-            assert!(Instant::now() < deadline, "displaced controller did not close");
+            assert!(
+                Instant::now() < deadline,
+                "displaced controller did not close"
+            );
             match original.session.recv() {
                 Ok(DaemonMsg::Output(bytes)) => {
                     old_output.extend(bytes);
@@ -3112,7 +3115,9 @@ mod kitty_graphics {
                     );
                     original.apply(update);
                 }
-                Ok(DaemonMsg::Exited { code }) => panic!("takeover ended the living child: {code:?}"),
+                Ok(DaemonMsg::Exited { code }) => {
+                    panic!("takeover ended the living child: {code:?}")
+                }
                 Ok(DaemonMsg::Error(error)) => panic!("displaced controller failed: {error}"),
                 Ok(_) => {}
                 Err(error) => {

@@ -38,7 +38,8 @@ pub(crate) struct GraphicsGrant {
 impl GraphicsGrant {
     pub(crate) fn valid(&self) -> bool {
         let state = self.broker.state.lock().unwrap();
-        self.revision.is_none_or(|revision| state.revision == revision)
+        self.revision
+            .is_none_or(|revision| state.revision == revision)
             && self.tokens.iter().all(|token| {
                 state
                     .pending
