@@ -441,20 +441,32 @@ impl ImageStore {
     #[cfg(test)]
     pub(super) fn recovery_diagnostics(&self) -> String {
         let inner = self.0.state.lock().unwrap();
-        let resources: Vec<_> = inner.resources.iter().map(|(key, resource)| (
-            *key,
-            resource.width,
-            resource.height,
-            resource.evicted,
-            resource.pending.is_some(),
-            resource.decoded.as_ref().map(|decoded| {
-                let bytes = decoded.residency.data.as_bytes(0).unwrap();
-                (bytes.len(), bytes[..bytes.len().min(32)].to_vec())
-            }),
-        )).collect();
-        let placements: Vec<_> = inner.placements.values().map(|anchored| &anchored.placement).collect();
-        format!("screen={} origin={} generation={} closed={} resources (key,w,h,evicted,pending,pixels)={resources:?} placements={placements:?}",
-            inner.screen, inner.history_origin, inner.reader_generation, inner.closed)
+        let resources: Vec<_> = inner
+            .resources
+            .iter()
+            .map(|(key, resource)| {
+                (
+                    *key,
+                    resource.width,
+                    resource.height,
+                    resource.evicted,
+                    resource.pending.is_some(),
+                    resource.decoded.as_ref().map(|decoded| {
+                        let bytes = decoded.residency.data.as_bytes(0).unwrap();
+                        (bytes.len(), bytes[..bytes.len().min(32)].to_vec())
+                    }),
+                )
+            })
+            .collect();
+        let placements: Vec<_> = inner
+            .placements
+            .values()
+            .map(|anchored| &anchored.placement)
+            .collect();
+        format!(
+            "screen={} origin={} generation={} closed={} resources (key,w,h,evicted,pending,pixels)={resources:?} placements={placements:?}",
+            inner.screen, inner.history_origin, inner.reader_generation, inner.closed
+        )
     }
 
     pub fn graphics_capacity(&self) -> (u64, u64) {
