@@ -976,6 +976,8 @@ struct ForegroundProbes {
     remote: Box<dyn Fn() -> Option<RemoteContext> + Send>,
     agent: Box<dyn Fn() -> Option<Option<(crate::core::cli_agent::CLIAgent, Vec<String>)>> + Send>,
     cwd: Box<dyn Fn() -> Option<PathBuf> + Send>,
+    /// Same-group child permission proof, separate from the UI context parser.
+    local_group: fn(i32) -> Option<bool>,
 }
 
 struct PtyBackend {
@@ -1990,6 +1992,7 @@ impl DaemonPane {
                 remote: Box::new(move || foreground_remote_context(&remote_master)),
                 agent: Box::new(move || foreground_agent(&agent_master)),
                 cwd: Box::new(move || foreground_cwd(&cwd_master, shell_pid)),
+                local_group: crate::daemon::procinfo::foreground_group_is_local,
             },
             death,
         );
@@ -2241,6 +2244,7 @@ impl DaemonPane {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: crate::daemon::procinfo::foreground_group_is_local,
             },
             death,
         );
@@ -2292,6 +2296,7 @@ impl DaemonPane {
             remote: foreground_remote,
             agent: foreground_agent_fn,
             cwd: foreground_cwd_fn,
+            local_group: foreground_group_locality,
         } = probes;
         let (eviction_tx, eviction_rx) = std::sync::mpsc::sync_channel(1);
         let owner = {
@@ -2407,7 +2412,10 @@ impl DaemonPane {
                             // exec ssh can keep the same pgid. Probe afresh only
                             // when the parser is accepting an indirect medium.
                             let mut media_locality = || {
-                                if managed { Some(false) } else { foreground_group().map(|_| foreground_remote().is_none()) }
+                                if managed { Some(false) } else {
+                                    let pgid = foreground_group()?;
+                                    if foreground_remote().is_some() { Some(false) } else { foreground_group_locality(pgid) }
+                                }
                             };
                             let passthrough = graphics_reader::consume(raw, &mut clipboard, &mut graphics, &state, &gate, &writer, controller, &mut media_locality);
                             let bytes: &[u8] = &passthrough;
@@ -6276,6 +6284,7 @@ mod tests {
                     remote: Box::new(|| None),
                     agent: Box::new(|| Some(None)),
                     cwd: Box::new(|| None),
+                    local_group: |_| Some(true),
                 },
                 Arc::new(DeathReporter::new(|| {})),
             )
@@ -6358,6 +6367,7 @@ mod tests {
                 // to honor the agent's own explicit shutdown event.
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(|| {})),
         )
@@ -6514,6 +6524,7 @@ mod tests {
                     remote: Box::new(|| None),
                     agent: Box::new(|| Some(None)),
                     cwd: Box::new(|| None),
+                    local_group: |_| Some(true),
                 },
                 Arc::new(DeathReporter::new(|| {})),
             )
@@ -7476,6 +7487,7 @@ mod tests {
                 remote,
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(|| {})),
         );
@@ -7524,6 +7536,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(move || {
                 dead_flag.store(true, Ordering::SeqCst)
@@ -7629,6 +7642,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(|| {})),
         );
@@ -7727,6 +7741,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             death.clone(),
         );
@@ -7765,6 +7780,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             death.clone(),
         );
@@ -7832,6 +7848,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             death.clone(),
         );
@@ -7944,6 +7961,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(|| {})),
         )
@@ -8026,6 +8044,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(|| {})),
         )
@@ -8100,6 +8119,7 @@ mod tests {
                     }),
                     agent: Box::new(|| None),
                     cwd: Box::new(|| None),
+                    local_group: |_| Some(true),
                 },
                 Arc::new(DeathReporter::new(|| {})),
             ).join().unwrap();
@@ -8151,6 +8171,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| Some(PathBuf::from("/Users/alice/dev/lyrel"))),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(|| {})),
         );
@@ -8183,6 +8204,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(move || dead_tx.send(()).unwrap())),
         );
@@ -8210,6 +8232,7 @@ mod tests {
                 remote: Box::new(|| None),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
+                local_group: |_| Some(true),
             },
             Arc::new(DeathReporter::new(move || {
                 dead_flag.store(true, Ordering::SeqCst)
@@ -8819,6 +8842,7 @@ mod tests {
                         None
                     }),
                     cwd: Box::new(|| None),
+                    local_group: |_| Some(true),
                 },
                 Arc::new(DeathReporter::new(|| {})),
             );

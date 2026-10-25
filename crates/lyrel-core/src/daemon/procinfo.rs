@@ -20,6 +20,40 @@ const MAX_PROCS: usize = 64;
 /// found; only the list handed to the panel is cut back to `MAX_PROCS`.
 const MAX_TREE: usize = 512;
 
+/// Media permission is stricter than the UI's interactive SSH context. An SSH
+/// child can share a local wrapper's foreground pgid and run a remote command.
+/// Called only at the indirect-media boundary, never by ordinary PTY output.
+pub(crate) fn foreground_group_is_local(pgid: i32) -> Option<bool> {
+    if pgid <= 0 {
+        return None;
+    }
+    let table = process_table();
+    group_media_locality(pgid as u32, &table, |pid| {
+        super::remote::foreground_argv(i32::try_from(pid).ok()?)
+    })
+}
+
+fn group_media_locality(
+    pgid: u32,
+    table: &HashMap<u32, Row>,
+    mut argv_for: impl FnMut(u32) -> Option<Vec<String>>,
+) -> Option<bool> {
+    let mut found = false;
+    for (&pid, row) in table {
+        if row.pgid != pgid {
+            continue;
+        }
+        found = true;
+        let argv = argv_for(pid)?;
+        let program = argv.first()?;
+        let name = std::path::Path::new(program).file_name()?;
+        if name == "ssh" {
+            return Some(false);
+        }
+    }
+    found.then_some(true)
+}
+
 pub fn snapshot(shell_pid: u32, fg_pgid: Option<i32>) -> PaneProcs {
     let table = process_table();
     let procs = walk(&table, shell_pid, fg_pgid);
@@ -1000,6 +1034,42 @@ mod tests {
             uid: ME,
             name: name.to_string(),
         }
+    }
+
+    #[test]
+    fn foreground_group_media_rejects_ssh_command_child_not_just_local_leader() {
+        let mut table = HashMap::from([(100, row(1, "python3")), (200, row(100, "ssh"))]);
+        for process in table.values_mut() { process.pgid = 100; }
+        let commands = HashMap::from([
+            (100, vec!["python3".into(), "controller.py".into()]),
+            (200, vec!["/usr/bin/ssh".into(), "host".into(), "python3".into(), "-c".into(), "query".into()]),
+        ]);
+        assert_eq!(group_media_locality(100, &table, |pid| commands.get(&pid).cloned()), Some(false));
+    }
+
+    #[test]
+    fn foreground_group_media_unknown_argv_or_missing_group_cannot_prove_local() {
+        let mut table = HashMap::from([(100, row(1, "python3")), (200, row(100, "unknown"))]);
+        for process in table.values_mut() { process.pgid = 100; }
+        for unknown in [None, Some(Vec::<String>::new())] {
+            assert_eq!(group_media_locality(100, &table, |pid| {
+                if pid == 100 { Some(vec!["python3".into()]) } else { unknown.clone() }
+            }), None);
+        }
+        assert_eq!(group_media_locality(999, &table, |_| panic!("a missing group has no members to classify")), None);
+    }
+
+    #[test]
+    fn foreground_group_media_accepts_known_local_members_ignores_other_ssh_groups() {
+        let mut table = HashMap::from([(100, row(1, "python3")), (200, row(100, "cat")), (900, row(1, "ssh"))]);
+        table.get_mut(&100).unwrap().pgid = 100;
+        table.get_mut(&200).unwrap().pgid = 100;
+        table.get_mut(&900).unwrap().pgid = 900;
+        assert_eq!(group_media_locality(100, &table, |pid| match pid {
+            100 => Some(vec!["python3".into(), "controller.py".into()]),
+            200 => Some(vec!["cat".into()]),
+            _ => panic!("SSH in another terminal group cannot disable local media"),
+        }), Some(true));
     }
 
     #[test]
