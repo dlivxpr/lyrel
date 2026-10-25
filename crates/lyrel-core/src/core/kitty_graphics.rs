@@ -1331,10 +1331,9 @@ impl GraphicsParser {
                 .split(|b| *b == b',')
                 .all(|pair| pair.starts_with(b"m=") || pair.starts_with(b"q=") || pair.is_empty());
             if continuation {
-                if header
-                    .split(|b| *b == b',')
-                    .any(|pair| pair.starts_with(b"q="))
-                {
+                // Kitty keeps the first chunk's quiet unless a later chunk
+                // supplies a nonzero override; an explicit q=0 is not a reset.
+                if control.quiet != 0 {
                     self.pending.as_mut().unwrap().control.quiet = control.quiet;
                 }
                 if control.invalid {

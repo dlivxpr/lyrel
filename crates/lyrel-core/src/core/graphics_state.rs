@@ -593,16 +593,7 @@ impl GraphicsState {
     ) -> Result<PreparedImage, &'static str> {
         let retention = retention::Retention::shared();
         let mut work = retention.work(owner);
-        let scratch = match (image.format, image.compressed) {
-            (WireFormat::Png, true) => MAX_IMAGE_BYTES * 3 + (4 << 20),
-            (WireFormat::Png, false) => 4 << 20,
-            (_, true) => 256 << 10,
-            (_, false) => 0,
-        };
-        if !work.resize(scratch) {
-            return Err("ENOSPC:Graphics validation budget exhausted");
-        }
-        let decoded_bytes = validate_image(&mut image).map_err(|status| {
+        let decoded_bytes = validate_image(&mut image, &mut work).map_err(|status| {
             if control.medium == super::kitty_graphics::Medium::Direct {
                 status
             } else {
@@ -1329,19 +1320,18 @@ impl GraphicsState {
     }
 }
 
-fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
+fn validate_image(image: &mut Image, work: &mut retention::Work) -> Result<usize, &'static str> {
     if image.data.len() > MAX_IMAGE_BYTES {
         return Err("ENOSPC:Image payload too large");
     }
+    // The parser still charges the input for this read. Only a normalized PNG
+    // adds a second owned source; keep that source's capacity charged through
+    // PreparedImage, including while it is serialized/admitted.
+    let mut normalized_capacity = 0;
     if image.format == WireFormat::Png {
         if image.compressed {
-            image.data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
-                &image.data,
-                MAX_IMAGE_BYTES,
-            )
-            .map_err(|_| "EINVAL:Invalid or excessive compressed PNG")?
-            .into_boxed_slice()
-            .into_vec();
+            image.data = inflate_png(&image.data, work)?;
+            normalized_capacity = image.data.capacity();
             image.compressed = false;
         }
         if image.data.get(..8) != Some(b"\x89PNG\r\n\x1a\n")
@@ -1379,6 +1369,9 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
         // allocate. Validation discards each decoded row instead of allocating
         // a full second image in the daemon. Ignore ancillary metadata that is
         // irrelevant to terminal pixels and independently cap decoder scratch.
+        if !work.resize(normalized_capacity + (4 << 20)) {
+            return Err("ENOSPC:Graphics validation budget exhausted");
+        }
         let mut decoder = png::Decoder::new_with_limits(
             std::io::Cursor::new(&image.data),
             png::Limits { bytes: 4 << 20 },
@@ -1400,12 +1393,73 @@ fn validate_image(image: &mut Image) -> Result<usize, &'static str> {
             bytes
         };
         if image.compressed {
+            if !work.resize(256 << 10) {
+                return Err("ENOSPC:Graphics validation budget exhausted");
+            }
             validate_zlib_pixels(&image.data, expected)?;
         } else if image.data.len() != expected {
             return Err("EINVAL:Pixel payload does not match dimensions");
         }
     }
+    // Row decoding/inflate scratch is gone, but normalized source bytes stay
+    // alive until the prepared image and its packet have been consumed.
+    work.resize(normalized_capacity);
     Ok(bytes)
+}
+
+fn inflate_png(data: &[u8], work: &mut retention::Work) -> Result<Vec<u8>, &'static str> {
+    use miniz_oxide::inflate::stream::{InflateState, inflate};
+    use miniz_oxide::{DataFormat, MZFlush, MZStatus};
+
+    let state_bytes = std::mem::size_of::<InflateState>();
+    if !work.resize(state_bytes) {
+        return Err("ENOSPC:Graphics validation budget exhausted");
+    }
+    let mut state = InflateState::new_boxed(DataFormat::Zlib);
+    let mut output = Vec::new();
+    let mut consumed = 0;
+    loop {
+        if output.len() == output.capacity() {
+            let old_capacity = output.capacity();
+            // One excess byte detects expansion beyond the encoded source
+            // boundary, including when the valid PNG exactly fills the limit.
+            let capacity = old_capacity
+                .max(32 << 10)
+                .saturating_mul(2)
+                .min(MAX_IMAGE_BYTES + 1);
+            // reserve_exact may move the allocation: both old and new source
+            // capacities coexist at its peak, in addition to the zlib state.
+            if !work.resize(state_bytes + old_capacity + capacity) {
+                return Err("ENOSPC:Graphics validation budget exhausted");
+            }
+            output.reserve_exact(capacity - output.len());
+            if !work.resize(state_bytes + output.capacity()) {
+                return Err("ENOSPC:Graphics validation budget exhausted");
+            }
+        }
+        let start = output.len();
+        output.resize(output.capacity(), 0);
+        let result = inflate(
+            &mut state,
+            &data[consumed..],
+            &mut output[start..],
+            MZFlush::None,
+        );
+        consumed += result.bytes_consumed;
+        output.truncate(start + result.bytes_written);
+        if output.len() > MAX_IMAGE_BYTES {
+            return Err("EINVAL:Invalid or excessive compressed PNG");
+        }
+        match result.status {
+            Ok(MZStatus::StreamEnd) if consumed == data.len() => {
+                drop(state);
+                work.resize(output.capacity());
+                return Ok(output);
+            }
+            Ok(MZStatus::Ok) if result.bytes_consumed != 0 || result.bytes_written != 0 => {}
+            _ => return Err("EINVAL:Invalid or excessive compressed PNG"),
+        }
+    }
 }
 
 fn validate_zlib_pixels(data: &[u8], expected: usize) -> Result<(), &'static str> {
