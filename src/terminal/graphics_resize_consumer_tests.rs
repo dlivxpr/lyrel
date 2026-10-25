@@ -133,6 +133,16 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
     });
     graphics_assert_production_paint(_window.into(), &view, cx);
     graphics_send_fixture(&view, cx, 424, b"\x1b[0m");
+    let target_window_size = graphics_window_geometry(
+        _window.into(),
+        &view,
+        cx,
+        TermSize::new(80, usize::from(rows)),
+    )
+    .0;
+    // Observe the reader's grid without pumping the old 24-row surface while
+    // the daemon Size is in flight; it must not send a competing resize back.
+    let authoritative_term = view.read_with(cx, |view, _| view.terminal.term.clone());
     ClientMsg::Resize(crate::daemon::protocol::WinSize {
         cols: 80,
         rows,
@@ -144,9 +154,7 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
     controller.flush().unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if view.read_with(cx, |view, _| {
-            view.terminal.term.lock().screen_lines() == usize::from(rows)
-        }) {
+        if authoritative_term.lock().screen_lines() == usize::from(rows) {
             break;
         }
         assert!(
@@ -155,6 +163,7 @@ fn graphics_resize_real_daemon(cx: &mut TestAppContext, grow: bool) {
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    cx.simulate_window_resize(_window.into(), target_window_size);
     // The sender's APC round-trip is also an ordered graphics/layout barrier.
     graphics_send_fixture(&view, cx, 422, b"\x1b[0m");
     view.read_with(cx, |view, _| {

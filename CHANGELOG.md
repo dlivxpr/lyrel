@@ -45,6 +45,7 @@
 - GPUI 回归先同步 rooted 窗口的实际列数再修改终端尺寸，避免推进 UI 时由旧窗口布局回写覆盖 reflow；Screen／原点回归等待其后有序文本 marker 与实际解码状态，不以一张图片已出现替代 Screen 已消费。
 - 原生 SSH 夹具的请求 serial 跨 fresh consumer 不复用，避免旧 Snapshot 回复被误归为当前请求；恢复等待唯一文本屏障及权威最终 `Screen`，不在先到的 Snapshot 上提前返回。GUI 从不接管／不 resize 的真实 Observe raw Output 核对应用收到的全部关联 ACK，保留有限预算、像素与 placement 断言，不依赖终端网格保存已被覆盖的诊断文字。
 - fresh GPUI 恢复夹具通过公开 deactivate 完成 headless active-window／input-handler owner 释放，再正常销毁实体、图片 store 和 texture；首帧先测实际字体并设置物理尺寸，再挂载终端，避免默认最大化首绘改写存活备用屏。保留三重弱引用、真实上传 ACK、权威 observer 顺序、像素与 resize 断言；不以测试平台生命周期问题掩盖丢图。
+- 真实 daemon resize 回归先按实际字体计算目标窗口尺寸，等待权威 `Size` 时只读 reader 共享网格，不推进仍为 24 行的旧测试窗口；消费后先同步物理窗口再走 PTY 屏障，避免旧 surface 回写尺寸并扰乱历史锚点。保留 ConPTY／标准 PTY 的不同预期及最后写入行断言；Windows 7 项真实 daemon／rooted paint 回归通过，macOS 完整结果仍待修复后的 CI。
 - 桌面测试明确声明 `base64` dev-dependency，修复 macOS 仅因 Windows 生产依赖可见性而编译失败；移除固定内部三帧排列的旧 resize wiring 测试，真实 daemon／GPUI 尺寸与图片顺序回归继续执行，不把新 `Screen` 元数据当作异常。
 - x86_64 musl 的 CI 与 Release C++ 构建统一使用上游 `SIMDUTF_IMPLEMENTATION_ICELAKE=0` 配置，避开正式 `simdutf 0.7.0` 可选 Ice Lake backend 的 `evex512` 编译错误；保留 Zig `0.16.0` 与 AVX2／SSE／scalar 运行时分派，不修改第三方源码或提高远端 CPU 要求。
 
