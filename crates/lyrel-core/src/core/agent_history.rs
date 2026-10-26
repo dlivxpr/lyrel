@@ -558,6 +558,70 @@ fn pi_files(sessions: &Path, agent: CLIAgent) -> Vec<Found> {
         .collect()
 }
 
+/// 按原生 OMP scope 枚举会话文件，不套用历史列表的最近 500 条上限。
+pub(crate) fn omp_session_paths(
+    scope: &crate::host::session_operations::SessionScope,
+    cwd: &Path,
+) -> std::io::Result<impl Iterator<Item = PathBuf>> {
+    let root = if let Some(dir) = &scope.session_dir {
+        if dir.is_absolute() {
+            dir.clone()
+        } else {
+            cwd.join(dir)
+        }
+    } else {
+        let home_keys = if cfg!(windows) {
+            ["USERPROFILE", "HOME"]
+        } else {
+            ["HOME", "USERPROFILE"]
+        };
+        let home = home_keys
+            .into_iter()
+            .find_map(|key| {
+                scope
+                    .environment
+                    .get(key)
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from)
+            })
+            .or_else(home)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "home directory unavailable for OMP session lookup",
+                )
+            })?;
+        let mut environment = scope.environment.clone();
+        // 此入口只定位 OMP，不让另一个 agent 的独立 home 选择器影响它。
+        environment.remove("KIMI_CODE_HOME");
+        if let Some(profile) = &scope.profile {
+            environment.insert("OMP_PROFILE".into(), profile.clone());
+        }
+        if let Some(dir) = environment
+            .get_mut("PI_CODING_AGENT_DIR")
+            .filter(|value| !value.is_empty())
+        {
+            let path = if dir.as_str() == "~" {
+                home.clone()
+            } else if let Some(rest) = dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\")) {
+                home.join(rest)
+            } else if Path::new(dir.as_str()).is_absolute() {
+                PathBuf::from(&*dir)
+            } else {
+                cwd.join(&*dir)
+            };
+            *dir = path.to_string_lossy().into_owned();
+        }
+        let roots = Roots::from_environment(&home, &environment)?;
+        roots
+            .omp_session_dir
+            .unwrap_or_else(|| roots.omp.join("sessions"))
+    };
+    Ok(pi_files(&root, CLIAgent::OhMyPi)
+        .into_iter()
+        .map(|file| file.path))
+}
+
 /// Kimi Code: `sessions/wd_<dir>_<hash>/<session>/state.json`.
 fn kimi_files(root: &Path) -> Vec<Found> {
     dirs_in(&root.join("sessions"))

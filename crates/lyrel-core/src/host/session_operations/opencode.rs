@@ -102,7 +102,8 @@ fn capability(bridge: &OpenCodeBridge) -> Result<String, SessionOperationError> 
             .map(PathBuf::from)
             .ok_or_else(bad)?
             .join("System32/WindowsPowerShell/v1.0/powershell.exe");
-        let script = "$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; foreach($p in @($env:LYREL_OPENCODE_PRIVATE_DIR,(Join-Path $env:LYREL_OPENCODE_PRIVATE_DIR 'client.json'))) { $a=Get-Acl -LiteralPath $p; if($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid) { exit 1 }; if($p -eq $env:LYREL_OPENCODE_PRIVATE_DIR -and -not $a.AreAccessRulesProtected) { exit 1 }; foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) { if($r.AccessControlType -eq 'Allow' -and $r.IdentityReference.Value -ne $sid) { exit 1 } } }";
+        // 与 TUI 一样直接读取 .NET ACL，避免依赖继承环境中的 PowerShell Security 模块。
+        let script = "$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; foreach($p in @($env:LYREL_OPENCODE_PRIVATE_DIR,[IO.Path]::Combine($env:LYREL_OPENCODE_PRIVATE_DIR,'client.json'))) { $a=if($p -eq $env:LYREL_OPENCODE_PRIVATE_DIR) { [IO.Directory]::GetAccessControl($p) } else { [IO.File]::GetAccessControl($p) }; if($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid) { exit 1 }; if($p -eq $env:LYREL_OPENCODE_PRIVATE_DIR -and -not $a.AreAccessRulesProtected) { exit 1 }; foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) { if($r.AccessControlType -eq 'Allow' -and $r.IdentityReference.Value -ne $sid -and $r.IdentityReference.Value -ne 'S-1-5-18') { exit 1 } } }";
         let mut command = Command::new(shell);
         command
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
@@ -1654,6 +1655,24 @@ fn api(
 mod tests {
     use super::*;
     use crate::host::local::LocalHost;
+
+    #[cfg(windows)]
+    #[test]
+    fn opencode_windows_registration_keeps_private_acl_without_security_module() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/opencode_tui.test.mjs");
+        let output = Command::new("node")
+            .arg(script)
+            .arg(directory.path())
+            .output()
+            .expect("OpenCode Windows ACL regression requires Node.js on PATH");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn statistics_reads_independent_sessions_without_serial_request_starvation() {
