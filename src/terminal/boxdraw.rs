@@ -7,10 +7,14 @@ pub(crate) enum Ink {
 }
 
 pub(crate) fn glyph(c: char, bounds: Bounds<Pixels>, scale: f32) -> Option<Vec<Ink>> {
-    if !('\u{2500}'..='\u{259f}').contains(&c) {
+    let math_delimiter = ('\u{239b}'..='\u{23ad}').contains(&c);
+    if !math_delimiter && !('\u{2500}'..='\u{259f}').contains(&c) {
         return None;
     }
     let g = Cell::new(&bounds, scale);
+    if math_delimiter {
+        return Some(g.math_delimiter(c));
+    }
     if let Some((u, d, l, r)) = arms_of(c) {
         return Some(g.arms(u, d, l, r));
     }
@@ -95,6 +99,113 @@ impl Cell {
             point(px(x0), px(y0)),
             size(px(x1 - x0), px(self.stroke_px(w))),
         ))
+    }
+
+    /// Unicode Technical delimiter pieces must meet at cell edges, not at font
+    /// ascenders/descenders: otherwise terminal line spacing splits matrices.
+    fn math_delimiter(&self, c: char) -> Vec<Ink> {
+        if matches!(c, '⎜' | '⎟' | '⎢' | '⎥' | '⎪') {
+            return vec![self.vstroke(self.cx, self.t, self.y0, self.y1)];
+        }
+        let right = matches!(c, '⎞' | '⎠' | '⎤' | '⎦' | '⎫' | '⎬' | '⎭');
+        let lower = matches!(c, '⎝' | '⎠' | '⎣' | '⎦' | '⎩' | '⎭');
+        let width = self.x1 - self.x0;
+        let height = self.y1 - self.y0;
+        let stem = self.snap(self.cx - self.t / 2.);
+        let thickness = self.stroke_px(self.t);
+        // Reflect whole pixel-aligned outlines, keeping the extension lane the
+        // same for left and right pieces (including the shared brace extender).
+        let at = |x: f32, y: f32| {
+            point(
+                px(if right { 2. * stem + thickness - x } else { x }),
+                px(if lower { self.y0 + self.y1 - y } else { y }),
+            )
+        };
+        let center = stem + thickness / 2.;
+        let mut path = gpui_kit::Path::new(at(center, self.snap(self.y0)));
+        // GPUI's path is a triangle fan, not an arbitrary polygon tessellator.
+        // Separate convex strips keep a concave curved stroke from filling in.
+        let curve = |path: &mut gpui_kit::Path<Pixels>,
+                     from: (f32, f32),
+                     control: (f32, f32),
+                     to: (f32, f32)| {
+            let edge = |t: f32| {
+                let u = 1. - t;
+                let x = u * u * from.0 + 2. * u * t * control.0 + t * t * to.0;
+                let y = u * u * from.1 + 2. * u * t * control.1 + t * t * to.1;
+                let dx = u * (control.0 - from.0) + t * (to.0 - control.0);
+                let dy = u * (control.1 - from.1) + t * (to.1 - control.1);
+                let half = thickness / (2. * dx.hypot(dy).max(f32::EPSILON));
+                (
+                    at(x - dy * half, y + dx * half),
+                    at(x + dy * half, y - dx * half),
+                )
+            };
+            let mut previous = edge(0.);
+            for segment in 1..=8 {
+                let next = edge(segment as f32 / 8.);
+                path.move_to(previous.0);
+                path.line_to(previous.1);
+                path.line_to(next.1);
+                path.line_to(next.0);
+                previous = next;
+            }
+        };
+        if matches!(c, '⎨' | '⎬') {
+            let tip = self.x0 + width * 0.18;
+            curve(
+                &mut path,
+                (center, self.snap(self.y0)),
+                (center, self.cy),
+                (tip, self.cy),
+            );
+            curve(
+                &mut path,
+                (tip, self.cy),
+                (center, self.cy),
+                (center, self.snap(self.y1)),
+            );
+            return vec![Ink::Path(path)];
+        }
+        let cap = self.snap(self.y0 + height * 0.12);
+        let tip = self.x0 + width * 0.82;
+        if matches!(c, '⎡' | '⎣' | '⎤' | '⎦') {
+            let edge = if right {
+                2. * stem + thickness - tip
+            } else {
+                tip
+            };
+            let (top, bottom) = if lower {
+                (self.y0, self.y0 + self.y1 - cap)
+            } else {
+                (cap, self.y1)
+            };
+            return vec![
+                self.vstroke(self.cx, self.t, top, bottom),
+                self.hstroke(
+                    if lower { bottom } else { top },
+                    self.t,
+                    center.min(edge),
+                    center.max(edge),
+                ),
+            ];
+        }
+        let join = self.snap(
+            self.y0
+                + height
+                    * if matches!(c, '⎧' | '⎩' | '⎫' | '⎭') {
+                        0.4
+                    } else {
+                        0.85
+                    },
+        );
+        curve(&mut path, (tip, cap), (center, cap), (center, join));
+        let (top, bottom) = if lower {
+            (self.y0, self.y0 + self.y1 - join)
+        } else {
+            (join, self.y1)
+        };
+        vec![Ink::Path(path), self.vstroke(self.cx, self.t, top, bottom)]
     }
 
     fn arms(&self, u: Arm, d: Arm, l: Arm, r: Arm) -> Vec<Ink> {
@@ -493,6 +604,41 @@ mod tests {
     }
 
     #[test]
+    fn math_delimiter_pieces_join_across_rows() {
+        for scale in [1., 1.25, 1.5, 2.] {
+            for height in [15., 21., 28.] {
+                for pieces in ["⎛⎜⎝", "⎞⎟⎠", "⎡⎢⎣", "⎤⎥⎦", "⎧⎪⎨⎪⎩", "⎫⎪⎬⎪⎭"]
+                {
+                    let mut previous_edge: Option<f32> = None;
+                    for (row, c) in pieces.chars().enumerate() {
+                        let bounds = Bounds::new(
+                            point(px(10.37), px(20.11 + row as f32 * height)),
+                            size(px(9.03), px(height)),
+                        );
+                        let ink = glyph(c, bounds, scale)
+                            .unwrap_or_else(|| panic!("{c} falls back to disconnected font ink"));
+                        let (_, _, top, bottom) = extents(&ink);
+                        let expected_top = (bounds.origin.y.as_f32() * scale).round() / scale;
+                        let expected_bottom =
+                            ((bounds.origin.y.as_f32() + height) * scale).round() / scale;
+                        if let Some(edge) = previous_edge {
+                            assert!((top - edge).abs() < 0.001, "{pieces}: gap before {c}");
+                            assert!((top - expected_top).abs() < 0.001);
+                        }
+                        if row + 1 < pieces.chars().count() {
+                            assert!(
+                                (bottom - expected_bottom).abs() < 0.001,
+                                "{c}: misses next row"
+                            );
+                        }
+                        previous_edge = Some(bottom);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_whole_range_is_covered() {
         for cp in 0x2500u32..=0x259f {
             let c = char::from_u32(cp).unwrap();
@@ -508,7 +654,7 @@ mod tests {
         let b = cell();
         let (x0, y0) = (b.origin.x.as_f32(), b.origin.y.as_f32());
         let (x1, y1) = (x0 + b.size.width.as_f32(), y0 + b.size.height.as_f32());
-        for cp in 0x2500u32..=0x259f {
+        for cp in (0x239bu32..=0x23ad).chain(0x2500..=0x259f) {
             let c = char::from_u32(cp).unwrap();
             let (nx, xx, ny, xy) = extents(&glyph(c, b, 1.).unwrap());
             assert!(

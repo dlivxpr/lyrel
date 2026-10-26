@@ -86,11 +86,17 @@ export default Plugin.define({
     const directory = mkdtempSync(join(root, "lyrel-opencode-"))
     if (process.platform !== "win32") chmodSync(directory, 0o700)
     else {
-      const script = "$ErrorActionPreference='Stop'; $p=$env:LYREL_OPENCODE_PRIVATE_DIR; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=[Security.AccessControl.DirectorySecurity]::new(); $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')); Set-Acl -LiteralPath $p -AclObject $acl"
-      const secured = spawnSync(join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], {
-        env: { ...process.env, LYREL_OPENCODE_PRIVATE_DIR: directory }, stdio: "ignore", windowsHide: true, timeout: 10000,
-      })
-      if (secured.status !== 0) { rmSync(directory, { recursive: true, force: true }); throw new Error("lyrel: cannot protect private client registration DACL") }
+      // 继承的 PSModulePath 可能指向不兼容的 Security 模块；直接使用系统 .NET ACL API。
+      const script = "$ErrorActionPreference='Stop'; $p=$env:LYREL_OPENCODE_PRIVATE_DIR; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18'); $acl=[Security.AccessControl.DirectorySecurity]::new(); $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); foreach($identity in @($sid,$system)) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')) }; [IO.Directory]::SetAccessControl($p,$acl)"
+      try {
+        const secured = spawnSync(join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], {
+          env: { ...process.env, LYREL_OPENCODE_PRIVATE_DIR: directory }, stdio: "ignore", windowsHide: true, timeout: 10000,
+        })
+        if (secured.status !== 0) throw new Error("lyrel: cannot protect private client registration DACL")
+      } catch {
+        rmSync(directory, { recursive: true, force: true })
+        throw new Error("lyrel: cannot protect private client registration DACL")
+      }
     }
     const registration = join(directory, "client.json")
     const sockets = new Set()

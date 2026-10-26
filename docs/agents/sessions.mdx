@@ -79,7 +79,7 @@ daemon 重启依然遵循原有会话恢复规则，持久停放记录不代表�
 | 智能体 | lyrel 执行的命令 |
 |---|---|
 | OpenCode 2.x | 由源窗格本地 TUI 的已连接正式 `context.client.session.fork` 创建真实新 ID，经 Host 核验服务连接后原生 `--session <新 ID>` 打开 |
-| Oh My Pi | 先由原生 RPC 核定源身份，再以 `omp --fork <精确会话路径> --mode rpc` 取得真实新身份，最后在新窗格原生恢复 |
+| Oh My Pi | 只读核对源文件 header 与存储范围，再以 `omp --fork <精确会话路径> --mode rpc` 取得真实新身份，最后在新窗格原生恢复 |
 | pi | 核对精确源文件 header，以正式 `pi --fork <路径> --mode rpc` 获取新 ID／文件，再在新窗格执行 `pi --session <新路径>` |
 | Kimi Code 2.2.0 | 在源 Host 原生 `kimi fork <id>`，严格验证stdout与实际新目标后，在新窗格原生 `kimi --session <新ID>` |
 | Hermes | 从所选安装的 launcher 取得准确运行时，调用 `session.branch_stored` 返回持久化新 ID，再在新窗格原生恢复 |
@@ -112,14 +112,24 @@ lyrel 只调用智能体自己的操作，不复制内部会话文件。原生�
 
 本机 GUI 在后台创建 shell，用待连接窗格保留启动上下文，不将等待两秒视为创建失败。`Spawn.await_claim` 默认为 false；启用时，daemon 在同一连接收到匹配新 ID 的 `Attach` 后才将 pane 纳入持久 registry／handoff。此前取消、断连或目标窗口关闭只回收这次创建的 pane，不能向原 pane 投递启动命令。旧 daemon 缺能力时明确要求重启更新，不回退不安全路径。远端晚到结果沿准确 Host／pane ID 回收新建 pane；恢复的持久 pane 只断开连接。
 
-omp 基线在实施时复核为正式 `18.12.1`。原生 `get_state.sessionId` 是 provider-facing 身份，
-不能替代会话文件 header 的持久化 ID；恢复与分叉以真实 header 校核身份，并保留实际文件路径。
-准备进程只发送 `get_state`，不发送 prompt，不以 headless 推理代替新窗格的原生 TUI。
+omp 的原生 `get_state.sessionId` 是 provider-facing 身份，不能替代会话文件 header 的
+持久化 ID。源定位只读核验 header 与所选 ID／存储范围；只有 ID 时沿有效 profile 和
+存储目录查找，不受最近 500 条历史列表限制，缺失或歧义均明确拒绝。
+不要用额外的 `--resume --mode rpc` 探测活跃源：启动扩展可能写入，触发原生单写者保护，
+转存到另一个 sibling，继而出现 `omp resumed a different session than the selected source`。
+真正创建分叉仍使用原生 `--fork`；准备进程只发送 `get_state`，不发送 prompt，
+不以 headless 推理代替新窗格的原生 TUI。
 `--api-key` 等凭据参数不会被复制进可显示命令；无法安全重放的参数给出明确限制。
 正式 CLI／配置／RPC 契约来自 [版本化 CLI 文档](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/cli-reference.md)、
 [配置文档](https://github.com/can1357/oh-my-pi/blob/v18.12.1/docs/config-usage.md)及
 [RPC 实现](https://github.com/can1357/oh-my-pi/blob/v18.12.1/packages/coding-agent/src/modes/rpc/rpc-mode.ts)。
 这些来源及契约回归不构成真实正式智能体、daemon／PTY、新窗格或跨平台验收证据；实际证明范围见[验收状态与已知限制](#acceptance-status)。
+
+Windows 本轮以正式 `omp/18.12.6` 和会在 `session_start` 写入状态的隔离扩展复现上述
+冲突；修复后真实多进程回归确认父文件字节不变、源 writer 保持活跃、只创建一个目标 fork，
+且源启动扩展只执行一次。另在隔离开发窗口实际运行源 TUI，经生产 Host 分叉并在第二个
+标签页原生打开子 TUI，确认两者同时存活且持久化 ID 不同；未发送模型请求。
+该链路未包含自动鼠标右键，也不能替代 macOS、远端 SSH 或真实模型对话验收。
 
 ### pi 1.3.0 的独立契约
 

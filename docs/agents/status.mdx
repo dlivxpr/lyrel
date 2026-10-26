@@ -108,6 +108,13 @@ profile 无效或相对覆盖目录缺少原生启动工作目录时明确报错
 `opencode plugin list` 与原生 TUI 插件提示诊断；“文件已安装”不是“插件已加载”。
 旧 daemon 缺少 `agent-results` 能力时，桥接明确失败，需更新／重连 daemon。
 
+Windows 的私有客户端注册目录关闭外部权限继承，仅允许当前用户与 SYSTEM 访问；
+插件设置权限和 Host 核验权限均直接使用系统 .NET ACL API，不依赖继承环境中的
+`Microsoft.PowerShell.Security` 模块。遇到旧插件的
+`lyrel: cannot protect private client registration DACL` 时，在集成设置中更新插件并重启
+对应 OpenCode TUI；不要通过放宽目录权限绕过保护。Windows 真实注册、权限拒绝与
+退出清理已有回归验证，不代表完整 OpenCode TUI／模型流程均已验收。
+
 代码与确定性状态回归不能替代正式智能体和 GUI 实测；双窗格、多个 tabs、同会话双视图、
 服务先启动、真实模型执行和断线重连须分别验证，参见[验收边界](/agents/sessions#acceptance-status)。
 

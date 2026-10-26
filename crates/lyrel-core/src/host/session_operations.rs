@@ -519,26 +519,37 @@ fn omp(request: &SessionOperation) -> Result<PreparedSession, SessionOperationEr
     launch.extend(["--cwd".into(), request.cwd.to_string_lossy().into_owned()]);
     // Reject unrepresentable shell contexts before an irreversible native fork.
     command_line(&launch, &scope)?;
-    let source = scope
-        .session_file
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| request.source_id.clone());
-    let (source_file, source_id, source_shutdown_error) =
-        omp_state(&launch, &scope, &request.cwd, "--resume", &source).map_err(|mut error| {
-            error.message = format!("locating omp source: {}", error.message);
-            error
-        })?;
+    // Source lookup must not start OMP: session_start extensions can append,
+    // making a second writer move off an active source into a new sibling.
+    let source_file = if let Some(file) = &scope.session_file {
+        resolve(&request.cwd, file)
+    } else {
+        let files = crate::core::agent_history::omp_session_paths(&scope, &request.cwd)
+            .map_err(|error| failure(SessionErrorKind::Directory, error.to_string()))?;
+        let mut selected = None;
+        for file in files {
+            if omp_identity(&file).is_ok_and(|identity| identity == request.source_id) {
+                if selected.is_some() {
+                    return Err(failure(
+                        SessionErrorKind::Identity,
+                        "omp session ID is ambiguous in this storage scope; select its exact history entry",
+                    ));
+                }
+                selected = Some(file);
+            }
+        }
+        selected.ok_or_else(|| {
+            failure(
+                SessionErrorKind::Identity,
+                "omp session does not exist in the selected storage scope",
+            )
+        })?
+    };
+    let source_id = omp_identity(&source_file)?;
     if source_id != request.source_id {
         return Err(failure(
             SessionErrorKind::Identity,
             "omp resumed a different session than the selected source",
-        ));
-    }
-    if let Some(error) = source_shutdown_error {
-        return Err(failure(
-            SessionErrorKind::Command,
-            format!("locating omp source: {error}"),
         ));
     }
     if let Some(dir) = &scope.session_dir {
@@ -553,7 +564,7 @@ fn omp(request: &SessionOperation) -> Result<PreparedSession, SessionOperationEr
             ));
         }
     }
-    // Pin future opens to the directory actually selected by the native lookup.
+    // Pin future opens to the directory selected by the read-only lookup.
     // A later profile/default change must not resolve the same ID elsewhere.
     if scope.session_dir.is_none() {
         scope.session_dir = source_file.parent().map(Path::to_path_buf);
@@ -661,6 +672,52 @@ pub(crate) fn command_line(
     Ok(command)
 }
 
+fn omp_identity(path: &Path) -> Result<String, SessionOperationError> {
+    let file = std::fs::File::open(path).map_err(|e| {
+        failure(
+            SessionErrorKind::Identity,
+            format!("cannot read persisted omp identity: {e}"),
+        )
+    })?;
+    let mut reader = io::BufReader::new(file).take(256 * 1024);
+    let mut line = String::new();
+    // Native OMP can reserve its first line for the in-place title slot.
+    for _ in 0..2 {
+        line.clear();
+        reader.read_line(&mut line).map_err(|e| {
+            failure(
+                SessionErrorKind::Identity,
+                format!("cannot read persisted omp identity: {e}"),
+            )
+        })?;
+        let header: serde_json::Value = serde_json::from_str(&line).map_err(|e| {
+            failure(
+                SessionErrorKind::Identity,
+                format!("invalid persisted omp identity: {e}"),
+            )
+        })?;
+        if header["type"] == "session" {
+            return header["id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    failure(
+                        SessionErrorKind::Identity,
+                        "omp session file has no persisted session identity",
+                    )
+                });
+        }
+        if header["type"] != "title" {
+            break;
+        }
+    }
+    Err(failure(
+        SessionErrorKind::Identity,
+        "omp session file has no persisted session identity",
+    ))
+}
+
 /// get_state.sessionId is a provider-facing identity (it may change on /fresh).
 /// The persisted session header is authoritative for restore/fork identity.
 fn omp_state(
@@ -728,47 +785,7 @@ fn omp_state(
             )
         })?;
     let path = resolve(cwd, Path::new(path));
-    let file = std::fs::File::open(&path).map_err(|e| {
-        failure(
-            SessionErrorKind::Identity,
-            format!("cannot read persisted omp identity: {e}"),
-        )
-    })?;
-    let mut reader = io::BufReader::new(file).take(256 * 1024);
-    let mut line = String::new();
-    let mut identity = None;
-    // Native OMP can reserve its first line for the in-place title slot.
-    for _ in 0..2 {
-        line.clear();
-        reader.read_line(&mut line).map_err(|e| {
-            failure(
-                SessionErrorKind::Identity,
-                format!("cannot read persisted omp identity: {e}"),
-            )
-        })?;
-        let header: serde_json::Value = serde_json::from_str(&line).map_err(|e| {
-            failure(
-                SessionErrorKind::Identity,
-                format!("invalid persisted omp identity: {e}"),
-            )
-        })?;
-        if header["type"] == "session" {
-            identity = header["id"]
-                .as_str()
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned);
-            break;
-        }
-        if header["type"] != "title" {
-            break;
-        }
-    }
-    let id = identity.ok_or_else(|| {
-        failure(
-            SessionErrorKind::Identity,
-            "omp session file has no persisted session identity",
-        )
-    })?;
+    let id = omp_identity(&path)?;
     let error = if timed_out {
         Some("omp created/reopened the session but shutdown timed out".into())
     } else if !output.status.success() {
@@ -1006,66 +1023,325 @@ mod tests {
         assert!(!error.to_string().contains("secret-must-not-appear"));
     }
 
-    /// 仅对显式提供的隔离正式安装和隔离源会话运行；不读取个人历史。
-    /// 非默认存储还需显式提供 LYREL_TEST_OMP_SESSION_DIR。
-    #[test]
-    #[ignore = "requires LYREL_TEST_OMP, LYREL_TEST_OMP_HOME, LYREL_TEST_OMP_SESSION and LYREL_TEST_OMP_CWD"]
-    fn native_omp_fork_has_an_independent_reopenable_identity() {
-        let binary = std::env::var("LYREL_TEST_OMP").unwrap();
-        let home = std::env::var("LYREL_TEST_OMP_HOME").unwrap();
-        let source = std::env::var("LYREL_TEST_OMP_SESSION").unwrap();
-        let cwd = PathBuf::from(std::env::var("LYREL_TEST_OMP_CWD").unwrap());
-        let host = LocalHost::new();
-        let mut request = operation(cwd);
+    fn persisted_omp_operation(cwd: PathBuf) -> SessionOperation {
+        let mut request = persisted_pi_operation(cwd.clone());
         request.agent = CLIAgent::OhMyPi;
-        request.source_id = source.clone();
-        request.kind = SessionOperationKind::Fork;
-        request.launch_argv = vec![binary];
-        request.scope.session_dir =
-            std::env::var_os("LYREL_TEST_OMP_SESSION_DIR").map(PathBuf::from);
+        request.launch_argv = vec![
+            cwd.join("not-installed")
+                .join(if cfg!(windows) { "omp.exe" } else { "omp" })
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        request
+    }
+
+    #[test]
+    fn omp_resume_reads_the_selected_identity_without_starting_its_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = persisted_omp_operation(dir.path().into());
+        let source = request.scope.session_file.as_ref().unwrap();
+        let before = std::fs::read(source).unwrap();
+        let resumed = LocalHost::new().session_operation(&request).unwrap();
+        assert_eq!(resumed.target_id.as_deref(), Some("session-original"));
+        assert_eq!(resumed.session_file.as_ref(), Some(source));
+        assert!(!resumed.created);
+        assert_eq!(std::fs::read(source).unwrap(), before);
+
+        let wrong = SessionOperation {
+            source_id: "different-source".into(),
+            ..request
+        };
+        assert_eq!(
+            LocalHost::new().session_operation(&wrong).unwrap_err().kind,
+            SessionErrorKind::Identity
+        );
+    }
+
+    #[test]
+    fn omp_id_lookup_is_not_limited_to_the_recent_history_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = persisted_omp_operation(dir.path().into());
+        let source = request.scope.session_file.take().unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))
+            .unwrap();
+        for index in 0..501 {
+            std::fs::write(
+                dir.path().join(format!("newer-{index}.jsonl")),
+                format!("{{\"type\":\"session\",\"id\":\"newer-{index}\"}}\n"),
+            )
+            .unwrap();
+        }
+        let resumed = LocalHost::new().session_operation(&request).unwrap();
+        assert_eq!(resumed.target_id.as_deref(), Some("session-original"));
+        assert_eq!(resumed.session_file.as_ref(), Some(&source));
+        std::fs::copy(&source, dir.path().join("ambiguous.jsonl")).unwrap();
+        assert_eq!(
+            LocalHost::new()
+                .session_operation(&request)
+                .unwrap_err()
+                .kind,
+            SessionErrorKind::Identity
+        );
+        request.source_id = "missing-source".into();
+        assert_eq!(
+            LocalHost::new()
+                .session_operation(&request)
+                .unwrap_err()
+                .kind,
+            SessionErrorKind::Identity
+        );
+    }
+
+    #[test]
+    fn omp_id_lookup_keeps_the_selected_profile_and_agent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut request = persisted_omp_operation(dir.path().into());
+        let source = request.scope.session_file.take().unwrap();
+        request.scope.session_dir = None;
+        request.scope.profile = Some("work".into());
         for key in SCOPE_ENV {
             request
                 .scope
                 .environment
                 .insert((*key).into(), String::new());
         }
-        request
-            .scope
-            .environment
-            .insert("OMP_PROFILE".into(), "default".into());
+        let custom_agent = dir.path().join("custom-agent");
+        let profile_store = dir.path().join(".omp/profiles/work/agent/sessions/project");
+        let custom_store = custom_agent.join("sessions/project");
+        for store in [&profile_store, &custom_store] {
+            std::fs::create_dir_all(store).unwrap();
+            std::fs::copy(&source, store.join("source.jsonl")).unwrap();
+        }
+        for key in ["HOME", "USERPROFILE"] {
+            request
+                .scope
+                .environment
+                .insert(key.into(), dir.path().to_string_lossy().into_owned());
+        }
         request
             .scope
             .environment
             .insert("PI_CONFIG_DIR".into(), ".omp".into());
         request.scope.environment.insert(
             "PI_CODING_AGENT_DIR".into(),
-            Path::new(&home)
-                .join(".omp/agent")
-                .to_string_lossy()
-                .into_owned(),
+            custom_agent.to_string_lossy().into_owned(),
         );
-        request
-            .scope
-            .environment
-            .insert("HOME".into(), home.clone());
-        request.scope.environment.insert("USERPROFILE".into(), home);
+        let named = LocalHost::new().session_operation(&request).unwrap();
+        assert_eq!(named.session_file, Some(profile_store.join("source.jsonl")));
+        request.scope.profile = Some("default".into());
+        let custom = LocalHost::new().session_operation(&request).unwrap();
+        assert_eq!(custom.session_file, Some(custom_store.join("source.jsonl")));
+    }
+
+    #[test]
+    fn omp_resume_rejects_a_source_outside_its_selected_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let mut request = persisted_omp_operation(dir.path().into());
+        request.scope.session_dir = Some(store.path().into());
+        assert_eq!(
+            LocalHost::new()
+                .session_operation(&request)
+                .unwrap_err()
+                .kind,
+            SessionErrorKind::Identity
+        );
+    }
+
+    /// 仅使用显式指定的正式 OMP 安装；源、配置、扩展和 writer 都在临时目录。
+    #[test]
+    #[ignore = "requires LYREL_TEST_OMP pointing to a native OMP installation"]
+    fn native_omp_fork_has_an_independent_reopenable_identity() {
+        struct Owner(std::process::Child);
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let binary = std::env::var("LYREL_TEST_OMP").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let cwd = root.path().join("workspace");
+        let store = root.path().join("sessions");
+        for dir in [&home, &cwd, &store] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let source = store.join("parent.jsonl");
+        let source_id = "native-active-parent";
+        let records = [
+            serde_json::json!({"type":"session","version":3,"id":source_id,"timestamp":"2026-10-26T00:00:00.000Z","cwd":cwd}),
+            serde_json::json!({"type":"message","id":"fixture-user","parentId":null,"timestamp":"2026-10-26T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"离线回归夹具，不发送模型请求。"}],"timestamp":1792972801000_u64}}),
+        ];
+        std::fs::write(
+            &source,
+            records.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let startup_log = root.path().join("startup.jsonl");
+        let extension = root.path().join("write-on-start.ts");
+        std::fs::write(
+            &extension,
+            format!(
+                "import {{ appendFileSync }} from 'node:fs';\nexport default function(pi) {{ pi.on('session_start', (_event, ctx) => {{ pi.appendEntry('lyrel-active-writer-regression', {{pid:process.pid}}); appendFileSync({}, JSON.stringify({{session_id:ctx.sessionManager.getSessionId()}})+'\\n'); }}); pi.on('before_provider_request', () => {{ throw new Error('offline fixture forbids model calls'); }}); }}\n",
+                serde_json::to_string(&startup_log).unwrap()
+            ),
+        )
+        .unwrap();
+        let mut request = operation(cwd.clone());
+        request.agent = CLIAgent::OhMyPi;
+        request.kind = SessionOperationKind::Fork;
+        request.source_id = source_id.into();
+        request.launch_argv = vec![
+            binary,
+            "--model".into(),
+            "openai/gpt-4.1".into(),
+            "--extension".into(),
+            extension.to_string_lossy().into_owned(),
+        ];
+        request.scope.session_file = Some(source.clone());
+        request.scope.session_dir = Some(store.clone());
+        for key in SCOPE_ENV {
+            request
+                .scope
+                .environment
+                .insert((*key).into(), String::new());
+        }
+        for (key, value) in [
+            ("HOME", home.to_string_lossy().into_owned()),
+            ("USERPROFILE", home.to_string_lossy().into_owned()),
+            ("OMP_PROFILE", "default".into()),
+            ("PI_CONFIG_DIR", ".omp".into()),
+            (
+                "PI_CODING_AGENT_DIR",
+                home.join(".omp/agent").to_string_lossy().into_owned(),
+            ),
+        ] {
+            request.scope.environment.insert(key.into(), value);
+        }
+        let mut command = Command::new(&request.launch_argv[0]);
+        command
+            .args(&request.launch_argv[1..])
+            .args([
+                "--session-dir",
+                store.to_str().unwrap(),
+                "--resume",
+                source.to_str().unwrap(),
+                "--mode",
+                "rpc",
+            ])
+            .current_dir(&cwd)
+            .envs(&request.scope.environment)
+            .env_remove("LYREL")
+            .env_remove(crate::daemon::pane::LYREL_PANE_ENV)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        crate::core::proc::hide_console(&mut command);
+        let mut owner = Owner(command.spawn().unwrap());
+        let stdout = owner.0.stdout.take().unwrap();
+        let mut stderr = owner.0.stderr.take().unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = io::BufReader::new(stdout);
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|read| read > 0) {
+                if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line)
+                    && frame["type"] == "response"
+                    && frame["id"] == "lyrel-owner-ready"
+                {
+                    let _ = ready_tx.send(frame);
+                    break;
+                }
+                line.clear();
+            }
+            let _ = io::copy(&mut reader, &mut io::sink());
+        });
+        std::thread::spawn(move || {
+            let _ = io::copy(&mut stderr, &mut io::sink());
+        });
+        owner
+            .0
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"{\"id\":\"lyrel-owner-ready\",\"type\":\"get_state\"}\n")
+            .unwrap();
+        let ready = ready_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_eq!(ready["success"], true);
+        assert_eq!(ready["data"]["sessionFile"].as_str(), source.to_str());
+        assert!(owner.0.try_wait().unwrap().is_none());
+        let before = std::fs::read(&source).unwrap();
+
+        let host = LocalHost::new();
         let fork = host.session_operation(&request).unwrap();
         assert!(fork.created);
-        let target = fork.target_id.as_deref().unwrap();
-        assert_ne!(target, source);
-        assert!(fork.session_file.is_some());
+        assert_ne!(fork.target_id.as_deref(), Some(source_id));
+        let fork_contents = std::fs::read_to_string(fork.session_file.as_ref().unwrap()).unwrap();
+        let fork_entries = fork_contents
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fork_entries
+                .iter()
+                .find(|entry| entry["type"] == "session")
+                .unwrap()["parentSession"],
+            source_id
+        );
+        assert!(
+            fork_entries
+                .iter()
+                .any(|entry| entry["type"] == "message" && entry["id"] == "fixture-user")
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), before);
         let original = host
             .session_operation(&SessionOperation {
                 kind: SessionOperationKind::Resume,
                 ..request.clone()
             })
             .unwrap();
-        assert_eq!(original.target_id.as_deref(), Some(source.as_str()));
+        assert_eq!(original.target_id.as_deref(), Some(source_id));
         request.kind = SessionOperationKind::Resume;
-        request.source_id = target.into();
-        request.scope.session_file = fork.session_file;
+        request.source_id = fork.target_id.clone().unwrap();
+        request.scope = fork.scope.clone();
+        request.launch_argv = fork.launch_argv.clone();
         let reopened = host.session_operation(&request).unwrap();
         assert_eq!(reopened.target_id, fork.target_id);
         assert!(!reopened.created);
+        let (file, id, error) = omp_state(
+            &fork.launch_argv,
+            &fork.scope,
+            &fork.cwd,
+            "--resume",
+            fork.session_file.as_ref().unwrap().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(Some(file), fork.session_file);
+        assert_eq!(Some(id), fork.target_id);
+        assert_eq!(error, None);
+        assert!(owner.0.try_wait().unwrap().is_none());
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(&store)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+                .count(),
+            2
+        );
+        let source_starts = std::fs::read_to_string(startup_log)
+            .unwrap()
+            .lines()
+            .filter(|line| {
+                serde_json::from_str::<serde_json::Value>(line).unwrap()["session_id"] == source_id
+            })
+            .count();
+        assert_eq!(source_starts, 1, "只读源定位不得再次执行源会话的启动扩展");
     }
 }
