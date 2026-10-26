@@ -1038,7 +1038,9 @@ fn capture_still_answers_after_a_resize(daemon: &Daemon) {
         .expect("spawn the finite output fixture");
     pane.set_recv_timeout(Some(SETTLE_WITHIN))
         .expect("bound fixture output reads");
-    collect_pane_output_until(&mut pane, b"lyrel_e2e_tail_line_6");
+    // The trailing CRLF is output too: resizing before it arrives would put
+    // a newline-only segment after the six lines this case must capture.
+    collect_pane_output_until(&mut pane, b"lyrel_e2e_tail_line_6\r\n");
     let address = format!("%{}", pane.pane_id());
     pane.resize(WinSize {
         cols: 80,
@@ -1097,7 +1099,7 @@ fn capture_tail_trims_a_real_panes_answer(daemon: &Daemon) {
         .expect("spawn the finite capture-tail fixture");
     pane.set_recv_timeout(Some(SETTLE_WITHIN))
         .expect("bound fixture output reads");
-    collect_pane_output_until(&mut pane, b"lyrel_e2e_tail_line_6");
+    collect_pane_output_until(&mut pane, b"lyrel_e2e_tail_line_6\r\n");
     let address = format!("%{}", pane.pane_id());
 
     let whole = daemon.run_json(&["capture", &address, "--plain", "--scrollback"]);
@@ -1476,7 +1478,7 @@ fn retired_executable_names_still_run_as_ordinary_pty_commands(daemon: &Daemon) 
         )
         .expect("the supported-agent list is not an executable allowlist");
     pane.set_recv_timeout(Some(SETTLE_WITHIN)).unwrap();
-    collect_pane_output_until(&mut pane, b"lyrel_e2e_tail_line_6");
+    collect_pane_output_until(&mut pane, b"lyrel_e2e_tail_line_6\r\n");
     let address = format!("%{}", pane.pane_id());
     let captured = daemon.run_ok(&["capture", &address, "--scrollback"]);
     assert!(captured.contains("lyrel_e2e_tail_line_6"), "{captured}");
