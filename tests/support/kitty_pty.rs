@@ -222,7 +222,13 @@ pub fn pty_sender() {
         assert_eq!(barrier, b"\x1b_Gi=4294967294;OK\x1b\\");
         // A non-digit terminates the serial even when older text remains
         // to its right. Never clear the row: that could delete a placement.
-        write!(output, "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial};\r\n\x1b8").unwrap();
+        // GPUI consumers observe the title after the cursor restore, not just
+        // visible text that may arrive in an earlier PTY output packet.
+        write!(
+            output,
+            "\x1b7\x1b[1;1H\r\nKITTY_DONE_{serial};\r\n\x1b8\x1b]2;KITTY_DONE_{serial};\x1b\\"
+        )
+        .unwrap();
         output.flush().unwrap();
         if let Some(gate) = gate {
             std::fs::write(gate.with_extension("done"), []).unwrap();
