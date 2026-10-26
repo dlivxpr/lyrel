@@ -114,6 +114,8 @@ Windows 的私有客户端注册目录关闭外部权限继承，仅允许当前
 `lyrel: cannot protect private client registration DACL` 时，在集成设置中更新插件并重启
 对应 OpenCode TUI；不要通过放宽目录权限绕过保护。Windows 真实注册、权限拒绝与
 退出清理已有回归验证，不代表完整 OpenCode TUI／模型流程均已验收。
+`client.json` 先独占创建为空文件，显式将 owner 设为当前用户，再写入注册 token；
+文件 owner 不随目录 DACL 继承，不能依赖提升权限进程可能采用的 Administrators 默认 owner。
 
 代码与确定性状态回归不能替代正式智能体和 GUI 实测；双窗格、多个 tabs、同会话双视图、
 服务先启动、真实模型执行和断线重连须分别验证，参见[验收边界](/agents/sessions#acceptance-status)。
