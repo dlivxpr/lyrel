@@ -87,7 +87,9 @@ export default Plugin.define({
     if (process.platform !== "win32") chmodSync(directory, 0o700)
     else {
       // 继承的 PSModulePath 可能指向不兼容的 Security 模块；直接使用系统 .NET ACL API。
-      const script = "$ErrorActionPreference='Stop'; $p=$env:LYREL_OPENCODE_PRIVATE_DIR; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18'); $acl=[Security.AccessControl.DirectorySecurity]::new(); $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); foreach($identity in @($sid,$system)) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')) }; [IO.Directory]::SetAccessControl($p,$acl)"
+      // 文件 owner 来自创建进程的 token，不继承目录 owner；提升权限时可能默认为 Administrators。
+      // 先以 CreateNew 创建空文件并绑定当前用户，再写入 token；只改 owner，保留目录继承的 DACL。
+      const script = "$ErrorActionPreference='Stop'; $p=$env:LYREL_OPENCODE_PRIVATE_DIR; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18'); $acl=[Security.AccessControl.DirectorySecurity]::new(); $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); foreach($identity in @($sid,$system)) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')) }; [IO.Directory]::SetAccessControl($p,$acl); $file=[IO.Path]::Combine($p,'client.json'); [IO.File]::Open($file,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None).Dispose(); $fileAcl=[IO.File]::GetAccessControl($file); $fileAcl.SetOwner($sid); [IO.File]::SetAccessControl($file,$fileAcl)"
       try {
         const secured = spawnSync(join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], {
           env: { ...process.env, LYREL_OPENCODE_PRIVATE_DIR: directory }, stdio: "ignore", windowsHide: true, timeout: 10000,
@@ -234,7 +236,7 @@ export default Plugin.define({
       try {
         const port = listener.address().port
         bridge = { client_id, pane, port, registration }
-        writeFileSync(registration, JSON.stringify({ ...bridge, token: token.toString("hex") }), { mode: 0o600, flag: "wx" })
+        writeFileSync(registration, JSON.stringify({ ...bridge, token: token.toString("hex") }), { mode: 0o600, flag: process.platform === "win32" ? "r+" : "wx" })
         ready.resolve()
       } catch (error) { ready.reject(error); listener.close() }
     })

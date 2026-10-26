@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -42,17 +42,18 @@ try {
   const directory = join(clients, readdirSync(clients)[0])
   const registration = join(directory, "client.json")
   const deadline = Date.now() + 2000
-  while (!readdirSync(directory).includes("client.json") && Date.now() < deadline) {
+  while ((!readdirSync(directory).includes("client.json") || statSync(registration).size === 0) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   const record = readFileSync(registration, "utf8")
   assert.equal(JSON.parse(record).token.length, 64)
   const inspect = powershell(`$ErrorActionPreference='Stop';
-    $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
+    $tokenIdentity=[Security.Principal.WindowsIdentity]::GetCurrent(); $sid=$tokenIdentity.User.Value;
     foreach($p in @($env:LYREL_OPENCODE_PRIVATE_DIR,[IO.Path]::Combine($env:LYREL_OPENCODE_PRIVATE_DIR,'client.json'))) {
       $isDirectory=$p -eq $env:LYREL_OPENCODE_PRIVATE_DIR;
       $a=if($isDirectory) { [IO.Directory]::GetAccessControl($p) } else { [IO.File]::GetAccessControl($p) };
-      if($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw 'incorrect owner' };
+      $owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;
+      if($owner -ne $sid) { throw ($p+': incorrect owner '+$owner+', expected '+$sid+', token default owner '+$tokenIdentity.Owner.Value) };
       if($isDirectory -and -not $a.AreAccessRulesProtected) { throw 'directory inheritance enabled' };
       $rules=$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]);
       if($rules.Count -ne 2) { throw 'unexpected ACE count' };
@@ -69,15 +70,15 @@ try {
         if(-not $found) { throw 'missing private identity' }
       }
     };
-    [Console]::WriteLine('ACL_OK owner='+$sid+' allowed='+$sid+',S-1-5-18 protected=True fileInherited=True')`, directory)
+    [Console]::WriteLine('ACL_OK owner='+$sid+' tokenDefaultOwner='+$tokenIdentity.Owner.Value+' allowed='+$sid+',S-1-5-18 protected=True fileInherited=True')`, directory)
   assert.equal(inspect.status, 0, inspect.stderr)
   console.log(inspect.stdout.trim())
   assert.equal(powershell(hostScript, directory).status, 0, "Host 必须接受真实私有注册")
   const broaden = powershell("$ErrorActionPreference='Stop'; $p=[IO.Path]::Combine($env:LYREL_OPENCODE_PRIVATE_DIR,'client.json'); $a=[IO.File]::GetAccessControl($p); $a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'Read','Allow')); [IO.File]::SetAccessControl($p,$a)", directory)
   assert.equal(broaden.status, 0, broaden.stderr)
   assert.notEqual(powershell(hostScript, directory).status, 0, "Host 必须拒绝其他 SID 的访问权限")
-  rmSync(registration)
-  writeFileSync(registration, record, { flag: "wx", mode: 0o600 })
+  const restore = powershell("$ErrorActionPreference='Stop'; $p=[IO.Path]::Combine($env:LYREL_OPENCODE_PRIVATE_DIR,'client.json'); $a=[IO.File]::GetAccessControl($p); $a.RemoveAccessRuleSpecific([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'Read','Allow')); [IO.File]::SetAccessControl($p,$a)", directory)
+  assert.equal(restore.status, 0, restore.stderr)
   assert.equal(powershell(hostScript, directory).status, 0)
   const inherit = powershell("$ErrorActionPreference='Stop'; $p=$env:LYREL_OPENCODE_PRIVATE_DIR; $a=[IO.Directory]::GetAccessControl($p); $a.SetAccessRuleProtection($false,$true); [IO.Directory]::SetAccessControl($p,$a)", directory)
   assert.equal(inherit.status, 0, inherit.stderr)
