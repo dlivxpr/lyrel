@@ -262,7 +262,11 @@ fn graphics_send_fixture_with_replies(
     let marker = format!("KITTY_DONE_{serial};");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if view.read_with(cx, |view, _| view.scrollback_text().contains(&marker)) {
+        // The visible marker can arrive before its trailing cursor restore,
+        // especially through ConPTY. The title follows that restore in-stream.
+        if view.read_with(cx, |view, _| {
+            view.title == marker && view.scrollback_text().contains(&marker)
+        }) {
             break;
         }
         assert!(
