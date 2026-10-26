@@ -7,6 +7,17 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-26
+
+### 修复
+
+- 修复合法 zlib RGBA 图片使桌面解码额度减法下溢、锁中毒并导致 GUI 退出的问题：解码完成后，在 scratch 额度仍有效时去除像素缓冲区的多余容量，再转为常驻 CPU／GPU 资源；不以饱和减法隐瞒额度错误。新增真实解码、像素与资源释放回归，并在原生窗口复验原崩溃路径。
+
+### 验证
+
+- 补充 Windows 100% 显示缩放的 direct／Unicode／alpha、分屏／字体／透明材质、GUI 进程重开无重传及 4K 历史压力／GPU 内存采样；Windows 原生 SSH → WSL2 Linux 验证图片、替换／删除、压力和本地 router 重建后的同一远端会话恢复。精确边界与数值见 `docs/getting-started/concepts.mdx`、`docs/remote/ssh.mdx`。
+- 正式 `omp/18.12.6` 的公开 `--resume` placeholder 路径在原生窗口显示受控 SVG 与真实测试窗口截图；没有模型推理，不冒称真实新回答。direct 模式原生重放出现位置重叠，暂推荐 `PI_KITTY_PLACEHOLDERS=1`；macOS、其他 DPI、远端正式 omp 与完整平台验收仍未完成，#39／#40–#47 保持开放。
+
 ## [0.2.1] - 2026-10-25
 
 ### 新增

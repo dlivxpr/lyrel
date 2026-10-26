@@ -161,9 +161,9 @@ Unicode 占位符、裁剪／替换／删除、滚动与 screen、有限预算�
 
 本地终端内直接启动的普通 SSH 也不能借同进程组的本地父进程读取本机图片路径。独立 Linux CLI／PTY／真实 OpenSSH 冒烟已验证：同一前景进程组下，本地查询成功、远端带命令的查询返回 `ENOTSUPPORTED:Host-local transfer unavailable`，SSH 退出后的独立本地查询恢复成功；无法确定来源时拒绝间接媒体。远端程序仍应优先直接传输像素或 PNG，这不构成任意多层代理链的兼容保证。
 
-这些 rooted 测试推进生产 decoder／paint 路径并核对像素、几何和权威状态，
-**不是原生 GPU 窗口截图或压力峰值证据**。Windows 原生窗口及正式 omp 实窗、
-macOS → Linux 的实连／原生呈现仍待验收，#46／#47 不据此关闭。
+上述 rooted 自动化不是原生 GPU 证据。随后另在 Windows `10.0.26300`／RTX 5080、100% 显示缩放／`Consolas 15` 的隔离原生窗口，经生产 native SSH router 连接 WSL2 Linux 专用 OpenSSH 端点（固定 ed25519 指纹、临时 HOME／SFTP／密钥，不安装系统服务）。两端 `0.2.1`／pane `15`／control `16`，Windows GUI 含本轮解码容量修复；实际显示 direct／Unicode／alpha 图片，完整上传并放置替换后颜色更新，删除后无残影。
+
+关闭 GUI 并停止本地 router 后，新 GUI PID `56088` 恢复同一远端 daemon PID `33649`／shell PID `33736`；发送器已退出，发送记录仍为 `67 bytes`，两张原图均恢复，无重传。另在真实远端 PTY 执行 `node kitty-pressure.mjs --images 24 --width 3840 --height 2160 --path mixed --mode history --delay 100`，窗口显示末尾图片，完成后普通输入可达。此轮未采样远端 CPU／GPU 峰值。macOS → Linux、远端正式 omp 和完整平台验收仍未完成，#46／#47 不据此关闭。
 tmux/screen、多级中转、Linux 桌面 UI 与移动访问不在本次兼容承诺内。
 
 <a id="copying-a-remote-image-to-this-machine"></a>

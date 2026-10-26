@@ -1677,6 +1677,10 @@ fn decode(img: &mut Image) -> Option<(Arc<RenderImage>, u32, u32, usize)> {
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
+    // Inflate may overallocate beyond the admitted RGBA length. Trim that
+    // spare capacity while decoder scratch is still reserved, before keeping
+    // the pixels under the resource's retained CPU/GPU reservation.
+    let rgba = rgba.into_boxed_slice().into_vec();
     let allocated_bytes = rgba.capacity();
     let render = RenderImage::new(SmallVec::from_elem(
         Frame::new(RgbaImage::from_raw(w, h, rgba)?),
@@ -1995,6 +1999,51 @@ mod tests {
             store.snapshot().is_empty(),
             "successor deletion remains live"
         );
+    }
+
+    #[test]
+    fn compressed_raw_image_survives_decode_and_releases_its_budget() {
+        use base64::Engine as _;
+        let store = ImageStore::new();
+        let worker = DecodeWorker::spawn(store.clone(), || {});
+        establish_screen(&worker);
+        let update = GraphicsUpdate::Resource {
+            key: 1,
+            image: Arc::new(Image {
+                width: 320,
+                height: 160,
+                format: WireFormat::Rgba,
+                compressed: true,
+                // Node zlib.deflateSync of [10, 20, 30, 128] repeated 320×160.
+                data: base64::engine::general_purpose::STANDARD
+                    .decode(format!(
+                        "eJztw7ENAAAIA6C9s7O39nT/MJCQ2UZ{}dU3D4ff6I8=",
+                        "V".repeat(262)
+                    ))
+                    .unwrap(),
+            }),
+        };
+        assert!(worker.offer(
+            1,
+            1,
+            320,
+            160,
+            update.encode_frame().len() as u64,
+            OWNER_METADATA_BYTES,
+        ));
+        worker.apply(update);
+        apply_placement(&worker, placement(10, 1, 0, 0));
+        wait_for(&store, |images| images.len() == 1);
+        let images = store.snapshot();
+        assert_eq!(
+            images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
+            [30, 20, 10, 128].repeat(320 * 160),
+        );
+        drop(images);
+        drop(worker);
+        store.take_for_release();
+        assert_eq!(store.0.pane_budget.used.load(Ordering::Acquire), 0);
+        assert_eq!(store.0.pane_source.used.load(Ordering::Acquire), 0);
     }
 
     #[test]
