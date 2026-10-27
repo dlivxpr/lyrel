@@ -28,9 +28,8 @@ fn cursor_after_conpty_frame(pty: PtySource, frame: &[u8]) -> (i32, usize) {
     for _ in 0..600 {
         {
             let t = term.term.lock();
-            let painted = t.grid[rio_vt::crosswords::pos::Line(19)]
-                [rio_vt::crosswords::pos::Column(1)]
-            .c();
+            let painted =
+                t.grid[rio_vt::crosswords::pos::Line(19)][rio_vt::crosswords::pos::Column(1)].c();
             if painted == 'X' {
                 let point = term.paint_cursor_position().unwrap_or(t.grid.cursor.pos);
                 return (point.row.0, point.col.0);
@@ -99,10 +98,9 @@ fn a_local_route_is_a_conpty_only_where_conhost_exists() {
 
 #[test]
 fn a_routed_pane_reads_a_raw_pty_whatever_the_client_was_built_for() {
-    let spec: NativeSshSpec = serde_json::from_str(
-        r#"{"host":"linux-box","port":22,"user":"dev","auth_mode":"auto"}"#,
-    )
-    .unwrap();
+    let spec: NativeSshSpec =
+        serde_json::from_str(r#"{"host":"linux-box","port":22,"user":"dev","auth_mode":"auto"}"#)
+            .unwrap();
     // A remote workspace only ever installs a `lyrel-server` on Linux or
     // macOS (`install::asset::asset_for_uname`), and a WSL workspace is a
     // Linux server too, so a routed pane's pty is a raw one — the far end
@@ -174,9 +172,7 @@ fn a_raw_pty_repaint_keeps_the_cursor_the_frame_left_so_the_echo_lands_on_it() {
     // vim wrote at the head of the command line.
     stream.extend_from_slice(b"\x1b[?25l\x1b[m\x1b[11;10H^[\x1b[1;1H\x1b[?25h");
     stream.extend_from_slice(b"\x1b[?25l\x1b[11;10H  \x1b[1;1H\x07\x1b[?25h");
-    stream.extend_from_slice(
-        b"\x1b[?25l\x1b[11;10H:\x1b[1;1H\x1b[11;1H\x1b[K\x1b[11;1H:\x1b[?25h",
-    );
+    stream.extend_from_slice(b"\x1b[?25l\x1b[11;10H:\x1b[1;1H\x1b[11;1H\x1b[K\x1b[11;1H:\x1b[?25h");
     // `w`, `q`, `!`: vim echoes them with no positioning of their own.
     stream.extend_from_slice(b"wq!");
     DaemonMsg::Output(stream).encode(&mut daemon_side).unwrap();
@@ -264,9 +260,8 @@ fn a_native_ssh_context_turns_the_repair_off_mid_stream() {
     for _ in 0..600 {
         {
             let t = term.term.lock();
-            let painted = t.grid[rio_vt::crosswords::pos::Line(19)]
-                [rio_vt::crosswords::pos::Column(1)]
-            .c();
+            let painted =
+                t.grid[rio_vt::crosswords::pos::Line(19)][rio_vt::crosswords::pos::Column(1)].c();
             if painted == 'X' {
                 let point = t.grid.cursor.pos;
                 cursor = (point.row.0, point.col.0);

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use gpui_kit::{App, Global};
 use lyrel_core::core::machine::{
     Axis as TreeAxis, LayoutDelta, Machine, PaneNode, PaneRecord, Side, Tab as TreeTab, TabId,
-    TabPresentation, Workspace,
+    Workspace,
 };
 use lyrel_core::daemon::control::{ControlClient, ControlRequest, ReplyOk};
 use lyrel_core::host::HostId;
@@ -27,7 +27,6 @@ use crate::core::session::{Session, SessionPane, SessionTab, WorkspaceId, Worksp
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneSlot};
-
 
 fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
     match node {
@@ -270,7 +269,6 @@ pub(crate) fn intend_close(cx: &mut App, client_ws: WorkspaceId, tab: TabId) {
         closing.push(tab);
     }
 }
-
 
 /// Hand a closing tab to the next sync, which tells the machine to remember it
 /// rather than forget it. See [`take_unsent_retirement`] for the other half.
@@ -2758,10 +2756,10 @@ fn set_gui_ratio(pane: &mut Pane, path: &[Side], ratio: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_layout::{leaf, split, tab};
+    use super::*;
     use crate::core::group_key::{AutoKey, GroupId};
-    use lyrel_core::core::machine::AgentFacts;
+    use lyrel_core::core::machine::{AgentFacts, TabPresentation};
 
     fn retiring(tab: TabId, panes: Vec<u64>) -> Retiring {
         Retiring {

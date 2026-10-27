@@ -4,13 +4,11 @@ use crate::commands::execute;
 use crate::commands::test_support::agent_state;
 use crate::commands::test_support::agent_state_at;
 use crate::commands::test_support::cli;
-use crate::commands::test_support::human;
 use crate::commands::test_support::json_of;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
 use lyrel_core::daemon::control::ControlRequest;
 use lyrel_core::daemon::control::ReplyOk;
-use serde_json::json;
 
 /// A pane sitting at its prompt: the shell, and nothing in front of it.
 fn idle_procs() -> lyrel_core::daemon::protocol::PaneProcs {

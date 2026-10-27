@@ -8,7 +8,6 @@ use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
 use lyrel_core::daemon::control::ControlRequest;
 use lyrel_core::daemon::control::ReplyOk;
-use serde_json::json;
 
 #[test]
 fn a_mistyped_subcommand_is_named_as_one_not_offered_to_the_gui() {

@@ -21,7 +21,7 @@ use crate::core::config::CursorStyle as ConfigCursorStyle;
 use crate::core::osc::{Note, NoteBudget};
 use crate::daemon::protocol::{
     AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, LoopbackForward, LoopbackForwardRequest,
-    ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RemoteKind, RestoreFrom, SftpEntry,
+    ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RestoreFrom, SftpEntry,
     SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, ShellSpec, SshForwardRule, SshPhase,
     WinSize, WorkspaceOp, WorkspaceRequest,
 };
@@ -2390,8 +2390,6 @@ mod tests {
             "a disconnect is not a child exit — auto-close must not fire"
         );
     }
-
-
 
     #[test]
     fn win_size_carries_grid_and_cell_dims() {

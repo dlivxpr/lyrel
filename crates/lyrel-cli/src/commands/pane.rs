@@ -19,7 +19,11 @@ pub(super) fn execute(cmd: PaneCmd, ctx: &Context, backend: &mut dyn Backend) ->
     }
 }
 
-pub(super) fn pane_split(args: SplitArgs, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcome> {
+pub(super) fn pane_split(
+    args: SplitArgs,
+    ctx: &Context,
+    backend: &mut dyn Backend,
+) -> Result<Outcome> {
     let pane = address::pane_or_context(args.target.as_deref(), ctx)?;
     let machine = fetch_machine(backend)?;
     let workspace = resolve::workspace_of_pane(&machine, pane)?.id;
@@ -51,7 +55,11 @@ pub(super) fn pane_split(args: SplitArgs, ctx: &Context, backend: &mut dyn Backe
     report(format!("%{new}"), json!({ "pane": new }))
 }
 
-pub(super) fn hang_up_removed_panes(request: &str, reply: ReplyOk, backend: &mut dyn Backend) -> Result<()> {
+pub(super) fn hang_up_removed_panes(
+    request: &str,
+    reply: ReplyOk,
+    backend: &mut dyn Backend,
+) -> Result<()> {
     let panes = match reply {
         ReplyOk::Panes(panes) => panes,
         other => bail!("the server answered {request} with {other:?}"),

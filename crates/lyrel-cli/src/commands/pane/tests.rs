@@ -1,5 +1,4 @@
 use crate::address::Context;
-use crate::address;
 use crate::commands::Outcome;
 use crate::commands::execute;
 use crate::commands::test_support::cli;
@@ -13,7 +12,6 @@ use lyrel_core::core::machine::PaneSeed;
 use lyrel_core::daemon::control::ControlRequest;
 use lyrel_core::daemon::control::ReplyOk;
 use serde_json::Value;
-use serde_json::json;
 
 #[test]
 fn pane_ls_all_surfaces_the_panes_no_workspace_holds() {

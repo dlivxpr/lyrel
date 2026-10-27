@@ -74,7 +74,10 @@ impl DesiredNode {
 /// it is sent (#612). Its own terminals stand in for the machine's liveness
 /// probe: a pane this window holds open is one that registry answers alive, and
 /// one still connecting is not yet anyone's to call — later facts settle it.
-pub(super) fn seeded_records(desired: &[DesiredTab], live: impl Fn(u64) -> bool) -> Vec<PaneRecord> {
+pub(super) fn seeded_records(
+    desired: &[DesiredTab],
+    live: impl Fn(u64) -> bool,
+) -> Vec<PaneRecord> {
     fn walk(node: &DesiredNode, live: &impl Fn(u64) -> bool, out: &mut Vec<PaneRecord>) {
         match node {
             DesiredNode::Leaf { pane, seed } => out.push(seed.clone().into_record(live(*pane))),
@@ -114,5 +117,4 @@ mod tests {
         assert!(!records[1].live, "one still connecting is not yet");
         assert!(records[2].live);
     }
-
 }

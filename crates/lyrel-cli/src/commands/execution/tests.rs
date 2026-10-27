@@ -1,3 +1,4 @@
+use super::EXIT_CODE_UNKNOWN;
 use crate::address::Context;
 use crate::backend::RunSpec;
 use crate::backend::mock::MockBackend;
@@ -5,15 +6,12 @@ use crate::commands::Outcome;
 use crate::commands::Report;
 use crate::commands::execute;
 use crate::commands::test_support::cli;
-use crate::commands::test_support::human;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::segment;
 use crate::exec::ExecEnd;
 use lyrel_core::core::machine::PaneSeed;
 use lyrel_core::daemon::control::ControlRequest;
-use serde_json::json;
 use std::time::Duration;
-use super::EXIT_CODE_UNKNOWN;
 
 #[test]
 fn run_passes_the_command_and_its_exit_code_through() {
@@ -50,8 +48,7 @@ fn run_keep_spawns_first_then_files_the_pane_into_the_workspace() {
     let api = backend.machine.workspaces[0].id;
     let out = execute(
         cli(&[
-            "lyrel", "run", "--keep", "--ws", "api", "--cwd", "C:\\proj", "--", "cargo",
-            "watch",
+            "lyrel", "run", "--keep", "--ws", "api", "--cwd", "C:\\proj", "--", "cargo", "watch",
         ]),
         &Context::default(),
         &mut backend,
