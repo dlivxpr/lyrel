@@ -48,11 +48,11 @@ impl ForwardRoute {
         }
     }
 
-    pub(crate) fn list(&self) -> Vec<ManagedForward> {
+    pub(crate) fn list(&self) -> Option<Vec<ManagedForward>> {
         let Some(req) = self.workspace_op(WorkspaceOp::ListForwards) else {
             return RemoteTerminal::list_forwards(self.pane_id);
         };
-        Self::forwards(RemoteTerminal::on_workspace(req)).unwrap_or_default()
+        Self::forwards(RemoteTerminal::on_workspace(req))
     }
 
     pub(crate) fn add(&self, rule: SshForwardRule) -> Option<Vec<ManagedForward>> {

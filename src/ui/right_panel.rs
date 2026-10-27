@@ -1832,7 +1832,7 @@ impl LyrelApp {
                         Some(host) => host.pane_procs(pane_id),
                         None => Some(crate::terminal::RemoteTerminal::query_procs(pane_id)),
                     };
-                    let managed = route.map(|r| r.list()).unwrap_or_default();
+                    let managed = route.and_then(|r| r.list());
                     let link = match (want_link, &host) {
                         (true, Some(host)) => host.link_rtt(),
                         _ => None,
@@ -1855,9 +1855,7 @@ impl LyrelApp {
                             .sample(&procs.procs, std::time::Instant::now());
                         app.right_panel.procs = Some(procs);
                     }
-                    if forwards.is_some() {
-                        app.loopback_panel.accept_list(Some(managed));
-                    }
+                    app.loopback_panel.accept_list(managed);
                     // Only when this round actually asked. A round that did not
                     // leaves the last answer in place, so reopening the panel
                     // shows the number it was closed on rather than a dash

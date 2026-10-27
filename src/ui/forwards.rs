@@ -21,6 +21,7 @@ pub(crate) struct Forwarding {
     mf_description: Entity<InputState>,
     // Recovery needs the original mapping, not just its registry identity.
     mf_editing: Option<ManagedForward>,
+    mf_recovery: Option<editing::Recovery>,
     mf_error: Option<String>,
     mf_subs: Vec<gpui_kit::Subscription>,
     mf_advanced: bool,
@@ -197,19 +198,6 @@ impl ForwardFields {
         .iter()
         .all(|v| v.trim().is_empty())
     }
-}
-
-/// The entry a forward request just appended: the one the panel did not have
-/// before it asked.
-///
-/// Ids come from a counter that only goes up, so "none of the ids from before"
-/// names the new entry exactly — and it is the new entry that says whether the
-/// rule is listening or why it is not.
-pub(crate) fn added_forward<'a>(
-    before: &[u64],
-    list: &'a [ManagedForward],
-) -> Option<&'a ManagedForward> {
-    list.iter().find(|m| !before.contains(&m.id))
 }
 
 /// The rule a live forward was made from.
@@ -875,17 +863,6 @@ mod tests {
         assert_eq!(rule.target_host, "10.0.0.5");
         assert_eq!(rule.target_port, 80);
         assert_eq!(rule.description.as_deref(), Some("the staging box"));
-    }
-
-    #[test]
-    fn the_entry_an_add_appended_is_the_one_that_was_not_there_before() {
-        let list = vec![managed(1, 8080), managed(4, 9090)];
-        let added = added_forward(&[1], &list).expect("the new entry");
-        assert_eq!(added.id, 4);
-        assert!(
-            added_forward(&[1, 4], &list).is_none(),
-            "nothing was added, so there is nothing to point at"
-        );
     }
 
     #[test]

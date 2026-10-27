@@ -23,6 +23,8 @@ struct Registry {
     next_id: u64,
     mutations: Vec<Mutation>,
     lose: Option<(Mutation, bool)>,
+    lose_list: bool,
+    skip_matching_losses: usize,
     reject_add: bool,
 }
 
@@ -49,8 +51,25 @@ impl Registry {
                 assert_eq!(self.owner, ForwardOwnerKey::Pane(pane_id));
                 WorkspaceOp::RemoveForward { forward_id }
             }
+            ClientMsg::SetForwardEnabled {
+                pane_id,
+                forward_id,
+                enabled,
+            } => {
+                assert_eq!(self.owner, ForwardOwnerKey::Pane(pane_id));
+                WorkspaceOp::SetForwardEnabled {
+                    forward_id,
+                    enabled,
+                }
+            }
             _ => return Some(DaemonMsg::Error("not a forwarding request".into())),
         };
+        if matches!(op, WorkspaceOp::SetForwardEnabled { .. }) {
+            return Some(DaemonMsg::Error("switch refused".into()));
+        }
+        if matches!(op, WorkspaceOp::ListForwards) && std::mem::take(&mut self.lose_list) {
+            return None;
+        }
         let mutation = match &op {
             WorkspaceOp::AddForward { .. } => Some(Mutation::Add),
             WorkspaceOp::RemoveForward { forward_id } => Some(Mutation::Remove(*forward_id)),
@@ -64,7 +83,12 @@ impl Registry {
                 .as_ref()
                 .is_some_and(|(kind, _)| *kind == mutation)
             {
-                self.lose.take().map(|(_, apply)| apply)
+                if self.skip_matching_losses > 0 {
+                    self.skip_matching_losses -= 1;
+                    None
+                } else {
+                    self.lose.take().map(|(_, apply)| apply)
+                }
             } else {
                 None
             }
@@ -123,6 +147,8 @@ impl WirePeer {
             next_id: 10,
             mutations: Vec::new(),
             lose: None,
+            lose_list: false,
+            skip_matching_losses: 0,
             reject_add: false,
         }));
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -227,11 +253,12 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
     crate::core::config::set_config_dir(config.into());
     let peer = WirePeer::start();
     for use_workspace in [false, true] {
-        for (mutation, applied) in [
-            (Mutation::Add, true),
-            (Mutation::Add, false),
-            (Mutation::Remove(1), true),
-            (Mutation::Remove(1), false),
+        for (mutation, applied, changed_draft) in [
+            (Mutation::Add, true, false),
+            (Mutation::Add, false, false),
+            (Mutation::Add, true, true),
+            (Mutation::Remove(1), true, false),
+            (Mutation::Remove(1), false, false),
         ] {
             let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
             let workspace = use_workspace.then(workspace);
@@ -251,6 +278,12 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
                     view.set_workspace(workspace.clone());
                 });
                 app.refresh_managed_forwards(1, cx);
+                peer.registry.lock().unwrap().lose_list = true;
+                app.refresh_managed_forwards(1, cx);
+                assert_eq!(app.loopback_panel.managed(), &[original()]);
+                peer.registry.lock().unwrap().lose_list = true;
+                app.set_managed_forward_enabled(1, 1, false, window, cx);
+                assert_eq!(app.loopback_panel.managed(), &[original()]);
                 app.loopback_panel.edit(original(), window, cx);
                 app.loopback_panel
                     .mf_target_host
@@ -272,6 +305,38 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
                     expected,
                     "an unanswered mutation must not trigger retry or rollback"
                 );
+                app.add_managed_forward(999, window, cx);
+                assert_eq!(
+                    peer.registry.lock().unwrap().mutations,
+                    expected,
+                    "another registry cannot reconcile or mutate the pending submission"
+                );
+                app.loopback_panel.edit(original(), window, cx);
+                assert_eq!(
+                    app.loopback_panel.mf_target_host.read(cx).value().as_str(),
+                    "10.0.0.6",
+                    "selecting another row cannot overwrite an unresolved draft"
+                );
+                app.close_managed_forward_form(window, cx);
+                app.toggle_managed_forward_form(1, window, cx);
+                assert_eq!(
+                    app.loopback_panel.mf_target_host.read(cx).value().as_str(),
+                    "10.0.0.6",
+                    "hiding and reopening keeps the unresolved transaction draft"
+                );
+                peer.registry.lock().unwrap().lose_list = true;
+                app.add_managed_forward(1, window, cx);
+                assert!(app.loopback_panel.is_open_for(1));
+                assert_eq!(
+                    peer.registry.lock().unwrap().mutations,
+                    expected,
+                    "an unanswered reconciliation query cannot authorize another mutation"
+                );
+                if changed_draft {
+                    app.loopback_panel
+                        .mf_target_host
+                        .update(cx, |input, cx| input.set_value("10.0.0.7", window, cx));
+                }
                 app.add_managed_forward(1, window, cx);
                 assert!(!app.loopback_panel.is_open_for(1));
                 let state = peer.registry.lock().unwrap();
@@ -280,7 +345,14 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
                     1,
                     "reconciliation must not duplicate the rule"
                 );
-                assert_eq!(state.rules[0].target_host, "10.0.0.6");
+                assert_eq!(
+                    state.rules[0].target_host,
+                    if changed_draft {
+                        "10.0.0.7"
+                    } else {
+                        "10.0.0.6"
+                    }
+                );
                 assert_eq!(app.loopback_panel.managed(), state.rules.as_slice());
                 assert_eq!(
                     state
@@ -288,7 +360,7 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
                         .iter()
                         .filter(|m| **m == Mutation::Add)
                         .count(),
-                    if mutation == Mutation::Add && !applied {
+                    if mutation == Mutation::Add && (!applied || changed_draft) {
                         2
                     } else {
                         1
@@ -338,6 +410,50 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
                 assert_eq!(state.rules.len(), 1);
                 assert_eq!(state.rules[0].bind_port, 3000);
                 assert!(matches!(state.rules[0].status, ForwardStatus::Listening));
+            });
+        }
+
+        // A rollback is an add too: if its reply disappears, the next save
+        // must remove its actual new identity rather than the original id.
+        for applied in [false, true] {
+            let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+            let workspace = use_workspace.then(workspace);
+            {
+                let mut state = peer.registry.lock().unwrap();
+                state.owner = workspace
+                    .as_ref()
+                    .map_or(ForwardOwnerKey::Pane(1), |workspace| {
+                        ForwardOwnerKey::Workspace(workspace.workspace)
+                    });
+                state.rules = vec![original()];
+                state.mutations.clear();
+                state.lose = Some((Mutation::Add, applied));
+                state.skip_matching_losses = 1;
+                state.reject_add = true;
+            }
+            app.update_in(&mut vcx, |app, window, cx| {
+                app.tabs[0].pane.terminals()[0].update(cx, |view, _| {
+                    view.set_workspace(workspace.clone());
+                });
+                app.refresh_managed_forwards(1, cx);
+                app.loopback_panel.edit(original(), window, cx);
+                app.loopback_panel
+                    .mf_target_host
+                    .update(cx, |input, cx| input.set_value("10.0.0.8", window, cx));
+                app.add_managed_forward(1, window, cx);
+                assert!(app.loopback_panel.is_open_for(1));
+                assert!(app.loopback_panel.mf_error.is_some());
+                assert_eq!(
+                    peer.registry.lock().unwrap().mutations.len(),
+                    4,
+                    "the explicit rejection allows exactly one rollback attempt"
+                );
+                app.add_managed_forward(1, window, cx);
+                assert!(!app.loopback_panel.is_open_for(1));
+                let state = peer.registry.lock().unwrap();
+                assert_eq!(state.rules.len(), 1);
+                assert_eq!(state.rules[0].target_host, "10.0.0.8");
+                assert_eq!(app.loopback_panel.managed(), state.rules.as_slice());
             });
         }
     }
