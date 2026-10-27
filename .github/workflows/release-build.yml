@@ -6,9 +6,6 @@ on:
       source_sha:
         required: true
         type: string
-      require_macos_release_signing:
-        default: false
-        type: boolean
       ci_server_run_id:
         default: ''
         type: string
@@ -224,11 +221,10 @@ jobs:
         shell: bash
         run: tar -xzf desktop-inputs/desktop-aarch64-apple-darwin.tar.gz
 
-      # CI 无凭据时可验证开发包；Release 显式开启门控，禁止 ad-hoc 发行。
-      - name: Bundle macOS DMG + ZIP with requested signing policy
+      # 未配置 Apple 凭据时发布 ad-hoc 包，继续校验架构与完整签名。
+      - name: Bundle macOS DMG + ZIP
         working-directory: lyrel
         env:
-          LYREL_REQUIRE_RELEASE_SIGNING: ${{ inputs.require_macos_release_signing && '1' || '0' }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}

@@ -7,13 +7,15 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-28
+
 ### 变更
 
 - GUI 升级到正式 `gpui-kit 0.8.1` 与配套 `gpui-pre 0.3.10`，同步 HTTP transport、平台信息、动态快捷键、修饰键、菜单提示和滚动 API；保留 `tree-sitter-languages`、测试 `test-support`，不启用 `gpui-fast`。
 
-### 修复
+### 发布
 
-- macOS 正式发行不再静默回退到 ad-hoc：构建与草稿汇总共同验证 Developer ID Application、预期 Team、固定 bundle ID、随包可执行文件及公证票据，复用旧构建同样受门控。ad-hoc 的默认签名身份随代码变化，不能保证升级保留权限；首次迁移到正式签名包需要手动安装并重新授权。真实 Developer ID 两版本升级及 TCC 权限保留尚未验收。
+- 本阶段不要求 Developer ID 或 Apple 公证，macOS 正式包继续使用 ad-hoc 签名，Windows 包保持未签名；保留架构、完整代码签名、归档 SHA-256、精确版本及更新来源校验。ad-hoc 身份随代码变化，升级后仍可能需要重新授权，不将本版本描述为权限延续修复。
 
 ### 已知限制
 
