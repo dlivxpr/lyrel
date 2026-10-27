@@ -217,7 +217,7 @@ fn a_resize_racing_the_replay_keeps_the_replayed_screen() {
     crate::core::config::pin_test_config_dir();
     let (client_side, mut daemon) = socket_pair();
     let mut term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24)).unwrap();
-    term.route = echoing_route();
+    term.connection.finish_spawn(echoing_route(), None);
 
     DaemonMsg::Size(ws(120, 40)).encode(&mut daemon).unwrap();
     DaemonMsg::Snapshot(b"REPLAYED-SCREEN\r\n".to_vec())
@@ -466,7 +466,7 @@ fn attach_client(
     }
     let mut term = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24))
         .expect("a client over the pair");
-    term.route = echoing_route();
+    term.connection.finish_spawn(echoing_route(), None);
     (epoch, term, forward)
 }
 
