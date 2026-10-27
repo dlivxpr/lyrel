@@ -1,5 +1,5 @@
 use super::*;
-use lyrel_core::core::machine::WorkspaceId;
+use lyrel_core::core::session::WorkspaceId;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
@@ -314,7 +314,7 @@ impl EditorBuffers {
         self.files.push(OpenFile {
             path, untitled, host, input, dirty: false, saved, format, saved_format: format,
             config, indent, disk_mtime: mtime, saving: false, save_pending: false,
-            save_then_close: false, reload_seq: 0, conflict: None, preview, wrap,
+            reload_seq: 0, conflict: None, preview, wrap,
             preview_scroll: gpui_kit::ScrollHandle::new(), gutter: gutter::BufferGutter::default(),
             popups, _sub: sub, _observe: observe,
         });

@@ -148,6 +148,19 @@ impl TabCode {
         closed
     }
 
+    /// Completes a close for the captured side, without consulting new focus.
+    pub(crate) fn close_in_side(&mut self, id: BufferId, left: bool) -> bool {
+        let closed = if self.focus_is_left() == left {
+            self.forget(id)
+        } else if let Some(other) = self.split.as_mut() {
+            remove(&mut other.files, &mut other.active, id)
+        } else {
+            self.forget(id)
+        };
+        self.collapse();
+        closed
+    }
+
     /// Takes a buffer out of both groups, for a buffer that is going away.
     pub(crate) fn forget_everywhere(&mut self, id: BufferId) -> bool {
         let mut gone = self.forget(id);
@@ -270,7 +283,7 @@ impl LyrelApp {
             return false;
         };
         code.split_with(id);
-        self.editor.bar = None;
+        self.editor.dismiss_bar();
         self.focus_editor(window, cx);
         cx.notify();
         true
@@ -292,7 +305,7 @@ impl LyrelApp {
             return false;
         }
         code.swap_focus();
-        self.editor.bar = None;
+        self.editor.dismiss_bar();
         self.focus_editor(window, cx);
         cx.notify();
         true
@@ -812,7 +825,7 @@ mod gpui_tests {
             // only does if the group focus has followed it.
             window.dispatch_keystroke(gpui_kit::Keystroke::parse("ctrl-g").unwrap(), cx);
             assert!(
-                app.read(cx).editor.bar.is_some(),
+                app.read(cx).editor.has_bar(),
                 "the command saw the group the keyboard is in"
             );
         });
@@ -835,7 +848,7 @@ mod gpui_tests {
             let node = window.focused(cx).unwrap();
             node.dispatch_action(&crate::core::actions::EditorGoToLine, window, cx);
             assert!(
-                app.read(cx).editor.bar.is_some(),
+                app.read(cx).editor.has_bar(),
                 "the command saw the group the keyboard is in"
             );
             let front = app.read(cx).active_buffer().unwrap().path.clone();

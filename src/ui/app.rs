@@ -1062,7 +1062,7 @@ impl LyrelApp {
                 let unsaved = app.editor_unsaved();
                 app.editor_guard_unsaved(
                     unsaved,
-                    crate::ui::code_editor::AfterUnsaved::CloseWindow,
+                    crate::ui::code_editor::saving::AfterUnsaved::CloseWindow,
                     window,
                     cx,
                 )
@@ -1168,7 +1168,7 @@ impl LyrelApp {
         let unsaved = self.editor_unsaved();
         if self.editor_guard_unsaved(
             unsaved,
-            crate::ui::code_editor::AfterUnsaved::CloseWindow,
+            crate::ui::code_editor::saving::AfterUnsaved::CloseWindow,
             window,
             cx,
         ) {
@@ -1584,7 +1584,7 @@ impl LyrelApp {
         let unsaved = self.editor_unsaved();
         if self.editor_guard_unsaved(
             unsaved,
-            crate::ui::code_editor::AfterUnsaved::Quit,
+            crate::ui::code_editor::saving::AfterUnsaved::Quit,
             window,
             cx,
         ) {
@@ -3368,7 +3368,7 @@ impl LyrelApp {
             let unsaved = self.editor_unsaved_in_tab(self.tabs.active_index());
             if self.editor_guard_unsaved(
                 unsaved,
-                crate::ui::code_editor::AfterUnsaved::ClosePane(pane),
+                crate::ui::code_editor::saving::AfterUnsaved::ClosePane(pane),
                 window,
                 cx,
             ) {
@@ -4295,7 +4295,7 @@ impl LyrelApp {
             let unsaved = self.editor_unsaved_in_tab(index);
             if self.editor_guard_unsaved(
                 unsaved,
-                crate::ui::code_editor::AfterUnsaved::CloseTab(id),
+                crate::ui::code_editor::saving::AfterUnsaved::CloseTab(id),
                 window,
                 cx,
             ) {
