@@ -4085,7 +4085,9 @@ mod fold_tests {
                 repo("/w/beta"),
                 "the probe wins"
             );
-            let (desired, _, _) = crate::ui::tree_sync::desired_tabs(app, cx);
+            let (desired, _, _) = crate::ui::tree_sync::projection::desired_tabs(
+                &app.tabs, app.tabs.active_index(), app.workspace, cx,
+            );
             assert_eq!(
                 desired[0].last_auto,
                 Some(AutoKey::Repo(PathBuf::from("/w/beta"))),

@@ -3354,7 +3354,7 @@ mod render_idle_gpui_tests {
         loop {
             vcx.background_executor.run_until_parked();
             let ready = app.update_in(&mut vcx, |app, _, _| {
-                app.tabs[app.active]
+                app.tabs[app.tabs.active_index()]
                     .diff_overlay
                     .as_ref()
                     .is_some_and(|o| matches!(o.load, DiffLoad::Ready(_)) && !o.loading)
@@ -3372,7 +3372,7 @@ mod render_idle_gpui_tests {
         // card starts shut. Open it: a reader opening a large file is exactly
         // the frame this is about.
         app.update_in(&mut vcx, |app, _, cx| {
-            let active = app.active;
+            let active = app.tabs.active_index();
             app.tabs[active]
                 .diff_overlay
                 .as_mut()
@@ -3384,7 +3384,7 @@ mod render_idle_gpui_tests {
         vcx.background_executor.run_until_parked();
 
         let rows = app.update_in(&mut vcx, |app, _, _| {
-            app.tabs[app.active]
+            app.tabs[app.tabs.active_index()]
                 .diff_overlay
                 .as_ref()
                 .map(|o| o.rows.len())
@@ -3414,7 +3414,7 @@ mod render_idle_gpui_tests {
         // hint the bar reaches 248px into this patch — its thumb fills the
         // track, and dragging it to the bottom lands a screen down.
         let reach = app.update_in(&mut vcx, |app, _, _| {
-            app.tabs[app.active]
+            app.tabs[app.tabs.active_index()]
                 .diff_overlay
                 .as_ref()
                 .expect("the overlay is open")
@@ -3485,7 +3485,7 @@ mod render_idle_gpui_tests {
         loop {
             vcx.background_executor.run_until_parked();
             let ready = app.update_in(&mut vcx, |app, _, _| {
-                app.tabs[app.active]
+                app.tabs[app.tabs.active_index()]
                     .diff_overlay
                     .as_ref()
                     .is_some_and(|o| matches!(o.load, DiffLoad::Ready(_)) && !o.loading)

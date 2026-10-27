@@ -325,7 +325,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
             .iter()
             .flat_map(|tab| tab.pane.leaves())
             .filter(|slot| scoped_pane(slot, cx).is_some_and(|pane| pane.owner().is_client_local()))
-            .filter_map(|slot| crate::ui::tree_sync::seed_for_slot(&slot, cx))
+            .filter_map(|slot| crate::ui::tree_sync::projection::seed_for_slot(&slot, cx))
             .collect();
         let state = cx
             .default_global::<PaneSidecars>()
