@@ -16,7 +16,8 @@ use rio_vt::crosswords::{Crosswords, Mode};
 
 use super::TermSize;
 use super::cmd_editor::CmdEditor;
-use super::completion::{self, CandidateKind, CompletionSession};
+use super::completion::{self, CandidateKind};
+use super::completion::state::{CompletionContext, CompletionWork, RemoteRequest, TerminalCompletion};
 use super::element::{GridSnapshot, RenderCell, TerminalElement};
 use super::highlight::{self, TokenKind};
 use super::hold::{GapHold, Verdict};
@@ -290,14 +291,7 @@ pub struct TerminalView {
     typeahead: Typeahead,
     hold: GapHold,
     history: TerminalHistory,
-    completion: Option<CompletionSession>,
-    remote_completion_inflight: bool,
-    /// Why the last remote listing produced nothing, when it failed: "no
-    /// candidates" and "the listing itself failed" used to end in the same
-    /// silence, and only one of them is normal (#585). Dismissed by the next
-    /// keystroke, like the integration notice.
-    remote_completion_notice: Option<String>,
-    completion_generation: u64,
+    completion: TerminalCompletion,
     editor_handoff: Option<u64>,
     editor_handoff_interrupt_seq: Option<u64>,
     integration_notice: Option<String>,
@@ -1195,12 +1189,9 @@ impl TerminalView {
             typeahead: Typeahead::new(),
             hold: GapHold::new(),
             history: TerminalHistory::new(),
-            completion: None,
-            completion_generation: 0,
+            completion: TerminalCompletion::default(),
             editor_handoff: None,
             editor_handoff_interrupt_seq: None,
-            remote_completion_inflight: false,
-            remote_completion_notice: None,
             integration_notice: None,
             integration_notice_shown: false,
             created_at: std::time::Instant::now(),
@@ -1872,7 +1863,7 @@ impl TerminalView {
         }
         // The remote-listing failure pill goes away on the next keystroke
         // too — by then the user has seen it (#585).
-        if self.remote_completion_notice.take().is_some() {
+        if self.completion.dismiss_notice() {
             cx.notify();
         }
         let reshaped = if cfg!(target_os = "macos") {
@@ -2153,7 +2144,7 @@ impl TerminalView {
             return;
         }
 
-        if self.completion.is_some() && !m.control && !m.alt {
+        if self.completion.is_open() && !m.control && !m.alt {
             match (m.platform, key) {
                 (false, "up") => {
                     self.completion_select(false, cx);
@@ -3252,6 +3243,10 @@ impl TerminalView {
     }
 
     fn poll_foreground(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.completion.has_work() {
+            let context = self.completion_context();
+            if self.completion.observe_context(context) { cx.notify(); }
+        }
         let notify_allowed = cx
             .global::<Config>()
             .notify_on_command_finish
@@ -4026,10 +4021,7 @@ impl TerminalView {
     }
 
     fn accept_line(&mut self, cx: &mut Context<Self>) {
-        if self
-            .completion
-            .as_ref()
-            .is_some_and(|s| s.selected().is_some())
+        if self.completion.has_selection()
         {
             self.completion_accept(cx);
             return;
@@ -4094,7 +4086,7 @@ impl TerminalView {
     }
 
     fn ghost_suggestion(&self) -> Option<String> {
-        self.history.ghost_suggestion(&self.cmd)
+        self.completion.ghost_suggestion(&self.cmd, &self.history)
     }
 
     fn note_integration_gap(&mut self, cx: &mut Context<Self>) {
@@ -4219,123 +4211,52 @@ impl TerminalView {
         self.handoff_line_to_shell(&bytes, cx);
     }
 
-    fn complete_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if self.history.search().is_some() {
-            return;
-        }
-        if !cx.global::<Config>().tab_completion {
-            log::debug!(target: "lyrel::completion", "handing the line to the shell: tab_completion is off");
-            self.handoff_tab_to_shell(!forward, cx);
-            return;
-        }
-        if self.completion.is_some() {
-            self.completion_tab_step(forward, cx);
-            return;
-        }
-
-        let cwd = self
-            .paths_are_local()
-            .then(|| self.local_cwd().or_else(|| std::env::current_dir().ok()))
-            .flatten();
-        let share_cwd = if cwd.is_none() {
-            self.wsl_share_cwd()
-        } else {
-            None
-        };
-        let line = self.cmd.text();
-        let cursor = self.cmd.cursor();
-        let comp = match &share_cwd {
-            Some(share) => super::completion::complete_foreign(&line, cursor, share),
-            None => super::completion::complete(
-                &line,
-                cursor,
-                cwd.as_deref(),
-                self.shell_program().as_deref(),
-            ),
-        };
-        let Some(comp) = comp else {
-            if self.spawn_remote_path_completion(&line, cursor, forward, cx) {
-                return;
-            }
-            log::debug!(
-                target: "lyrel::completion",
-                "handing the line to the shell: no candidates for {line:?} at {cursor} \
-                 (local cwd {cwd:?}, share cwd {share_cwd:?}, remote cwd {:?})",
-                self.remote_ssh_cwd(),
-            );
-            self.handoff_tab_to_shell(!forward, cx);
-            return;
-        };
-
-        let pending_generators = comp.pending.len();
-
-        let (word_start, word_end) = match comp.candidates.first() {
-            Some(c) => (c.start, c.end),
-            None => (word_start_of(&line, cursor), cursor),
-        };
-        let Some(generation) = self.offer_candidates(
-            &line,
-            word_start,
-            word_end,
-            comp.candidates,
-            pending_generators,
-            cx,
-        ) else {
-            return;
-        };
-
-        let Some(cwd) = cwd else { return };
-        for pending in comp.pending {
-            let script = pending.script;
-            let cwd = cwd.clone();
-            cx.spawn(async move |this, cx| {
-                let results = cx
-                    .background_executor()
-                    .spawn(async move { super::generator::run(&script, &cwd) })
-                    .await;
-                let _ = this.update(cx, |view, cx| {
-                    view.completion_merge(generation, results, cx);
-                });
-            })
-            .detach();
-        }
+    fn completion_context(&self) -> CompletionContext {
+        CompletionContext::new(self.host_id, self.cwd(), self.remote_context())
     }
 
-    fn offer_candidates(
-        &mut self,
-        line: &str,
-        word_start: usize,
-        word_end: usize,
-        cands: Vec<completion::Candidate>,
-        pending_generators: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<u64> {
-        let has_pending = pending_generators > 0;
-        if !has_pending && cands.len() == 1 {
-            let c = cands[0].clone();
-            self.completion_insert(&c, c.start);
-            self.lifecycle.show_cursor();
-            cx.notify();
-            return None;
-        }
-        let word: String = line
-            .chars()
-            .skip(word_start)
-            .take(word_end - word_start)
-            .collect();
+    fn complete_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.history.search().is_some() { return; }
+        let cwd = self.paths_are_local()
+            .then(|| self.local_cwd().or_else(|| std::env::current_dir().ok())).flatten();
+        let share = cwd.is_none().then(|| self.wsl_share_cwd()).flatten();
+        let remote = self.remote_ssh_cwd();
         let shell = self.shell_program();
-        let s = CompletionSession::new(word_start, word.clone(), cands, pending_generators);
-        if !has_pending
-            && let Some(lcp) = s.common_prefix()
-            && lcp.chars().count() > word.chars().count()
-            && quote_for_shell(&lcp, shell.as_deref()) == lcp
-        {
-            self.apply_candidate(line, word_start, word_end, &lcp);
+        let context = self.completion_context();
+        let work = self.completion.tab(
+            &mut self.cmd, context, cwd.as_deref(), share.as_deref(),
+            remote.as_deref(), shell.as_deref(), cx.global::<Config>().tab_completion, forward,
+        );
+        match work {
+            CompletionWork::Handoff => self.handoff_tab_to_shell(!forward, cx),
+            CompletionWork::Updated => {},
+            CompletionWork::Generators { generation, scripts, cwd } => {
+                for pending in scripts {
+                    let cwd = cwd.clone();
+                    cx.spawn(async move |this, cx| {
+                        let results = cx.background_executor().spawn(async move {
+                            super::generator::run(&pending.script, &cwd)
+                        }).await;
+                        let _ = this.update(cx, |view, cx| {
+                            let context = view.completion_context();
+                            if view.completion.merge(generation, context, &view.cmd, results) {
+                                cx.notify();
+                            }
+                        });
+                    }).detach();
+                }
+            },
+            CompletionWork::Remote(request) => {
+                let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
+                let dir = request.directory().to_string();
+                cx.spawn(async move |this, cx| {
+                    let listed = cx.background_spawn(async move { route.list(&dir) }).await;
+                    let _ = this.update(cx, |view, cx| view.remote_path_results(request, listed, cx));
+                }).detach();
+            },
         }
-        let generation = self.open_completion(s);
         self.lifecycle.show_cursor();
         cx.notify();
-        Some(generation)
     }
 
     /// The cwd to list over the distro's `\\wsl$` share, for a pane whose
@@ -4368,265 +4289,40 @@ impl TerminalView {
         cwd.starts_with('/').then_some(cwd)
     }
 
-    fn spawn_remote_path_completion(
-        &mut self,
-        line: &str,
-        cursor: usize,
-        forward: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(cwd) = self.remote_ssh_cwd() else {
-            return false;
-        };
-        let Some(req) = completion::remote_path_request(line, cursor, &cwd) else {
-            log::debug!(
-                target: "lyrel::completion",
-                "no remote listing to ask for: {line:?} at {cursor} against {cwd}"
-            );
-            return false;
-        };
-        if self.remote_completion_inflight {
-            return true;
-        }
-        self.remote_completion_inflight = true;
-        // The listing takes a network round-trip the menu says nothing about
-        // — paint the "listing…" pill now, or a slow link reads as a broken
-        // Tab key (#585).
-        cx.notify();
-        let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
-        let dir = req.dir.clone();
-        let line = line.to_string();
-        log::debug!(target: "lyrel::completion", "listing {dir} over the remote's own connection");
-        cx.spawn(async move |this, cx| {
-            let listed = cx.background_spawn(async move { route.list(&dir) }).await;
-            let (entries, failed) = match listed {
-                Ok(entries) => (entries, None),
-                Err(e) => {
-                    // A failure is not an empty directory: the two used to
-                    // end in the same silence (#585).
-                    log::warn!(
-                        target: "lyrel::completion",
-                        "remote listing failed, treating it as no candidates: {e}"
-                    );
-                    (Vec::new(), Some(e.to_string()))
-                }
-            };
-            let _ = this.update(cx, |view, cx| {
-                view.remote_completion_inflight = false;
-                if let Some(error) = failed {
-                    view.remote_completion_notice = Some(t_fmt(
-                        L10nKey::CompletionRemoteListingFailed,
-                        &[("error", &error)],
-                    ));
-                }
-                view.remote_path_results(req, &line, cursor, entries, forward, cx);
-                // An empty listing closes the menu without one — the pill
-                // still has to come down.
-                cx.notify();
-            });
-        })
-        .detach();
-        true
-    }
-
     fn remote_path_results(
         &mut self,
-        req: completion::RemotePathRequest,
-        line: &str,
-        cursor: usize,
-        listed: Vec<crate::daemon::protocol::SftpEntry>,
-        forward: bool,
+        request: RemoteRequest,
+        listed: std::io::Result<Vec<crate::daemon::protocol::SftpEntry>>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(reason) = self
-            .link_inactive_reason(cx)
-            .or_else(|| self.input_inactive_reason())
-        {
-            log::debug!(
-                target: "lyrel::completion",
-                "dropping a remote listing for {line:?}: {reason}"
-            );
-            return;
+        let context = self.completion_context();
+        let active = self.link_inactive_reason(cx).is_none() && self.input_inactive_reason().is_none();
+        let shell = self.shell_program();
+        if let Some(shift) = self.completion.remote_results(request, context, &mut self.cmd, active, listed, shell.as_deref()) {
+            self.handoff_tab_to_shell(shift, cx);
         }
-        if self.cmd.text() != line || self.cmd.cursor() != cursor {
-            log::debug!(
-                target: "lyrel::completion",
-                "dropping a remote listing for {line:?}: the line has moved on"
-            );
-            return;
-        }
-        let entries: Vec<completion::RemoteEntry> = listed
-            .into_iter()
-            .map(|e| completion::RemoteEntry {
-                is_dir: e.kind == crate::daemon::protocol::SftpEntryKind::Dir || e.target_is_dir,
-                name: e.name,
-            })
-            .collect();
-        let cands = completion::remote_path_candidates(&req, &entries);
-        log::debug!(
-            target: "lyrel::completion",
-            "{} entries in {}, {} match the word",
-            entries.len(),
-            req.dir,
-            cands.len()
-        );
-        if cands.is_empty() {
-            self.handoff_tab_to_shell(!forward, cx);
-            return;
-        }
-        self.offer_candidates(line, req.word_start, req.cursor, cands, 0, cx);
-    }
-
-    fn open_completion(&mut self, session: CompletionSession) -> u64 {
-        self.completion = Some(session);
-        self.completion_generation = self.completion_generation.wrapping_add(1);
-        self.completion_generation
+        cx.notify();
     }
 
     fn close_completion(&mut self) {
-        let _ = self.take_completion();
-    }
-
-    fn take_completion(&mut self) -> Option<CompletionSession> {
-        let s = self.completion.take();
-        if s.is_some() {
-            self.completion_generation = self.completion_generation.wrapping_add(1);
-        }
-        s
-    }
-
-    fn completion_merge(
-        &mut self,
-        generation: u64,
-        results: Vec<super::generator::Parsed>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.completion_generation != generation || self.completion.is_none() {
-            return;
-        }
-        let word_start = self.completion.as_ref().map(|s| s.word_start).unwrap_or(0);
-        let chars: Vec<char> = self.cmd.text().chars().collect();
-        let cursor = self.cmd.cursor().min(chars.len());
-        let end = cursor.max(word_start);
-        let live_word: String = if cursor >= word_start {
-            chars[word_start..cursor].iter().collect()
-        } else {
-            String::new()
-        };
-        let new: Vec<completion::Candidate> = results
-            .into_iter()
-            .map(|p| completion::Candidate {
-                text: p.text,
-                kind: CandidateKind::Value,
-                start: word_start,
-                end,
-                description: p.description,
-                icon: None,
-            })
-            .collect();
-        let spent = match self.completion.as_mut() {
-            Some(s) => {
-                s.generator_answered();
-                s.merge(new, &live_word);
-                s.is_spent()
-            }
-            None => false,
-        };
-        if spent {
-            self.close_completion();
-        }
-        cx.notify();
-    }
-
-    fn completion_tab_step(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if forward {
-            let shell = self.shell_program();
-            let Some(s) = self.completion.as_ref() else {
-                return;
-            };
-            let (word_start, lcp, lone) = (s.word_start, s.common_prefix(), s.filtered.len() == 1);
-            let line = self.cmd.text();
-            let cursor = self.cmd.cursor().min(line.chars().count());
-            if let Some(lcp) = lcp
-                && lcp.chars().count() > cursor.saturating_sub(word_start)
-            {
-                if lone {
-                    self.completion_accept(cx);
-                    return;
-                }
-                if quote_for_shell(&lcp, shell.as_deref()) == lcp {
-                    self.apply_candidate(&line, word_start, cursor, &lcp);
-                    self.lifecycle.show_cursor();
-                    cx.notify();
-                    return;
-                }
-            }
-        }
-        self.completion_select(forward, cx);
+        self.completion.close();
     }
 
     fn completion_select(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if let Some(s) = self.completion.as_mut() {
-            s.select(forward);
-            self.lifecycle.show_cursor();
-            cx.notify();
-        }
-    }
-
-    fn completion_accept(&mut self, cx: &mut Context<Self>) {
-        let Some(s) = self.take_completion() else {
-            return;
-        };
-        if let Some(c) = s.selected().cloned() {
-            self.completion_insert(&c, s.word_start);
-        }
+        self.completion.select(forward);
         self.lifecycle.show_cursor();
         cx.notify();
     }
 
-    fn completion_insert(&mut self, cand: &completion::Candidate, start: usize) {
-        let line = self.cmd.text();
-        let len = line.chars().count();
-        let cursor = self.cmd.cursor().min(len);
-        let mut text = quote_for_shell(&cand.text, self.shell_program().as_deref());
-        if cand.is_dir() {
-            if !text.ends_with('/') {
-                text.push('/');
-            }
-        } else if cursor == len {
-            text.push(' ');
-        }
-        self.apply_candidate(&line, start, cursor, &text);
+    fn completion_accept(&mut self, cx: &mut Context<Self>) {
+        let shell = self.shell_program();
+        self.completion.accept(&mut self.cmd, shell.as_deref());
+        self.lifecycle.show_cursor();
+        cx.notify();
     }
 
     fn completion_refilter(&mut self) {
-        let Some(s) = self.completion.as_mut() else {
-            return;
-        };
-        let chars: Vec<char> = self.cmd.text().chars().collect();
-        let cursor = self.cmd.cursor().min(chars.len());
-        let keep = cursor >= s.word_start
-            && chars[s.word_start..cursor]
-                .iter()
-                .all(|c| !c.is_whitespace())
-            && {
-                let word: String = chars[s.word_start..cursor].iter().collect();
-                s.refilter(&word)
-            };
-        if !keep {
-            self.close_completion();
-        }
-    }
-
-    fn apply_candidate(&mut self, orig: &str, start: usize, end: usize, text: &str) {
-        let (line, cursor) = completion::Replacement {
-            orig: orig.to_string(),
-            start,
-            end,
-            text: text.to_string(),
-        }
-        .apply();
-        self.cmd.set_with_cursor(&line, cursor);
+        self.completion.refilter(&self.cmd);
     }
 
     pub fn input_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -5501,8 +5197,7 @@ impl TerminalView {
     }
 
     fn render_completion_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let s = self.completion.as_ref()?;
-        let items: Vec<&completion::Candidate> = s.filtered.iter().map(|&i| &s.all[i]).collect();
+        let items = self.completion.items();
         if items.is_empty() {
             return None;
         }
@@ -5529,7 +5224,7 @@ impl TerminalView {
             total_rows,
             srow,
             items.len(),
-            s.index.unwrap_or(0),
+            self.completion.selected_index().unwrap_or(0),
             MAX_ROWS,
         );
         let hidden_above = first;
@@ -5540,7 +5235,7 @@ impl TerminalView {
         let cell = self.cell_width.as_f32();
         let row = |i: usize| {
             let cand = items[i];
-            let selected = s.index == Some(i);
+            let selected = self.completion.selected_index() == Some(i);
             let icon_color = if selected {
                 theme.foreground
             } else {
@@ -5802,11 +5497,7 @@ impl TerminalView {
     /// the listing's failure once it has one, "listing…" while it runs, and
     /// nothing at all the rest of the time (#585).
     fn remote_completion_notice_text(&self) -> Option<String> {
-        if let Some(notice) = &self.remote_completion_notice {
-            return Some(notice.clone());
-        }
-        self.remote_completion_inflight
-            .then(|| t(L10nKey::CompletionListingRemote).to_string())
+        self.completion.notice_text()
     }
 
     fn render_remote_completion_notice(
@@ -6252,14 +5943,6 @@ fn mac_only(_key: &'static str) -> Option<&'static str> {
     None
 }
 
-fn word_start_of(line: &str, cursor: usize) -> usize {
-    let chars: Vec<char> = line.chars().collect();
-    let mut start = cursor.min(chars.len());
-    while start > 0 && !chars[start - 1].is_whitespace() {
-        start -= 1;
-    }
-    start
-}
 
 /// A history entry drawn on a one-line row, with its line breaks folded to a
 /// visible stand-in.
@@ -8697,6 +8380,18 @@ mod gpui_tests {
         include!("history_ghost_consumer_tests.rs");
     }
 
+    mod completion_consumer_fixture {
+        include!("completion_consumer_fixture.rs");
+    }
+
+    mod completion_keyboard_consumer_tests {
+        include!("completion_keyboard_consumer_tests.rs");
+    }
+
+    mod completion_async_consumer_tests {
+        include!("completion_async_consumer_tests.rs");
+    }
+
     mod links {
         include!("link/consumer_tests.rs");
     }
@@ -10874,232 +10569,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn a_late_remote_listing_leaves_a_line_the_editor_no_longer_owns_alone(
-        cx: &mut TestAppContext,
-    ) {
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: None,
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        wait_for_input_active(&window, cx);
-
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set("ls /nope/");
-                view.editor_handoff = Some(view.terminal.prompt_cycle());
-                assert!(!view.input_active(), "the shell owns this prompt already");
-
-                let req =
-                    super::completion::remote_path_request("ls /nope/", 9, "/home/u").unwrap();
-                view.remote_path_results(req, "ls /nope/", 9, Vec::new(), true, cx);
-
-                assert_eq!(
-                    view.cmd.text(),
-                    "ls /nope/",
-                    "an empty listing must not hand off a line the editor no longer drives"
-                );
-            })
-            .unwrap();
-        assert_eq!(
-            next_input_until_timeout(&mut daemon),
-            None,
-            "not one byte reached the wire"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn tab_completion_off_sends_every_tab_to_the_shell(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        cx.update(|cx| {
-            let mut cfg = cx.global::<Config>().clone();
-            cfg.tab_completion = false;
-            cx.set_global(cfg);
-        });
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: None,
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        wait_for_input_active(&window, cx);
-
-        window
-            .update(cx, |view, window, cx| {
-                for ch in ["c", "d", " "] {
-                    type_char(view, ch, window, cx);
-                }
-                view.complete_tab(true, cx);
-                assert!(view.completion.is_none(), "no lyrel menu while opted out");
-                assert_eq!(view.cmd.text(), "");
-            })
-            .unwrap();
-        assert_eq!(next_input_until_timeout(&mut daemon), Some(b"cd ".to_vec()));
-        assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\t".to_vec()));
-    }
-
-    fn dir_candidate(text: &str, start: usize, end: usize) -> completion::Candidate {
-        completion::Candidate {
-            text: text.into(),
-            kind: CandidateKind::Dir,
-            start,
-            end,
-            description: None,
-            icon: None,
-        }
-    }
-
-    #[gpui_kit::test]
-    fn accepting_a_candidate_quotes_it_for_the_shell(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                view.cmd.set("cd My");
-                view.completion_insert(&dir_candidate("My Documents", 3, 5), 3);
-                assert_eq!(
-                    view.cmd.text(),
-                    "cd 'My Documents'/",
-                    "an unquoted candidate resplits into two arguments and the command breaks"
-                );
-
-                view.cmd.set("cd ~/My");
-                view.completion_insert(&dir_candidate("~/My Documents", 3, 6), 3);
-                assert_eq!(
-                    view.cmd.text(),
-                    "cd ~/'My Documents'/",
-                    "the ~ stays outside the quotes so the shell still expands it"
-                );
-
-                view.cmd.set("git commit --mess");
-                view.completion_insert(
-                    &completion::Candidate {
-                        text: "--message".into(),
-                        kind: CandidateKind::Flag,
-                        start: 11,
-                        end: 17,
-                        description: None,
-                        icon: None,
-                    },
-                    11,
-                );
-                assert_eq!(view.cmd.text(), "git commit --message ");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_candidate_needing_escapes_is_never_half_applied(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set("cd My");
-                let offered = view.offer_candidates(
-                    "cd My",
-                    3,
-                    5,
-                    vec![
-                        dir_candidate("My Documents", 3, 5),
-                        dir_candidate("My Music", 3, 5),
-                    ],
-                    0,
-                    cx,
-                );
-                assert!(offered.is_some(), "two candidates open a menu");
-                assert_eq!(
-                    view.cmd.text(),
-                    "cd My",
-                    "the common prefix here is `My ` — writing it raw would break the line \
-                     and the trailing space would close the menu on the next keystroke"
-                );
-            })
-            .unwrap();
-    }
-
-    fn parsed(text: &str) -> super::super::generator::Parsed {
-        super::super::generator::Parsed {
-            text: text.into(),
-            description: None,
-        }
-    }
-
-    #[gpui_kit::test]
-    fn a_generator_that_supplies_no_match_closes_the_menu(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                // `git ckout<Tab>`: no subcommand matches, but git's alias generator
-                // is in flight, so the session opens empty and waits for it.
-                view.cmd.set("ckout");
-                let generation =
-                    view.open_completion(CompletionSession::new(0, "ckout".into(), Vec::new(), 1));
-                assert!(
-                    view.completion.is_some(),
-                    "the menu waits for its generator"
-                );
-
-                view.completion_merge(generation, Vec::new(), cx);
-                assert!(
-                    view.completion.is_none(),
-                    "a menu that never got a candidate must not stay armed — it swallows \
-                     every later Tab instead of handing the line to the shell"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn generator_results_that_match_nothing_close_the_menu(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set("ckout");
-                let generation =
-                    view.open_completion(CompletionSession::new(0, "ckout".into(), Vec::new(), 1));
-
-                view.completion_merge(generation, vec![parsed("main"), parsed("release")], cx);
-                assert!(
-                    view.completion.is_none(),
-                    "branches that match nothing typed are as good as no candidates at all"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_menu_waits_while_another_generator_is_still_in_flight(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set("ck");
-                let generation =
-                    view.open_completion(CompletionSession::new(0, "ck".into(), Vec::new(), 2));
-
-                view.completion_merge(generation, Vec::new(), cx);
-                assert!(
-                    view.completion.is_some(),
-                    "one generator came back empty, the other has not answered yet"
-                );
-
-                view.completion_merge(generation, vec![parsed("ckout-fix")], cx);
-                let s = view
-                    .completion
-                    .as_ref()
-                    .expect("the second one supplied a match");
-                assert_eq!(s.filtered.len(), 1);
-            })
-            .unwrap();
-    }
 
     #[gpui_kit::test]
     fn shell_vi_mode_prompt_input_is_not_typeahead(cx: &mut TestAppContext) {
@@ -11345,51 +10814,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn insert_newline_action_closes_the_completion_menu_but_enter_still_accepts(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-
-        let candidate = |text: &str| completion::Candidate {
-            text: text.to_string(),
-            kind: CandidateKind::Command,
-            start: 4,
-            end: 4,
-            description: None,
-            icon: None,
-        };
-
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set_with_cursor("git ", 4);
-                view.open_completion(CompletionSession::new(
-                    4,
-                    String::new(),
-                    vec![candidate("status")],
-                    0,
-                ));
-
-                view.insert_newline_action(cx);
-                assert!(
-                    view.completion.is_none(),
-                    "the newline ends the completed word, so the menu closes"
-                );
-                assert_eq!(view.cmd.text(), "git \n");
-
-                view.cmd.set_with_cursor("git ", 4);
-                view.open_completion(CompletionSession::new(
-                    4,
-                    String::new(),
-                    vec![candidate("status")],
-                    0,
-                ));
-                view.handle_editor_key(&key("enter"), cx);
-                assert_eq!(view.cmd.text(), "git status ");
-            })
-            .unwrap();
-    }
 
     #[gpui_kit::test]
     fn shift_enter_reaches_a_foreground_tui_with_kitty_encoding(cx: &mut TestAppContext) {
@@ -11785,7 +11209,7 @@ mod gpui_tests {
                     prefer_character_input: false,
                 };
                 view.on_key_down(&ctrl_r, window, cx);
-                assert!(view.completion.is_none(), "no lyrel completion menu");
+                assert!(!view.completion.is_open(), "no lyrel completion menu");
                 assert!(view.history.search().is_none(), "no lyrel history menu");
                 assert!(
                     view.integration_notice.is_none(),
@@ -12100,28 +11524,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn a_remote_listing_says_so_while_it_runs_and_when_it_fails(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                assert!(view.remote_completion_notice_text().is_none());
-                view.remote_completion_inflight = true;
-                assert_eq!(
-                    view.remote_completion_notice_text().as_deref(),
-                    Some("listing remote…"),
-                    "a slow link must not read as a broken Tab key (#585)"
-                );
-                view.remote_completion_inflight = false;
-                view.remote_completion_notice = Some("remote listing failed — boom".to_string());
-                assert_eq!(
-                    view.remote_completion_notice_text().as_deref(),
-                    Some("remote listing failed — boom"),
-                    "a failed listing is not the same silence as an empty one"
-                );
-            })
-            .unwrap();
-    }
 
     #[gpui_kit::test]
     fn a_tab_on_a_detached_remote_pane_never_asks_for_a_listing(cx: &mut TestAppContext) {
@@ -12161,7 +11563,7 @@ mod gpui_tests {
 
                 view.tab_pressed(true, cx);
                 assert!(
-                    !view.remote_completion_inflight,
+                    view.completion.notice_text().is_none(),
                     "a Tab must not send an SFTP listing down a link that is not attached"
                 );
                 assert_eq!(
@@ -13903,85 +13305,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-    #[gpui_kit::test]
-    fn generator_results_merge_into_the_open_menu(cx: &mut TestAppContext) {
-        use crate::terminal::generator::Parsed;
-
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set_with_cursor("git checkout ma", 15);
-                let session = CompletionSession::new(13, String::new(), Vec::new(), 1);
-                let generation = view.open_completion(session);
-
-                let results = vec![
-                    Parsed {
-                        text: "main".into(),
-                        description: Some("branch".into()),
-                    },
-                    Parsed {
-                        text: "mainline".into(),
-                        description: Some("branch".into()),
-                    },
-                    Parsed {
-                        text: "feature".into(),
-                        description: None,
-                    },
-                ];
-                view.completion_merge(generation, results, cx);
-
-                let s = view.completion.as_ref().expect("menu still open");
-                let shown: Vec<&str> = s.filtered.iter().map(|&i| s.all[i].text.as_str()).collect();
-                assert_eq!(shown, vec!["main", "mainline"]);
-                assert_eq!(s.selected().unwrap().text, "main");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn generator_result_for_a_closed_menu_is_dropped(cx: &mut TestAppContext) {
-        use crate::terminal::generator::Parsed;
-
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set_with_cursor("git checkout ", 13);
-                let session = CompletionSession::new(13, String::new(), Vec::new(), 1);
-                let stale = view.open_completion(session);
-                view.close_completion();
-
-                view.completion_merge(
-                    stale,
-                    vec![Parsed {
-                        text: "main".into(),
-                        description: None,
-                    }],
-                    cx,
-                );
-                assert!(
-                    view.completion.is_none(),
-                    "a result for a closed session never reopens the menu"
-                );
-
-                let fresh =
-                    view.open_completion(CompletionSession::new(13, String::new(), Vec::new(), 1));
-                assert_ne!(stale, fresh);
-                view.completion_merge(
-                    stale,
-                    vec![Parsed {
-                        text: "main".into(),
-                        description: None,
-                    }],
-                    cx,
-                );
-                let s = view.completion.as_ref().unwrap();
-                assert!(
-                    s.all.is_empty(),
-                    "the stale result stayed out of the new menu"
-                );
-            })
-            .unwrap();
-    }
 
     #[gpui_kit::test]
     fn a_remote_workspace_pane_reports_its_cwd_as_remote(cx: &mut TestAppContext) {
