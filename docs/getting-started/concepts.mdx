@@ -89,6 +89,23 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 4. 再次记录 pane ID、归属和 shell PID，必须与断开前一致；通过 GUI 输入 `echo after-link`，确认原 pane 和 CLI capture 都出现新输出，且当前尺寸生效、输入没有落到相邻 pane。
 5. 在同一专用会话中往返切换可见／隐藏 pane，并单独退出、重开 GUI 验证冷 attach。记录重连期间及冷 attach 后的 agent 未读／完成提示；Windows 的静默旧 peer、旧 reader 不能覆盖 successor 网格／decoder 的回归另由真实 socket 消费者覆盖。Windows 与 macOS 的原生结果分别记录，不能互相替代。
 
+### 内部职责归属
+
+这些模块将状态与转换规则放在一起，而不只是把协调器的方法分散到文件中：
+
+| 能力 | 状态与行为所有者 | 协调器保留的工作 |
+|---|---|---|
+| 工作台 | `ui/tab` 的 `Tab`／`TabSet`、`session_lifecycle`、`pending_pane`、`window_chrome`、搜索与转发表单模块 | `LyrelApp` 组合窗口、执行跨能力导航并交接焦点 |
+| 终端交互 | `PromptInput`、`TerminalHistory`、`TerminalCompletion`、`SelectionScroll`、`AgentActivity`、`LinkInteraction`、`TerminalLifecycle` | `TerminalView` 保留 GPUI 实体身份、绘制、事件适配与任务调度 |
+| 文档编辑 | `EditorBuffers` 管理 Host-aware 缓冲区与加载／监视；`EditorPanelState` 管理保存与未保存提示 | 工作台执行保存成功后捕获的关闭意图；退休分组不能转而关闭新的呈现 |
+| 布局同步 | `tree_sync/projection`、`reconcile`、`lifecycle::WindowSync` 分别拥有投影、操作排序、队列与恢复转换 | 原同步入口执行 I/O 与 GPUI 结果应用；`MachineMirrors` 仍独立 |
+| 连接与 daemon | `PaneConnection`、`LinkWriter`、`FrameReader` 与 daemon 的 facts／subscriptions／lifecycle | `RemoteTerminal` 装配客户端；`DaemonPane` 保留会话权威和原有锁内顺序 |
+| CLI | `crates/lyrel-cli/src/commands/` 按命令族处理目标、执行与输出 | 原 `execute`、`Outcome` 和 `Backend` 契约不变 |
+
+接口传递目标身份、Host、借用数据或语义结果，不向能力模块开放整个可变工作台。
+本次迁移没有改变协议版本、持久化格式、第三方依赖或平台范围；既有 settings、paste、launch 与 replay 实现仍是唯一入口。
+协调器并非零方法：视图组合、跨能力操作与单流排序仍需集中；搜索文件索引、SCM、SFTP 等未纳入独立所有权重写的功能不因主文件缩短就被视为已解耦。
+
 
 <Warning>
   重启服务器会结束该机器上所有窗格中的所有进程，包括 shell、智能体和 SSH 会话。布局会保留，并在恢复时启动新的 shell。未经询问，切勿代他人执行此操作。

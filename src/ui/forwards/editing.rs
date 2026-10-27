@@ -147,7 +147,10 @@ impl Forwarding {
                     owner: route.owner_key(),
                     previous,
                     draft: rule,
-                    mutation: Unanswered::Remove { id: old.id, rejected: false },
+                    mutation: Unanswered::Remove {
+                        id: old.id,
+                        rejected: false,
+                    },
                 });
                 self.mf_error = Some(t(L10nKey::ForwardRequestFailed).to_string());
                 return;
@@ -159,7 +162,10 @@ impl Forwarding {
         let outcome = match self.place(route, rule.clone(), &previous, &rule) {
             PlaceOutcome::Rejected(_) if !fields.advanced && rule.bind_port != 0 => self.place(
                 route,
-                SshForwardRule { bind_port: 0, ..rule.clone() },
+                SshForwardRule {
+                    bind_port: 0,
+                    ..rule.clone()
+                },
                 &previous,
                 &rule,
             ),
@@ -188,7 +194,11 @@ impl Forwarding {
                             owner: route.owner_key(),
                             previous,
                             draft: rule,
-                            mutation: Unanswered::Add { rule: restored_rule, before, rollback: true },
+                            mutation: Unanswered::Add {
+                                rule: restored_rule,
+                                before,
+                                rollback: true,
+                            },
                         });
                     }
                 }
@@ -219,10 +229,15 @@ impl Forwarding {
         };
         self.managed = list;
         match &recovery.mutation {
-            Unanswered::Add { rule, before, rollback } => {
-                let mut candidates = self.managed.iter().filter(|forward| {
-                    !before.contains(&forward.id) && matches_rule(rule, forward)
-                });
+            Unanswered::Add {
+                rule,
+                before,
+                rollback,
+            } => {
+                let mut candidates = self
+                    .managed
+                    .iter()
+                    .filter(|forward| !before.contains(&forward.id) && matches_rule(rule, forward));
                 let added = candidates.next().cloned();
                 if candidates.next().is_some() {
                     // Without request ids, identical concurrent additions are
@@ -237,7 +252,10 @@ impl Forwarding {
                         recovery.previous = Some(added);
                     } else if added.enabled && matches!(added.status, ForwardStatus::Error(_)) {
                         let Some(list) = route.remove(added.id) else {
-                            recovery.mutation = Unanswered::Remove { id: added.id, rejected: true };
+                            recovery.mutation = Unanswered::Remove {
+                                id: added.id,
+                                rejected: true,
+                            };
                             self.mf_recovery = Some(recovery);
                             return None;
                         };
@@ -263,7 +281,11 @@ impl Forwarding {
                     }
                     self.mf_editing = None;
                 } else {
-                    self.mf_editing = self.managed.iter().find(|forward| forward.id == *id).cloned();
+                    self.mf_editing = self
+                        .managed
+                        .iter()
+                        .find(|forward| forward.id == *id)
+                        .cloned();
                 }
             }
         }
@@ -283,13 +305,17 @@ impl Forwarding {
                 owner: route.owner_key(),
                 previous: previous.clone(),
                 draft: draft.clone(),
-                mutation: Unanswered::Add { rule, before, rollback: false },
+                mutation: Unanswered::Add {
+                    rule,
+                    before,
+                    rollback: false,
+                },
             });
             return PlaceOutcome::Unreachable(t(L10nKey::ForwardRequestFailed).to_string());
         };
-        let mut candidates = list.iter().filter(|forward| {
-            !before.contains(&forward.id) && matches_rule(&rule, forward)
-        });
+        let mut candidates = list
+            .iter()
+            .filter(|forward| !before.contains(&forward.id) && matches_rule(&rule, forward));
         let added = candidates.next();
         if added.is_none() || candidates.next().is_some() {
             self.managed = list;
@@ -297,11 +323,17 @@ impl Forwarding {
                 owner: route.owner_key(),
                 previous: previous.clone(),
                 draft: draft.clone(),
-                mutation: Unanswered::Add { rule, before, rollback: false },
+                mutation: Unanswered::Add {
+                    rule,
+                    before,
+                    rollback: false,
+                },
             });
             return PlaceOutcome::Unreachable(t(L10nKey::ForwardRequestFailed).to_string());
         }
-        let broken = added.filter(|added| added.enabled).and_then(|added| match &added.status {
+        let broken = added
+            .filter(|added| added.enabled)
+            .and_then(|added| match &added.status {
                 ForwardStatus::Error(msg) => Some((added.id, msg.clone())),
                 ForwardStatus::Listening => None,
             });
@@ -407,7 +439,11 @@ impl Forwarding {
         cx: &mut Context<T>,
         on_submit: fn(&mut T, u64, &mut Window, &mut Context<T>),
     ) {
-        if self.mf_recovery.as_ref().is_some_and(|recovery| recovery.owner != route.owner_key()) {
+        if self
+            .mf_recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner != route.owner_key())
+        {
             self.mf_error = Some(t(L10nKey::ForwardRequestFailed).to_string());
             return;
         }
