@@ -163,7 +163,7 @@ impl LyrelApp {
                     for leaf in this.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
                         leaf.update(cx, |pane, cx| {
                             if *force_visible {
-                                pane.cursor_visible = true;
+                                pane.show_cursor();
                             }
                             cx.notify();
                         });

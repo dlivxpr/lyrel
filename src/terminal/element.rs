@@ -2398,7 +2398,7 @@ impl Element for TerminalElement {
         let bold_font = self.view.read(cx).font_bold.clone();
         let italic_font = self.view.read(cx).font_italic.clone();
         let focused = self.view.read(cx).focus_handle.is_focused(window);
-        let cursor_visible = self.view.read(cx).cursor_visible;
+        let cursor_visible = self.view.read(cx).cursor_visible();
         let bell_flash = self.view.read(cx).bell_flash;
         let editor_active = self.view.read(cx).input_active();
         // The pane leaf stores its per-frame dim here (see `TerminalView::dim`).
@@ -2497,7 +2497,7 @@ impl Element for TerminalElement {
         // map that back to a screen row with the snapshot's scroll state and
         // drop anything scrolled out of the viewport.
         let image_store = self.view.read(cx).terminal.images();
-        let displayed = self.view.read(cx).displayed.clone();
+        let displayed = self.view.read(cx).lifecycle.paint_visibility().clone();
         let images = image_store.snapshot_with_placeholders(&snap.placeholders);
         let notice = images.iter().any(|image| image.evicted).then(|| {
             let text = SharedString::new_static(t(L10nKey::TerminalImageEvicted));

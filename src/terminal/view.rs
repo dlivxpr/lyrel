@@ -6,7 +6,7 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
-    App, ClipboardEntry, ClipboardItem, Context, EntityId, ExternalPaths, FocusHandle, Focusable,
+    App, ClipboardEntry, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable,
     Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels,
     ScrollWheelEvent, Task, WeakEntity, Window, actions, div, prelude::*, px,
 };
@@ -70,53 +70,6 @@ fn input_caret_paint(
     })
 }
 
-/// Which panes are on screen right now, readable without touching the entity
-/// map. The chrome (tab strip, sidebar, switcher) reads every pane entity
-/// while the window draws, so gpui tracks them all and `notify()` from a
-/// hidden pane still dirties the window — this flag is the out-of-band answer
-/// the output pump consults instead. `LyrelApp::render` declares it each frame
-/// for its own tabs; a pane nobody has declared yet counts as displayed, so a
-/// missed path can only cost extra repaints, never a frozen grid.
-///
-/// A gpui `Global` rather than a `static`: entity ids are only unique within
-/// one `App`, and parallel `#[gpui::test]` apps mint colliding ids — a
-/// process-wide map would let one test's declarations flip another's flags.
-/// In the shipped binary there is exactly one `App`, so the two are the same.
-#[derive(Default)]
-struct DisplayedRegistry(
-    std::sync::Mutex<std::collections::HashMap<EntityId, super::remote::GraphicsViewportReporter>>,
-);
-
-impl gpui_kit::Global for DisplayedRegistry {}
-
-pub fn declare_displayed(cx: &App, panes: impl IntoIterator<Item = (EntityId, bool)>) {
-    // No registry means no pane has ever been built in this app.
-    let Some(registry) = cx.try_global::<DisplayedRegistry>() else {
-        return;
-    };
-    let map = registry.0.lock().unwrap();
-    for (id, on) in panes {
-        if let Some(reporter) = map.get(&id) {
-            reporter.set_displayed(on);
-        }
-    }
-}
-
-/// What the registry holds for `id`: `None` when the pane never registered
-/// (or already released), otherwise the flag the output gate would consult.
-#[cfg(test)]
-pub(crate) fn displayed_for_test(cx: &App, id: EntityId) -> Option<bool> {
-    cx.try_global::<DisplayedRegistry>()?
-        .0
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|reporter| {
-            reporter
-                .displayed()
-                .load(std::sync::atomic::Ordering::Relaxed)
-        })
-}
 
 actions!(
     terminal,
@@ -232,9 +185,7 @@ pub struct TerminalView {
     remote_clipboard_write_in_flight: Option<u64>,
     remote_clipboard_write_generation: u64,
     pub focus_handle: FocusHandle,
-    /// See [`displayed_registry`]. Shared with the registry so the app can
-    /// flip it during a draw without an entity access.
-    pub(super) displayed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(super) lifecycle: super::lifecycle::TerminalLifecycle,
     pub font: Font,
     pub font_bold: Option<Font>,
     pub font_italic: Option<Font>,
@@ -300,7 +251,6 @@ pub struct TerminalView {
     /// and where it has asked for it to go. See [`super::scrollbar`].
     pub(super) scroll_handle: TerminalScrollHandle,
     pub search: Option<SearchState>,
-    pub cursor_visible: bool,
     pub(super) search_focused: bool,
     /// The message box docked under an agent, once it has been asked for —
     /// see [`super::composer`].
@@ -370,7 +320,6 @@ pub struct TerminalView {
     /// the field to 1.0 at the end of every paint, so the value never
     /// outlives the frame it was written for.
     pub(super) dim: f32,
-    _focus_subs: Vec<gpui_kit::Subscription>,
 }
 
 
@@ -1153,127 +1102,29 @@ impl TerminalView {
 
         let focus_handle = cx.focus_handle();
 
-        let events = terminal.events.clone();
-        cx.spawn(async move |this, cx| {
-            let mut batch = Vec::new();
-            while let Ok(ev) = events.recv().await {
-                batch.push(ev);
-                while let Ok(ev) = events.try_recv() {
-                    batch.push(ev);
-                }
-                // Output reaches the screen through `handle_event`'s
-                // `notify()`, which gpui scopes to windows currently
-                // rendering this view. A pane in a background tab must stay
-                // out of the frame loop entirely: refreshing the window
-                // directly from here pinned the visible tab at full frame
-                // rate whenever any hidden pane was producing output.
-                let res = this.update_in(cx, |view, window, cx| {
-                    let mut woke = false;
-                    for ev in batch.drain(..) {
-                        if matches!(ev, PaneEvent::Wakeup) && std::mem::replace(&mut woke, true) {
-                            continue;
-                        }
-                        view.handle_event(ev, cx);
+        let lifecycle = super::lifecycle::TerminalLifecycle::new(
+            &terminal,
+            &focus_handle,
+            window,
+            cx,
+            super::lifecycle::LifecycleCallbacks {
+                state: |view| &mut view.lifecycle,
+                event: Self::handle_event,
+                focus: |view, focused, cx| {
+                    if focused {
+                        view.agent_activity.focused((view.host_id, view.pane_id), cx);
+                    } else {
+                        view.marked_text.clear();
                     }
-                    // A daemon may be waiting for this exact GPU lease before
-                    // it can ACK new graphics. Do not depend on a later frame
-                    // or the periodic cleanup to return retired atlas pages.
-                    view.terminal.images().release_retired(window, cx);
-                });
-                if res.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-
-        let focus_subs = vec![
-            cx.on_focus_in(&focus_handle, window, |view, _window, cx| {
-                view.cursor_visible = true;
-                view.agent_activity.focused((view.host_id, view.pane_id), cx);
-                view.report_focus_change(true);
-                cx.notify();
-            }),
-            cx.on_blur(&focus_handle, window, |view, _window, cx| {
-                view.marked_text.clear();
-                view.report_focus_change(false);
-                cx.notify();
-            }),
-        ];
-
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(530))
-                    .await;
-                if this
-                    .update_in(cx, |view, window, cx| {
-                        // A pane can be focused once while it is being built, before
-                        // its leaf is attached to the window. Moving focus away in
-                        // that interval does not deliver the leaf a blur callback,
-                        // so no flag a callback maintains can be trusted to say
-                        // which pane the reader is on. The window's handle is
-                        // authoritative here, just as it is in the paint path.
-                        if view.focus_handle.is_focused(window) {
-                            if cx.global::<Config>().cursor_blink {
-                                view.cursor_visible = !view.cursor_visible;
-                                cx.notify();
-                            } else if !view.cursor_visible {
-                                view.cursor_visible = true;
-                                cx.notify();
-                            }
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
-
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(300))
-                    .await;
-                if this
-                    .update_in(cx, |view, window, cx| {
-                        view.terminal.images().release_retired(window, cx);
-                        view.poll_foreground(window, cx);
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
+                    view.report_focus_change(focused);
+                },
+                foreground: Self::poll_foreground,
+                detach: |view| view.terminal.detach_link(),
+            },
+        );
 
         super::color_scheme::watch(cx);
 
-        let viewport_reporter = terminal.viewport_reporter();
-        let displayed = viewport_reporter.displayed();
-        let entity_id = cx.entity().entity_id();
-        cx.default_global::<DisplayedRegistry>()
-            .0
-            .lock()
-            .unwrap()
-            .insert(entity_id, viewport_reporter);
-
-        // The window may be gone before this entity is released. These owners
-        // must be removed even when on_release_in cannot update that window.
-        cx.on_release(move |view, cx| {
-            if let Some(registry) = cx.try_global::<DisplayedRegistry>() {
-                registry.0.lock().unwrap().remove(&entity_id);
-            }
-            view.terminal.detach_link();
-        })
-        .detach();
-        cx.on_release_in(window, |view, window, cx| {
-            view.terminal.images().release_all(window, cx);
-        })
-        .detach();
 
         window.focus(&focus_handle, cx);
 
@@ -1291,7 +1142,7 @@ impl TerminalView {
             remote_clipboard_write_in_flight: None,
             remote_clipboard_write_generation: 0,
             focus_handle,
-            displayed,
+            lifecycle,
             font,
             font_bold,
             font_italic,
@@ -1319,7 +1170,6 @@ impl TerminalView {
             links: LinkInteraction::default(),
             scroll_handle: TerminalScrollHandle::default(),
             search: None,
-            cursor_visible: true,
             dim: 1.,
             search_focused: false,
             composer: None,
@@ -1358,8 +1208,15 @@ impl TerminalView {
             editor_select_gesture: false,
             editor_drag_word: None,
             editor_goal_col: None,
-            _focus_subs: focus_subs,
         }
+    }
+
+    pub fn cursor_visible(&self) -> bool {
+        self.lifecycle.cursor_visible()
+    }
+
+    pub fn show_cursor(&mut self) {
+        self.lifecycle.show_cursor();
     }
 
     pub fn set_grid_size(
@@ -1649,7 +1506,7 @@ impl TerminalView {
     }
 
     fn recheck_git_root(&self, cx: &mut Context<Self>) {
-        if !self.displayed.load(std::sync::atomic::Ordering::Relaxed) {
+        if !self.lifecycle.is_displayed() {
             return;
         }
         let Some(cwd) = self.git_status_cwd.as_deref() else {
@@ -1680,7 +1537,7 @@ impl TerminalView {
                     let _ = pane.update(cx, |view, cx| {
                         if view.host_id == id
                             && view.git_status_cwd.as_deref() == Some(&cwd)
-                            && view.displayed.load(std::sync::atomic::Ordering::Relaxed)
+                            && view.lifecycle.is_displayed()
                         {
                             view.refresh_git_status(Some(cwd), GitRefresh::Edge, cx);
                         }
@@ -1935,13 +1792,7 @@ impl TerminalView {
             PaneEvent::Wakeup => {
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
-                // Only a pane that is on screen repaints on output. The
-                // chrome's per-frame entity reads keep every pane in the
-                // window's tracked set, so an ungated notify from a
-                // background tab would dirty the window at output rate.
-                if self.displayed.load(std::sync::atomic::Ordering::Relaxed) {
-                    cx.notify();
-                }
+                self.lifecycle.notify_output(cx);
             }
             PaneEvent::Title(title) => self.set_title_when_settled(title, cx),
             PaneEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
@@ -2161,7 +2012,7 @@ impl TerminalView {
                     });
                 }
             }
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             self.jump_to_prompt();
             cx.notify();
             cx.stop_propagation();
@@ -2240,7 +2091,7 @@ impl TerminalView {
                         self.cmd.delete_to_start();
                     }
                     self.close_completion();
-                    self.cursor_visible = true;
+                    self.lifecycle.show_cursor();
                     cx.notify();
                 } else if cfg!(target_os = "macos") && self.accepts_input(cx) {
                     self.send_shortcut_bytes(&[0x15], "u", cx);
@@ -2253,7 +2104,7 @@ impl TerminalView {
                         self.cmd.delete_to_end();
                     }
                     self.close_completion();
-                    self.cursor_visible = true;
+                    self.lifecycle.show_cursor();
                     cx.notify();
                 } else if cfg!(target_os = "macos") && self.accepts_input(cx) {
                     self.send_shortcut_bytes(&[0x0b], "k", cx);
@@ -2267,7 +2118,7 @@ impl TerminalView {
     fn handle_editor_key(&mut self, ks: &gpui_kit::Keystroke, cx: &mut Context<Self>) {
         let m = &ks.modifiers;
         let key = ks.key.as_str();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.jump_to_prompt();
         self.adopt_typeahead();
 
@@ -2329,7 +2180,7 @@ impl TerminalView {
                 (false, "backspace") if self.cmd.selection().is_none() && !self.cmd.is_empty() => {
                     self.cmd.backspace();
                     self.completion_refilter();
-                    self.cursor_visible = true;
+                    self.lifecycle.show_cursor();
                     cx.notify();
                     return;
                 }
@@ -2386,7 +2237,7 @@ impl TerminalView {
             if cfg!(not(target_os = "macos")) && key == "a" {
                 self.cmd.select_all();
                 self.close_completion();
-                self.cursor_visible = true;
+                self.lifecycle.show_cursor();
                 cx.notify();
                 return;
             }
@@ -2755,7 +2606,7 @@ impl TerminalView {
             return;
         }
         self.terminal.write(bytes.to_vec());
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.jump_to_prompt();
         cx.notify();
     }
@@ -2797,7 +2648,7 @@ impl TerminalView {
             self.history.reset_navigation();
             self.editor_goal_col = None;
             self.close_completion();
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
             return;
         }
@@ -3036,7 +2887,7 @@ impl TerminalView {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
             self.cmd.delete_selection();
             self.close_completion();
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
         }
         true
@@ -3866,7 +3717,7 @@ impl TerminalView {
         self.editor_select_gesture = true;
         self.editor_goal_col = None;
         self.close_completion();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
         true
     }
@@ -3885,7 +3736,7 @@ impl TerminalView {
         } else {
             self.cmd.extend_to(idx);
         }
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
         true
     }
@@ -4153,7 +4004,7 @@ impl TerminalView {
         }
         self.jump_to_prompt();
         self.close_completion();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.cmd.insert_str("\n");
         self.history.reset_navigation();
         self.editor_goal_col = None;
@@ -4215,7 +4066,7 @@ impl TerminalView {
         let pasted = self.cmd.pasted();
         self.terminal.write(submit_bytes(&line, bracketed, pasted));
         self.cmd.clear();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.jump_to_prompt();
         cx.notify();
     }
@@ -4463,7 +4314,7 @@ impl TerminalView {
         if !has_pending && cands.len() == 1 {
             let c = cands[0].clone();
             self.completion_insert(&c, c.start);
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
             return None;
         }
@@ -4482,7 +4333,7 @@ impl TerminalView {
             self.apply_candidate(line, word_start, word_end, &lcp);
         }
         let generation = self.open_completion(s);
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
         Some(generation)
     }
@@ -4705,7 +4556,7 @@ impl TerminalView {
                 }
                 if quote_for_shell(&lcp, shell.as_deref()) == lcp {
                     self.apply_candidate(&line, word_start, cursor, &lcp);
-                    self.cursor_visible = true;
+                    self.lifecycle.show_cursor();
                     cx.notify();
                     return;
                 }
@@ -4717,7 +4568,7 @@ impl TerminalView {
     fn completion_select(&mut self, forward: bool, cx: &mut Context<Self>) {
         if let Some(s) = self.completion.as_mut() {
             s.select(forward);
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
         }
     }
@@ -4729,7 +4580,7 @@ impl TerminalView {
         if let Some(c) = s.selected().cloned() {
             self.completion_insert(&c, s.word_start);
         }
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
     }
 
@@ -4798,7 +4649,7 @@ impl TerminalView {
         // back to the prompt and the letters between them did not.
         self.jump_to_prompt();
         if self.history.push_search_query(text) {
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
             return;
         }
@@ -4809,12 +4660,12 @@ impl TerminalView {
             self.editor_goal_col = None;
             self.history.reset_last_word();
             self.completion_refilter();
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
             return;
         }
         self.write_gap_text(text, text.as_bytes().to_vec(), false, cx);
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
     }
 
@@ -5473,7 +5324,7 @@ impl TerminalView {
             let cfg = cx.global::<Config>();
             cfg.prompt_cursor_style.shape().unwrap_or(cfg.cursor_style)
         };
-        let cursor_paint = input_caret_paint(focused, self.cursor_visible, cursor_style);
+        let cursor_paint = input_caret_paint(focused, self.lifecycle.cursor_visible(), cursor_style);
         let cursor_on = cursor_paint.is_some();
         let block_cursor = cursor_paint == Some(InputCaretPaint::Block);
         // A block caret is drawn as reverse video on the cell it covers, not as
@@ -8823,6 +8674,7 @@ mod gpui_tests {
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
     use crate::daemon::transport::Stream;
     use crate::terminal::remote::PtySource;
+    use crate::terminal::lifecycle::declare_displayed;
     use gpui_kit::{Bounds, Entity, TestAppContext, point};
 
     mod history_scope_consumer_tests {
@@ -9197,6 +9049,7 @@ mod gpui_tests {
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");
     include!("native_ssh_consumer_tests.rs");
+    include!("lifecycle_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
@@ -9869,107 +9722,6 @@ mod gpui_tests {
         });
     }
 
-    #[gpui_kit::test]
-    fn graphics_consumer_hidden_decode_keeps_pixels_without_notifying_window(
-        cx: &mut TestAppContext,
-    ) {
-        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
-        use std::{cell::Cell, rc::Rc, sync::Arc};
-
-        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-        let images = window
-            .update(cx, |view, _, _| view.terminal.images())
-            .unwrap();
-        let pane = window
-            .update(cx, |view, _, cx| {
-                view.displayed
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
-                cx.entity()
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let notifications = Rc::new(Cell::new(0));
-        let count = notifications.clone();
-        let _subscription = cx.update(|cx| {
-            cx.observe(&pane, move |_, _| {
-                count.set(count.get() + 1);
-            })
-        });
-        send_admitted_graphics(
-            &images,
-            &mut daemon,
-            GraphicsUpdate::Resource {
-                key: 41,
-                image: Arc::new(Image {
-                    width: 1,
-                    height: 1,
-                    format: WireFormat::Rgba,
-                    compressed: false,
-                    data: vec![1, 2, 3, 64],
-                }),
-            },
-        );
-        let mut placement = graphics_placement(51, 41, 0, 0);
-        placement.x = 0;
-        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
-        for _ in 0..200 {
-            cx.run_until_parked();
-            if pane.read_with(cx, |view, _| !view.terminal.images().snapshot().is_empty()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        cx.run_until_parked();
-        pane.read_with(cx, |view, _| {
-            let images = view.terminal.images().snapshot();
-            assert_eq!(
-                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
-                &[3, 2, 1, 64]
-            );
-            assert!(!images[0].painted.load(std::sync::atomic::Ordering::Acquire));
-        });
-        assert_eq!(
-            notifications.get(),
-            0,
-            "decoded hidden output must not dirty the window"
-        );
-        window
-            .update(cx, |view, _, _| {
-                view.displayed
-                    .store(true, std::sync::atomic::Ordering::Relaxed)
-            })
-            .unwrap();
-        pane.read_with(cx, |view, _| {
-            let images = view.terminal.images().snapshot();
-            assert_eq!(
-                images.len(),
-                1,
-                "returning to the pane retains its current image without a resend"
-            );
-            assert_eq!(
-                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
-                &[3, 2, 1, 64]
-            );
-        });
-        send_graphics(
-            &mut daemon,
-            GraphicsUpdate::Remove {
-                placements: vec![51],
-                resources: vec![41],
-            },
-        );
-        for _ in 0..200 {
-            cx.run_until_parked();
-            if notifications.get() > 0 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(notifications.get() > 0, "a visible removal must repaint");
-        pane.read_with(cx, |view, _| {
-            assert!(view.terminal.images().snapshot().is_empty())
-        });
-    }
 
     #[gpui_kit::test]
     fn clearing_the_scrollback_drops_the_selection_anchored_in_it(cx: &mut TestAppContext) {
@@ -13530,43 +13282,6 @@ mod gpui_tests {
         assert_eq!(next_input(&mut daemon), want.into_bytes());
     }
 
-    #[gpui_kit::test]
-    fn daemon_output_reaches_the_grid_through_the_event_pump(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-
-        let read_row = |cx: &mut TestAppContext, len: usize| -> String {
-            window
-                .update(cx, |view, _, _| {
-                    let term = view.terminal.term.clone();
-                    let term = term.lock();
-                    let grid = &term.grid;
-                    (0..len).map(|c| grid[Line(0)][Column(c)].c()).collect()
-                })
-                .unwrap()
-        };
-        let wait_for = |cx: &mut TestAppContext, want: &str| {
-            let mut got = String::new();
-            for _ in 0..400 {
-                cx.run_until_parked();
-                got = read_row(cx, want.chars().count());
-                if got == want {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            got
-        };
-
-        DaemonMsg::Output(b"hello".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        assert_eq!(wait_for(cx, "hello"), "hello");
-
-        DaemonMsg::Output(b" again".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        assert_eq!(wait_for(cx, "hello again"), "hello again");
-    }
 
     #[gpui_kit::test]
     fn ctrl_c_copy_consumes_the_selection_so_the_next_press_is_sigint(cx: &mut TestAppContext) {

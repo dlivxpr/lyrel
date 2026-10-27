@@ -69,6 +69,7 @@ fn graphics_recovery_destroy(
     window: gpui_kit::AnyWindowHandle,
     cx: &mut TestAppContext,
 ) {
+    let entity_id = view.entity_id();
     let weak_view = view.downgrade();
     let (store_released, pixels) = view.read_with(cx, |view, _| {
         let store = view.terminal.images();
@@ -79,7 +80,6 @@ fn graphics_recovery_destroy(
             .collect();
         (store.release_probe(), pixels)
     });
-    view.update(cx, |view, _| view.terminal.detach_link());
     // The headless platform keeps its active TestWindow (and that window's
     // production IME handler, which owns a strong TerminalView) independently
     // of App's window map. Simulate the native blur before removing the window
@@ -113,6 +113,9 @@ fn graphics_recovery_destroy(
         cx.run_until_parked();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    cx.update(|cx| {
+        assert_eq!(crate::terminal::lifecycle::displayed_for_test(cx, entity_id), None);
+    });
 }
 
 #[track_caller]

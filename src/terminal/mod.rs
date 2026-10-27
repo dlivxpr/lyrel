@@ -22,6 +22,7 @@ pub(crate) mod images;
 pub mod input;
 mod link;
 mod link_probe;
+pub(crate) mod lifecycle;
 mod loopback;
 pub mod palette;
 pub(crate) mod pane_liveness;
