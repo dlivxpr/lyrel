@@ -1,6 +1,6 @@
 //! Retained search ownership: one view, its event lease, and return focus.
 
-use gpui_kit::{App, Context, Entity, FocusHandle, Subscription, Window};
+use gpui_kit::{App, AppContext as _, Context, Entity, FocusHandle, Subscription, Window};
 
 use super::{SearchCatalog, SearchEvent, SearchTab, SearchView};
 

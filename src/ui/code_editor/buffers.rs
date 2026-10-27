@@ -1,5 +1,5 @@
 use super::*;
-use lyrel_core::core::machine::WorkspaceId;
+use lyrel_core::core::session::WorkspaceId;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
@@ -44,8 +44,15 @@ pub(super) struct OpenTarget {
 }
 
 pub(super) enum OpenResult {
-    Opened { id: BufferId, created: bool, front: bool },
-    Failed { host: HostId, error: EditorOpenError },
+    Opened {
+        id: BufferId,
+        created: bool,
+        front: bool,
+    },
+    Failed {
+        host: HostId,
+        error: EditorOpenError,
+    },
 }
 
 type Access<E> = fn(&mut E) -> &mut EditorBuffers;
@@ -68,24 +75,28 @@ impl EditorBuffers {
                 while let Ok(more) = rx.try_recv() {
                     batches.push(more);
                 }
-                if view.update_in(cx, |view, window, cx| {
-                    let owner = access(view);
-                    let mut paths = HashSet::new();
-                    for batch in batches {
-                        if batch.generation == owner.watch_generation {
-                            paths.extend(batch.paths);
+                if view
+                    .update_in(cx, |view, window, cx| {
+                        let owner = access(view);
+                        let mut paths = HashSet::new();
+                        for batch in batches {
+                            if batch.generation == owner.watch_generation {
+                                paths.extend(batch.paths);
+                            }
                         }
-                    }
-                    for path in paths {
-                        if access(view).watched_files.contains(&path) {
-                            access(view).external_change(&path, window, cx, access, edited);
+                        for path in paths {
+                            if access(view).watched_files.contains(&path) {
+                                access(view).external_change(&path, window, cx, access, edited);
+                            }
                         }
-                    }
-                }).is_err() {
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
-        }).detach();
+        })
+        .detach();
         Self {
             files: Vec::new(),
             next_untitled: 1,
@@ -141,7 +152,10 @@ impl EditorBuffers {
     }
 
     pub(super) fn at(&self, host: HostId, path: &Path) -> Option<BufferId> {
-        self.files.iter().find(|file| file.is_at(host, path)).map(OpenFile::id)
+        self.files
+            .iter()
+            .find(|file| file.is_at(host, path))
+            .map(OpenFile::id)
     }
 
     pub(super) fn iter(&self) -> std::slice::Iter<'_, OpenFile> {
@@ -167,7 +181,9 @@ impl EditorBuffers {
     }
 
     pub(super) fn is_dirty(&self, host: HostId, path: &Path) -> bool {
-        self.files.iter().any(|file| file.dirty && file.is_at(host, path))
+        self.files
+            .iter()
+            .any(|file| file.dirty && file.is_at(host, path))
     }
 
     pub(super) fn note_edit(&mut self, id: BufferId, cx: &gpui_kit::App) {
@@ -176,8 +192,8 @@ impl EditorBuffers {
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let text = file.input.read(cx).text();
         let len = text.len();
-        let same = len == file.saved.len
-            && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
+        let same =
+            len == file.saved.len && Fingerprint::of_chunks(len, text.chunks()) == file.saved;
         file.dirty = !same || file.format != file.saved_format;
     }
 
@@ -207,25 +223,42 @@ impl EditorBuffers {
         }
         self.pending.insert(key.clone(), seq);
         let requested = path.to_path_buf();
-        HostOps::run_in(host.clone(), window, cx, move |h| load_file(h, requested),
+        HostOps::run_in(
+            host.clone(),
+            window,
+            cx,
+            move |h| load_file(h, requested),
             move |view, result, window, cx| {
                 let current = access(view).pending.get(&key).copied() == Some(seq);
-                if !current { return; }
+                if !current {
+                    return;
+                }
                 access(view).pending.remove(&key);
-                if !valid(view, target, cx) { return; }
-                let Some(current) = access(view).foreground.get(&target.tab).copied() else { return };
+                if !valid(view, target, cx) {
+                    return;
+                }
+                let Some(current) = access(view).foreground.get(&target.tab).copied() else {
+                    return;
+                };
                 let front = current == seq;
                 let result = match result {
                     Ok(loaded) => {
-                        let (id, created) = access(view).install(host, loaded, window, cx, access, edited);
-                        if front { access(view).place_cursor(id, cursor, window, cx); }
+                        let (id, created) =
+                            access(view).install(host, loaded, window, cx, access, edited);
+                        if front {
+                            access(view).place_cursor(id, cursor, window, cx);
+                        }
                         OpenResult::Opened { id, created, front }
                     }
-                    Err(error) if front => OpenResult::Failed { host: host.id(), error },
+                    Err(error) if front => OpenResult::Failed {
+                        host: host.id(),
+                        error,
+                    },
                     Err(_) => return,
                 };
                 opened(view, target, result, window, cx);
-            });
+            },
+        );
         None
     }
 
@@ -242,19 +275,42 @@ impl EditorBuffers {
         landed: impl FnOnce(&mut E, Vec<Option<Loaded>>, &mut Window, &mut Context<E>) + 'static,
     ) {
         let epoch = self.context_epoch;
-        HostOps::run_in(host, window, cx,
-            move |host| files.into_iter().map(|path| load_file(host, path).ok()).collect(),
+        HostOps::run_in(
+            host,
+            window,
+            cx,
+            move |host| {
+                files
+                    .into_iter()
+                    .map(|path| load_file(host, path).ok())
+                    .collect()
+            },
             move |view, loaded, window, cx| {
-                if access(view).context_epoch != epoch || !valid(view, target, cx) { return; }
+                if access(view).context_epoch != epoch || !valid(view, target, cx) {
+                    return;
+                }
                 landed(view, loaded, window, cx);
-            });
+            },
+        );
     }
 
-    fn place_cursor(&mut self, id: BufferId, cursor: Option<Position>, window: &mut Window, cx: &mut gpui_kit::App) {
+    fn place_cursor(
+        &mut self,
+        id: BufferId,
+        cursor: Option<Position>,
+        window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) {
         let Some(position) = cursor else { return };
         let Some(file) = self.get_mut(id) else { return };
         file.preview = false;
-        place_cursor(file.input.clone(), position, CURSOR_SCROLL_ATTEMPTS, window, cx);
+        place_cursor(
+            file.input.clone(),
+            position,
+            CURSOR_SCROLL_ATTEMPTS,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn install<E: 'static>(
@@ -270,9 +326,26 @@ impl EditorBuffers {
             return (id, false);
         }
         let language = language_for_path(&loaded.path);
-        let indent = loaded.config.indent(editor_text::detect_indent(&loaded.text, language));
-        (self.create(host, loaded.path, None, loaded.text, loaded.format, loaded.config, indent,
-            loaded.mtime, window, cx, access, edited), true)
+        let indent = loaded
+            .config
+            .indent(editor_text::detect_indent(&loaded.text, language));
+        (
+            self.create(
+                host,
+                loaded.path,
+                None,
+                loaded.text,
+                loaded.format,
+                loaded.config,
+                indent,
+                loaded.mtime,
+                window,
+                cx,
+                access,
+                edited,
+            ),
+            true,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -291,16 +364,26 @@ impl EditorBuffers {
         access: Access<E>,
         edited: Edited<E>,
     ) -> BufferId {
-        let language = if untitled.is_some() { "text" } else { language_for_path(&path) };
+        let language = if untitled.is_some() {
+            "text"
+        } else {
+            language_for_path(&path)
+        };
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
         let preview = cfg.editor_markdown_preview && language == "markdown";
         let saved = Fingerprint::of_str(&text);
         let input = cx.new(|cx| {
             EditorState::new(window, cx)
-                .language(language).tab_size(tab_size(indent)).line_number(true)
-                .searchable(true).replaceable(true).folding(true).soft_wrap(wrap)
-                .context_menu(false).default_value(text)
+                .language(language)
+                .tab_size(tab_size(indent))
+                .line_number(true)
+                .searchable(true)
+                .replaceable(true)
+                .folding(true)
+                .soft_wrap(wrap)
+                .context_menu(false)
+                .default_value(text)
         });
         let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
         let id = input.entity_id();
@@ -312,11 +395,29 @@ impl EditorBuffers {
         });
         let observe = cx.observe(&input, |_, _, cx| cx.notify());
         self.files.push(OpenFile {
-            path, untitled, host, input, dirty: false, saved, format, saved_format: format,
-            config, indent, disk_mtime: mtime, saving: false, save_pending: false,
-            save_then_close: false, reload_seq: 0, conflict: None, preview, wrap,
-            preview_scroll: gpui_kit::ScrollHandle::new(), gutter: gutter::BufferGutter::default(),
-            popups, _sub: sub, _observe: observe,
+            path,
+            untitled,
+            host,
+            input,
+            dirty: false,
+            saved,
+            format,
+            saved_format: format,
+            config,
+            indent,
+            disk_mtime: mtime,
+            saving: false,
+            save_pending: false,
+            save_then_close: false,
+            reload_seq: 0,
+            conflict: None,
+            preview,
+            wrap,
+            preview_scroll: gpui_kit::ScrollHandle::new(),
+            gutter: gutter::BufferGutter::default(),
+            popups,
+            _sub: sub,
+            _observe: observe,
         });
         id
     }
@@ -324,7 +425,10 @@ impl EditorBuffers {
     /// A watch only sees buffers on its own Host. SFTP-only buffers retain
     /// save-time conflict detection rather than borrowing a local watcher.
     pub(super) fn rebuild_watch<E: 'static>(
-        &mut self, host: Option<SharedHost>, cx: &mut Context<E>, access: Access<E>,
+        &mut self,
+        host: Option<SharedHost>,
+        cx: &mut Context<E>,
+        access: Access<E>,
     ) {
         let changed_host = match (&self.watch_host, &host) {
             (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
@@ -339,87 +443,162 @@ impl EditorBuffers {
             self.watch_busy = false;
             self.watch_dirty = false;
         }
-        let files: HashSet<PathBuf> = self.files.iter()
-            .filter(|file| file.untitled.is_none() && Some(file.host.id()) == host.as_ref().map(|h| h.id()))
-            .map(|file| file.path.clone()).collect();
-        let dirs = files.iter().filter_map(|path| path.parent().map(Path::to_path_buf)).collect();
+        let files: HashSet<PathBuf> = self
+            .files
+            .iter()
+            .filter(|file| {
+                file.untitled.is_none() && Some(file.host.id()) == host.as_ref().map(|h| h.id())
+            })
+            .map(|file| file.path.clone())
+            .collect();
+        let dirs = files
+            .iter()
+            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .collect();
         self.watched_files = files;
-        if dirs == self.watched_dirs && !changed_host { return; }
+        if dirs == self.watched_dirs && !changed_host {
+            return;
+        }
         self.watched_dirs = dirs;
         self.apply_watch(cx, access);
     }
 
     fn apply_watch<E: 'static>(&mut self, cx: &mut Context<E>, access: Access<E>) {
-        let Some(host) = self.watch_host.clone() else { return };
+        let Some(host) = self.watch_host.clone() else {
+            return;
+        };
         let generation = self.watch_generation;
         let want: Vec<PathBuf> = self.watched_dirs.iter().cloned().collect();
         if let Some(sub) = self.watch.clone() {
-            if self.watch_busy { self.watch_dirty = true; return; }
+            if self.watch_busy {
+                self.watch_dirty = true;
+                return;
+            }
             self.watch_busy = true;
-            HostOps::run(host, cx, move |_| sub.set_dirs(&want), move |view, result, cx| {
-                let owner = access(view);
-                if owner.watch_generation != generation { return; }
-                owner.watch_busy = false;
-                if let Err(error) = result { log::warn!("editor: could not update the watched set: {error}"); }
-                if std::mem::take(&mut owner.watch_dirty) { owner.apply_watch(cx, access); }
-            });
+            HostOps::run(
+                host,
+                cx,
+                move |_| sub.set_dirs(&want),
+                move |view, result, cx| {
+                    let owner = access(view);
+                    if owner.watch_generation != generation {
+                        return;
+                    }
+                    owner.watch_busy = false;
+                    if let Err(error) = result {
+                        log::warn!("editor: could not update the watched set: {error}");
+                    }
+                    if std::mem::take(&mut owner.watch_dirty) {
+                        owner.apply_watch(cx, access);
+                    }
+                },
+            );
             return;
         }
-        if self.watch_opening { return; }
+        if self.watch_opening {
+            return;
+        }
         self.watch_opening = true;
         let opened_with = self.watched_dirs.clone();
-        HostOps::run(host, cx, move |h| h.watch(&want).map(Arc::new),
+        HostOps::run(
+            host,
+            cx,
+            move |h| h.watch(&want).map(Arc::new),
             move |view, result: std::io::Result<Arc<WatchSub>>, cx| {
                 let owner = access(view);
-                if owner.watch_generation != generation { return; }
+                if owner.watch_generation != generation {
+                    return;
+                }
                 owner.watch_opening = false;
                 let sub = match result {
                     Ok(sub) => sub,
-                    Err(error) => { log::warn!("editor: external-change watcher unavailable: {error}"); return; }
+                    Err(error) => {
+                        log::warn!("editor: external-change watcher unavailable: {error}");
+                        return;
+                    }
                 };
                 let events = sub.events().clone();
                 let tx = owner.events_tx.clone();
                 owner.watch = Some(sub);
-                if owner.watched_dirs != opened_with { owner.apply_watch(cx, access); }
+                if owner.watched_dirs != opened_with {
+                    owner.apply_watch(cx, access);
+                }
                 cx.spawn(async move |_, _| {
                     while let Ok(paths) = events.recv().await {
-                        if tx.send(WatchBatch { generation, paths }).await.is_err() { break; }
+                        if tx.send(WatchBatch { generation, paths }).await.is_err() {
+                            break;
+                        }
                     }
-                }).detach();
-            });
+                })
+                .detach();
+            },
+        );
     }
 
     pub(super) fn external_change<E: 'static>(
-        &mut self, path: &Path, window: &Window, cx: &mut Context<E>, access: Access<E>, edited: Edited<E>,
+        &mut self,
+        path: &Path,
+        window: &Window,
+        cx: &mut Context<E>,
+        access: Access<E>,
+        edited: Edited<E>,
     ) {
-        let Some(host) = self.watch_host.clone() else { return };
-        let Some(id) = self.at(host.id(), path) else { return };
-        let Some(seq) = self.get(id).map(|file| file.reload_seq) else { return };
+        let Some(host) = self.watch_host.clone() else {
+            return;
+        };
+        let Some(id) = self.at(host.id(), path) else {
+            return;
+        };
+        let Some(seq) = self.get(id).map(|file| file.reload_seq) else {
+            return;
+        };
         let generation = self.watch_generation;
         let target = path.to_path_buf();
         let expected = target.clone();
-        HostOps::run_in(host.clone(), window, cx, move |h| match h.stat(&target) {
-            Ok(meta) => Observed::Present(meta.mtime),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Observed::Missing,
-            Err(_) => Observed::Present(None),
-        }, move |view, observed, window, cx| {
-            let owner = access(view);
-            if owner.watch_generation != generation { return; }
-            if owner.get(id).is_none_or(|file| file.reload_seq != seq || !file.is_at(host.id(), &expected)) { return; }
-            if owner.apply_external_change(id, observed, cx) {
-                owner.reload(id, window, cx, access, edited);
-            }
-        });
+        HostOps::run_in(
+            host.clone(),
+            window,
+            cx,
+            move |h| match h.stat(&target) {
+                Ok(meta) => Observed::Present(meta.mtime),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Observed::Missing,
+                Err(_) => Observed::Present(None),
+            },
+            move |view, observed, window, cx| {
+                let owner = access(view);
+                if owner.watch_generation != generation {
+                    return;
+                }
+                if owner
+                    .get(id)
+                    .is_none_or(|file| file.reload_seq != seq || !file.is_at(host.id(), &expected))
+                {
+                    return;
+                }
+                if owner.apply_external_change(id, observed, cx) {
+                    owner.reload(id, window, cx, access, edited);
+                }
+            },
+        );
     }
 
     /// Returns whether the clean buffer needs reloading; conflicts never
     /// replace text and therefore preserve every tab's unsaved edits.
-    pub(super) fn apply_external_change<E: 'static>(&mut self, id: BufferId, observed: Observed, cx: &mut Context<E>) -> bool {
-        let Some(file) = self.get_mut(id) else { return false };
+    pub(super) fn apply_external_change<E: 'static>(
+        &mut self,
+        id: BufferId,
+        observed: Observed,
+        cx: &mut Context<E>,
+    ) -> bool {
+        let Some(file) = self.get_mut(id) else {
+            return false;
+        };
         match classify_external_change(file.saving, file.dirty, file.disk_mtime, observed) {
             ExternalChange::Ignore => {}
             ExternalChange::Conflict => {
-                if let Observed::Present(mtime) = observed { file.conflict = Some(DiskConflict::Changed(mtime)); }
+                if let Observed::Present(mtime) = observed {
+                    file.conflict = Some(DiskConflict::Changed(mtime));
+                }
                 cx.notify();
             }
             ExternalChange::Deleted => {
@@ -433,53 +612,94 @@ impl EditorBuffers {
     }
 
     pub(super) fn reload<E: 'static>(
-        &mut self, id: BufferId, window: &Window, cx: &mut Context<E>, access: Access<E>, edited: Edited<E>,
+        &mut self,
+        id: BufferId,
+        window: &Window,
+        cx: &mut Context<E>,
+        access: Access<E>,
+        edited: Edited<E>,
     ) {
-        let Some(file) = self.get_mut(id).filter(|file| file.untitled.is_none()) else { return };
+        let Some(file) = self.get_mut(id).filter(|file| file.untitled.is_none()) else {
+            return;
+        };
         let target = file.path.clone();
         let expected = target.clone();
         let host = file.host.clone();
         let host_id = host.id();
         file.reload_seq = file.reload_seq.wrapping_add(1);
         let seq = file.reload_seq;
-        HostOps::run_in(host, window, cx, move |h| {
-            let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
-            let decoded = editor_text::decode(&bytes).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text"))?;
-            let mtime = h.stat(&target).ok().and_then(|meta| meta.mtime);
-            Ok((decoded, mtime))
-        }, move |view, result: std::io::Result<(editor_text::Decoded, Option<MTime>)>, window, cx| {
-            let Some(file) = access(view).get_mut(id) else { return };
-            if file.reload_seq != seq || !file.is_at(host_id, &expected) { return; }
-            let (decoded, mtime) = match result {
-                Ok(loaded) => loaded,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    file.conflict = Some(DiskConflict::Deleted);
-                    file.disk_mtime = None;
-                    cx.notify();
+        HostOps::run_in(
+            host,
+            window,
+            cx,
+            move |h| {
+                let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
+                let decoded = editor_text::decode(&bytes).ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
+                })?;
+                let mtime = h.stat(&target).ok().and_then(|meta| meta.mtime);
+                Ok((decoded, mtime))
+            },
+            move |view,
+                  result: std::io::Result<(editor_text::Decoded, Option<MTime>)>,
+                  window,
+                  cx| {
+                let Some(file) = access(view).get_mut(id) else {
+                    return;
+                };
+                if file.reload_seq != seq || !file.is_at(host_id, &expected) {
                     return;
                 }
-                Err(error) => { log::warn!("editor: reload of {} failed: {error}", file.path.display()); return; }
-            };
-            file.disk_mtime = mtime;
-            file.conflict = None;
-            file.saved = Fingerprint::of_str(&decoded.text);
-            file.format = decoded.format;
-            file.saved_format = decoded.format;
-            let input = file.input.clone();
-            replace_buffer_text(&input, &decoded.text, window, cx);
-            access(view).note_edit(id, cx);
-            edited(view, id, cx);
-        });
+                let (decoded, mtime) = match result {
+                    Ok(loaded) => loaded,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        file.conflict = Some(DiskConflict::Deleted);
+                        file.disk_mtime = None;
+                        cx.notify();
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("editor: reload of {} failed: {error}", file.path.display());
+                        return;
+                    }
+                };
+                file.disk_mtime = mtime;
+                file.conflict = None;
+                file.saved = Fingerprint::of_str(&decoded.text);
+                file.format = decoded.format;
+                file.saved_format = decoded.format;
+                let input = file.input.clone();
+                replace_buffer_text(&input, &decoded.text, window, cx);
+                access(view).note_edit(id, cx);
+                edited(view, id, cx);
+            },
+        );
     }
 
-    pub(super) fn path_moved(&mut self, host: HostId, from: &Path, to: &Path, cx: &mut gpui_kit::App) -> bool {
+    pub(super) fn path_moved(
+        &mut self,
+        host: HostId,
+        from: &Path,
+        to: &Path,
+        cx: &mut gpui_kit::App,
+    ) -> bool {
         let mut moved = false;
         for file in &mut self.files {
-            if file.untitled.is_some() || file.host.id() != host { continue; }
-            let Ok(rest) = file.path.strip_prefix(from) else { continue };
-            file.path = if rest.as_os_str().is_empty() { to.to_path_buf() } else { to.join(rest) };
+            if file.untitled.is_some() || file.host.id() != host {
+                continue;
+            }
+            let Ok(rest) = file.path.strip_prefix(from) else {
+                continue;
+            };
+            file.path = if rest.as_os_str().is_empty() {
+                to.to_path_buf()
+            } else {
+                to.join(rest)
+            };
             file.reload_seq = file.reload_seq.wrapping_add(1);
-            file.input.update(cx, |state, cx| state.set_highlighter(language_for_path(&file.path), cx));
+            file.input.update(cx, |state, cx| {
+                state.set_highlighter(language_for_path(&file.path), cx)
+            });
             moved = true;
         }
         moved

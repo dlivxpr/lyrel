@@ -403,7 +403,8 @@ impl LyrelApp {
             .cursor_pointer()
             .hover(|s| s.bg(gpui_kit::rgb(sf.hover)))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.loopback_panel.edit(forward_for_edit.clone(), window, cx);
+                this.loopback_panel
+                    .edit(forward_for_edit.clone(), window, cx);
                 cx.notify();
             }))
             .child(crate::ui::right_panel::git_badge(
@@ -930,7 +931,7 @@ mod tests {
 #[cfg(test)]
 mod managed_forward_gpui_tests {
     use gpui_kit::component::input::InputState;
-    use gpui_kit::{Focusable as _, TestAppContext, TestSupportExt as _};
+    use gpui_kit::{Focusable as _, TestAppContext};
 
     use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
     use crate::ui::app::test_window::harness_with_tabs;
@@ -975,10 +976,12 @@ mod managed_forward_gpui_tests {
             app.close_managed_forward_form(window, cx);
 
             assert_eq!(app.loopback_panel.form_pane_id, None);
-            assert!(app.tabs[0].pane.terminals()[0]
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window));
+            assert!(
+                app.tabs[0].pane.terminals()[0]
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
         });
     }
 

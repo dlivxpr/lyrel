@@ -1,6 +1,5 @@
 use super::*;
 use crate::daemon::protocol::DaemonMsg;
-use crate::daemon::transport::Stream;
 
 use super::super::test_support::socket_pair;
 #[test]

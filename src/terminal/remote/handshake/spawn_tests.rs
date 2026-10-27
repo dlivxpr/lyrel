@@ -1,13 +1,12 @@
 use super::*;
 use crate::terminal::remote::test_support::socket_pair;
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 
 #[test]
 fn a_slow_split_spawn_reply_keeps_its_real_pane_id() {
     let (mut client, mut daemon) = socket_pair();
     let cancellation = SpawnCancellation::default();
-    let worker =
-        std::thread::spawn(move || cancellable_spawn_reply(&mut client, &cancellation));
+    let worker = std::thread::spawn(move || cancellable_spawn_reply(&mut client, &cancellation));
     let mut bytes = Vec::new();
     DaemonMsg::Spawned { pane_id: 42 }
         .encode(&mut bytes)
@@ -72,7 +71,10 @@ fn only_landing_a_provisional_terminal_sends_its_matching_attach() {
     crate::core::config::pin_test_config_dir();
     let (client, mut daemon) = socket_pair();
     let mut terminal = RemoteTerminal::from_stream(client, TermSize::new(80, 24)).unwrap();
-    terminal.connection.finish_spawn(PaneRoute::Local, Some((43, win_size(TermSize::new(80, 24), 8, 17))));
+    terminal.connection.finish_spawn(
+        PaneRoute::Local,
+        Some((43, win_size(TermSize::new(80, 24), 8, 17))),
+    );
     terminal.claim_spawn();
     daemon
         .set_read_timeout(Some(std::time::Duration::from_secs(2)))

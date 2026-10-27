@@ -1,15 +1,18 @@
 //! 单个 pane 链接的安装、替换、resize 同步与退休。
 //! successor 安装前先退休 reader；任何关闭路径均不 join socket 线程。
-use super::{EventProxy, GraphicsViewportReporter, PaneEvent, PaneRoute, ReaderSignals, ShellState, TermSize, win_size};
 use super::reader::ReaderTask;
 use super::writer::{InputLoss, LinkWriter};
+use super::{
+    EventProxy, GraphicsViewportReporter, PaneEvent, PaneRoute, ReaderSignals, ShellState,
+    TermSize, win_size,
+};
 use crate::daemon::protocol::{ClientMsg, WinSize};
 use crate::daemon::transport::Stream;
 use crate::terminal::bridge::ParseBridge;
 use lyrel_core::core::term_modes::KeyboardStacks;
 use parking_lot::FairMutex;
 use rio_vt::crosswords::Crosswords;
-use rio_vt::crosswords::grid::Dimensions as _;
+use rio_vt::performer::handler::Handler as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -53,11 +56,26 @@ impl PaneConnection {
     ) -> anyhow::Result<Self> {
         let read_half = stream.try_clone()?;
         let quit = Arc::new(AtomicBool::new(false));
-        let link = LinkWriter::new(stream, InputLoss::new(quit.clone(), signals.exited.clone(), proxy.clone()))?;
-        let viewport_reporter = GraphicsViewportReporter::new(term, signals.images.clone(), link.sender())?;
-        let reader = ReaderTask::spawn(term.clone(), proxy.clone(), read_half, buffered, quit, signals, link.sender(), viewport_reporter.clone());
+        let link = LinkWriter::new(
+            stream,
+            InputLoss::new(quit.clone(), signals.exited.clone(), proxy.clone()),
+        )?;
+        let viewport_reporter =
+            GraphicsViewportReporter::new(term, signals.images.clone(), link.sender())?;
+        let reader = ReaderTask::spawn(
+            term.clone(),
+            proxy.clone(),
+            read_half,
+            buffered,
+            quit,
+            signals,
+            link.sender(),
+            viewport_reporter.clone(),
+        );
         Ok(Self {
-            link, reader, viewport_reporter,
+            link,
+            reader,
+            viewport_reporter,
             route: PaneRoute::Local,
             size,
             synced_size: false,
@@ -75,7 +93,8 @@ impl PaneConnection {
     pub(super) fn claim_spawn(&mut self) {
         if let Some((pane_id, size)) = self.spawn_claim.take() {
             self.link.send(ClientMsg::Attach {
-                pane_id, size,
+                pane_id,
+                size,
                 allow_remote_clipboard_write: self.route.allow_remote_clipboard_write(),
             });
         }
@@ -257,7 +276,10 @@ impl PaneConnection {
         if !echoed {
             let local_conpty = local_conpty.load(Ordering::Relaxed);
             let shell_redraws = !local_conpty
-                && shell.lock().map(|s| s.active && s.at_prompt).unwrap_or(false);
+                && shell
+                    .lock()
+                    .map(|s| s.active && s.at_prompt)
+                    .unwrap_or(false);
             crate::terminal::prompt_reflow::resize(
                 &mut term.lock(),
                 size,

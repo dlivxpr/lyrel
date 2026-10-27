@@ -1,6 +1,6 @@
-use super::*;
+use super::super::test_support::{null_writer, test_state};
 use super::super::*;
-use super::super::test_support::{test_state, ws, null_writer};
+use super::*;
 
 #[test]
 fn observed_facts_prefer_the_sessions_argv_and_carry_its_status() {
