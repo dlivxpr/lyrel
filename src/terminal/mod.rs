@@ -1,3 +1,4 @@
+mod agent_activity;
 mod boxdraw;
 pub(super) mod bridge;
 mod cmd_editor;
@@ -5,6 +6,7 @@ mod color_scheme;
 mod command_cursor;
 mod completion;
 mod composer;
+pub(crate) mod desktop_notification;
 pub mod element;
 pub mod fps;
 mod fuzzy;
@@ -35,5 +37,5 @@ mod typeahead;
 pub mod view;
 
 pub use remote::{PaneRoute, PaneWorkspace, RemoteTerminal, attach_refused};
-pub(crate) use remote::{SpawnCancellation, notify_desktop};
+pub(crate) use remote::SpawnCancellation;
 pub use size::TermSize;

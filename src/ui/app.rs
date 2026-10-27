@@ -7212,7 +7212,10 @@ impl LyrelApp {
 
     fn deliver_agent_prompt(&mut self, prompt: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppNoRunningCodingAgent));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppNoRunningCodingAgent),
+            );
             return;
         };
         target.read(cx).send_agent_prompt(prompt);
@@ -7235,7 +7238,10 @@ impl LyrelApp {
             None => (None, None),
         };
         let Some(selection) = selection else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppNothingSelected));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppNothingSelected),
+            );
             return;
         };
         let cwd = cwd.map(|c| c.to_string_lossy().into_owned());
@@ -7256,7 +7262,10 @@ impl LyrelApp {
             Some((view.host(cx)?, view.host_cwd()?))
         });
         let Some((host, cwd)) = target else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppPaneNoKnownDirectory));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppPaneNoKnownDirectory),
+            );
             return;
         };
         crate::ui::host_ops::HostOps::run_in(
@@ -7277,7 +7286,7 @@ impl LyrelApp {
             move |this, (diff, cwd_s), window, cx| {
                 match crate::core::agent_prompt::build_diff_review_prompt(&diff, Some(&cwd_s)) {
                     Some(prompt) => this.deliver_agent_prompt(&prompt, window, cx),
-                    None => crate::terminal::notify_desktop(
+                    None => crate::terminal::desktop_notification::notify_desktop(
                         Some("lyrel"),
                         &t_fmt(L10nKey::AppNoUncommittedChanges, &[("cwd", &cwd_s)]),
                     ),
