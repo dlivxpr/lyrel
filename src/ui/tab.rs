@@ -636,7 +636,7 @@ impl Tab {
 
 /// What a rename box's contents mean for the tab's name.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Rename {
+enum Rename {
     /// The box still holds what it was seeded with, so nothing was asked for.
     Unchanged,
     /// Emptied on purpose: the tab goes back to following its pane.
@@ -654,7 +654,7 @@ pub(crate) enum Rename {
 /// as a name — and a name is a different thing from the title it was copied
 /// from: it stops following the pane, freezing the tab on whatever it happened
 /// to say at that moment, with no way to undo it.
-pub(crate) fn rename_outcome(value: &str, prefill: &str) -> Rename {
+fn rename_outcome(value: &str, prefill: &str) -> Rename {
     let value = value.trim();
     match value {
         v if v == prefill.trim() => Rename::Unchanged,
