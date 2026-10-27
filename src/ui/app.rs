@@ -5147,7 +5147,7 @@ impl LyrelApp {
     /// processing output, but their wakeups must not dirty the whole window.
     fn declare_displayed_panes(&self, cx: &App) {
         let active = self.active;
-        crate::terminal::view::declare_displayed(
+        crate::terminal::lifecycle::declare_displayed(
             cx,
             self.tabs.iter().enumerate().flat_map(|(i, tab)| {
                 tab.pane.leaves().into_iter().filter_map(move |slot| {
@@ -11341,8 +11341,8 @@ mod cursor_blink_gpui_tests {
         app.update_in(&mut vcx, |_, window, cx| {
             assert!(left.read(cx).focus_handle.is_focused(window));
             assert!(!right.read(cx).focus_handle.is_focused(window));
-            assert!(left.read(cx).cursor_visible);
-            assert!(right.read(cx).cursor_visible);
+            assert!(left.read(cx).cursor_visible());
+            assert!(right.read(cx).cursor_visible());
         });
 
         vcx.executor()
@@ -11350,9 +11350,9 @@ mod cursor_blink_gpui_tests {
         vcx.background_executor.run_until_parked();
 
         app.update(&mut vcx, |_, cx| {
-            assert!(!left.read(cx).cursor_visible, "the focused cursor blinks");
+            assert!(!left.read(cx).cursor_visible(), "the focused cursor blinks");
             assert!(
-                right.read(cx).cursor_visible,
+                right.read(cx).cursor_visible(),
                 "the unfocused cursor must keep a steady phase"
             );
         });
@@ -12079,7 +12079,8 @@ mod rename_gpui_tests {
 mod displayed_gpui_tests {
     use gpui_kit::TestAppContext;
 
-    use crate::terminal::view::{declare_displayed, displayed_for_test, quiet_test_pane};
+    use crate::terminal::lifecycle::{declare_displayed, displayed_for_test};
+    use crate::terminal::view::quiet_test_pane;
     use crate::ui::app::test_window::harness_with_tabs;
 
     fn pane_id(app: &super::LyrelApp, tab: usize) -> gpui_kit::EntityId {

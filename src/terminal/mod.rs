@@ -18,6 +18,7 @@ mod hold;
 pub(crate) mod images;
 pub mod input;
 mod link_probe;
+pub(crate) mod lifecycle;
 mod loopback;
 pub mod palette;
 pub(crate) mod pane_liveness;
