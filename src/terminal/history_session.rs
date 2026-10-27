@@ -300,20 +300,10 @@ impl TerminalHistory {
         true
     }
 
-    /// Ghost text uses recency, cwd affinity and successful exit, not frecency.
-    pub(super) fn ghost_suggestion(&self, cmd: &CmdEditor) -> Option<String> {
-        if cmd.is_empty() || cmd.cursor() != cmd.len() { return None }
-        let line = cmd.text();
-        let cwd = self.ranked_cwd.as_deref().and_then(Path::to_str);
-        let mut elsewhere = None;
-        for entry in self.data.entries.iter().rev() {
-            if entry.len() <= line.len() || !entry.starts_with(&line) { continue }
-            if self.data.meta.get(entry).and_then(|m| m.exit).is_some_and(|exit| exit != 0) { continue }
-            let here = cwd.is_some_and(|dir| self.data.cwds.get(entry).is_some_and(|dirs| dirs.contains(dir)));
-            if here || cwd.is_none() { return Some(entry.clone()) }
-            elsewhere.get_or_insert(entry);
-        }
-        elsewhere.cloned()
+    /// None means no directory was reported; otherwise borrow its run affinity.
+    pub(super) fn directory_affinity(&self, entry: &str) -> Option<bool> {
+        let cwd = self.ranked_cwd.as_deref().and_then(Path::to_str)?;
+        Some(self.data.cwds.get(entry).is_some_and(|dirs| dirs.contains(cwd)))
     }
 
     pub(super) fn search(&self) -> Option<&ReverseSearch> { self.search.as_ref() }
