@@ -1,4 +1,4 @@
-pub(crate) mod state;
+pub(super) mod state;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

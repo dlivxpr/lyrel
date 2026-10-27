@@ -5,26 +5,26 @@ use crate::ui::i18n::{L10nKey, t, t_fmt};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct CompletionContext {
+pub(in crate::terminal) struct CompletionContext {
     host: HostId,
     cwd: Option<PathBuf>,
     remote: Option<crate::daemon::protocol::RemoteContext>,
 }
 
 impl CompletionContext {
-    pub(crate) fn new(host: HostId, cwd: Option<PathBuf>, remote: Option<crate::daemon::protocol::RemoteContext>) -> Self {
+    pub(in crate::terminal) fn new(host: HostId, cwd: Option<PathBuf>, remote: Option<crate::daemon::protocol::RemoteContext>) -> Self {
         Self { host, cwd, remote }
     }
 }
 
-pub(crate) enum CompletionWork {
+pub(in crate::terminal) enum CompletionWork {
     Updated,
     Handoff,
     Generators { generation: u64, scripts: Vec<super::PendingGenerator>, cwd: PathBuf },
     Remote(RemoteRequest),
 }
 
-pub(crate) struct RemoteRequest {
+pub(in crate::terminal) struct RemoteRequest {
     generation: u64,
     context: CompletionContext,
     line: String,
@@ -34,13 +34,13 @@ pub(crate) struct RemoteRequest {
 }
 
 impl RemoteRequest {
-    pub(crate) fn directory(&self) -> &str { &self.path.dir }
+    pub(in crate::terminal) fn directory(&self) -> &str { &self.path.dir }
 }
 
 /// Owns the complete suggestion lifecycle. The retained view only schedules I/O,
 /// supplies the current input/locality, and applies the shell-handoff decision.
 #[derive(Default)]
-pub(crate) struct TerminalCompletion {
+pub(in crate::terminal) struct TerminalCompletion {
     session: Option<CompletionSession>,
     generation: u64,
     context: Option<CompletionContext>,
@@ -50,7 +50,7 @@ pub(crate) struct TerminalCompletion {
 
 impl TerminalCompletion {
     /// History remains the only store; ghosts use recency, not frecency.
-    pub(crate) fn ghost_suggestion(&self, cmd: &CmdEditor, history: &crate::terminal::history_session::TerminalHistory) -> Option<String> {
+    pub(in crate::terminal) fn ghost_suggestion(&self, cmd: &CmdEditor, history: &crate::terminal::history_session::TerminalHistory) -> Option<String> {
         if cmd.is_empty() || cmd.cursor() != cmd.len() { return None }
         let line = cmd.text();
         let mut elsewhere = None;
@@ -63,29 +63,29 @@ impl TerminalCompletion {
         elsewhere.cloned()
     }
 
-    pub(crate) fn is_open(&self) -> bool { self.session.is_some() }
-    pub(crate) fn has_work(&self) -> bool { self.session.is_some() || self.remote_inflight }
-    pub(crate) fn has_selection(&self) -> bool {
+    pub(in crate::terminal) fn is_open(&self) -> bool { self.session.is_some() }
+    pub(in crate::terminal) fn has_work(&self) -> bool { self.session.is_some() || self.remote_inflight }
+    pub(in crate::terminal) fn has_selection(&self) -> bool {
         self.session.as_ref().is_some_and(|s| s.selected().is_some())
     }
-    pub(crate) fn items(&self) -> Vec<&Candidate> {
+    pub(in crate::terminal) fn items(&self) -> Vec<&Candidate> {
         self.session.as_ref().map(|s| s.filtered.iter().map(|&i| &s.all[i]).collect()).unwrap_or_default()
     }
-    pub(crate) fn selected_index(&self) -> Option<usize> {
+    pub(in crate::terminal) fn selected_index(&self) -> Option<usize> {
         self.session.as_ref().and_then(|s| s.index)
     }
-    pub(crate) fn notice_text(&self) -> Option<String> {
+    pub(in crate::terminal) fn notice_text(&self) -> Option<String> {
         self.notice.clone().or_else(|| self.remote_inflight.then(|| t(L10nKey::CompletionListingRemote).to_string()))
     }
-    pub(crate) fn dismiss_notice(&mut self) -> bool { self.notice.take().is_some() }
+    pub(in crate::terminal) fn dismiss_notice(&mut self) -> bool { self.notice.take().is_some() }
 
-    pub(crate) fn close(&mut self) {
+    pub(in crate::terminal) fn close(&mut self) {
         self.session = None;
         self.remote_inflight = false;
         self.generation = self.generation.wrapping_add(1);
     }
 
-    pub(crate) fn observe_context(&mut self, context: CompletionContext) -> bool {
+    pub(in crate::terminal) fn observe_context(&mut self, context: CompletionContext) -> bool {
         if self.context.as_ref() == Some(&context) { return false }
         let changed = self.has_work() || self.notice.is_some();
         self.close();
@@ -94,7 +94,7 @@ impl TerminalCompletion {
         changed
     }
 
-    pub(crate) fn tab(
+    pub(in crate::terminal) fn tab(
         &mut self,
         cmd: &mut CmdEditor,
         context: CompletionContext,
@@ -139,7 +139,7 @@ impl TerminalCompletion {
         }
     }
 
-    pub(crate) fn begin_remote(&mut self, cmd: &CmdEditor, context: CompletionContext, path: RemotePathRequest, forward: bool) -> RemoteRequest {
+    fn begin_remote(&mut self, cmd: &CmdEditor, context: CompletionContext, path: RemotePathRequest, forward: bool) -> RemoteRequest {
         self.observe_context(context.clone());
         self.close();
         self.remote_inflight = true;
@@ -148,7 +148,7 @@ impl TerminalCompletion {
 
     /// A stale answer must not clear a successor's loading indicator or error.
     /// Failed listings retain a notice; successful empty listings hand Tab back.
-    pub(crate) fn remote_results(
+    pub(in crate::terminal) fn remote_results(
         &mut self,
         request: RemoteRequest,
         context: CompletionContext,
@@ -180,7 +180,7 @@ impl TerminalCompletion {
         None
     }
 
-    pub(crate) fn offer(&mut self, cmd: &mut CmdEditor, start: usize, end: usize, candidates: Vec<Candidate>, pending: usize, shell: Option<&str>) -> Option<u64> {
+    pub(in crate::terminal) fn offer(&mut self, cmd: &mut CmdEditor, start: usize, end: usize, candidates: Vec<Candidate>, pending: usize, shell: Option<&str>) -> Option<u64> {
         self.close();
         if pending == 0 && candidates.len() == 1 {
             Self::insert(cmd, &candidates[0], candidates[0].start, shell);
@@ -200,7 +200,7 @@ impl TerminalCompletion {
         Some(self.generation)
     }
 
-    pub(crate) fn merge(&mut self, generation: u64, context: CompletionContext, cmd: &CmdEditor, results: Vec<crate::terminal::generator::Parsed>) -> bool {
+    pub(in crate::terminal) fn merge(&mut self, generation: u64, context: CompletionContext, cmd: &CmdEditor, results: Vec<crate::terminal::generator::Parsed>) -> bool {
         self.observe_context(context);
         if self.generation != generation { return false }
         let Some(session) = self.session.as_mut() else { return false };
@@ -219,7 +219,7 @@ impl TerminalCompletion {
         true
     }
 
-    pub(crate) fn select(&mut self, forward: bool) {
+    pub(in crate::terminal) fn select(&mut self, forward: bool) {
         if let Some(session) = self.session.as_mut() { session.select(forward); }
     }
 
@@ -239,7 +239,7 @@ impl TerminalCompletion {
         self.select(forward);
     }
 
-    pub(crate) fn accept(&mut self, cmd: &mut CmdEditor, shell: Option<&str>) {
+    pub(in crate::terminal) fn accept(&mut self, cmd: &mut CmdEditor, shell: Option<&str>) {
         let session = self.session.take();
         self.close();
         if let Some(session) = session && let Some(candidate) = session.selected() {
@@ -261,7 +261,7 @@ impl TerminalCompletion {
         cmd.set_with_cursor(&line, cursor);
     }
 
-    pub(crate) fn refilter(&mut self, cmd: &CmdEditor) {
+    pub(in crate::terminal) fn refilter(&mut self, cmd: &CmdEditor) {
         if self.remote_inflight { self.close(); }
         let Some(session) = self.session.as_mut() else { return };
         let chars: Vec<char> = cmd.text().chars().collect();
