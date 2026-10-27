@@ -12,14 +12,14 @@ struct IsolatedHost {
     id: HostId,
     relative_state: bool,
 }
-pub(crate) fn install(home: &Path, cx: &mut Context<LyrelApp>) {
+pub(crate) fn install(home: &Path, cx: &mut Context<SettingsWindow>) {
     install_on(home, HostId::LOCAL, false, cx);
 }
 pub(super) fn install_on(
     home: &Path,
     id: HostId,
     relative_state: bool,
-    cx: &mut Context<LyrelApp>,
+    cx: &mut Context<SettingsWindow>,
 ) {
     HostRegistry::insert(
         cx,

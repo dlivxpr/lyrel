@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::keychain::{CredentialStore, InMemoryCredentialStore};
-use crate::ui::{app::test_window::harness, settings::SettingsSection};
+use crate::ui::app::{LyrelApp, test_window::harness};
+use crate::ui::settings::SettingsSection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext, TestAppContext, VisualTestContext};
 use std::{collections::VecDeque, sync::mpsc};
@@ -189,18 +190,20 @@ fn settle(vcx: &mut VisualTestContext, condition: impl Fn(&UsageData) -> bool) {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
-fn open(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
+fn open(workspace: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Entity<SettingsWindow> {
+    let app = crate::ui::settings::test_window::open(workspace, vcx);
     vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)));
     app.update_in(vcx, |app, w, cx| {
         app.open_settings_section(SettingsSection::Usage, w, cx)
     });
     vcx.run_until_parked();
+    app
 }
 
 #[gpui_kit::test]
 fn account_modal_blocks_navigation_until_cancelled(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -210,7 +213,7 @@ fn account_modal_blocks_navigation_until_cancelled(cx: &mut TestAppContext) {
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     let navigation = format!("settings-nav-{}", SettingsSection::General.profile_label());
     vcx.update(|window, cx| {
@@ -242,7 +245,7 @@ fn settings_account_lifecycle_validates_before_saving_and_removes_only_its_own_s
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     vault
         .set_password("user", "unrelated", 22, "ssh-secret")
@@ -256,7 +259,7 @@ fn settings_account_lifecycle_validates_before_saving_and_removes_only_its_own_s
         false,
     );
     assert_eq!(http.calls.load(Ordering::SeqCst), 0);
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     http.reply(401, b"{}");
     click(&mut vcx, "usage-add");
     type_into(&mut vcx, "usage-name", "same");
@@ -353,7 +356,7 @@ fn visible_page_polling_stops_on_search_navigation_and_close_even_after_late_res
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let http = Arc::new(Http::default());
     let id = install(
         &mut vcx,
@@ -370,7 +373,7 @@ fn visible_page_polling_stops_on_search_navigation_and_close_even_after_late_res
         0,
         "startup must not query"
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     vcx.update(|w, cx| {
         w.render_frame(cx);
         w.within("usage-cadence").click("input", cx);
@@ -406,7 +409,7 @@ fn visible_page_polling_stops_on_search_navigation_and_close_even_after_late_res
         1,
         "late response must not rearm hidden page"
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     app.update_in(&mut vcx, |a, w, cx| {
         let search = a.active_settings().unwrap().search.clone();
         search.update(cx, |s, cx| s.set_value("DeepSeek", w, cx));
@@ -427,7 +430,7 @@ fn replacing_and_removing_accounts_rejects_late_refreshes_through_settings(
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let http = Arc::new(Http::default());
     let vault = Arc::new(InMemoryCredentialStore::new());
     let id = install(
@@ -438,7 +441,7 @@ fn replacing_and_removing_accounts_rejects_late_refreshes_through_settings(
         true,
     )
     .unwrap();
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     let old = http.held(200, BALANCE);
     click(&mut vcx, &format!("usage-refresh-{id}"));
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
@@ -553,7 +556,7 @@ fn settings_reports_vault_and_query_failures_without_losing_old_balance_or_key(
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let http = Arc::new(Http::default());
     let vault = Arc::new(LockedVault::default());
     let id = install(
@@ -564,7 +567,7 @@ fn settings_reports_vault_and_query_failures_without_losing_old_balance_or_key(
         true,
     )
     .unwrap();
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     vault.locked.store(true, Ordering::SeqCst);
     http.reply(200, BALANCE);
     click(&mut vcx, &format!("usage-replace-{id}"));
@@ -619,7 +622,7 @@ fn closing_settings_during_key_validation_cannot_create_an_account_or_save_a_sec
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let http = Arc::new(Http::default());
     let vault = Arc::new(InMemoryCredentialStore::new());
     install(
@@ -629,7 +632,7 @@ fn closing_settings_during_key_validation_cannot_create_an_account_or_save_a_sec
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     let release = http.held(200, BALANCE);
     click(&mut vcx, "usage-add");
     type_into(&mut vcx, "usage-name", "Cancelled");
@@ -667,7 +670,7 @@ fn escape_cancels_the_usage_form_without_closing_settings_or_persisting_a_key(
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -677,7 +680,7 @@ fn escape_cancels_the_usage_form_without_closing_settings_or_persisting_a_key(
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     vcx.simulate_resize(gpui_kit::size(gpui_kit::px(720.), gpui_kit::px(560.)));
     vcx.update(|w, cx| {
         w.render_frame(cx);
@@ -731,7 +734,7 @@ fn private_manual_session_verifies_then_saves_and_failed_replacement_preserves_p
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -741,7 +744,7 @@ fn private_manual_session_verifies_then_saves_and_failed_replacement_preserves_p
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-source");
     vcx.simulate_keystrokes("down enter");
@@ -820,12 +823,12 @@ mod console_workflow_tests;
 #[gpui_kit::test]
 fn replacing_credentials_commits_the_edited_name_with_the_verified_source(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     let path = dir.path().join("usage.json");
     let id = install(&mut vcx, path.clone(), vault.clone(), http.clone(), true).unwrap();
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, &format!("usage-replace-{id}"));
     type_into(&mut vcx, "usage-name", "Replacement name");
     type_into(&mut vcx, "usage-key", "rejected-key");
@@ -856,7 +859,7 @@ fn replacing_credentials_commits_the_edited_name_with_the_verified_source(cx: &m
 #[gpui_kit::test]
 fn account_overflow_keyboard_opens_a_named_form_and_restores_the_trigger(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let http = Arc::new(Http::default());
     let id = install(
         &mut vcx,
@@ -866,7 +869,7 @@ fn account_overflow_keyboard_opens_a_named_form_and_restores_the_trigger(cx: &mu
         true,
     )
     .unwrap();
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     let more = format!("usage-more-{id}");
     reveal(&mut vcx, &more, "usage-content");
     vcx.update(|window, cx| {
@@ -902,11 +905,11 @@ fn usage_account_grid_keeps_identity_actions_and_update_footer_reachable_at_inte
 ) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("usage.json");
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(&mut vcx, path.clone(), vault.clone(), http.clone(), true);
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     for name in ["Work account", "Shared account"] {
         click(&mut vcx, "usage-add-DeepSeek");
         type_into(&mut vcx, "usage-name", name);

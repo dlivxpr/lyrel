@@ -25,24 +25,33 @@ use crate::core::keychain::{
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
 };
-use crate::ui::app::{
-    FONT_SIZE_STEP, LINE_HEIGHT_STEP, LyrelApp, TITLE_BAR_HEIGHT, ThemeEdit, UI_FONT_SIZE_STEP,
-};
+use crate::ui::app::{FONT_SIZE_STEP, LINE_HEIGHT_STEP, TITLE_BAR_HEIGHT, UI_FONT_SIZE_STEP};
 use crate::ui::host_ops::HostId;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::presets;
+use crate::ui::settings_window::{SettingsEvent, SettingsWindow};
+#[cfg(target_os = "windows")]
+pub(crate) use theme_edit::window_backdrop_label_key;
+pub(crate) use theme_edit::{ThemeEdit, theme_edit_label};
 
 mod agents;
+mod configuration;
 mod editor;
 mod hosts;
+mod inputs;
 pub(crate) mod kit;
 mod pages;
 mod shell;
 mod shortcuts;
 pub(crate) mod skills;
+mod state;
 pub(crate) mod statistics;
+mod theme_edit;
 mod theme_picker;
 pub(crate) mod usage;
+
+#[cfg(test)]
+pub(crate) mod test_window;
 
 /// The settings nav, and the page's padding either side of its column.
 const NAV_W: f32 = 220.;
@@ -1732,7 +1741,7 @@ fn forward_row_inputs(row: &ForwardRuleForm) -> [&Entity<InputState>; 5] {
 
 fn seed_forward_row(
     window: &mut Window,
-    cx: &mut Context<LyrelApp>,
+    cx: &mut Context<SettingsWindow>,
     rule: &ForwardRule,
 ) -> ForwardRuleForm {
     let port = |p: u16| if p == 0 { String::new() } else { p.to_string() };
@@ -1754,7 +1763,7 @@ fn seed_forward_row(
 
 fn seed_hinted(
     window: &mut Window,
-    cx: &mut Context<LyrelApp>,
+    cx: &mut Context<SettingsWindow>,
     value: &str,
     placeholder: &'static str,
 ) -> Entity<InputState> {
@@ -1766,7 +1775,11 @@ fn seed_hinted(
     })
 }
 
-fn seed_input(window: &mut Window, cx: &mut Context<LyrelApp>, value: &str) -> Entity<InputState> {
+fn seed_input(
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+    value: &str,
+) -> Entity<InputState> {
     let value = value.to_string();
     cx.new(|cx| InputState::new(window, cx).default_value(value))
 }
@@ -1874,7 +1887,7 @@ fn stored_passphrase(key_path: &str) -> String {
         .unwrap_or_default()
 }
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn with_settings_edits_resolved(
         &mut self,
         window: &mut Window,
@@ -2031,24 +2044,7 @@ impl LyrelApp {
     }
 
     fn live_ssh_profiles(&self, cx: &App) -> std::collections::HashSet<Uuid> {
-        use crate::daemon::protocol::SshPhase;
-        let mut live = std::collections::HashSet::new();
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                let v = leaf.read(cx);
-                if !matches!(v.ssh_phase(), Some(SshPhase::Connected)) || v.terminal.exited {
-                    continue;
-                }
-                if let Some(id) = v
-                    .ssh_spec()
-                    .and_then(|s| s.profile_id.clone())
-                    .and_then(|id| Uuid::parse_str(&id).ok())
-                {
-                    live.insert(id);
-                }
-            }
-        }
-        live
+        (self.workspace.live_profiles)(cx)
     }
 
     fn toggle_ssh_group(&mut self, key: String, cx: &mut Context<Self>) {
@@ -2707,7 +2703,7 @@ impl LyrelApp {
             .collect();
         log::info!(
             "imported {read} alias(es) from {source} ({} file(s) read): {} added, {} updated, \
-             {} unchanged; no lyrel setting for: [{}]",
+         {} unchanged; no lyrel setting for: [{}]",
             report.files_read,
             stats.added,
             stats.updated,
@@ -3579,35 +3575,8 @@ mod tests {
 mod gpui_tests {
     use super::SettingsSection;
     use crate::core::config::{Config, MouseZoomModifier};
-    use crate::core::session::Session;
-    use crate::ui::app::LyrelApp;
-    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, px, size};
-
-    fn harness(cx: &mut TestAppContext) -> (Entity<LyrelApp>, VisualTestContext) {
-        crate::core::config::pin_test_config_dir();
-        cx.executor().allow_parking();
-        cx.update(|cx| {
-            gpui_kit::component::init(cx);
-            cx.set_global(Config::default());
-            crate::ui::keymap::init(cx);
-        });
-        let window = cx.add_window(|window, cx| {
-            let app =
-                cx.new(|cx| LyrelApp::with_session(None, Some(Session::default()), window, cx));
-            gpui_kit::component::Root::new(app, window, cx)
-        });
-        cx.background_executor.run_until_parked();
-        let app = window
-            .update(cx, |root, _, _| {
-                root.view()
-                    .clone()
-                    .downcast::<LyrelApp>()
-                    .unwrap_or_else(|_| panic!("window root wraps a LyrelApp"))
-            })
-            .unwrap();
-        let vcx = VisualTestContext::from_window(window.into(), cx);
-        (app, vcx)
-    }
+    use crate::ui::settings::test_window::harness;
+    use gpui_kit::{TestAppContext, px, size};
 
     /// The password is the one field on the host editor that never reaches the
     /// profile — it goes to the system keychain — so the dirty check that
@@ -3678,15 +3647,19 @@ mod gpui_tests {
     #[gpui_kit::test]
     fn external_ssh_navigation_resolves_the_current_form_once(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
-        let (app, mut vcx) = harness(cx);
+        let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
         let mut original = crate::core::ssh_profile::SshProfile::new("original");
         original.host = "original.example.com".into();
         let id = original.id;
-        app.update_in(&mut vcx, |app, window, cx| {
+        workspace.update_in(&mut vcx, |workspace, window, cx| {
             cx.global_mut::<Config>()
                 .ssh_profiles
                 .push(original.clone());
-            app.open_ssh_profile_in_settings(id, window, cx);
+            workspace.open_ssh_profile_in_settings(id, window, cx);
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
             let input = app
                 .active_settings()
                 .unwrap()
@@ -3698,7 +3671,9 @@ mod gpui_tests {
             input.update(cx, |input, cx| {
                 input.set_value("edited.example.com", window, cx)
             });
-            app.open_ssh_profile_new_from_target("new.example.com".into(), window, cx);
+        });
+        workspace.update_in(&mut vcx, |workspace, window, cx| {
+            workspace.open_ssh_profile_new_from_target("new.example.com".into(), window, cx);
         });
         vcx.run_until_parked();
         assert!(vcx.has_pending_prompt());
@@ -3706,7 +3681,7 @@ mod gpui_tests {
             crate::ui::i18n::L10nKey::SettingsKeepEditing,
         ));
         vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
+        app.update_in(&mut vcx, |app, _, cx| {
             assert_eq!(
                 app.active_settings()
                     .unwrap()
@@ -3717,7 +3692,9 @@ mod gpui_tests {
                 id
             );
             assert!(app.ssh_form_dirty(cx));
-            app.open_ssh_profile_new_from_target("new.example.com".into(), window, cx);
+        });
+        workspace.update_in(&mut vcx, |workspace, window, cx| {
+            workspace.open_ssh_profile_new_from_target("new.example.com".into(), window, cx);
         });
         vcx.run_until_parked();
         assert!(vcx.has_pending_prompt());
@@ -3729,9 +3706,12 @@ mod gpui_tests {
             assert_ne!(form.editing, id);
             assert_eq!(form.host.read(cx).value().as_str(), "new.example.com");
         });
+        app.update_in(&mut vcx, |app, _, cx| app.cancel_ssh_form(cx));
+        workspace.update_in(&mut vcx, |workspace, window, cx| {
+            workspace.open_ssh_profile_in_settings(id, window, cx);
+        });
+        vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
-            app.cancel_ssh_form(cx);
-            app.open_ssh_profile_in_settings(id, window, cx);
             let input = app
                 .active_settings()
                 .unwrap()
@@ -3741,7 +3721,9 @@ mod gpui_tests {
                 .host
                 .clone();
             input.update(cx, |s, cx| s.set_value("saved.example.com", window, cx));
-            app.open_ssh_profile_in_settings(id, window, cx);
+        });
+        workspace.update_in(&mut vcx, |workspace, window, cx| {
+            workspace.open_ssh_profile_in_settings(id, window, cx);
         });
         vcx.run_until_parked();
         vcx.simulate_prompt_answer(crate::ui::i18n::t(
@@ -3775,7 +3757,8 @@ mod gpui_tests {
     fn the_credential_rows_follow_the_auth_method(cx: &mut TestAppContext) {
         use crate::core::ssh_profile::{AuthMode, SshProfile};
         crate::core::config::pin_test_config_dir();
-        let (app, mut vcx) = harness(cx);
+        let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
         for (auth, password, keys) in [
             (AuthMode::Auto, true, true),
             (AuthMode::Password, true, false),
@@ -3785,9 +3768,12 @@ mod gpui_tests {
             let mut profile = SshProfile::new("creds");
             profile.auth = auth;
             let id = profile.id;
-            app.update_in(&mut vcx, |app, window, cx| {
+            workspace.update_in(&mut vcx, |workspace, window, cx| {
                 cx.global_mut::<Config>().ssh_profiles.push(profile);
-                app.open_ssh_profile_in_settings(id, window, cx);
+                workspace.open_ssh_profile_in_settings(id, window, cx);
+            });
+            vcx.run_until_parked();
+            app.update_in(&mut vcx, |app, _, cx| {
                 let form = app.active_settings().unwrap().ssh_form.as_ref().unwrap();
                 assert_eq!(form.wants_password(), password, "{auth:?}");
                 if !keys {
@@ -3836,7 +3822,7 @@ mod gpui_tests {
             cx.global_mut::<Config>().theme_preset = "settings-test-theme".into();
             app.open_settings_section(SettingsSection::Appearance, window, cx);
             app.edit_active_theme(
-                crate::ui::app::ThemeEdit::Accent,
+                crate::ui::settings::ThemeEdit::Accent,
                 gpui_kit::rgb(0x123456).into(),
                 window,
                 cx,
@@ -3850,7 +3836,7 @@ mod gpui_tests {
                 original_color
             );
             app.edit_active_theme(
-                crate::ui::app::ThemeEdit::Accent,
+                crate::ui::settings::ThemeEdit::Accent,
                 gpui_kit::rgb(0x654321).into(),
                 window,
                 cx,
@@ -3859,7 +3845,7 @@ mod gpui_tests {
             assert_ne!(std::fs::read(&path).unwrap(), original_file);
             assert!(!app.theme_draft_dirty());
             app.edit_active_theme(
-                crate::ui::app::ThemeEdit::Accent,
+                crate::ui::settings::ThemeEdit::Accent,
                 gpui_kit::rgb(0x102030).into(),
                 window,
                 cx,

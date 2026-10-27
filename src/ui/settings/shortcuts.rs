@@ -5,7 +5,7 @@
 use super::kit::{BtnKind, Tk, fs};
 use super::*;
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn render_settings_keybindings(&self, cx: &mut Context<Self>) -> AnyElement {
         let tk = Tk::of(cx);
         let Some(s) = self.active_settings() else {
@@ -350,3 +350,298 @@ impl LyrelApp {
 }
 
 use super::kit;
+pub(crate) const RECORD_COMMIT_DELAY_MS: u64 = 650;
+
+impl SettingsWindow {
+    pub(crate) fn start_recording_key(
+        &mut self,
+        action: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this = cx.weak_entity();
+        let intercept = cx.intercept_keystrokes(move |ev, _window, cx| {
+            let keystroke = ev.keystroke.clone();
+            let _ = this.update(cx, |this, cx| this.on_record_key(&keystroke, cx));
+            cx.stop_propagation();
+        });
+        self.record_gen = self.record_gen.wrapping_add(1);
+        if let Some(s) = self.active_settings_mut() {
+            s.rebinding_note = None;
+            s.kb_conflict = None;
+            s.recording = Some(Recording {
+                action,
+                chords: Vec::new(),
+                _intercept: intercept,
+            });
+        }
+        cx.notify();
+    }
+
+    fn on_record_key(&mut self, keystroke: &gpui_kit::Keystroke, cx: &mut Context<Self>) {
+        let Some((action, has_chords)) = self
+            .active_settings()
+            .and_then(|s| s.recording.as_ref())
+            .map(|r| (r.action.clone(), !r.chords.is_empty()))
+        else {
+            return;
+        };
+        match keystroke.key.as_str() {
+            "escape" => {
+                self.stop_recording(cx);
+                return;
+            }
+            "backspace" | "delete" => {
+                if has_chords {
+                    if let Some(r) = self
+                        .active_settings_mut()
+                        .and_then(|s| s.recording.as_mut())
+                    {
+                        r.chords.pop();
+                    }
+                    let still_has = self
+                        .active_settings()
+                        .and_then(|s| s.recording.as_ref())
+                        .is_some_and(|r| !r.chords.is_empty());
+                    if still_has {
+                        self.schedule_recording_commit(cx);
+                    } else {
+                        self.record_gen = self.record_gen.wrapping_add(1);
+                    }
+                    cx.notify();
+                } else {
+                    self.stop_recording(cx);
+                    self.unbind_keybinding(action, cx);
+                }
+                return;
+            }
+            _ => {}
+        }
+        let Some(spec) = crate::ui::keymap::spec_from_keystroke(keystroke) else {
+            return;
+        };
+        if let Some(r) = self
+            .active_settings_mut()
+            .and_then(|s| s.recording.as_mut())
+        {
+            r.chords.push(spec);
+        }
+        self.schedule_recording_commit(cx);
+        cx.notify();
+    }
+
+    fn schedule_recording_commit(&mut self, cx: &mut Context<Self>) {
+        self.record_gen = self.record_gen.wrapping_add(1);
+        let generation = self.record_gen;
+        cx.spawn(async move |this, cx| {
+            smol::Timer::after(std::time::Duration::from_millis(RECORD_COMMIT_DELAY_MS)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.record_gen == generation {
+                    this.commit_recording(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn commit_recording(&mut self, cx: &mut Context<Self>) {
+        let Some((action, chords)) = self
+            .active_settings()
+            .and_then(|s| s.recording.as_ref())
+            .filter(|r| !r.chords.is_empty())
+            .map(|r| (r.action.clone(), r.chords.clone()))
+        else {
+            return;
+        };
+        self.stop_recording(cx);
+        let spec = chords.join(" ");
+        // A chord another action answers to is not taken silently: the row
+        // asks whether to take it over, and only Replace moves it.
+        if let Some(other) = Self::keybinding_owner(&action, &spec, cx) {
+            if let Some(s) = self.active_settings_mut() {
+                s.kb_conflict = Some(crate::ui::settings::KeyConflict {
+                    action,
+                    spec,
+                    other,
+                });
+            }
+            cx.notify();
+            return;
+        }
+        self.assign_keybinding(action, spec, cx);
+    }
+
+    /// The other action that already answers to `spec`, if any.
+    fn keybinding_owner(action: &str, spec: &str, cx: &App) -> Option<String> {
+        use crate::ui::keymap::same_chord;
+        crate::ui::keymap::effective_chords(cx)
+            .into_iter()
+            .find(|(a, chords)| a != action && chords.iter().any(|k| same_chord(k, spec)))
+            .map(|(a, _)| a)
+            .or_else(|| {
+                crate::ui::keymap::extra_bindings(cx)
+                    .into_iter()
+                    .find(|(a, k)| a != action && same_chord(k, spec))
+                    .map(|(a, _)| a)
+            })
+    }
+
+    /// Takes the conflicting chord over, as the row's Replace button says.
+    pub(crate) fn resolve_keybinding_conflict(&mut self, replace: bool, cx: &mut Context<Self>) {
+        let Some(conflict) = self
+            .active_settings_mut()
+            .and_then(|s| s.kb_conflict.take())
+        else {
+            return;
+        };
+        if replace {
+            self.assign_keybinding(conflict.action, conflict.spec, cx);
+            if let Some(s) = self.active_settings_mut() {
+                // The row already said what Replace would do.
+                s.rebinding_note = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn stop_recording(&mut self, cx: &mut Context<Self>) {
+        self.record_gen = self.record_gen.wrapping_add(1);
+        if let Some(s) = self.active_settings_mut() {
+            s.recording = None;
+        }
+        cx.notify();
+    }
+
+    fn assign_keybinding(&mut self, action: String, spec: String, cx: &mut Context<Self>) {
+        // Compared as chords, not as spellings: a recorded `secondary-}` and a
+        // config's `secondary-shift-]` are one keystroke written two ways, and
+        // only `same_chord` sees it. Compared as text, the displacement never
+        // fires and both bindings survive onto that keystroke, where which one
+        // wins is arbitrary (#750).
+        //
+        // Only that chord moves: the action that had it keeps any others it
+        // has, since an action can carry several (#868) and emptying it would
+        // take away keys that were never on this keystroke. An extra default —
+        // Alt+Enter beside Shift+Enter — follows its action's first chord rather
+        // than being one of its own, so its owner is unbound outright, as it
+        // always was.
+        use crate::ui::keymap::same_chord;
+        let displaced: Option<(String, Vec<String>)> = crate::ui::keymap::effective_chords(cx)
+            .into_iter()
+            .find(|(a, chords)| *a != action && chords.iter().any(|k| same_chord(k, &spec)))
+            .map(|(a, chords)| {
+                let rest = chords.into_iter().filter(|k| !same_chord(k, &spec));
+                (a, rest.collect())
+            })
+            .or_else(|| {
+                crate::ui::keymap::extra_bindings(cx)
+                    .into_iter()
+                    .find(|(a, k)| *a != action && same_chord(k, &spec))
+                    .map(|(a, _)| (a, Vec::new()))
+            });
+        // A trailing "…" on an action name marks a command that opens
+        // something; it is not punctuation, and inside a sentence it reads as
+        // the sentence trailing off — "Rename Tab… took the shortcut from".
+        let in_prose = |name: &str| name.trim_end_matches('…').to_string();
+        let note = displaced.as_ref().map(|(other, _)| {
+            t_fmt(
+                L10nKey::AppKeybindingDisplacedNote,
+                &[
+                    (
+                        "action",
+                        &in_prose(&crate::ui::keymap::action_entry(&action).1),
+                    ),
+                    (
+                        "previous",
+                        &in_prose(&crate::ui::keymap::action_entry(other).1),
+                    ),
+                ],
+            )
+        });
+        // Both written as lists. Recording a shortcut sets it — the row showed
+        // one chord and now shows another — and a bare string in config adds a
+        // chord beside the default instead (#868).
+        self.update_config(cx, |cfg| {
+            use crate::core::config::KeybindingOverride;
+            if let Some((other, rest)) = &displaced {
+                cfg.keybindings
+                    .insert(other.clone(), KeybindingOverride::Exact(rest.clone()));
+            }
+            cfg.keybindings
+                .insert(action, KeybindingOverride::Exact(vec![spec]));
+        });
+        crate::ui::keymap::rebind(cx);
+        if let Some(s) = self.active_settings_mut() {
+            s.rebinding_note = note;
+        }
+        cx.notify();
+    }
+
+    /// Takes every chord off an action, and keeps it off.
+    ///
+    /// ⌫ on a row that has recorded nothing used to *reset* it — drop the
+    /// override so the action gets its shipped chord back. On a row nobody has
+    /// overridden, which is every row the first time it is looked at, that is a
+    /// no-op: someone pressing Backspace over Alt+1 to be rid of it watched
+    /// Alt+1 sit exactly where it was and read it as the default restoring
+    /// itself (#901). Nothing anywhere in the app said "this action should have
+    /// no key", though `config.json` has spelled it `[]` since #868.
+    ///
+    /// So ⌫ writes that empty list, and the **Reset** button beside the row —
+    /// which appears the moment an action is overridden, this way included — is
+    /// the way back to the default.
+    pub(crate) fn unbind_keybinding(&mut self, action: String, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| {
+            cfg.keybindings.insert(
+                action,
+                crate::core::config::KeybindingOverride::Exact(Vec::new()),
+            );
+        });
+        crate::ui::keymap::rebind(cx);
+        if let Some(s) = self.active_settings_mut() {
+            s.recording = None;
+            s.rebinding_note = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn reset_keybinding(&mut self, action: String, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| {
+            cfg.keybindings.remove(&action);
+        });
+        crate::ui::keymap::rebind(cx);
+        if let Some(s) = self.active_settings_mut() {
+            s.recording = None;
+            s.rebinding_note = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn restore_default_keybindings_confirmed(&mut self, cx: &mut Context<Self>) {
+        self.update_config(cx, |cfg| cfg.keybindings.clear());
+        crate::ui::keymap::rebind(cx);
+        if let Some(s) = self.active_settings_mut() {
+            s.recording = None;
+            s.rebinding_note = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_keybinding_preset(&mut self, preset: &str, cx: &mut Context<Self>) {
+        let preset = preset.to_string();
+        self.update_config(cx, |cfg| cfg.keybinding_preset = preset);
+        crate::ui::keymap::rebind(cx);
+        if let Some(s) = self.active_settings_mut() {
+            s.recording = None;
+            s.rebinding_note = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_keybinding_prefix(&mut self, prefix: &str, cx: &mut Context<Self>) {
+        let prefix = prefix.to_string();
+        self.update_config(cx, |cfg| cfg.prefix = prefix);
+        crate::ui::keymap::rebind(cx);
+        cx.notify();
+    }
+}

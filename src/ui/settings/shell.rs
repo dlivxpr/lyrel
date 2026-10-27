@@ -10,7 +10,7 @@ use crate::ui::app::{TITLE_BAR_BORDER, TitleStripRow as _};
 use gpui_kit::TestSupportExt as _;
 
 /// What a menu row does when picked.
-pub(crate) type PickFn = Rc<dyn Fn(&mut LyrelApp, &mut Window, &mut Context<LyrelApp>)>;
+pub(crate) type PickFn = Rc<dyn Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>)>;
 
 /// The settings page's own close tile, hung in the top band's right corner.
 const CLOSE_TILE: f32 = 26.;
@@ -35,7 +35,7 @@ impl MenuEntry {
     pub(crate) fn item(
         label: impl Into<SharedString>,
         checked: bool,
-        on_pick: impl Fn(&mut LyrelApp, &mut Window, &mut Context<LyrelApp>) + 'static,
+        on_pick: impl Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
     ) -> Self {
         MenuEntry::Item {
             label: label.into(),
@@ -54,7 +54,7 @@ pub(crate) struct SearchOption {
     pub font: Option<SharedString>,
 }
 
-impl LyrelApp {
+impl SettingsWindow {
     // ── Popovers ─────────────────────────────────────────────────────────
 
     pub(crate) fn settings_menu_open(&self, id: &str) -> bool {
@@ -232,7 +232,7 @@ impl LyrelApp {
         label: impl Into<SharedString>,
         options: Rc<Vec<SearchOption>>,
         current: Option<usize>,
-        on_pick: Rc<dyn Fn(&mut LyrelApp, usize, &mut Window, &mut Context<LyrelApp>)>,
+        on_pick: Rc<dyn Fn(&mut SettingsWindow, usize, &mut Window, &mut Context<SettingsWindow>)>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tk = Tk::of(cx);
@@ -685,54 +685,6 @@ impl LyrelApp {
             entries.push(MenuEntry::item(custom, true, |_, _, _| {}));
         }
         self.settings_dropdown(id, label, None, entries, cx)
-    }
-
-    /// A segmented control. Settings rows pick with [`Self::settings_choice`];
-    /// this is for forms outside the settings window — the SSH strip's forward
-    /// form — which have no settings popover to hang a menu from.
-    pub(crate) fn segmented(
-        &self,
-        id: impl Into<SharedString>,
-        options: &[&str],
-        selected: usize,
-        cx: &mut Context<Self>,
-        on_pick: impl Fn(&mut Self, usize, &mut Window, &mut Context<Self>) + 'static,
-    ) -> AnyElement {
-        let tk = Tk::of(cx);
-        let id: SharedString = id.into();
-        let on_pick = Rc::new(on_pick);
-        h_flex()
-            .id(ElementId::Name(id.clone()))
-            .flex_shrink_0()
-            .p(px(2.))
-            .gap(px(2.))
-            .rounded(px(7.))
-            .bg(tk.k05)
-            .children(options.iter().enumerate().map(|(i, label)| {
-                let active = i == selected;
-                let on_pick = on_pick.clone();
-                h_flex()
-                    .id(ElementId::NamedInteger(id.clone(), i as u64))
-                    .items_center()
-                    .justify_center()
-                    .h(px(22.))
-                    .px(px(10.))
-                    .rounded(px(5.))
-                    .whitespace_nowrap()
-                    .text_size(fs(12.))
-                    .when(active, |s| {
-                        s.bg(tk.chip).shadow(tk.raised()).text_color(tk.fg)
-                    })
-                    .when(!active, |s| {
-                        s.text_color(tk.k5).hover(move |h| h.text_color(tk.fg))
-                    })
-                    .child(label.to_string())
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        on_pick(this, i, window, cx);
-                    }))
-            }))
-            .into_any_element()
     }
 
     /// A switch bound to a setter.

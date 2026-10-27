@@ -12,7 +12,7 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
     std::fs::create_dir_all(&installation).unwrap();
     let content = "---\nname: unknown\ndescription: No inferred update URL\n---\n# Keep\n";
     std::fs::write(installation.join("SKILL.md"), content).unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::super::tests::isolate_native_roots(&root.join("home"), cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);
@@ -145,7 +145,7 @@ fn skills_host_and_source_pickers_preserve_keyboard_selection_and_escape(
         "---\nname: project-only\n---\n# Project",
     )
     .unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);

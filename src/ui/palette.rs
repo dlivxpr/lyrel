@@ -56,8 +56,9 @@ fn edits_text(ks: &Keystroke) -> bool {
 
 fn recording_a_shortcut(app: &Entity<LyrelApp>, cx: &App) -> bool {
     app.read(cx)
-        .active_settings()
-        .is_some_and(|s| s.recording.is_some())
+        .settings
+        .as_ref()
+        .is_some_and(|view| view.read(cx).recording_shortcut())
 }
 
 fn intercept(ev: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
@@ -125,24 +126,23 @@ fn intercept(ev: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 /// Settings has a window of its own: the palette opens over the workspace
 /// that owns it, brought forward.
 fn from_settings(settings: &Entity<SettingsWindow>, ks: &Keystroke, cx: &mut App) {
-    let Some(app) = settings.read(cx).app.upgrade() else {
-        return;
-    };
-    if recording_a_shortcut(&app, cx) || !is_palette_chord(ks, cx) {
+    if settings.read(cx).recording_shortcut() || !is_palette_chord(ks, cx) {
         return;
     }
-    let Some((_, owner)) = app.read(cx).settings_window else {
-        return;
-    };
+    let owner = settings.read(cx).owner();
     cx.stop_propagation();
     cx.defer(move |cx| {
         let _ = owner.update(cx, |_, window, cx| {
             window.activate_window();
-            app.update(cx, |app, cx| {
-                if app.search.is_none() {
-                    app.toggle_search(window, cx);
-                }
-            });
+            if let Some(root) = window.root::<gpui_kit::component::Root>().flatten()
+                && let Ok(app) = root.read(cx).view().clone().downcast::<LyrelApp>()
+            {
+                app.update(cx, |app, cx| {
+                    if app.search.is_none() {
+                        app.toggle_search(window, cx);
+                    }
+                });
+            }
         });
     });
 }
@@ -159,7 +159,7 @@ mod tests {
     use crate::daemon::transport::Stream;
     use crate::ui::app::test_window::harness_with_tabs;
     use crate::ui::keymap::effective_key;
-    use crate::ui::settings::SettingsSection;
+    use crate::ui::settings::test_window::open;
 
     fn key(action: &str, vcx: &mut VisualTestContext) -> String {
         vcx.update(|_, cx| effective_key(action, cx))
@@ -197,21 +197,19 @@ mod tests {
         });
         vcx.run_until_parked();
         let chord = key("TogglePalette", &mut vcx);
-        type Input = fn(&LyrelApp) -> Entity<gpui_kit::component::input::InputState>;
-        let side_panel: Input = |app| app.file_search.clone();
-        let settings: Input = |app| app.active_settings().unwrap().search.clone();
-        for (place, input) in [("side panel", side_panel), ("settings", settings)] {
-            if place == "settings" {
-                app.update_in(&mut vcx, |app, window, cx| {
-                    app.open_settings_section(SettingsSection::General, window, cx)
-                });
+        for place in ["side panel", "settings"] {
+            let input = if place == "settings" {
+                let settings = open(&app, &mut vcx);
                 vcx.run_until_parked();
-            }
-            app.update_in(&mut vcx, |app, window, cx| {
-                input(app).update(cx, |input, cx| input.focus(window, cx));
-            });
+                settings.read_with(&vcx, |settings, _| {
+                    settings.active_settings().unwrap().search.clone()
+                })
+            } else {
+                app.read_with(&vcx, |app, _| app.file_search.clone())
+            };
+            input.update_in(&mut vcx, |input, window, cx| input.focus(window, cx));
             vcx.run_until_parked();
-            let focused = app.read_with(&vcx, |app, cx| input(app).read(cx).focus_handle(cx));
+            let focused = input.read_with(&vcx, |input, cx| input.focus_handle(cx));
             assert!(
                 vcx.update(|window, _| focused.is_focused(window)),
                 "the {place} field has focus"

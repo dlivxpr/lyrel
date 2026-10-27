@@ -1683,8 +1683,13 @@ mod tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         let home = tempfile::tempdir().unwrap();
         crate::ui::i18n::set_locale("en");
-        app.update_in(&mut vcx, |app, window, cx| {
+        let settings = crate::ui::settings::test_window::open(&app, &mut vcx);
+        settings.update_in(&mut vcx, |settings, window, cx| {
             crate::ui::settings::skills::test_host::install(home.path(), cx);
+            settings.close_settings(window, cx);
+        });
+        vcx.run_until_parked();
+        app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::Sessions, "", window, cx)
         });
         // The isolated Host scan still lands asynchronously. Let it finish

@@ -1,5 +1,6 @@
 //! 实际 GPUI 入口完成来源关联与价格管理；原生文件仅来自临时目录。
 use super::*;
+use crate::ui::app::LyrelApp;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 mod test_host;
@@ -14,7 +15,7 @@ impl storage::CatalogHttp for ControlledCatalog {
         }
     }
 }
-fn settle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
+fn settle(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         cx.run_until_parked();
@@ -31,7 +32,7 @@ fn settle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
-fn reveal(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str) {
+fn reveal(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext, id: &str) {
     cx.update(|window, cx| {
         window.render_frame(cx);
         let top = window
@@ -53,12 +54,12 @@ fn reveal(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str) {
         );
     });
 }
-fn click(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str) {
+fn click(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext, id: &str) {
     reveal(app, cx, id);
     cx.update(|window, cx| window.click(SharedString::from(id.to_owned()), cx));
     cx.run_until_parked();
 }
-fn type_into(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, id: &str, value: &str) {
+fn type_into(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext, id: &str, value: &str) {
     click(app, cx, id);
     cx.update(|window, cx| {
         assert!(
@@ -125,12 +126,13 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         });
         gpui_kit::component::Root::new(app, window, cx)
     });
-    let app = window
+    let workspace = window
         .update(cx, |root, _, _| {
             root.view().clone().downcast::<LyrelApp>().unwrap()
         })
         .unwrap();
     let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
     app.update_in(&mut vcx, |app, window, cx| {
         app.open_settings_section(SettingsSection::General, window, cx);
         let state = &mut app.active_settings_mut().unwrap().statistics;
@@ -140,7 +142,7 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         app.navigate_settings(SettingsSection::Statistics, None, window, cx);
     });
     settle(&app, &mut vcx);
-    vcx.simulate_window_resize(window.into(), gpui_kit::size(px(955.), px(701.)));
+    vcx.simulate_resize(gpui_kit::size(px(955.), px(701.)));
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.render_frame(cx);
@@ -313,7 +315,7 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
     ] {
         crate::ui::i18n::set_locale(locale);
-        vcx.simulate_window_resize(window.into(), gpui_kit::size(px(width), px(800.)));
+        vcx.simulate_resize(gpui_kit::size(px(width), px(800.)));
         app.update_in(&mut vcx, |_, window, cx| {
             gpui_kit::component::Theme::change(mode, Some(window), cx);
             gpui_kit::component::Theme::update(cx, |t| t.font_size = px(18.));
@@ -531,7 +533,7 @@ fn statistics_refresh_discovery_failure_keeps_visible_totals_and_original_time(
     )
     .unwrap();
     std::fs::write(history.join("visible.jsonl"), "{\"type\":\"session\",\"version\":3,\"id\":\"visible-cache\",\"timestamp\":\"2026-10-19T00:00:00Z\"}\n{\"type\":\"message\",\"id\":\"usage\",\"timestamp\":\"2026-10-19T00:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":40,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n").unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         cx.global_mut::<Config>().agent_launch.insert(
             "pi".into(),
@@ -632,7 +634,7 @@ fn cached_filter_fixture(
     tempfile::TempDir,
     Arc<test_host::CountingHost>,
     Option<test_host::ScanGate>,
-    Entity<LyrelApp>,
+    Entity<SettingsWindow>,
     VisualTestContext,
 ) {
     let temp = tempfile::tempdir().unwrap();
@@ -642,7 +644,7 @@ fn cached_filter_fixture(
     std::fs::write(history.join("visible.jsonl"), "{\"type\":\"session\",\"version\":3,\"id\":\"cached-filter\",\"timestamp\":\"2026-10-18T12:00:00Z\"}\n{\"type\":\"message\",\"id\":\"earlier\",\"timestamp\":\"2026-10-18T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":40,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n{\"type\":\"message\",\"id\":\"later\",\"timestamp\":\"2026-10-19T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"fixture\",\"model\":\"fixture\",\"usage\":{\"input\":60,\"output\":10,\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0}}}}\n").unwrap();
     let host = test_host::CountingHost::new(temp.path());
     let gate = block_scan.then(|| host.block_scan());
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         HostRegistry::insert(cx, host.clone());
         cx.global_mut::<Config>().agent_launch.insert(

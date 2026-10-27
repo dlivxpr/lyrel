@@ -20,7 +20,7 @@ fn kimi_api_settings_keeps_four_distinct_windows_and_failed_replacement_keeps_ol
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -30,7 +30,7 @@ fn kimi_api_settings_keeps_four_distinct_windows_and_failed_replacement_keeps_ol
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down enter");
@@ -107,7 +107,7 @@ fn kimi_browser_selection_reads_access_token_not_refresh_token_and_preserves_sou
         )
         .unwrap();
     }
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -117,7 +117,7 @@ fn kimi_browser_selection_reads_access_token_not_refresh_token_and_preserves_sou
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down enter");
@@ -201,7 +201,7 @@ fn kimi_manual_session_keeps_counts_and_old_snapshot_on_rate_limit_or_missing_us
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -211,7 +211,7 @@ fn kimi_manual_session_keeps_counts_and_old_snapshot_on_rate_limit_or_missing_us
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down enter");
@@ -291,7 +291,7 @@ fn reply_command(http: &Http) {
 #[gpui_kit::test]
 fn command_key_workflow_queries_only_three_subscription_quotas(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -301,7 +301,7 @@ fn command_key_workflow_queries_only_three_subscription_quotas(cx: &mut TestAppC
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down enter");
@@ -627,7 +627,7 @@ fn kimi_manual_settings_uses_real_post_body_and_bearer_without_cookie(cx: &mut T
         (header, body)
     });
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     install(
         &mut vcx,
@@ -636,7 +636,7 @@ fn kimi_manual_settings_uses_real_post_body_and_bearer_without_cookie(cx: &mut T
         Arc::new(KimiLoopback(format!("http://{address}/controlled-kimi"))),
         false,
     );
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down enter");
@@ -667,7 +667,7 @@ fn command_manual_enhancement_mismatch_and_expiry_never_replace_primary_key(
     cx: &mut TestAppContext,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -677,7 +677,7 @@ fn command_manual_enhancement_mismatch_and_expiry_never_replace_primary_key(
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down enter");
@@ -799,7 +799,7 @@ fn kimi_settings_redirect_never_forwards_credentials_or_creates_account(cx: &mut
         write!(stream,"HTTP/1.1 302 Found\r\nLocation: http://{target_address}/must-not-receive-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
     });
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     install(
         &mut vcx,
@@ -808,7 +808,7 @@ fn kimi_settings_redirect_never_forwards_credentials_or_creates_account(cx: &mut
         Arc::new(KimiLoopback(format!("http://{address}/controlled-kimi"))),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down enter");
@@ -872,7 +872,7 @@ fn add_command(vcx: &mut VisualTestContext, http: &Http) -> Uuid {
     vcx.update(|_, cx| cx.global::<UsageGlobal>().0.read(cx).stored.accounts[0].id)
 }
 
-fn select_command_browser(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, id: Uuid) {
+fn select_command_browser(app: &Entity<SettingsWindow>, vcx: &mut VisualTestContext, id: Uuid) {
     click(vcx, &format!("usage-enhance-{id}"));
     app.update_in(vcx, |a, _, cx| {
         let page = a.active_settings().unwrap().usage.read(cx);
@@ -932,7 +932,7 @@ fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_
 ) {
     let dir = tempfile::tempdir().unwrap();
     let db = command_browser_fixture(&dir.path().join("isolated-browser"));
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -942,7 +942,7 @@ fn command_selected_browser_profile_enhances_without_saving_cookie_and_rechecks_
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     let id = add_command(&mut vcx, &http);
     select_command_browser(&app, &mut vcx, id);
     reply_command(&http);
@@ -1073,7 +1073,7 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
 ) {
     let dir = tempfile::tempdir().unwrap();
     let _db = command_browser_fixture(&dir.path().join("isolated-browser"));
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -1083,7 +1083,7 @@ fn command_browser_late_enhancement_after_escape_or_page_close_cannot_bind_sourc
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     let id = add_command(&mut vcx, &http);
     let page = app.update_in(&mut vcx, |a, _, _| {
         a.active_settings().unwrap().usage.clone()
@@ -1187,7 +1187,7 @@ fn canceled_cookie_forms_never_authorize_after_a_blocked_native_boundary(cx: &mu
                     Err(browser::BrowserError::Denied)
                 }
             }));
-            let (app, mut vcx) = harness(cx);
+            let (workspace, mut vcx) = harness(cx);
             let vault = Arc::new(InMemoryCredentialStore::new());
             let http = Arc::new(Http::default());
             install(&mut vcx, path.clone(), vault.clone(), http.clone(), false);
@@ -1197,7 +1197,7 @@ fn canceled_cookie_forms_never_authorize_after_a_blocked_native_boundary(cx: &mu
                     Arc::get_mut(&mut data.shared).unwrap().browser = Arc::new(reader)
                 });
             });
-            open(&app, &mut vcx);
+            let app = open(&workspace, &mut vcx);
             click(&mut vcx, "usage-add");
             click(&mut vcx, "usage-provider");
             vcx.simulate_keystrokes(if mode == 2 {
