@@ -1,4 +1,4 @@
-mod presentation;
+pub(crate) mod presentation;
 
 use std::rc::Rc;
 use gpui_kit::{App, Entity, IntoElement, Window, div, prelude::*, TestSupportExt as _};
@@ -959,3 +959,7 @@ mod navigation_tests;
 #[cfg(test)]
 #[path = "tab/tests_focus_origin.rs"]
 mod focus_origin_tests;
+
+#[cfg(test)]
+#[path = "tab/tests_launch.rs"]
+mod launch_tests;

@@ -5,6 +5,7 @@ use lyrel_core::core::machine::{Axis as TreeAxis, PaneNode, Tab as TreeTab, TabP
 use crate::core::session::{WorkspaceId, WorkspaceStore};
 use crate::ui::pane::{Dir, Pane, PaneSlot};
 use crate::ui::tree_sync::projection::{logical_node, slot_pane_id};
+use crate::daemon::protocol::ShellSpec;
 fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
     match node {
         PaneNode::Leaf { pane } => slots.remove(pane).map(Pane::Leaf),
@@ -21,6 +22,26 @@ fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Op
 }
 
 impl Tab {
+    pub(crate) fn prepare_split(&self, spawn: Option<SpawnAs>, window: &Window, cx: &App) -> Option<SplitRequest> {
+        let target = self.command_target(window, cx).or_else(|| self.pane.first_leaf())?;
+        let view = target.terminal()?.read(cx);
+        let (spawn, opened) = match spawn {
+            Some(spawn) => {
+                let opened = match spawn { SpawnAs::Ssh(_) => OpenedFrom::FreshSshHost, SpawnAs::Shell(_) => OpenedFrom::LocalShell };
+                (spawn, opened)
+            }
+            None => match view.ssh_spec() {
+                Some(spec) => (SpawnAs::Ssh(crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx)), OpenedFrom::SameSshHost),
+                None => (SpawnAs::Shell(view.shell_spec()), OpenedFrom::LocalShell),
+            },
+        };
+        let workspace = match &spawn { SpawnAs::Shell(_) => view.workspace().cloned(), SpawnAs::Ssh(_) => None };
+        Some(SplitRequest {
+            tab: self.id(), target: target.entity_id(), spawn,
+            cwd: inherited_start_dir(opened, view.cwd(), view.remote_context().is_some()),
+            workspace,
+        })
+    }
     fn change_scoped_presentation(&mut self, pane: EntityId, fallback: Option<EntityId>, parked: Option<bool>, cx: &App) -> Option<bool> {
         use crate::ui::pane_sidecar::{mixed, scoped_pane, snapshot, install_presentation};
         if !mixed(self, cx) { return None; }
@@ -337,5 +358,60 @@ impl TabSet {
         }
         if host.diff_overlay.is_none() { host.diff_overlay = moved.diff_overlay; }
         Some((merged_id, first))
+    }
+}
+/// What to start in a pane that is about to be opened.
+pub(crate) enum SpawnAs {
+    /// A local shell; `None` is whatever the default one is.
+    Shell(Option<ShellSpec>),
+    Ssh(Box<crate::daemon::protocol::NativeSshSpec>),
+}
+
+/// How a pane being opened relates to the pane it was opened from — which is
+/// what decides whether it may start in that pane's directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpenedFrom {
+    /// A local shell.
+    LocalShell,
+    /// The source pane's own SSH host, dialled again (⌘T, ⌘D on an SSH pane).
+    SameSshHost,
+    /// A saved host or quick connect: a connection of its own, whatever pane
+    /// happened to be in front when it was asked for.
+    FreshSshHost,
+}
+
+/// The directory a pane opened from another one starts in.
+///
+/// `source_cwd` is the source pane's last reported directory, and on a remote
+/// pane that is a path on the far host. It carries over only to a pane on the
+/// same side of the link: a local shell takes a local pane's directory, and a
+/// redial of the same host takes the far shell's. Anything else starts where a
+/// fresh pane would — a local path handed to a remote `cd` names nothing there,
+/// and a remote one handed to a local spawn names nothing here.
+pub(crate) fn inherited_start_dir(
+    opened: OpenedFrom,
+    source_cwd: Option<std::path::PathBuf>,
+    source_is_remote: bool,
+) -> Option<std::path::PathBuf> {
+    match opened {
+        OpenedFrom::LocalShell => source_cwd.filter(|_| !source_is_remote),
+        OpenedFrom::SameSshHost => source_cwd,
+        OpenedFrom::FreshSshHost => None,
+    }
+}
+
+/// A captured split destination and its Host-aware launch policy. Creation is
+/// still performed by PendingPane; focus changes cannot change this destination.
+pub(crate) struct SplitRequest {
+    tab: lyrel_core::core::machine::TabId,
+    target: EntityId,
+    spawn: SpawnAs,
+    cwd: Option<std::path::PathBuf>,
+    workspace: Option<crate::terminal::PaneWorkspace>,
+}
+
+impl SplitRequest {
+    pub(crate) fn into_parts(self) -> (lyrel_core::core::machine::TabId, EntityId, SpawnAs, Option<std::path::PathBuf>, Option<crate::terminal::PaneWorkspace>) {
+        (self.tab, self.target, self.spawn, self.cwd, self.workspace)
     }
 }

@@ -28,6 +28,7 @@ use crate::ui::forwards::{Forwarding, route::ForwardRoute};
 use crate::ui::host_registry::HostId;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
+use crate::ui::tab::presentation::{SpawnAs, OpenedFrom, inherited_start_dir};
 use crate::ui::scm::ScmIntent;
 use crate::ui::search::{
     ActionCatalog, ChromeState, CommandKind, SearchCatalog, SearchEvent, SearchState, SearchTab,
@@ -39,45 +40,6 @@ mod settings_bridge;
 use crate::ui::theme::{apply_theme, set_menus};
 
 use crate::ui::window_chrome::{ChromeCommand, WindowChrome, window_controls_drawn};
-/// What to start in a pane that is about to be opened.
-pub(crate) enum SpawnAs {
-    /// A local shell; `None` is whatever the default one is.
-    Shell(Option<ShellSpec>),
-    Ssh(Box<crate::daemon::protocol::NativeSshSpec>),
-}
-
-/// How a pane being opened relates to the pane it was opened from — which is
-/// what decides whether it may start in that pane's directory.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OpenedFrom {
-    /// A local shell.
-    LocalShell,
-    /// The source pane's own SSH host, dialled again (⌘T, ⌘D on an SSH pane).
-    SameSshHost,
-    /// A saved host or quick connect: a connection of its own, whatever pane
-    /// happened to be in front when it was asked for.
-    FreshSshHost,
-}
-
-/// The directory a pane opened from another one starts in.
-///
-/// `source_cwd` is the source pane's last reported directory, and on a remote
-/// pane that is a path on the far host. It carries over only to a pane on the
-/// same side of the link: a local shell takes a local pane's directory, and a
-/// redial of the same host takes the far shell's. Anything else starts where a
-/// fresh pane would — a local path handed to a remote `cd` names nothing there,
-/// and a remote one handed to a local spawn names nothing here.
-fn inherited_start_dir(
-    opened: OpenedFrom,
-    source_cwd: Option<std::path::PathBuf>,
-    source_is_remote: bool,
-) -> Option<std::path::PathBuf> {
-    match opened {
-        OpenedFrom::LocalShell => source_cwd.filter(|_| !source_is_remote),
-        OpenedFrom::SameSshHost => source_cwd,
-        OpenedFrom::FreshSshHost => None,
-    }
-}
 
 /// Where a row taken out of the new-tab menu lands.
 ///
@@ -3000,47 +2962,16 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PaneSlot> {
-        let target = self.tabs.get(self.tabs.active_index()).and_then(|tab| {
-            tab.pane
-                .focused_leaf(window, cx)
-                .or_else(|| tab.focus_target(cx))
-                .or_else(|| tab.pane.first_leaf())
-                .and_then(|slot| slot.terminal().cloned())
-        })?;
+        let request = self.tabs.get(self.tabs.active_index())?.prepare_split(spawn, window, cx)?;
         if !self.guard_local_spawn(window, cx) {
             return None;
         }
-        let (spawn, opened) = match spawn {
-            Some(spawn) => {
-                let opened = match spawn {
-                    SpawnAs::Ssh(_) => OpenedFrom::FreshSshHost,
-                    SpawnAs::Shell(_) => OpenedFrom::LocalShell,
-                };
-                (spawn, opened)
-            }
-            // A stored spec is resolved against the saved host before it is
-            // dialled; one handed in by a caller was just built from that host
-            // and needs no second pass.
-            None => match target.read(cx).ssh_spec() {
-                Some(spec) => (
-                    SpawnAs::Ssh(crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx)),
-                    OpenedFrom::SameSshHost,
-                ),
-                None => (
-                    SpawnAs::Shell(target.read(cx).shell_spec()),
-                    OpenedFrom::LocalShell,
-                ),
-            },
-        };
-        let cwd = {
-            let target = target.read(cx);
-            inherited_start_dir(opened, target.cwd(), target.remote_context().is_some())
-        };
+        let (tab_id, target, spawn, cwd, workspace) = request.into_parts();
         let new = match spawn {
             SpawnAs::Ssh(spec) => new_terminal_native(self.font_size, self.workspace, cwd, spec, window, cx),
             SpawnAs::Shell(shell) => {
                 match new_terminal(
-                    target.read(cx).workspace().cloned(),
+                    workspace,
                     Some(self.workspace),
                     self.font_size,
                     cwd,
@@ -3064,8 +2995,8 @@ impl LyrelApp {
                 }
             }
         };
-        let tab = self.tabs.active_mut()?;
-        if !tab.split_pane(target.entity_id(), axis, false, new.clone()) {
+        let tab = self.tabs.iter_mut().find(|tab| tab.id() == tab_id)?;
+        if !tab.split_pane(target, axis, false, new.clone()) {
             return None;
         }
         self.maximized = None;
@@ -7568,9 +7499,9 @@ fn apply_ssh_o_option(
 mod tests {
     use super::close_reason;
     use super::{
-        CloseReason, DOCUMENT_MIN_W, OpenedFrom, TERMINAL_MIN_W,
+        CloseReason, DOCUMENT_MIN_W, TERMINAL_MIN_W,
         TabAgentSession, close_prompt, document_column_px,
-        inherited_start_dir, join_shell_args, leaf_shares_the_window_daemon,
+        join_shell_args, leaf_shares_the_window_daemon,
         native_ssh_pane_alive, pane_free_for, parse_ssh_connect_input,
         parse_ssh_option_words, side_panel_max, split_machine_held,
         split_shell_args, wd_path_saveable,
@@ -7879,47 +7810,6 @@ mod tests {
         assert!(leaf_shares_the_window_daemon(false, false));
     }
 
-    #[test]
-    fn a_saved_host_opened_from_a_local_pane_does_not_start_in_its_local_directory() {
-        let local = Some(std::path::PathBuf::from("/Users/alice/dev/lyrel"));
-        assert_eq!(
-            inherited_start_dir(OpenedFrom::FreshSshHost, local.clone(), false),
-            None
-        );
-        let remote = Some(std::path::PathBuf::from("/home/alice/my_service"));
-        assert_eq!(
-            inherited_start_dir(OpenedFrom::FreshSshHost, remote, true),
-            None,
-            "another host's directory means nothing on the one being dialled"
-        );
-    }
-
-    #[test]
-    fn redialling_the_same_ssh_host_starts_in_the_far_directory_it_was_in() {
-        let remote = Some(std::path::PathBuf::from("/home/alice/my_service"));
-        assert_eq!(
-            inherited_start_dir(OpenedFrom::SameSshHost, remote.clone(), true),
-            remote
-        );
-        assert_eq!(
-            inherited_start_dir(OpenedFrom::SameSshHost, None, true),
-            None
-        );
-    }
-
-    #[test]
-    fn a_local_shell_inherits_only_a_local_directory() {
-        let dir = Some(std::path::PathBuf::from("/work/repo"));
-        assert_eq!(
-            inherited_start_dir(OpenedFrom::LocalShell, dir.clone(), false),
-            dir
-        );
-        assert_eq!(
-            inherited_start_dir(OpenedFrom::LocalShell, dir, true),
-            None,
-            "a remote pane's directory is on the far host"
-        );
-    }
 
     #[test]
     fn a_native_ssh_pane_the_server_no_longer_has_is_dialled_again() {
