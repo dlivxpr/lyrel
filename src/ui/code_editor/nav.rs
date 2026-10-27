@@ -467,7 +467,7 @@ impl LyrelApp {
     /// A buffer changed: move saved locations by the actual text replacement,
     /// including undo, reload and LSP edits rather than depending on a widget log.
     pub(crate) fn editor_nav_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer(id) else { return };
+        let Some(f) = self.editor.buffers.get(id) else { return };
         let file = NavLocation {
             host: f.host.id(),
             path: f.path.clone(),
@@ -534,7 +534,7 @@ impl LyrelApp {
     ) -> bool {
         let at = Instant::now();
         if let Some(id) = target.buffer {
-            if self.buffer(id).is_none() {
+            if self.editor.buffers.get(id).is_none() {
                 return false;
             }
             self.editor
@@ -544,7 +544,7 @@ impl LyrelApp {
                 .or_default()
                 .expect(target.clone(), at);
             self.editor_show_in_tab(tab, id, true, window, cx);
-            if let Some(f) = self.buffer(id) {
+            if let Some(f) = self.editor.buffers.get(id) {
                 place_cursor(
                     f.input.clone(),
                     target.pos,
@@ -565,12 +565,7 @@ impl LyrelApp {
             .or_default()
             .expect(target.clone(), at);
         // The same road a file link takes, so a file closed since opens again.
-        self.editor.pending_cursor = Some((
-            target.path.clone(),
-            target.pos.line + 1,
-            target.pos.character + 1,
-        ));
-        self.editor_open_on_host(host, &target.path, window, cx);
+        self.editor_open_on_host_at(host, &target.path, Some(target.pos), window, cx);
         true
     }
 
@@ -605,7 +600,7 @@ impl LyrelApp {
         if let Some(provided) = self.editor.nav.provided.get(&id) {
             return Some(provided.clone());
         }
-        let f = self.buffer(id)?;
+        let f = self.editor.buffers.get(id)?;
         let language = f.language();
         let text = f.input.read(cx).text().clone();
         if !outline::supports(&language) {
@@ -679,7 +674,7 @@ impl LyrelApp {
         let input = f.input.clone();
         // A symbol is a place in the source; a rendered Markdown file shows
         // the source to be taken to it.
-        if let Some(f) = self.buffer_mut(id) {
+        if let Some(f) = self.editor.buffers.get_mut(id) {
             f.preview = false;
         }
         let (origin, scroll) = {
@@ -724,7 +719,7 @@ impl LyrelApp {
         let Some(buffer) = self.editor.nav.preview.as_ref().map(|p| p.buffer) else {
             return;
         };
-        let Some(f) = self.buffer(buffer) else { return };
+        let Some(f) = self.editor.buffers.get(buffer) else { return };
         f.input.update(cx, |state, cx| {
             let offset = state
                 .text()
@@ -771,7 +766,7 @@ impl LyrelApp {
         let Some(preview) = self.editor.nav.preview.take() else {
             return;
         };
-        let Some(f) = self.buffer(preview.buffer) else {
+        let Some(f) = self.editor.buffers.get(preview.buffer) else {
             return;
         };
         f.input.update(cx, |state, cx| {
@@ -882,7 +877,7 @@ impl LyrelApp {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let f = self.buffer(id)?;
+        let f = self.editor.buffers.get(id)?;
         let caret = f.input.read(cx).cursor_position();
         let segments: Vec<String> = if f.untitled.is_some() {
             vec![f.label().to_string()]

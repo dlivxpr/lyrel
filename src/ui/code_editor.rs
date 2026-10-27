@@ -25,6 +25,8 @@ use crate::ui::host_ops::{HostId, HostOps, MTime, SharedHost, WatchSub};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 
 pub(crate) mod commands;
+mod buffers;
+use buffers::Loaded;
 mod gutter;
 mod nav;
 pub(crate) mod outline;
@@ -34,14 +36,6 @@ mod strip;
 
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 
-const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
-
-const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
-
-/// How far up the tree to look for `.editorconfig` files. Each level is one
-/// round trip on a remote host, and a project nested deeper than this without
-/// a `root = true` somewhere above it is not one worth stalling an open for.
-const EDITORCONFIG_DEPTH: usize = 16;
 
 /// An open buffer is named by its input's entity id: unique, stable for the
 /// buffer's life, and already what every async landing looks it up by.
@@ -311,14 +305,7 @@ struct EditorBar {
 }
 
 pub(crate) struct EditorPanelState {
-    /// Every open buffer in this window. Tabs refer to these by id.
-    buffers: Vec<OpenFile>,
-    next_untitled: u32,
-    /// Where to put the cursor once a particular file is on screen, for a
-    /// `file.rs:120:3` that has to load first. Carried rather than applied at
-    /// the call site because opening is asynchronous: the click is long over
-    /// by the time there is a buffer to put a cursor in.
-    pending_cursor: Option<(PathBuf, u32, u32)>,
+    buffers: buffers::EditorBuffers,
     bar: Option<EditorBar>,
     waiters: Vec<SaveWaiter>,
     unsaved_prompt_open: bool,
@@ -327,14 +314,6 @@ pub(crate) struct EditorPanelState {
     /// What was last written to the session store for each tab, so an
     /// unchanged tab costs a comparison per frame and nothing more.
     recorded: HashMap<TabId, TabEditor>,
-    watch: Option<Arc<WatchSub>>,
-    watch_host: Option<SharedHost>,
-    watch_opening: bool,
-    watch_busy: bool,
-    watch_dirty: bool,
-    watched_dirs: HashSet<PathBuf>,
-    watched_files: HashSet<PathBuf>,
-    events_tx: smol::channel::Sender<Vec<PathBuf>>,
     /// Back/forward history, outlines and Go to Symbol's preview.
     nav: nav::EditorNav,
     /// The Problems list at the foot of the panel — see `problems`.
@@ -353,50 +332,38 @@ pub(crate) struct EditorPanelState {
 
 impl EditorPanelState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
-        let (tx, rx) = smol::channel::unbounded::<Vec<PathBuf>>();
-        cx.spawn_in(window, async move |app, cx| {
-            while let Ok(first) = rx.recv().await {
-                cx.background_executor().timer(RELOAD_DEBOUNCE).await;
-                let mut changed: HashSet<PathBuf> = first.into_iter().collect();
-                while let Ok(more) = rx.try_recv() {
-                    changed.extend(more);
-                }
-                let ok = app.update_in(cx, |app, window, cx| {
-                    for path in changed {
-                        if app.editor.watched_files.contains(&path) {
-                            app.editor_handle_external_change(&path, window, cx);
-                        }
-                    }
-                });
-                if ok.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
+        let buffers = buffers::EditorBuffers::new(window, cx, |app| &mut app.editor.buffers, Self::buffer_edited);
         Self {
-            buffers: Vec::new(),
-            next_untitled: 1,
-            pending_cursor: None,
+            buffers,
             bar: None,
             waiters: Vec::new(),
             unsaved_prompt_open: false,
             restored: HashSet::new(),
             recorded: HashMap::new(),
-            watch: None,
-            watch_host: None,
-            watch_opening: false,
-            watch_busy: false,
-            watch_dirty: false,
-            watched_dirs: HashSet::new(),
-            watched_files: HashSet::new(),
-            events_tx: tx,
             nav: nav::EditorNav::new(cx),
             problems: Default::default(),
             strip_picker: None,
             empty_focus: cx.focus_handle(),
             had_focus: None,
         }
+    }
+
+    fn buffer_edited(app: &mut LyrelApp, id: BufferId, cx: &mut Context<LyrelApp>) {
+        app.editor_buffer_changed(id, cx);
+    }
+
+    /// File-tree dirtiness is Host-aware, like duplicate detection.
+    pub(crate) fn is_dirty(&self, host: HostId, path: &Path) -> bool {
+        self.buffers.is_dirty(host, path)
+    }
+
+    /// Only saved, local files are visible to language servers.
+    pub(crate) fn local_files(&self) -> Vec<LocalFile> {
+        self.buffers.iter().filter_map(OpenFile::local).collect()
+    }
+
+    pub(crate) fn local_file(&self, id: BufferId) -> Option<LocalFile> {
+        self.buffers.get(id).and_then(OpenFile::local)
     }
 }
 
@@ -611,73 +578,6 @@ enum EditorOpenError {
     Message(String),
 }
 
-/// A file read off its host, decoded, with everything needed to edit it.
-struct Loaded {
-    path: PathBuf,
-    text: String,
-    format: TextFormat,
-    mtime: Option<MTime>,
-    config: EditorConfig,
-}
-
-/// Reads, sizes, decodes and configures a file, on the host's own thread.
-fn load_file(
-    h: &dyn lyrel_core::host::Host,
-    requested: PathBuf,
-) -> Result<Loaded, EditorOpenError> {
-    let path = h.canonicalize(&requested).unwrap_or(requested);
-    let meta = h.stat(&path).map_err(|e| {
-        EditorOpenError::Message(t_fmt(
-            L10nKey::EditorCantOpen,
-            &[("path", &path.display().to_string()), ("e", &e.to_string())],
-        ))
-    })?;
-    if meta.len > MAX_FILE_BYTES {
-        return Err(EditorOpenError::Message(t_fmt(
-            L10nKey::EditorFileTooLarge,
-            &[
-                ("path", &path.display().to_string()),
-                ("size", &(meta.len / (1024 * 1024)).to_string()),
-            ],
-        )));
-    }
-    let bytes = h.read_file(&path, MAX_FILE_BYTES).map_err(|e| {
-        EditorOpenError::Message(t_fmt(
-            L10nKey::EditorCantRead,
-            &[("path", &path.display().to_string()), ("e", &e.to_string())],
-        ))
-    })?;
-    let Some(decoded) = editor_text::decode(&bytes) else {
-        return Err(EditorOpenError::NotText(path));
-    };
-    let config = read_editorconfig(h, &path);
-    Ok(Loaded {
-        path,
-        text: decoded.text,
-        format: decoded.format,
-        mtime: meta.mtime,
-        config,
-    })
-}
-
-/// Collects the `.editorconfig` files that apply to `path`, nearest first,
-/// stopping at the first one that declares itself the root.
-fn read_editorconfig(h: &dyn lyrel_core::host::Host, path: &Path) -> EditorConfig {
-    let mut configs = Vec::new();
-    for dir in path.ancestors().skip(1).take(EDITORCONFIG_DEPTH) {
-        let file = h.join(dir, editor_text::EDITORCONFIG);
-        let Ok(bytes) = h.read_file(&file, 64 * 1024) else {
-            continue;
-        };
-        let contents = String::from_utf8_lossy(&bytes).into_owned();
-        let root = editor_text::is_root(&contents);
-        configs.push((dir.to_path_buf(), contents));
-        if root {
-            break;
-        }
-    }
-    editor_text::editorconfig_for(path, &configs)
-}
 
 fn tab_size(indent: Indent) -> TabSize {
     TabSize {
@@ -787,44 +687,6 @@ fn selected_lines(
     Some((start.row + 1, last + 1))
 }
 
-/// What a watcher saw at a path: the file's modification time, or that it
-/// is not there any more.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Observed {
-    Present(Option<MTime>),
-    Missing,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ExternalChange {
-    Ignore,
-    Conflict,
-    Deleted,
-    Reload,
-}
-
-fn classify_external_change(
-    saving: bool,
-    dirty: bool,
-    disk_mtime: Option<MTime>,
-    observed: Observed,
-) -> ExternalChange {
-    if saving {
-        return ExternalChange::Ignore;
-    }
-    let observed = match observed {
-        Observed::Missing => return ExternalChange::Deleted,
-        Observed::Present(m) => m,
-    };
-    if observed.is_some() && observed == disk_mtime {
-        return ExternalChange::Ignore;
-    }
-    if dirty {
-        ExternalChange::Conflict
-    } else {
-        ExternalChange::Reload
-    }
-}
 
 /// How a save attempt ended, as reported back from the host's thread.
 enum SaveOutcome {
@@ -881,25 +743,10 @@ impl LyrelApp {
         self.tab_code().is_some_and(|c| c.visible)
     }
 
-    fn buffer(&self, id: BufferId) -> Option<&OpenFile> {
-        self.editor.buffers.iter().find(|b| b.id() == id)
-    }
-
-    fn buffer_mut(&mut self, id: BufferId) -> Option<&mut OpenFile> {
-        self.editor.buffers.iter_mut().find(|b| b.id() == id)
-    }
-
-    fn buffer_at(&self, host: HostId, path: &Path) -> Option<BufferId> {
-        self.editor
-            .buffers
-            .iter()
-            .find(|b| b.is_at(host, path))
-            .map(OpenFile::id)
-    }
 
     /// The buffer in front of the active tab's editor.
     fn active_buffer(&self) -> Option<&OpenFile> {
-        self.buffer(self.tab_code()?.active_id()?)
+        self.editor.buffers.get(self.tab_code()?.active_id()?)
     }
 
     /// Where the file in front of the active tab's editor lives, if it has
@@ -934,13 +781,6 @@ impl LyrelApp {
             .count()
     }
 
-    /// Whether the file tree should mark this path as having unsaved edits.
-    pub(crate) fn editor_is_dirty(&self, host: HostId, path: &Path) -> bool {
-        self.editor
-            .buffers
-            .iter()
-            .any(|b| b.dirty && b.is_at(host, path))
-    }
 
     /// Unsaved buffers that only tab `tab_ix` shows — the ones closing it
     /// would lose. A buffer another tab also shows survives the close.
@@ -950,7 +790,7 @@ impl LyrelApp {
         };
         code.all_files()
             .into_iter()
-            .filter(|id| self.buffer(*id).is_some_and(|b| b.dirty) && self.buffer_tabs(*id) == 1)
+            .filter(|id| self.editor.buffers.get(*id).is_some_and(|b| b.dirty) && self.buffer_tabs(*id) == 1)
             .collect()
     }
 
@@ -964,116 +804,14 @@ impl LyrelApp {
             .collect()
     }
 
-    fn editor_rebuild_watcher(&mut self, cx: &mut Context<Self>) {
-        // Only files on the host the watch itself runs on. A path from
-        // another machine — an SFTP file, say — does not exist under that
-        // watcher's feet, and would either miss or, worse, match a local file
-        // that happens to share its name. Those are checked when they are
-        // saved instead: see `write_checked`.
-        let watch_host = self.spawn_host(cx);
-        let files: HashSet<PathBuf> = self
-            .editor
-            .buffers
-            .iter()
-            .filter(|f| f.untitled.is_none() && f.host.id() == watch_host)
-            .map(|f| f.path.clone())
-            .collect();
-        let dirs: HashSet<PathBuf> = files
-            .iter()
-            .filter_map(|p| p.parent().map(Path::to_path_buf))
-            .collect();
-        self.editor.watched_files = files;
-        // Every change to which files are open, or where they live, passes
-        // through here — which is exactly what the language servers follow.
-        self.lsp_sync_buffers(cx);
-        if dirs == self.editor.watched_dirs {
-            return;
-        }
-        self.editor.watched_dirs = dirs;
-        self.editor_watch_apply(cx);
+    pub(crate) fn editor_context_changed(&mut self) {
+        self.editor.buffers.invalidate_context();
     }
 
-    fn editor_watch_apply(&mut self, cx: &mut Context<Self>) {
-        let want: Vec<PathBuf> = self.editor.watched_dirs.iter().cloned().collect();
-        let Some(host) = self.active_host(cx) else {
-            return;
-        };
-
-        if !self
-            .editor
-            .watch_host
-            .as_ref()
-            .is_some_and(|opened_with| Arc::ptr_eq(opened_with, &host))
-        {
-            self.editor.watch = None;
-            self.editor.watch_host = None;
-            self.editor.watch_busy = false;
-            self.editor.watch_dirty = false;
-        }
-
-        if let Some(sub) = self.editor.watch.clone() {
-            if self.editor.watch_busy {
-                self.editor.watch_dirty = true;
-                return;
-            }
-            self.editor.watch_busy = true;
-            HostOps::run(
-                host,
-                cx,
-                move |_| sub.set_dirs(&want),
-                |app: &mut Self, result: std::io::Result<()>, cx| {
-                    app.editor.watch_busy = false;
-                    if let Err(e) = result {
-                        log::warn!("editor: could not update the watched set: {e}");
-                    }
-                    if std::mem::take(&mut app.editor.watch_dirty) {
-                        app.editor_watch_apply(cx);
-                    }
-                },
-            );
-            return;
-        }
-        if self.editor.watch_opening {
-            return;
-        }
-        self.editor.watch_opening = true;
-        let opened_host = Arc::clone(&host);
-        let opened_with = self.editor.watched_dirs.clone();
-        HostOps::run(
-            host,
-            cx,
-            {
-                let want = want.clone();
-                move |h| h.watch(&want).map(Arc::new)
-            },
-            move |app, result: std::io::Result<Arc<WatchSub>>, cx| {
-                app.editor.watch_opening = false;
-                let sub = match result {
-                    Ok(sub) => sub,
-                    Err(e) => {
-                        log::warn!("editor: external-change watcher unavailable: {e}");
-                        return;
-                    }
-                };
-                let events = sub.events().clone();
-                app.editor.watch = Some(sub);
-                app.editor.watch_host = Some(opened_host);
-                cx.spawn(async move |app, cx| {
-                    while let Ok(batch) = events.recv().await {
-                        let ok = app.update(cx, |app, _cx| {
-                            let _ = app.editor.events_tx.try_send(batch);
-                        });
-                        if ok.is_err() {
-                            break;
-                        }
-                    }
-                })
-                .detach();
-                if app.editor.watched_dirs != opened_with {
-                    app.editor_watch_apply(cx);
-                }
-            },
-        );
+    fn editor_rebuild_watcher(&mut self, cx: &mut Context<Self>) {
+        let host = self.active_host(cx);
+        self.editor.buffers.rebuild_watch(host, cx, |app| &mut app.editor.buffers);
+        self.lsp_sync_buffers(cx);
     }
 
     /// Shows what a file link in the grid pointed at.
@@ -1109,51 +847,14 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editor.pending_cursor =
-            line.map(|line| (path.to_path_buf(), line, column.unwrap_or(1)));
-        self.open_file_in_editor(path, window, cx);
+        let Some(host) = self.active_host(cx) else { return };
+        let cursor = line.map(|line| Position {
+            line: line.saturating_sub(1),
+            character: column.unwrap_or(1).saturating_sub(1),
+        });
+        self.editor_open_on_host_at(host, path, cursor, window, cx);
     }
 
-    /// Moves the cursor to the position a link asked for, if the file it asked
-    /// about is the one that just opened. Anything else — a different file
-    /// opened in between, a file that never arrived — drops the request rather
-    /// than throwing the cursor somewhere it was never meant to go.
-    fn apply_pending_cursor(
-        &mut self,
-        id: BufferId,
-        requested: &Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Peeked before it is taken: another file opening in the meantime must
-        // not swallow a request that was never about it.
-        if self
-            .editor
-            .pending_cursor
-            .as_ref()
-            .is_none_or(|(wanted, ..)| wanted != requested)
-        {
-            return;
-        }
-        let Some((_, line, column)) = self.editor.pending_cursor.take() else {
-            return;
-        };
-        let Some(file) = self.buffer_mut(id) else {
-            return;
-        };
-        // A line to land on is a place in the source. A Markdown file that
-        // would otherwise open rendered (the remembered preview) opens as
-        // text here, or the cursor would be placed somewhere nobody can see.
-        file.preview = false;
-        let input = file.input.clone();
-        // The grid counts from one and `Position` counts from zero, and a
-        // compiler that says "line 1" means the first line either way.
-        let position = Position {
-            line: line.saturating_sub(1),
-            character: column.saturating_sub(1),
-        };
-        place_cursor(input, position, CURSOR_SCROLL_ATTEMPTS, window, cx);
-    }
 
     pub(crate) fn open_file_in_editor(
         &mut self,
@@ -1176,40 +877,49 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.get(self.active).map(|t| t.tree_id.get()) else {
-            return;
-        };
+        self.editor_open_on_host_at(host, path, None, window, cx);
+    }
+
+    fn editor_open_on_host_at(
+        &mut self,
+        host: SharedHost,
+        path: &Path,
+        cursor: Option<Position>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(self.active).map(|tab| tab.tree_id.get()) else { return };
         self.raise_code_overlay();
-        if let Some(id) = self.buffer_at(host.id(), path) {
-            self.editor_show_in_tab(tab, id, true, window, cx);
-            self.apply_pending_cursor(id, path, window, cx);
-            return;
-        }
-        let p = path.to_path_buf();
-        let requested = p.clone();
-        let host_id = host.id();
-        HostOps::run_in(
-            host.clone(),
-            window,
-            cx,
-            move |h| load_file(h, p),
-            move |app, opened, window, cx| match opened {
-                Ok(loaded) => {
-                    let id = app.editor_install(host, loaded, tab, true, window, cx);
-                    // Against `requested`, not the loaded path: the host
-                    // canonicalised it on the way through, and a link that
-                    // named a symlink would otherwise lose the line it asked
-                    // for.
-                    app.apply_pending_cursor(id, &requested, window, cx);
-                }
-                Err(EditorOpenError::NotText(path)) => {
-                    app.open_outside_the_editor(host_id, &path, window, cx);
-                }
-                Err(EditorOpenError::Message(message)) => {
-                    window.notify_app(message, cx);
-                }
-            },
+        let target = buffers::OpenTarget { workspace: self.workspace, tab, window_host: self.spawn_host(cx) };
+        let reused = self.editor.buffers.open(
+            host, path, cursor, target, window, cx,
+            |app| &mut app.editor.buffers,
+            EditorPanelState::buffer_edited,
+            Self::editor_open_target_valid,
+            Self::editor_opened,
         );
+        if let Some(id) = reused {
+            self.editor_show_in_tab(tab, id, true, window, cx);
+        }
+    }
+
+    fn editor_open_target_valid(&self, target: buffers::OpenTarget, cx: &gpui_kit::App) -> bool {
+        self.workspace == target.workspace && self.spawn_host(cx) == target.window_host
+            && self.tab_index_of(target.tab).is_some()
+    }
+
+    fn editor_opened(&mut self, target: buffers::OpenTarget, result: buffers::OpenResult, window: &mut Window, cx: &mut Context<Self>) {
+        match result {
+            buffers::OpenResult::Opened { id, created, front } => {
+                if created { self.editor_buffer_created(id, window, cx); }
+                self.editor_show_in_tab(target.tab, id, front, window, cx);
+                self.editor_rebuild_watcher(cx);
+            }
+            buffers::OpenResult::Failed { host, error: EditorOpenError::NotText(path) } => {
+                self.open_outside_the_editor(host, &path, window, cx);
+            }
+            buffers::OpenResult::Failed { error: EditorOpenError::Message(message), .. } => { window.notify_app(message, cx); }
+        }
     }
 
     /// What to do with a file the built-in editor cannot show.
@@ -1277,7 +987,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab_ix) = self.tab_index_of(tab).or(Some(self.active)) else {
+        let Some(tab_ix) = self.tab_index_of(tab) else {
             return;
         };
         let Some(t) = self.tabs.get_mut(tab_ix) else {
@@ -1310,26 +1020,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> BufferId {
-        if let Some(id) = self.buffer_at(host.id(), &loaded.path) {
-            self.editor_show_in_tab(tab, id, front, window, cx);
-            return id;
-        }
-        let language = language_for_path(&loaded.path);
-        let indent = loaded
-            .config
-            .indent(editor_text::detect_indent(&loaded.text, language));
-        let id = self.editor_new_buffer(
-            host,
-            loaded.path,
-            None,
-            loaded.text,
-            loaded.format,
-            loaded.config,
-            indent,
-            loaded.mtime,
-            window,
-            cx,
-        );
+        let (id, created) = self.editor.buffers.install(host, loaded, window, cx,
+            |app| &mut app.editor.buffers, EditorPanelState::buffer_edited);
+        if created { self.editor_buffer_created(id, window, cx); }
         self.editor_show_in_tab(tab, id, front, window, cx);
         self.editor_rebuild_watcher(cx);
         id
@@ -1349,111 +1042,33 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> BufferId {
-        let language = if untitled.is_some() {
-            "text"
-        } else {
-            language_for_path(&path)
-        };
-        let (wrap, preview) = {
-            let cfg = cx.global::<crate::core::config::Config>();
-            (
-                cfg.editor_soft_wrap,
-                cfg.editor_markdown_preview && language == "markdown",
-            )
-        };
-        let saved = Fingerprint::of_str(&text);
-        let input = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language(language)
-                .tab_size(tab_size(indent))
-                .line_number(true)
-                .searchable(true)
-                .replaceable(true)
-                .folding(true)
-                .soft_wrap(wrap)
-                // Ours is drawn by `editor_body_menu`, like every other menu
-                // in the window; the built-in one is a native OS menu.
-                .context_menu(false)
-                .default_value(text)
-        });
-        self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
-        let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
-        let id = input.entity_id();
-        let git_gutter = gutter::BufferGutter::default();
-        let sub = cx.subscribe_in(
-            &input,
-            window,
-            move |this: &mut LyrelApp, _input, ev, _window, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    this.editor_note_edit(id, cx);
-                }
-            },
-        );
-        let observe = cx.observe(&input, |_, _, cx| cx.notify());
-        self.editor
-            .nav
-            .track_buffer(id, input.read(cx).text().clone());
-        self.editor.buffers.push(OpenFile {
-            path,
-            untitled,
-            host,
-            input,
-            dirty: false,
-            saved,
-            format,
-            saved_format: format,
-            config,
-            indent,
-            disk_mtime: mtime,
-            saving: false,
-            save_pending: false,
-            save_then_close: false,
-            reload_seq: 0,
-            conflict: None,
-            preview,
-            wrap,
-            preview_scroll: gpui_kit::ScrollHandle::new(),
-            gutter: git_gutter,
-            popups,
-            _sub: sub,
-            _observe: observe,
-        });
+        let id = self.editor.buffers.create(host, path, untitled, text, format, config, indent, mtime,
+            window, cx, |app| &mut app.editor.buffers, EditorPanelState::buffer_edited);
+        self.editor_buffer_created(id, window, cx);
         id
+    }
+
+    fn editor_buffer_created(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(file) = self.editor.buffers.get(id) else { return };
+        let input = file.input.clone();
+        self.watch_document_status_focus(&input.read(cx).focus_handle(cx), window, cx);
+        self.editor.nav.track_buffer(id, input.read(cx).text().clone());
     }
 
     /// Re-derives whether a buffer differs from what is on disk, after an
     /// edit of any kind — typing, undo, a reload, a save rule.
     fn editor_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer(id) else {
-            return;
-        };
-        let state = f.input.read(cx);
-        let text = state.text();
-        let len = text.len();
-        let same_text = len == f.saved.len && Fingerprint::of_chunks(len, text.chunks()) == f.saved;
-        let dirty = !same_text || f.format != f.saved_format;
-        if let Some(f) = self.buffer_mut(id) {
-            f.dirty = dirty;
-        }
+        self.editor.buffers.note_edit(id, cx);
+        self.editor_buffer_changed(id, cx);
+    }
+
+    fn editor_buffer_changed(&mut self, id: BufferId, cx: &mut Context<Self>) {
         self.lsp_buffer_edited(id, cx);
         self.editor_gutter_note_edit(id, cx);
         self.editor_nav_note_edit(id, cx);
         cx.notify();
     }
 
-    /// Saved files on this machine — what a language server can read
-    /// (`ui::lsp`). Untitled buffers and files on other hosts are not.
-    pub(crate) fn editor_local_files(&self) -> Vec<LocalFile> {
-        self.editor
-            .buffers
-            .iter()
-            .filter_map(OpenFile::local)
-            .collect()
-    }
-
-    pub(crate) fn editor_local_file(&self, id: BufferId) -> Option<LocalFile> {
-        self.buffer(id).and_then(OpenFile::local)
-    }
 
     pub(crate) fn editor_active_local_file(&self) -> Option<LocalFile> {
         self.active_buffer().and_then(OpenFile::local)
@@ -1481,8 +1096,7 @@ impl LyrelApp {
             return;
         };
         self.raise_code_overlay();
-        let n = self.editor.next_untitled;
-        self.editor.next_untitled += 1;
+        let n = self.editor.buffers.next_untitled();
         let indent = editor_text::detect_indent("", "text");
         let id = self.editor_new_buffer(
             host,
@@ -1511,8 +1125,7 @@ impl LyrelApp {
             return;
         };
         let host: SharedHost = lyrel_core::host::local::LocalHost::new();
-        let n = self.editor.next_untitled;
-        self.editor.next_untitled += 1;
+        let n = self.editor.buffers.next_untitled();
         let indent = editor_text::detect_indent(&text, "text");
         let dirty = !text.is_empty();
         let id = self.editor_new_buffer(
@@ -1527,7 +1140,7 @@ impl LyrelApp {
             window,
             cx,
         );
-        if let Some(file) = self.buffer_mut(id) {
+        if let Some(file) = self.editor.buffers.get_mut(id) {
             file.saved = Fingerprint::of_str("");
             file.dirty = dirty;
         }
@@ -1647,7 +1260,7 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
             return;
         };
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         if f.language() != "markdown" {
@@ -1669,7 +1282,7 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
             return;
         };
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         f.wrap = !f.wrap;
@@ -1688,7 +1301,7 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
             return;
         };
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         f.format.line_ending = match f.format.line_ending {
@@ -1853,7 +1466,7 @@ impl LyrelApp {
     /// final newline — to the buffer itself, before it is written, so what is
     /// on screen is what is on disk.
     fn apply_save_rules(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
         let text = f.input.read(cx).text().to_string();
@@ -1871,7 +1484,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         if f.untitled.is_some() {
@@ -1884,7 +1497,7 @@ impl LyrelApp {
             return;
         }
         self.apply_save_rules(id, window, cx);
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         let text = f.input.read(cx).text().to_string();
@@ -1902,7 +1515,7 @@ impl LyrelApp {
                 return;
             }
         };
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         f.saving = true;
@@ -1922,7 +1535,7 @@ impl LyrelApp {
             cx,
             move |h| write_checked(h, &target, &bytes, expect),
             move |app, outcome: SaveOutcome, window, cx| {
-                let Some(f) = app.buffer_mut(id) else {
+                let Some(f) = app.editor.buffers.get_mut(id) else {
                     return;
                 };
                 f.saving = false;
@@ -1946,8 +1559,7 @@ impl LyrelApp {
                             app.editor_save_file(id, false, false, window, cx);
                             return;
                         }
-                        let close = app
-                            .buffer_mut(id)
+                        let close = app.editor.buffers.get_mut(id)
                             .is_some_and(|f| std::mem::take(&mut f.save_then_close) && !f.dirty);
                         if close {
                             app.editor_drop_buffer(id, cx);
@@ -1978,7 +1590,7 @@ impl LyrelApp {
 
     /// Asked when a save finds the file changed underneath it.
     fn editor_ask_overwrite(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
         let name = f.label();
@@ -2009,7 +1621,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         f.save_then_close = false;
@@ -2034,7 +1646,7 @@ impl LyrelApp {
                 return;
             }
             let _ = app.update_in(cx, |app, window, cx| {
-                if let Some(f) = app.buffer_mut(id) {
+                if let Some(f) = app.editor.buffers.get_mut(id) {
                     f.format = TextFormat {
                         line_ending: f.format.line_ending,
                         ..TextFormat::default()
@@ -2055,7 +1667,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
         let suggested = if f.untitled.is_some() {
@@ -2113,11 +1725,11 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
         let host = f.host.clone();
-        if let Some(other) = self.buffer_at(host.id(), &path)
+        if let Some(other) = self.editor.buffers.at(host.id(), &path)
             && other != id
         {
             window.notify_app(
@@ -2129,7 +1741,7 @@ impl LyrelApp {
             );
             return;
         }
-        if let Some(f) = self.buffer_mut(id) {
+        if let Some(f) = self.editor.buffers.get_mut(id) {
             f.path = path.clone();
             f.untitled = None;
             f.conflict = None;
@@ -2207,7 +1819,7 @@ impl LyrelApp {
             return;
         }
         if let Some(f) = self.tab_code().and_then(TabCode::active_id)
-            && let Some(f) = self.buffer_mut(f)
+            && let Some(f) = self.editor.buffers.get_mut(f)
         {
             // There is no line to land on in the rendered view.
             f.preview = false;
@@ -2260,7 +1872,7 @@ impl LyrelApp {
                 if path.as_os_str().is_empty() {
                     return;
                 }
-                let Some(host) = self.buffer(id).map(|f| f.host.clone()) else {
+                let Some(host) = self.editor.buffers.get(id).map(|f| f.host.clone()) else {
                     return;
                 };
                 if !host.is_absolute(&path) {
@@ -2319,7 +1931,7 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(|c| c.files.get(pos).copied()) else {
             return;
         };
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
         if !f.dirty || self.buffer_refs(id) > 1 {
@@ -2383,7 +1995,7 @@ impl LyrelApp {
         let unsaved: Vec<BufferId> = ids
             .iter()
             .copied()
-            .filter(|id| self.buffer(*id).is_some_and(|f| f.dirty) && self.buffer_refs(*id) == 1)
+            .filter(|id| self.editor.buffers.get(*id).is_some_and(|f| f.dirty) && self.buffer_refs(*id) == 1)
             .collect();
         if self.editor_guard_unsaved(
             unsaved,
@@ -2401,7 +2013,7 @@ impl LyrelApp {
     /// Types `@path` into the running agent's prompt, with the selected
     /// lines after it when there are any.
     fn editor_attach_to_agent(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer(id).filter(|f| f.untitled.is_none()) else {
+        let Some(f) = self.editor.buffers.get(id).filter(|f| f.untitled.is_none()) else {
             return;
         };
         let state = f.input.read(cx);
@@ -2427,7 +2039,7 @@ impl LyrelApp {
             return menu;
         };
         let this = this.read(cx);
-        let Some(f) = this.buffer(id) else {
+        let Some(f) = this.editor.buffers.get(id) else {
             return menu;
         };
         let state = f.input.read(cx);
@@ -2548,7 +2160,7 @@ impl LyrelApp {
         app: &gpui_kit::WeakEntity<Self>,
         cx: &gpui_kit::App,
     ) -> PopupMenu {
-        let Some(f) = self.buffer(id).filter(|f| f.untitled.is_none()) else {
+        let Some(f) = self.editor.buffers.get(id).filter(|f| f.untitled.is_none()) else {
             return menu;
         };
         let path = f.path.clone();
@@ -2665,7 +2277,7 @@ impl LyrelApp {
         for code in self.tabs.iter_mut().filter_map(|t| t.code.as_deref_mut()) {
             code.forget_everywhere(id);
         }
-        self.editor.buffers.retain(|b| b.id() != id);
+        self.editor.buffers.remove(id);
         self.editor.nav.forget_buffer(id);
         if matches!(
             self.editor.bar.as_ref().map(|b| &b.kind),
@@ -2699,7 +2311,7 @@ impl LyrelApp {
         self.editor.unsaved_prompt_open = true;
         let names: Vec<SharedString> = ids
             .iter()
-            .filter_map(|id| self.buffer(*id).map(OpenFile::label))
+            .filter_map(|id| self.editor.buffers.get(*id).map(OpenFile::label))
             .collect();
         let title = match names.as_slice() {
             [one] => t_fmt(L10nKey::EditorUnsavedChanges, &[("name", one)]),
@@ -2783,7 +2395,7 @@ impl LyrelApp {
                 .into_iter()
                 .partition(|w| {
                     w.ids.iter().all(|id| {
-                        self.buffer(*id)
+                        self.editor.buffers.get(*id)
                             .is_none_or(|f| !f.dirty && !f.saving && f.untitled.is_none())
                     })
                 });
@@ -2831,24 +2443,7 @@ impl LyrelApp {
         to: &Path,
         cx: &mut Context<Self>,
     ) {
-        let mut moved = false;
-        for f in self.editor.buffers.iter_mut() {
-            if f.untitled.is_some() || f.host.id() != host {
-                continue;
-            }
-            let Ok(rest) = f.path.strip_prefix(from) else {
-                continue;
-            };
-            f.path = if rest.as_os_str().is_empty() {
-                to.to_path_buf()
-            } else {
-                to.join(rest)
-            };
-            let language = language_for_path(&f.path);
-            f.input
-                .update(cx, |st, cx| st.set_highlighter(language, cx));
-            moved = true;
-        }
+        let moved = self.editor.buffers.path_moved(host, from, to, cx);
         if moved {
             self.editor_rebuild_watcher(cx);
             cx.notify();
@@ -2863,79 +2458,12 @@ impl LyrelApp {
         path: &Path,
         cx: &mut Context<Self>,
     ) {
-        for f in self.editor.buffers.iter_mut() {
-            if f.untitled.is_none() && f.host.id() == host && f.path.starts_with(path) {
-                f.conflict = Some(DiskConflict::Deleted);
-                f.disk_mtime = None;
-            }
-        }
+        self.editor.buffers.path_removed(host, path);
         cx.notify();
     }
 
     // ---- Changes made by something else ----
 
-    pub(crate) fn editor_handle_external_change(
-        &mut self,
-        path: &Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // The watcher's own host: the events came from its machine, whatever
-        // the window has moved on to since.
-        let Some(host) = self.editor.watch_host.clone() else {
-            return;
-        };
-        let host_id = host.id();
-        let p = path.to_path_buf();
-        let landed = p.clone();
-        HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| match h.stat(&p) {
-                Ok(m) => Observed::Present(m.mtime),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Observed::Missing,
-                // Unreadable for some other reason: say nothing rather than
-                // call a file deleted that may well still be there.
-                Err(_) => Observed::Present(None),
-            },
-            move |app, observed, window, cx| {
-                app.editor_apply_external_change(host_id, &landed, observed, window, cx)
-            },
-        );
-    }
-
-    fn editor_apply_external_change(
-        &mut self,
-        host: HostId,
-        path: &Path,
-        observed: Observed,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(id) = self.buffer_at(host, path) else {
-            return;
-        };
-        let Some(f) = self.buffer_mut(id) else {
-            return;
-        };
-        match classify_external_change(f.saving, f.dirty, f.disk_mtime, observed) {
-            ExternalChange::Ignore => {}
-            ExternalChange::Conflict => {
-                let Observed::Present(mtime) = observed else {
-                    return;
-                };
-                f.conflict = Some(DiskConflict::Changed(mtime));
-                cx.notify();
-            }
-            ExternalChange::Deleted => {
-                f.conflict = Some(DiskConflict::Deleted);
-                f.disk_mtime = None;
-                cx.notify();
-            }
-            ExternalChange::Reload => self.editor_reload_from_disk(id, window, cx),
-        }
-    }
 
     pub(crate) fn editor_reload_from_disk(
         &mut self,
@@ -2943,66 +2471,8 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.buffer_mut(id) else {
-            return;
-        };
-        if f.untitled.is_some() {
-            return;
-        }
-        let target = f.path.clone();
-        let host = f.host.clone();
-        f.reload_seq = f.reload_seq.wrapping_add(1);
-        let seq = f.reload_seq;
-        HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| {
-                let bytes = h.read_file(&target, MAX_FILE_BYTES)?;
-                let decoded = editor_text::decode(&bytes).ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "no longer text")
-                })?;
-                let mtime = h.stat(&target).ok().and_then(|m| m.mtime);
-                Ok((decoded, mtime))
-            },
-            move |app,
-                  result: std::io::Result<(editor_text::Decoded, Option<MTime>)>,
-                  window,
-                  cx| {
-                let Some(f) = app.buffer_mut(id) else {
-                    return;
-                };
-                if f.reload_seq != seq {
-                    return;
-                }
-                let (decoded, mtime) = match result {
-                    Ok(ok) => ok,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        f.conflict = Some(DiskConflict::Deleted);
-                        f.disk_mtime = None;
-                        cx.notify();
-                        return;
-                    }
-                    // Unreadable for a moment — mid-write, say — is not a
-                    // reason to touch the buffer; the next change event tries
-                    // again.
-                    Err(e) => {
-                        log::warn!("editor: reload of {} failed: {e}", f.path.display());
-                        return;
-                    }
-                };
-                f.disk_mtime = mtime;
-                f.conflict = None;
-                f.saved = Fingerprint::of_str(&decoded.text);
-                f.format = decoded.format;
-                f.saved_format = decoded.format;
-                let input = f.input.clone();
-                replace_buffer_text(&input, &decoded.text, window, cx);
-                // The replace reports its own change, but only once effects
-                // flush; settle it now so nothing reads a stale flag first.
-                app.editor_note_edit(id, cx);
-            },
-        );
+        self.editor.buffers.reload(id, window, cx,
+            |app| &mut app.editor.buffers, EditorPanelState::buffer_edited);
     }
 
     // ---- Keeping the registry, the tabs and the session store in step ----
@@ -3016,6 +2486,9 @@ impl LyrelApp {
     /// that exits, a tab dragged into another, a workspace switch, a server
     /// restart — because this sees all of them, including ones added later.
     pub(crate) fn editor_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.buffers.take_watch_refresh() {
+            self.editor_rebuild_watcher(cx);
+        }
         // A tab that left and came back under the same id — a server restart
         // rebuilds every tab that way — gets its files back like a relaunch.
         if self.editor.restored.len() > self.tabs.len() {
@@ -3052,7 +2525,7 @@ impl LyrelApp {
         let mut changed = false;
         for (id, dirty) in orphans {
             if !dirty {
-                self.editor.buffers.retain(|b| b.id() != id);
+                self.editor.buffers.remove(id);
                 self.editor.nav.forget_buffer(id);
                 changed = true;
                 continue;
@@ -3062,7 +2535,7 @@ impl LyrelApp {
             let Some(tab) = self.tabs.get(self.active).map(|t| t.tree_id.get()) else {
                 continue;
             };
-            let name = self.buffer(id).map(OpenFile::label).unwrap_or_default();
+            let name = self.editor.buffers.get(id).map(OpenFile::label).unwrap_or_default();
             self.editor_show_in_tab(tab, id, false, window, cx);
             window.notify_app(t_fmt(L10nKey::EditorOrphanAdopted, &[("name", &name)]), cx);
             changed = true;
@@ -3106,16 +2579,15 @@ impl LyrelApp {
             .cloned()
             .collect();
         let requested = files.clone();
-        HostOps::run_in(
-            host.clone(),
-            window,
-            cx,
-            move |h| {
-                files
-                    .into_iter()
-                    .map(|p| load_file(h, p).ok())
-                    .collect::<Vec<_>>()
-            },
+        let target = buffers::OpenTarget {
+            workspace: self.workspace,
+            tab: tab_id,
+            window_host: self.spawn_host(cx),
+        };
+        self.editor.buffers.restore(
+            host.clone(), files, target, window, cx,
+            |app| &mut app.editor.buffers,
+            Self::editor_open_target_valid,
             move |app, loaded: Vec<Option<Loaded>>, window, cx| {
                 let mut opened: Vec<(PathBuf, BufferId)> = Vec::new();
                 for (path, l) in requested.into_iter().zip(loaded) {
@@ -3192,7 +2664,7 @@ impl LyrelApp {
                 let mut files = Vec::new();
                 let mut active = 0;
                 for (pos, id) in ids.iter().enumerate() {
-                    let Some(f) = self.buffer(*id) else { continue };
+                    let Some(f) = self.editor.buffers.get(*id) else { continue };
                     if f.untitled.is_some() || f.host.id() != spawn_host {
                         continue;
                     }
@@ -3243,7 +2715,7 @@ impl LyrelApp {
             return;
         };
         for id in ids {
-            if self.buffer_tabs(id) == 1 && self.buffer(id).is_some_and(|b| !b.dirty) {
+            if self.buffer_tabs(id) == 1 && self.editor.buffers.get(id).is_some_and(|b| !b.dirty) {
                 self.editor_drop_buffer(id, cx);
             }
         }
@@ -3252,6 +2724,7 @@ impl LyrelApp {
     /// A tab was closed for good: forget what it had open.
     pub(crate) fn editor_forget_tab(&mut self, tab: TabId, cx: &mut Context<Self>) {
         self.editor.recorded.remove(&tab);
+        self.editor.buffers.forget_tab(tab);
         self.editor.nav.forget_tab(tab);
         editor_session::remove(cx, tab);
     }
@@ -3381,7 +2854,7 @@ impl LyrelApp {
         slot: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        match id.and_then(|id| self.buffer(id)) {
+        match id.and_then(|id| self.editor.buffers.get(id)) {
             None => self.render_editor_empty(cx).into_any_element(),
             Some(f) if f.preview => {
                 let markdown = f.input.read(cx).text().to_string();
@@ -3462,7 +2935,7 @@ impl LyrelApp {
         let files: Vec<(usize, SharedString, String, bool, bool)> = shown
             .into_iter()
             .filter_map(|(pos, id)| {
-                let f = self.buffer(id)?;
+                let f = self.editor.buffers.get(id)?;
                 let tip = if f.untitled.is_some() {
                     f.label().to_string()
                 } else {
@@ -3905,7 +3378,7 @@ impl LyrelApp {
                     rungs,
                     cx,
                     cx.listener(move |this, _, _w, cx| {
-                        if let Some(f) = this.buffer_mut(id) {
+                        if let Some(f) = this.editor.buffers.get_mut(id) {
                             // The version seen on disk is now the one a
                             // save is allowed to replace.
                             f.disk_mtime = observed;
@@ -4003,58 +3476,6 @@ mod tests {
         }
     }
 
-    fn mt(secs: i64, nanos: u32) -> Option<MTime> {
-        Some(MTime { secs, nanos })
-    }
-
-    #[test]
-    fn external_changes_are_told_apart_from_our_own_saves() {
-        let ours = mt(100, 0);
-        let seen = |m| Observed::Present(m);
-
-        assert_eq!(
-            classify_external_change(false, false, ours, seen(ours)),
-            ExternalChange::Ignore
-        );
-        assert_eq!(
-            classify_external_change(false, false, ours, seen(mt(101, 0))),
-            ExternalChange::Reload
-        );
-        assert_eq!(
-            classify_external_change(false, true, ours, seen(mt(101, 0))),
-            ExternalChange::Conflict
-        );
-        assert_eq!(
-            classify_external_change(false, false, mt(100, 0), seen(mt(100, 1))),
-            ExternalChange::Reload
-        );
-        assert_eq!(
-            classify_external_change(true, false, ours, seen(mt(101, 0))),
-            ExternalChange::Ignore
-        );
-        assert_eq!(
-            classify_external_change(false, false, None, seen(None)),
-            ExternalChange::Reload
-        );
-    }
-
-    #[test]
-    fn a_file_that_vanished_is_reported_deleted_whether_or_not_it_was_edited() {
-        assert_eq!(
-            classify_external_change(false, false, mt(1, 0), Observed::Missing),
-            ExternalChange::Deleted
-        );
-        assert_eq!(
-            classify_external_change(false, true, mt(1, 0), Observed::Missing),
-            ExternalChange::Deleted
-        );
-        // Our own save replaces the file by rename, and a watcher can catch
-        // the instant between.
-        assert_eq!(
-            classify_external_change(true, false, mt(1, 0), Observed::Missing),
-            ExternalChange::Ignore
-        );
-    }
 
     #[test]
     fn the_fingerprint_does_not_depend_on_how_the_text_is_chunked() {
