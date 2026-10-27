@@ -1,4 +1,3 @@
-
 use gpui_kit::TestAppContext;
 
 use crate::core::session::SessionPane;

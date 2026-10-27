@@ -7,7 +7,7 @@ pub(crate) enum AfterUnsaved {
     CloseFiles {
         tab: TabId,
         ids: Vec<BufferId>,
-        left: bool,
+        group: split::GroupId,
     },
     ClosePane(gpui_kit::EntityId),
     CloseWindow,

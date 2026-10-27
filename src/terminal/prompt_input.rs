@@ -5,16 +5,25 @@ pub(super) mod layout;
 #[cfg(test)]
 #[path = "prompt_input/owner_tests.rs"]
 mod owner_tests;
+use self::layout::{input_char_positions, input_start};
+use super::{
+    cmd_editor::CmdEditor,
+    completion::state::TerminalCompletion,
+    history_session::TerminalHistory,
+    hold::{GapHold, Verdict},
+    remote::RemoteTerminal,
+    reverse_search,
+    typeahead::{RawInput, Typeahead},
+};
 use gpui_kit::{Bounds, Modifiers, Pixels};
-use rio_vt::crosswords::{Mode};
-use rio_vt::crosswords::grid::Dimensions;
-use super::{cmd_editor::CmdEditor, completion::state::TerminalCompletion,
-    history_session::TerminalHistory, hold::{GapHold, Verdict}, remote::RemoteTerminal,
-    typeahead::{RawInput, Typeahead}, reverse_search};
-use self::layout::{input_start, input_char_positions};
+use rio_vt::crosswords::Mode;
 
 #[derive(Clone, Copy)]
-pub(super) enum KeyDelivery { Unencoded, Written, Held(Option<u64>) }
+pub(super) enum KeyDelivery {
+    Unencoded,
+    Written,
+    Held(Option<u64>),
+}
 
 pub(super) enum EditorIntent<'a> {
     Redraw,
@@ -45,20 +54,30 @@ pub(super) struct PromptInput {
 impl PromptInput {
     /// Writes a raw key without replaying a foreground program's input into a later prompt.
     /// The optional epoch asks the GPUI adapter to schedule the existing gap timer.
-    pub(super) fn raw_key(&mut self, ks: &gpui_kit::Keystroke, terminal: &RemoteTerminal,
-        flags: impl Fn() -> super::input::KeyFlags) -> KeyDelivery {
+    pub(super) fn raw_key(
+        &mut self,
+        ks: &gpui_kit::Keystroke,
+        terminal: &RemoteTerminal,
+        flags: impl Fn() -> super::input::KeyFlags,
+    ) -> KeyDelivery {
         let m = &ks.modifiers;
         if m.control && !m.platform && !m.alt && ks.key == "c" && self.handoff_active(terminal) {
             // A fresh A/B after Ctrl-C need not advance prompt_cycle: remember its report boundary.
             self.interrupt_handoff(terminal);
         }
-        let Some(bytes) = super::input::keystroke_to_bytes(ks, flags()) else { return KeyDelivery::Unencoded; };
+        let Some(bytes) = super::input::keystroke_to_bytes(ks, flags()) else {
+            return KeyDelivery::Unencoded;
+        };
         let plain = !m.control && !m.alt && !m.platform;
         let boundary = typeahead_boundary(ks.key.as_str(), m);
         let interrupt = boundary.is_some();
         let shell_owns_prompt = self.shell_owns_prompt(terminal);
-        if plain && ks.key == "backspace" && !shell_owns_prompt && self.gap_holdable(terminal)
-            && let Verdict::Held(arm) = self.hold.hold_backspace(&bytes) {
+        if plain
+            && ks.key == "backspace"
+            && !shell_owns_prompt
+            && self.gap_holdable(terminal)
+            && let Verdict::Held(arm) = self.hold.hold_backspace(&bytes)
+        {
             return KeyDelivery::Held(arm);
         }
         self.release_hold(terminal);
@@ -68,75 +87,148 @@ impl PromptInput {
         }
         terminal.write(bytes);
         if !shell_owns_prompt && !interrupt {
-            self.observe(terminal, RawInput::Key { key: ks.key.as_str(), plain });
+            self.observe(
+                terminal,
+                RawInput::Key {
+                    key: ks.key.as_str(),
+                    plain,
+                },
+            );
         }
         KeyDelivery::Written
     }
     pub(super) fn new(enabled: bool) -> Self {
-        Self { cmd: CmdEditor::new(), enabled, typeahead: Typeahead::new(), hold: GapHold::new(),
-            last_blocked: false, handoff: None, interrupt_seq: None, marked: String::new(),
-            anchor: None, selecting: false, select_gesture: false, drag_word: None, goal_col: None }
+        Self {
+            cmd: CmdEditor::new(),
+            enabled,
+            typeahead: Typeahead::new(),
+            hold: GapHold::new(),
+            last_blocked: false,
+            handoff: None,
+            interrupt_seq: None,
+            marked: String::new(),
+            anchor: None,
+            selecting: false,
+            select_gesture: false,
+            drag_word: None,
+            goal_col: None,
+        }
     }
     // The existing editor capability is borrowed by history/completion and render adapters.
-    pub(super) fn editor(&self) -> &CmdEditor { &self.cmd }
-    pub(super) fn editor_mut(&mut self) -> &mut CmdEditor { &mut self.cmd }
-    pub(super) fn enabled(&self) -> bool { self.enabled }
-    pub(super) fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
-    pub(super) fn marked(&self) -> &str { &self.marked }
-    pub(super) fn mark(&mut self, text: String) { self.marked = text; }
+    pub(super) fn editor(&self) -> &CmdEditor {
+        &self.cmd
+    }
+    pub(super) fn editor_mut(&mut self) -> &mut CmdEditor {
+        &mut self.cmd
+    }
+    pub(super) fn enabled(&self) -> bool {
+        self.enabled
+    }
+    pub(super) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+    pub(super) fn marked(&self) -> &str {
+        &self.marked
+    }
+    pub(super) fn mark(&mut self, text: String) {
+        self.marked = text;
+    }
     pub(super) fn unmark(&mut self) -> bool {
-        if self.marked.is_empty() { return false; }
+        if self.marked.is_empty() {
+            return false;
+        }
         self.marked.clear();
         true
     }
     pub(super) fn anchor_moved(&mut self, anchor: Option<Bounds<Pixels>>) -> bool {
-        if self.anchor == anchor { return false; }
+        if self.anchor == anchor {
+            return false;
+        }
         self.anchor = anchor;
         anchor.is_some()
     }
     fn handoff_active(&self, terminal: &RemoteTerminal) -> bool {
         self.handoff == Some(terminal.prompt_cycle())
-            && self.interrupt_seq.is_none_or(|seq| terminal.prompt_seq() <= seq)
-            && terminal.at_prompt() && !Self::alt(terminal)
+            && self
+                .interrupt_seq
+                .is_none_or(|seq| terminal.prompt_seq() <= seq)
+            && terminal.at_prompt()
+            && !Self::alt(terminal)
     }
     fn interrupt_handoff(&mut self, terminal: &RemoteTerminal) {
         self.interrupt_seq = Some(terminal.prompt_seq());
     }
-    fn alt(terminal: &RemoteTerminal) -> bool { terminal.term.lock().mode().contains(Mode::ALT_SCREEN) }
+    fn alt(terminal: &RemoteTerminal) -> bool {
+        terminal.term.lock().mode().contains(Mode::ALT_SCREEN)
+    }
     fn shell_vi(terminal: &RemoteTerminal) -> bool {
         terminal.shell_vi_mode() && terminal.at_prompt() && !Self::alt(terminal)
     }
     pub(super) fn shell_owns_prompt(&self, terminal: &RemoteTerminal) -> bool {
         !self.enabled || Self::shell_vi(terminal) || self.handoff_active(terminal)
     }
-    pub(super) fn inactive_reason(&self, terminal: &RemoteTerminal, search_focused: bool) -> Option<&'static str> {
-        if !self.enabled { return Some("the inline prompt editor is turned off"); }
-        if terminal.exited { return Some("the shell has exited"); }
-        if search_focused { return Some("the search field holds the keyboard"); }
-        if Self::alt(terminal) { return Some("the pane is on the alternate screen"); }
-        if terminal.foreground_agent().is_some() { return Some("the foreground agent owns input"); }
-        if Self::shell_vi(terminal) { return Some("the shell prompt is in vi mode"); }
-        if self.handoff_active(terminal) { return Some("this prompt's line was already handed to the shell"); }
-        if !terminal.at_prompt() { return Some("the shell has not reported a prompt (no OSC 133)"); }
+    pub(super) fn inactive_reason(
+        &self,
+        terminal: &RemoteTerminal,
+        search_focused: bool,
+    ) -> Option<&'static str> {
+        if !self.enabled {
+            return Some("the inline prompt editor is turned off");
+        }
+        if terminal.exited {
+            return Some("the shell has exited");
+        }
+        if search_focused {
+            return Some("the search field holds the keyboard");
+        }
+        if Self::alt(terminal) {
+            return Some("the pane is on the alternate screen");
+        }
+        if terminal.foreground_agent().is_some() {
+            return Some("the foreground agent owns input");
+        }
+        if Self::shell_vi(terminal) {
+            return Some("the shell prompt is in vi mode");
+        }
+        if self.handoff_active(terminal) {
+            return Some("this prompt's line was already handed to the shell");
+        }
+        if !terminal.at_prompt() {
+            return Some("the shell has not reported a prompt (no OSC 133)");
+        }
         None
     }
     fn blocked(terminal: &RemoteTerminal) -> bool {
-        Self::alt(terminal) || terminal.foreground_agent().is_some() || terminal.agent_session().is_some()
+        Self::alt(terminal)
+            || terminal.foreground_agent().is_some()
+            || terminal.agent_session().is_some()
     }
     pub(super) fn sync_owner(&mut self, terminal: &RemoteTerminal) {
-        sync_typeahead_owner_state(&mut self.typeahead, &mut self.last_blocked, Self::blocked(terminal));
+        sync_typeahead_owner_state(
+            &mut self.typeahead,
+            &mut self.last_blocked,
+            Self::blocked(terminal),
+        );
     }
     pub(super) fn observe(&mut self, terminal: &RemoteTerminal, input: RawInput<'_>) {
-        observe_typeahead_for_owner(&mut self.typeahead, &mut self.last_blocked, input, Self::blocked(terminal));
+        observe_typeahead_for_owner(
+            &mut self.typeahead,
+            &mut self.last_blocked,
+            input,
+            Self::blocked(terminal),
+        );
     }
     pub(super) fn shortcut(&mut self, terminal: &RemoteTerminal, key: &str) {
-        self.typeahead.observe(RawInput::Key { key, plain: false }, Self::alt(terminal));
+        self.typeahead
+            .observe(RawInput::Key { key, plain: false }, Self::alt(terminal));
     }
     fn gap_holdable(&self, terminal: &RemoteTerminal) -> bool {
         terminal.shell_active() && !Self::alt(terminal) && !self.shell_owns_prompt(terminal)
     }
     pub(super) fn settle_shell_owner(&mut self, terminal: &RemoteTerminal) {
-        if let Some((_net, bytes)) = self.hold.release() { terminal.write(bytes); }
+        if let Some((_net, bytes)) = self.hold.release() {
+            terminal.write(bytes);
+        }
         self.typeahead.drain();
     }
     pub(super) fn flush_typeahead(&mut self, terminal: &RemoteTerminal) {
@@ -209,11 +301,14 @@ impl PromptInput {
     /// A gap's text on its way to the record, which replays it into the editor
     /// later — so a paste has to be recorded as one.
     fn observe_gap_text(&mut self, terminal: &RemoteTerminal, text: &str, pasted: bool) {
-        self.observe(terminal, if pasted {
-            RawInput::Pasted(text)
-        } else {
-            RawInput::Text(text)
-        });
+        self.observe(
+            terminal,
+            if pasted {
+                RawInput::Pasted(text)
+            } else {
+                RawInput::Text(text)
+            },
+        );
     }
 
     pub(super) fn release_hold(&mut self, terminal: &RemoteTerminal) {
@@ -224,17 +319,40 @@ impl PromptInput {
         }
     }
 
-    pub(super) fn write_gap_text(&mut self, terminal: &RemoteTerminal, text: &str, bytes: Vec<u8>, pasted: bool) -> Option<u64> {
-        if self.shell_owns_prompt(terminal) { self.release_hold(terminal); terminal.write(bytes); return None; }
+    pub(super) fn write_gap_text(
+        &mut self,
+        terminal: &RemoteTerminal,
+        text: &str,
+        bytes: Vec<u8>,
+        pasted: bool,
+    ) -> Option<u64> {
+        if self.shell_owns_prompt(terminal) {
+            self.release_hold(terminal);
+            terminal.write(bytes);
+            return None;
+        }
         if self.gap_holdable(terminal) && !text.chars().any(char::is_control) {
-            let held = if pasted { self.hold.hold_pasted_text(text, &bytes) } else { self.hold.hold_text(text, &bytes) };
-            if let Verdict::Held(arm) = held { return arm; }
-        } else { self.release_hold(terminal); }
+            let held = if pasted {
+                self.hold.hold_pasted_text(text, &bytes)
+            } else {
+                self.hold.hold_text(text, &bytes)
+            };
+            if let Verdict::Held(arm) = held {
+                return arm;
+            }
+        } else {
+            self.release_hold(terminal);
+        }
         terminal.write(bytes);
         self.observe_gap_text(terminal, text, pasted);
         None
     }
-    pub(super) fn timeout(&mut self, terminal: &RemoteTerminal, epoch: u64, accepts_input: bool) -> bool {
+    pub(super) fn timeout(
+        &mut self,
+        terminal: &RemoteTerminal,
+        epoch: u64,
+        accepts_input: bool,
+    ) -> bool {
         let pasted = self.hold.pasted();
         let expired = self.hold.timeout(epoch);
         if accepts_input && let Some((net, bytes)) = expired {
@@ -244,18 +362,28 @@ impl PromptInput {
         }
         false
     }
-    pub(super) fn handoff_line(&mut self, terminal: &RemoteTerminal, completion: &mut TerminalCompletion) -> bool {
+    pub(super) fn handoff_line(
+        &mut self,
+        terminal: &RemoteTerminal,
+        completion: &mut TerminalCompletion,
+    ) -> bool {
         self.engage_hold_into_editor();
         self.adopt_typeahead();
         let line = self.cmd.text();
-        if line.contains('\n') { return false; }
+        if line.contains('\n') {
+            return false;
+        }
         completion.close();
         self.flush_typeahead(terminal);
         let tail = line.chars().count().saturating_sub(self.cmd.cursor());
         if !line.is_empty() {
             terminal.write(line.into_bytes());
             if tail > 0 {
-                let left: &[u8] = if terminal.term.lock().mode().contains(Mode::APP_CURSOR) { b"\x1bOD" } else { b"\x1b[D" };
+                let left: &[u8] = if terminal.term.lock().mode().contains(Mode::APP_CURSOR) {
+                    b"\x1bOD"
+                } else {
+                    b"\x1b[D"
+                };
                 terminal.write(left.repeat(tail));
             }
         }
@@ -265,9 +393,15 @@ impl PromptInput {
         true
     }
 
-    pub(super) fn key<'a>(&mut self, ks: &'a gpui_kit::Keystroke, terminal: &RemoteTerminal,
-        history: &mut TerminalHistory, completion: &mut TerminalCompletion,
-        history_search: bool, flags: impl Fn() -> super::input::KeyFlags) -> EditorIntent<'a> {
+    pub(super) fn key<'a>(
+        &mut self,
+        ks: &'a gpui_kit::Keystroke,
+        terminal: &RemoteTerminal,
+        history: &mut TerminalHistory,
+        completion: &mut TerminalCompletion,
+        history_search: bool,
+        flags: impl Fn() -> super::input::KeyFlags,
+    ) -> EditorIntent<'a> {
         let m = &ks.modifiers;
         let key = ks.key.as_str();
         self.adopt_typeahead();
@@ -297,8 +431,15 @@ impl PromptInput {
         if history.search().is_some() {
             match history.search_key(ks) {
                 reverse_search::Action::Redraw | reverse_search::Action::Cancel => {}
-                reverse_search::Action::Accept(line) => { if let Some(line) = line { self.cmd.set(&line); } }
-                reverse_search::Action::Run(line) => { self.cmd.set(&line); return EditorIntent::Submit; }
+                reverse_search::Action::Accept(line) => {
+                    if let Some(line) = line {
+                        self.cmd.set(&line);
+                    }
+                }
+                reverse_search::Action::Run(line) => {
+                    self.cmd.set(&line);
+                    return EditorIntent::Submit;
+                }
             }
             return EditorIntent::Redraw;
         }
@@ -393,7 +534,8 @@ impl PromptInput {
                 return EditorIntent::Handoff(vec![0x12]);
             }
             if !self.apply_readline_ctrl(key, terminal, history, completion)
-                && let Some(bytes) = super::input::keystroke_to_bytes(ks, flags()) {
+                && let Some(bytes) = super::input::keystroke_to_bytes(ks, flags())
+            {
                 return EditorIntent::Handoff(bytes);
             }
             return EditorIntent::Redraw;
@@ -434,10 +576,13 @@ impl PromptInput {
             "backspace" => {
                 if self.cmd.is_empty() {
                     terminal.write(vec![0x7f]);
-                    self.observe(terminal, RawInput::Key {
-                        key: "backspace",
-                        plain: true,
-                    });
+                    self.observe(
+                        terminal,
+                        RawInput::Key {
+                            key: "backspace",
+                            plain: true,
+                        },
+                    );
                     return EditorIntent::Silent;
                 }
                 if m.alt && self.cmd.selection().is_none() {
@@ -480,8 +625,8 @@ impl PromptInput {
                 return EditorIntent::Redraw;
             }
             "escape" => {
-                let bytes = super::input::keystroke_to_bytes(ks, flags())
-                    .unwrap_or_else(|| vec![0x1b]);
+                let bytes =
+                    super::input::keystroke_to_bytes(ks, flags()).unwrap_or_else(|| vec![0x1b]);
                 terminal.write(bytes);
                 return EditorIntent::Silent;
             }
@@ -494,8 +639,8 @@ impl PromptInput {
                     }
                 }
                 if m.alt && !m.control && !m.platform && key.chars().count() == 1 {
-                    let bytes = super::input::keystroke_to_bytes(ks, flags())
-                        .unwrap_or_else(|| {
+                    let bytes =
+                        super::input::keystroke_to_bytes(ks, flags()).unwrap_or_else(|| {
                             let name = if m.shift {
                                 key.to_uppercase()
                             } else {
@@ -512,8 +657,13 @@ impl PromptInput {
         EditorIntent::Redraw
     }
 
-    fn apply_readline_ctrl(&mut self, key: &str, terminal: &RemoteTerminal,
-        history: &mut TerminalHistory, completion: &TerminalCompletion) -> bool {
+    fn apply_readline_ctrl(
+        &mut self,
+        key: &str,
+        terminal: &RemoteTerminal,
+        history: &mut TerminalHistory,
+        completion: &TerminalCompletion,
+    ) -> bool {
         match key {
             "r" => history.start_search(),
             "a" => {
@@ -613,7 +763,9 @@ impl PromptInput {
     fn editor_move_v(&mut self, terminal: &RemoteTerminal, down: bool, shift: bool) -> bool {
         let term = terminal.term.lock();
         let cursor = term.cursor().pos;
-        if cursor.row.0 + (term.display_offset() as i32) < 0 { return false; }
+        if cursor.row.0 + (term.display_offset() as i32) < 0 {
+            return false;
+        }
         let scol = cursor.col.0;
         let cols = term.columns().max(1);
         drop(term);
@@ -669,20 +821,49 @@ impl PromptInput {
         true
     }
 
-    pub(super) fn click(&mut self, idx: usize, clicks: usize, shift: bool, separators: &str, smart: bool) {
+    pub(super) fn click(
+        &mut self,
+        idx: usize,
+        clicks: usize,
+        shift: bool,
+        separators: &str,
+        smart: bool,
+    ) {
         match clicks {
-            1 if shift => { self.cmd.extend_to(idx); self.selecting = true; self.drag_word = None; }
-            1 => { self.cmd.set_cursor(idx); self.cmd.clear_selection(); self.selecting = true; self.drag_word = None; }
-            2 => { self.cmd.select_word_at(idx, separators, smart); self.selecting = true; self.drag_word = self.cmd.selection(); }
-            _ => { self.cmd.select_all(); self.selecting = false; self.drag_word = None; }
+            1 if shift => {
+                self.cmd.extend_to(idx);
+                self.selecting = true;
+                self.drag_word = None;
+            }
+            1 => {
+                self.cmd.set_cursor(idx);
+                self.cmd.clear_selection();
+                self.selecting = true;
+                self.drag_word = None;
+            }
+            2 => {
+                self.cmd.select_word_at(idx, separators, smart);
+                self.selecting = true;
+                self.drag_word = self.cmd.selection();
+            }
+            _ => {
+                self.cmd.select_all();
+                self.selecting = false;
+                self.drag_word = None;
+            }
         }
         self.select_gesture = true;
         self.goal_col = None;
     }
-    pub(super) fn is_selecting(&self) -> bool { self.selecting }
+    pub(super) fn is_selecting(&self) -> bool {
+        self.selecting
+    }
     pub(super) fn drag(&mut self, idx: usize, separators: &str, smart: bool) {
-        if let Some((s, e)) = self.drag_word { self.cmd.extend_word_to(s, e, idx, separators, smart); }
-        else { self.cmd.extend_to(idx); }
+        if let Some((s, e)) = self.drag_word {
+            self.cmd.extend_word_to(s, e, idx, separators, smart);
+        } else {
+            self.cmd.extend_to(idx);
+        }
     }
     pub(super) fn end_selection(&mut self) -> bool {
         let gesture = self.select_gesture;
@@ -692,12 +873,23 @@ impl PromptInput {
         gesture
     }
     #[cfg(test)]
-    pub(super) fn reset_handoff(&mut self) { self.handoff = None; }
+    pub(super) fn reset_handoff(&mut self) {
+        self.handoff = None;
+    }
     #[cfg(test)]
-    pub(super) fn has_handoff(&self) -> bool { self.handoff.is_some() }
+    pub(super) fn has_handoff(&self) -> bool {
+        self.handoff.is_some()
+    }
     #[cfg(test)]
-    pub(super) fn record_for_test(&mut self, input: RawInput<'_>, blocked: bool) { self.typeahead.observe(input, blocked); }
-    pub(super) fn commit_editor(&mut self, text: &str, history: &mut TerminalHistory, completion: &mut TerminalCompletion) {
+    pub(super) fn record_for_test(&mut self, input: RawInput<'_>, blocked: bool) {
+        self.typeahead.observe(input, blocked);
+    }
+    pub(super) fn commit_editor(
+        &mut self,
+        text: &str,
+        history: &mut TerminalHistory,
+        completion: &mut TerminalCompletion,
+    ) {
         self.adopt_typeahead();
         self.cmd.insert_str(text);
         history.reset_navigation();
@@ -705,21 +897,35 @@ impl PromptInput {
         history.reset_last_word();
         completion.refilter(&self.cmd);
     }
-    pub(super) fn paste_editor(&mut self, text: &str, history: &mut TerminalHistory, completion: &mut TerminalCompletion) {
-        self.cmd.insert_pasted(text.strip_suffix('\n').unwrap_or(text));
+    pub(super) fn paste_editor(
+        &mut self,
+        text: &str,
+        history: &mut TerminalHistory,
+        completion: &mut TerminalCompletion,
+    ) {
+        self.cmd
+            .insert_pasted(text.strip_suffix('\n').unwrap_or(text));
         history.reset_navigation();
         self.goal_col = None;
         completion.close();
     }
-    pub(super) fn newline(&mut self, history: &mut TerminalHistory, completion: &mut TerminalCompletion) {
+    pub(super) fn newline(
+        &mut self,
+        history: &mut TerminalHistory,
+        completion: &mut TerminalCompletion,
+    ) {
         completion.close();
         self.cmd.insert_str("\n");
         history.reset_navigation();
         self.goal_col = None;
         history.reset_last_word();
     }
-    pub(super) fn submit(&mut self, terminal: &RemoteTerminal, history: &mut TerminalHistory,
-        completion: &mut TerminalCompletion) {
+    pub(super) fn submit(
+        &mut self,
+        terminal: &RemoteTerminal,
+        history: &mut TerminalHistory,
+        completion: &mut TerminalCompletion,
+    ) {
         self.engage_hold_into_editor();
         // Adoption changes the editor before editing; the owed Ctrl-U stays immediately
         // before submission, after the shell's line editor has started reading.
@@ -727,7 +933,10 @@ impl PromptInput {
         let line = self.cmd.text();
         let cwd = terminal.foreground_cwd();
         let prompt = super::history_session::PromptHistory::new(
-            terminal.prompt_seq(), terminal.at_prompt(), terminal.last_exit_code());
+            terminal.prompt_seq(),
+            terminal.at_prompt(),
+            terminal.last_exit_code(),
+        );
         history.record(&line, cwd, prompt);
         completion.close();
         let bracketed = terminal.term.lock().mode().contains(Mode::BRACKETED_PASTE);

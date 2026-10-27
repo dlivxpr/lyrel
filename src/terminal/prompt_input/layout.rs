@@ -83,7 +83,7 @@ pub(in crate::terminal) fn input_start(scol: usize, cols: usize) -> (usize, usiz
 /// the separately returned end position is the caret after the final cell.
 pub(in crate::terminal) fn input_char_positions(
     chars: &[char],
-    pub(in crate::terminal) start: (usize, usize),
+    start: (usize, usize),
     cols: usize,
 ) -> (Vec<(usize, usize, usize)>, usize, usize) {
     let mut positions: Vec<(usize, usize, usize)> = Vec::with_capacity(chars.len());
@@ -112,7 +112,7 @@ pub(in crate::terminal) fn input_overlay_rows(
     chars: &[char],
     cursor: usize,
     marked: &str,
-    pub(in crate::terminal) start: (usize, usize),
+    start: (usize, usize),
     cols: usize,
 ) -> (usize, usize) {
     let mut merged: Vec<char> = Vec::with_capacity(chars.len() + marked.len());
@@ -130,7 +130,12 @@ pub(in crate::terminal) fn input_overlay_rows(
     (end_row + 1, caret_vrow)
 }
 
-pub(in crate::terminal) fn input_overflow_shift(crow: usize, caret_vrow: usize, visual_rows: usize, rows: usize) -> usize {
+pub(in crate::terminal) fn input_overflow_shift(
+    crow: usize,
+    caret_vrow: usize,
+    visual_rows: usize,
+    rows: usize,
+) -> usize {
     (crow + visual_rows)
         .saturating_sub(rows)
         .min(crow + caret_vrow)
@@ -144,7 +149,7 @@ pub(in crate::terminal) fn before_input(start: (usize, usize), col: usize, targe
 
 pub(in crate::terminal) fn wrapped_click_index(
     chars: &[char],
-    pub(in crate::terminal) start: (usize, usize),
+    start: (usize, usize),
     cols: usize,
     col: usize,
     target: usize,

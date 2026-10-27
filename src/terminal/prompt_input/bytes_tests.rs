@@ -162,4 +162,3 @@ fn submit_bytes_strips_esc_and_skips_markers_on_an_empty_line() {
 
     assert_eq!(submit_bytes("", true, false), b"\r".to_vec());
 }
-

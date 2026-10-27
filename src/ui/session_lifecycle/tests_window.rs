@@ -1,4 +1,3 @@
-
 use crate::core::actions::CloseWindow;
 use crate::core::config::Config;
 use crate::core::session::Session;

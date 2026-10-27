@@ -42,7 +42,10 @@ impl Registry {
                 assert_eq!(self.owner, ForwardOwnerKey::Pane(pane_id));
                 WorkspaceOp::AddForward { rule }
             }
-            ClientMsg::RemoveForward { pane_id, forward_id } => {
+            ClientMsg::RemoveForward {
+                pane_id,
+                forward_id,
+            } => {
                 assert_eq!(self.owner, ForwardOwnerKey::Pane(pane_id));
                 WorkspaceOp::RemoveForward { forward_id }
             }
@@ -56,7 +59,11 @@ impl Registry {
         };
         let lost = mutation.and_then(|mutation| {
             self.mutations.push(mutation);
-            if self.lose.as_ref().is_some_and(|(kind, _)| *kind == mutation) {
+            if self
+                .lose
+                .as_ref()
+                .is_some_and(|(kind, _)| *kind == mutation)
+            {
                 self.lose.take().map(|(_, apply)| apply)
             } else {
                 None
@@ -75,7 +82,11 @@ impl Registry {
                         pane_id: 1,
                         kind: rule.kind,
                         bind_host: rule.bind_host,
-                        bind_port: if rule.bind_port == 0 { 49152 } else { rule.bind_port },
+                        bind_port: if rule.bind_port == 0 {
+                            49152
+                        } else {
+                            rule.bind_port
+                        },
                         target_host: rule.target_host,
                         target_port: rule.target_port,
                         description: rule.description,
@@ -91,7 +102,8 @@ impl Registry {
                 _ => unreachable!(),
             }
         }
-        lost.is_none().then(|| DaemonMsg::ForwardList(self.rules.clone()))
+        lost.is_none()
+            .then(|| DaemonMsg::ForwardList(self.rules.clone()))
     }
 }
 
@@ -120,8 +132,12 @@ impl WirePeer {
             while !stopped.load(std::sync::atomic::Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                        stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        stream
+                            .set_write_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
                         crate::daemon::transport::authenticate(&mut stream).unwrap();
                         let request = ClientMsg::read(&mut stream).unwrap();
                         if let Some(reply) = state.lock().unwrap().request(request) {
@@ -135,7 +151,11 @@ impl WirePeer {
                 }
             }
         });
-        Self { registry, stop, thread: Some(thread) }
+        Self {
+            registry,
+            stop,
+            thread: Some(thread),
+        }
     }
 }
 
@@ -165,7 +185,8 @@ fn original() -> ManagedForward {
 fn workspace() -> PaneWorkspace {
     let spec = serde_json::from_str::<crate::daemon::protocol::NativeSshSpec>(
         r#"{"host":"wire-fixture","port":22,"user":"me","auth_mode":"auto"}"#,
-    ).unwrap();
+    )
+    .unwrap();
     PaneWorkspace {
         workspace: crate::core::session::WorkspaceId::new(),
         target: crate::core::session::RemoteTarget::direct(&spec.user, &spec.host, spec.port),
@@ -183,12 +204,24 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
     let Some(config) = std::env::var_os(CHILD_CONFIG) else {
         let dir = tempfile::TempDir::new().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", concat!(module_path!(), "::managed_forward_wire_recovery")
-                .split_once("::").unwrap().1, "--nocapture", "--test-threads=1"])
+            .args([
+                "--exact",
+                concat!(module_path!(), "::managed_forward_wire_recovery")
+                    .split_once("::")
+                    .unwrap()
+                    .1,
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env(CHILD_CONFIG, dir.path())
-            .output().unwrap();
-        assert!(output.status.success(), "wire recovery child failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "wire recovery child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return;
     };
     crate::core::config::set_config_dir(config.into());
@@ -204,9 +237,11 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
             let workspace = use_workspace.then(workspace);
             {
                 let mut state = peer.registry.lock().unwrap();
-                state.owner = workspace.as_ref().map_or(ForwardOwnerKey::Pane(1), |workspace| {
-                    ForwardOwnerKey::Workspace(workspace.workspace)
-                });
+                state.owner = workspace
+                    .as_ref()
+                    .map_or(ForwardOwnerKey::Pane(1), |workspace| {
+                        ForwardOwnerKey::Workspace(workspace.workspace)
+                    });
                 state.rules = vec![original()];
                 state.mutations.clear();
                 state.lose = Some((mutation, applied));
@@ -217,28 +252,48 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
                 });
                 app.refresh_managed_forwards(1, cx);
                 app.loopback_panel.edit(original(), window, cx);
-                app.loopback_panel.mf_target_host.update(cx, |input, cx| {
-                    input.set_value("10.0.0.6", window, cx)
-                });
+                app.loopback_panel
+                    .mf_target_host
+                    .update(cx, |input, cx| input.set_value("10.0.0.6", window, cx));
                 app.add_managed_forward(1, window, cx);
                 assert!(app.loopback_panel.is_open_for(1));
                 assert!(app.loopback_panel.mf_error.is_some());
-                assert_eq!(app.loopback_panel.mf_target_host.read(cx).value().as_str(), "10.0.0.6");
+                assert_eq!(
+                    app.loopback_panel.mf_target_host.read(cx).value().as_str(),
+                    "10.0.0.6"
+                );
                 let expected = if mutation == Mutation::Add {
                     vec![Mutation::Remove(1), Mutation::Add]
                 } else {
                     vec![Mutation::Remove(1)]
                 };
-                assert_eq!(peer.registry.lock().unwrap().mutations, expected,
-                    "an unanswered mutation must not trigger retry or rollback");
+                assert_eq!(
+                    peer.registry.lock().unwrap().mutations,
+                    expected,
+                    "an unanswered mutation must not trigger retry or rollback"
+                );
                 app.add_managed_forward(1, window, cx);
                 assert!(!app.loopback_panel.is_open_for(1));
                 let state = peer.registry.lock().unwrap();
-                assert_eq!(state.rules.len(), 1, "reconciliation must not duplicate the rule");
+                assert_eq!(
+                    state.rules.len(),
+                    1,
+                    "reconciliation must not duplicate the rule"
+                );
                 assert_eq!(state.rules[0].target_host, "10.0.0.6");
                 assert_eq!(app.loopback_panel.managed(), state.rules.as_slice());
-                assert_eq!(state.mutations.iter().filter(|m| **m == Mutation::Add).count(),
-                    if mutation == Mutation::Add && !applied { 2 } else { 1 });
+                assert_eq!(
+                    state
+                        .mutations
+                        .iter()
+                        .filter(|m| **m == Mutation::Add)
+                        .count(),
+                    if mutation == Mutation::Add && !applied {
+                        2
+                    } else {
+                        1
+                    }
+                );
             });
         }
 
@@ -247,9 +302,11 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
             let workspace = use_workspace.then(workspace);
             {
                 let mut state = peer.registry.lock().unwrap();
-                state.owner = workspace.as_ref().map_or(ForwardOwnerKey::Pane(1), |workspace| {
-                    ForwardOwnerKey::Workspace(workspace.workspace)
-                });
+                state.owner = workspace
+                    .as_ref()
+                    .map_or(ForwardOwnerKey::Pane(1), |workspace| {
+                        ForwardOwnerKey::Workspace(workspace.workspace)
+                    });
                 state.rules.clear();
                 state.mutations.clear();
                 let failed_id = state.next_id;
@@ -261,14 +318,20 @@ fn managed_forward_wire_recovery(cx: &mut TestAppContext) {
                     view.set_workspace(workspace.clone());
                 });
                 app.toggle_managed_forward_form(1, window, cx);
-                app.loopback_panel.mf_target_port.update(cx, |input, cx| {
-                    input.set_value("3000", window, cx)
-                });
+                app.loopback_panel
+                    .mf_target_port
+                    .update(cx, |input, cx| input.set_value("3000", window, cx));
                 app.add_managed_forward(1, window, cx);
                 assert!(app.loopback_panel.is_open_for(1));
-                assert_eq!(peer.registry.lock().unwrap().mutations.len(), 2,
-                    "unanswered rejected-rule cleanup cannot trigger alternate-port add");
-                assert_eq!(app.loopback_panel.mf_target_port.read(cx).value().as_str(), "3000");
+                assert_eq!(
+                    peer.registry.lock().unwrap().mutations.len(),
+                    2,
+                    "unanswered rejected-rule cleanup cannot trigger alternate-port add"
+                );
+                assert_eq!(
+                    app.loopback_panel.mf_target_port.read(cx).value().as_str(),
+                    "3000"
+                );
                 app.add_managed_forward(1, window, cx);
                 assert!(!app.loopback_panel.is_open_for(1));
                 let state = peer.registry.lock().unwrap();

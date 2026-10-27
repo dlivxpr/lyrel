@@ -6,6 +6,7 @@ use super::{
 };
 use crate::daemon::protocol::{ClientMsg, DaemonMsg};
 use crate::daemon::transport::{self, Stream};
+#[cfg(test)]
 use std::io::Read as _;
 use std::path::PathBuf;
 

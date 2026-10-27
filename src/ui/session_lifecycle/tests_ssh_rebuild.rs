@@ -1,4 +1,3 @@
-
 use super::test_window::harness_with_pane;
 use crate::core::session::{
     RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,

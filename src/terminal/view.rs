@@ -11,17 +11,20 @@ use gpui_kit::{
     Window, actions, div, prelude::*, px,
 };
 use rio_vt::crosswords::Mode;
-use rio_vt::crosswords::grid::{Dimensions, Scroll};
-use rio_vt::crosswords::pos::{Column, Direction, Line, Pos, Side};
+use rio_vt::crosswords::grid::Dimensions;
+#[cfg(test)]
+use rio_vt::crosswords::grid::Scroll;
+use rio_vt::crosswords::pos::{Column, Direction, Pos};
+#[cfg(test)]
+use rio_vt::crosswords::pos::{Line, Side};
 
-use super::prompt_input::layout::{before_input, input_cells, input_char_positions,
-    input_overflow_shift, input_overlay_rows, input_start, wrapped_click_index};
-use super::prompt_input::bytes::paste_bytes;
 use super::TermSize;
+#[cfg(test)]
+use super::completion;
+use super::completion::CandidateKind;
 use super::completion::state::{
     CompletionContext, CompletionWork, RemoteRequest, TerminalCompletion,
 };
-use super::completion::{self, CandidateKind};
 use super::element::{GridSnapshot, RenderCell, TerminalElement};
 use super::highlight::{self, TokenKind};
 use super::history_session::{PromptHistory, TerminalHistory, unix_now};
@@ -30,8 +33,14 @@ use super::paste::{
     PasteUploads, clipboard_paths, local_path_for_pane, remote_paste_spec, stages_clipboard_image,
     write_clipboard_image,
 };
+use super::prompt_input::bytes::paste_bytes;
+#[cfg(test)]
+use super::prompt_input::layout::input_char_positions;
+use super::prompt_input::layout::{
+    before_input, input_cells, input_overflow_shift, input_overlay_rows, input_start,
+    wrapped_click_index,
+};
 use super::remote::RemoteTerminal;
-use super::reverse_search;
 use super::scrollbar::{GridScroll, TerminalScrollHandle};
 use super::search::{LinkTarget, SearchState};
 #[cfg(test)]
@@ -671,7 +680,6 @@ fn ring_system_bell() -> bool {
         unsafe { MessageBeep(MB_OK) != 0 }
     }
 }
-
 
 fn trim_trailing_spaces(text: &str) -> String {
     text.split('\n')
@@ -1785,10 +1793,16 @@ impl TerminalView {
 
         use super::prompt_input::KeyDelivery;
         let terminal = &self.terminal;
-        let delivery = self.input.raw_key(ks, terminal, || super::input::KeyFlags::from_mode_with_local_conpty(
-            &terminal.term.lock().mode(), terminal.is_local_conpty()));
+        let delivery = self.input.raw_key(ks, terminal, || {
+            super::input::KeyFlags::from_mode_with_local_conpty(
+                &terminal.term.lock().mode(),
+                terminal.is_local_conpty(),
+            )
+        });
         if !matches!(delivery, KeyDelivery::Unencoded) {
-            if let KeyDelivery::Held(Some(epoch)) = delivery { self.arm_hold_timer(epoch, cx); }
+            if let KeyDelivery::Held(Some(epoch)) = delivery {
+                self.arm_hold_timer(epoch, cx);
+            }
             self.lifecycle.show_cursor();
             self.jump_to_prompt();
             cx.notify();
@@ -1895,19 +1909,31 @@ impl TerminalView {
         self.lifecycle.show_cursor();
         self.jump_to_prompt();
         let terminal = &self.terminal;
-        match self.input.key(ks, terminal, &mut self.history, &mut self.completion,
-            cx.global::<Config>().history_search, || super::input::KeyFlags::from_mode_with_local_conpty(
-                &terminal.term.lock().mode(), terminal.is_local_conpty())) {
+        match self.input.key(
+            ks,
+            terminal,
+            &mut self.history,
+            &mut self.completion,
+            cx.global::<Config>().history_search,
+            || {
+                super::input::KeyFlags::from_mode_with_local_conpty(
+                    &terminal.term.lock().mode(),
+                    terminal.is_local_conpty(),
+                )
+            },
+        ) {
             EditorIntent::Redraw => cx.notify(),
-            EditorIntent::Silent => {},
+            EditorIntent::Silent => {}
             EditorIntent::AcceptLine => self.accept_line(cx),
             EditorIntent::Submit => self.submit_command(cx),
-            EditorIntent::AcceptAndSubmit => { self.completion_accept(cx); self.submit_command(cx); }
+            EditorIntent::AcceptAndSubmit => {
+                self.completion_accept(cx);
+                self.submit_command(cx);
+            }
             EditorIntent::Handoff(bytes) => self.handoff_line_to_shell(&bytes, cx),
             EditorIntent::Commit(text) => self.commit_text(text, cx),
         }
     }
-
 
     fn editor_move_edge(&mut self, end: bool, shift: bool) {
         self.input.editor_move_edge(end, shift);
@@ -1922,7 +1948,8 @@ impl TerminalView {
     /// the draw off the lock; a selection that appears while the reader holds
     /// it is drawn one frame later.
     fn any_selection(&self) -> bool {
-        self.frame_has_selection || (self.input_active() && self.input.editor().selected_text().is_some())
+        self.frame_has_selection
+            || (self.input_active() && self.input.editor().selected_text().is_some())
     }
 
     /// The keymap context this pane declares each frame.
@@ -2026,7 +2053,8 @@ impl TerminalView {
         // this function used to do on its own.
         self.jump_to_prompt();
         if self.input_active() {
-            self.input.paste_editor(&text, &mut self.history, &mut self.completion);
+            self.input
+                .paste_editor(&text, &mut self.history, &mut self.completion);
             self.lifecycle.show_cursor();
             cx.notify();
             return;
@@ -2963,6 +2991,7 @@ impl TerminalView {
         update.turn_finished
     }
 
+    #[cfg(test)]
     fn at_shell_prompt(&self) -> bool {
         self.terminal.at_prompt()
     }
@@ -3077,7 +3106,8 @@ impl TerminalView {
             return false;
         };
         let cfg = cx.global::<Config>();
-        self.input.click(idx, clicks, shift, &cfg.word_separators, cfg.smart_select);
+        self.input
+            .click(idx, clicks, shift, &cfg.word_separators, cfg.smart_select);
         self.close_completion();
         self.lifecycle.show_cursor();
         cx.notify();
@@ -3124,14 +3154,13 @@ impl TerminalView {
     }
 
     fn input_inactive_reason(&self) -> Option<&'static str> {
-        self.input.inactive_reason(&self.terminal, self.search_focused)
+        self.input
+            .inactive_reason(&self.terminal, self.search_focused)
     }
 
     fn link_inactive_reason(&self, cx: &gpui_kit::App) -> Option<&'static str> {
         (!self.accepts_input(cx)).then_some("the remote link is not attached")
     }
-
-
 
     fn shell_owns_prompt(&self) -> bool {
         self.input.shell_owns_prompt(&self.terminal)
@@ -3145,9 +3174,11 @@ impl TerminalView {
         self.input.sync_owner(&self.terminal);
     }
 
-
     fn write_gap_text(&mut self, text: &str, bytes: Vec<u8>, pasted: bool, cx: &mut Context<Self>) {
-        if let Some(epoch) = self.input.write_gap_text(&self.terminal, text, bytes, pasted) {
+        if let Some(epoch) = self
+            .input
+            .write_gap_text(&self.terminal, text, bytes, pasted)
+        {
             self.arm_hold_timer(epoch, cx);
         }
     }
@@ -3162,7 +3193,9 @@ impl TerminalView {
 
     fn dump_hold(&mut self, epoch: u64, cx: &mut Context<Self>) {
         let accepts_input = self.accepts_input(cx);
-        if self.input.timeout(&self.terminal, epoch, accepts_input) { cx.notify(); }
+        if self.input.timeout(&self.terminal, epoch, accepts_input) {
+            cx.notify();
+        }
     }
 
     fn insert_newline_action(&mut self, cx: &mut Context<Self>) {
@@ -3202,19 +3235,20 @@ impl TerminalView {
         if self.terminal.exited || !self.accepts_input(cx) {
             return;
         }
-        self.input.submit(&self.terminal, &mut self.history, &mut self.completion);
+        self.input
+            .submit(&self.terminal, &mut self.history, &mut self.completion);
         self.lifecycle.show_cursor();
         self.jump_to_prompt();
         cx.notify();
     }
-
 
     fn flush_pending_history(&mut self) {
         self.history.flush_pending(self.history_prompt());
     }
 
     fn ghost_suggestion(&self) -> Option<String> {
-        self.completion.ghost_suggestion(self.input.editor(), &self.history)
+        self.completion
+            .ghost_suggestion(self.input.editor(), &self.history)
     }
 
     fn note_integration_gap(&mut self, cx: &mut Context<Self>) {
@@ -3261,12 +3295,14 @@ impl TerminalView {
         .detach();
     }
 
-
     fn handoff_line_to_shell(&mut self, chord: &[u8], cx: &mut Context<Self>) {
         if !self.accepts_input(cx) {
             return;
         }
-        if self.input.handoff_line(&self.terminal, &mut self.completion) {
+        if self
+            .input
+            .handoff_line(&self.terminal, &mut self.completion)
+        {
             self.send_to_pty(chord, cx);
         } else {
             cx.notify();
@@ -3339,10 +3375,12 @@ impl TerminalView {
                             .await;
                         let _ = this.update(cx, |view, cx| {
                             let context = view.completion_context();
-                            if view
-                                .completion
-                                .merge(generation, context, view.input.editor(), results)
-                            {
+                            if view.completion.merge(
+                                generation,
+                                context,
+                                view.input.editor(),
+                                results,
+                            ) {
                                 cx.notify();
                             }
                         });
@@ -3422,14 +3460,13 @@ impl TerminalView {
         self.completion.close();
     }
 
-
     fn completion_accept(&mut self, cx: &mut Context<Self>) {
         let shell = self.shell_program();
-        self.completion.accept(self.input.editor_mut(), shell.as_deref());
+        self.completion
+            .accept(self.input.editor_mut(), shell.as_deref());
         self.lifecycle.show_cursor();
         cx.notify();
     }
-
 
     pub fn input_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.commit_text(text, cx);
@@ -3456,7 +3493,8 @@ impl TerminalView {
             return;
         }
         if self.input_active() {
-            self.input.commit_editor(text, &mut self.history, &mut self.completion);
+            self.input
+                .commit_editor(text, &mut self.history, &mut self.completion);
             self.lifecycle.show_cursor();
             cx.notify();
             return;
@@ -3562,7 +3600,9 @@ impl TerminalView {
     pub fn on_select_end(&mut self, cx: &mut Context<Self>) {
         use super::selection_scroll::SelectEndCopy;
         let editor_gesture = self.input.end_selection();
-        let copy = self.selection_scroll.end(cx.global::<Config>().copy_on_select, editor_gesture);
+        let copy = self
+            .selection_scroll
+            .end(cx.global::<Config>().copy_on_select, editor_gesture);
         match copy {
             SelectEndCopy::None => {}
             SelectEndCopy::Grid => self.copy_selection(cx),
@@ -4729,8 +4769,6 @@ impl TerminalView {
     }
 }
 
-
-
 /// Why closing a pane would end work that is still going on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneBusy {
@@ -5150,7 +5188,6 @@ fn highlight_runs(line: &str, positions: &[usize]) -> Vec<(String, bool)> {
     runs
 }
 
-
 #[derive(Debug, PartialEq)]
 enum WheelRoute {
     Report { base: u8 },
@@ -5498,7 +5535,6 @@ fn menu_layout(
     (place_above, visible, first)
 }
 
-
 /// Advance the in-flight scroll animation once per presented frame.
 ///
 /// Registered by the wheel adapter: gpui runs the callback
@@ -5610,16 +5646,15 @@ mod tests {
         assert!(!out.contains(" …"), "{out:?}");
     }
     use super::{
-        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute,
-        WheelRoute, compose_notification_title, cwd_is_on_host, loopback_plan,
+        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, WheelRoute, compose_notification_title,
+        cwd_is_on_host, loopback_plan,
     };
     use super::{TitleSettle, files_cwd, settle_title, wsl_share_distro, wsl_share_path};
     use super::{
-        before_input, description_budget, elide, encode_mouse,
-        expand_file_command_template, fallback_chain, fig_icon_emoji, fig_icon_glyph,
-        focus_report_bytes, highlight_runs, input_cells, input_char_positions,
-        input_overflow_shift, input_overlay_rows, input_start, menu_layout, paste_bytes,
-        trim_trailing_spaces, wheel_route, wrapped_click_index,
+        before_input, description_budget, elide, encode_mouse, expand_file_command_template,
+        fallback_chain, fig_icon_emoji, fig_icon_glyph, focus_report_bytes, highlight_runs,
+        input_cells, input_char_positions, input_overflow_shift, input_overlay_rows, input_start,
+        menu_layout, trim_trailing_spaces, wheel_route, wrapped_click_index,
     };
     use gpui_kit::Modifiers;
     use gpui_kit::component::IconName;
@@ -5707,8 +5742,6 @@ mod tests {
         );
         assert_eq!(compose_notification_title(None, None, None), "lyrel");
     }
-
-
 
     fn ws(target: RemoteTarget, with_spec: bool) -> PaneWorkspace {
         PaneWorkspace {
@@ -7046,10 +7079,18 @@ mod agent_activity_tests;
 
 #[cfg(test)]
 mod gpui_tests {
-    mod ime_consumer_tests { include!("prompt_input/ime_consumer_tests.rs"); }
-    mod routing_consumer_tests { include!("prompt_input/routing_consumer_tests.rs"); }
-    mod key_consumer_tests { include!("prompt_input/key_consumer_tests.rs"); }
-    mod paste_consumer_tests { include!("prompt_input/paste_consumer_tests.rs"); }
+    mod ime_consumer_tests {
+        include!("prompt_input/ime_consumer_tests.rs");
+    }
+    mod routing_consumer_tests {
+        include!("prompt_input/routing_consumer_tests.rs");
+    }
+    mod key_consumer_tests {
+        include!("prompt_input/key_consumer_tests.rs");
+    }
+    mod paste_consumer_tests {
+        include!("prompt_input/paste_consumer_tests.rs");
+    }
     use super::*;
     use crate::core::config::MouseZoomModifier;
     use rio_vt::selection::{Selection, SelectionType};
@@ -7175,7 +7216,6 @@ mod gpui_tests {
         let view = built.borrow_mut().take().expect("the pane was built");
         (window, view, daemon_side)
     }
-
 
     fn prompt_ready(
         window: &gpui_kit::WindowHandle<TerminalView>,
@@ -8631,16 +8671,6 @@ mod gpui_tests {
         );
     }
 
-
-
-
-
-
-
-
-
-
-
     fn wait_for_input_active(
         window: &gpui_kit::WindowHandle<TerminalView>,
         cx: &mut TestAppContext,
@@ -8655,11 +8685,6 @@ mod gpui_tests {
         }
         panic!("the local editor never engaged at the prompt");
     }
-
-
-
-
-
 
     fn key(spec: &str) -> gpui_kit::Keystroke {
         gpui_kit::Keystroke::parse(spec).expect("valid keystroke spec")
@@ -8732,7 +8757,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-
     fn scroll_into_history(view: &TerminalView, offset: usize) {
         let mut parser = rio_vt::performer::handler::Processor::default();
         let mut term = view.terminal.term.lock();
@@ -8768,10 +8792,6 @@ mod gpui_tests {
     fn notch(view: &TerminalView, lines: f32) -> ScrollWheelEvent {
         wheel(view, lines, gpui_kit::TouchPhase::Moved)
     }
-
-
-
-
 
     #[gpui_kit::test]
     fn pty_write_events_reach_the_daemon_as_input(cx: &mut TestAppContext) {
@@ -10033,17 +10053,6 @@ mod gpui_tests {
             .unwrap();
         assert_eq!(next_input(&mut daemon), want.into_bytes());
     }
-
-
-
-
-
-
-
-
-
-
-
 
     #[gpui_kit::test]
     fn hidden_cursor_at_prompt_anchors_the_editor_at_the_real_cell_not_top_left(

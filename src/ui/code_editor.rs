@@ -185,6 +185,7 @@ pub(crate) struct LocalFile {
 /// One tab's view of the editor: which buffers it shows, in the order its
 /// strip draws them, and which one is in front.
 pub(crate) struct TabCode {
+    group: split::GroupId,
     pub(crate) visible: bool,
     pub(crate) files: Vec<BufferId>,
     pub(crate) active: usize,
@@ -204,6 +205,7 @@ pub(crate) struct TabCode {
 impl TabCode {
     pub(crate) fn new() -> Self {
         Self {
+            group: split::GroupId::default(),
             visible: false,
             files: Vec::new(),
             active: 0,
@@ -1568,13 +1570,13 @@ impl LyrelApp {
             return;
         }
         let tab = self.tabs.get(tab_ix).unwrap().id();
-        let left = self.tab_code().unwrap().focus_is_left();
+        let group = self.tab_code().unwrap().focused_group();
         self.editor_guard_unsaved(
             vec![id],
             AfterUnsaved::CloseFiles {
                 tab,
                 ids: vec![id],
-                left,
+                group,
             },
             window,
             cx,
@@ -1617,7 +1619,7 @@ impl LyrelApp {
             AfterUnsaved::CloseFiles {
                 tab,
                 ids: ids.clone(),
-                left: self.tab_code().unwrap().focus_is_left(),
+                group: self.tab_code().unwrap().focused_group(),
             },
             window,
             cx,
@@ -1946,7 +1948,7 @@ impl LyrelApp {
                     self.close_tab(ix, window, cx);
                 }
             }
-            AfterUnsaved::CloseFiles { tab, ids, left } => {
+            AfterUnsaved::CloseFiles { tab, ids, group } => {
                 if let Some(ix) = self.tab_index_of(tab) {
                     for id in ids {
                         if let Some(code) = self
@@ -1954,7 +1956,7 @@ impl LyrelApp {
                             .get_mut(ix)
                             .and_then(|tab| tab.code.as_deref_mut())
                         {
-                            code.close_in_side(id, left);
+                            code.close_in_group(id, group);
                         }
                         if self.buffer_refs(id) == 0 {
                             self.editor_drop_buffer(id, cx);

@@ -31,9 +31,22 @@ use super::{BufferId, TabCode};
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 
+/// Retained identity follows a group through focus swaps and split collapse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GroupId(u64);
+
+impl Default for GroupId {
+    fn default() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// The group without the focus.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OtherGroup {
+    pub(super) id: GroupId,
     pub(crate) files: Vec<BufferId>,
     pub(crate) active: usize,
     /// Whether the group *with* the focus is the left one.
@@ -107,6 +120,7 @@ impl TabCode {
         };
         std::mem::swap(&mut self.files, &mut other.files);
         std::mem::swap(&mut self.active, &mut other.active);
+        std::mem::swap(&mut self.group, &mut other.id);
         other.focus_left = !other.focus_left;
     }
 
@@ -121,6 +135,10 @@ impl TabCode {
         self.split.as_ref().is_none_or(|o| o.focus_left)
     }
 
+    pub(super) fn focused_group(&self) -> GroupId {
+        self.group
+    }
+
     /// Shows `id` in the other group and gives that group the focus —
     /// splitting the editor first if it is not split yet, with the new group
     /// on the right.
@@ -128,6 +146,7 @@ impl TabCode {
         match self.split.as_mut() {
             None => {
                 self.split = Some(OtherGroup {
+                    id: std::mem::take(&mut self.group),
                     files: std::mem::replace(&mut self.files, vec![id]),
                     active: std::mem::replace(&mut self.active, 0),
                     focus_left: false,
@@ -148,14 +167,14 @@ impl TabCode {
         closed
     }
 
-    /// Completes a close for the captured side, without consulting new focus.
-    pub(crate) fn close_in_side(&mut self, id: BufferId, left: bool) -> bool {
-        let closed = if self.focus_is_left() == left {
+    /// A retired group cannot close a replacement, even on the same side.
+    pub(super) fn close_in_group(&mut self, id: BufferId, group: GroupId) -> bool {
+        let closed = if self.group == group {
             self.forget(id)
-        } else if let Some(other) = self.split.as_mut() {
+        } else if let Some(other) = self.split.as_mut().filter(|other| other.id == group) {
             remove(&mut other.files, &mut other.active, id)
         } else {
-            self.forget(id)
+            false
         };
         self.collapse();
         closed
@@ -182,6 +201,7 @@ impl TabCode {
             let other = self.split.take().unwrap_or_default();
             self.files = other.files;
             self.active = other.active;
+            self.group = other.id;
         }
     }
 
@@ -220,6 +240,7 @@ impl TabCode {
                 self.files = left;
                 self.active = left_active;
                 self.split = Some(OtherGroup {
+                    id: GroupId::default(),
                     files: right,
                     active: right_active,
                     focus_left: true,

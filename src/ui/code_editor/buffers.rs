@@ -162,10 +162,6 @@ impl EditorBuffers {
         self.files.iter()
     }
 
-    pub(super) fn iter_mut(&mut self) -> std::slice::IterMut<'_, OpenFile> {
-        self.files.iter_mut()
-    }
-
     pub(super) fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
@@ -583,7 +579,7 @@ impl EditorBuffers {
 
     /// Returns whether the clean buffer needs reloading; conflicts never
     /// replace text and therefore preserve every tab's unsaved edits.
-    pub(super) fn apply_external_change<E: 'static>(
+    fn apply_external_change<E: 'static>(
         &mut self,
         id: BufferId,
         observed: Observed,

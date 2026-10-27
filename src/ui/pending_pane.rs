@@ -156,6 +156,7 @@ impl PendingPane {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn is_attach_only(&self) -> bool {
         self.attach_only
     }

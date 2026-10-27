@@ -622,6 +622,7 @@ mod tests {
         let ids = ids(4);
         let mut code = code(&ids[..2], 1);
         code.split = Some(super::super::split::OtherGroup {
+            id: super::super::split::GroupId::default(),
             files: ids[2..].to_vec(),
             active: 0,
             focus_left: true,

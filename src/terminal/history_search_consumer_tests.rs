@@ -145,7 +145,7 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
                 view.focus_handle.focus(window, cx);
                 seed_history(view, vec!["echo one".to_string(), "echo two".to_string()]);
                 
-                view.start_reverse_search();
+                view.handle_editor_key(&key("ctrl-r"), cx);
                 cx.notify();
             })
             .unwrap();

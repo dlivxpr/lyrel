@@ -147,9 +147,7 @@ fn a_running_program_and_a_shells_own_prompt_title_both_keep_theirs(cx: &mut Tes
 /// started it. The replayed prompt state says a command owns the pane,
 /// and that is enough to know the title is the command's to lose at `D`.
 #[gpui_kit::test]
-fn a_reattached_window_retires_a_title_whose_c_rolled_out_of_the_replay(
-    cx: &mut TestAppContext,
-) {
+fn a_reattached_window_retires_a_title_whose_c_rolled_out_of_the_replay(cx: &mut TestAppContext) {
     crate::core::config::pin_test_config_dir();
     cx.executor().allow_parking();
     let (client_side, mut daemon) = test_stream_pair();
@@ -158,9 +156,8 @@ fn a_reattached_window_retires_a_title_whose_c_rolled_out_of_the_replay(
         cx.set_global(Config::default());
     });
     let window = cx.add_window(|window, cx| {
-        let terminal =
-            RemoteTerminal::from_stream_reattached(client_side, TermSize::new(80, 24))
-                .expect("reattached link-backed terminal");
+        let terminal = RemoteTerminal::from_stream_reattached(client_side, TermSize::new(80, 24))
+            .expect("reattached link-backed terminal");
         TerminalView::with_terminal(terminal, 1, window, cx)
     });
 
@@ -182,11 +179,7 @@ fn a_reattached_window_retires_a_title_whose_c_rolled_out_of_the_replay(
 
 /// Printable text arrives the way the platform delivers it — through the
 /// text-input path, which is what the gap hold and the typeahead record see.
-fn type_text(
-    window: &gpui_kit::WindowHandle<TerminalView>,
-    cx: &mut TestAppContext,
-    text: &str,
-) {
+fn type_text(window: &gpui_kit::WindowHandle<TerminalView>, cx: &mut TestAppContext, text: &str) {
     for ch in text.chars() {
         window
             .update(cx, |view, _, cx| view.commit_text(&ch.to_string(), cx))
@@ -268,9 +261,7 @@ fn typed_into_the_gap_then_handed_back(
 }
 
 #[gpui_kit::test]
-fn a_line_typed_into_the_gap_survives_a_prompt_that_is_not_reading_yet(
-    cx: &mut TestAppContext,
-) {
+fn a_line_typed_into_the_gap_survives_a_prompt_that_is_not_reading_yet(cx: &mut TestAppContext) {
     let (window, mut daemon) = harness(cx);
     typed_into_the_gap_then_handed_back(cx, &window, &mut daemon, "echo hi");
 

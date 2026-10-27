@@ -104,3 +104,75 @@ fn remote_save_as_bar_keeps_its_host_and_local_shared_path_independent(cx: &mut 
     assert_eq!(std::fs::read_to_string(path).unwrap(), "unchanged local");
     assert_eq!(std::fs::read_to_string(target).unwrap(), "remote edits");
 }
+
+#[gpui_kit::test]
+fn a_delayed_save_cannot_close_a_replacement_editor_group(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let left_path = dir.path().join("left.txt");
+    let path = dir.path().join("saved.txt");
+    std::fs::write(&left_path, "left").unwrap();
+    std::fs::write(&path, "before").unwrap();
+    let host = FileHost::new(HostId(702));
+    let release = host.pause_next_write();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&left_path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_split(window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().is_some_and(|file| file.path == path)
+        })
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+    });
+    vcx.update(|window, cx| {
+        window.press("secondary-a", cx);
+        window.input("saved original", cx);
+    });
+    settle(&mut vcx);
+    let id = app.read_with(&vcx, |app, _| app.tab_code().unwrap().active_id().unwrap());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+    });
+    settle(&mut vcx);
+    vcx.simulate_prompt_answer(t(L10nKey::Save));
+    wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_focus_group(true, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+        app.editor_focus_group(false, window, cx);
+        app.editor_close_file(0, window, cx);
+        assert!(!app.tab_code().unwrap().is_split());
+        app.editor_split(window, cx);
+        assert_eq!(app.tab_code().unwrap().views_of(id), 2);
+    });
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.editor.buffers.get(id).is_some_and(|file| !file.saving)
+        })
+    });
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(app.tab_code().unwrap().views_of(id), 2);
+        assert_eq!(
+            app.editor
+                .buffers
+                .get(id)
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            "saved original"
+        );
+    });
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "saved original");
+}
