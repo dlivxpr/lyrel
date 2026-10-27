@@ -599,7 +599,7 @@ impl SpawnCancellation {
         self.0.store(true, Ordering::Release);
     }
 
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 }

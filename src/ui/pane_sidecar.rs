@@ -40,9 +40,9 @@ pub(crate) fn scoped_pane(slot: &PaneSlot, cx: &App) -> Option<ScopedPane> {
             })
         }
         PaneSlot::Connecting(pending) => {
-            let spawn = &pending.read(cx).spawn;
-            let pane = spawn.restore_pane?;
-            Some(if spawn.workspace.is_some() {
+            let pending = pending.read(cx);
+            let pane = pending.restore_pane()?;
+            Some(if pending.workspace().is_some() {
                 ScopedPane::workspace(pane)
             } else {
                 ScopedPane::client_local(pane)

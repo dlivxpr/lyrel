@@ -2185,7 +2185,7 @@ impl LyrelApp {
                     continue;
                 }
                 PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-                PaneSlot::Connecting(pending) => pending.read(cx).spawn.restore_pane,
+                PaneSlot::Connecting(pending) => pending.read(cx).restore_pane(),
             };
             if let Some(id) = id {
                 existing.insert(id, slot);

@@ -305,7 +305,7 @@ impl Tab {
         let leaves = self.pane.leaves();
         let matches = |slot: &&PaneSlot| match slot {
             PaneSlot::Ready(view) => view.read(cx).pane_id == pane,
-            PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane == Some(pane),
+            PaneSlot::Connecting(view) => view.read(cx).restore_pane() == Some(pane),
         };
         // A remote workspace may also contain client-local native SSH panes.
         // Their daemon IDs are not identities in the owning machine's tree.
@@ -333,7 +333,7 @@ impl Tab {
         }
         let pane = match slot {
             PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-            PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane,
+            PaneSlot::Connecting(view) => view.read(cx).restore_pane(),
         };
         pane.filter(|pane| self.presentation.is_parked(*pane))
             .and_then(|pane| self.presentation_slot(pane, cx))
@@ -815,6 +815,16 @@ impl TabSet {
             };
         }
         true
+    }
+    pub(crate) fn contains_slot(&self, slot: gpui_kit::EntityId) -> bool {
+        fn contains(pane: &Pane, slot: gpui_kit::EntityId) -> bool {
+            match pane {
+                Pane::Leaf(leaf) => leaf.entity_id() == slot,
+                Pane::Split { a, b, .. } => contains(a, slot) || contains(b, slot),
+                Pane::Empty => false,
+            }
+        }
+        self.tabs.iter().any(|tab| contains(&tab.pane, slot))
     }
     pub(crate) fn replace_leaf(&mut self, old: gpui_kit::EntityId, new: PaneSlot) {
         for tab in &mut self.tabs { if tab.replace_leaf(old, &new) { break; } }
