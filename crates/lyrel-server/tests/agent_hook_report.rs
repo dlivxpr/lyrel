@@ -144,6 +144,7 @@ fn shell_output_marks_reach_pane_replay_and_machine_clients() {
     let daemon = Daemon::start();
     let directory = daemon.dir.path().join("work space");
     std::fs::create_dir(&directory).unwrap();
+    let directory = directory.canonicalize().unwrap();
     let encoded_directory = directory
         .to_str()
         .unwrap()

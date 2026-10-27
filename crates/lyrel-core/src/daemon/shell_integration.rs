@@ -2282,6 +2282,8 @@ mod tests {
         // would prevent dropping the master from actually closing the console.
         drop(pty.slave);
         let bash_prompt = matches!(shell_kind(Some(program)), Some(ShellKind::Bash));
+        let unix_powershell =
+            cfg!(unix) && matches!(shell_kind(Some(program)), Some(ShellKind::PowerShell));
 
         let mut writer = pty.master.take_writer().expect("writer");
         let mut reader = pty.master.try_clone_reader().expect("reader");
@@ -2336,7 +2338,14 @@ mod tests {
             // Bash emits A from PROMPT_COMMAND before Readline owns the tty.
             // Wait for its displayed prompt so literal-next input is not
             // consumed by the tty's canonical line discipline instead.
-            if !typed && (text.contains("133;B") || (!bash_prompt && text.contains("133;A"))) {
+            // Unix PowerShell draws the prompt before PSReadLine's console
+            // input initialization has finished. Its application-cursor-mode
+            // sequence follows that initialization; do not race keys against it.
+            let input_ready = !unix_powershell || text.contains("\u{1b}[?1h");
+            if !typed
+                && input_ready
+                && (text.contains("133;B") || (!bash_prompt && text.contains("133;A")))
+            {
                 writer.write_all(keys).expect("write");
                 writer.flush().expect("flush");
                 typed = true;
