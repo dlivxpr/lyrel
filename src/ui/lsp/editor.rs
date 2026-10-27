@@ -38,7 +38,7 @@ impl LyrelApp {
     pub(crate) fn lsp_sync_buffers(&self, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
         let buffers = if Self::lsp_enabled(cx) {
-            self.editor_local_files()
+            self.editor.local_files()
                 .into_iter()
                 .map(|f| LspBuffer {
                     input: f.input,
@@ -71,7 +71,7 @@ impl LyrelApp {
 
     /// A buffer's text changed.
     pub(crate) fn lsp_buffer_edited(&self, id: BufferId, cx: &mut Context<Self>) {
-        if let Some(f) = self.editor_local_file(id) {
+        if let Some(f) = self.editor.local_file(id) {
             LspStore::edited(f.input.entity_id(), &f.path, cx);
             self.lsp_signature_help_after_edit(&f, cx);
         }
@@ -79,7 +79,7 @@ impl LyrelApp {
 
     /// A buffer was written to disk.
     pub(crate) fn lsp_buffer_saved(&self, id: BufferId, cx: &mut Context<Self>) {
-        if let Some(f) = self.editor_local_file(id) {
+        if let Some(f) = self.editor.local_file(id) {
             LspStore::saved(f.input.entity_id(), &f.path, cx);
         }
     }
@@ -127,8 +127,7 @@ impl LyrelApp {
                 cx,
             );
         };
-        let open_buffer = self
-            .editor_local_files()
+        let open_buffer = self.editor.local_files()
             .into_iter()
             .find(|f| f.path == path.as_path());
         if let Some(f) = open_buffer {
@@ -281,7 +280,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.editor_local_file(id) else {
+        let Some(f) = self.editor.local_file(id) else {
             return;
         };
         let text = f.input.read(cx).text().clone();
@@ -349,7 +348,7 @@ impl LyrelApp {
             EditorFindReferences, EditorFormatDocument, EditorGoToDefinition, EditorQuickFix,
             EditorRenameSymbol,
         };
-        let Some(f) = self.editor_local_file(id) else {
+        let Some(f) = self.editor.local_file(id) else {
             return menu;
         };
         if !matches!(
