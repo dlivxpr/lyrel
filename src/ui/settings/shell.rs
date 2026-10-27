@@ -1318,7 +1318,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) {
         let key = ev.keystroke.key.as_str();
-        if key == "f" && ev.keystroke.modifiers.secondary() && !ev.keystroke.modifiers.shift {
+        if key == "f" && ev.keystroke.modifiers.secondary(cx) && !ev.keystroke.modifiers.shift {
             if self.skills_modal_open() || self.usage_form_open(cx) {
                 cx.stop_propagation();
                 return;

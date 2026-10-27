@@ -838,7 +838,8 @@ mod config_reload_tests {
     /// What the live keymap — the one gpui dispatches against — does with
     /// `keys` typed in a terminal.
     fn dispatched(cx: &App, keys: &str) -> Vec<&'static str> {
-        let typed = [Keystroke::parse(keys).expect("the typed keystroke parses")];
+        let typed = [Keystroke::parse_with_os(keys, cx.platform_info().os)
+            .expect("the typed keystroke parses")];
         let context = [KeyContext::parse("Terminal").expect("the context parses")];
         cx.key_bindings()
             .borrow()

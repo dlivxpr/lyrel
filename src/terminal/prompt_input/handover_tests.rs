@@ -192,7 +192,8 @@ fn press(window: &gpui_kit::WindowHandle<TerminalView>, cx: &mut TestAppContext,
         .update(cx, |view, window, cx| {
             view.on_key_down(
                 &KeyDownEvent {
-                    keystroke: gpui_kit::Keystroke::parse(key).unwrap(),
+                    keystroke: gpui_kit::Keystroke::parse_with_os(key, cx.platform_info().os)
+                        .unwrap(),
                     is_held: false,
                     prefer_character_input: false,
                 },
@@ -480,7 +481,7 @@ fn a_wheel_report_names_the_cell_under_the_pointer_not_the_last_click(cx: &mut T
             view.mouse_press(MouseButton::Left, 3, 23, &Modifiers::default());
             view.mouse_release(MouseButton::Left, 3, 23, &Modifiers::default());
             // Then one notch up, with the pointer up in the pane content.
-            let ev = ScrollWheelEvent {
+            let ev = ScrollEvent {
                 position: gpui_kit::point(px(105.), px(110.)),
                 delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., 1.)),
                 ..Default::default()

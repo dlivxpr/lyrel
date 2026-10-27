@@ -1461,7 +1461,7 @@ impl LyrelApp {
         }
         let column = sw.column;
         let layout = self.switcher_layout(cx);
-        match key_intent(key, mods) {
+        match key_intent(key, mods, cx) {
             // Escape already returned above; closing again is harmless and
             // beats a panic in the render path if that ever stops being true.
             Key::Close => self.close_switcher(window, cx),
@@ -1519,7 +1519,7 @@ impl LyrelApp {
             (form.open, form.sel, self.form_items(form, cx).len())
         };
         let (key, mods) = (ev.keystroke.key.as_str(), ev.keystroke.modifiers);
-        let bare = !mods.alt && !mods.function && !mods.control && !mods.secondary();
+        let bare = !mods.alt && !mods.function && !mods.control && !mods.secondary(cx);
         match key {
             // The dropdown is the smaller thing to back out of; the form only
             // folds back into the list on a second press.
@@ -2672,7 +2672,7 @@ impl LyrelApp {
                 if let Some(at) = nav_at {
                     this.switcher_point_at(at, cx);
                 }
-                let modified = ev.modifiers().secondary();
+                let modified = ev.modifiers().secondary(cx);
                 if ev.click_count() >= 2 || modified {
                     this.switcher_open(click_ref.clone(), modified, window, cx);
                 }
@@ -3169,7 +3169,7 @@ impl LyrelApp {
                         )
                     })
                     .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
-                        this.switcher_open_tab(ws, id, ev.modifiers().secondary(), window, cx)
+                        this.switcher_open_tab(ws, id, ev.modifiers().secondary(cx), window, cx)
                     }))
                     // Mid-gesture a click arrives as a right press on macOS. It
                     // aims the cursor; releasing Ctrl is what commits.
@@ -3507,7 +3507,7 @@ enum Key {
     Pass,
 }
 
-fn key_intent(key: &str, mods: gpui_kit::Modifiers) -> Key {
+fn key_intent(key: &str, mods: gpui_kit::Modifiers, cx: &App) -> Key {
     if key == "escape" {
         return Key::Close;
     }
@@ -3518,7 +3518,7 @@ fn key_intent(key: &str, mods: gpui_kit::Modifiers) -> Key {
     // Careful: `control` cannot be lumped in with "some modifier is down", as
     // it *is* the secondary modifier off macOS — Ctrl+Enter has to reach the
     // new-window branch there, not fall through as a stray chord.
-    let bare = !mods.control && !mods.secondary();
+    let bare = !mods.control && !mods.secondary(cx);
     match key {
         "up" | "down" if bare => Key::Step(key == "down"),
         "left" if bare => Key::ToColumn(Column::Left),
@@ -3526,8 +3526,8 @@ fn key_intent(key: &str, mods: gpui_kit::Modifiers) -> Key {
         // Tab keeps working with Ctrl held — that is the Ctrl+Tab gesture still
         // in progress. Off macOS that chord arrives as the NextTab action
         // instead, which lands in the same place.
-        "tab" if !mods.secondary() => Key::Tab(!mods.shift),
-        "enter" if bare || mods.secondary() => Key::Confirm(mods.secondary()),
+        "tab" if !mods.secondary(cx) => Key::Tab(!mods.shift),
+        "enter" if bare || mods.secondary(cx) => Key::Confirm(mods.secondary(cx)),
         _ => Key::Pass,
     }
 }
@@ -4671,7 +4671,15 @@ mod gpui_tests {
 mod key_tests {
     use gpui_kit::Modifiers;
 
-    use super::{Column, Key, key_intent};
+    use super::{Column, Key};
+
+    fn key_intent(key: &str, mods: Modifiers) -> Key {
+        gpui_kit::TestAppContext::single().read(|cx| super::key_intent(key, mods, cx))
+    }
+
+    fn secondary_key() -> Modifiers {
+        gpui_kit::TestAppContext::single().read(Modifiers::secondary_key)
+    }
 
     #[test]
     fn bare_arrows_and_enter_drive_the_panel() {
@@ -4688,10 +4696,7 @@ mod key_tests {
     fn the_secondary_modifier_turns_enter_into_a_new_window() {
         // ⌘ on macOS, Ctrl everywhere else. Off macOS this is the case that a
         // blanket "control means not ours" check would have swallowed.
-        assert_eq!(
-            key_intent("enter", Modifiers::secondary_key()),
-            Key::Confirm(true)
-        );
+        assert_eq!(key_intent("enter", secondary_key()), Key::Confirm(true));
     }
 
     #[test]
@@ -4723,7 +4728,7 @@ mod key_tests {
     #[test]
     fn escape_closes_even_mid_chord() {
         assert_eq!(key_intent("escape", Modifiers::alt()), Key::Close);
-        assert_eq!(key_intent("escape", Modifiers::secondary_key()), Key::Close);
+        assert_eq!(key_intent("escape", secondary_key()), Key::Close);
     }
 
     #[test]

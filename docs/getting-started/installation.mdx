@@ -6,7 +6,7 @@ description: "macOS、Windows 桌面构建，以及保留的 Linux server／CLI 
 {/* 本文件源自 l0ng-ai/tty7，lyrel 已修改（含本声明）；原有版权与许可保留。 */}
 
 lyrel 当前 stable 版本为 `0.2.2`，从独立初版 `0.1.0` 递增。安装包及校验和以
-[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 中对应版本的正式资产为准。macOS 包采用 ad-hoc 签名，未经过 Developer ID 签名或 Apple 公证；Windows 包未签名。缺少所需安装包时，请从源码构建，不要回退下载上游安装包。
+[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 中对应版本的正式资产为准。历史 macOS 包采用 ad-hoc 签名，未经过 Developer ID 签名或 Apple 公证；新的正式 macOS 桌面包必须完成 Developer ID 签名和公证，缺少凭据时阻止发行，不回退为 ad-hoc。Windows 包未签名。签名前提见[更新说明](/reference/updates)；缺少所需安装包时，请从源码构建，不要回退下载上游安装包。
 
 桌面端仅支持 macOS、Windows，字体内嵌于二进制文件中，无需预先安装运行时。
 Linux 不再提供 GUI、AppImage 或桌面 updater；共享核心、server、CLI、SSH 远程开发与 Windows WSL 仍受支持。
@@ -127,9 +127,11 @@ lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装
 
 Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件运行 `cargo build --locked`；应用二进制文件名为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`。Linux 使用下列排除根桌面包的命令，直接构建根包会明确拒绝。
 
-GUI 统一通过正式 `gpui-kit 0.8.0` 使用 `gpui-pre 0.3.9` 配套链，GUI HTTP 使用 `gpui-pre-reqwest-client 0.3.9`；保留 `tree-sitter-languages` 和测试专用 `test-support`，不启用 `gpui-fast`。具体传递包身份以 `Cargo.lock` 为准，registry 包内部的上游快照不等于应用仍维护旧 fork。
+GUI 统一通过正式 `gpui-kit =0.8.1` 使用 `gpui-pre =0.3.10` 配套链，GUI HTTP 同步使用 `gpui-pre-reqwest-client =0.3.10`，避免引入旧版 HTTP 类型链；保留 `tree-sitter-languages` 和测试专用 `test-support`，不启用 `gpui-fast`。具体传递包身份以 `Cargo.lock` 为准，registry 包内部的上游快照不等于应用仍维护旧 fork。
 
 `Cargo.lock` 会收录可选后端及其他平台的依赖，这不表示当前构建启用了它们。用 `cargo tree --locked -p lyrel -i gpui-pre` 检查实际后端链；未启用 `gpui-fast` 时，`cargo tree --locked -p lyrel -i gpui-fast` 没有依赖路径。
+
+该版本修复文本选择、Markdown 表格、编辑器 Tab 布局、滚动与焦点，并提供文本样式、编辑器滚动条和 Diff 的定制 API。虽然 Kit 自身保留 `0.8.0` API 兼容性，其更新后的 GPUI 重导出 API 仍有变化：`Modifiers::secondary`／`secondary_key` 需要 `&App`，动态快捷键及 `secondary` 别名使用 `KeyBinding::load`／`Keystroke::parse_with_os`，格式化按 `cx.platform_info().os` 处理；滚动输入类型改为 `PlatformInput::Scroll`，事件新增 `source`。维护自定义 GPUI 代码时请核对[官方 `v0.8.1` 发布与迁移说明](https://github.com/longbridge/gpui-kit/releases/tag/v0.8.1)。
 
 GUI、CLI 与 daemon 的图片权威状态统一采用正式 `rio-vt =0.5.28`（不启用默认 features），保留 lyrel 自有 daemon、PTY 和渲染，不引入 Rio 的窗口或 GPU 后端。图片布局的零宽字符判定直接使用同一锁图中的 `rio-unicode =0.5.28`，不复制宽度表或 VT parser。`lyrel-core` 的 `terminal-width` feature 只控制输入栏／CLI 的测宽 API，不再决定 daemon 是否链接 VT 网格。第三方 Rust 依赖来自正式 registry，使用锁定归档及标准 Cargo 缓存，不修改下载源码或配置 source replacement。依赖包内部的上游快照和多版本副本仍以正式解析结果为准。
 
@@ -322,7 +324,7 @@ node scripts/rerun-failed-ci.cjs <run-id>
 草稿汇总先解析远端标签及附注标签链，确认最终目标为真实提交；创建 Release 时，`target_commitish` 使用该提交的完整 SHA，不直接填写版本标签名。无法解析、非提交目标或无效 SHA 会在创建草稿／上传资产前失败；无需为解决此 API 参数错误配置代码签名证书。
 桌面与 server 并行编译，桌面一次编译 GUI、CLI 和 updater。Windows 打包只等待本平台编译和真实 WSL musl server，macOS 打包只等待本平台编译，不跨平台互相阻塞。编译与打包间使用 tar 保留可执行权限，归档及恢复均使用相对路径，避免 GNU tar 把 Windows 的 `drive:` 绝对路径当作远程主机；已压缩包不再做外层压缩。Thin LTO 和单 codegen unit 的发行配置不变。
 
-正式发布与 CI 的发布流程验证共用 `.github/workflows/release-build.yml`。它只授予 `contents: read` 和 `actions: read`，仅生成构建／打包 artifacts，不包含创建草稿或发布的 job。CI 调用不传 Apple 签名凭据，macOS 按既有脚本执行 ad-hoc 路径；正式 Release 才显式传入可选签名凭据，草稿写权限只留在 `.github/workflows/release.yml` 的汇总 job。发布流程变化需要真实打包验证，不能只用普通 Rust 测试替代。
+正式发布与 CI 的发布流程验证共用 `.github/workflows/release-build.yml`。它只授予 `contents: read` 和 `actions: read`，仅生成构建／打包 artifacts，不包含创建草稿或发布的 job。CI 调用不传 Apple 签名凭据，macOS 开发验证包仍可执行 ad-hoc 路径；正式 Release 必须提供 Developer ID 签名和公证所需凭据，缺少凭据时构建失败，不降级发行。草稿写权限只留在 `.github/workflows/release.yml` 的汇总 job，签名前提与权限边界见[更新说明](/reference/updates)。发布流程变化需要真实打包验证，不能只用普通 Rust 测试替代。
 
 可信 main push 在三个独立 server 构建及平台断言成功后上传 `ci-server-<target>`，保存 7 天。Release 可复用同仓库、同 SHA、已完整成功的 main CI 产物；PR、fork 和手动 CI 产物不作为发布来源。下载固定 artifact ID，核验来源 run、目标、文件 SHA-256、Cargo 输入及 Rust／Zig／SDK 构建契约，再执行原有静态链接／Mach-O／签名检查。缺失、过期、下载失败或契约不匹配时正常重新构建，不放宽校验；Windows server 不参与此复用。该机制不是字节级可重现构建声明。路径裁剪未生成该 SHA 的 server artifact 时，同样由 Release 正常构建。
 

@@ -17,7 +17,7 @@ impl LyrelApp {
     ) {
         let m = &ev.modifiers;
         self.switcher_hold_changed(m, window, cx);
-        self.set_link_modifier(m.secondary(), cx);
+        self.set_link_modifier(m.secondary(cx), cx);
 
         // The numbers drawn on the tabs are `ActivateTab1`…`ActivateTab9`, so
         // the hold that raises them is the one those chords are on — Alt off

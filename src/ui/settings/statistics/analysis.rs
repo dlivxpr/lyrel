@@ -323,7 +323,7 @@ impl SettingsWindow {
         let key = event.keystroke.key.as_str();
         if event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
-            || event.keystroke.modifiers.secondary()
+            || event.keystroke.modifiers.secondary(cx)
         {
             return;
         }

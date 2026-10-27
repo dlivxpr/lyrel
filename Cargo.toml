@@ -133,7 +133,7 @@ image = "0.25"
 
 # The published transport matches gpui-pre's HTTP types behind gpui-kit.
 # Its library name is `reqwest_client`; it owns its Tokio runtime.
-gpui-pre-reqwest-client = "=0.3.9"
+gpui-pre-reqwest-client = "=0.3.10"
 ureq = { version = "3", default-features = false, features = ["rustls", "win-system-proxy", "socks-proxy"] }
 
 # See `[workspace.dependencies]`: the pin is shared with lyrel-cli, which parses
@@ -288,7 +288,7 @@ version = "0.2.2"
 
 [workspace.dependencies]
 # The public facade supplies component, base, assets and platform layers.
-gpui-kit = "=0.8.0"
+gpui-kit = "=0.8.1"
 
 # 正式 Rio VT parser + grid 同时供 GUI 镜像、CLI capture 和 daemon 图片状态使用。
 # 共享版本保证三个消费者的光标与字符单元语义一致；PTY 仍由 portable-pty 驱动。

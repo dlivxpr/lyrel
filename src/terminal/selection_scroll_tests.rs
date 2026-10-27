@@ -93,26 +93,47 @@ fn drag_scroll_step_scales_with_overshoot_and_caps() {
 /// else — so which key zooms is a setting, all the way down to none.
 #[test]
 fn the_zoom_modifier_is_configurable_and_can_be_turned_off() {
-    let secondary = Modifiers::secondary_key();
-    let alt = Modifiers::alt();
-    assert!(zoom_wheel(MouseZoomModifier::Platform, &secondary));
-    assert!(
-        !zoom_wheel(MouseZoomModifier::None, &secondary),
-        "off is off"
-    );
-    assert!(!zoom_wheel(MouseZoomModifier::Alt, &secondary));
-    assert!(zoom_wheel(MouseZoomModifier::Alt, &alt));
-    assert!(!zoom_wheel(MouseZoomModifier::Platform, &alt));
-    assert!(zoom_wheel(MouseZoomModifier::Ctrl, &Modifiers::control()));
-    assert_eq!(
-        zoom_wheel(MouseZoomModifier::Platform, &Modifiers::control()),
-        !cfg!(target_os = "macos"),
-        "off macOS the platform modifier is Ctrl itself"
-    );
-    // A second modifier is somebody else's gesture, whichever key is bound.
-    let both = Modifiers { shift: true, ..alt };
-    assert!(!zoom_wheel(MouseZoomModifier::Alt, &both));
-    assert!(!zoom_wheel(MouseZoomModifier::Platform, &Modifiers::none()));
+    for os in [
+        OperatingSystem::Mac,
+        OperatingSystem::Windows,
+        OperatingSystem::Linux,
+    ] {
+        let secondary = if os == OperatingSystem::Mac {
+            Modifiers {
+                platform: true,
+                ..Modifiers::none()
+            }
+        } else {
+            Modifiers::control()
+        };
+        let alt = Modifiers::alt();
+        assert!(zoom_wheel(MouseZoomModifier::Platform, &secondary, os));
+        assert!(
+            !zoom_wheel(MouseZoomModifier::None, &secondary, os),
+            "off is off"
+        );
+        assert!(!zoom_wheel(MouseZoomModifier::Alt, &secondary, os));
+        assert!(zoom_wheel(MouseZoomModifier::Alt, &alt, os));
+        assert!(!zoom_wheel(MouseZoomModifier::Platform, &alt, os));
+        assert!(zoom_wheel(
+            MouseZoomModifier::Ctrl,
+            &Modifiers::control(),
+            os
+        ));
+        assert_eq!(
+            zoom_wheel(MouseZoomModifier::Platform, &Modifiers::control(), os),
+            os != OperatingSystem::Mac,
+            "off macOS the platform modifier is Ctrl itself"
+        );
+        // A second modifier is somebody else's gesture, whichever key is bound.
+        let both = Modifiers { shift: true, ..alt };
+        assert!(!zoom_wheel(MouseZoomModifier::Alt, &both, os));
+        assert!(!zoom_wheel(
+            MouseZoomModifier::Platform,
+            &Modifiers::none(),
+            os
+        ));
+    }
 }
 
 /// A detent is one step however many lines the platform bills it as —

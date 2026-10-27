@@ -97,7 +97,7 @@ jobs:
                 ...repo, run_id: runId, filter: 'latest', per_page: 100
               });
               const nested = jobs.some(job => job.name.startsWith('production / '));
-              const production = jobs.filter(job => job.name !== 'draft-release').map(job => {
+              const production = jobs.filter(job => !['draft-release', 'verify-macos-identity'].includes(job.name)).map(job => {
                 if (nested && job.name !== 'version' && !job.name.startsWith('production / ')) {
                   fail('reused run mixes flat and nested production job names');
                 }
@@ -187,6 +187,7 @@ jobs:
       actions: read
     with:
       source_sha: ${{ needs.version.outputs.source_sha }}
+      require_macos_release_signing: true
       ci_server_run_id: ${{ needs.version.outputs.ci_server_run_id }}
       ci_server_run_attempt: ${{ needs.version.outputs.ci_server_run_attempt }}
       ci_server_repository_id: ${{ needs.version.outputs.ci_server_repository_id }}
@@ -199,13 +200,66 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+
+  # 复用旧 run 同样验证实际资产，不能靠旧流程成功状态绕过签名门控。
+  verify-macos-identity:
+    needs: [version, production]
+    if: >-
+      always() && needs.version.result == 'success' && needs.version.outputs.tag != '' &&
+      ((inputs.reuse_run_id != '' && needs.version.outputs.artifact_run_id == inputs.reuse_run_id) ||
+       (inputs.reuse_run_id == '' && needs.production.result == 'success'))
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: lyrel
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-macos-arm64
+          path: macos-release
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.version.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify ZIP and DMG publisher identity and notarization
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          VERIFY="$GITHUB_WORKSPACE/lyrel/.github/scripts/verify-macos-release-signing.sh"
+          STAGE="$(mktemp -d "$RUNNER_TEMP/lyrel-release-identity.XXXXXX")"
+          MOUNT="$STAGE/dmg"
+          ATTACHED=0
+          cleanup() {
+            if [[ "$ATTACHED" == 1 ]]; then hdiutil detach "$MOUNT"; fi
+            rm -rf "$STAGE"
+          }
+          trap cleanup EXIT
+          ditto -x -k "macos-release/lyrel-${VERSION}-macos-arm64.zip" "$STAGE/zip"
+          bash "$VERIFY" "$STAGE/zip/lyrel.app" "$APPLE_TEAM_ID"
+          mkdir "$MOUNT"
+          hdiutil attach "macos-release/lyrel-${VERSION}-macos-arm64.dmg" -readonly -nobrowse -mountpoint "$MOUNT"
+          ATTACHED=1
+          bash "$VERIFY" "$MOUNT/lyrel.app" "$APPLE_TEAM_ID"
 
   # main 无显式 tag 的手动运行仅预热；有效复用可越过全部 skipped 生产 jobs。
   # 仅汇总 stable draft，不 publish；最终发布仍需 CI、资产与中文说明审核。
   draft-release:
-    needs: [version, production]
+    needs: [version, production, verify-macos-identity]
     if: >-
-      always() && needs.version.result == 'success' && needs.version.outputs.tag != '' &&
+      always() && needs.version.result == 'success' && needs.verify-macos-identity.result == 'success' && needs.version.outputs.tag != '' &&
       ((inputs.reuse_run_id != '' && needs.version.outputs.artifact_run_id == inputs.reuse_run_id) ||
        (inputs.reuse_run_id == '' && needs.production.result == 'success'))
     runs-on: ubuntu-24.04

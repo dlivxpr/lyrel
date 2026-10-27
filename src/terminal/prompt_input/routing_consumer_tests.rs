@@ -34,7 +34,7 @@ fn passthrough_ctrl_d_discards_typeahead_before_the_shell_can_resume(cx: &mut Te
 fn assert_foreground_interrupt_does_not_wipe_prompt(
     cx: &mut TestAppContext,
     pending: &str,
-    chord: &str,
+    chord: &'static str,
     byte: u8,
 ) {
     let (window, mut daemon) = harness(cx);
@@ -42,10 +42,13 @@ fn assert_foreground_interrupt_does_not_wipe_prompt(
         .update(cx, |view, window, cx| {
             assert!(!view.input_active(), "the foreground process owns input");
             view.input.record_for_test(RawInput::Text(pending), false);
-            view.input.record_for_test(RawInput::Key {
-                key: "up",
-                plain: true,
-            }, false);
+            view.input.record_for_test(
+                RawInput::Key {
+                    key: "up",
+                    plain: true,
+                },
+                false,
+            );
 
             view.on_key_down(
                 &KeyDownEvent {
@@ -166,7 +169,7 @@ fn assert_agent_question_owns_arrows(
     window
         .update(cx, |view, window, cx| {
             seed_history(view, vec!["echo shell-history".into()]);
-            
+
             for chord in ["up", "down"] {
                 view.on_key_down(
                     &KeyDownEvent {
@@ -467,7 +470,11 @@ fn tab_with_no_candidates_hands_the_line_to_the_shell(cx: &mut TestAppContext) {
             }
             assert_eq!(view.input.editor().text(), "zzqqx");
             view.complete_tab(true, cx);
-            assert_eq!(view.input.editor().text(), "", "the line moved to the shell");
+            assert_eq!(
+                view.input.editor().text(),
+                "",
+                "the line moved to the shell"
+            );
             assert!(
                 !view.input_active(),
                 "the shell owns the prompt after the handoff"
@@ -612,9 +619,7 @@ fn shell_vi_mode_prompt_input_is_not_typeahead(cx: &mut TestAppContext) {
         cx.run_until_parked();
         let ready = window
             .update(cx, |view, _, _| {
-                !view.input_active()
-                    && view.terminal.shell_vi_mode()
-                    && view.terminal.zle_reading()
+                !view.input_active() && view.terminal.shell_vi_mode() && view.terminal.zle_reading()
             })
             .unwrap();
         if ready {
