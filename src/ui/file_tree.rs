@@ -802,7 +802,7 @@ impl LyrelApp {
     ) -> Option<(SharedHost, Vec<PathBuf>)> {
         let id = self.spawn_host(cx);
         let host = self.active_host(cx)?;
-        let leaves = match self.tabs.get(self.active) {
+        let leaves = match self.tabs.get(self.tabs.active_index()) {
             Some(tab) => tab.pane.terminals(),
             None => Vec::new(),
         };
@@ -1627,7 +1627,7 @@ impl LyrelApp {
     fn file_tree_cd(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(leaf) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
         else {
             return;
@@ -2251,7 +2251,7 @@ impl LyrelApp {
                         let _ = app.update(cx, |this, cx| {
                             if let Some(leaf) = this
                                 .tabs
-                                .get(this.active)
+                                .get(this.tabs.active_index())
                                 .and_then(|t| t.pane.focused_or_first(window, cx))
                             {
                                 leaf.update(cx, |view, cx| {

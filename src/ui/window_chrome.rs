@@ -24,7 +24,7 @@ impl LyrelApp {
         let right_open = self.right_panel_open(cx);
         let can_split = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|tab| tab.detail_pane(window, cx))
             .is_some();
         let tile = |button: Button| button.custom(chrome_tile_variant(cx)).size_8().rounded_lg();
@@ -242,7 +242,7 @@ mod gpui_tests {
 
     fn terminal_focused(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
         app.update_in(vcx, |app, window, cx| {
-            app.tabs[app.active]
+            app.tabs[app.tabs.active_index()]
                 .pane
                 .leaves()
                 .iter()
@@ -600,7 +600,7 @@ mod gpui_tests {
                 app.workspace,
                 app.tabs
                     .iter()
-                    .map(|tab| tab.tree_id.get())
+                    .map(|tab| tab.id())
                     .collect::<Vec<_>>(),
                 app.tabs
                     .iter()
@@ -651,7 +651,7 @@ mod gpui_tests {
             );
             vcx.dispatch_action(ActivateTab2);
             settle(&mut vcx);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
             assert!(terminal_focused(&app, &mut vcx));
             vcx.dispatch_action(ActivateTab1);
             settle(&mut vcx);
@@ -661,7 +661,7 @@ mod gpui_tests {
             assert_eq!(
                 app.tabs
                     .iter()
-                    .map(|tab| tab.tree_id.get())
+                    .map(|tab| tab.id())
                     .collect::<Vec<_>>(),
                 original.1
             );
@@ -700,7 +700,7 @@ mod gpui_tests {
             assert!(second_tab.size.width > px(0.));
             vcx.simulate_click(second_tab.center(), gpui_kit::Modifiers::none());
             settle(&mut vcx);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
             assert!(terminal_focused(&app, &mut vcx));
 
             vcx.update(|window, cx| window.click("titlebar-search", cx));
@@ -709,7 +709,7 @@ mod gpui_tests {
             vcx.simulate_keystrokes(&first_tab_key);
             vcx.simulate_keystrokes("q");
             settle(&mut vcx);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
             assert_eq!(input(&mut streams[0]), None);
             assert_eq!(input(&mut streams[1]), None);
             vcx.simulate_keystrokes("escape");

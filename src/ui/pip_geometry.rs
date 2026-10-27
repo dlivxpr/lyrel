@@ -130,7 +130,7 @@ pub(crate) fn commit(
     cx: &mut App,
 ) {
     let _ = app.update(cx, |app, cx| {
-        let Some(tab) = app.tabs.iter_mut().find(|tab| tab.tree_id.get() == tab_id) else {
+        let Some(tab) = app.tabs.iter_mut().find(|tab| tab.id() == tab_id) else {
             return;
         };
         if !tab
@@ -585,8 +585,8 @@ fn render_in_viewport(
                     move |_, window, cx| {
                         let _ = app.update(cx, |app, cx| {
                             // Buttons act on this rendered PiP, never a stale terminal focus.
-                            if !app.tabs.get(app.active).is_some_and(|tab| {
-                                tab.tree_id.get() == tab_id
+                            if !app.tabs.get(app.tabs.active_index()).is_some_and(|tab| {
+                                tab.id() == tab_id
                                     && tab.pip_slot(cx).is_some_and(|pip| pip.entity_id() == id)
                             }) {
                                 return;

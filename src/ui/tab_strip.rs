@@ -23,7 +23,8 @@ use crate::core::cli_agent::CLIAgent;
 use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab};
+use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE};
+use crate::ui::tab::Tab;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::search::SearchTab;
 
@@ -52,7 +53,7 @@ fn shell_spec(shell: &DetectedShell) -> ShellSpec {
 pub(crate) use lyrel_core::core::tab_view::strip_host_prefix;
 
 /// `home` is the home directory of the machine `path` is on, from
-/// [`Tab::label_view`](crate::ui::app::Tab::label_view) or
+/// [`Tab::label_view`](crate::ui::tab::Tab::label_view) or
 /// the workspace's host; `None` leaves the path spelled out (#580).
 pub(crate) fn abbreviate_home<'a>(
     path: &'a str,
@@ -149,7 +150,7 @@ pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
 /// [`TabView`](crate::ui::machine_mirror::TabView): the switcher reads one out
 /// of the machine tree for a window it does not own, and the strip builds one
 /// from its own live panes in
-/// [`Tab::label_view`](crate::ui::app::Tab::label_view).
+/// [`Tab::label_view`](crate::ui::tab::Tab::label_view).
 ///
 /// They used to rank their own evidence, and disagreed where it mattered most:
 /// a pane with a working directory and no title — every non-PowerShell shell
@@ -1575,7 +1576,7 @@ impl LyrelApp {
     ) -> Option<String> {
         use crate::ui::machine_mirror::TabLabel;
 
-        if let Some(name) = tab.name.as_ref().filter(|n| !n.trim().is_empty()) {
+        if let Some(name) = tab.name().as_ref().filter(|n| !n.trim().is_empty()) {
             return Some(name.trim().to_string());
         }
         let (view, home) = tab.label_view(window, cx);
@@ -2162,7 +2163,8 @@ mod ssh_host_row_tests {
     use crate::terminal::view::{
         quiet_test_pane, quiet_test_ssh_pane, quiet_test_ssh_pane_of, quiet_test_ssh_pane_with,
     };
-    use crate::ui::app::{Tab, test_window::harness};
+    use crate::ui::app::test_window::harness;
+use crate::ui::tab::Tab;
     use crate::ui::i18n::{L10nKey, set_locale, t};
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::ssh_connect::TabHostForm;
@@ -2191,7 +2193,7 @@ mod ssh_host_row_tests {
             for view in [local, dialled, from_host] {
                 app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
             }
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             (a, b, c)
         });
@@ -2244,7 +2246,7 @@ mod ssh_host_row_tests {
         let _end = app.update_in(&mut vcx, |app, window, cx| {
             let (view, end) = quiet_test_ssh_pane_of(1, Some(uuid::Uuid::new_v4()), window, cx);
             app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             end
         });
@@ -2286,7 +2288,7 @@ mod ssh_host_row_tests {
             spec.login_script = vec!["tmux attach".to_string()];
             let (view, end) = quiet_test_ssh_pane_with(1, spec, window, cx);
             app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             end
         });
@@ -2866,7 +2868,7 @@ mod tests {
 
     /// A tab of this window as the strip reads it: `tab_label` is nothing but
     /// [`label_of`] over the [`TabView`](crate::ui::machine_mirror::TabView)
-    /// that [`Tab::label_view`](crate::ui::app::Tab::label_view) builds from
+    /// that [`Tab::label_view`](crate::ui::tab::Tab::label_view) builds from
     /// the live leaf, so naming one here climbs the same ladder a real tab
     /// climbs. `title` is the placeholder `label_view` fills that slot with —
     /// the machine tree puts a process name there, a live pane has only the
@@ -2955,14 +2957,14 @@ mod tests {
                 .terminal
                 .seed_cwd(Some(std::path::PathBuf::from("/work/repo")));
             app.tabs
-                .push(crate::ui::app::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            app.active = app.tabs.len() - 1;
+                .push(crate::ui::tab::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
+            app.tabs.select(app.tabs.len() - 1);
             stream
         });
         vcx.background_executor.run_until_parked();
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let index = app.active;
+            let index = app.tabs.active_index();
             let tab = &app.tabs[index];
             let (view, home) = tab.label_view(Some(window), cx);
             assert_eq!(view.osc_title, None, "the pane never titled itself");
@@ -2980,7 +2982,7 @@ mod tests {
             // switcher ever has: no title was seen, the cwd is the one above,
             // and `title` is the foreground process name.
             let from_tree = crate::ui::machine_mirror::TabView {
-                id: tab.tree_id.get(),
+                id: tab.id(),
                 name: None,
                 title: "zsh".into(),
                 osc_title: None,

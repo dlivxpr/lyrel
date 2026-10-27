@@ -434,7 +434,7 @@ impl LyrelApp {
         let host = self.spawn_host(cx);
         let mut cwds: Vec<PathBuf> = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .map(|tab| tab.pane.terminals())
             .unwrap_or_default()
             .iter()

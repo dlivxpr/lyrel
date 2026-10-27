@@ -444,7 +444,7 @@ impl LyrelApp {
     ) -> Option<crate::terminal::PaneWorkspace> {
         let leaf = self
             .tabs
-            .get(self.active)?
+            .get(self.tabs.active_index())?
             .pane
             .focused_or_first(window, cx)?;
         let leaf = leaf.read(cx);
@@ -500,7 +500,7 @@ impl LyrelApp {
     fn pane_shell_cwd(&self, pane_id: u64, window: &Window, cx: &App) -> Option<String> {
         let leaf = self
             .tabs
-            .get(self.active)?
+            .get(self.tabs.active_index())?
             .pane
             .focused_or_first(window, cx)?;
         let leaf = leaf.read(cx);

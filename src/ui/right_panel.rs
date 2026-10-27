@@ -815,7 +815,7 @@ impl LyrelApp {
         let mut diff_target: Option<(crate::ui::host_ops::HostId, PathBuf)> = None;
         let mut git: Option<crate::terminal::git_status::GitStatus> = None;
 
-        if let Some(tab) = self.tabs.get(self.active) {
+        if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
             if let Some(leaf) = tab.detail_pane(window, cx) {
                 let view = leaf.read(cx);
                 pane_id = Some(view.pane_id);
@@ -1601,7 +1601,7 @@ impl LyrelApp {
         window: &Window,
         cx: &gpui_kit::App,
     ) -> Option<PaneForwardCtx> {
-        let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
+        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
         let view = leaf.read(cx);
         // A pane holds managed forwards once it has somewhere to hold them:
         // a live native-ssh connection, or the workspace's shared one.
@@ -1942,7 +1942,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<(u64, String)> {
         use crate::daemon::protocol::{RemoteKind, SshPhase};
-        let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
+        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let remote = view.remote_context()?;
         if remote.kind != RemoteKind::NativeSsh

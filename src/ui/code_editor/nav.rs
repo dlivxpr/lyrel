@@ -427,7 +427,7 @@ impl EditorNav {
 
 impl LyrelApp {
     fn nav_tab(&self) -> Option<TabId> {
-        self.tabs.get(self.active).map(|t| t.tree_id.get())
+        self.tabs.get(self.tabs.active_index()).map(|t| t.id())
     }
 
     /// Where the caret is in the buffer in front, if there is one.

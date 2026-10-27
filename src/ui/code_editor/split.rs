@@ -709,10 +709,10 @@ mod gpui_tests {
             }),
         };
         // The second tab was split when the window last closed.
-        let tab = app.read_with(&vcx, |app, _| app.tabs[1].tree_id.get());
+        let tab = app.read_with(&vcx, |app, _| app.tabs[1].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state.clone()));
         app.update_in(&mut vcx, |app, window, cx| {
-            app.active = 1;
+            app.tabs.select(1);
             // As on a relaunch: nothing has been put back for it yet.
             app.editor.restored.remove(&tab);
             app.editor_restore_active(window, cx);
@@ -761,7 +761,7 @@ mod gpui_tests {
                 focused: true,
             }),
         };
-        let tab = app.read_with(&vcx, |app, _| app.tabs[0].tree_id.get());
+        let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state.clone()));
         app.update_in(&mut vcx, |app, window, cx| {
             app.editor.restored.remove(&tab);
@@ -863,7 +863,7 @@ mod gpui_tests {
                 focused: false,
             }),
         };
-        let tab = app.read_with(&vcx, |app, _| app.tabs[0].tree_id.get());
+        let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state));
         app.update_in(&mut vcx, |app, window, cx| {
             app.editor.restored.remove(&tab);
