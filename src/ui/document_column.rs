@@ -920,7 +920,7 @@ mod gpui_tests {
         crate::ui::i18n::set_locale("en");
         let row = |app: &Entity<LyrelApp>, vcx: &mut VisualTestContext| {
             app.update_in(vcx, |app, window, cx| {
-                app.search_actions(window, cx)
+                app.search_input(window, cx).build(cx).actions
                     .into_iter()
                     .find(|c| c.kind == CommandKind::ToggleDocumentFill)
                     .expect("the search offers the fill toggle")

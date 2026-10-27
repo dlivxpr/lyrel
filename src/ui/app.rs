@@ -30,8 +30,8 @@ use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
 use crate::ui::scm::ScmIntent;
 use crate::ui::search::{
-    Avatar, Catalog, ChromeState, CommandGroup, CommandKind, Item, SearchEvent, SearchTab,
-    SearchView,
+    ActionCatalog, ChromeState, CommandKind, SearchCatalog, SearchEvent, SearchState, SearchTab,
+    SearchView, SessionHistory, TerminalCatalog,
 };
 use crate::ui::settings::SettingsSection;
 use crate::ui::settings_window::SettingsWindow;
@@ -987,9 +987,7 @@ pub struct LyrelApp {
     _git_status_watch: Subscription,
     _pane_liveness_watch: Subscription,
     _appearance_watch: Subscription,
-    pub(crate) search: Option<Entity<SearchView>>,
-    search_sub: Option<Subscription>,
-    search_return_focus: Option<gpui_kit::FocusHandle>,
+    pub(crate) search: SearchState,
     /// Preset that was live when the search's theme picker started previewing.
     /// `Some` means the theme on screen is a preview that was never written to
     /// disk, and closing the search without confirming puts this one back.
@@ -1654,9 +1652,7 @@ impl LyrelApp {
             _git_status_watch: git_status_watch,
             _pane_liveness_watch: pane_liveness_watch,
             _appearance_watch: appearance_watch,
-            search: None,
-            search_sub: None,
-            search_return_focus: None,
+            search: SearchState::default(),
             theme_preview_restore: None,
             closed: Vec::new(),
             renaming: None,
@@ -2081,6 +2077,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.search.is_open() {
+            self.close_search(window, cx);
+        }
         let previous_host = self.spawn_host(cx);
         self.workspace = id;
         self.rebind_host(previous_host, cx);
@@ -6300,308 +6299,45 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// Everything the search offers from this window, gathered when it opens.
-    pub(crate) fn search_catalog(&self, window: &Window, cx: &App) -> Catalog {
-        let mut catalog = Catalog::new(
-            self.search_actions(window, cx),
-            self.search_terminals(cx),
-            crate::ui::search::host_items(cx),
-        );
-        let last = last_sessions(self.spawn_host(cx));
-        let (sessions, here) = self.search_sessions(last, window, cx);
-        catalog.sessions = sessions;
-        catalog.sessions_here = here;
-        catalog.files = self.file_list_now(cx);
-        catalog
+    /// Project only workbench-owned facts; search owns row construction and ranking.
+    pub(crate) fn search_input(&self, window: &Window, cx: &App) -> SearchCatalog {
+        let actions = ActionCatalog::new(
+            ChromeState {
+                rail_collapsed: self.sidebar_collapsed,
+                right_panel_visible: self.right_panel_visible,
+                document_filled: self.document_layout(cx) == crate::core::config::DocumentLayout::Fill,
+                remote_server: WorkspaceStore::remote_ref(cx, self.workspace)
+                    .filter(|remote| remote.target.hosts_our_server())
+                    .map(|remote| crate::ui::remote_connect::route_label(cx, &remote)),
+            },
+            WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote()),
+            self.unsaved_ssh_session(window, cx).is_some(),
+        ).with_editor(self.editor_palette_items(), self.editor_can_dispatch());
+        let agents = self.offered_agents(cx);
+        let terminals = TerminalCatalog::new(self.workspace, &self.shells, &agents)
+            .items(|id| self.tab_rows_for(id, true, cx), cx);
+        SearchCatalog::new(actions, terminals, self.search_history(window, cx), self.file_list_now(cx))
+            .query_sessions(
+                self.active_host(cx),
+                self.tabs.iter().flat_map(|tab| tab.pane.terminals()).collect(),
+                agents,
+            )
     }
 
-    /// The Sessions tab's rows from `found`: those that ran in the focused
-    /// pane's directory first, under its name, then the rest by recency. The
-    /// second value is how many lead.
-    ///
-    /// `found` are the sessions of the machine this window's workspace is
-    /// on: a remote window's new tab opens there, and so resumes there.
-    pub(crate) fn search_sessions(
-        &self,
-        found: Vec<crate::core::agent_history::PastSession>,
-        window: &Window,
-        cx: &App,
-    ) -> (Vec<Item>, usize) {
-        let here = self
-            .tabs
-            .get(self.active)
-            .and_then(|t| t.pane.focused_or_first(window, cx))
-            .and_then(|leaf| leaf.read(cx).spawnable_cwd());
-        let home = crate::ui::path_display::home_for_host(cx, self.spawn_host(cx));
-        let now = crate::core::config::unix_now();
-        let hidden = &cx.global::<Config>().hidden_agent_sessions;
-        let (mut mine, mut rest): (Vec<_>, Vec<_>) = found
-            .into_iter()
-            .filter(|s| !hidden.contains(&crate::core::agent_history::session_key(s.agent, &s.id)))
-            .partition(|s| here.is_some() && s.cwd == here);
-        let here_section: Option<gpui_kit::SharedString> = here.as_ref().map(|dir| {
-            t_fmt(
-                L10nKey::SearchSectionSessionsHere,
-                &[("dir", &crate::ui::home::display_path(dir, home.as_deref()))],
-            )
-            .into()
-        });
-        let recent: gpui_kit::SharedString = t(L10nKey::SearchSectionSessionsRecent).into();
-        let row = |s: crate::core::agent_history::PastSession, section: gpui_kit::SharedString| {
-            let place = s
-                .cwd
-                .as_deref()
-                .map(|p| crate::ui::home::display_path(p, home.as_deref()));
-            let mut subtitle = match (&place, &s.branch) {
-                (Some(place), Some(branch)) => Some(format!("{place} · {branch}")),
-                (Some(place), None) => Some(place.clone()),
-                (None, Some(branch)) => Some(branch.clone()),
-                (None, None) => None,
-            };
-            if let Some(scope) = &s.scope
-                && let Some(context) = &scope.opencode
-            {
-                let connection = context
-                    .server
-                    .as_ref()
-                    .map(|s| s.urls.join(", "))
-                    .unwrap_or_else(|| context.connection_argv.join(" "));
-                let storage = scope
-                    .environment
-                    .get("OPENCODE_DB")
-                    .or_else(|| scope.environment.get("XDG_DATA_HOME"))
-                    .or_else(|| scope.environment.get("HOME"))
-                    .or_else(|| scope.environment.get("USERPROFILE"));
-                let source = storage.map_or(connection.clone(), |storage| {
-                    format!("{connection} · {storage}")
-                });
-                subtitle =
-                    Some(subtitle.map_or(source.clone(), |place| format!("{place} · {source}")));
-            }
-            let mut item = Item::new(
-                s.title,
-                CommandKind::ResumeSession {
-                    agent: s.agent,
-                    session_id: s.id.clone(),
-                    cwd: s.cwd,
-                    host: self.spawn_host(cx),
-                    scope: s.scope,
-                },
-            )
-            .with_note(crate::ui::home::relative_time(now, s.updated))
-            .with_avatar(Avatar {
-                agent: Some(s.agent),
-                ..Avatar::default()
-            })
-            .with_alias(s.id)
-            .with_alias(s.agent.display_name())
-            .in_section(section);
-            if let Some(subtitle) = subtitle {
-                item = item.with_subtitle(subtitle);
-            }
-            item
-        };
-        let count = mine.len();
-        let mut out: Vec<Item> = match here_section {
-            Some(section) => mine.drain(..).map(|s| row(s, section.clone())).collect(),
-            None => Vec::new(),
-        };
-        out.extend(rest.drain(..).map(|s| row(s, recent.clone())));
-        (out, count)
-    }
-
-    /// The Actions tab: the fixed set, plus the rows only this window can
-    /// judge are worth offering.
-    pub(crate) fn search_actions(&self, window: &Window, cx: &App) -> Vec<Item> {
-        let mut actions = Item::actions(ChromeState {
-            rail_collapsed: self.sidebar_collapsed,
-            right_panel_visible: self.right_panel_visible,
-            document_filled: self.document_layout(cx) == crate::core::config::DocumentLayout::Fill,
-            remote_server: WorkspaceStore::remote_ref(cx, self.workspace)
-                .filter(|remote| remote.target.hosts_our_server())
-                .map(|remote| crate::ui::remote_connect::route_label(cx, &remote)),
-        });
-
-        // The editor's navigation, while there is a file in front of it.
-        actions.extend(self.editor_palette_items());
-
-        // Groups are something the sidebar draws, so they are offered only
-        // while the tabs are in it. Opening a folder as a group asks the
-        // system picker, which browses this computer: a path picked there
-        // names nothing on a remote workspace's machine, where "Pin as
-        // Group" in the file tree is the way in instead.
-        actions.push(
-            Item::localized(L10nKey::CmdNewGroup, CommandKind::NewGroup)
-                .with_subtitle(t(L10nKey::CmdNewGroupSubtitle))
-                .in_group(CommandGroup::TabsPanes),
-        );
-        if !WorkspaceStore::all(cx)
-            .get(self.workspace)
-            .is_some_and(|w| w.is_remote())
-        {
-            actions.push(
-                Item::localized(
-                    L10nKey::CmdOpenFolderAsGroup,
-                    CommandKind::OpenFolderAsGroup,
-                )
-                .with_subtitle(t(L10nKey::CmdOpenFolderAsGroupSubtitle))
-                .in_group(CommandGroup::TabsPanes),
-            );
-        }
-
-        // The editor's text commands, while there is a buffer to run them on.
-        if self.editor_can_dispatch() {
-            actions.extend(
-                [
-                    Item::localized(
-                        L10nKey::CmdEditorTransformUppercase,
-                        CommandKind::EditorTransformUppercase,
-                    ),
-                    Item::localized(
-                        L10nKey::CmdEditorTransformLowercase,
-                        CommandKind::EditorTransformLowercase,
-                    ),
-                    Item::localized(
-                        L10nKey::CmdEditorTransformTitleCase,
-                        CommandKind::EditorTransformTitleCase,
-                    ),
-                    Item::localized(
-                        L10nKey::CmdEditorTrimTrailingWhitespace,
-                        CommandKind::EditorTrimTrailingWhitespace,
-                    ),
-                    Item::localized(L10nKey::CmdEditorJoinLines, CommandKind::EditorJoinLines),
-                    Item::localized(
-                        L10nKey::CmdEditorRemoveSurroundingBrackets,
-                        CommandKind::EditorRemoveSurroundingBrackets,
-                    ),
-                ]
-                .into_iter()
-                .map(|item| item.in_group(CommandGroup::View)),
-            );
-        }
-
-        // Offered only where it would do something. A connection opened from a
-        // saved host has nothing to save, and a pane that is not an SSH one has
-        // no connection at all — either would be a row that quietly did nothing
-        // (#549).
-        if self.unsaved_ssh_session(window, cx).is_some() {
-            actions.push(
-                Item::localized(
-                    L10nKey::CmdSshSaveConnection,
-                    CommandKind::SaveSshSessionAsHost,
-                )
-                .with_subtitle(t(L10nKey::CmdSshSaveConnectionSubtitle))
-                .in_group(CommandGroup::Ssh),
-            );
-        }
-        actions
-    }
-
-    /// The Terminals tab: every open tab of every workspace this process
-    /// knows — this window's first, most recently used first and without the
-    /// one you are in — then every way to open a new one.
-    pub(crate) fn search_terminals(&self, cx: &App) -> Vec<Item> {
-        let mut out = Vec::new();
-        let store = WorkspaceStore::all(cx);
-        let name_of = |id: WorkspaceId| {
-            store
-                .get(id)
-                .and_then(|w| crate::ui::machine_mirror::display_name(cx, w))
-                .unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())
-        };
-        // This window's own workspace leads, and is listed whether or not the
-        // store has caught up with it: its tabs are right here in the window.
-        let mut others: Vec<_> = store
-            .views
-            .iter()
-            .filter(|w| w.id != self.workspace)
-            .collect();
-        others.sort_by_key(|w| std::cmp::Reverse(w.last_active));
-        let workspaces = std::iter::once(self.workspace).chain(others.into_iter().map(|w| w.id));
-        for id in workspaces {
-            let name = name_of(id);
-            let here = id == self.workspace;
-            for tab in self.tab_rows_for(id, true, cx) {
-                if here && tab.active {
-                    continue;
-                }
-                let mut item = Item::new(
-                    tab.label.clone(),
-                    CommandKind::GoToTab {
-                        workspace: id,
-                        tab: tab.id,
-                    },
-                )
-                .with_avatar(Avatar {
-                    agent: tab.agent,
-                    status: tab.status,
-                    unread: tab.unread,
-                    ssh: tab.ssh,
-                })
-                .with_alias(name.clone())
-                .in_section(name.clone());
-                // A label derived from the path already says where; one that
-                // is a name or an agent leaves the place worth printing.
-                if tab.named && !tab.path.is_empty() {
-                    item = item.with_subtitle(tab.path.clone());
-                } else if !tab.path.is_empty() {
-                    item = item.with_alias(tab.path.clone());
-                }
-                if let Some(agent) = tab.agent {
-                    item = item.with_alias(agent.display_name());
-                }
-                if !here {
-                    item = item.with_note(name.clone());
-                }
-                out.push(item);
-            }
-        }
-
-        let new_terminal: gpui_kit::SharedString = t(L10nKey::SearchSectionNewTerminal).into();
-        // Every shell the window's machine has, named alike in every language
-        // so the New Tab menu's "Other Shells…" row can land on exactly these
-        // by typing one word. Listed in the order that menu uses.
-        let default_shell = self.default_shell_label(cx);
-        let usage = &cx.global::<Config>().shell_frecency;
-        let now = crate::core::config::unix_now();
-        for s in crate::ui::tab_strip::shells_by_frecency(
-            &self.shells.shells,
-            &default_shell,
-            usage,
-            now,
-        ) {
-            let mut item = Item::new(
-                t_fmt(L10nKey::AppCmdShellTitle, &[("title", &s.label)]),
-                CommandKind::OpenShell(s.label.clone()),
-            )
-            .in_section(new_terminal.clone());
-            if s.label == default_shell {
-                item = item.with_subtitle(t(L10nKey::ShellDefault));
-            }
-            out.push(item);
-        }
-        for agent in self.offered_agents(cx) {
-            out.push(
-                Item::new(
-                    t_fmt(
-                        L10nKey::AppCmdAgentLaunchTitle,
-                        &[("name", agent.display_name())],
-                    ),
-                    CommandKind::LaunchAgent(agent),
-                )
-                .with_subtitle(agent.launch_command(&cx.global::<Config>().agent_launch))
-                .with_avatar(Avatar {
-                    agent: Some(agent),
-                    ..Avatar::default()
-                })
-                .in_section(new_terminal.clone()),
-            );
-        }
-        out
+    fn search_history(&self, window: &Window, cx: &App) -> SessionHistory {
+        let focused = self.tabs.get(self.active)
+            .and_then(|tab| tab.pane.focused_or_first(window, cx));
+        let host = self.spawn_host(cx);
+        SessionHistory::new(
+            host,
+            focused.as_ref().and_then(|pane| pane.read(cx).spawnable_cwd()),
+            focused.as_ref().and_then(|pane| pane.read(cx).host_cwd()),
+            crate::ui::path_display::home_for_host(cx, host),
+        )
     }
 
     pub(crate) fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search.is_some() {
+        if self.search.is_open() {
             self.close_search(window, cx);
             return;
         }
@@ -6620,240 +6356,27 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.search_return_focus = window.focused(cx);
-        let catalog = self.search_catalog(window, cx);
-        let view = cx.new(|cx| SearchView::new(catalog, tab, query, window, cx));
+        let catalog = self.search_input(window, cx);
+        let view = self.search.open(catalog, tab, query, Self::on_search_event, window, cx);
         if tab.in_editor_row() {
             let tabs = self.editor_search_tabs();
             view.update(cx, |view, cx| view.set_editor_tabs(tabs, cx));
         }
-        self.search_sub = Some(cx.subscribe_in(&view, window, Self::on_search_event));
-        self.search = Some(view.clone());
-        self.refresh_search_sessions(view, window, cx);
         self.refresh_file_index(window, cx);
         cx.notify();
     }
 
-    /// Asks the machine this window's workspace is on — this one, or a
-    /// remote one's server — for its agents' history, and hands what changed
-    /// to the open search. The search opened on the last scan's answer, so this is
-    /// only ever news: a session run since, or the first scan of the process.
-    fn refresh_search_sessions(
-        &mut self,
-        view: Entity<SearchView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let host_id = self.spawn_host(cx);
-        let Some(host) = self.active_host(cx) else {
-            return;
-        };
-        use lyrel_core::host::session_operations::{
-            SessionOperation, SessionOperationKind, SessionScope,
-        };
-        let opencode = crate::core::cli_agent::CLIAgent::OpenCode;
-        let mut opencode_scopes = Vec::new();
-        let hermes = crate::core::cli_agent::CLIAgent::Hermes;
-        let mut hermes_scopes = Vec::new();
-        let mut hermes_errors = Vec::new();
-        for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
-            let pane = leaf.read(cx);
-            if pane.host_id() == host_id
-                && pane.agent() == Some(hermes)
-                && let Some(state) = pane.agent_session()
-                && let Some(cwd) = pane.host_cwd()
-                && let Some(scope) = state.readout.session_scope.clone()
-                && let Some(launch_argv) =
-                    lyrel_core::host::session_operations::launch_context(hermes, &state)
-                && !hermes_scopes
-                    .iter()
-                    .any(|request: &SessionOperation| request.scope == scope)
-            {
-                hermes_scopes.push(SessionOperation {
-                    expected_host: host_id.0,
-                    agent: hermes,
-                    kind: SessionOperationKind::Resume,
-                    source_id: String::new(),
-                    cwd,
-                    launch_argv,
-                    scope,
-                });
-            }
-            if pane.host_id() != host_id || pane.agent() != Some(opencode) {
-                continue;
-            }
-            let Some(state) = pane.agent_session() else {
-                continue;
-            };
-            let Some(cwd) = pane.host_cwd() else {
-                continue;
-            };
-            let Some(mut scope) = state.readout.session_scope.clone() else {
-                continue;
-            };
-            let Some(launch_argv) =
-                lyrel_core::host::session_operations::launch_context(opencode, &state)
-            else {
-                continue;
-            };
-            if let Some(context) = &mut scope.opencode {
-                context.launch_argv = launch_argv.clone();
-            }
-            if opencode_scopes
-                .iter()
-                .any(|request: &SessionOperation| request.scope == scope)
-            {
-                continue;
-            }
-            opencode_scopes.push(SessionOperation {
-                expected_host: host_id.0,
-                agent: opencode,
-                kind: SessionOperationKind::Resume,
-                source_id: String::new(),
-                cwd,
-                launch_argv,
-                scope,
-            });
-        }
-        // A normal default/configured scope remains discoverable without an open TUI.
-        let default_launch = crate::core::cli_agent::parse_command_argv(
-            &opencode.launch_command(&cx.global::<Config>().agent_launch),
-        );
-        let default_cwd = self
-            .tabs
-            .get(self.active)
-            .and_then(|tab| tab.pane.focused_or_first(window, cx))
-            .and_then(|leaf| leaf.read(cx).host_cwd())
-            .or_else(|| crate::ui::path_display::home_for_host(cx, host_id))
-            .unwrap_or_default();
-        if self.offered_agents(cx).contains(&opencode)
-            && let Ok(launch_argv) = default_launch
-        {
-            opencode_scopes.push(SessionOperation {
-                expected_host: host_id.0,
-                agent: opencode,
-                kind: SessionOperationKind::Resume,
-                source_id: String::new(),
-                cwd: default_cwd.clone(),
-                launch_argv,
-                scope: SessionScope::default(),
-            });
-        }
-        if self.offered_agents(cx).contains(&hermes) {
-            match crate::core::cli_agent::parse_command_argv(
-                &hermes.launch_command(&cx.global::<Config>().agent_launch),
-            ) {
-                Ok(launch_argv) => hermes_scopes.push(SessionOperation {
-                    expected_host: host_id.0,
-                    agent: hermes,
-                    kind: SessionOperationKind::Resume,
-                    source_id: String::new(),
-                    cwd: default_cwd,
-                    launch_argv,
-                    scope: SessionScope::default(),
-                }),
-                Err(message) => hermes_errors.push(
-                    lyrel_core::host::session_operations::SessionOperationError {
-                        kind: lyrel_core::host::session_operations::SessionErrorKind::Unsupported,
-                        message: format!("Hermes history launch context: {message}"),
-                        retained: None,
-                    },
-                ),
-            }
-        }
-        // Weak: a slow host must not keep a closed search alive.
-        let view = view.downgrade();
-        crate::ui::host_ops::HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| {
-                let mut found = h.agent_sessions();
-                let mut errors = hermes_errors;
-                for request in opencode_scopes {
-                    match h.opencode_sessions(&request) {
-                        Ok(sessions) => {
-                            if let Ok(found) = &mut found {
-                                for session in sessions {
-                                    let same =
-                                        |existing: &crate::core::agent_history::PastSession| {
-                                            existing.agent == session.agent
-                                                && existing.id == session.id
-                                                && existing
-                                                    .scope
-                                                    .as_ref()
-                                                    .and_then(|s| s.opencode.as_ref())
-                                                    .map(|s| (&s.server, &s.connection_argv))
-                                                    == session
-                                                        .scope
-                                                        .as_ref()
-                                                        .and_then(|s| s.opencode.as_ref())
-                                                        .map(|s| (&s.server, &s.connection_argv))
-                                        };
-                                    if !found.iter().any(same) {
-                                        found.push(session);
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => errors.push(error),
-                    }
-                }
-                for request in hermes_scopes {
-                    match h.hermes_sessions(&request) {
-                        Ok(sessions) => {
-                            if let Ok(found) = &mut found {
-                                for session in sessions {
-                                    if !found.iter().any(|existing| {
-                                        existing.agent == session.agent
-                                            && existing.id == session.id
-                                            && existing.scope == session.scope
-                                    }) {
-                                        found.push(session);
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => errors.push(error),
-                    }
-                }
-                if let Ok(found) = &mut found {
-                    found.sort_by_key(|s| std::cmp::Reverse(s.updated));
-                }
-                (found, errors)
-            },
-            move |this, (found, errors), window, cx| {
-                for error in errors {
-                    this.notify_session_operation_error(error, window, cx);
-                }
-                let found = match found {
-                    Ok(found) => found,
-                    Err(e) => {
-                        log::warn!("listing agent sessions: {e}");
-                        return;
-                    }
-                };
-                remember_sessions(host_id, found.clone());
-                // Closed, or closed and opened again, since: nothing to update.
-                let Some(view) = view
-                    .upgrade()
-                    .filter(|view| this.search.as_ref() == Some(view))
-                else {
-                    return;
-                };
-                let (sessions, here) = this.search_sessions(found, window, cx);
-                view.update(cx, |view, cx| view.set_sessions(sessions, here, window, cx));
-            },
-        );
-    }
 
     fn on_search_event(
         &mut self,
-        _view: &Entity<SearchView>,
+        view: &Entity<SearchView>,
         ev: &SearchEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.search.owns(view) {
+            return;
+        }
         match ev {
             SearchEvent::Confirm(kind) => {
                 let kind = kind.clone();
@@ -6875,6 +6398,7 @@ impl LyrelApp {
             // Done inside the search, which stays open on the list it was.
             SearchEvent::RunInPlace(kind) => self.run_command(kind.clone(), window, cx),
             SearchEvent::Dismiss => self.close_search(window, cx),
+            SearchEvent::SessionError(error) => self.notify_session_operation_error(error.clone(), window, cx),
             SearchEvent::PreviewTheme(i) => {
                 if let Some(id) = crate::ui::presets::all(cx).get(*i).map(|t| t.id.clone()) {
                     self.preview_preset(&id, window, cx);
@@ -6901,12 +6425,11 @@ impl LyrelApp {
     }
 
     pub(crate) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.search = None;
-        self.search_sub = None;
+        let return_focus = self.search.close(cx);
         // A previewed theme was never persisted: closing the search any way
         // other than confirming the pick puts the old one back.
         self.cancel_preset_preview(window, cx);
-        match self.search_return_focus.take() {
+        match return_focus {
             Some(focus) => window.focus(&focus, cx),
             None => self.focus_active(window, cx),
         }
@@ -8746,7 +8269,7 @@ impl Render for LyrelApp {
                             this.child(el)
                         })
                         .children(self.render_switcher(window, cx))
-                        .when_some(self.search.clone(), |this, search| this.child(search)),
+                        .when_some(self.search.view(), |this, search| this.child(search)),
                 )
                 .child(self.render_status_bar(window, cx));
         let root = Self::with_editor_text_commands(root, cx);
@@ -12643,17 +12166,17 @@ mod unfocused_shortcut_tests {
         vcx.run_until_parked();
         vcx.simulate_keystrokes(&key);
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+        assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
     }
 
     #[gpui_kit::test]
     fn palette_after_blur(cx: &mut TestAppContext) {
-        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_some(), true, cx);
+        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_open(), true, cx);
     }
 
     #[gpui_kit::test]
     fn palette_with_orphan_focus(cx: &mut TestAppContext) {
-        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_some(), false, cx);
+        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_open(), false, cx);
     }
 
     #[gpui_kit::test]
@@ -13308,37 +12831,6 @@ mod hibernate_gpui_tests {
     }
 }
 
-/// What each host's last session scan found: what the Sessions tab shows
-/// while the next scan runs, so it does not open empty.
-static LAST_SESSIONS: std::sync::LazyLock<
-    std::sync::Mutex<
-        std::collections::HashMap<
-            crate::ui::host_ops::HostId,
-            Vec<crate::core::agent_history::PastSession>,
-        >,
-    >,
-> = std::sync::LazyLock::new(Default::default);
-
-fn last_sessions(
-    host: crate::ui::host_ops::HostId,
-) -> Vec<crate::core::agent_history::PastSession> {
-    LAST_SESSIONS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&host)
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn remember_sessions(
-    host: crate::ui::host_ops::HostId,
-    found: Vec<crate::core::agent_history::PastSession>,
-) {
-    LAST_SESSIONS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(host, found);
-}
 
 #[cfg(test)]
 mod spawn_consumer_tests {

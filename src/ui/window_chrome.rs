@@ -78,7 +78,7 @@ impl LyrelApp {
                 .accessibility_label(t(L10nKey::AppMenuSearchEverywhere))
                 .tooltip_with_action(t(L10nKey::AppMenuSearchEverywhere), &TogglePalette, None)
                 .on_click(
-                    cx.listener(|this, _, window, cx| match this.search.is_some() {
+                    cx.listener(|this, _, window, cx| match this.search.is_open() {
                         true => this.close_search(window, cx),
                         false => this.open_search(SearchTab::All, "", window, cx),
                     }),
@@ -426,7 +426,7 @@ mod gpui_tests {
                 (
                     app.left_panel_open(cx),
                     app.right_panel_open(cx),
-                    app.search.is_some(),
+                    app.search.is_open(),
                 )
             });
             vcx.update(|window, cx| {
@@ -441,7 +441,7 @@ mod gpui_tests {
                 (
                     app.left_panel_open(cx),
                     app.right_panel_open(cx),
-                    app.search.is_some(),
+                    app.search.is_open(),
                 )
             });
             let expected = match button {
@@ -705,7 +705,7 @@ mod gpui_tests {
 
             vcx.update(|window, cx| window.click("titlebar-search", cx));
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+            assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
             vcx.simulate_keystrokes(&first_tab_key);
             vcx.simulate_keystrokes("q");
             settle(&mut vcx);
@@ -714,7 +714,7 @@ mod gpui_tests {
             assert_eq!(input(&mut streams[1]), None);
             vcx.simulate_keystrokes("escape");
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+            assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
             assert!(terminal_focused(&app, &mut vcx));
             vcx.simulate_keystrokes("y");
             settle(&mut vcx);
@@ -755,11 +755,11 @@ mod gpui_tests {
             let before = editor.read_with(&vcx, |editor, _| editor.value().to_string());
             vcx.update(|window, cx| window.click("titlebar-search", cx));
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+            assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
             vcx.simulate_keystrokes("q");
             vcx.simulate_keystrokes("escape");
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+            assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
             assert_eq!(
                 editor.read_with(&vcx, |editor, _| editor.value().to_string()),
                 before
