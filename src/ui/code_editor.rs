@@ -34,6 +34,10 @@ pub(crate) mod outline;
 mod problems;
 mod split;
 mod strip;
+pub(crate) mod saving;
+use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
+#[cfg(test)]
+mod test_host;
 
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 
@@ -114,7 +118,6 @@ pub(crate) struct OpenFile {
     disk_mtime: Option<MTime>,
     saving: bool,
     save_pending: bool,
-    save_then_close: bool,
     reload_seq: u64,
     pub(crate) conflict: Option<DiskConflict>,
     pub(crate) preview: bool,
@@ -264,52 +267,13 @@ impl TabCode {
     }
 }
 
-/// What a question about unsaved files was standing in the way of.
-#[derive(Clone, Debug)]
-pub(crate) enum AfterUnsaved {
-    CloseTab(TabId),
-    /// Take these files out of that tab's strip — Close Others and Close to
-    /// the Right.
-    CloseFiles(TabId, Vec<BufferId>),
-    ClosePane(gpui_kit::EntityId),
-    CloseWindow,
-    Quit,
-}
-
-/// Saves that something is waiting on: once every buffer in `ids` has landed
-/// clean, `then` runs. Any one of them failing drops the wait, and with it
-/// the close it would have carried out.
-struct SaveWaiter {
-    ids: Vec<BufferId>,
-    then: AfterUnsaved,
-}
-
-enum BarKind {
-    GoToLine,
-    SaveAs {
-        id: BufferId,
-        then_close: bool,
-    },
-    /// A new name for the symbol at `offset` (`ui::lsp`).
-    Rename {
-        id: BufferId,
-        offset: usize,
-    },
-}
-
-/// The one-line prompt that sits above the text: go to line, or name a file
-/// to save to on a machine the native save panel cannot browse.
-struct EditorBar {
-    kind: BarKind,
-    input: Entity<InputState>,
-    _sub: Subscription,
-}
 
 pub(crate) struct EditorPanelState {
     buffers: buffers::EditorBuffers,
     bar: Option<EditorBar>,
     waiters: Vec<SaveWaiter>,
     unsaved_prompt_open: bool,
+    prompt_epoch: u64,
     /// Tabs whose remembered files have been reopened (or found to have none).
     restored: HashSet<TabId>,
     /// What was last written to the session store for each tab, so an
@@ -339,6 +303,7 @@ impl EditorPanelState {
             bar: None,
             waiters: Vec::new(),
             unsaved_prompt_open: false,
+            prompt_epoch: 0,
             restored: HashSet::new(),
             recorded: HashMap::new(),
             nav: nav::EditorNav::new(cx),
@@ -689,42 +654,6 @@ fn selected_lines(
 }
 
 
-/// How a save attempt ended, as reported back from the host's thread.
-enum SaveOutcome {
-    Saved(Option<MTime>),
-    /// The file changed on disk since the buffer last matched it; nothing
-    /// was written.
-    Conflict(Option<MTime>),
-    Failed(std::io::Error),
-}
-
-/// Writes `bytes` to `target`, first making sure nothing else wrote it since
-/// the buffer last matched it. `expect` is `None` to write regardless — a
-/// Save As, an Overwrite the user chose, or a file being recreated.
-///
-/// This is also the only external-change detection a host without a watcher
-/// gets: an SFTP buffer never hears about someone else's edit until now.
-fn write_checked(
-    h: &dyn lyrel_core::host::Host,
-    target: &Path,
-    bytes: &[u8],
-    expect: Option<Option<MTime>>,
-) -> SaveOutcome {
-    if let Some(expected) = expect {
-        match h.stat(target) {
-            Ok(meta) if meta.mtime != expected => return SaveOutcome::Conflict(meta.mtime),
-            Ok(_) => {}
-            // Gone since it was opened: saving puts it back, which is what a
-            // save of a deleted file means.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return SaveOutcome::Failed(e),
-        }
-    }
-    match h.write_file(target, bytes) {
-        Ok(meta) => SaveOutcome::Saved(meta.mtime),
-        Err(e) => SaveOutcome::Failed(e),
-    }
-}
 
 impl LyrelApp {
     pub(crate) fn tab_code(&self) -> Option<&TabCode> {
@@ -807,6 +736,7 @@ impl LyrelApp {
 
     pub(crate) fn editor_context_changed(&mut self) {
         self.editor.buffers.invalidate_context();
+        self.editor.retire_prompts();
     }
 
     fn editor_rebuild_watcher(&mut self, cx: &mut Context<Self>) {
@@ -1004,7 +934,7 @@ impl LyrelApp {
         code.show(id);
         code.visible = true;
         if tab_ix == self.tabs.active_index() {
-            self.editor.bar = None;
+            self.editor.dismiss_bar();
             self.focus_editor(window, cx);
         }
         cx.notify();
@@ -1166,7 +1096,7 @@ impl LyrelApp {
         if code.visible {
             code.visible = false;
             self.editor.had_focus = None;
-            self.editor.bar = None;
+            self.editor.dismiss_bar();
             self.file_tree.editing = None;
             self.focus_active(window, cx);
             cx.notify();
@@ -1241,7 +1171,7 @@ impl LyrelApp {
             return;
         }
         code.active = pos;
-        self.editor.bar = None;
+        self.editor.dismiss_bar();
         self.focus_editor(window, cx);
         cx.notify();
     }
@@ -1438,378 +1368,76 @@ impl LyrelApp {
     pub(crate) fn editor_panel_has_focus(&self, window: &Window, cx: &Context<Self>) -> bool {
         self.editor_has_focus(window, cx)
             || (self.code_panel_visible() && self.editor.empty_focus.is_focused(window))
-            || self.editor.bar.as_ref().is_some_and(|b| {
-                b.input
-                    .read(cx)
-                    .focus_handle(cx)
-                    .contains_focused(window, cx)
-            })
+            || self.editor.bar_has_focus(window, cx)
     }
 
     pub(crate) fn editor_save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
             return;
         };
-        self.editor_save_file(id, false, false, window, cx);
+        self.editor_save_file(id, false, window, cx);
     }
 
     pub(crate) fn editor_save_as_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
             return;
         };
-        self.editor_save_as(id, false, window, cx);
+        self.editor_save_as(id, window, cx);
     }
 
-    /// Applies the file's `.editorconfig` save rules — trailing whitespace,
-    /// final newline — to the buffer itself, before it is written, so what is
-    /// on screen is what is on disk.
-    fn apply_save_rules(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(f) = self.editor.buffers.get(id) else {
-            return;
-        };
-        let text = f.input.read(cx).text().to_string();
-        if let Some(fixed) = editor_text::apply_save_rules(&text, &f.config) {
-            let input = f.input.clone();
-            replace_buffer_text(&input, &fixed, window, cx);
+    fn editor_bridge() -> EditorBridge<Self> {
+        EditorBridge {
+            access: |app| &mut app.editor,
+            event: Self::editor_event,
         }
     }
 
-    fn editor_save_file(
-        &mut self,
-        id: BufferId,
-        then_close: bool,
-        force: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(f) = self.editor.buffers.get_mut(id) else {
-            return;
-        };
-        if f.untitled.is_some() {
-            self.editor_save_as(id, then_close, window, cx);
-            return;
-        }
-        f.save_then_close |= then_close;
-        if f.saving {
-            f.save_pending = true;
-            return;
-        }
-        self.apply_save_rules(id, window, cx);
-        let Some(f) = self.editor.buffers.get_mut(id) else {
-            return;
-        };
-        let text = f.input.read(cx).text().to_string();
-        // Pasted text can carry its own `\r\n`; the buffer's line ending is
-        // the file's, and encoding adds it back uniformly.
-        let text = if text.contains("\r\n") {
-            text.replace("\r\n", "\n")
-        } else {
-            text
-        };
-        let bytes = match editor_text::encode(&text, &f.format) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                self.editor_offer_utf8(id, then_close, e.unmappable, window, cx);
-                return;
+    fn editor_save_root(&self) -> PathBuf {
+        self.tab_code().and_then(|code| code.roots.first().cloned()).unwrap_or_default()
+    }
+
+    fn editor_save_file(&mut self, id: BufferId, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let root = self.editor_save_root();
+        self.editor.save(id, force, &root, window, cx, Self::editor_bridge());
+    }
+
+    fn editor_save_as(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
+        let root = self.editor_save_root();
+        self.editor.save_as(id, &root, window, cx, Self::editor_bridge());
+    }
+
+    fn editor_event(&mut self, event: EditorEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            EditorEvent::Saved { id, host, directory } => {
+                self.editor_buffer_changed(id, cx);
+                self.lsp_buffer_saved(id, cx);
+                self.editor_gutter_refetch(id);
+                if let Some(directory) = directory { self.scm_invalidate_cwd(host, &directory, cx); }
             }
-        };
-        let Some(f) = self.editor.buffers.get_mut(id) else {
-            return;
-        };
-        f.saving = true;
-        let expect = match (force, f.conflict) {
-            (true, _) | (_, Some(DiskConflict::Deleted)) => None,
-            _ => Some(f.disk_mtime),
-        };
-        let written = Fingerprint::of_str(&text);
-        let format = f.format;
-        let host = f.host.clone();
-        let target = f.path.clone();
-        let host_id = host.id();
-        let saved_in = target.parent().map(Path::to_path_buf);
-        HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| write_checked(h, &target, &bytes, expect),
-            move |app, outcome: SaveOutcome, window, cx| {
-                let Some(f) = app.editor.buffers.get_mut(id) else {
-                    return;
-                };
-                f.saving = false;
-                let pending = std::mem::take(&mut f.save_pending);
-                match outcome {
-                    SaveOutcome::Saved(mtime) => {
-                        f.disk_mtime = mtime;
-                        f.saved = written;
-                        f.saved_format = format;
-                        f.conflict = None;
-                        app.editor_note_edit(id, cx);
-                        app.lsp_buffer_saved(id, cx);
-                        app.editor_gutter_refetch(id);
-                        // A save is a working-tree edit the `.git` watch cannot
-                        // see, and the file tree only sees it while it happens
-                        // to be showing that directory.
-                        if let Some(dir) = &saved_in {
-                            app.scm_invalidate_cwd(host_id, dir, cx);
-                        }
-                        if pending {
-                            app.editor_save_file(id, false, false, window, cx);
-                            return;
-                        }
-                        let close = app.editor.buffers.get_mut(id)
-                            .is_some_and(|f| std::mem::take(&mut f.save_then_close) && !f.dirty);
-                        if close {
-                            app.editor_drop_buffer(id, cx);
-                        }
-                        app.editor_saves_landed(window, cx);
-                    }
-                    SaveOutcome::Conflict(observed) => {
-                        f.save_then_close = false;
-                        f.conflict = Some(DiskConflict::Changed(observed));
-                        app.editor_saves_failed(id);
-                        app.editor_ask_overwrite(id, window, cx);
-                    }
-                    SaveOutcome::Failed(e) => {
-                        f.save_then_close = false;
-                        // "Save failed" did not say which file, and with more
-                        // than one editor tab open that is the first thing you
-                        // need to know.
-                        let context = t_fmt(L10nKey::EditorSaveFailed, &[("name", &f.label())]);
-                        HostOps::notify_err(window, cx, &context, &e);
-                        app.editor_saves_failed(id);
-                    }
+            EditorEvent::IdentityChanged => self.editor_rebuild_watcher(cx),
+            EditorEvent::Continue(intent) => self.editor_continue(intent, window, cx),
+            EditorEvent::Discard(ids) => {
+                for id in ids { self.editor_drop_buffer(id, cx); }
+            }
+            EditorEvent::Focus => self.focus_editor(window, cx),
+            EditorEvent::GoToLine { id, line, column } => {
+                self.focus_editor(window, cx);
+                if let Some(file) = self.editor.buffers.get(id) {
+                    let input = file.input.clone();
+                    let lines = input.read(cx).text().lines_len().max(1) as u32;
+                    place_cursor(input, Position { line: line.min(lines) - 1, character: column - 1 }, CURSOR_SCROLL_ATTEMPTS, window, cx);
                 }
-                cx.notify();
-            },
-        );
+            }
+            EditorEvent::Rename { id, offset, name } => {
+                self.focus_editor(window, cx);
+                self.lsp_rename(id, offset, name, window, cx);
+            }
+        }
         cx.notify();
     }
 
-    /// Asked when a save finds the file changed underneath it.
-    fn editor_ask_overwrite(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(f) = self.editor.buffers.get(id) else {
-            return;
-        };
-        let name = f.label();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t_fmt(L10nKey::EditorSaveConflictTitle, &[("name", &name)]),
-            Some(t(L10nKey::EditorSaveConflictBody)),
-            &crate::ui::confirm_answers(t(L10nKey::EditorOverwrite), t(L10nKey::Cancel)),
-            cx,
-        );
-        cx.spawn_in(window, async move |app, cx| {
-            if !matches!(answer.await, Ok(0)) {
-                return;
-            }
-            let _ = app.update_in(cx, |app, window, cx| {
-                app.editor_save_file(id, false, true, window, cx);
-            });
-        })
-        .detach();
-    }
-
-    /// Asked when the text holds a character the file's encoding cannot.
-    fn editor_offer_utf8(
-        &mut self,
-        id: BufferId,
-        then_close: bool,
-        unmappable: char,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(f) = self.editor.buffers.get_mut(id) else {
-            return;
-        };
-        f.save_then_close = false;
-        let name = f.label();
-        let encoding = f.format.encoding_label();
-        self.editor_saves_failed(id);
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t_fmt(
-                L10nKey::EditorEncodeFailedTitle,
-                &[("name", &name), ("encoding", encoding)],
-            ),
-            Some(&t_fmt(
-                L10nKey::EditorEncodeFailedBody,
-                &[("ch", &unmappable.to_string()), ("encoding", encoding)],
-            )),
-            &crate::ui::confirm_answers(t(L10nKey::EditorSaveAsUtf8), t(L10nKey::Cancel)),
-            cx,
-        );
-        cx.spawn_in(window, async move |app, cx| {
-            if !matches!(answer.await, Ok(0)) {
-                return;
-            }
-            let _ = app.update_in(cx, |app, window, cx| {
-                if let Some(f) = app.editor.buffers.get_mut(id) {
-                    f.format = TextFormat {
-                        line_ending: f.format.line_ending,
-                        ..TextFormat::default()
-                    };
-                }
-                app.editor_save_file(id, then_close, false, window, cx);
-            });
-        })
-        .detach();
-    }
-
-    /// Save As: the native panel for a file on this machine, the path bar for
-    /// one on a machine the panel cannot browse.
-    fn editor_save_as(
-        &mut self,
-        id: BufferId,
-        then_close: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(f) = self.editor.buffers.get(id) else {
-            return;
-        };
-        let suggested = if f.untitled.is_some() {
-            PathBuf::from(format!("{}.txt", f.label()))
-        } else {
-            PathBuf::from(f.label().to_string())
-        };
-        let dir = match f.path.parent() {
-            Some(dir) if f.untitled.is_none() => dir.to_path_buf(),
-            _ => self
-                .tab_code()
-                .and_then(|c| c.roots.first().cloned())
-                .unwrap_or_default(),
-        };
-        if !f.host.id().is_local() {
-            let start = if dir.as_os_str().is_empty() {
-                suggested
-            } else {
-                f.host.join(&dir, &suggested.to_string_lossy())
-            };
-            self.editor_open_bar(
-                BarKind::SaveAs { id, then_close },
-                start.display().to_string(),
-                window,
-                cx,
-            );
-            return;
-        }
-        let dir = if dir.as_os_str().is_empty() {
-            dirs_home()
-        } else {
-            dir
-        };
-        let rx = cx.prompt_for_new_path(&dir, suggested.to_str());
-        cx.spawn_in(window, async move |app, cx| {
-            let Ok(Ok(Some(path))) = rx.await else {
-                // Cancelled: a close that was waiting for this save must not
-                // go ahead on some later, unrelated one.
-                let _ = app.update(cx, |app, _cx| app.editor_saves_failed(id));
-                return;
-            };
-            let _ = app.update_in(cx, |app, window, cx| {
-                app.editor_save_to(id, path, then_close, window, cx);
-            });
-        })
-        .detach();
-    }
-
-    /// Writes a buffer to a new path and points it there from then on.
-    fn editor_save_to(
-        &mut self,
-        id: BufferId,
-        path: PathBuf,
-        then_close: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(f) = self.editor.buffers.get(id) else {
-            return;
-        };
-        let host = f.host.clone();
-        if let Some(other) = self.editor.buffers.at(host.id(), &path)
-            && other != id
-        {
-            window.notify_app(
-                t_fmt(
-                    L10nKey::EditorAlreadyOpen,
-                    &[("path", &path.display().to_string())],
-                ),
-                cx,
-            );
-            return;
-        }
-        if let Some(f) = self.editor.buffers.get_mut(id) {
-            f.path = path.clone();
-            f.untitled = None;
-            f.conflict = None;
-            // A new file keeps the format the buffer had; its own
-            // `.editorconfig` is read the next time it opens.
-            let language = language_for_path(&path);
-            f.input
-                .update(cx, |st, cx| st.set_highlighter(language, cx));
-        }
-        self.editor_rebuild_watcher(cx);
-        // Written as a save to a file already known to be the one intended:
-        // the native panel has asked about replacing an existing file, and
-        // the path bar asks before it gets here.
-        self.editor_save_file(id, then_close, true, window, cx);
-    }
-
-    fn editor_open_bar(
-        &mut self,
-        kind: BarKind,
-        initial: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let placeholder = match kind {
-            BarKind::GoToLine => {
-                let total = self
-                    .active_buffer()
-                    .map(|f| f.input.read(cx).text().lines_len())
-                    .unwrap_or(1);
-                t_fmt(
-                    L10nKey::EditorGoToLinePlaceholder,
-                    &[("total", &total.to_string())],
-                )
-            }
-            BarKind::SaveAs { .. } => t(L10nKey::EditorSaveAsPlaceholder).to_string(),
-            BarKind::Rename { .. } => t_fmt(L10nKey::LspRenamePlaceholder, &[("name", &initial)]),
-        };
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(placeholder)
-                .default_value(initial)
-        });
-        let sub = cx.subscribe_in(
-            &input,
-            window,
-            |this: &mut LyrelApp, _input, ev, window, cx| {
-                match ev {
-                    InputEvent::PressEnter { .. } => this.editor_submit_bar(window, cx),
-                    // Clicking away from a go-to-line box is how you say never
-                    // mind. A Save As is left up: it may be half-typed.
-                    InputEvent::Blur => {
-                        if matches!(
-                            this.editor.bar.as_ref().map(|b| &b.kind),
-                            Some(BarKind::GoToLine | BarKind::Rename { .. })
-                        ) {
-                            this.editor.bar = None;
-                            cx.notify();
-                        }
-                    }
-                    _ => {}
-                }
-            },
-        );
-        input.update(cx, |st, cx| st.focus(window, cx));
-        self.editor.bar = Some(EditorBar {
-            kind,
-            input,
-            _sub: sub,
-        });
-        cx.notify();
+    fn editor_open_bar(&mut self, kind: BarKind, initial: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.open_bar(kind, initial, window, cx, Self::editor_bridge());
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1822,100 +1450,16 @@ impl LyrelApp {
             // There is no line to land on in the rendered view.
             f.preview = false;
         }
-        self.editor_open_bar(BarKind::GoToLine, String::new(), window, cx);
+        let id = self.tab_code().and_then(TabCode::active_id).unwrap();
+        self.editor_open_bar(BarKind::GoToLine { id }, String::new(), window, cx);
     }
 
     fn editor_close_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(BarKind::SaveAs { id, .. }) = self.editor.bar.as_ref().map(|b| &b.kind) {
-            let id = *id;
-            self.editor_saves_failed(id);
-        }
-        self.editor.bar = None;
+        self.editor.dismiss_bar();
         self.focus_editor(window, cx);
         cx.notify();
     }
 
-    fn editor_submit_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bar) = self.editor.bar.as_ref() else {
-            return;
-        };
-        let text = bar.input.read(cx).value().to_string();
-        match bar.kind {
-            BarKind::GoToLine => {
-                let Some((line, column)) = parse_line_target(&text) else {
-                    return;
-                };
-                self.editor_close_bar(window, cx);
-                let Some(f) = self.active_buffer() else {
-                    return;
-                };
-                let input = f.input.clone();
-                let lines = input.read(cx).text().lines_len().max(1) as u32;
-                let position = Position {
-                    line: line.min(lines) - 1,
-                    character: column - 1,
-                };
-                place_cursor(input, position, CURSOR_SCROLL_ATTEMPTS, window, cx);
-            }
-            BarKind::Rename { id, offset } => {
-                let name = text.trim().to_string();
-                if name.is_empty() {
-                    return;
-                }
-                self.editor_close_bar(window, cx);
-                self.lsp_rename(id, offset, name, window, cx);
-            }
-            BarKind::SaveAs { id, then_close } => {
-                let path = PathBuf::from(text.trim());
-                if path.as_os_str().is_empty() {
-                    return;
-                }
-                let Some(host) = self.editor.buffers.get(id).map(|f| f.host.clone()) else {
-                    return;
-                };
-                if !host.is_absolute(&path) {
-                    return;
-                }
-                self.editor.bar = None;
-                cx.notify();
-                let check = path.clone();
-                HostOps::run_in(
-                    host,
-                    window,
-                    cx,
-                    move |h| h.exists(&check),
-                    move |app, exists: bool, window, cx| {
-                        if !exists {
-                            app.editor_save_to(id, path, then_close, window, cx);
-                            return;
-                        }
-                        let answer = window.prompt(
-                            PromptLevel::Warning,
-                            &t_fmt(
-                                L10nKey::EditorReplaceExisting,
-                                &[("path", &path.display().to_string())],
-                            ),
-                            None,
-                            &crate::ui::confirm_answers(
-                                t(L10nKey::EditorReplace),
-                                t(L10nKey::Cancel),
-                            ),
-                            cx,
-                        );
-                        cx.spawn_in(window, async move |app, cx| {
-                            if !matches!(answer.await, Ok(0)) {
-                                return;
-                            }
-                            let _ = app.update_in(cx, |app, window, cx| {
-                                app.editor_save_to(id, path, then_close, window, cx);
-                            });
-                        })
-                        .detach();
-                    },
-                );
-            }
-        }
-    }
 
     /// Closes the file at `pos` in the active tab's strip. Asks first only
     /// when this is the last tab showing a buffer with unsaved changes.
@@ -1936,34 +1480,9 @@ impl LyrelApp {
             self.editor_remove_from_tab(tab_ix, id, cx);
             return;
         }
-        let name = f.label();
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t_fmt(L10nKey::EditorUnsavedChanges, &[("name", &name)]),
-            None,
-            // Cancel sits between Save and Discard on purpose. The platform
-            // renders the first button as the default and lays the rest out
-            // beside it, so Discard was landing directly next to the key that
-            // Return presses. Apple separates them for exactly this reason.
-            // Three answers, so the shared helper does not fit: Save keeps
-            // index 0 (rightmost, Return), Cancel takes Escape, and Discard
-            // sits on the far left where nothing lands by reflex.
-            &[
-                gpui_kit::PromptButton::ok(t(L10nKey::Save)),
-                gpui_kit::PromptButton::cancel(t(L10nKey::Cancel)),
-                gpui_kit::PromptButton::ok(t(L10nKey::EditorDiscard)),
-            ],
-            cx,
-        );
-        cx.spawn_in(window, async move |app, cx| {
-            let Ok(choice) = answer.await else { return };
-            let _ = app.update_in(cx, |app, window, cx| match choice {
-                0 => app.editor_save_file(id, true, false, window, cx),
-                2 => app.editor_drop_buffer(id, cx),
-                _ => {}
-            });
-        })
-        .detach();
+        let tab = self.tabs.get(tab_ix).unwrap().id();
+        let left = self.tab_code().unwrap().focus_is_left();
+        self.editor_guard_unsaved(vec![id], AfterUnsaved::CloseFiles { tab, ids: vec![id], left }, window, cx);
     }
 
     /// Closes the file with this buffer in the front tab's strip, wherever
@@ -1997,7 +1516,7 @@ impl LyrelApp {
             .collect();
         if self.editor_guard_unsaved(
             unsaved,
-            AfterUnsaved::CloseFiles(tab, ids.clone()),
+            AfterUnsaved::CloseFiles { tab, ids: ids.clone(), left: self.tab_code().unwrap().focus_is_left() },
             window,
             cx,
         ) {
@@ -2240,7 +1759,7 @@ impl LyrelApp {
         if code.files.is_empty() {
             code.visible = false;
             self.editor.had_focus = None;
-            self.editor.bar = None;
+            self.editor.dismiss_bar();
             self.file_tree.editing = None;
             self.focus_active(window, cx);
             cx.notify();
@@ -2269,20 +1788,12 @@ impl LyrelApp {
 
     /// Forgets a buffer everywhere, edits and all.
     fn editor_drop_buffer(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        // Whatever was waiting on this buffer to be saved is not going to
-        // see that happen now.
-        self.editor_saves_failed(id);
+        self.editor.forget_saved_buffer(id);
         for code in self.tabs.iter_mut().filter_map(|t| t.code.as_deref_mut()) {
             code.forget_everywhere(id);
         }
         self.editor.buffers.remove(id);
         self.editor.nav.forget_buffer(id);
-        if matches!(
-            self.editor.bar.as_ref().map(|b| &b.kind),
-            Some(BarKind::SaveAs { id: bar_id, .. }) if *bar_id == id
-        ) {
-            self.editor.bar = None;
-        }
         self.editor_rebuild_watcher(cx);
         cx.notify();
     }
@@ -2300,46 +1811,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if ids.is_empty() {
-            return false;
-        }
-        if self.editor.unsaved_prompt_open {
-            return true;
-        }
-        self.editor.unsaved_prompt_open = true;
-        let names: Vec<SharedString> = ids
-            .iter()
-            .filter_map(|id| self.editor.buffers.get(*id).map(OpenFile::label))
-            .collect();
-        let title = match names.as_slice() {
-            [one] => t_fmt(L10nKey::EditorUnsavedChanges, &[("name", one)]),
-            _ => t_fmt(
-                L10nKey::EditorUnsavedChangesMany,
-                &[("count", &names.len().to_string())],
-            ),
-        };
-        let mut body: Vec<String> = names.iter().take(8).map(|n| n.to_string()).collect();
-        if names.len() > 8 {
-            body.push("…".into());
-        }
-        let body = (names.len() > 1).then(|| body.join("\n"));
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            body.as_deref(),
-            // The same arrangement as closing a single file, and for the same
-            // reason: Discard as far from Return as the dialog allows.
-            &[
-                gpui_kit::PromptButton::ok(if names.len() > 1 {
-                    t(L10nKey::EditorSaveAll)
-                } else {
-                    t(L10nKey::Save)
-                }),
-                gpui_kit::PromptButton::cancel(t(L10nKey::Cancel)),
-                gpui_kit::PromptButton::ok(t(L10nKey::EditorDiscard)),
-            ],
-            cx,
-        );
+        if ids.is_empty() { return false; }
         // Showing it is part of the question: the file being asked about may
         // be behind the terminal, in a tab that is not the one in front.
         if let Some(tab_ix) = ids.first().and_then(|id| {
@@ -2358,55 +1830,8 @@ impl LyrelApp {
             code.active = pos;
             code.visible = true;
         }
-        cx.spawn_in(window, async move |app, cx| {
-            let choice = answer.await;
-            let _ = app.update_in(cx, |app, window, cx| {
-                app.editor.unsaved_prompt_open = false;
-                match choice {
-                    Ok(0) => {
-                        app.editor.waiters.push(SaveWaiter {
-                            ids: ids.clone(),
-                            then,
-                        });
-                        for id in ids {
-                            app.editor_save_file(id, false, false, window, cx);
-                        }
-                    }
-                    Ok(2) => {
-                        for id in ids {
-                            app.editor_drop_buffer(id, cx);
-                        }
-                        app.editor_continue(then, window, cx);
-                    }
-                    _ => cx.notify(),
-                }
-            });
-        })
-        .detach();
-        true
-    }
-
-    /// Runs whatever close was waiting on saves that have now all landed.
-    fn editor_saves_landed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (ready, waiting): (Vec<SaveWaiter>, Vec<SaveWaiter>) =
-            std::mem::take(&mut self.editor.waiters)
-                .into_iter()
-                .partition(|w| {
-                    w.ids.iter().all(|id| {
-                        self.editor.buffers.get(*id)
-                            .is_none_or(|f| !f.dirty && !f.saving && f.untitled.is_none())
-                    })
-                });
-        self.editor.waiters = waiting;
-        for w in ready {
-            self.editor_continue(w.then, window, cx);
-        }
-    }
-
-    /// A save that was part of a close did not happen, so neither does the
-    /// close: whatever it would have thrown away is still unsaved.
-    fn editor_saves_failed(&mut self, id: BufferId) {
-        self.editor.waiters.retain(|w| !w.ids.contains(&id));
+        let root = self.editor_save_root();
+        self.editor.guard_unsaved(ids, then, root, window, cx, Self::editor_bridge())
     }
 
     fn editor_continue(&mut self, then: AfterUnsaved, window: &mut Window, cx: &mut Context<Self>) {
@@ -2416,10 +1841,13 @@ impl LyrelApp {
                     self.close_tab(ix, window, cx);
                 }
             }
-            AfterUnsaved::CloseFiles(tab, ids) => {
+            AfterUnsaved::CloseFiles { tab, ids, left } => {
                 if let Some(ix) = self.tab_index_of(tab) {
                     for id in ids {
-                        self.editor_remove_from_tab(ix, id, cx);
+                        if let Some(code) = self.tabs.get_mut(ix).and_then(|tab| tab.code.as_deref_mut()) {
+                            code.close_in_side(id, left);
+                        }
+                        if self.buffer_refs(id) == 0 { self.editor_drop_buffer(id, cx); }
                     }
                 }
             }
@@ -2831,7 +2259,7 @@ impl LyrelApp {
                         }
                         // Escape in the go-to-line or Save As box dismisses the
                         // box, not the whole editor.
-                        if this.editor.bar.is_some() {
+                        if this.editor.has_bar() {
                             this.editor_close_bar(window, cx);
                             cx.stop_propagation();
                             return;
@@ -3145,37 +2573,7 @@ impl LyrelApp {
     }
 
     fn render_editor_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let bar = self.editor.bar.as_ref()?;
-        let label = match bar.kind {
-            BarKind::GoToLine => t(L10nKey::EditorGoToLine),
-            BarKind::SaveAs { .. } => t(L10nKey::EditorSaveAs),
-            BarKind::Rename { .. } => t(L10nKey::LspRenameSymbol),
-        };
-        Some(
-            h_flex()
-                .flex_none()
-                .w_full()
-                .items_center()
-                .gap_2()
-                .px(px(crate::ui::window_chrome::CONTENT_INSET))
-                .py_1()
-                .border_b_1()
-                .border_color(cx.theme().sidebar_border)
-                .text_sm()
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(Input::new(&bar.input).small()),
-                )
-                .into_any_element(),
-        )
+        self.editor.render_bar(cx)
     }
 
     pub(crate) fn render_document_status(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -3407,7 +2805,7 @@ impl LyrelApp {
                     rungs,
                     cx,
                     cx.listener(move |this, _, window, cx| {
-                        this.editor_save_file(id, false, true, window, cx);
+                        this.editor_save_file(id, true, window, cx);
                     }),
                 ))
                 .into_any_element(),
@@ -3779,71 +3177,6 @@ mod close_gpui_tests {
         }
     }
 
-    #[gpui_kit::test]
-    fn global_status_navigates_and_saves_the_displayed_document(cx: &mut TestAppContext) {
-        use crate::core::actions::{EditorNewFile, EditorSaveAs, ToggleDocumentFill};
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        vcx.simulate_resize(gpui_kit::size(px(1600.), px(900.)));
-        vcx.dispatch_action(EditorNewFile);
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.input("one\ntwo\nthree", cx));
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.click("status-cursor", cx));
-        settle(&mut vcx);
-        vcx.update(|window, cx| {
-            window.press("secondary-a", cx);
-            window.input("2:2", cx);
-            window.press("enter", cx);
-        });
-        settle(&mut vcx);
-        app.read_with(&vcx, |app, cx| {
-            let pos = app
-                .active_buffer()
-                .unwrap()
-                .input
-                .read(cx)
-                .cursor_position();
-            assert_eq!((pos.line, pos.character), (1, 1));
-        });
-        vcx.update(|window, cx| window.click("status-cursor", cx));
-        settle(&mut vcx);
-        vcx.simulate_keystrokes("escape");
-        settle(&mut vcx);
-        assert!(app.update_in(&mut vcx, |app, window, cx| {
-            app.code_panel_visible() && app.editor_has_focus(window, cx)
-        }));
-        for _ in 0..2 {
-            vcx.dispatch_action(ToggleDocumentFill);
-            settle(&mut vcx);
-            vcx.update(|window, cx| {
-                let cursor = window.find("status-cursor").bounds();
-                let global = window.find("workbench-status").bounds();
-                assert!(cursor.top() >= global.top() && cursor.bottom() <= global.bottom());
-                assert_eq!(window.find_all("status-cursor").len(), 1);
-                window.click("status-wrap", cx);
-            });
-            settle(&mut vcx);
-            assert!(app.update_in(&mut vcx, |app, window, cx| app.editor_has_focus(window, cx)));
-        }
-        // The line-ending control changes the real save output, not just its label.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("status.txt");
-        vcx.update(|window, cx| window.click("status-eol", cx));
-        settle(&mut vcx);
-        vcx.dispatch_action(EditorSaveAs);
-        settle(&mut vcx);
-        cx.simulate_new_path_selection(|_| Some(path.clone()));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !path.exists() || app.read_with(&vcx, |app, _| app.active_buffer().unwrap().saving) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the document save did not finish"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            settle(&mut vcx);
-        }
-        assert_eq!(std::fs::read(&path).unwrap(), b"one\r\ntwo\r\nthree");
-    }
 
     #[gpui_kit::test]
     fn docked_status_follows_terminal_focus_and_recovers_document_actions(cx: &mut TestAppContext) {

@@ -2,68 +2,10 @@ use super::*;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use crate::ui::app::test_window::harness_with_tabs;
-use lyrel_core::host::{ContentLimits, ContentQuery, ContentResults, Entry, Host, Meta, Output, SearchHit};
-use std::io;
-use std::sync::{Mutex, atomic::{AtomicBool, Ordering}, mpsc};
+use super::super::test_host::FileHost;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-/// Real filesystem adapter with a distinct Host identity and one controllable
-/// read. Only scheduling is substituted; bytes, metadata and canonicalization
-/// still go through LocalHost, as in the existing settings Host fixtures.
-struct FileHost {
-    inner: SharedHost,
-    id: HostId,
-    gate: Mutex<Option<mpsc::Receiver<()>>>,
-    entered: Arc<AtomicBool>,
-}
-
-impl FileHost {
-    fn new(id: HostId) -> Arc<Self> {
-        Arc::new(Self {
-            inner: lyrel_core::host::local::LocalHost::new(), id,
-            gate: Mutex::new(None), entered: Arc::new(AtomicBool::new(false)),
-        })
-    }
-
-    fn pause_next_read(&self) -> mpsc::Sender<()> {
-        let (tx, rx) = mpsc::channel();
-        self.entered.store(false, Ordering::SeqCst);
-        *self.gate.lock().unwrap() = Some(rx);
-        tx
-    }
-}
-
-impl Host for FileHost {
-    fn id(&self) -> HostId { self.id }
-    fn separator(&self) -> char { self.inner.separator() }
-    fn is_absolute(&self, p: &Path) -> bool { self.inner.is_absolute(p) }
-    fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> { self.inner.read_dir(p, root) }
-    fn stat(&self, p: &Path) -> io::Result<Meta> { self.inner.stat(p) }
-    fn read_file(&self, p: &Path, max: u64) -> io::Result<Vec<u8>> {
-        let gate = self.gate.lock().unwrap().take();
-        if let Some(gate) = gate {
-            self.entered.store(true, Ordering::SeqCst);
-            gate.recv_timeout(Duration::from_secs(10)).map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
-        }
-        self.inner.read_file(p, max)
-    }
-    fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> { self.inner.canonicalize(p) }
-    fn search(&self, roots: &[PathBuf], query: &str, limit: usize, dirs: usize, hidden: bool) -> io::Result<Vec<SearchHit>> {
-        self.inner.search(roots, query, limit, dirs, hidden)
-    }
-    fn search_content(&self, roots: &[PathBuf], query: &ContentQuery, limits: &ContentLimits) -> io::Result<ContentResults> {
-        self.inner.search_content(roots, query, limits)
-    }
-    fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> { self.inner.write_file(p, bytes) }
-    fn create_file_new(&self, p: &Path) -> io::Result<()> { self.inner.create_file_new(p) }
-    fn create_dir(&self, p: &Path, recursive: bool) -> io::Result<()> { self.inner.create_dir(p, recursive) }
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> { self.inner.rename(from, to) }
-    fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> { self.inner.remove(p, recursive) }
-    fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> { self.inner.repo_root(p) }
-    fn git(&self, p: &Path, args: &[&str]) -> io::Result<Output> { self.inner.git(p, args) }
-    fn shells(&self) -> io::Result<lyrel_core::core::shells::ShellInventory> { self.inner.shells() }
-    fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> { self.inner.watch(dirs) }
-}
 
 fn wait_until(vcx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
