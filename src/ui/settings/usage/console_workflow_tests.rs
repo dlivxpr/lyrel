@@ -7,7 +7,7 @@ fn mimo_manual_cookie_is_validated_before_save_and_failed_replace_preserves_old_
     let dir = tempfile::tempdir().unwrap();
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     install(
         &mut vcx,
         dir.path().join("usage.json"),
@@ -15,7 +15,7 @@ fn mimo_manual_cookie_is_validated_before_save_and_failed_replace_preserves_old_
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down down enter");
@@ -100,7 +100,7 @@ fn mimo_selected_firefox_cookies_query_in_memory_and_rotation_does_not_switch_ac
         INSERT INTO moz_cookies VALUES ('.platform.xiaomimimo.com','api-platform_serviceToken','isolated-browser-session','/',4102444800,'');
         INSERT INTO moz_cookies VALUES ('.xiaomimimo.com','userId','1024','/',4102444800,'');
         INSERT INTO moz_cookies VALUES ('.evil.invalid','userId','9999','/',4102444800,'');").unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -110,7 +110,7 @@ fn mimo_selected_firefox_cookies_query_in_memory_and_rotation_does_not_switch_ac
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down down enter");
@@ -259,7 +259,7 @@ fn stepfun_manual_settings_workflow_sends_real_connect_requests_and_preserves_id
     });
     let dir = tempfile::tempdir().unwrap();
     let vault = Arc::new(InMemoryCredentialStore::new());
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     install(
         &mut vcx,
         dir.path().join("usage.json"),
@@ -267,7 +267,7 @@ fn stepfun_manual_settings_workflow_sends_real_connect_requests_and_preserves_id
         Arc::new(StepFunLoopback(format!("http://{address}"))),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down enter");
@@ -340,7 +340,7 @@ fn stepfun_browser_workflow_reads_webid_from_selected_local_storage_not_cookie_o
             [b"selected-local-id".as_slice()],
         )
         .unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -350,7 +350,7 @@ fn stepfun_browser_workflow_reads_webid_from_selected_local_storage_not_cookie_o
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down enter");
@@ -541,7 +541,7 @@ fn mimo_manual_workflow_uses_real_get_cookie_and_expired_plan_keeps_known_balanc
         requests
     });
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     install(
         &mut vcx,
@@ -550,7 +550,7 @@ fn mimo_manual_workflow_uses_real_get_cookie_and_expired_plan_keeps_known_balanc
         Arc::new(MiMoLoopback(format!("http://{address}"))),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down down enter");

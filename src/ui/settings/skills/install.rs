@@ -66,7 +66,7 @@ impl InstallState {
     pub(super) fn new(
         subs: &mut Vec<Subscription>,
         window: &mut Window,
-        cx: &mut Context<LyrelApp>,
+        cx: &mut Context<SettingsWindow>,
     ) -> Self {
         let mut input = |key| {
             let entity = cx.new(|cx| InputState::new(window, cx).placeholder(t(key)));
@@ -166,7 +166,7 @@ impl InstallState {
         self.review_host = None;
         true
     }
-    pub(super) fn refresh_locale(&self, window: &mut Window, cx: &mut Context<LyrelApp>) {
+    pub(super) fn refresh_locale(&self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
         for (input, key) in [
             (&self.source, L10nKey::SkillsGithubHint),
             (&self.reference, L10nKey::SkillsRefHint),
@@ -201,7 +201,7 @@ fn catalog_error(error: catalog::CatalogError) -> String {
     };
     key.map_or_else(|| error.to_string(), |key| t(key).to_string())
 }
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn cancel_skills_install(
         &mut self,
         window: &mut Window,

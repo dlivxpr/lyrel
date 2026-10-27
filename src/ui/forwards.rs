@@ -11,6 +11,57 @@ use crate::terminal::view::TerminalView;
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, TEXT_MONO};
+use crate::ui::settings::kit::{Tk, fs};
+use gpui_kit::{ElementId, SharedString, Window};
+use std::rc::Rc;
+
+impl LyrelApp {
+    /// The live forward form has no settings popover, so its kind uses a segmented control.
+    fn segmented(
+        &self,
+        id: impl Into<SharedString>,
+        options: &[&str],
+        selected: usize,
+        cx: &mut Context<Self>,
+        on_pick: impl Fn(&mut Self, usize, &mut Window, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
+        let tk = Tk::of(cx);
+        let id: SharedString = id.into();
+        let on_pick = Rc::new(on_pick);
+        h_flex()
+            .id(ElementId::Name(id.clone()))
+            .flex_shrink_0()
+            .p(px(2.))
+            .gap(px(2.))
+            .rounded(px(7.))
+            .bg(tk.k05)
+            .children(options.iter().enumerate().map(|(i, label)| {
+                let active = i == selected;
+                let on_pick = on_pick.clone();
+                h_flex()
+                    .id(ElementId::NamedInteger(id.clone(), i as u64))
+                    .items_center()
+                    .justify_center()
+                    .h(px(22.))
+                    .px(px(10.))
+                    .rounded(px(5.))
+                    .whitespace_nowrap()
+                    .text_size(fs(12.))
+                    .when(active, |s| {
+                        s.bg(tk.chip).shadow(tk.raised()).text_color(tk.fg)
+                    })
+                    .when(!active, |s| {
+                        s.text_color(tk.k5).hover(move |h| h.text_color(tk.fg))
+                    })
+                    .child(label.to_string())
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        on_pick(this, i, window, cx);
+                    }))
+            }))
+            .into_any_element()
+    }
+}
 
 /// How far a forward's target endpoint fades when the rule is Dynamic and has
 /// no target to name. The rules editor in Settings and the live Forwards panel

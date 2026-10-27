@@ -42,7 +42,7 @@ fn comparison(totals: &Totals, previous: Option<&Totals>, metric: Metric) -> Opt
     (previous > 0.).then(|| (current / previous - 1.) * 100.)
 }
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(super) fn statistics_range_label(&self, window: &DateWindow) -> String {
         match (window.start(), window.end()) {
             (Some(start), Some(end)) => format!(

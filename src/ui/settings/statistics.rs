@@ -123,7 +123,7 @@ impl Presentation {
     }
 }
 impl StatisticsState {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
         let date = chrono::Local::now().format("%Y-%m-%d").to_string();
         Self {
             host: HostId::LOCAL,
@@ -210,7 +210,7 @@ fn issue_text(reason: &str) -> String {
     key.map(|key| t(key).to_string())
         .unwrap_or_else(|| reason.to_owned())
 }
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn load_statistics(&mut self, cx: &mut Context<Self>) {
         self.request_statistics(StatisticsRequest::Load, cx);
     }
@@ -284,55 +284,11 @@ impl LyrelApp {
         let refresh = refresh || state.pending_refresh;
         let launch = cx.global::<Config>().agent_launch.clone();
         let stored = state.management.stored.clone();
-        let mut opencode_sources = Vec::new();
-        if agent.is_none_or(|agent| agent == "opencode") {
-            use lyrel_core::host::session_operations::{
-                SessionOperation, SessionOperationKind, launch_context,
-            };
-            let native = crate::core::cli_agent::CLIAgent::OpenCode;
-            for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
-                let pane = leaf.read(cx);
-                if pane.host_id() != host_id || pane.agent() != Some(native) {
-                    continue;
-                }
-                let Some(session) = pane.agent_session() else {
-                    continue;
-                };
-                let (Some(scope), Some(cwd), Some(launch_argv)) = (
-                    session.readout.session_scope.clone(),
-                    pane.host_cwd(),
-                    launch_context(native, &session),
-                ) else {
-                    continue;
-                };
-                let selector = format!(
-                    "opencode:client:{}",
-                    scope
-                        .opencode
-                        .as_ref()
-                        .and_then(|context| context.bridge.as_ref())
-                        .map_or("disconnected", |bridge| bridge.client_id.as_str())
-                );
-                if opencode_sources
-                    .iter()
-                    .any(|(scope, _): &(String, SessionOperation)| *scope == selector)
-                {
-                    continue;
-                }
-                opencode_sources.push((
-                    selector,
-                    SessionOperation {
-                        expected_host: host_id.0,
-                        agent: native,
-                        kind: SessionOperationKind::Resume,
-                        source_id: String::new(),
-                        cwd,
-                        launch_argv,
-                        scope,
-                    },
-                ));
-            }
-        }
+        let opencode_sources = if agent.is_none_or(|agent| agent == "opencode") {
+            (self.workspace.session_sources)(host_id, cx)
+        } else {
+            Vec::new()
+        };
         let path = state.management.path.clone();
         let Some(host) = HostRegistry::get(cx, host_id) else {
             if let Some(s) = self.active_settings_mut() {
@@ -850,6 +806,7 @@ impl LyrelApp {
 mod tests {
     use super::*;
     use crate::core::session::Session;
+    use crate::ui::app::LyrelApp;
     use chrono::Datelike;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
@@ -917,12 +874,13 @@ mod tests {
             gpui_kit::component::Root::new(app, window, cx)
         });
         cx.background_executor.run_until_parked();
-        let app = window
+        let workspace = window
             .update(cx, |root, _, _| {
                 root.view().clone().downcast::<LyrelApp>().unwrap()
             })
             .unwrap();
         let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_settings_section(SettingsSection::General, window, cx);
             let search = app.active_settings().unwrap().search.clone();
@@ -1056,7 +1014,7 @@ mod tests {
             ("zh-CN", 620., gpui_kit::component::ThemeMode::Dark),
         ] {
             crate::ui::i18n::set_locale(locale);
-            vcx.simulate_window_resize(window.into(), gpui_kit::size(px(width), px(800.)));
+            vcx.simulate_resize(gpui_kit::size(px(width), px(800.)));
             app.update_in(&mut vcx, |app, window, cx| {
                 gpui_kit::component::Theme::change(mode, Some(window), cx);
                 gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(18.));

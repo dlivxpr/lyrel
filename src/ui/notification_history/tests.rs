@@ -274,16 +274,11 @@ fn a_settings_window_error_uses_the_same_inbox_and_preserves_its_workspace_sourc
 ) {
     let (app, mut main) = harness(cx);
     let _dir = isolated(&mut main);
-    main.dispatch_action(crate::core::actions::OpenSettings);
-    settle(&mut main);
-    let owner = main.update(|window, _| window.window_handle());
-    let settings = cx.add_window(|window, cx| {
-        app.update(cx, |app, _| {
-            app.settings_window = Some((window.window_handle(), owner));
-        });
-        let view = cx.new(|cx| crate::ui::settings_window::SettingsWindow::new(&app, window, cx));
-        gpui_kit::component::Root::new(view, window, cx)
+    app.update_in(&mut main, |app, window, cx| {
+        app.open_settings_window_then(window, cx, None);
     });
+    settle(&mut main);
+    let settings = app.read_with(&main, |app, _| app.settings_window.unwrap().0);
     cx.update_window(settings.into(), |_, window, cx| {
         crate::ui::host_ops::HostOps::notify_err(
             window,

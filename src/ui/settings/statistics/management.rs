@@ -35,7 +35,7 @@ impl Management {
         self.error = None;
         self.status = None;
     }
-    pub fn new(window: &mut Window, cx: &mut Context<LyrelApp>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
         Self {
             stored: Default::default(),
             loaded: false,
@@ -62,7 +62,7 @@ impl Management {
 }
 
 struct ManagementDialog {
-    app: gpui_kit::WeakEntity<LyrelApp>,
+    app: gpui_kit::WeakEntity<SettingsWindow>,
     _subscription: gpui_kit::Subscription,
 }
 impl Render for ManagementDialog {
@@ -72,7 +72,7 @@ impl Render for ManagementDialog {
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
-impl LyrelApp {
+impl SettingsWindow {
     fn open_statistics_management(
         &mut self,
         surface: Editor,

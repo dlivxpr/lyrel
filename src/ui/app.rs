@@ -1,6 +1,5 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, WindowExt as _};
 use gpui_kit::{
@@ -14,8 +13,7 @@ use std::sync::Arc;
 
 use crate::core::actions::*;
 use crate::core::config::{
-    Config, CursorStyle as ConfigCursorStyle, MouseZoomModifier, NewTabPosition, RightPanelTab,
-    ShellConfig, WindowBackdrop,
+    Config, CursorStyle as ConfigCursorStyle, NewTabPosition, RightPanelTab,
 };
 use crate::core::session::{
     Session, SessionAxis, SessionPane, SessionTab, WorkspaceId, WorkspaceStore,
@@ -28,15 +26,16 @@ use crate::daemon::spawn::DaemonMismatch;
 use crate::terminal::view::{ChildExited, TerminalView};
 use crate::ui::forwards::{ForwardFields, added_forward, rule_of};
 use crate::ui::host_registry::HostId;
-use crate::ui::i18n::{L10nKey, set_locale, t, t_fmt, t_plural};
+use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
-use crate::ui::presets::Fill;
 use crate::ui::scm::ScmIntent;
 use crate::ui::search::{
     Avatar, Catalog, ChromeState, CommandGroup, CommandKind, Item, SearchEvent, SearchTab,
     SearchView,
 };
-use crate::ui::settings::{Recording, SettingsSection, SettingsState, ThemeEditor};
+use crate::ui::settings::SettingsSection;
+use crate::ui::settings_window::SettingsWindow;
+mod settings_bridge;
 use crate::ui::theme::{apply_theme, set_menus};
 
 /// What to start in a pane that is about to be opened.
@@ -107,64 +106,11 @@ impl SpawnWhere {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ThemeEdit {
-    Background,
-    Foreground,
-    Accent,
-    Cursor,
-    Selection,
-    Ansi(usize),
-}
-
-/// The 16 ANSI slots in the order a terminal numbers them: 0-7, then their
-/// bright twins. A theme author needs to know that slot 9 is what `\e[91m`
-/// paints — "Color 9" does not say that, and "Bright red" does.
-const ANSI_COLOR_LABELS: [L10nKey; 16] = [
-    L10nKey::AppThemeAnsiBlack,
-    L10nKey::AppThemeAnsiRed,
-    L10nKey::AppThemeAnsiGreen,
-    L10nKey::AppThemeAnsiYellow,
-    L10nKey::AppThemeAnsiBlue,
-    L10nKey::AppThemeAnsiMagenta,
-    L10nKey::AppThemeAnsiCyan,
-    L10nKey::AppThemeAnsiWhite,
-    L10nKey::AppThemeAnsiBrightBlack,
-    L10nKey::AppThemeAnsiBrightRed,
-    L10nKey::AppThemeAnsiBrightGreen,
-    L10nKey::AppThemeAnsiBrightYellow,
-    L10nKey::AppThemeAnsiBrightBlue,
-    L10nKey::AppThemeAnsiBrightMagenta,
-    L10nKey::AppThemeAnsiBrightCyan,
-    L10nKey::AppThemeAnsiBrightWhite,
-];
-
-/// Looked up at render time, never stored: the editor outlives a language
-/// change, and a label cached when it opened would stay in the old language.
-pub(crate) fn theme_edit_label(edit: ThemeEdit) -> &'static str {
-    t(match edit {
-        ThemeEdit::Background => L10nKey::AppThemeColorBackground,
-        ThemeEdit::Foreground => L10nKey::AppThemeColorForeground,
-        ThemeEdit::Accent => L10nKey::AppThemeColorAccent,
-        ThemeEdit::Cursor => L10nKey::AppThemeColorCursor,
-        ThemeEdit::Selection => L10nKey::AppThemeColorSelection,
-        ThemeEdit::Ansi(i) => ANSI_COLOR_LABELS[i.min(15)],
-    })
-}
-
-fn hsla_to_u32(color: gpui_kit::Hsla) -> u32 {
-    let rgba: gpui_kit::Rgba = color.into();
-    let to = |f: f32| (f.clamp(0.0, 1.0) * 255.0).round() as u32;
-    (to(rgba.r) << 16) | (to(rgba.g) << 8) | to(rgba.b)
-}
-
 // The steppers clamp to the same range `sanitize` allows, defined in
 // lyrel-core next to the validation: a local, narrower pair used to push a
 // config-legal value the wrong way — `font_size: 50` shrank to 48 on "+",
 // and the result was written back to the file (#550).
-pub(crate) use crate::core::config::{
-    FONT_SIZE_MAX, FONT_SIZE_MIN, LINE_HEIGHT_MAX, LINE_HEIGHT_MIN,
-};
+pub(crate) use crate::core::config::{FONT_SIZE_MAX, FONT_SIZE_MIN};
 
 pub(crate) const FONT_SIZE_STEP: f32 = 1.0;
 
@@ -182,8 +128,6 @@ const REOPEN_SETTLE_POLLS: u32 = 40;
 const REOPEN_SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
 const RESIZE_STEP: f32 = 0.05;
-
-pub(crate) const RECORD_COMMIT_DELAY_MS: u64 = 650;
 
 /// The narrowest the terminal column may be squeezed to by the panels beside
 /// it: roughly forty columns at the default font, which is a prompt with room
@@ -325,9 +269,6 @@ impl<R: gpui_kit::Styled> TitleStripRow for R {
             .pb(pad)
     }
 }
-
-/// Work to run against the settings window once it has been built.
-type SettingsFollowUp = Box<dyn FnOnce(&mut LyrelApp, &mut Window, &mut Context<LyrelApp>)>;
 
 pub(crate) const TILE_SIZE: f32 = 32.;
 pub(crate) const TILE_GLYPH: f32 = 16.;
@@ -1059,7 +1000,6 @@ pub struct LyrelApp {
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
     pub(crate) mod_hint_gen: u64,
-    pub(crate) record_gen: u64,
     pub(crate) home_focus: gpui_kit::FocusHandle,
     /// Whether the home page's cursor block is on this half-second.
     ///
@@ -1089,19 +1029,6 @@ pub struct LyrelApp {
     pub(crate) editor: crate::ui::code_editor::EditorPanelState,
     pub(crate) sidebar_width: Rc<Cell<f32>>,
     pub(crate) sidebar_dragging: Rc<Cell<bool>>,
-    /// How much width a settings row will actually get, measured once per
-    /// render. `settings_row` is called from page builders that never see the
-    /// window, and the answer differs per page — the SSH page spends a host
-    /// list on top of the nav before the row gets anything.
-    pub(crate) settings_row_width: Cell<f32>,
-    /// The window width the settings chrome sized itself against, measured in
-    /// the same pass. The pages that render their own chrome — the SSH host
-    /// list, the theme panel — are as blind to the window as `settings_row` is.
-    pub(crate) settings_viewport_w: Cell<f32>,
-    /// Cleared at the top of every settings render, then set by the first row
-    /// the live search matched, so exactly one row per page carries the anchor
-    /// the page scrolls to.
-    pub(crate) settings_hit_anchored: Cell<bool>,
     last_settings_location: (SettingsSection, gpui_kit::Point<gpui_kit::Pixels>),
     pub(crate) right_panel_width: Rc<Cell<f32>>,
     pub(crate) right_panel_dragging: Rc<Cell<bool>>,
@@ -1157,7 +1084,8 @@ pub struct LyrelApp {
     pub(crate) pane_area: Rc<Cell<Option<Bounds<Pixels>>>>,
     pub(crate) file_search: Entity<InputState>,
     _file_search_sub: Subscription,
-    settings: Option<SettingsState>,
+    pub(crate) settings: Option<Entity<SettingsWindow>>,
+    settings_events: Option<Subscription>,
     /// The window settings are drawn in, and the workspace window that opened
     /// it (where focus goes back to on close). `None` while settings is shut —
     /// and always in tests, which keep drawing settings over the workspace so
@@ -1304,19 +1232,6 @@ impl TabAgentSession {
     }
 }
 
-/// The name the settings backdrop menu gives a material.
-#[cfg(target_os = "windows")]
-pub(crate) fn window_backdrop_label_key(backdrop: WindowBackdrop) -> L10nKey {
-    match backdrop {
-        WindowBackdrop::Auto => L10nKey::SettingsBackdropAuto,
-        WindowBackdrop::Blur => L10nKey::SettingsBackdropBlur,
-        WindowBackdrop::Mica => L10nKey::SettingsBackdropMica,
-        WindowBackdrop::MicaAlt => L10nKey::SettingsBackdropMicaAlt,
-        WindowBackdrop::Acrylic => L10nKey::SettingsBackdropAcrylic,
-        WindowBackdrop::Off => L10nKey::SettingsBackdropOff,
-    }
-}
-
 /// What a full-window overlay (settings, the opened file, the diff view)
 /// paints between its own fill and its content.
 ///
@@ -1361,17 +1276,6 @@ pub(crate) fn window_background_image_layer(cx: &App) -> Option<gpui_kit::Div> {
                     .object_fit(gpui_kit::ObjectFit::Cover),
             ),
     )
-}
-
-/// Clears the window overrides that are effective on the current platform.
-/// `backdrop_is_local` models whether the Windows-only backdrop participates
-/// in this platform's rendering and therefore belongs to its reset operation.
-fn clear_window_override_values(config: &mut Config, backdrop_is_local: bool) {
-    config.window_opacity = None;
-    config.window_blur = None;
-    if backdrop_is_local {
-        config.window_backdrop = WindowBackdrop::Auto;
-    }
 }
 
 /// The id the fullscreen hint is pushed under, so that entering again replaces
@@ -1647,7 +1551,7 @@ impl LyrelApp {
             }
             apply_theme(Some(window), cx);
             let _ = this.update(cx, |this, cx| {
-                this.rebuild_theme_editor(window, cx);
+                this.refresh_settings_theme(cx);
                 cx.notify();
             });
         });
@@ -1760,7 +1664,6 @@ impl LyrelApp {
             maximized: None,
             mod_hint_badges: false,
             mod_hint_gen: 0,
-            record_gen: 0,
             home_focus: cx.focus_handle(),
             home_cursor_on: true,
             working_dot_on: true,
@@ -1797,9 +1700,6 @@ impl LyrelApp {
             editor,
             sidebar_width: Rc::new(Cell::new(sidebar_width)),
             sidebar_dragging: Rc::new(Cell::new(false)),
-            settings_row_width: Cell::new(f32::MAX),
-            settings_viewport_w: Cell::new(f32::MAX),
-            settings_hit_anchored: Cell::new(false),
             last_settings_location: (SettingsSection::General, gpui_kit::point(px(0.), px(0.))),
             right_panel_width: Rc::new(Cell::new(right_panel_width)),
             right_panel_dragging: Rc::new(Cell::new(false)),
@@ -1823,6 +1723,7 @@ impl LyrelApp {
             file_search,
             _file_search_sub: file_search_sub,
             settings: None,
+            settings_events: None,
             settings_window: None,
             ssh_prompt: crate::ui::ssh_prompt::SshPromptState::new(cx),
             close_prompt_open: false,
@@ -2442,7 +2343,9 @@ impl LyrelApp {
                 }
                 surface_window(window, cx);
             }
-            TrayAction::SetNotifyMode(mode) => self.set_notify_mode(mode, cx),
+            TrayAction::SetNotifyMode(mode) => {
+                self.update_config(cx, |cfg| cfg.notify_on_command_finish = mode)
+            }
             TrayAction::OpenSettings => {
                 surface_window(window, cx);
                 // Opens it, or brings its window forward — never shuts it.
@@ -2744,71 +2647,22 @@ impl LyrelApp {
         self.set_font_size(Config::default().font_size, cx);
     }
 
-    fn set_ui_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
-        use crate::core::config::{UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN};
-        let size = size.clamp(UI_FONT_SIZE_MIN, UI_FONT_SIZE_MAX);
-        let cfg = cx.global_mut::<Config>();
-        if cfg.ui_font_size == size {
-            return;
-        }
-        cfg.ui_font_size = size;
-        self.persist_settings_config(cx);
-        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(size));
-        // Unlike the settings that only redraw the window they were changed
-        // in, this one re-lays-out every open window, and each reads the new
-        // rem from the global on its own next frame.
-        cx.notify();
-    }
-
-    pub(crate) fn ui_font_size(&self, cx: &gpui_kit::App) -> f32 {
-        cx.global::<Config>().ui_font_size
-    }
-
-    pub(crate) fn change_ui_font_size(&mut self, delta: f32, cx: &mut Context<Self>) {
-        self.set_ui_font_size(self.ui_font_size(cx) + delta, cx);
-    }
-
-    pub(crate) fn reset_ui_font_size(&mut self, cx: &mut Context<Self>) {
-        self.set_ui_font_size(Config::default().ui_font_size, cx);
-    }
-
-    fn set_line_height(&mut self, mul: f32, cx: &mut Context<Self>) {
-        let mul = mul.clamp(LINE_HEIGHT_MIN, LINE_HEIGHT_MAX);
-        self.line_height = mul;
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                leaf.update(cx, |v, cx| {
-                    v.line_height_mul = mul;
-                    cx.notify();
-                });
-            }
-        }
-        let cfg = cx.global_mut::<Config>();
-        cfg.line_height = mul;
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn change_line_height(&mut self, delta: f32, cx: &mut Context<Self>) {
-        self.set_line_height(self.line_height + delta, cx);
-    }
-
-    pub(crate) fn reset_line_height(&mut self, cx: &mut Context<Self>) {
-        self.set_line_height(Config::default().line_height, cx);
-    }
-
     pub(crate) fn set_preset(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.theme_draft_dirty() {
-            let id = id.to_string();
-            self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
-                this.set_preset(&id, window, cx)
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|view| view.read(cx).theme_draft_dirty())
+        {
+            let id = id.to_owned();
+            self.open_settings_then(window, cx, move |view, window, cx| {
+                view.set_preset(&id, window, cx)
             });
             return;
         }
         // A confirmed pick ends any preview: there is nothing left to roll back.
         self.theme_preview_restore = None;
         self.write_preset(id, cx);
-        self.after_theme_change(window, cx);
+        self.apply_theme_change(true, window, cx);
     }
 
     /// Points whichever preset slot is live at `id`, in memory only.
@@ -2845,466 +2699,6 @@ impl LyrelApp {
         self.apply_theme_change(false, window, cx);
     }
 
-    pub(crate) fn set_slot_preset(
-        &mut self,
-        dark_slot: bool,
-        id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.theme_draft_dirty() {
-            let id = id.to_string();
-            self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
-                this.set_slot_preset(dark_slot, &id, window, cx)
-            });
-            return;
-        }
-        let cfg = cx.global_mut::<Config>();
-        if dark_slot {
-            cfg.theme_preset_dark = id.to_string();
-        } else {
-            cfg.theme_preset_light = id.to_string();
-        }
-        self.after_theme_change(window, cx);
-    }
-
-    pub(crate) fn set_theme_follow_system(
-        &mut self,
-        on: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.theme_draft_dirty() {
-            self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
-                this.set_theme_follow_system(on, window, cx)
-            });
-            return;
-        }
-        if on {
-            let manual = cx.global::<Config>().theme_preset.clone();
-            let manual_dark = crate::ui::presets::by_id(cx, &manual).dark;
-            let cfg = cx.global_mut::<Config>();
-            cfg.theme_follow_system = true;
-            if manual_dark {
-                cfg.theme_preset_dark = manual;
-            } else {
-                cfg.theme_preset_light = manual;
-            }
-        } else {
-            let effective = crate::ui::theme::effective_preset_id(cx);
-            let cfg = cx.global_mut::<Config>();
-            cfg.theme_follow_system = false;
-            cfg.theme_preset = effective;
-        }
-        self.after_theme_change(window, cx);
-    }
-
-    /// The Appearance page's three modes. System follows the OS between the
-    /// light and the dark slot; Light and Dark pin the matching slot's theme.
-    pub(crate) fn set_theme_mode(
-        &mut self,
-        mode: crate::ui::settings::ThemeMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        use crate::ui::settings::ThemeMode;
-        if self.theme_draft_dirty() {
-            self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
-                this.set_theme_mode(mode, window, cx)
-            });
-            return;
-        }
-        match mode {
-            ThemeMode::System => {
-                if !cx.global::<Config>().theme_follow_system {
-                    self.set_theme_follow_system(true, window, cx);
-                }
-            }
-            ThemeMode::Light | ThemeMode::Dark => {
-                let cfg = cx.global_mut::<Config>();
-                cfg.theme_follow_system = false;
-                cfg.theme_preset = if mode == ThemeMode::Dark {
-                    cfg.theme_preset_dark.clone()
-                } else {
-                    cfg.theme_preset_light.clone()
-                };
-                self.theme_preview_restore = None;
-                self.after_theme_change(window, cx);
-            }
-        }
-    }
-
-    /// A pick from a theme slot's menu. Pinned to one mode, the pick is also
-    /// what that mode's slot remembers, so System picks it back up.
-    pub(crate) fn pick_slot_theme(
-        &mut self,
-        dark_slot: bool,
-        id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if cx.global::<Config>().theme_follow_system {
-            self.set_slot_preset(dark_slot, id, window, cx);
-            return;
-        }
-        if !self.theme_draft_dirty() {
-            let cfg = cx.global_mut::<Config>();
-            if dark_slot {
-                cfg.theme_preset_dark = id.to_string();
-            } else {
-                cfg.theme_preset_light = id.to_string();
-            }
-        }
-        self.set_preset(id, window, cx);
-    }
-
-    pub(crate) fn set_theme_legible_palette(
-        &mut self,
-        on: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.global_mut::<Config>().theme_legible_palette = on;
-        self.after_theme_change(window, cx);
-    }
-
-    fn after_theme_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_theme_change(true, window, cx);
-    }
-
-    /// Repaints everything a theme change touches. `persist` is false for a
-    /// palette preview, which repaints on every arrow key and must not turn
-    /// each of those keystrokes into a `config.json` write.
-    fn apply_theme_change(&mut self, persist: bool, window: &mut Window, cx: &mut Context<Self>) {
-        apply_theme(Some(window), cx);
-        set_menus(cx);
-        if persist {
-            self.persist_settings_config(cx);
-        }
-        self.rebuild_theme_editor(window, cx);
-        cx.notify();
-    }
-
-    pub(crate) fn open_themes_folder(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dir) = crate::ui::presets::themes_dir() else {
-            log::warn!("no config directory, so no themes folder to open");
-            return;
-        };
-        // The folder is created on demand, so the first click on a fresh
-        // install is also the one that can fail. Handing an absent path to the
-        // file manager just opens nothing.
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            log::warn!("could not create {}: {e}", dir.display());
-            crate::ui::host_ops::HostOps::notify_err(
-                window,
-                cx,
-                &t_fmt(
-                    L10nKey::OpenInFileManagerFailed,
-                    &[("path", &dir.display().to_string())],
-                ),
-                &e,
-            );
-            return;
-        }
-        cx.open_with_system(&dir);
-    }
-
-    pub(crate) fn theme_draft_dirty(&self) -> bool {
-        self.active_settings()
-            .is_some_and(|s| s.theme_draft.is_some())
-    }
-
-    pub(crate) fn save_theme_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some((_, draft)) = self.active_settings().and_then(|s| s.theme_draft.clone()) else {
-            return true;
-        };
-        if let Err(error) = crate::ui::presets::write_theme_file(&draft) {
-            if let Some(s) = self.active_settings_mut() {
-                s.theme_draft_error = Some(error.to_string());
-            }
-            crate::ui::host_ops::HostOps::notify_err(
-                window,
-                cx,
-                t(L10nKey::ThemeSaveFailed),
-                &error,
-            );
-            return false;
-        }
-        if let Some(s) = self.active_settings_mut() {
-            s.theme_draft = None;
-            s.theme_draft_error = None;
-        }
-        cx.notify();
-        true
-    }
-
-    pub(crate) fn cancel_theme_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(s) = self.active_settings_mut() {
-            s.theme_draft_error = None;
-        }
-        if let Some((original, _)) = self
-            .active_settings_mut()
-            .and_then(|s| s.theme_draft.take())
-        {
-            let mut themes = crate::ui::presets::all(cx);
-            if let Some(slot) = themes.iter_mut().find(|t| t.id == original.id) {
-                *slot = original;
-            }
-            cx.set_global(crate::ui::presets::Themes(themes));
-            apply_theme(Some(window), cx);
-            self.rebuild_theme_editor(window, cx);
-            cx.notify();
-        }
-    }
-
-    fn mutate_active_theme(
-        &mut self,
-        mutate: impl FnOnce(&mut crate::ui::presets::Theme),
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let id = crate::ui::theme::effective_preset_id(cx);
-        let mut theme = crate::ui::presets::by_id(cx, &id);
-        if !theme.editable() {
-            return;
-        }
-        mutate(&mut theme);
-        if let Some(state) = self.active_settings_mut() {
-            let original = state
-                .theme_draft
-                .as_ref()
-                .filter(|(original, _)| original.id == id)
-                .map(|(original, _)| original.clone())
-                .unwrap_or_else(|| crate::ui::presets::by_id(cx, &id));
-            if crate::ui::presets::to_yaml(&original) == crate::ui::presets::to_yaml(&theme) {
-                state.theme_draft = None;
-            } else {
-                state.theme_draft = Some((original, theme.clone()));
-            }
-            let mut themes = crate::ui::presets::all(cx);
-            if let Some(slot) = themes.iter_mut().find(|t| t.id == id) {
-                *slot = theme;
-            }
-            cx.set_global(crate::ui::presets::Themes(themes));
-        } else {
-            if let Err(error) = crate::ui::presets::write_theme_file(&theme) {
-                crate::ui::host_ops::HostOps::notify_err(
-                    window,
-                    cx,
-                    t(L10nKey::ThemeSaveFailed),
-                    &error,
-                );
-                return;
-            }
-            crate::ui::presets::load_registry(cx);
-        }
-        apply_theme(Some(window), cx);
-        cx.notify();
-    }
-
-    pub(crate) fn edit_active_theme(
-        &mut self,
-        edit: ThemeEdit,
-        value: gpui_kit::Hsla,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let c = hsla_to_u32(value);
-        self.mutate_active_theme(
-            |theme| match edit {
-                ThemeEdit::Background => theme.background = Fill::Solid(c),
-                ThemeEdit::Foreground => theme.foreground = c,
-                ThemeEdit::Accent => theme.accent = c,
-                ThemeEdit::Cursor => theme.caret = Some(c),
-                ThemeEdit::Selection => theme.selection = Some(c),
-                ThemeEdit::Ansi(i) => theme.ansi16[i] = ((c >> 16) as u8, (c >> 8) as u8, c as u8),
-            },
-            window,
-            cx,
-        );
-    }
-
-    pub(crate) fn effective_window_opacity(cx: &App) -> f32 {
-        let config = cx.global::<Config>();
-        let theme = crate::ui::presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
-        let blur = config.window_blur.unwrap_or(theme.blur);
-        config.window_opacity.or(theme.opacity).unwrap_or_else(|| {
-            crate::ui::theme::default_window_opacity(config.window_backdrop, blur)
-        })
-    }
-
-    pub(crate) fn set_window_blur(
-        &mut self,
-        on: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.global_mut::<Config>().window_blur = Some(on);
-        apply_theme(Some(window), cx);
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(crate) fn set_window_backdrop(
-        &mut self,
-        backdrop: WindowBackdrop,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.global_mut::<Config>().window_backdrop = backdrop;
-        apply_theme(Some(window), cx);
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn reset_window_overrides(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        {
-            let config = cx.global_mut::<Config>();
-            clear_window_override_values(config, cfg!(target_os = "windows"));
-        }
-        apply_theme(Some(window), cx);
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn pick_theme_image(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = rx.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let _ = this.update_in(cx, |this, window, cx| {
-                        this.mutate_active_theme(
-                            |theme| {
-                                let opacity =
-                                    theme.image.as_ref().map(|i| i.opacity).unwrap_or(0.3);
-                                theme.image = Some(crate::ui::presets::Image { path, opacity });
-                            },
-                            window,
-                            cx,
-                        );
-                        this.rebuild_theme_editor(window, cx);
-                    });
-                }
-            }
-        })
-        .detach();
-    }
-
-    pub(crate) fn remove_theme_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mutate_active_theme(|theme| theme.image = None, window, cx);
-        self.rebuild_theme_editor(window, cx);
-    }
-
-    pub(crate) fn set_theme_image_opacity(
-        &mut self,
-        v: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.mutate_active_theme(
-            |theme| {
-                if let Some(img) = theme.image.as_mut() {
-                    img.opacity = v.clamp(0.0, 1.0);
-                }
-            },
-            window,
-            cx,
-        );
-    }
-
-    pub(crate) fn rebuild_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings.is_none() {
-            return;
-        }
-        let id = crate::ui::theme::effective_preset_id(cx);
-        let theme = crate::ui::presets::by_id(cx, &id);
-        if !theme.editable() {
-            if let Some(s) = self.settings.as_mut() {
-                s.theme_editor = None;
-            }
-            return;
-        }
-
-        let neutrals = theme.neutrals();
-        let seed_specs: [(ThemeEdit, u32); 5] = [
-            (ThemeEdit::Background, theme.background_color()),
-            (ThemeEdit::Foreground, theme.foreground),
-            (ThemeEdit::Accent, theme.accent),
-            (ThemeEdit::Cursor, theme.caret.unwrap_or(theme.accent)),
-            (ThemeEdit::Selection, neutrals.selection),
-        ];
-
-        let mut subs = Vec::new();
-        let mut make =
-            |edit: ThemeEdit, value: u32, subs: &mut Vec<Subscription>, cx: &mut Context<Self>| {
-                let eff: gpui_kit::Hsla = gpui_kit::rgb(value).into();
-                let state = cx.new(|cx| ColorPickerState::new(window, cx).default_value(eff));
-                subs.push(cx.subscribe_in(
-                    &state,
-                    window,
-                    move |this, _picker, ev: &ColorPickerEvent, window, cx| {
-                        let ColorPickerEvent::Change(value) = ev;
-                        if let Some(v) = value {
-                            this.edit_active_theme(edit, *v, window, cx);
-                        }
-                    },
-                ));
-                state
-            };
-
-        let seed = seed_specs
-            .iter()
-            .map(|&(edit, value)| (edit, make(edit, value, &mut subs, cx)))
-            .collect();
-        let ansi = (0..16)
-            .map(|i| {
-                let (r, g, b) = theme.ansi16[i];
-                let value = (r as u32) << 16 | (g as u32) << 8 | b as u32;
-                (
-                    ThemeEdit::Ansi(i),
-                    make(ThemeEdit::Ansi(i), value, &mut subs, cx),
-                )
-            })
-            .collect();
-
-        if let Some(s) = self.settings.as_mut() {
-            s.theme_editor = Some(ThemeEditor {
-                seed,
-                ansi,
-                _subs: subs,
-            });
-        }
-    }
-
-    pub(crate) fn set_font_ligatures(&mut self, on: bool, cx: &mut Context<Self>) {
-        let features = on.then(|| {
-            crate::core::config::FontFeatures(Arc::new(vec![
-                ("calt".to_string(), 1),
-                ("liga".to_string(), 1),
-            ]))
-        });
-        let gpui_features = features
-            .as_ref()
-            .map(crate::core::config::gpui_font_features);
-        self.font_features = gpui_features.clone();
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                let features = gpui_features.clone();
-                leaf.update(cx, |v, cx| v.set_font_features(features, cx));
-            }
-        }
-        let cfg = cx.global_mut::<Config>();
-        cfg.font_features = features;
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
     fn apply_terminal_config_to_panes(&self, config: &Config, cx: &mut Context<Self>) {
         for tab in &self.tabs {
             for leaf in tab.pane.terminals() {
@@ -3314,89 +2708,6 @@ impl LyrelApp {
                 });
             }
         }
-    }
-
-    pub(crate) fn set_cursor_style(&mut self, style: ConfigCursorStyle, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.cursor_style = style);
-        let cfg = cx.global::<Config>().clone();
-        self.terminal_cursor_style = cfg.cursor_style;
-        self.terminal_scrollback_limit = cfg.scrollback_limit;
-        self.apply_terminal_config_to_panes(&cfg, cx);
-    }
-
-    pub(crate) fn set_prompt_cursor_style(
-        &mut self,
-        style: crate::core::config::PromptCursorStyle,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_config(cx, |cfg| cfg.prompt_cursor_style = style);
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                leaf.update(cx, |_, cx| cx.notify());
-            }
-        }
-    }
-
-    pub(crate) fn persist_settings_config(&mut self, cx: &mut Context<Self>) {
-        let config = cx.global::<Config>().clone();
-        let error = config.try_save().err().map(|error| error.to_string());
-        if let Some(message) = &error {
-            log::warn!("failed to save settings: {message}");
-        }
-        if let Some(s) = self.active_settings_mut() {
-            if error.is_none() {
-                s.saved_config = config;
-            }
-            s.save_error = error;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn discard_unsaved_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let snapshot = self
-            .active_settings()
-            .filter(|s| s.save_error.is_some())
-            .map(|s| s.saved_config.clone());
-        if let Some(snapshot) = snapshot {
-            cx.set_global(snapshot);
-            if let Some(s) = self.active_settings_mut() {
-                s.save_error = None;
-            }
-            self.reload_from_config(window, cx);
-        }
-    }
-
-    pub(crate) fn update_config(
-        &mut self,
-        cx: &mut Context<Self>,
-        mutate: impl FnOnce(&mut Config),
-    ) {
-        mutate(cx.global_mut::<Config>());
-        self.persist_settings_config(cx);
-    }
-
-    pub(crate) fn set_link_url(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.link_url = on);
-    }
-
-    pub(crate) fn set_link_file_open(
-        &mut self,
-        mode: crate::core::config::LinkFileOpen,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_config(cx, |cfg| cfg.link_file_open = Some(mode));
-    }
-
-    pub(crate) fn set_ssh_loopback_forward(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.ssh_loopback_forward = on);
-    }
-
-    pub(crate) fn set_verify_host_keys(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.verify_host_keys = on);
-    }
-
-    pub(crate) fn set_ssh_warn_on_close(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.ssh_warn_on_close = on);
     }
 
     pub(crate) fn forward_route(&self, pane_id: u64, cx: &gpui_kit::App) -> ForwardRoute {
@@ -3870,65 +3181,6 @@ impl LyrelApp {
         }
     }
 
-    pub(crate) fn set_check_for_updates(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.check_for_updates = on);
-    }
-
-    pub(crate) fn set_auto_download_updates(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.auto_download_updates = on);
-    }
-
-    /// Takes effect at next launch: `core::cli_install` runs once from `main`,
-    /// before there is a window to flip this in. Turning it off does not remove
-    /// a symlink already placed — the install is idempotent, not reversible.
-    pub(crate) fn set_install_cli_on_path(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.install_cli_on_path = on);
-    }
-
-    pub(crate) fn set_dim_inactive_panes(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.dim_inactive_panes = on);
-    }
-
-    pub(crate) fn set_cursor_blink(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.cursor_blink = on);
-        if !on {
-            for tab in &self.tabs {
-                for leaf in tab.pane.terminals() {
-                    leaf.update(cx, |v, cx| {
-                        v.cursor_visible = true;
-                        cx.notify();
-                    });
-                }
-            }
-        }
-    }
-
-    pub(crate) fn set_scrollback_limit(&mut self, lines: usize, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| {
-            cfg.scrollback_limit = lines.clamp(100, crate::core::config::MAX_SCROLLBACK)
-        });
-        let cfg = cx.global::<Config>().clone();
-        self.terminal_cursor_style = cfg.cursor_style;
-        self.terminal_scrollback_limit = cfg.scrollback_limit;
-        self.apply_terminal_config_to_panes(&cfg, cx);
-    }
-
-    pub(crate) fn set_new_tab_position(&mut self, pos: NewTabPosition, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.new_tab_position = pos);
-    }
-
-    pub(crate) fn set_confirm_close(
-        &mut self,
-        mode: crate::core::config::ConfirmClose,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_config(cx, |cfg| cfg.confirm_close = mode);
-    }
-
-    pub(crate) fn set_sidebar_auto_grouping(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.sidebar_auto_grouping = on);
-    }
-
     pub(crate) fn toggle_left_panel(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
         let collapsed = self.sidebar_collapsed;
@@ -3938,138 +3190,6 @@ impl LyrelApp {
 
     pub(crate) fn left_panel_open(&self, _cx: &gpui_kit::App) -> bool {
         !self.sidebar_collapsed && !self.tabs.is_empty()
-    }
-
-    pub(crate) fn set_notify_mode(
-        &mut self,
-        mode: crate::core::config::NotifyMode,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_config(cx, |cfg| cfg.notify_on_command_finish = mode);
-    }
-
-    pub(crate) fn set_notify_threshold(&mut self, secs: u64, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.notify_threshold_secs = secs.clamp(1, 3600));
-    }
-
-    pub(crate) fn set_bell_mode(
-        &mut self,
-        mode: crate::core::config::BellMode,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_config(cx, |cfg| cfg.bell = mode);
-    }
-
-    pub(crate) fn set_restore_session(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.restore_session = on);
-    }
-
-    /// Takes effect on the next pane: a shell is told where its history lives
-    /// when it starts, and nothing can move it afterwards.
-    pub(crate) fn set_per_pane_history(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.per_pane_history = on);
-    }
-
-    pub(crate) fn set_show_tray_icon(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.show_tray_icon = on);
-    }
-
-    /// Saved only: it is handed to the platform wrapper once, at launch, so
-    /// it takes hold at the next one (see `platform_application` in main.rs).
-    pub(crate) fn set_font_thicken(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.font_thicken = on);
-    }
-
-    pub(crate) fn set_macos_option_as_alt(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.macos_option_as_alt = on);
-    }
-
-    pub(crate) fn set_mouse_hide_while_typing(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.mouse_hide_while_typing = on);
-        crate::ui::theme::apply_cursor_hide_mode(cx);
-    }
-
-    pub(crate) fn set_focus_follows_mouse(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.focus_follows_mouse = on);
-    }
-
-    pub(crate) fn set_mouse_reporting(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.mouse_reporting = on);
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                leaf.update(cx, |v, cx| {
-                    v.report_mouse = on;
-                    cx.notify();
-                });
-            }
-        }
-    }
-
-    pub(crate) fn set_mouse_scroll_multiplier(&mut self, mult: f32, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| {
-            cfg.mouse_scroll_multiplier = mult.clamp(0.1, 10.0)
-        });
-    }
-
-    pub(crate) fn set_smooth_scroll(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.smooth_scroll = on);
-    }
-
-    /// Panes read the modifier off the global config as each wheel event
-    /// arrives, so there is nothing to push at them here.
-    pub(crate) fn set_mouse_zoom_modifier(
-        &mut self,
-        modifier: MouseZoomModifier,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_config(cx, |cfg| cfg.mouse_zoom_modifier = modifier);
-    }
-
-    pub(crate) fn set_clipboard_trim(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.clipboard_trim_trailing_spaces = on);
-    }
-
-    pub(crate) fn set_copy_on_select(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.copy_on_select = on);
-    }
-
-    pub(crate) fn set_smart_select(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.smart_select = on);
-    }
-
-    /// Hands the prompt to the shell's own line editor, or takes it back.
-    ///
-    /// Live panes carry a cached copy of the flag (see
-    /// [`crate::terminal::view::TerminalView::prompt_editor`]), so the switch
-    /// has to reach them: without this, only panes opened afterwards would
-    /// change hands.
-    pub(crate) fn set_prompt_editor(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.prompt_editor = on);
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                leaf.update(cx, |v, cx| v.set_prompt_editor(on, cx));
-            }
-        }
-    }
-
-    pub(crate) fn set_tab_completion(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.tab_completion = on);
-    }
-
-    pub(crate) fn set_history_search(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.history_search = on);
-    }
-
-    pub(crate) fn set_startup_mode(
-        &mut self,
-        mode: crate::core::config::StartupMode,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_config(cx, |cfg| cfg.startup_mode = mode);
-    }
-
-    pub(crate) fn set_remember_window_size(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.remember_window_size = on);
     }
 
     pub(crate) fn sync_window_title(&self, window: &mut Window, cx: &App) {
@@ -4093,8 +3213,17 @@ impl LyrelApp {
         let settings_here = self
             .settings_window
             .is_none_or(|(settings, _)| settings == window.window_handle());
-        if let Some(settings) = self.settings.as_ref().filter(|_| settings_here) {
-            window.focus(&settings.focus_handle, cx);
+        if let Some(focus) = self
+            .settings
+            .as_ref()
+            .filter(|_| settings_here)
+            .and_then(|view| {
+                view.read(cx)
+                    .active_settings()
+                    .map(|state| state.focus_handle.clone())
+            })
+        {
+            window.focus(&focus, cx);
             return;
         }
         let Some(tab) = self.tabs.get(self.active) else {
@@ -8157,498 +7286,6 @@ impl LyrelApp {
         );
     }
 
-    pub(crate) fn reset_settings_value(
-        &mut self,
-        title: L10nKey,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let defaults = Config::default();
-        match title {
-            L10nKey::SettingsDimInactivePanes => {
-                self.set_dim_inactive_panes(defaults.dim_inactive_panes, cx)
-            }
-            L10nKey::SettingsCursorBlink => self.set_cursor_blink(defaults.cursor_blink, cx),
-            L10nKey::SettingsCursorShape => self.set_cursor_style(defaults.cursor_style, cx),
-            L10nKey::SettingsPromptCursorShape => {
-                self.set_prompt_cursor_style(defaults.prompt_cursor_style, cx)
-            }
-            L10nKey::SettingsScrollback => self.set_scrollback_limit(defaults.scrollback_limit, cx),
-            L10nKey::SettingsNewTabPosition => {
-                self.set_new_tab_position(defaults.new_tab_position, cx)
-            }
-            L10nKey::SettingsConfirmClose => self.set_confirm_close(defaults.confirm_close, cx),
-            L10nKey::SettingsSidebarGrouping => {
-                self.set_sidebar_auto_grouping(defaults.sidebar_auto_grouping, cx)
-            }
-            L10nKey::SettingsEditorGitGutter => {
-                self.set_editor_git_gutter(defaults.editor_git_gutter, cx)
-            }
-            L10nKey::SettingsEditorLsp => self.set_editor_lsp(defaults.editor_lsp, cx),
-            L10nKey::SettingsEditorSoftWrap => {
-                self.set_editor_soft_wrap(defaults.editor_soft_wrap, cx)
-            }
-            L10nKey::SettingsEditorMarkdownPreview => {
-                self.set_editor_markdown_preview(defaults.editor_markdown_preview, cx)
-            }
-            L10nKey::SettingsNotifyOnCommandFinish => {
-                self.set_notify_mode(defaults.notify_on_command_finish, cx)
-            }
-            L10nKey::SettingsNotifyThreshold => {
-                self.set_notify_threshold(defaults.notify_threshold_secs, cx)
-            }
-            L10nKey::SettingsTerminalBell => self.set_bell_mode(defaults.bell, cx),
-            L10nKey::SettingsRestoreLastLayout => {
-                self.set_restore_session(defaults.restore_session, cx)
-            }
-            L10nKey::SettingsPerPaneHistory => {
-                self.set_per_pane_history(defaults.per_pane_history, cx)
-            }
-            L10nKey::SettingsShowTrayIcon => self.set_show_tray_icon(defaults.show_tray_icon, cx),
-            L10nKey::SettingsOptionAsMeta => {
-                self.set_macos_option_as_alt(defaults.macos_option_as_alt, cx)
-            }
-            L10nKey::SettingsHideMouseWhileTyping => {
-                self.set_mouse_hide_while_typing(defaults.mouse_hide_while_typing, cx)
-            }
-            L10nKey::SettingsFocusFollowsMouse => {
-                self.set_focus_follows_mouse(defaults.focus_follows_mouse, cx)
-            }
-            L10nKey::SettingsReportMouseToApps => {
-                self.set_mouse_reporting(defaults.mouse_reporting, cx)
-            }
-            L10nKey::SettingsScrollSpeed => {
-                self.set_mouse_scroll_multiplier(defaults.mouse_scroll_multiplier, cx)
-            }
-            L10nKey::SettingsSmoothScroll => self.set_smooth_scroll(defaults.smooth_scroll, cx),
-            L10nKey::SettingsMouseZoom => {
-                self.set_mouse_zoom_modifier(defaults.mouse_zoom_modifier, cx)
-            }
-            L10nKey::SettingsTrimTrailingSpaces => {
-                self.set_clipboard_trim(defaults.clipboard_trim_trailing_spaces, cx)
-            }
-            L10nKey::SettingsCopyOnSelect => self.set_copy_on_select(defaults.copy_on_select, cx),
-            L10nKey::SettingsSmartSelection => self.set_smart_select(defaults.smart_select, cx),
-            L10nKey::SettingsPromptEditor => self.set_prompt_editor(defaults.prompt_editor, cx),
-            L10nKey::SettingsTabCompletion => self.set_tab_completion(defaults.tab_completion, cx),
-            L10nKey::SettingsHistorySearch => self.set_history_search(defaults.history_search, cx),
-            L10nKey::SettingsStartupWindow => self.set_startup_mode(defaults.startup_mode, cx),
-            L10nKey::SettingsRememberWindowSize => {
-                self.set_remember_window_size(defaults.remember_window_size, cx)
-            }
-            L10nKey::SettingsCheckUpdatesOnLaunch => {
-                self.set_check_for_updates(defaults.check_for_updates, cx)
-            }
-            L10nKey::SettingsAutoDownload => {
-                self.set_auto_download_updates(defaults.auto_download_updates, cx)
-            }
-            L10nKey::DetectUrls => self.set_link_url(defaults.link_url, cx),
-            L10nKey::ForwardSshLoopbackLinks => {
-                self.set_ssh_loopback_forward(defaults.ssh_loopback_forward, cx)
-            }
-            L10nKey::SettingsVerifyHostKeys => {
-                self.set_verify_host_keys(defaults.verify_host_keys, cx)
-            }
-            L10nKey::WarnBeforeClosing => {
-                self.set_ssh_warn_on_close(defaults.ssh_warn_on_close, cx)
-            }
-            L10nKey::SettingsLanguage => self.set_gui_language(
-                Self::normalize_gui_language(&defaults.gui_language),
-                window,
-                cx,
-            ),
-            L10nKey::SettingsFontSize => self.reset_font_size(cx),
-            L10nKey::SettingsUiFontSize => self.reset_ui_font_size(cx),
-            L10nKey::SettingsLineHeight => self.reset_line_height(cx),
-            L10nKey::SettingsFontFamily => {
-                self.commit_font_family(defaults.font_family.clone(), cx)
-            }
-            L10nKey::SettingsBoldFont => self.commit_font_family_emphasis(
-                true,
-                crate::ui::settings::font_default_label().to_string(),
-                cx,
-            ),
-            L10nKey::SettingsItalicFont => self.commit_font_family_emphasis(
-                false,
-                crate::ui::settings::font_default_label().to_string(),
-                cx,
-            ),
-            L10nKey::SettingsUiFontFamily => self.commit_ui_font_family(
-                crate::ui::settings::ui_font_default_label().to_string(),
-                window,
-                cx,
-            ),
-            L10nKey::SettingsSyncWithSystem => {
-                self.set_theme_follow_system(defaults.theme_follow_system, window, cx)
-            }
-            L10nKey::SettingsLegiblePalette => {
-                self.set_theme_legible_palette(defaults.theme_legible_palette, window, cx)
-            }
-            L10nKey::SettingsOpacity => {
-                self.update_config(cx, |cfg| cfg.window_opacity = None);
-                apply_theme(Some(window), cx);
-            }
-            L10nKey::SettingsBlur => {
-                self.update_config(cx, |cfg| cfg.window_blur = None);
-                apply_theme(Some(window), cx);
-            }
-            #[cfg(target_os = "windows")]
-            L10nKey::SettingsBackdrop => {
-                self.set_window_backdrop(defaults.window_backdrop, window, cx)
-            }
-            L10nKey::SettingsFontLigatures => self.set_font_ligatures(
-                defaults
-                    .font_features
-                    .as_ref()
-                    .is_some_and(|f| f.is_calt_enabled() == Some(true)),
-                cx,
-            ),
-            L10nKey::OpenFilesWith => {
-                self.update_config(cx, |cfg| cfg.link_file_open = defaults.link_file_open);
-            }
-            L10nKey::SettingsProgram => {
-                self.update_config(cx, |cfg| cfg.shell = defaults.shell.clone())
-            }
-            L10nKey::SettingsArguments => self.update_config(cx, |cfg| {
-                if let Some(shell) = &mut cfg.shell {
-                    shell.args.clear();
-                }
-            }),
-            L10nKey::SettingsStartIn => self.update_config(cx, |cfg| {
-                cfg.working_directory.strategy = defaults.working_directory.strategy
-            }),
-            L10nKey::SettingsCustomPath => self.update_config(cx, |cfg| {
-                cfg.working_directory.path = defaults.working_directory.path.clone()
-            }),
-            L10nKey::SettingsAppHttpProxy => {
-                self.update_config(cx, |cfg| cfg.http_proxy = defaults.http_proxy.clone())
-            }
-            L10nKey::SettingsOpenFilesCommand => self.update_config(cx, |cfg| {
-                cfg.link_file_command = defaults.link_file_command.clone()
-            }),
-            _ => return,
-        }
-        self.refresh_settings_controls(title, window, cx);
-    }
-
-    fn refresh_settings_controls(
-        &mut self,
-        title: L10nKey,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let mut subs = Vec::new();
-        match title {
-            L10nKey::SettingsProgram | L10nKey::SettingsArguments => {
-                let (program, args, _) = self.build_shell_inputs(&mut subs, window, cx);
-                if let Some(s) = self.active_settings_mut() {
-                    s.shell_program_input = program;
-                    s.shell_args_input = args;
-                }
-            }
-            L10nKey::SettingsCustomPath => {
-                let value = cx.global::<Config>().working_directory.path.clone();
-                if let Some(s) = self.active_settings() {
-                    s.wd_path_input
-                        .clone()
-                        .update(cx, |s, cx| s.set_value(value, window, cx));
-                }
-            }
-            L10nKey::SettingsOpenFilesCommand => {
-                let value = self.build_link_file_command_input(&mut subs, window, cx);
-                if let Some(s) = self.active_settings_mut() {
-                    s.link_file_command_input = value;
-                }
-            }
-            L10nKey::SettingsAppHttpProxy => {
-                let value = self.build_http_proxy_input(&mut subs, window, cx);
-                if let Some(s) = self.active_settings_mut() {
-                    s.http_proxy_input = value;
-                }
-            }
-            _ => {}
-        }
-        if let Some(s) = self.active_settings_mut() {
-            s._subs.extend(subs);
-        }
-        cx.notify();
-    }
-
-    /// Settings opens in a window of its own, beside the workspace rather
-    /// than over it. Asked for again while that window is up, it comes to the
-    /// front — a second ⌘, is someone looking for the window, not asking to
-    /// close it.
-    fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((handle, _)) = self.settings_window {
-            if handle
-                .update(cx, |_, window, _| window.activate_window())
-                .is_ok()
-            {
-                return;
-            }
-            // The window went away without telling us.
-            self.settings_window = None;
-            self.settings = None;
-        }
-        if self.settings.is_some() {
-            self.close_settings_checked(window, cx);
-            return;
-        }
-        self.remember_active_pane(window, cx);
-        if cfg!(test) {
-            self.build_settings_state(window, cx);
-            return;
-        }
-        self.open_settings_window_then(window, cx, None);
-    }
-
-    fn open_settings_window_then(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        then: Option<SettingsFollowUp>,
-    ) {
-        let owner = window.window_handle();
-        let app = cx.entity();
-        // Deferred: the new window's state is built by updating this entity,
-        // which cannot happen while this call still holds it.
-        cx.defer(move |cx| {
-            let options = crate::ui::settings_window::window_options(cx);
-            let opened = cx.open_window(options, |window, cx| {
-                app.update(cx, |this, cx| {
-                    this.build_settings_state(window, cx);
-                    if let Some(then) = then {
-                        then(this, window, cx);
-                    }
-                });
-                let view =
-                    cx.new(|cx| crate::ui::settings_window::SettingsWindow::new(&app, window, cx));
-                let root = cx.new(|cx| gpui_kit::component::Root::new(view, window, cx));
-                // The settings window never gets an `apply_theme` pass of its
-                // own; without this its backdrop stays at the gpui carrier
-                // from the creation options instead of the configured
-                // material (Acrylic most visibly).
-                crate::ui::theme::sync_window_backdrop(window, cx);
-                root
-            });
-            match opened {
-                Ok(handle) => app.update(cx, |this, _| {
-                    this.settings_window = Some((handle.into(), owner));
-                }),
-                Err(e) => {
-                    log::error!("failed to open the settings window: {e}");
-                    app.update(cx, |this, cx| {
-                        this.settings = None;
-                        cx.notify();
-                    });
-                }
-            }
-        });
-    }
-
-    /// Every family the settings font menus offer, with the configured ones
-    /// kept even when the system no longer has them — a menu that cannot show
-    /// the current value cannot say what it is.
-    fn settings_font_names(cx: &App) -> Vec<String> {
-        let cfg = cx.global::<Config>();
-        let mut names = cx.text_system().all_font_names();
-        for configured in [
-            Some(&cfg.font_family),
-            cfg.ui_font_family.as_ref(),
-            cfg.font_family_bold.as_ref(),
-            cfg.font_family_italic.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if !names.contains(configured) {
-                names.push(configured.clone());
-            }
-        }
-        names.sort_unstable();
-        names.dedup();
-        names
-    }
-
-    /// Build the settings page's state against `window` — the window it will
-    /// be drawn in, which owns its inputs' focus.
-    fn build_settings_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let focus_handle = cx.focus_handle();
-        let mut subs = Vec::new();
-        let font_names = std::rc::Rc::new(Self::settings_font_names(cx));
-        let (shell_program_input, shell_args_input, wd_path_input) =
-            self.build_shell_inputs(&mut subs, window, cx);
-        let link_file_command_input = self.build_link_file_command_input(&mut subs, window, cx);
-        let http_proxy_input = self.build_http_proxy_input(&mut subs, window, cx);
-        let skills = self.build_skills_state(&mut subs, window, cx);
-        // One query box for whichever popover is open — a theme list or a
-        // font list — since only one is ever open at a time.
-        // Shared by every searchable dropdown on the page, so the hint is the
-        // generic one; without it the field was a bare caret under the list.
-        let menu_query =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SearchTheme)));
-        subs.push(
-            cx.subscribe_in(&menu_query, window, |this, input, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    // A new query starts from the top; the clear that opens a
-                    // popover keeps the row it opened on.
-                    let typed = !input.read(cx).value().is_empty();
-                    if let Some(s) = this.active_settings_mut().filter(|_| typed) {
-                        s.menu_hi = 0;
-                    }
-                    cx.notify();
-                }
-            }),
-        );
-        let agent_query =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSearchAgents)));
-        subs.push(
-            cx.subscribe_in(&agent_query, window, |_this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
-        let settings_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchSettings))
-        });
-        subs.push(
-            cx.subscribe_in(&settings_search, window, |this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    this.autoselect_settings_search(cx);
-                    if let Some(s) = this.active_settings_mut() {
-                        s.reveal_first_hit.set(true);
-                    }
-                    cx.notify();
-                }
-            }),
-        );
-
-        let shortcut_search = cx
-            .new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSearchShortcuts)));
-        subs.push(
-            cx.subscribe_in(&shortcut_search, window, |_, _, ev, _, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
-
-        let ssh_filter = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::FilterHosts))
-        });
-        subs.push(
-            cx.subscribe_in(&ssh_filter, window, |_this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
-
-        let content_scroll = gpui_kit::ScrollHandle::new();
-        content_scroll.set_offset(self.last_settings_location.1);
-        let search_anchor = gpui_kit::ScrollAnchor::for_handle(content_scroll.clone());
-        let usage = cx.new(|cx| crate::ui::settings::usage::UsagePage::new(window, cx));
-        // Account forms render above the whole settings shell, outside UsagePage.
-        subs.push(cx.observe(&usage, |_, _, cx| cx.notify()));
-        if self.last_settings_location.0 == SettingsSection::Usage {
-            usage.update(cx, |page, cx| page.set_visible(true, cx));
-        }
-
-        self.settings = Some(SettingsState {
-            focus_handle: focus_handle.clone(),
-            section: self.last_settings_location.0,
-            usage,
-            search: settings_search,
-            skills,
-            shortcut_search,
-            modified_only: false,
-            search_active: false,
-            search_return_offset: self.last_settings_location.1,
-            search_selection: 0,
-            search_rows: std::cell::RefCell::new(None),
-            focused_setting: None,
-            content_scroll,
-            search_anchor,
-            reveal_first_hit: Cell::new(false),
-            font_names,
-            shell_program_input,
-            shell_args_input,
-            wd_path_input,
-            link_file_command_input,
-            http_proxy_input,
-            theme_editor: None,
-            theme_draft: None,
-            theme_draft_error: None,
-            save_error: None,
-            saved_config: cx.global::<Config>().clone(),
-            menu: None,
-            menu_query,
-            menu_hi: 0,
-            menu_scroll: gpui_kit::ScrollHandle::new(),
-            focused: std::cell::RefCell::new(None),
-            kb_conflict: None,
-            recording: None,
-            rebinding_note: None,
-            ssh_form: None,
-            ssh_open: None,
-            ssh_show_all: false,
-            ssh_confirm_remove: false,
-            ssh_copied: None,
-            ssh_filter,
-            ssh_collapsed_groups: std::collections::HashSet::new(),
-            agent_hooks_host: crate::ui::host_ops::HostId::LOCAL,
-            agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
-            agent_hooks_seq: 0,
-            agent_hooks_note: None,
-            agent_query,
-            agent_show_all: false,
-            agent_touched: std::collections::HashSet::new(),
-            agent_busy: std::collections::HashSet::new(),
-            statistics: crate::ui::settings::statistics::StatisticsState::new(window, cx),
-            _subs: subs,
-        });
-        let search_focus = self
-            .settings
-            .as_ref()
-            .map(|s| s.search.read(cx).focus_handle(cx));
-        match search_focus {
-            Some(handle) => window.focus(&handle, cx),
-            None => window.focus(&focus_handle, cx),
-        }
-        self.rebuild_theme_editor(window, cx);
-        self.ensure_agent_hooks_loaded(cx);
-        self.skills_section_changed(self.last_settings_location.0, cx);
-        self.load_statistics(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn normalize_gui_language(code: &str) -> &'static str {
-        crate::core::config::normalize_gui_language(code)
-    }
-
-    pub(crate) fn set_gui_language(
-        &mut self,
-        code: &'static str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let code = Self::normalize_gui_language(code);
-        {
-            let cfg = cx.global_mut::<Config>();
-            cfg.gui_language = code.to_string();
-        }
-        set_locale(code);
-        self.persist_settings_config(cx);
-        set_menus(cx);
-        // Explorer reads its menu wording from the registry, so it is the one
-        // surface a language change does not reach on its own. No-op unless
-        // the user installed the context menu, and off Windows entirely.
-        crate::core::explorer_context_menu::refresh_labels();
-        self.refresh_locale_state(window, cx);
-        crate::ui::windows::WindowRegistry::refresh_locale(cx, Some(self.workspace));
-    }
-
     pub(crate) fn refresh_locale_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.file_search.update(cx, |state, cx| {
             state.set_placeholder(t(L10nKey::SearchFiles), window, cx)
@@ -8658,348 +7295,7 @@ impl LyrelApp {
         self.sftp_panel.filter_input.update(cx, |state, cx| {
             state.set_placeholder(t(L10nKey::SearchFiles), window, cx)
         });
-        if let Some(s) = self.active_settings() {
-            s.search.update(cx, |state, cx| {
-                state.set_placeholder(t(L10nKey::SearchSettings), window, cx)
-            });
-            s.ssh_filter.update(cx, |state, cx| {
-                state.set_placeholder(t(L10nKey::FilterHosts), window, cx)
-            });
-            s.shortcut_search.update(cx, |state, cx| {
-                state.set_placeholder(t(L10nKey::SettingsSearchShortcuts), window, cx)
-            });
-            s.agent_query.update(cx, |state, cx| {
-                state.set_placeholder(t(L10nKey::SettingsSearchAgents), window, cx)
-            });
-            s.skills.refresh_locale(window, cx);
-            s.shell_args_input.update(cx, |state, cx| {
-                state.set_placeholder(t(L10nKey::AppPlaceholderNone), window, cx)
-            });
-            if !cfg!(windows) {
-                s.shell_program_input.update(cx, |state, cx| {
-                    state.set_placeholder(t(L10nKey::AppPlaceholderLoginShell), window, cx)
-                });
-            }
-            s.link_file_command_input.update(cx, |state, cx| {
-                state.set_placeholder(t(L10nKey::AppPlaceholderOpenInDefaultApp), window, cx)
-            });
-        }
         cx.notify();
-    }
-
-    fn build_shell_inputs(
-        &mut self,
-        subs: &mut Vec<Subscription>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> (Entity<InputState>, Entity<InputState>, Entity<InputState>) {
-        let cfg = cx.global::<Config>();
-        let (shell_program, shell_args) = match &cfg.shell {
-            // Quote each argument back into field text rather than joining on
-            // spaces: `join(" ")` cannot spell an argument that contains one,
-            // so a perfectly legal `"args": ["-c", "echo hi"]` in config.json
-            // refilled as three words and re-committed as three argv the moment
-            // the field lost focus — the user never typed a thing (#551).
-            // `join_shell_args` quotes only what needs it, and `commit_shell`'s
-            // matching `split_shell_args` parses it back losslessly.
-            Some(s) => (s.program.clone(), join_shell_args(&s.args)),
-            None => (String::new(), String::new()),
-        };
-        let wd_path = cfg.working_directory.path.clone();
-        let platform_default = if cfg!(windows) {
-            "PowerShell"
-        } else {
-            t(L10nKey::AppPlaceholderLoginShell)
-        };
-        let shell_program_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(platform_default)
-                .default_value(shell_program)
-        });
-        let shell_args_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(t(L10nKey::AppPlaceholderNone))
-                .default_value(shell_args)
-        });
-        let wd_path_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("/path/to/directory")
-                .default_value(wd_path)
-        });
-        let commit_shell = |this: &mut Self, ev: &InputEvent, cx: &mut Context<Self>| {
-            if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                this.commit_shell(cx);
-            }
-        };
-        let commit_wd = |this: &mut Self, ev: &InputEvent, cx: &mut Context<Self>| {
-            if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                this.commit_working_directory_path(cx);
-            }
-        };
-        subs.push(
-            cx.subscribe_in(&shell_program_input, window, move |this, _i, ev, _w, cx| {
-                commit_shell(this, ev, cx)
-            }),
-        );
-        subs.push(
-            cx.subscribe_in(&shell_args_input, window, move |this, _i, ev, _w, cx| {
-                commit_shell(this, ev, cx)
-            }),
-        );
-        subs.push(
-            cx.subscribe_in(&wd_path_input, window, move |this, _i, ev, _w, cx| {
-                commit_wd(this, ev, cx)
-            }),
-        );
-        (shell_program_input, shell_args_input, wd_path_input)
-    }
-
-    fn build_link_file_command_input(
-        &mut self,
-        subs: &mut Vec<Subscription>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        let value = cx
-            .global::<Config>()
-            .link_file_command
-            .clone()
-            .unwrap_or_default();
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(t(L10nKey::AppPlaceholderOpenInDefaultApp))
-                .default_value(value)
-        });
-        subs.push(
-            cx.subscribe_in(&input, window, move |this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    this.commit_link_file_command(cx);
-                }
-            }),
-        );
-        input
-    }
-
-    fn build_http_proxy_input(
-        &mut self,
-        subs: &mut Vec<Subscription>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        let value = cx.global::<Config>().http_proxy.clone().unwrap_or_default();
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("http://127.0.0.1:7890")
-                .default_value(value)
-        });
-        subs.push(
-            cx.subscribe_in(&input, window, move |this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    this.commit_http_proxy(cx);
-                }
-            }),
-        );
-        input
-    }
-
-    fn commit_http_proxy(&mut self, cx: &mut Context<Self>) {
-        let Some(value) = self
-            .active_settings()
-            .map(|s| s.http_proxy_input.read(cx).value().trim().to_string())
-        else {
-            return;
-        };
-        // Keep an unusable value out of `config.json`. The row renders a hint
-        // under the input, so the typo does not silently vanish either.
-        if !value.is_empty() && !lyrel_core::daemon::install::proxy::is_valid_manual(&value) {
-            cx.notify();
-            return;
-        }
-        let value = (!value.is_empty()).then_some(value);
-        let cfg = cx.global_mut::<Config>();
-        if cfg.http_proxy == value {
-            return;
-        }
-        cfg.http_proxy = value;
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    fn commit_link_file_command(&mut self, cx: &mut Context<Self>) {
-        let Some(command) = self.active_settings().map(|s| {
-            s.link_file_command_input
-                .read(cx)
-                .value()
-                .trim()
-                .to_string()
-        }) else {
-            return;
-        };
-        let command = if command.is_empty() {
-            None
-        } else {
-            Some(command)
-        };
-        let cfg = cx.global_mut::<Config>();
-        if cfg.link_file_command == command {
-            return;
-        }
-        cfg.link_file_command = command;
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(s) = self.settings.take() {
-            s.usage.update(cx, |page, cx| page.set_visible(false, cx));
-            self.last_settings_location = (
-                s.section,
-                if s.search_active {
-                    s.search_return_offset
-                } else {
-                    s.content_scroll.offset()
-                },
-            );
-            match self.settings_window.take() {
-                // `window` is the settings window here, so the workspace is
-                // reached through its handle — after this update lets go of
-                // both it and this entity.
-                Some((settings, owner)) => {
-                    let app = cx.entity().downgrade();
-                    cx.defer(move |cx| {
-                        let _ = settings.update(cx, |_, window, _| window.remove_window());
-                        let _ = owner.update(cx, |_, window, cx| {
-                            window.activate_window();
-                            let _ =
-                                app.update(cx, |this, cx| this.focus_previous_content(window, cx));
-                        });
-                    });
-                }
-                None => self.focus_previous_content(window, cx),
-            }
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn has_settings(&self) -> bool {
-        self.settings.is_some()
-    }
-
-    /// The settings window was closed out from under its state — its owner
-    /// is going away, or the window was removed without passing through
-    /// `close_settings`. Drop the state without trying to hand focus back.
-    pub(crate) fn forget_settings_window(&mut self, cx: &mut Context<Self>) {
-        if self.settings_window.take().is_some() {
-            if let Some(s) = self.settings.as_ref() {
-                s.usage.update(cx, |page, cx| page.set_visible(false, cx));
-            }
-            self.settings = None;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn open_settings_section(
-        &mut self,
-        section: SettingsSection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_settings_then(window, cx, move |this, window, cx| {
-            this.navigate_settings(section, None, window, cx)
-        });
-    }
-
-    /// Open settings (or bring its window forward) and then run `then` against
-    /// the window the page is drawn in, once its state exists. Anything that
-    /// builds inputs for the page — loading a form — has to run there: an
-    /// input belongs to the window it was made in.
-    pub(crate) fn open_settings_then(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) {
-        if let Some((handle, _)) = self.settings_window {
-            let app = cx.entity().downgrade();
-            cx.defer(move |cx| {
-                let _ = handle.update(cx, |_, window, cx| {
-                    window.activate_window();
-                    let _ = app.update(cx, |this, cx| then(this, window, cx));
-                });
-            });
-            return;
-        }
-        if self.settings.is_none() {
-            self.remember_active_pane(window, cx);
-            if !cfg!(test) {
-                self.open_settings_window_then(window, cx, Some(Box::new(then)));
-                return;
-            }
-            self.build_settings_state(window, cx);
-        }
-        then(self, window, cx);
-    }
-
-    /// Close settings, then run `then` in the workspace window — where a tab it
-    /// opens belongs, whichever window the request came from.
-    pub(crate) fn close_settings_then(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) {
-        let owner = self.settings_window.map(|(_, owner)| owner);
-        self.close_settings(window, cx);
-        match owner {
-            None => then(self, window, cx),
-            Some(owner) => {
-                let app = cx.entity().downgrade();
-                cx.defer(move |cx| {
-                    let _ = owner.update(cx, |_, window, cx| {
-                        let _ = app.update(cx, |this, cx| then(this, window, cx));
-                    });
-                });
-            }
-        }
-    }
-
-    /// Resolve a pending form before performing both parts of an external
-    /// navigation. Opening the page and loading its form must be one action.
-    pub(crate) fn open_ssh_profile_form(
-        &mut self,
-        profile: crate::core::ssh_profile::SshProfile,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
-            this.open_settings_then(window, cx, move |this, window, cx| {
-                this.navigate_settings(SettingsSection::Ssh, None, window, cx);
-                this.ssh_form_load(&profile, window, cx);
-            });
-        });
-    }
-
-    pub(crate) fn open_ssh_profile_in_settings(
-        &mut self,
-        id: uuid::Uuid,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
-            // Read after resolving edits, so saving and reopening the same
-            // profile cannot load a snapshot from before that save.
-            if let Some(profile) = cx
-                .global::<Config>()
-                .ssh_profiles
-                .iter()
-                .find(|p| p.id == id)
-                .cloned()
-            {
-                this.open_ssh_profile_form(profile, window, cx);
-            } else {
-                this.open_settings_section(SettingsSection::Ssh, window, cx);
-            }
-        });
     }
 
     pub(crate) fn open_ssh_profile_new_from_target(
@@ -9020,72 +7316,6 @@ impl LyrelApp {
             }
         }
         self.open_ssh_profile_form(profile, window, cx);
-    }
-
-    pub(crate) fn commit_font_family(&mut self, family: String, cx: &mut Context<Self>) {
-        self.font_family = family.clone();
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                let family = family.clone();
-                leaf.update(cx, |v, cx| v.set_font_family(family, cx));
-            }
-        }
-        let cfg = cx.global_mut::<Config>();
-        cfg.font_family = family;
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn commit_font_family_emphasis(
-        &mut self,
-        bold: bool,
-        name: String,
-        cx: &mut Context<Self>,
-    ) {
-        let family = (name != crate::ui::settings::font_default_label()).then_some(name);
-        for tab in &self.tabs {
-            for leaf in tab.pane.terminals() {
-                let family = family.clone();
-                leaf.update(cx, |v, cx| {
-                    if bold {
-                        v.set_font_family_bold(family, cx);
-                    } else {
-                        v.set_font_family_italic(family, cx);
-                    }
-                });
-            }
-        }
-        if bold {
-            self.font_family_bold = family.clone();
-        } else {
-            self.font_family_italic = family.clone();
-        }
-        let cfg = cx.global_mut::<Config>();
-        if bold {
-            cfg.font_family_bold = family;
-        } else {
-            cfg.font_family_italic = family;
-        }
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn commit_ui_font_family(
-        &mut self,
-        name: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let family = (name != crate::ui::settings::ui_font_default_label()).then_some(name);
-        let cfg = cx.global_mut::<Config>();
-        if cfg.ui_font_family == family {
-            return;
-        }
-        cfg.ui_font_family = family;
-        self.persist_settings_config(cx);
-        apply_theme(Some(window), cx);
-        cx.refresh_windows();
-        cx.notify();
     }
 
     fn reload_from_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -9211,114 +7441,6 @@ impl LyrelApp {
             }
         }
         cx.notify();
-    }
-
-    /// Saves the shell after the detected-shell menu wrote into the field.
-    ///
-    /// The field itself only commits on Enter or blur, and picking from a menu
-    /// is neither — without this the choice would sit in the box unsaved until
-    /// the user happened to click into it and out again.
-    pub(crate) fn commit_shell_from_picker(&mut self, cx: &mut Context<Self>) {
-        self.commit_shell(cx);
-        cx.notify();
-    }
-
-    fn commit_shell(&mut self, cx: &mut Context<Self>) {
-        let Some(settings) = self.active_settings() else {
-            return;
-        };
-        let program = settings
-            .shell_program_input
-            .read(cx)
-            .value()
-            .trim()
-            .to_string();
-        // Split the way a command line splits, not on raw whitespace: the text
-        // goes on to become argv verbatim, and `split_whitespace` kept the
-        // quote characters while tearing the quoted string apart — `-c "echo
-        // hi"` reached the shell as `["-c", "\"echo", "hi\""]` (#551).
-        let raw_args = settings.shell_args_input.read(cx).value();
-        let args: Vec<String> = match split_shell_args(&raw_args) {
-            Ok(args) => args,
-            // A quote that never closes names no argv at all, so this text
-            // cannot go into `config.json` — the proxy row's pattern: leave the
-            // stored arguments alone and let the row explain why under the
-            // input after this notify. The rest of the row still commits: the
-            // Program the user just typed, or picked from the menu, is not
-            // theirs to lose over the field below it.
-            Err(_) => {
-                cx.notify();
-                let cfg = cx.global::<Config>();
-                cfg.shell
-                    .as_ref()
-                    .map(|s| s.args.clone())
-                    .unwrap_or_default()
-            }
-        };
-        let shell = if program.is_empty() {
-            None
-        } else {
-            Some(ShellConfig { program, args })
-        };
-        {
-            let cfg = cx.global_mut::<Config>();
-            if cfg.shell == shell {
-                return;
-            }
-            cfg.shell = shell;
-            self.persist_settings_config(cx);
-        }
-        // Shell discovery runs off the UI thread and now includes the saved
-        // configured shell, so refresh the menu without blocking Settings.
-        self.refresh_shells(cx);
-    }
-
-    pub(crate) fn set_working_directory_strategy(
-        &mut self,
-        strategy: crate::core::config::WdStrategy,
-        cx: &mut Context<Self>,
-    ) {
-        let cfg = cx.global_mut::<Config>();
-        if cfg.working_directory.strategy == strategy {
-            return;
-        }
-        cfg.working_directory.strategy = strategy;
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    fn commit_working_directory_path(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self
-            .active_settings()
-            .map(|s| s.wd_path_input.read(cx).value().trim().to_string())
-        else {
-            return;
-        };
-        // A typo here is not a directory, and the daemon then silently falls
-        // back to its own cwd for every new pane — "new shells don't start in
-        // my project" reads as a lyrel bug rather than a typo (#601). Refuse
-        // to save, the proxy row's pattern (#551): the field keeps the text,
-        // the settings row explains in red, and the last good value stays in
-        // config.json.
-        if !wd_path_saveable(&path) {
-            cx.notify();
-            return;
-        }
-        let cfg = cx.global_mut::<Config>();
-        if cfg.working_directory.path == path {
-            return;
-        }
-        cfg.working_directory.path = path;
-        self.persist_settings_config(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn active_settings(&self) -> Option<&SettingsState> {
-        self.settings.as_ref()
-    }
-
-    pub(crate) fn active_settings_mut(&mut self) -> Option<&mut SettingsState> {
-        self.settings.as_mut()
     }
 
     pub(crate) fn tab_ssh_dot(&self, tab: &Tab, cx: &App) -> Option<u32> {
@@ -9487,598 +7609,6 @@ impl LyrelApp {
             .pane
             .focused_or_first(window, cx)?;
         self.leaf_close_reason(&leaf, cx)
-    }
-
-    pub(crate) fn select_settings_section(
-        &mut self,
-        target: SettingsSection,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(s) = self.settings.as_mut() {
-            let moved = s.section != target;
-            s.section = target;
-            s.recording = None;
-            // Arriving on a page with a query live means arriving to look for
-            // what the nav badge counted, so take the page to it.
-            if moved {
-                s.reveal_first_hit.set(true);
-            }
-            if moved {
-                s.statistics.invalidate();
-            }
-            if target == SettingsSection::Agents {
-                s.agent_hooks_states = crate::ui::settings::AgentHooksView::Loading;
-            }
-            s.usage.update(cx, |page, cx| {
-                page.set_visible(target == SettingsSection::Usage, cx)
-            });
-        }
-        self.ensure_agent_hooks_loaded(cx);
-        self.skills_section_changed(target, cx);
-        if target == SettingsSection::Statistics {
-            self.load_statistics(cx);
-        }
-        cx.notify();
-    }
-
-    fn ensure_agent_hooks_loaded(&mut self, cx: &mut Context<Self>) {
-        if self
-            .active_settings()
-            .is_some_and(|s| s.section == SettingsSection::Agents)
-        {
-            self.load_agent_hooks_states(cx);
-        }
-    }
-
-    pub(crate) fn agent_hooks_machines(
-        &self,
-        cx: &mut App,
-    ) -> Vec<crate::ui::settings::AgentHooksMachine> {
-        use crate::ui::settings::AgentHooksMachine;
-        let mut out = vec![AgentHooksMachine {
-            host: crate::ui::host_ops::HostId::LOCAL,
-            label: t(L10nKey::AppAgentHooksThisComputer).to_string(),
-        }];
-        let configured = crate::ui::remote_connect::available_hosts(cx);
-        for id in crate::ui::host_registry::HostRegistry::ids(cx) {
-            if id.is_local() {
-                continue;
-            }
-            let label = configured
-                .iter()
-                .find(|h| h.target.host_id() == id)
-                .map(|h| h.label.clone())
-                .unwrap_or_else(|| t(L10nKey::AppAgentHooksRemoteMachine).to_string());
-            out.push(AgentHooksMachine { host: id, label });
-        }
-        out
-    }
-
-    pub(crate) fn agent_hooks_offline_count(&self, cx: &mut App) -> usize {
-        let connected = crate::ui::host_registry::HostRegistry::ids(cx);
-        cx.global::<Config>()
-            .ssh_profiles
-            .iter()
-            .filter(|p| {
-                !connected
-                    .contains(&crate::core::session::RemoteTarget::Profile { id: p.id }.host_id())
-            })
-            .count()
-    }
-
-    pub(crate) fn select_agent_hooks_host(
-        &mut self,
-        host: crate::ui::host_ops::HostId,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(s) = self.settings.as_mut() {
-            if s.agent_hooks_host == host {
-                return;
-            }
-            s.agent_hooks_host = host;
-            s.agent_hooks_note = None;
-            s.agent_hooks_states = crate::ui::settings::AgentHooksView::Loading;
-        }
-        self.load_agent_hooks_states(cx);
-        cx.notify();
-    }
-
-    fn load_agent_hooks_states(&mut self, cx: &mut Context<Self>) {
-        use crate::core::agent_hooks::{HookAgent, HookTarget};
-        use crate::ui::settings::{AgentHookRow, AgentHooksView};
-
-        let Some(host_id) = self.settings.as_ref().map(|s| s.agent_hooks_host) else {
-            return;
-        };
-        let seq = match self.settings.as_mut() {
-            Some(s) => {
-                s.agent_hooks_seq += 1;
-                s.agent_hooks_seq
-            }
-            None => return,
-        };
-        let Some((host, home)) = self.agent_hooks_link(host_id, cx) else {
-            if let Some(s) = self.settings.as_mut() {
-                s.agent_hooks_states = AgentHooksView::Unavailable(Self::agent_hooks_offline_msg());
-            }
-            cx.notify();
-            return;
-        };
-        let launch_commands = cx.global::<Config>().agent_launch.clone();
-
-        crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
-            move |h| {
-                let target = match &home {
-                    Some(home) => HookTarget::remote(h, home.clone()),
-                    None => HookTarget::local(h)?,
-                }
-                .with_launch_commands(&launch_commands);
-                Some(
-                    HookAgent::ALL
-                        .into_iter()
-                        .map(|agent| AgentHookRow {
-                            agent,
-                            state: crate::core::agent_hooks::hooks_state(&target, agent),
-                            target: agent.target_display(&target),
-                            diagnostic: crate::core::agent_hooks::hooks_diagnostic(&target, agent),
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            },
-            move |this, rows, cx| {
-                if let Some(s) = this.settings.as_mut()
-                    && s.agent_hooks_seq == seq
-                {
-                    s.agent_hooks_states = match rows {
-                        Some(rows) => AgentHooksView::Ready(rows),
-                        None => AgentHooksView::Unavailable(
-                            t(L10nKey::AppAgentHooksNoHomeDir).to_string(),
-                        ),
-                    };
-                    cx.notify();
-                }
-            },
-        );
-    }
-
-    fn agent_hooks_offline_msg() -> String {
-        t(L10nKey::AppAgentHooksOffline).to_string()
-    }
-
-    fn agent_hooks_link(
-        &self,
-        host_id: crate::ui::host_ops::HostId,
-        cx: &mut App,
-    ) -> Option<(crate::ui::host_ops::SharedHost, Option<std::path::PathBuf>)> {
-        let host = crate::ui::host_registry::HostRegistry::get(cx, host_id)?;
-        if host_id.is_local() {
-            return Some((host, None));
-        }
-        if !host.is_connected() {
-            return None;
-        }
-        let home = crate::ui::remote_connect::HostLinks::home(cx, host_id)?;
-        Some((host, Some(home)))
-    }
-
-    pub(crate) fn settings_install_agent_hooks(
-        &mut self,
-        agent: crate::core::agent_hooks::HookAgent,
-        cx: &mut Context<Self>,
-    ) {
-        self.run_agent_hooks_action(agent, true, cx);
-    }
-
-    pub(crate) fn settings_uninstall_agent_hooks(
-        &mut self,
-        agent: crate::core::agent_hooks::HookAgent,
-        cx: &mut Context<Self>,
-    ) {
-        self.run_agent_hooks_action(agent, false, cx);
-    }
-
-    /// Words a hook install or removal for the note in Settings.
-    ///
-    /// `agent_hooks` returns what it did rather than a sentence, because it
-    /// lives in `lyrel-core` and cannot reach `src/ui/i18n` — it used to hand
-    /// back English prose, which a Chinese or Japanese UI then showed as-is.
-    fn agent_hooks_outcome_msg(outcome: &crate::core::agent_hooks::HookOutcome) -> String {
-        use crate::core::agent_hooks::HookOutcome as O;
-        match outcome {
-            O::Installed => t(L10nKey::AppAgentHooksInstalled).to_string(),
-            O::Removed => t(L10nKey::AppAgentHooksRemoved).to_string(),
-            O::NothingInstalled => t(L10nKey::AppAgentHooksNothingInstalled).to_string(),
-            O::NoLyrelHooks => t(L10nKey::AppAgentHooksNoLyrelHooks).to_string(),
-        }
-    }
-
-    fn run_agent_hooks_action(
-        &mut self,
-        agent: crate::core::agent_hooks::HookAgent,
-        install: bool,
-        cx: &mut Context<Self>,
-    ) {
-        use crate::core::agent_hooks::HookTarget;
-
-        let Some(host_id) = self.settings.as_ref().map(|s| s.agent_hooks_host) else {
-            return;
-        };
-        let Some((host, home)) = self.agent_hooks_link(host_id, cx) else {
-            if let Some(s) = self.settings.as_mut() {
-                s.agent_hooks_note = Some((agent, Self::agent_hooks_offline_msg()));
-                s.agent_hooks_states = crate::ui::settings::AgentHooksView::Unavailable(
-                    Self::agent_hooks_offline_msg(),
-                );
-            }
-            cx.notify();
-            return;
-        };
-
-        if let Some(s) = self.settings.as_mut() {
-            s.agent_busy.insert(agent);
-            s.agent_touched.insert(agent);
-        }
-        cx.notify();
-        let launch_commands = cx.global::<Config>().agent_launch.clone();
-        crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
-            move |h| {
-                let target = match &home {
-                    Some(home) => HookTarget::remote(h, home.clone()),
-                    None => HookTarget::local(h).ok_or_else(|| {
-                        anyhow::anyhow!("{}", t(L10nKey::AppAgentHooksHomeDirUnresolved))
-                    })?,
-                }
-                .with_launch_commands(&launch_commands);
-                if install {
-                    crate::core::agent_hooks::install_hooks(&target, agent)
-                } else {
-                    crate::core::agent_hooks::uninstall_hooks(&target, agent)
-                }
-            },
-            move |this, result, cx| {
-                if let Some(s) = this.settings.as_mut() {
-                    s.agent_busy.remove(&agent);
-                    s.agent_hooks_note = Some((
-                        agent,
-                        match result {
-                            Ok(outcome) => Self::agent_hooks_outcome_msg(&outcome),
-                            // Every sibling error names its action; this one
-                            // said only "Failed:", leaving the note that
-                            // reports it silent about which half of the
-                            // toggle had not happened.
-                            Err(e) => t_fmt(
-                                match install {
-                                    true => L10nKey::AppAgentHooksInstallFailed,
-                                    false => L10nKey::AppAgentHooksRemoveFailed,
-                                },
-                                &[("error", &e.to_string())],
-                            ),
-                        },
-                    ));
-                }
-                this.load_agent_hooks_states(cx);
-                cx.notify();
-            },
-        );
-    }
-
-    pub(crate) fn autoselect_settings_search(&mut self, cx: &mut Context<Self>) {
-        if let Some(s) = self.settings.as_mut() {
-            let active = !s.search.read(cx).value().trim().is_empty() || s.modified_only;
-            if active && !s.search_active {
-                s.search_return_offset = s.content_scroll.offset();
-            }
-            if active {
-                s.content_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
-            } else if s.search_active {
-                s.content_scroll.set_offset(s.search_return_offset);
-            }
-            s.search_active = active;
-            s.usage.update(cx, |page, cx| {
-                page.set_visible(s.section == SettingsSection::Usage && !active, cx)
-            });
-            s.search_selection = 0;
-            if active {
-                s.focused_setting = None;
-            }
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn start_recording_key(
-        &mut self,
-        action: String,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let this = cx.weak_entity();
-        let intercept = cx.intercept_keystrokes(move |ev, _window, cx| {
-            let keystroke = ev.keystroke.clone();
-            let _ = this.update(cx, |this, cx| this.on_record_key(&keystroke, cx));
-            cx.stop_propagation();
-        });
-        self.record_gen = self.record_gen.wrapping_add(1);
-        if let Some(s) = self.active_settings_mut() {
-            s.rebinding_note = None;
-            s.kb_conflict = None;
-            s.recording = Some(Recording {
-                action,
-                chords: Vec::new(),
-                _intercept: intercept,
-            });
-        }
-        cx.notify();
-    }
-
-    fn on_record_key(&mut self, keystroke: &gpui_kit::Keystroke, cx: &mut Context<Self>) {
-        let Some((action, has_chords)) = self
-            .active_settings()
-            .and_then(|s| s.recording.as_ref())
-            .map(|r| (r.action.clone(), !r.chords.is_empty()))
-        else {
-            return;
-        };
-        match keystroke.key.as_str() {
-            "escape" => {
-                self.stop_recording(cx);
-                return;
-            }
-            "backspace" | "delete" => {
-                if has_chords {
-                    if let Some(r) = self
-                        .active_settings_mut()
-                        .and_then(|s| s.recording.as_mut())
-                    {
-                        r.chords.pop();
-                    }
-                    let still_has = self
-                        .active_settings()
-                        .and_then(|s| s.recording.as_ref())
-                        .is_some_and(|r| !r.chords.is_empty());
-                    if still_has {
-                        self.schedule_recording_commit(cx);
-                    } else {
-                        self.record_gen = self.record_gen.wrapping_add(1);
-                    }
-                    cx.notify();
-                } else {
-                    self.stop_recording(cx);
-                    self.unbind_keybinding(action, cx);
-                }
-                return;
-            }
-            _ => {}
-        }
-        let Some(spec) = crate::ui::keymap::spec_from_keystroke(keystroke) else {
-            return;
-        };
-        if let Some(r) = self
-            .active_settings_mut()
-            .and_then(|s| s.recording.as_mut())
-        {
-            r.chords.push(spec);
-        }
-        self.schedule_recording_commit(cx);
-        cx.notify();
-    }
-
-    fn schedule_recording_commit(&mut self, cx: &mut Context<Self>) {
-        self.record_gen = self.record_gen.wrapping_add(1);
-        let generation = self.record_gen;
-        cx.spawn(async move |this, cx| {
-            smol::Timer::after(std::time::Duration::from_millis(RECORD_COMMIT_DELAY_MS)).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.record_gen == generation {
-                    this.commit_recording(cx);
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn commit_recording(&mut self, cx: &mut Context<Self>) {
-        let Some((action, chords)) = self
-            .active_settings()
-            .and_then(|s| s.recording.as_ref())
-            .filter(|r| !r.chords.is_empty())
-            .map(|r| (r.action.clone(), r.chords.clone()))
-        else {
-            return;
-        };
-        self.stop_recording(cx);
-        let spec = chords.join(" ");
-        // A chord another action answers to is not taken silently: the row
-        // asks whether to take it over, and only Replace moves it.
-        if let Some(other) = Self::keybinding_owner(&action, &spec, cx) {
-            if let Some(s) = self.active_settings_mut() {
-                s.kb_conflict = Some(crate::ui::settings::KeyConflict {
-                    action,
-                    spec,
-                    other,
-                });
-            }
-            cx.notify();
-            return;
-        }
-        self.assign_keybinding(action, spec, cx);
-    }
-
-    /// The other action that already answers to `spec`, if any.
-    fn keybinding_owner(action: &str, spec: &str, cx: &App) -> Option<String> {
-        use crate::ui::keymap::same_chord;
-        crate::ui::keymap::effective_chords(cx)
-            .into_iter()
-            .find(|(a, chords)| a != action && chords.iter().any(|k| same_chord(k, spec)))
-            .map(|(a, _)| a)
-            .or_else(|| {
-                crate::ui::keymap::extra_bindings(cx)
-                    .into_iter()
-                    .find(|(a, k)| a != action && same_chord(k, spec))
-                    .map(|(a, _)| a)
-            })
-    }
-
-    /// Takes the conflicting chord over, as the row's Replace button says.
-    pub(crate) fn resolve_keybinding_conflict(&mut self, replace: bool, cx: &mut Context<Self>) {
-        let Some(conflict) = self
-            .active_settings_mut()
-            .and_then(|s| s.kb_conflict.take())
-        else {
-            return;
-        };
-        if replace {
-            self.assign_keybinding(conflict.action, conflict.spec, cx);
-            if let Some(s) = self.active_settings_mut() {
-                // The row already said what Replace would do.
-                s.rebinding_note = None;
-            }
-        }
-        cx.notify();
-    }
-
-    fn stop_recording(&mut self, cx: &mut Context<Self>) {
-        self.record_gen = self.record_gen.wrapping_add(1);
-        if let Some(s) = self.active_settings_mut() {
-            s.recording = None;
-        }
-        cx.notify();
-    }
-
-    fn assign_keybinding(&mut self, action: String, spec: String, cx: &mut Context<Self>) {
-        // Compared as chords, not as spellings: a recorded `secondary-}` and a
-        // config's `secondary-shift-]` are one keystroke written two ways, and
-        // only `same_chord` sees it. Compared as text, the displacement never
-        // fires and both bindings survive onto that keystroke, where which one
-        // wins is arbitrary (#750).
-        //
-        // Only that chord moves: the action that had it keeps any others it
-        // has, since an action can carry several (#868) and emptying it would
-        // take away keys that were never on this keystroke. An extra default —
-        // Alt+Enter beside Shift+Enter — follows its action's first chord rather
-        // than being one of its own, so its owner is unbound outright, as it
-        // always was.
-        use crate::ui::keymap::same_chord;
-        let displaced: Option<(String, Vec<String>)> = crate::ui::keymap::effective_chords(cx)
-            .into_iter()
-            .find(|(a, chords)| *a != action && chords.iter().any(|k| same_chord(k, &spec)))
-            .map(|(a, chords)| {
-                let rest = chords.into_iter().filter(|k| !same_chord(k, &spec));
-                (a, rest.collect())
-            })
-            .or_else(|| {
-                crate::ui::keymap::extra_bindings(cx)
-                    .into_iter()
-                    .find(|(a, k)| *a != action && same_chord(k, &spec))
-                    .map(|(a, _)| (a, Vec::new()))
-            });
-        // A trailing "…" on an action name marks a command that opens
-        // something; it is not punctuation, and inside a sentence it reads as
-        // the sentence trailing off — "Rename Tab… took the shortcut from".
-        let in_prose = |name: &str| name.trim_end_matches('…').to_string();
-        let note = displaced.as_ref().map(|(other, _)| {
-            t_fmt(
-                L10nKey::AppKeybindingDisplacedNote,
-                &[
-                    (
-                        "action",
-                        &in_prose(&crate::ui::keymap::action_entry(&action).1),
-                    ),
-                    (
-                        "previous",
-                        &in_prose(&crate::ui::keymap::action_entry(other).1),
-                    ),
-                ],
-            )
-        });
-        // Both written as lists. Recording a shortcut sets it — the row showed
-        // one chord and now shows another — and a bare string in config adds a
-        // chord beside the default instead (#868).
-        self.update_config(cx, |cfg| {
-            use crate::core::config::KeybindingOverride;
-            if let Some((other, rest)) = &displaced {
-                cfg.keybindings
-                    .insert(other.clone(), KeybindingOverride::Exact(rest.clone()));
-            }
-            cfg.keybindings
-                .insert(action, KeybindingOverride::Exact(vec![spec]));
-        });
-        crate::ui::keymap::rebind(cx);
-        if let Some(s) = self.active_settings_mut() {
-            s.rebinding_note = note;
-        }
-        cx.notify();
-    }
-
-    /// Takes every chord off an action, and keeps it off.
-    ///
-    /// ⌫ on a row that has recorded nothing used to *reset* it — drop the
-    /// override so the action gets its shipped chord back. On a row nobody has
-    /// overridden, which is every row the first time it is looked at, that is a
-    /// no-op: someone pressing Backspace over Alt+1 to be rid of it watched
-    /// Alt+1 sit exactly where it was and read it as the default restoring
-    /// itself (#901). Nothing anywhere in the app said "this action should have
-    /// no key", though `config.json` has spelled it `[]` since #868.
-    ///
-    /// So ⌫ writes that empty list, and the **Reset** button beside the row —
-    /// which appears the moment an action is overridden, this way included — is
-    /// the way back to the default.
-    pub(crate) fn unbind_keybinding(&mut self, action: String, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| {
-            cfg.keybindings.insert(
-                action,
-                crate::core::config::KeybindingOverride::Exact(Vec::new()),
-            );
-        });
-        crate::ui::keymap::rebind(cx);
-        if let Some(s) = self.active_settings_mut() {
-            s.recording = None;
-            s.rebinding_note = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn reset_keybinding(&mut self, action: String, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| {
-            cfg.keybindings.remove(&action);
-        });
-        crate::ui::keymap::rebind(cx);
-        if let Some(s) = self.active_settings_mut() {
-            s.recording = None;
-            s.rebinding_note = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn restore_default_keybindings_confirmed(&mut self, cx: &mut Context<Self>) {
-        self.update_config(cx, |cfg| cfg.keybindings.clear());
-        crate::ui::keymap::rebind(cx);
-        if let Some(s) = self.active_settings_mut() {
-            s.recording = None;
-            s.rebinding_note = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn set_keybinding_preset(&mut self, preset: &str, cx: &mut Context<Self>) {
-        let preset = preset.to_string();
-        self.update_config(cx, |cfg| cfg.keybinding_preset = preset);
-        crate::ui::keymap::rebind(cx);
-        if let Some(s) = self.active_settings_mut() {
-            s.recording = None;
-            s.rebinding_note = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn set_keybinding_prefix(&mut self, prefix: &str, cx: &mut Context<Self>) {
-        let prefix = prefix.to_string();
-        self.update_config(cx, |cfg| cfg.prefix = prefix);
-        crate::ui::keymap::rebind(cx);
-        cx.notify();
     }
 }
 
@@ -10712,7 +8242,7 @@ impl Render for LyrelApp {
                     // preset's gradient fill is preserved, just with alpha 1;
                     // `render_settings` repaints the theme image over it.
                     .bg(settings_bg)
-                    .child(self.render_settings(window, cx))
+                    .child(self.settings.as_ref().unwrap().clone())
             });
 
         let root =
@@ -12812,9 +10342,9 @@ mod tests {
     use super::close_reason;
     use super::{
         CloseReason, DOCUMENT_MIN_W, Dir, OpenedFrom, Pane, Rename, TERMINAL_MIN_W,
-        TITLE_BAR_BORDER, Tab, TabAgentSession, clear_window_override_values, close_prompt,
-        document_column_px, inherited_start_dir, join_shell_args, leaf_shares_the_window_daemon,
-        mru_order, native_ssh_pane_alive, one_slot_move, pane_free_for, parse_ssh_connect_input,
+        TITLE_BAR_BORDER, Tab, TabAgentSession, close_prompt, document_column_px,
+        inherited_start_dir, join_shell_args, leaf_shares_the_window_daemon, mru_order,
+        native_ssh_pane_alive, one_slot_move, pane_free_for, parse_ssh_connect_input,
         parse_ssh_option_words, rename_outcome, side_panel_max, split_machine_held,
         split_shell_args, step_in_order, title_strip_centre, title_strip_content_centre,
         title_strip_rule_and_pad, wd_path_saveable,
@@ -13149,37 +10679,6 @@ mod tests {
         // Singular is not "1 tabs".
         let one = crate::ui::i18n::t_plural(crate::ui::i18n::L10nKey::AppTabsNotRestored, 1, &[]);
         assert!(one.contains("1 tab "), "{one}");
-    }
-
-    #[test]
-    fn non_windows_reset_preserves_the_synced_windows_backdrop() {
-        let mut config = crate::core::config::Config::default();
-        config.window_opacity = Some(0.8);
-        config.window_blur = Some(true);
-        config.window_backdrop = crate::core::config::WindowBackdrop::Mica;
-
-        clear_window_override_values(&mut config, false);
-
-        assert_eq!(config.window_opacity, None);
-        assert_eq!(config.window_blur, None);
-        assert_eq!(
-            config.window_backdrop,
-            crate::core::config::WindowBackdrop::Mica,
-            "an inert synchronized backdrop is not a local override to reset"
-        );
-    }
-
-    #[test]
-    fn windows_reset_clears_the_local_backdrop_override() {
-        let mut config = crate::core::config::Config::default();
-        config.window_backdrop = crate::core::config::WindowBackdrop::Acrylic;
-
-        clear_window_override_values(&mut config, true);
-
-        assert_eq!(
-            config.window_backdrop,
-            crate::core::config::WindowBackdrop::Auto
-        );
     }
 
     #[test]
@@ -14077,16 +11576,15 @@ mod ssh_rebuild_gpui_tests {
 
 #[cfg(test)]
 mod keybinding_gpui_tests {
-    use super::test_window::harness;
     use crate::core::config::Config;
-    use crate::ui::app::LyrelApp;
     use crate::ui::settings::SettingsSection;
+    use crate::ui::settings::test_window::harness;
+    use crate::ui::settings_window::SettingsWindow;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 
-    fn begin_capture(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, action: &str) {
+    fn begin_capture(app: &Entity<SettingsWindow>, vcx: &mut VisualTestContext, action: &str) {
         let action = action.to_string();
         app.update_in(vcx, |app, window, cx| {
-            app.toggle_settings(window, cx);
             app.select_settings_section(SettingsSection::Keybindings, cx);
             app.start_recording_key(action, window, cx);
         });
@@ -14115,7 +11613,7 @@ mod keybinding_gpui_tests {
 
     /// Waits for the row to ask about a chord another action has, checks who
     /// it names, and answers Replace.
-    fn replace_conflict(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, owner: &str) {
+    fn replace_conflict(app: &Entity<SettingsWindow>, vcx: &mut VisualTestContext, owner: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             vcx.background_executor.run_until_parked();
@@ -14262,7 +11760,6 @@ mod keybinding_gpui_tests {
     fn escape_cancels_capture_without_writing(cx: &mut TestAppContext) {
         let (app, mut vcx) = harness(cx);
         app.update_in(&mut vcx, |app, window, cx| {
-            app.toggle_settings(window, cx);
             app.select_settings_section(SettingsSection::Keybindings, cx);
             app.start_recording_key("NewTab".to_string(), window, cx);
         });
@@ -14280,8 +11777,8 @@ mod keybinding_gpui_tests {
 
 #[cfg(test)]
 mod ui_font_gpui_tests {
-    use super::test_window::harness;
     use crate::core::config::Config;
+    use crate::ui::settings::test_window::harness;
     use crate::ui::settings::ui_font_default_label;
     use gpui_kit::TestAppContext;
     use gpui_kit::component::Theme;
@@ -15175,10 +12672,10 @@ mod unfocused_shortcut_tests {
     fn settings_in_its_own_window_leaves_the_workspace_its_focus(cx: &mut TestAppContext) {
         let (app, mut vcx) = open(cx);
         let elsewhere = cx.add_window(|_, _| gpui_kit::EmptyView);
+        let _settings = crate::ui::settings::test_window::open(&app, &mut vcx);
         app.update_in(&mut vcx, |app, window, cx| {
             // Tests build the page in place; point it at the other window, as
             // a real ⌘, does.
-            app.toggle_settings(window, cx);
             app.settings_window = Some((elsewhere.into(), window.window_handle()));
             let orphan = cx.focus_handle();
             window.focus(&orphan, cx);
@@ -15194,6 +12691,9 @@ mod unfocused_shortcut_tests {
             assert!(
                 !app.settings
                     .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .active_settings()
                     .unwrap()
                     .focus_handle
                     .is_focused(window),
@@ -15225,7 +12725,7 @@ mod unfocused_shortcut_tests {
         vcx.run_until_parked();
         vcx.update(|window, cx| window.render_frame(cx));
         assert!(app.update_in(&mut vcx, |app, window, cx| {
-            app.active_settings().is_none() && app.editor_has_focus(window, cx)
+            app.settings.is_none() && app.editor_has_focus(window, cx)
         }));
         vcx.update(|window, cx| window.input("returns to document", cx));
         assert!(app.update_in(&mut vcx, |app, window, cx| app.editor_has_focus(window, cx)));
@@ -16250,7 +13750,11 @@ mod pane_menu_guard_tests {
         let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
         let pane = app.update_in(&mut vcx, |app, _, _| app.tabs[0].pane.first_leaf().unwrap());
         for size in [14., 20.] {
-            app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(size, cx));
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<Config>().ui_font_size = size;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(size));
+                cx.notify();
+            });
             vcx.update(|window, cx| {
                 window.render_frame(cx);
                 let id = ("pane-drag-handle", pane.entity_id().as_u64() as usize);
@@ -17476,7 +14980,11 @@ mod pip_geometry_gpui_tests {
             assert_eq!(window.find_all(("pane-drag-handle", key)).len(), 1);
         });
         for size in [20., 14.] {
-            app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(size, cx));
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<Config>().ui_font_size = size;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(size));
+                cx.notify();
+            });
             vcx.run_until_parked();
             vcx.update(|window, cx| {
                 window.render_frame(cx);

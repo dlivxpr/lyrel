@@ -719,7 +719,9 @@ fn parking_target_matches_painted_ellipse_and_stays_above_status_after_zoom_resi
     for (width, font, sidebar) in [(1280., 14., false), (620., 20., true), (980., 18., false)] {
         vcx.simulate_resize(size(px(width), px(720.)));
         app.update_in(&mut vcx, |app, _, cx| {
-            app.set_ui_font_size(font, cx);
+            cx.global_mut::<Config>().ui_font_size = font;
+            gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font));
+            cx.notify();
             if app.sidebar_open(cx) != sidebar {
                 app.toggle_left_panel(cx);
             }
@@ -1133,7 +1135,11 @@ fn overflow_uses_content_width_and_zoom_without_shrinking_targets_or_losing_entr
         );
     });
     vcx.simulate_resize(size(px(620.), px(540.)));
-    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(24., cx));
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<Config>().ui_font_size = 24.;
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(24.));
+        cx.notify();
+    });
     vcx.run_until_parked();
     vcx.update(|window, cx| window.click("parked-more", cx));
     vcx.run_until_parked();
@@ -1174,7 +1180,11 @@ fn overflow_uses_content_width_and_zoom_without_shrinking_targets_or_losing_entr
         );
     });
     vcx.simulate_resize(size(px(1440.), px(720.)));
-    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(16., cx));
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<Config>().ui_font_size = 16.;
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(16.));
+        cx.notify();
+    });
     vcx.run_until_parked();
     vcx.update(|window, cx| window.press("escape", cx));
     vcx.run_until_parked();
@@ -1219,7 +1229,11 @@ fn overflow_tabbed_rows_activate_their_own_pane_before_restore(cx: &mut TestAppC
     });
     // Leave room for all three Tab stops; virtualization is covered separately.
     vcx.simulate_resize(size(px(620.), px(900.)));
-    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(24., cx));
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<Config>().ui_font_size = 24.;
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(24.));
+        cx.notify();
+    });
     vcx.run_until_parked();
     vcx.update(|window, cx| window.click("parked-more", cx));
     vcx.run_until_parked();
@@ -1294,7 +1308,11 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
         (current, parked)
     });
     vcx.simulate_resize(size(px(620.), px(540.)));
-    app.update_in(&mut vcx, |app, _, cx| app.set_ui_font_size(20., cx));
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<Config>().ui_font_size = 20.;
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(20.));
+        cx.notify();
+    });
     vcx.run_until_parked();
     vcx.update(|window, cx| window.click("parked-more", cx));
     vcx.run_until_parked();

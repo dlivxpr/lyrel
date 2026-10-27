@@ -46,7 +46,7 @@ src/ui/host_ops.rs|*
 # the user's color schemes with it.
 src/ui/presets.rs|std::fs::
 src/ui/presets.rs|.is_absolute()
-src/ui/app.rs|std::fs::create_dir_all
+src/ui/settings/theme_edit.rs|std::fs::create_dir_all
 
 # The editor's record of which files each tab had open is app state under the
 # local config dir, like the themes above — not a file in any workspace.
@@ -99,13 +99,13 @@ src/terminal/search.rs|.is_absolute()
 
 # Clipboard-image paste stages the bytes into the OS temp dir so an agent TUI
 # can be handed a path. Always `std::env::temp_dir()` on this machine.
-src/terminal/view.rs|std::fs::create_dir_all
-src/terminal/view.rs|std::fs::write
+src/terminal/paste.rs|std::fs::create_dir_all
+src/terminal/paste.rs|std::fs::write
 # The source side of a paste/drop upload into a remote pane: the paths the
 # clipboard or desktop hands over are on this machine by construction, so
 # asking whether one is a directory is a local read. The remote side of the
 # copy goes over SFTP.
-src/terminal/view.rs|std::fs::metadata
+src/terminal/paste.rs|std::fs::metadata
 
 # Asking whether a file would be *launched* rather than shown before handing it
 # to the desktop opener. Only reachable behind `host_id.is_local()` — a path on
