@@ -1653,7 +1653,10 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppNoRunningCodingAgent));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppNoRunningCodingAgent),
+            );
             return;
         };
         let rel = self

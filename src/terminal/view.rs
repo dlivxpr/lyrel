@@ -207,30 +207,6 @@ pub struct ShellParts {
     pub(crate) owner: Option<crate::core::session::WorkspaceId>,
 }
 
-/// What the reader was last shown of each pane's finished agent turn, kept for
-/// the life of the app rather than of a view.
-///
-/// A view is thrown away and built again over the same daemon pane whenever a
-/// workspace is switched out and back or a window is reopened from the tray,
-/// and a fresh view sees a `Done` agent arrive from nothing — exactly what a
-/// turn finishing live looks like. This is how the new view tells the two apart
-/// (#870).
-#[derive(Default)]
-struct AgentReadMarks(std::collections::HashMap<(crate::ui::host_ops::HostId, u64), AgentReadMark>);
-
-impl gpui_kit::Global for AgentReadMarks {}
-
-#[derive(Clone)]
-struct AgentReadMark {
-    session: (Option<String>, Option<Vec<String>>),
-    /// The status the pane's last view saw. Kept for every status, not only
-    /// `Done`, so that a pane with no mark at all is one this app never watched
-    /// an agent in — the only case where a reattach's replayed status may be
-    /// taken as a baseline (see `poll_agent_status`).
-    status: Option<crate::core::cli_agent::AgentStatus>,
-    turns: u64,
-    unread: bool,
-}
 
 #[derive(Clone, Copy)]
 struct DragScroll {
@@ -447,32 +423,10 @@ pub struct TerminalView {
     running_since: Option<std::time::Instant>,
     running_title: String,
     running_agent: Option<crate::core::cli_agent::CLIAgent>,
-    /// The foreground agent as of the last poll, so a new one is reported
-    /// once ([`AgentDetected`]) rather than on every frame it keeps running.
-    seen_agent: Option<crate::core::cli_agent::CLIAgent>,
-    /// Whether an agent appearing here is news. A pane this view spawned is
-    /// armed from the start; one it reattached to — an app restart, a
-    /// workspace switched back to — may already be running an agent that was
-    /// counted when it started, so it arms only once its shell is seen back
-    /// at the prompt with no agent in front.
-    agent_detection_armed: bool,
-    last_agent_status: Option<crate::core::cli_agent::AgentStatus>,
-    last_agent_session: (Option<String>, Option<Vec<String>>),
-    agent_turn_started: Option<std::time::Instant>,
-    /// The "finished" notification for a turn that just reached `Done`,
-    /// waiting out [`AGENT_DONE_SETTLE`]. Dropped — and so never sent — when
-    /// the status moves on first.
-    pending_finish_notice: Option<Task<()>>,
-    agent_was_rich: bool,
-    agent_result_unread: bool,
-    keep_unread_on_focus: bool,
-    /// Whether this view has seen its pane's agent status move at all. The
-    /// first move is where a rebuilt view consults [`AgentReadMarks`].
-    agent_status_seen: bool,
+    agent_activity: super::agent_activity::AgentActivity,
     git_status_cwd: Option<std::path::PathBuf>,
     /// Command completion can fall entirely between foreground polls.
     git_prompt_cycle: u64,
-    last_agent_activity: u64,
     cmd: CmdEditor,
     /// Mirrors `Config::prompt_editor`. Cached rather than read from the global
     /// because the ownership question ("does this keystroke belong to the local
@@ -658,10 +612,6 @@ const GIT_RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(10);
 /// wait for it is still what the reader is doing.
 const TITLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// How long a turn has to stay finished before it is announced. Long enough
-/// for a queued message or a `Stop` hook to start the next turn, short enough
-/// that the notification still reads as the moment the agent stopped.
-const AGENT_DONE_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// What a pane does with a title the program just set — see
 /// `TerminalView::set_title_when_settled`.
@@ -809,7 +759,7 @@ impl TerminalView {
     /// different number from `pane_id`, which the daemon assigns.
     fn notify_pane(&self, lead: Option<&str>, body: &str, cx: &mut Context<Self>) {
         let title = self.notification_title(lead, cx);
-        super::remote::notify_desktop_for_pane(Some(&title), body, Some(cx.entity_id()));
+        super::desktop_notification::notify_desktop_for_pane(Some(&title), body, Some(cx.entity_id()));
     }
 
     /// Desktop notifications the program wrote (OSC 9, 99, 777), such as
@@ -855,7 +805,7 @@ impl TerminalView {
         }
         for (title, body) in notes {
             match title {
-                Some(title) => super::remote::notify_desktop_for_pane(
+                Some(title) => super::desktop_notification::notify_desktop_for_pane(
                     Some(&title),
                     &body,
                     Some(cx.entity_id()),
@@ -1319,7 +1269,7 @@ impl TerminalView {
             .map(crate::core::config::gpui_font_features);
         let report_mouse = config.mouse_reporting;
         let prompt_editor = config.prompt_editor;
-        let agent_detection_armed = !terminal.reattached();
+        let agent_activity = super::agent_activity::AgentActivity::new(terminal.reattached());
         let mut font = gpui_kit::font(font_family);
         font.fallbacks = Some(gpui_kit::FontFallbacks::from_fonts(fallbacks.clone()));
         if let Some(features) = &font_features {
@@ -1377,12 +1327,7 @@ impl TerminalView {
         let focus_subs = vec![
             cx.on_focus_in(&focus_handle, window, |view, _window, cx| {
                 view.cursor_visible = true;
-                if view.keep_unread_on_focus {
-                    view.keep_unread_on_focus = false;
-                } else {
-                    view.agent_result_unread = false;
-                    view.note_agent_result_unread(cx);
-                }
+                view.agent_activity.focused((view.host_id, view.pane_id), cx);
                 view.report_focus_change(true);
                 cx.notify();
             }),
@@ -1545,19 +1490,9 @@ impl TerminalView {
             running_since: None,
             running_title: String::new(),
             running_agent: None,
-            seen_agent: None,
-            agent_detection_armed,
-            last_agent_status: None,
-            last_agent_session: (None, None),
-            agent_turn_started: None,
-            pending_finish_notice: None,
-            agent_was_rich: false,
-            agent_result_unread: false,
-            keep_unread_on_focus: false,
-            agent_status_seen: false,
+            agent_activity,
             git_status_cwd: None,
             git_prompt_cycle: 0,
-            last_agent_activity: 0,
             cmd: CmdEditor::new(),
             prompt_editor,
             typeahead: Typeahead::new(),
@@ -1833,41 +1768,12 @@ impl TerminalView {
     }
 
     pub fn agent_result_unread(&self) -> bool {
-        self.agent_result_unread
+        self.agent_activity.unread()
     }
 
     pub fn mark_agent_result_unread(&mut self, refocus_incoming: bool, cx: &mut App) {
-        self.agent_result_unread = true;
-        self.keep_unread_on_focus = refocus_incoming;
-        self.note_agent_result_unread(cx);
-    }
-
-    /// Leave what the reader has seen of this pane's agent where the pane's
-    /// next view will look for it — see [`AgentReadMarks`]. A mark left at any
-    /// status other than `Done` never vouches for a finished turn, but it still
-    /// records that this app was watching: a turn that was running when the
-    /// view went and finished before the next one came must badge.
-    fn record_agent_read_mark(&self, turns: u64, cx: &mut App) {
-        cx.default_global::<AgentReadMarks>().0.insert(
-            (self.host_id, self.pane_id),
-            AgentReadMark {
-                session: self.last_agent_session.clone(),
-                status: self.last_agent_status,
-                turns,
-                unread: self.agent_result_unread,
-            },
-        );
-    }
-
-    /// Carry a change to the badge alone into the mark the last status left.
-    fn note_agent_result_unread(&self, cx: &mut App) {
-        if !cx.has_global::<AgentReadMarks>() {
-            return;
-        }
-        let key = (self.host_id, self.pane_id);
-        if let Some(mark) = cx.global_mut::<AgentReadMarks>().0.get_mut(&key) {
-            mark.unread = self.agent_result_unread;
-        }
+        self.agent_activity
+            .mark_unread((self.host_id, self.pane_id), refocus_incoming, cx);
     }
 
     pub fn git_status(&self, cx: &App) -> Option<crate::terminal::git_status::GitStatus> {
@@ -3709,7 +3615,7 @@ impl TerminalView {
                 self.running_since = None;
                 if notify_allowed {
                     match agent {
-                        Some(_) if self.agent_was_rich => {}
+                        Some(_) if self.agent_activity.was_rich() => {}
                         Some(agent) => self.notify_agent_finished(agent, elapsed, cx),
                         None => {
                             let threshold = std::time::Duration::from_secs(
@@ -3730,13 +3636,7 @@ impl TerminalView {
         let turn_finished = self.poll_agent_status(notify_allowed, window, cx);
 
         let session = self.terminal.agent_session();
-        let tool_activity = match session.as_ref().map(|s| s.activity) {
-            Some(n) => std::mem::replace(&mut self.last_agent_activity, n) != n,
-            None => {
-                self.last_agent_activity = 0;
-                false
-            }
-        };
+        let tool_activity = self.agent_activity.tool_activity_changed(session.as_ref());
         let cwd_now = self
             .cwd_is_on_host()
             .then(|| {
@@ -3939,21 +3839,12 @@ impl TerminalView {
         );
     }
 
-    /// Report an agent that has just started in this pane ([`AgentDetected`]),
-    /// once per start, and never one that was already running when this view
-    /// reattached to the pane.
     fn poll_agent_detection(&mut self, at_prompt: bool, cx: &mut Context<Self>) {
-        let agent = self.terminal.foreground_agent();
-        if agent != self.seen_agent {
-            self.seen_agent = agent;
-            if let Some(agent) = agent
-                && self.agent_detection_armed
-            {
-                cx.emit(AgentDetected(agent));
-            }
-        }
-        if agent.is_none() && at_prompt {
-            self.agent_detection_armed = true;
+        if let Some(agent) = self
+            .agent_activity
+            .detect(self.terminal.foreground_agent(), at_prompt)
+        {
+            cx.emit(AgentDetected(agent));
         }
     }
 
@@ -3963,181 +3854,41 @@ impl TerminalView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        use crate::core::cli_agent::AgentStatus;
-
-        // Attaching to a pane the daemon kept alive — the app restarting onto
-        // last session's tabs above all — has the daemon replay the pane's
-        // stored agent status as an ordinary report. When this app has never
-        // watched the pane, that is a baseline, not an edge: the turn it
-        // describes ended before this view existed, often before this process
-        // did, and reading it as "a result just landed" is what used to bring
-        // every restored agent tab up wearing an unread badge for output its
-        // reader had long since read.
-        //
-        // When an earlier view of this app did watch the pane (a workspace
-        // switched out and back, a window reopened from the tray), its read
-        // mark knows more than the replay does, so the replay stays an edge and
-        // the mark decides below: the same finished turn takes its badge back
-        // as the reader left it, anything else is news (#870).
-        let adopted_baseline = match self.terminal.take_replayed_agent_status() {
-            Some(restored)
-                if !cx
-                    .try_global::<AgentReadMarks>()
-                    .is_some_and(|marks| marks.0.contains_key(&(self.host_id, self.pane_id))) =>
-            {
-                self.last_agent_status = restored;
-                self.agent_status_seen = true;
-                true
-            }
-            _ => false,
-        };
-
+        let replayed = self.terminal.take_replayed_agent_status();
         let session = self.terminal.agent_session();
-        if session.as_ref().is_some_and(|s| s.rich) {
-            self.agent_was_rich = true;
-        }
-        if self.terminal.foreground_agent().is_none() && session.is_none() {
-            self.agent_was_rich = false;
-        }
-
-        let identity = (
-            session.as_ref().and_then(|s| s.session_id.clone()),
-            session.as_ref().and_then(|s| s.launch_argv.clone()),
+        let update = self.agent_activity.observe(
+            (self.host_id, self.pane_id),
+            self.terminal.foreground_agent(),
+            session.as_ref(),
+            replayed,
+            self.focus_handle.is_focused(window),
+            notify_allowed,
+            cx,
         );
-        if identity != self.last_agent_session {
-            self.last_agent_session = identity;
+        if update.session_changed {
             cx.emit(AgentSessionChanged);
         }
-
-        let status = session.as_ref().map(|s| s.status);
-        let turns = session.as_ref().map_or(0, |s| s.turns);
-        if adopted_baseline {
-            // From here on this app is watching the pane, so a later rebuild
-            // must find a mark rather than adopt its own replay.
-            self.record_agent_read_mark(turns, cx);
-        }
-        if status == self.last_agent_status {
-            return false;
-        }
-        let prev = std::mem::replace(&mut self.last_agent_status, status);
-        let first_sight = !std::mem::replace(&mut self.agent_status_seen, true);
-        self.pending_finish_notice = None;
-
-        // A view built over a pane that already holds a finished turn sees
-        // `Done` arrive from nothing, the same as a turn finishing now. If the
-        // pane's previous view left a mark for this session at this turn count,
-        // it is the turn the reader was already shown: take their badge back as
-        // they left it instead of raising a new one (#870). A turn that
-        // finished after the old view went has no such mark, or a lower count.
-        if first_sight
-            && status == Some(AgentStatus::Done)
-            && let Some(mark) = cx
-                .try_global::<AgentReadMarks>()
-                .and_then(|marks| marks.0.get(&(self.host_id, self.pane_id)))
-                .filter(|mark| {
-                    mark.status == Some(AgentStatus::Done)
-                        && mark.session == self.last_agent_session
-                        && mark.turns == turns
-                })
-                .cloned()
-        {
-            self.agent_result_unread = mark.unread && !self.focus_handle.is_focused(window);
-            self.keep_unread_on_focus = false;
-            self.record_agent_read_mark(turns, cx);
-            cx.notify();
-            return false;
-        }
-
-        let turn_finished = status == Some(AgentStatus::Done) && prev != Some(AgentStatus::Done);
-
-        match status {
-            Some(AgentStatus::Done) if prev != Some(AgentStatus::Done) => {
-                // Whether the reader saw the result is a question about the
-                // window's live focus, not about the last focus callback this
-                // pane happened to receive. A pane focused while it was being
-                // built, before its leaf was attached, never gets the blur that
-                // would clear `self.focused` — trusting the cached flag there
-                // drops the badge on the one pane the reader is not looking at.
-                self.agent_result_unread = !self.focus_handle.is_focused(window);
-                self.keep_unread_on_focus = false;
-            }
-            Some(AgentStatus::Done) => {}
-            _ => {
-                self.agent_result_unread = false;
-                self.keep_unread_on_focus = false;
-            }
-        }
-        self.record_agent_read_mark(turns, cx);
-
-        let rich = session.as_ref().is_some_and(|s| s.rich);
-        let agent_name = self
-            .terminal
-            .foreground_agent()
-            .map(|a| a.display_name())
-            .unwrap_or("Agent");
-        match status {
-            Some(AgentStatus::Working) => {
-                self.agent_turn_started = Some(std::time::Instant::now());
-            }
-            Some(AgentStatus::Waiting) if rich && notify_allowed => {
-                let body = session
-                    .as_ref()
-                    .and_then(|s| s.message.clone())
-                    .unwrap_or_else(|| t(L10nKey::NotifyAgentWaiting).to_string());
-                self.notify_pane(Some(agent_name), &body, cx);
-            }
-            Some(AgentStatus::Done)
-                if rich
-                    && notify_allowed
-                    && matches!(
-                        prev,
-                        Some(AgentStatus::Working) | Some(AgentStatus::Waiting)
-                    ) =>
-            {
-                let elapsed = self.agent_turn_started.take().map(|start| start.elapsed());
-                let body = match session
-                    .as_ref()
-                    .and_then(|session| session.readout.result.as_ref())
-                {
-                    Some(result) => {
-                        let result = crate::ui::i18n::agent_result_text(result);
-                        match elapsed {
-                            Some(elapsed) => t_fmt(
-                                L10nKey::AgentResultWithDuration,
-                                &[
-                                    ("result", &result),
-                                    ("secs", &elapsed.as_secs().to_string()),
-                                ],
-                            ),
-                            None => result,
-                        }
-                    }
-                    None => match elapsed {
-                        Some(elapsed) => t_fmt(
-                            L10nKey::NotifyAgentFinished,
-                            &[("secs", &elapsed.as_secs().to_string())],
-                        ),
-                        None => t(L10nKey::NotifyTurnFinished).to_string(),
-                    },
-                };
-                // Held back briefly: a turn that ends only for the next one to
-                // start at once — a message queued while the agent worked, a
-                // `Stop` hook sending it back to work — is not finished, and
-                // announcing it would be a notification about nothing.
-                let agent_name = agent_name.to_string();
-                self.pending_finish_notice = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(AGENT_DONE_SETTLE).await;
+        if let Some(notice) = update.notice {
+            if notice.delayed {
+                let task = cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(super::agent_activity::DONE_SETTLE)
+                        .await;
                     this.update(cx, |view, cx| {
-                        view.pending_finish_notice = None;
-                        view.notify_pane(Some(&agent_name), &body, cx);
+                        view.agent_activity.notice_delivered();
+                        view.notify_pane(Some(notice.agent), &notice.body, cx);
                     })
                     .ok();
-                }));
+                });
+                self.agent_activity.await_notice(task);
+            } else {
+                self.notify_pane(Some(notice.agent), &notice.body, cx);
             }
-            _ => {}
         }
-        cx.notify();
-        turn_finished
+        if update.changed {
+            cx.notify();
+        }
+        update.turn_finished
     }
 
     fn at_shell_prompt(&self) -> bool {
@@ -10009,6 +9760,9 @@ fn history_fixture(entries: Vec<String>) -> super::history::History {
 fn seed_history(view: &mut TerminalView, entries: Vec<String>) {
     view.history = TerminalHistory::from_loaded(history_fixture(entries));
 }
+#[cfg(test)]
+#[path = "agent_activity_tests.rs"]
+mod agent_activity_tests;
 
 #[cfg(test)]
 mod gpui_tests {
@@ -10038,7 +9792,7 @@ mod gpui_tests {
         include!("history_ghost_consumer_tests.rs");
     }
 
-    fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
+    pub(super) fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
         let pty = if cfg!(windows) {
             PtySource::LocalConpty
         } else {
@@ -10240,538 +9994,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn a_reported_session_id_asks_the_window_to_save(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::{AgentSessionState, AgentStatus};
-
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        let saves = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let view = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        {
-            let saves = saves.clone();
-            cx.update(|cx| {
-                cx.subscribe(&view, move |_, _: &AgentSessionChanged, _| {
-                    saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                })
-                .detach();
-            });
-        }
-
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
-            status: AgentStatus::Idle,
-            message: None,
-            session_id: Some("sid-abc".into()),
-            launch_argv: Some(vec!["omp".into()]),
-            rich: true,
-            cwd: None,
-            activity: 0,
-            turns: 0,
-            pending_requests: Vec::new(),
-            request_resume_status: Default::default(),
-            pending_stop: false,
-            readout: Default::default(),
-        }))
-        .encode(&mut daemon)
-        .unwrap();
-        for _ in 0..200 {
-            if window
-                .update(cx, |view, _, _| view.terminal.agent_session().is_some())
-                .unwrap()
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, window, cx| {
-                view.poll_agent_status(false, window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        assert_eq!(
-            saves.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "the id has to reach the layout on file"
-        );
-
-        window
-            .update(cx, |view, window, cx| {
-                view.poll_agent_status(false, window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        assert_eq!(
-            saves.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "an unchanged session must not re-save on every poll"
-        );
-    }
-
-    /// Report a session in `status` on `daemon` and wait for `pane` to see it.
-    fn report_agent_status(
-        status: crate::core::cli_agent::AgentStatus,
-        pane: &gpui_kit::Entity<TerminalView>,
-        cx: &mut TestAppContext,
-        daemon: &mut Stream,
-    ) {
-        report_agent_turn(status, 0, pane, cx, daemon);
-    }
-
-    /// The same, for a session that has finished `turns` turns so far.
-    fn report_agent_turn(
-        status: crate::core::cli_agent::AgentStatus,
-        turns: u64,
-        pane: &gpui_kit::Entity<TerminalView>,
-        cx: &mut TestAppContext,
-        daemon: &mut Stream,
-    ) {
-        use crate::core::cli_agent::AgentSessionState;
-
-        let state = AgentSessionState {
-            status,
-            message: None,
-            session_id: Some("sid-abc".into()),
-            launch_argv: Some(vec!["omp".into()]),
-            rich: true,
-            cwd: None,
-            activity: 0,
-            turns,
-            pending_requests: Vec::new(),
-            request_resume_status: Default::default(),
-            pending_stop: false,
-            readout: Default::default(),
-        };
-        DaemonMsg::AgentStatus(Some(state.clone()))
-            .encode(daemon)
-            .unwrap();
-        for _ in 0..200 {
-            if cx.update(|cx| pane.read(cx).terminal.agent_session()) == Some(state.clone()) {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("the agent status never reached the pane");
-    }
-
-    /// Poll `pane`'s agent status inside `window` and read its badge back.
-    fn poll_unread(
-        window: gpui_kit::WindowHandle<TerminalView>,
-        pane: &gpui_kit::Entity<TerminalView>,
-        cx: &mut TestAppContext,
-    ) -> bool {
-        // Through the untyped handle: the typed one leases the root view, and
-        // `pane` may be that view.
-        cx.update_window(window.into(), |_, window, cx| {
-            pane.update(cx, |pane, cx| {
-                pane.poll_agent_status(false, window, cx);
-                pane.agent_result_unread()
-            })
-        })
-        .unwrap()
-    }
-
-    /// Switching workspaces, or reopening a window from the tray, throws the
-    /// pane's view away and builds a new one on the same daemon pane (#870).
-    /// The new view's first look at a `Done` agent is not a turn finishing —
-    /// the reader watched that one finish before the old view went.
-    #[gpui_kit::test]
-    fn a_rebuilt_pane_does_not_re_badge_a_turn_the_reader_already_saw(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &before, cx, &mut before_daemon);
-        assert!(
-            !poll_unread(window, &before, cx),
-            "the reader watched it finish"
-        );
-
-        // The same daemon pane, rebuilt the way `tabs_from_session` rebuilds it,
-        // with the reader's focus somewhere else.
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &after, cx, &mut daemon);
-        assert!(
-            !poll_unread(window, &after, cx),
-            "rebuilding the pane is not a turn finishing"
-        );
-    }
-
-    /// What the rebuild must not swallow: a turn that was still running when
-    /// the view went away and finished before the new one arrived.
-    #[gpui_kit::test]
-    fn a_turn_that_finished_while_the_pane_was_away_still_badges(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Working, 0, &before, cx, &mut before_daemon);
-        assert!(!poll_unread(window, &before, cx));
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &after, cx, &mut daemon);
-        assert!(
-            poll_unread(window, &after, cx),
-            "nobody saw this turn finish"
-        );
-    }
-
-    /// Nor a whole later turn: the reader saw turn one, the agent was sent
-    /// another and finished it while the pane was away. The status reads
-    /// `Done` both times; only the turn count tells them apart.
-    #[gpui_kit::test]
-    fn a_later_turn_that_finished_while_the_pane_was_away_still_badges(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &before, cx, &mut before_daemon);
-        assert!(!poll_unread(window, &before, cx));
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 2, &after, cx, &mut daemon);
-        assert!(
-            poll_unread(window, &after, cx),
-            "the second turn finished unseen"
-        );
-    }
-
-    /// And a badge the reader had not cleared yet comes back with the pane.
-    #[gpui_kit::test]
-    fn an_unread_turn_is_still_unread_after_the_pane_is_rebuilt(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        // Building another pane takes the window's focus off `before`.
-        let (_elsewhere, _elsewhere_daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(5, window, cx))
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &before, cx, &mut before_daemon);
-        assert!(poll_unread(window, &before, cx), "nobody was looking");
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &after, cx, &mut daemon);
-        assert!(
-            poll_unread(window, &after, cx),
-            "rebuilding the pane is not reading it"
-        );
-    }
-
-    /// The badge answers "did the reader see this?", so it has to read the
-    /// window's live focus rather than anything a focus callback left behind.
-    ///
-    /// A second pane built into the same window is the case that goes wrong:
-    /// it holds no focus and was never told it lost any, so a flag a callback
-    /// maintains says whatever it was born saying — and the badge lands on
-    /// exactly the pane nobody is looking at.
-    #[gpui_kit::test]
-    fn a_finished_turn_on_an_unfocused_pane_is_unread(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let (pane, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(2, window, cx))
-            .unwrap();
-        // Building a pane takes the window's focus (`with_terminal`), and the
-        // reader's next click hands it back. The new pane is not in the element
-        // tree, so nothing delivers it the blur that goes with losing it.
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |_, window, cx| {
-                assert!(
-                    !pane.read(cx).focus_handle.is_focused(window),
-                    "the focus went back to the pane the reader is on"
-                );
-            })
-            .unwrap();
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(pane.agent_result_unread(), "nobody was looking at the pane");
-                });
-            })
-            .unwrap();
-    }
-
-    /// Reinstalling or restarting the app leaves the daemon — and every agent
-    /// in it — running, so each restored tab reattaches to a pane whose agent
-    /// finished its turn long ago. The daemon replays that status, and reading
-    /// it as a turn that just landed put an unread badge on every agent tab in
-    /// the window the moment it opened.
-    #[gpui_kit::test]
-    fn a_restored_pane_does_not_badge_the_turn_it_reattached_to(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let (pane, mut daemon) = window
-            .update(cx, |_, window, cx| {
-                super::quiet_reattached_test_pane(2, window, cx)
-            })
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(
-                        !pane.agent_result_unread(),
-                        "the replayed status is where this pane starts, not a result that \
-                         just arrived"
-                    );
-                });
-            })
-            .unwrap();
-
-        // And the pane is still armed: the next turn it actually watches finish
-        // badges exactly as it would have without the reattach.
-        report_agent_status(AgentStatus::Working, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                });
-            })
-            .unwrap();
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(
-                        pane.agent_result_unread(),
-                        "a turn that finished while the reader was elsewhere is unread"
-                    );
-                });
-            })
-            .unwrap();
-    }
-
-    /// Build `pane_id`'s first view (unfocused), let it watch `status` at
-    /// `turns`, then rebuild the pane the way restoring a workspace does — a
-    /// reattach, whose head is the daemon replaying `replayed` — and read the
-    /// rebuilt view's badge.
-    fn rebuild_by_reattach(
-        watched: (crate::core::cli_agent::AgentStatus, u64),
-        replayed: (crate::core::cli_agent::AgentStatus, u64),
-        cx: &mut TestAppContext,
-    ) -> bool {
-        let (window, _root_daemon) = harness(cx);
-        let focus_root = |cx: &mut TestAppContext| {
-            window
-                .update(cx, |view, window, cx| {
-                    view.focus_handle.clone().focus(window, cx)
-                })
-                .unwrap();
-            cx.run_until_parked();
-        };
-        let (before, mut before_daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(2, window, cx))
-            .unwrap();
-        focus_root(cx);
-        report_agent_turn(watched.0, watched.1, &before, cx, &mut before_daemon);
-        poll_unread(window, &before, cx);
-        drop(before);
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| {
-                super::quiet_reattached_test_pane(2, window, cx)
-            })
-            .unwrap();
-        focus_root(cx);
-        report_agent_turn(replayed.0, replayed.1, &after, cx, &mut daemon);
-        poll_unread(window, &after, cx)
-    }
-
-    /// A reattach whose pane this app already watched is a rebuild, not a
-    /// restart: the read mark, not the replay, says whether the turn is news.
-    #[gpui_kit::test]
-    fn a_reattached_pane_takes_back_the_badge_its_reader_left(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-        assert!(
-            rebuild_by_reattach((AgentStatus::Done, 1), (AgentStatus::Done, 1), cx),
-            "the reader never cleared that badge; rebuilding the pane is not reading it"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn a_reattached_pane_badges_a_turn_that_was_running_when_its_view_went(
-        cx: &mut TestAppContext,
-    ) {
-        use crate::core::cli_agent::AgentStatus;
-        assert!(
-            rebuild_by_reattach((AgentStatus::Working, 0), (AgentStatus::Done, 1), cx),
-            "nobody saw this turn finish"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn a_reattached_pane_badges_a_later_turn_that_finished_while_away(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-        // Turn one left a mark; turn two finishing before the reattach is a
-        // different count, so the mark does not vouch for it.
-        assert!(
-            rebuild_by_reattach((AgentStatus::Done, 1), (AgentStatus::Done, 2), cx),
-            "the second turn finished unseen"
-        );
-    }
-
-    /// A relink keeps the view and what it last saw. A turn that was running
-    /// when the link dropped and finished before it came back reaches the view
-    /// only as the daemon's replay, and that replay has to badge: nobody saw
-    /// the turn finish.
-    #[gpui_kit::test]
-    fn a_turn_that_finished_while_the_link_was_down_still_badges(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let (pane, mut daemon) = window
-            .update(cx, |_, window, cx| {
-                super::quiet_reattached_test_pane(2, window, cx)
-            })
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        report_agent_status(AgentStatus::Working, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(!pane.agent_result_unread(), "the turn is still running");
-                });
-            })
-            .unwrap();
-
-        let (new_client, mut new_daemon) = super::test_stream_pair();
-        pane.update(cx, |pane, cx| {
-            pane.adopt_relink(
-                new_client,
-                Vec::new(),
-                &crate::terminal::PaneRoute::Local,
-                TermSize::new(80, 24),
-                8,
-                17,
-                cx,
-            )
-            .expect("the swap itself cannot fail");
-        });
-        drop(daemon);
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut new_daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(
-                        pane.agent_result_unread(),
-                        "the turn finished while the link was down, so nobody read it"
-                    );
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_finished_turn_on_the_focused_pane_is_already_read(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        let pane = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |view, window, cx| {
-                assert!(view.focus_handle.is_focused(window));
-                view.poll_agent_status(false, window, cx);
-                assert!(
-                    !view.agent_result_unread(),
-                    "the reader watched the turn finish"
-                );
-            })
-            .unwrap();
-    }
 
     /// An agent that moves into a git worktree does not `chdir` — the process
     /// stays put and only its hook stream says where the work went. Every
@@ -17019,95 +16241,6 @@ mod gpui_tests {
     }
 
 
-    /// Quick launch counts an agent each time one starts. Reattaching to a pane
-    /// whose agent was already running — every agent tab after an app restart
-    /// — is not a start, and counting it bumped every agent once per launch of
-    /// the app. Once that pane's agent exits, the next one is a start again.
-    #[gpui_kit::test]
-    fn only_an_agent_that_starts_under_this_view_counts_as_detected(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::CLIAgent;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let detected = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let pane = |reattached: bool, cx: &mut TestAppContext| {
-            let (pane, daemon) = window
-                .update(cx, |_, window, cx| {
-                    if reattached {
-                        super::quiet_reattached_test_pane(2, window, cx)
-                    } else {
-                        super::quiet_test_pane(3, window, cx)
-                    }
-                })
-                .unwrap();
-            let seen = detected.clone();
-            cx.update(|cx| {
-                cx.subscribe(&pane, move |_, ev: &AgentDetected, _| {
-                    seen.borrow_mut().push(ev.0)
-                })
-                .detach()
-            });
-            (pane, daemon)
-        };
-        let report = |agent: Option<CLIAgent>,
-                      at_prompt: bool,
-                      pane: &Entity<TerminalView>,
-                      daemon: &mut Stream,
-                      cx: &mut TestAppContext| {
-            DaemonMsg::Agent(agent).encode(daemon).unwrap();
-            for _ in 0..200 {
-                if pane.read_with(cx, |p, _| p.terminal.foreground_agent()) == agent {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            pane.update(cx, |p, cx| p.poll_agent_detection(at_prompt, cx));
-            cx.run_until_parked();
-        };
-
-        let (restored, mut restored_daemon) = pane(true, cx);
-        report(
-            Some(CLIAgent::OhMyPi),
-            false,
-            &restored,
-            &mut restored_daemon,
-            cx,
-        );
-        report(
-            Some(CLIAgent::OhMyPi),
-            false,
-            &restored,
-            &mut restored_daemon,
-            cx,
-        );
-        assert_eq!(
-            *detected.borrow(),
-            vec![],
-            "already running when reattached"
-        );
-        report(None, true, &restored, &mut restored_daemon, cx);
-        report(
-            Some(CLIAgent::Pi),
-            false,
-            &restored,
-            &mut restored_daemon,
-            cx,
-        );
-        assert_eq!(
-            *detected.borrow(),
-            vec![CLIAgent::Pi],
-            "started after the reattach"
-        );
-
-        let (fresh, mut fresh_daemon) = pane(false, cx);
-        report(Some(CLIAgent::OhMyPi), false, &fresh, &mut fresh_daemon, cx);
-        report(Some(CLIAgent::OhMyPi), false, &fresh, &mut fresh_daemon, cx);
-        assert_eq!(
-            *detected.borrow(),
-            vec![CLIAgent::Pi, CLIAgent::OhMyPi],
-            "a spawned pane counts its first agent, once"
-        );
-    }
 
     /// #958: `prompt_cursor_style` shapes the shell's own caret at a prompt,
     /// leaves the running program's cursor alone, and steps aside for a vi-mode
