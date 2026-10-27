@@ -29,7 +29,6 @@ use lyrel_core::core::git::status::{
 use crate::terminal::git_data::status_of;
 use crate::terminal::git_diff::DiffSource;
 use crate::ui::app::LyrelApp;
-use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
 use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::right_panel::{
@@ -41,6 +40,7 @@ use crate::ui::scm::path::split_display_path;
 use crate::ui::scm::state::{RepoKey, ScmGroup};
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::scm::tree::{TreeRow, normalize_query, path_matches, tree_rows};
+use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
 
 /// Shared compact pitch for working-tree and commit-detail file rows.
 ///
@@ -1119,7 +1119,9 @@ impl LyrelApp {
             // `Button` sizes an icon off its own `Size`, so the glyph is asked
             // for by way of the size that produces it — the same conversion
             // `chrome_tile_sized` does.
-            .with_size(px(COMMIT_GLYPH / crate::ui::window_chrome::BUTTON_ICON_SCALE))
+            .with_size(px(
+                COMMIT_GLYPH / crate::ui::window_chrome::BUTTON_ICON_SCALE
+            ))
             .w(px(COMMIT_CHEVRON_W))
             .h_full()
             .rounded_corners(segment_corners(1, 2, COMMIT_RADIUS, HAIRLINE))
@@ -1234,7 +1236,10 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(SharedHost, PathBuf)> {
-        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let cwd = view.effective_host_cwd()?;
         Some((view.host(cx)?, cwd))

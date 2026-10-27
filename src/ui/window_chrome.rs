@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, TitleBar, h_flex,
@@ -150,9 +151,7 @@ const TRAFFIC_LIGHTS_W: f32 = 54.;
 
 /// The room the lights take at the bar's leading edge on macOS: their span,
 /// with the inset they sit at on either side.
-const TRAFFIC_LIGHTS_LEAD: f32 =
-    TRAFFIC_LIGHT_INSET + TRAFFIC_LIGHTS_W + TRAFFIC_LIGHT_INSET;
-
+const TRAFFIC_LIGHTS_LEAD: f32 = TRAFFIC_LIGHT_INSET + TRAFFIC_LIGHTS_W + TRAFFIC_LIGHT_INSET;
 
 const WINDOW_MARK_SIZE: f32 = 20.;
 
@@ -299,7 +298,6 @@ pub(crate) fn chrome_tile_sized(
         .w(px(tile))
         .h(px(tile))
 }
-
 
 /// 工作台只接收语义意图，窗口 chrome 不持有工作台或标签页的可变访问权。
 #[derive(Clone, Copy)]
@@ -450,8 +448,7 @@ impl WindowChrome {
             .gap_2()
             .child(window_mark())
             .child(self.left);
-        let left = title_bar_drag(left_row, "workbench-left-drag", window, cx)
-            .into_any_element();
+        let left = title_bar_drag(left_row, "workbench-left-drag", window, cx).into_any_element();
         let trailing_inset = if macos_fullscreen { 0.75 } else { 0.25 };
         let strip = h_flex()
             .w_full()
@@ -486,8 +483,7 @@ impl WindowChrome {
                 .flex_none()
                 .w_full()
                 .child(strip);
-            title_bar_drag(row, "workbench-right-drag", window, cx)
-                .into_any_element()
+            title_bar_drag(row, "workbench-right-drag", window, cx).into_any_element()
         };
         h_flex()
             .flex_none()
@@ -506,17 +502,17 @@ mod gpui_tests {
     use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
 
+    use super::{
+        TITLE_BAR_BORDER, TRAFFIC_LIGHT_BUTTON_H, title_strip_centre, title_strip_content_centre,
+        title_strip_rule_and_pad, traffic_light_position,
+    };
+    #[cfg(target_os = "macos")]
+    use super::{TITLE_BAR_LEAD, TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_W};
     use crate::core::actions::{ActivateTab1, ActivateTab2};
     use crate::core::config::RightPanelTab;
     use crate::daemon::protocol::ClientMsg;
     use crate::daemon::transport::Stream;
     use crate::ui::app::{LyrelApp, test_window::harness_with_tabs};
-    use super::{
-        TITLE_BAR_BORDER, title_strip_centre, title_strip_content_centre, title_strip_rule_and_pad,
-        traffic_light_position, TRAFFIC_LIGHT_BUTTON_H,
-    };
-    #[cfg(target_os = "macos")]
-    use super::{TITLE_BAR_LEAD, TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_W};
     /// A title-bar row spends [`TITLE_BAR_BORDER`] of its height below its
     /// contents, and there are two ways it does that: it carries the whole point
     /// as a rule painted transparent (the strip's `TitleBar`, the rail's header,
@@ -677,9 +673,7 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn zoom_and_fullscreen_preserve_chrome_hit_targets_and_terminal_top(
-        cx: &mut TestAppContext,
-    ) {
+    fn zoom_and_fullscreen_preserve_chrome_hit_targets_and_terminal_top(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
         let controls = [
             "titlebar-left-panel",
@@ -701,6 +695,21 @@ mod gpui_tests {
             for fullscreen in [true, false] {
                 vcx.dispatch_action(crate::core::actions::ToggleFullscreen);
                 settle(&mut vcx);
+                // Fullscreen feedback overlays the toolbar while entering and
+                // dismissing. Move away so hover cannot hold it open, then let
+                // its real notification lifecycle finish on the test clock.
+                vcx.update(|window, cx| {
+                    window.pointer_move(gpui_kit::point(px(width / 2.), px(200.)), None, cx);
+                });
+                for _ in 0..30 {
+                    if vcx.update(|window, _| window.find_all("notification").is_empty()) {
+                        break;
+                    }
+                    vcx.background_executor
+                        .advance_clock(std::time::Duration::from_millis(250));
+                    settle(&mut vcx);
+                }
+                vcx.update(|window, _| assert!(window.find_all("notification").is_empty()));
                 let anchored = vcx.update(|window, _| {
                     assert_eq!(window.is_fullscreen(), fullscreen);
                     controls.map(|id| window.find(id).bounds())
@@ -722,7 +731,8 @@ mod gpui_tests {
                         } else {
                             (before.0, !before.1)
                         };
-                        assert_eq!((app.left_panel_open(cx), app.right_panel_open(cx)), expected);
+                        assert_eq!((app.left_panel_open(cx), app.right_panel_open(cx)), expected,
+                            "button={button}, width={width}, font_size={font_size}, fullscreen={fullscreen}");
                         assert_eq!(app.pane_area.get().unwrap().top(), px(font_size * 3.));
                     });
                     vcx.update(|window, _| {
@@ -735,7 +745,10 @@ mod gpui_tests {
                     });
                 }
                 if !fullscreen {
-                    assert_eq!(anchored, windowed, "leaving fullscreen restores native reserves");
+                    assert_eq!(
+                        anchored, windowed,
+                        "leaving fullscreen restores native reserves"
+                    );
                 }
             }
         }
@@ -1017,10 +1030,7 @@ mod gpui_tests {
         let original = app.read_with(&vcx, |app, cx| {
             (
                 app.workspace,
-                app.tabs
-                    .iter()
-                    .map(|tab| tab.id())
-                    .collect::<Vec<_>>(),
+                app.tabs.iter().map(|tab| tab.id()).collect::<Vec<_>>(),
                 app.tabs
                     .iter()
                     .map(|tab| {
@@ -1078,10 +1088,7 @@ mod gpui_tests {
         app.read_with(&vcx, |app, cx| {
             assert_eq!(app.workspace, original.0);
             assert_eq!(
-                app.tabs
-                    .iter()
-                    .map(|tab| tab.id())
-                    .collect::<Vec<_>>(),
+                app.tabs.iter().map(|tab| tab.id()).collect::<Vec<_>>(),
                 original.1
             );
             assert_eq!(

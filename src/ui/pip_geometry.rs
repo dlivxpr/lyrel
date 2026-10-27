@@ -133,24 +133,7 @@ pub(crate) fn commit(
         let Some(tab) = app.tabs.iter_mut().find(|tab| tab.id() == tab_id) else {
             return;
         };
-        if !tab
-            .pip_slot(cx)
-            .is_some_and(|slot| slot.entity_id() == pane)
-        {
-            return;
-        }
-        let changed = if let Some(presentation) = &mut tab.foreign_presentation {
-            let changed = presentation.set_pip_geometry(Some(geometry));
-            if presentation
-                .pip()
-                .is_some_and(|pip| !pip.pane().owner().is_client_local())
-            {
-                tab.presentation.set_pip_geometry(Some(geometry));
-            }
-            changed
-        } else {
-            tab.presentation.set_pip_geometry(Some(geometry))
-        };
+        let changed = tab.commit_pip_geometry(pane, geometry, cx);
         if changed {
             app.save_session(cx);
             cx.notify();

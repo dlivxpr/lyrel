@@ -1,5 +1,7 @@
-use super::*;
+use gpui_kit::VisualContext as _;
+
 use super::super::*;
+use super::*;
 
 /// A real presentation action on an existing tab is new work too: the recovery
 /// may refresh its machine baseline, but cannot replace the live terminal view.
@@ -36,7 +38,11 @@ fn a_late_recovery_keeps_the_users_new_pip_and_terminal_identity(
             panes: vec![PaneRecord::new(1)],
         };
         mark_window_informed(cx, ws);
-        let (epoch, _) = cx.default_global::<TreeSync>().windows.get_mut(&ws).unwrap()
+        let (epoch, _) = cx
+            .default_global::<TreeSync>()
+            .windows
+            .get_mut(&ws)
+            .unwrap()
             .begin_hydration(Adopt::Replace, vec![tab]);
         let pane = app.tabs[0].pane.first_leaf().unwrap();
         window.focus(&pane.focus_handle(cx), cx);
@@ -45,7 +51,10 @@ fn a_late_recovery_keeps_the_users_new_pip_and_terminal_identity(
 
     vcx.dispatch_action(crate::core::actions::TogglePanePip);
     vcx.update(|_, cx| {
-        assert_eq!(app.read(cx).tabs[0].pip_slot(cx).unwrap().entity_id(), pane.entity_id());
+        assert_eq!(
+            app.read(cx).tabs[0].pip_slot(cx).unwrap().entity_id(),
+            pane.entity_id()
+        );
         let (machine, mirror, session) = layout_of(machine, ws).unwrap();
         finish_hydration(
             cx,
@@ -58,8 +67,17 @@ fn a_late_recovery_keeps_the_users_new_pip_and_terminal_identity(
     vcx.update(|window, cx| {
         let app = app.read(cx);
         assert_eq!(app.tabs.len(), 1);
-        assert_eq!(app.tabs[0].pip_slot(cx).unwrap().entity_id(), pane.entity_id());
-        assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), pane.entity_id());
-        assert!(pane.contains_focused(window, cx), "recovery must not steal the user's pane focus");
+        assert_eq!(
+            app.tabs[0].pip_slot(cx).unwrap().entity_id(),
+            pane.entity_id()
+        );
+        assert_eq!(
+            app.tabs[0].pane.first_leaf().unwrap().entity_id(),
+            pane.entity_id()
+        );
+        assert!(
+            pane.contains_focused(window, cx),
+            "recovery must not steal the user's pane focus"
+        );
     });
 }

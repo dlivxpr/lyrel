@@ -170,7 +170,11 @@ impl LyrelApp {
             })
             .flatten();
         let agent = (!document)
-            .then(|| self.tabs.get(self.tabs.active_index()).and_then(|tab| tab.agent_row(cx)))
+            .then(|| {
+                self.tabs
+                    .get(self.tabs.active_index())
+                    .and_then(|tab| tab.agent_row(cx))
+            })
             .flatten();
         let context = h_flex()
             .flex_1()

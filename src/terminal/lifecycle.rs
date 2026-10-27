@@ -1,8 +1,11 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
-use gpui_kit::{App, Context, EntityId, FocusHandle, Subscription, Task, Window, prelude::*};
+use gpui_kit::{App, Context, EntityId, FocusHandle, Subscription, Task, Window};
 
 use super::images::ImageStore;
 use super::remote::{GraphicsViewportReporter, PaneEvent, RemoteTerminal};
@@ -30,7 +33,10 @@ pub fn declare_displayed(cx: &App, panes: impl IntoIterator<Item = (EntityId, bo
 #[cfg(test)]
 pub(crate) fn displayed_for_test(cx: &App, id: EntityId) -> Option<bool> {
     cx.try_global::<DisplayedRegistry>()?
-        .0.lock().unwrap().get(&id)
+        .0
+        .lock()
+        .unwrap()
+        .get(&id)
         .map(|reporter| reporter.displayed().load(Ordering::Relaxed))
 }
 
@@ -80,20 +86,28 @@ impl TerminalLifecycle {
                 while let Ok(event) = events.try_recv() {
                     batch.push(event);
                 }
-                if this.update_in(cx, |view, window, cx| {
-                    let mut woke = false;
-                    for event in batch.drain(..) {
-                        if matches!(event, PaneEvent::Wakeup) && std::mem::replace(&mut woke, true) {
-                            continue;
+                if this
+                    .update_in(cx, |view, window, cx| {
+                        let mut woke = false;
+                        for event in batch.drain(..) {
+                            if matches!(event, PaneEvent::Wakeup)
+                                && std::mem::replace(&mut woke, true)
+                            {
+                                continue;
+                            }
+                            on_event(view, event, cx);
                         }
-                        on_event(view, event, cx);
-                    }
-                    // Admission can be waiting for this exact GPU lease. Even
-                    // hidden panes return retired pages after this batch, not
-                    // after some future visible frame or periodic cleanup.
-                    event_images.release_retired(window, cx);
-                }).is_err() {
-                    this.update(cx, |view, cx| Self::release_view(view, cx, state, on_detach)).ok();
+                        // Admission can be waiting for this exact GPU lease. Even
+                        // hidden panes return retired pages after this batch, not
+                        // after some future visible frame or periodic cleanup.
+                        event_images.release_retired(window, cx);
+                    })
+                    .is_err()
+                {
+                    this.update(cx, |view, cx| {
+                        Self::release_view(view, cx, state, on_detach)
+                    })
+                    .ok();
                     break;
                 }
             }
@@ -113,17 +127,25 @@ impl TerminalLifecycle {
         let blink_focus = focus.clone();
         let blink = cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_millis(530)).await;
-                if this.update_in(cx, |view, window, cx| {
-                    // A handle may receive focus before its leaf is attached,
-                    // and then miss blur. The window, not a cached flag, wins.
-                    let focused = blink_focus.is_focused(window);
-                    let enabled = cx.global::<Config>().cursor_blink;
-                    if state(view).tick_cursor(focused, enabled) {
-                        cx.notify();
-                    }
-                }).is_err() {
-                    this.update(cx, |view, cx| Self::release_view(view, cx, state, on_detach)).ok();
+                cx.background_executor()
+                    .timer(Duration::from_millis(530))
+                    .await;
+                if this
+                    .update_in(cx, |view, window, cx| {
+                        // A handle may receive focus before its leaf is attached,
+                        // and then miss blur. The window, not a cached flag, wins.
+                        let focused = blink_focus.is_focused(window);
+                        let enabled = cx.global::<Config>().cursor_blink;
+                        if state(view).tick_cursor(focused, enabled) {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    this.update(cx, |view, cx| {
+                        Self::release_view(view, cx, state, on_detach)
+                    })
+                    .ok();
                     break;
                 }
             }
@@ -133,13 +155,21 @@ impl TerminalLifecycle {
         let on_foreground = callbacks.foreground;
         let foreground = cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_millis(300)).await;
-                if this.update_in(cx, |view, window, cx| {
-                    poll_images.release_retired(window, cx);
-                    // Shell and agent facts must still advance while hidden.
-                    on_foreground(view, window, cx);
-                }).is_err() {
-                    this.update(cx, |view, cx| Self::release_view(view, cx, state, on_detach)).ok();
+                cx.background_executor()
+                    .timer(Duration::from_millis(300))
+                    .await;
+                if this
+                    .update_in(cx, |view, window, cx| {
+                        poll_images.release_retired(window, cx);
+                        // Shell and agent facts must still advance while hidden.
+                        on_foreground(view, window, cx);
+                    })
+                    .is_err()
+                {
+                    this.update(cx, |view, cx| {
+                        Self::release_view(view, cx, state, on_detach)
+                    })
+                    .ok();
                     break;
                 }
             }
@@ -148,7 +178,11 @@ impl TerminalLifecycle {
         let reporter = terminal.viewport_reporter();
         let displayed = reporter.displayed();
         let id = cx.entity().entity_id();
-        cx.default_global::<DisplayedRegistry>().0.lock().unwrap().insert(id, reporter);
+        cx.default_global::<DisplayedRegistry>()
+            .0
+            .lock()
+            .unwrap()
+            .insert(id, reporter);
         let release = cx.on_release(move |view, cx| {
             Self::release_view(view, cx, state, on_detach);
         });
@@ -182,8 +216,14 @@ impl TerminalLifecycle {
         if let Some(registry) = cx.try_global::<DisplayedRegistry>() {
             registry.0.lock().unwrap().remove(&lifecycle.id);
         }
-        if lifecycle.window.update(cx, |_, window, cx| lifecycle.images.release_all(window, cx)).is_err() {
-            lifecycle.images.release_after_window_close(lifecycle.window.window_id(), cx);
+        if lifecycle
+            .window
+            .update(cx, |_, window, cx| lifecycle.images.release_all(window, cx))
+            .is_err()
+        {
+            lifecycle
+                .images
+                .release_after_window_close(lifecycle.window.window_id(), cx);
         }
     }
 

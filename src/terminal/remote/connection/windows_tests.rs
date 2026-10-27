@@ -1,6 +1,6 @@
 use super::*;
-use crate::terminal::remote::RemoteTerminal;
 use crate::daemon::protocol::DaemonMsg;
+use crate::terminal::remote::RemoteTerminal;
 
 use super::super::test_support::socket_pair as tcp_pair;
 

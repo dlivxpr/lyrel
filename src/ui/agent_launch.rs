@@ -23,7 +23,8 @@ use gpui_kit::{App, Axis, Context, Window};
 use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
 use crate::core::config::{Config, ProfileUsage, unix_now};
 use crate::core::session::WorkspaceStore;
-use crate::ui::app::{LyrelApp, SpawnAs, SpawnWhere, join_shell_args};
+use crate::ui::app::{LyrelApp, SpawnWhere, join_shell_args};
+use crate::ui::tab::presentation::SpawnAs;
 use crate::ui::i18n::{L10nKey, t_fmt};
 use crate::ui::pane::PaneSlot;
 
@@ -154,7 +155,7 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
             .detach();
         }
         PaneSlot::Connecting(pending) => {
-            pending.update(cx, |pending, _| pending.spawn.run_on_land = Some(command));
+            pending.update(cx, |pending, _| pending.run_when_ready(command));
         }
     }
 }
@@ -341,11 +342,9 @@ impl LyrelApp {
             // The failed connection card retries this exact prepared identity,
             // not the source fork operation.
             pending.update(cx, |pending, _| {
-                pending.spawn.agent = Some(prepared.agent);
-                pending.spawn.agent_session_id = prepared.target_id.clone();
-                pending.spawn.agent_launch_argv = Some(prepared.launch_argv.clone());
-                pending.spawn.agent_session_scope = Some(
-                    lyrel_core::host::session_operations::durable_scope(&prepared.scope),
+                pending.resume_agent(
+                    Some(prepared.agent), prepared.target_id.clone(),
+                    Some(prepared.launch_argv.clone()), Some(prepared.scope.clone()), false,
                 );
             });
         }

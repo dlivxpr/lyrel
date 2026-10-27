@@ -6,13 +6,13 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
-    App, ClipboardEntry, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable,
-    Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels,
-    ScrollWheelEvent, Task, WeakEntity, Window, actions, div, prelude::*, px,
+    App, ClipboardEntry, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Font,
+    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollWheelEvent, WeakEntity,
+    Window, actions, div, prelude::*, px,
 };
+use rio_vt::crosswords::Mode;
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Direction, Line, Pos, Side};
-use rio_vt::crosswords::{Crosswords, Mode};
 
 use super::prompt_input::layout::{before_input, input_cells, input_char_positions,
     input_overflow_shift, input_overlay_rows, input_start, wrapped_click_index};
@@ -22,15 +22,15 @@ use super::completion::{self, CandidateKind};
 use super::completion::state::{CompletionContext, CompletionWork, RemoteRequest, TerminalCompletion};
 use super::element::{GridSnapshot, RenderCell, TerminalElement};
 use super::highlight::{self, TokenKind};
+use super::history_session::{PromptHistory, TerminalHistory, unix_now};
+use super::link::{LinkAt, LinkInteraction};
 use super::paste::{
     PasteUploads, clipboard_paths, local_path_for_pane, remote_paste_spec, stages_clipboard_image,
     write_clipboard_image,
 };
 use super::remote::RemoteTerminal;
-use super::history_session::{PromptHistory, TerminalHistory, unix_now};
 use super::reverse_search;
 use super::scrollbar::{GridScroll, TerminalScrollHandle};
-use super::link::{LinkAt, LinkInteraction};
 use super::search::{LinkTarget, SearchState};
 #[cfg(test)]
 use super::typeahead::RawInput;
@@ -72,7 +72,6 @@ fn input_caret_paint(
         CursorStyle::Underline => InputCaretPaint::Underline,
     })
 }
-
 
 actions!(
     terminal,
@@ -134,6 +133,13 @@ pub struct NativeSshParts {
     persist: Box<crate::daemon::protocol::NativeSshSpec>,
 }
 
+impl NativeSshParts {
+    pub(crate) fn new(terminal: RemoteTerminal, pane_id: u64, persist: Box<crate::daemon::protocol::NativeSshSpec>) -> Self {
+        Self { terminal, pane_id, persist }
+    }
+    pub(crate) fn pane_id(&self) -> u64 { self.pane_id }
+}
+
 /// What a pane is called when nothing running in it has said otherwise.
 pub(crate) const DEFAULT_TITLE: &str = "lyrel";
 
@@ -164,6 +170,15 @@ pub struct ShellParts {
     pub(crate) owner: Option<crate::core::session::WorkspaceId>,
 }
 
+impl ShellParts {
+    pub(crate) fn new(
+        terminal: RemoteTerminal, pane_id: u64, shell_spec: Option<ShellSpec>,
+        workspace: Option<crate::terminal::PaneWorkspace>, restored: bool,
+        owner: Option<crate::core::session::WorkspaceId>,
+    ) -> Self {
+        Self { terminal, pane_id, shell_spec, workspace, restored, owner }
+    }
+}
 
 
 
@@ -173,7 +188,6 @@ fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
         true => !host_is_local,
     }
 }
-
 
 pub struct TerminalView {
     pub terminal: RemoteTerminal,
@@ -299,13 +313,11 @@ pub struct TerminalView {
     pub(super) dim: f32,
 }
 
-
 enum LoopbackOpen {
     Forwarded(String),
     ForwardFailed(String),
     NotLoopback,
 }
-
 
 /// What it takes to open one of a pane's loopback ports from this machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -374,7 +386,6 @@ pub(super) fn loopback_plan(
     }
 }
 
-
 enum CmdKey {
     Consumed,
     Bubble,
@@ -400,7 +411,6 @@ const GIT_RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(10);
 /// reaches the label, short enough that one still running is named while the
 /// wait for it is still what the reader is doing.
 const TITLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
-
 
 /// What a pane does with a title the program just set — see
 /// `TerminalView::set_title_when_settled`.
@@ -548,7 +558,11 @@ impl TerminalView {
     /// different number from `pane_id`, which the daemon assigns.
     fn notify_pane(&self, lead: Option<&str>, body: &str, cx: &mut Context<Self>) {
         let title = self.notification_title(lead, cx);
-        super::desktop_notification::notify_desktop_for_pane(Some(&title), body, Some(cx.entity_id()));
+        super::desktop_notification::notify_desktop_for_pane(
+            Some(&title),
+            body,
+            Some(cx.entity_id()),
+        );
     }
 
     /// Desktop notifications the program wrote (OSC 9, 99, 777), such as
@@ -817,91 +831,6 @@ fn apply_fallback_chain(
 }
 
 impl TerminalView {
-    /// Attaches an existing owned session without ever spawning a substitute.
-    pub(crate) fn attach_owned_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
-        pane_id: u64,
-        owner: Option<crate::core::session::WorkspaceId>,
-    ) -> anyhow::Result<ShellParts> {
-        let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
-        let terminal = super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
-        Ok(ShellParts {
-            terminal,
-            pane_id,
-            shell_spec: None,
-            workspace,
-            restored: true,
-            owner,
-        })
-    }
-
-    pub fn spawn_shell_terminal_in(
-        workspace: Option<crate::terminal::PaneWorkspace>,
-        working_directory: Option<std::path::PathBuf>,
-        restore_pane: Option<u64>,
-        shell: Option<ShellSpec>,
-        owner: Option<crate::core::session::WorkspaceId>,
-        cancellation: Option<&crate::terminal::SpawnCancellation>,
-    ) -> anyhow::Result<ShellParts> {
-        let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
-        let attached = match restore_pane {
-            Some(id) => match super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, id) {
-                Ok(terminal) => Some((terminal, id, None)),
-                Err(e) if super::remote::handshake::attach_refused(&e) => {
-                    log::info!("pane {id} is gone on its machine ({e:#}); spawning fresh");
-                    None
-                }
-                // A refused graphics replay, unanswered attach or broken link
-                // does not mean the pane is gone, even for a local daemon.
-                // Keep its identity and let retry reach the original session.
-                Err(e) => {
-                    log::info!("pane {id} could not be reached to reattach ({e:#})");
-                    return Err(e.context(format!(
-                        "could not reach pane {id}, which may still be running"
-                    )));
-                }
-            },
-            None => None,
-        };
-        let restored = attached.is_some();
-        let (terminal, pane_id, shell_spec) = match attached {
-            Some(parts) => parts,
-            None => {
-                // The pane this one stands in for is gone, but its screen may
-                // not be: if the daemon kept a copy, the new pane opens showing
-                // it, under a line saying the shell below is new. Asking costs
-                // nothing when there is no copy — the daemon answers by
-                // spawning the blank pane it would have spawned anyway.
-                let restore = restore_pane.map(|pane_id| crate::daemon::protocol::RestoreFrom {
-                    pane_id,
-                    banner: Some(
-                        crate::ui::i18n::t(crate::ui::i18n::L10nKey::PaneRestoredScreenBanner)
-                            .to_string(),
-                    ),
-                });
-                let (terminal, id) = super::remote::handshake::PaneHandshake::spawn_on(
-                    &route,
-                    TermSize::new(80, 24),
-                    8,
-                    17,
-                    working_directory,
-                    shell.clone(),
-                    owner.map(|id| id.to_string()),
-                    restore,
-                    cancellation,
-                )?;
-                (terminal, id, shell)
-            }
-        };
-        Ok(ShellParts {
-            terminal,
-            pane_id,
-            shell_spec,
-            workspace,
-            restored,
-            owner,
-        })
-    }
 
     pub fn from_shell_parts(
         mut parts: ShellParts,
@@ -925,24 +854,6 @@ impl TerminalView {
         self.owner_workspace
     }
 
-    /// Dials `spec` through the local daemon. `remote_start_dir` is a
-    /// directory on the far host — see [`ClientMsg::SpawnNativeSsh`]'s `cwd`
-    /// — and never a local one.
-    ///
-    /// [`ClientMsg::SpawnNativeSsh`]: crate::daemon::protocol::ClientMsg::SpawnNativeSsh
-    pub fn spawn_native_ssh_terminal(
-        spec: Box<crate::daemon::protocol::NativeSshSpec>,
-        remote_start_dir: Option<std::path::PathBuf>,
-    ) -> anyhow::Result<NativeSshParts> {
-        let persist = Box::new(spec.without_secrets());
-        let (terminal, pane_id) =
-            super::remote::handshake::PaneHandshake::spawn_native_ssh(TermSize::new(80, 24), 8, 17, remote_start_dir, spec)?;
-        Ok(NativeSshParts {
-            terminal,
-            pane_id,
-            persist,
-        })
-    }
 
     pub fn from_native_ssh_parts(
         parts: NativeSshParts,
@@ -1012,22 +923,21 @@ impl TerminalView {
                 event: Self::handle_event,
                 focus: |view, focused, cx| {
                     if focused {
-                        view.agent_activity.focused((view.host_id, view.pane_id), cx);
+                        view.agent_activity
+                            .focused((view.host_id, view.pane_id), cx);
                     } else {
                         view.input.unmark();
                     }
                     view.report_focus_change(focused);
                 },
-                foreground: Self::poll_foreground,
+                foreground: |view, window, cx| view.poll_foreground(window, cx),
                 detach: |view| view.terminal.detach_link(),
             },
         );
 
         super::color_scheme::watch(cx);
 
-
         window.focus(&focus_handle, cx);
-
 
         Self {
             terminal,
@@ -1438,7 +1348,9 @@ impl TerminalView {
     /// no way to do.
     #[cfg(test)]
     pub(crate) fn set_git_status_cwd_for_test(&mut self, cwd: Option<std::path::PathBuf>) {
-        if self.git_status_cwd != cwd { self.links.invalidate_geometry(); }
+        if self.git_status_cwd != cwd {
+            self.links.invalidate_geometry();
+        }
         self.git_status_cwd = cwd;
     }
 
@@ -2260,7 +2172,8 @@ impl TerminalView {
                 self.terminal.write(out);
             }
             WheelRoute::Scrollback => {
-                self.selection_scroll.scroll_lines(&mut self.terminal.term.lock(), lines);
+                self.selection_scroll
+                    .scroll_lines(&mut self.terminal.term.lock(), lines);
                 self.terminal.viewport_reporter().report();
                 cx.notify();
             }
@@ -2846,7 +2759,10 @@ impl TerminalView {
 
     fn follow_history_scope(&mut self, cx: &mut Context<Self>) {
         let scope = self.desired_history_scope();
-        let Some(load) = self.history.change_scope(scope, self.host_id, self.history_prompt()) else {
+        let Some(load) = self
+            .history
+            .change_scope(scope, self.host_id, self.history_prompt())
+        else {
             return;
         };
         cx.notify();
@@ -2918,7 +2834,9 @@ impl TerminalView {
 
         let changed = self.git_status_cwd != cwd;
         self.git_status_cwd = cwd.clone();
-        if changed { self.links.invalidate_geometry(); }
+        if changed {
+            self.links.invalidate_geometry();
+        }
         let Some(cwd) = cwd else {
             if changed {
                 cx.notify();
@@ -3521,15 +3439,31 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         let mut term = self.terminal.term.lock();
-        self.selection_scroll.start(&mut term, col, row, left, clicks, shift, cx.global::<Config>());
+        self.selection_scroll.start(
+            &mut term,
+            col,
+            row,
+            left,
+            clicks,
+            shift,
+            cx.global::<Config>(),
+        );
         drop(term);
         cx.notify();
     }
 
     pub fn on_select_update(&mut self, col: usize, row: usize, left: bool, cx: &mut Context<Self>) {
-        if !self.selection_scroll.is_selecting() { return; }
+        if !self.selection_scroll.is_selecting() {
+            return;
+        }
         let mut term = self.terminal.term.lock();
-        self.selection_scroll.update(&mut term, col, row, left, &cx.global::<Config>().word_separators);
+        self.selection_scroll.update(
+            &mut term,
+            col,
+            row,
+            left,
+            &cx.global::<Config>().word_separators,
+        );
         drop(term);
         cx.notify();
     }
@@ -3541,7 +3475,9 @@ impl TerminalView {
         left: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(epoch) = self.selection_scroll.autoscroll(overshoot, col, left) else { return; };
+        let Some(epoch) = self.selection_scroll.autoscroll(overshoot, col, left) else {
+            return;
+        };
         self.drag_scroll_tick(epoch, cx);
         cx.spawn(async move |this, cx| {
             loop {
@@ -3551,9 +3487,12 @@ impl TerminalView {
                 if !matches!(
                     this.update(cx, |view, cx| view.drag_scroll_tick(epoch, cx)),
                     Ok(true)
-                ) { break; }
+                ) {
+                    break;
+                }
             }
-        }).detach();
+        })
+        .detach();
     }
 
     fn drag_scroll_tick(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
@@ -3562,9 +3501,13 @@ impl TerminalView {
             || self.terminal.term.lock(),
             &cx.global::<Config>().word_separators,
         );
-        let Some(moved) = moved else { return false; };
+        let Some(moved) = moved else {
+            return false;
+        };
         self.terminal.viewport_reporter().report();
-        if moved { cx.notify(); }
+        if moved {
+            cx.notify();
+        }
         true
     }
 
@@ -3585,12 +3528,19 @@ impl TerminalView {
 
     fn on_scroll(&mut self, ev: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
         use super::selection_scroll::WheelMotion;
-        let quantized = || !ev.modifiers.shift && {
-            let mode = self.terminal.term.lock().mode();
-            mode.intersects(Mode::MOUSE_MODE)
-                || mode.contains(Mode::ALT_SCREEN | Mode::ALTERNATE_SCROLL)
+        let quantized = || {
+            !ev.modifiers.shift && {
+                let mode = self.terminal.term.lock().mode();
+                mode.intersects(Mode::MOUSE_MODE)
+                    || mode.contains(Mode::ALT_SCREEN | Mode::ALTERNATE_SCROLL)
+            }
         };
-        match self.selection_scroll.wheel(ev, self.line_height.as_f32(), cx.global::<Config>(), quantized) {
+        match self.selection_scroll.wheel(
+            ev,
+            self.line_height.as_f32(),
+            cx.global::<Config>(),
+            quantized,
+        ) {
             WheelMotion::Zoom(steps) => {
                 // Share clamping and persistence with keyboard and menu zoom.
                 for _ in 0..steps.unsigned_abs() {
@@ -3603,7 +3553,8 @@ impl TerminalView {
             }
             WheelMotion::Quantized(lines) => {
                 if lines != 0 {
-                    let at = self.cell_geom
+                    let at = self
+                        .cell_geom
                         .map(|geom| geom.pos_to_cell(ev.position))
                         .map(|(col, row, _)| (col, row));
                     self.scroll(lines, at, &ev.modifiers, cx);
@@ -3615,7 +3566,9 @@ impl TerminalView {
                     cx.notify();
                 }
             }
-            WheelMotion::Direct(delta) => { self.smooth_scroll(delta, cx); }
+            WheelMotion::Direct(delta) => {
+                self.smooth_scroll(delta, cx);
+            }
         }
     }
 
@@ -3625,15 +3578,23 @@ impl TerminalView {
         let moved = self.selection_scroll.smooth_scroll(&mut term, delta);
         drop(term);
         self.terminal.viewport_reporter().report();
-        if moved { cx.notify(); }
+        if moved {
+            cx.notify();
+        }
         moved
     }
 
     fn scroll_anim_frame(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
-        let frame = self.selection_scroll.animation_frame(epoch, || self.terminal.term.lock());
-        let Some((moved, running)) = frame else { return false; };
+        let frame = self
+            .selection_scroll
+            .animation_frame(epoch, || self.terminal.term.lock());
+        let Some((moved, running)) = frame else {
+            return false;
+        };
         self.terminal.viewport_reporter().report();
-        if moved { cx.notify(); }
+        if moved {
+            cx.notify();
+        }
         running
     }
 
@@ -3761,10 +3722,20 @@ impl TerminalView {
     }
 
     fn open_menu_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(link) = self.links.menu() else { return; };
+        let Some(link) = self.links.menu() else {
+            return;
+        };
         let mode = link.open_mode(cx.global::<Config>().file_open_mode());
         let host_id = link.host();
-        let LinkTarget::File { path, line, column, is_dir } = link.target().clone() else { return; };
+        let LinkTarget::File {
+            path,
+            line,
+            column,
+            is_dir,
+        } = link.target().clone()
+        else {
+            return;
+        };
         self.deliver_file_link(path, line, column, is_dir, host_id, mode, window, cx);
     }
 
@@ -3785,7 +3756,9 @@ impl TerminalView {
     }
 
     fn reveal_menu_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.links.menu().is_some_and(|link| link.host().is_local()) { return; };
+        if !self.links.menu().is_some_and(|link| link.host().is_local()) {
+            return;
+        };
         let Some(path) = self.menu_link_path().map(std::path::Path::to_path_buf) else {
             return;
         };
@@ -3817,7 +3790,8 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mode = LinkInteraction::file_open_mode(self.host_id, cx.global::<Config>().file_open_mode());
+        let mode =
+            LinkInteraction::file_open_mode(self.host_id, cx.global::<Config>().file_open_mode());
         self.deliver_file_link(path, line, column, is_dir, self.host_id, mode, window, cx);
     }
 
@@ -3874,7 +3848,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(message) = self.links.unresolved_message(candidate, pending) else { return false; };
+        let Some(message) = self.links.unresolved_message(candidate, pending) else {
+            return false;
+        };
         window.notify_app(
             crate::ui::notification_history::Notification::info(message).pane(
                 self.owner_workspace(),
@@ -3983,43 +3959,68 @@ impl TerminalView {
         armed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        if let Some(found) = self.links.cached_hover(col, row, armed) { return found; }
+        if let Some(found) = self.links.cached_hover(col, row, armed) {
+            return found;
+        }
         let alt_screen = self.on_alt_screen();
         if let Some((found, changed)) = self.links.prepare_hover(
-            &self.terminal.term, col, row, armed, cx.global::<Config>().link_url, alt_screen,
+            &self.terminal.term,
+            col,
+            row,
+            armed,
+            cx.global::<Config>().link_url,
+            alt_screen,
         ) {
-            if changed { cx.notify(); }
+            if changed {
+                cx.notify();
+            }
             return found;
         }
         self.sync_link_location();
         let include_loopback = self.can_forward_loopback(cx);
         let (found, changed) = self.links.resolve_hover(
-            &self.terminal.term, col, row, armed, include_loopback,
-            |host, cwd| cx.try_global::<crate::terminal::git_status::GitStatusCache>()
-                .and_then(|cache| cache.repo_root_for(host, cwd))
-                .map(std::path::Path::to_path_buf),
+            &self.terminal.term,
+            col,
+            row,
+            armed,
+            include_loopback,
+            |host, cwd| {
+                cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+                    .and_then(|cache| cache.repo_root_for(host, cwd))
+                    .map(std::path::Path::to_path_buf)
+            },
         );
         self.request_link_work(cx);
         self.flush_link_probes(cx);
-        if changed { cx.notify(); }
+        if changed {
+            cx.notify();
+        }
         found
     }
 
     pub fn refresh_link_hover(&mut self, armed: bool, cx: &mut Context<Self>) -> bool {
-        let Some((col, row)) = self.links.refresh_cell(armed, false) else { return false; };
+        let Some((col, row)) = self.links.refresh_cell(armed, false) else {
+            return false;
+        };
         self.hover_link_at(col, row, armed, cx)
     }
 
     fn recompute_link_hover(&mut self, cx: &mut Context<Self>) -> bool {
         let armed = self.links.modifier_down();
-        let Some((col, row)) = self.links.refresh_cell(armed, true) else { return false; };
+        let Some((col, row)) = self.links.refresh_cell(armed, true) else {
+            return false;
+        };
         self.hover_link_at(col, row, armed, cx)
     }
 
-    pub fn link_modifier_down(&self) -> bool { self.links.modifier_down() }
+    pub fn link_modifier_down(&self) -> bool {
+        self.links.modifier_down()
+    }
 
     pub fn clear_hovered_link(&mut self, cx: &mut Context<Self>) {
-        if self.links.clear_hover() { cx.notify(); }
+        if self.links.clear_hover() {
+            cx.notify();
+        }
     }
 
     fn resolve_link_at(
@@ -4032,10 +4033,16 @@ impl TerminalView {
     ) -> LinkAt {
         self.sync_link_location();
         let result = self.links.resolve(
-            &self.terminal.term, col, row, include_files, include_loopback,
-            |host, cwd| cx.try_global::<crate::terminal::git_status::GitStatusCache>()
-                .and_then(|cache| cache.repo_root_for(host, cwd))
-                .map(std::path::Path::to_path_buf),
+            &self.terminal.term,
+            col,
+            row,
+            include_files,
+            include_loopback,
+            |host, cwd| {
+                cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+                    .and_then(|cache| cache.repo_root_for(host, cwd))
+                    .map(std::path::Path::to_path_buf)
+            },
         );
         self.request_link_work(cx);
         self.flush_link_probes(cx);
@@ -4043,42 +4050,61 @@ impl TerminalView {
     }
 
     fn request_link_work(&mut self, cx: &mut Context<Self>) {
-        if !self.links.wants_root() { return; }
+        if !self.links.wants_root() {
+            return;
+        }
         // Do not mark work in flight until there is a Host to carry it.
-        let Some(host) = self.host(cx) else { return; };
+        let Some(host) = self.host(cx) else {
+            return;
+        };
         if let Some((epoch, cwd)) = self.links.request_root() {
             crate::ui::host_ops::HostOps::run(
-                host, cx,
+                host,
+                cx,
                 move |h| h.repo_root(&cwd).ok().flatten(),
                 move |view, root, cx| {
                     view.sync_link_location();
-                    if view.links.land_root(epoch, root) { view.recompute_link_hover(cx); }
+                    if view.links.land_root(epoch, root) {
+                        view.recompute_link_hover(cx);
+                    }
                 },
             );
         }
     }
 
     fn flush_link_probes(&mut self, cx: &mut Context<Self>) {
-        if self.host_id.is_local() { return; }
-        let Some(host) = self.host(cx) else { return; };
+        if self.host_id.is_local() {
+            return;
+        }
+        let Some(host) = self.host(cx) else {
+            return;
+        };
         let (epoch, wanted) = self.links.take_probes();
-        if wanted.is_empty() { return; }
+        if wanted.is_empty() {
+            return;
+        }
         crate::ui::host_ops::HostOps::run(
-            host, cx,
+            host,
+            cx,
             move |h| {
                 use super::link_probe::Existence;
-                wanted.into_iter().map(|path| {
-                    let existence = match h.stat(&path) {
-                        Ok(meta) if meta.is_dir => Existence::Dir,
-                        Ok(_) => Existence::File,
-                        Err(_) => Existence::Missing,
-                    };
-                    (path, existence)
-                }).collect::<Vec<_>>()
+                wanted
+                    .into_iter()
+                    .map(|path| {
+                        let existence = match h.stat(&path) {
+                            Ok(meta) if meta.is_dir => Existence::Dir,
+                            Ok(_) => Existence::File,
+                            Err(_) => Existence::Missing,
+                        };
+                        (path, existence)
+                    })
+                    .collect::<Vec<_>>()
             },
             move |view, answers, cx| {
                 view.sync_link_location();
-                if view.links.land_probes(epoch, answers) { view.recompute_link_hover(cx); }
+                if view.links.land_probes(epoch, answers) {
+                    view.recompute_link_hover(cx);
+                }
             },
         );
     }
@@ -4152,7 +4178,8 @@ impl TerminalView {
             let cfg = cx.global::<Config>();
             cfg.prompt_cursor_style.shape().unwrap_or(cfg.cursor_style)
         };
-        let cursor_paint = input_caret_paint(focused, self.lifecycle.cursor_visible(), cursor_style);
+        let cursor_paint =
+            input_caret_paint(focused, self.lifecycle.cursor_visible(), cursor_style);
         let cursor_on = cursor_paint.is_some();
         let block_cursor = cursor_paint == Some(InputCaretPaint::Block);
         // A block caret is drawn as reverse video on the cell it covers, not as
@@ -4760,7 +4787,8 @@ impl Render for TerminalView {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, ev: &MouseDownEvent, _window, _cx| {
-                    this.links.record_menu_permission(this.mouse_mode(), ev.modifiers.shift);
+                    this.links
+                        .record_menu_permission(this.mouse_mode(), ev.modifiers.shift);
                 }),
             )
             .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(cx.theme().drag_border.opacity(0.12)))
@@ -5101,8 +5129,6 @@ fn wheel_route(mode: Mode, shift: bool, up: bool) -> WheelRoute {
     WheelRoute::Scrollback
 }
 
-
-
 /// Whether a file link's menu offers "Open with Default App" beside "Open".
 ///
 /// Only for a file on this machine: the OS opener is handed a local path, and
@@ -5426,7 +5452,6 @@ fn menu_layout(
 }
 
 
-
 /// Advance the in-flight scroll animation once per presented frame.
 ///
 /// Registered by the wheel adapter: gpui runs the callback
@@ -5448,7 +5473,6 @@ fn schedule_scroll_anim_frame(view: WeakEntity<TerminalView>, epoch: u64, window
         }
     });
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -6110,7 +6134,6 @@ mod tests {
         assert_eq!(wheel_route(everything, true, true), WheelRoute::Scrollback);
         assert_eq!(wheel_route(everything, true, false), WheelRoute::Scrollback);
     }
-
 
     #[test]
     fn sgr_mouse_reports_one_based_decimal_with_modifier_bits() {
@@ -6960,7 +6983,10 @@ pub(crate) fn quiet_test_ssh_pane_with(
 
 #[cfg(test)]
 fn history_fixture(entries: Vec<String>) -> super::history::History {
-    super::history::History { entries, ..Default::default() }
+    super::history::History {
+        entries,
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
@@ -6986,8 +7012,8 @@ mod gpui_tests {
     }
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
     use crate::daemon::transport::Stream;
-    use crate::terminal::remote::PtySource;
     use crate::terminal::lifecycle::declare_displayed;
+    use crate::terminal::remote::PtySource;
     use gpui_kit::{Bounds, Entity, TestAppContext, point};
 
     mod history_scope_consumer_tests {
@@ -7026,7 +7052,9 @@ mod gpui_tests {
         include!("link/consumer_tests.rs");
     }
 
-    pub(super) fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
+    pub(super) fn harness(
+        cx: &mut TestAppContext,
+    ) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
         let pty = if cfg!(windows) {
             PtySource::LocalConpty
         } else {
@@ -7199,7 +7227,6 @@ mod gpui_tests {
             "a finished turn must not hold the tab open"
         );
     }
-
 
     /// An agent that moves into a git worktree does not `chdir` — the process
     /// stays put and only its hook stream says where the work went. Every
@@ -8019,7 +8046,6 @@ mod gpui_tests {
         });
     }
 
-
     #[gpui_kit::test]
     fn clearing_the_scrollback_drops_the_selection_anchored_in_it(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
@@ -8094,7 +8120,6 @@ mod gpui_tests {
             })
             .unwrap();
     }
-
 
     /// Runs out the wait a new title is held for.
     fn settle(cx: &mut TestAppContext) {
@@ -8662,24 +8687,6 @@ mod gpui_tests {
     }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     fn scroll_into_history(view: &TerminalView, offset: usize) {
         let mut parser = rio_vt::performer::handler::Processor::default();
         let mut term = view.terminal.term.lock();
@@ -8715,9 +8722,6 @@ mod gpui_tests {
     fn notch(view: &TerminalView, lines: f32) -> ScrollWheelEvent {
         wheel(view, lines, gpui_kit::TouchPhase::Moved)
     }
-
-
-
 
 
 
@@ -9996,7 +10000,6 @@ mod gpui_tests {
 
 
 
-
     #[gpui_kit::test]
     fn hidden_cursor_at_prompt_anchors_the_editor_at_the_real_cell_not_top_left(
         cx: &mut TestAppContext,
@@ -10320,9 +10323,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-
-
-
     /// #958: `prompt_cursor_style` shapes the shell's own caret at a prompt,
     /// leaves the running program's cursor alone, and steps aside for a vi-mode
     /// prompt, whose insert/normal shapes are the shell's to set.
@@ -10389,7 +10389,6 @@ mod gpui_tests {
         wait_for(cx, &|view| !view.terminal.at_prompt());
         assert_eq!(shape(cx), None, "a running command gets cursor_style back");
     }
-
 }
 
 /// The window between the shell reporting a prompt and its line editor

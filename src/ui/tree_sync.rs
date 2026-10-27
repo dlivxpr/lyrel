@@ -1,14 +1,14 @@
 pub(crate) mod desired;
+mod lifecycle;
 pub(crate) mod projection;
 mod reconcile;
-mod lifecycle;
 
 #[cfg(test)]
 mod test_layout;
 
 use desired::seeded_records;
-use projection::{desired_tabs, logical_node, slot_pane_id};
 use lifecycle::{ProjectionResult, WindowSync};
+use projection::{desired_tabs, logical_node, slot_pane_id};
 use reconcile::WsMirror;
 
 use crate::ui::notification_history::NotificationWindowExt as _;
@@ -30,131 +30,6 @@ use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneSlot};
 
-fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
-    match node {
-        PaneNode::Leaf { pane } => slots.remove(pane).map(Pane::Leaf),
-        PaneNode::Split { axis, ratio, a, b } => Some(Pane::split_node(
-            match axis {
-                TreeAxis::Horizontal => gpui_kit::Axis::Horizontal,
-                TreeAxis::Vertical => gpui_kit::Axis::Vertical,
-            },
-            *ratio,
-            pane_from_existing(a, slots)?,
-            pane_from_existing(b, slots)?,
-        )),
-    }
-}
-
-/// Toggles presentation through the shared domain mutation. Every leaf, including
-/// client-local native SSH, stays in the logical tree and keeps its existing view.
-pub(crate) fn toggle_pip_for_tab(
-    tab: &mut crate::ui::tab::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    change_presentation_for_tab(tab, pane, fallback, None, workspace, cx)
-}
-
-pub(crate) fn set_parked_for_tab(
-    tab: &mut crate::ui::tab::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    parked: bool,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    change_presentation_for_tab(tab, pane, fallback, Some(parked), workspace, cx)
-}
-
-fn change_presentation_for_tab(
-    tab: &mut crate::ui::tab::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    parked: Option<bool>,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    let leaves = tab.pane.leaves();
-    let remote = WorkspaceStore::all(cx)
-        .get(workspace)
-        .is_some_and(|w| w.is_remote());
-    if remote
-        && let Some(changed) =
-            crate::ui::pane_sidecar::change_for_tab(tab, pane, fallback, parked, cx)
-    {
-        return changed;
-    }
-    let Some(target_slot) = leaves.iter().find(|slot| slot.entity_id() == pane) else {
-        return false;
-    };
-    if remote
-        && matches!(target_slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-    {
-        return false;
-    }
-    let Some(target) = slot_pane_id(target_slot, cx) else {
-        return false;
-    };
-    let Some(root) = logical_node(&tab.pane, remote, cx) else {
-        return false;
-    };
-    // An unassigned connecting leaf must not disappear when a restore reshapes.
-    let mut slots = HashMap::with_capacity(leaves.len());
-    let mut client_local = Vec::new();
-    for slot in &leaves {
-        if remote && matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-        {
-            client_local.push(slot.clone());
-            continue;
-        }
-        let Some(id) = slot_pane_id(slot, cx) else {
-            return false;
-        };
-        if slots.insert(id, slot.clone()).is_some() {
-            return false;
-        }
-    }
-    let fallback = fallback
-        .and_then(|id| leaves.iter().find(|slot| slot.entity_id() == id))
-        .filter(|slot| {
-            !remote
-                || !matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-        })
-        .and_then(|slot| slot_pane_id(slot, cx));
-    let mut logical = TreeTab {
-        root,
-        presentation: tab.presentation.clone(),
-        id: tab.id(),
-        name: None,
-        group: None,
-        last_auto: None,
-        hibernated: false,
-    };
-    let changed = match parked {
-        Some(true) => logical.park(target),
-        Some(false) => logical.restore_parked(target, fallback),
-        None => {
-            let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target))
-                .then_some(target);
-            logical.set_pip(promote, fallback)
-        }
-    };
-    if !changed {
-        return false;
-    }
-    if logical_node(&tab.pane, remote, cx).as_ref() != Some(&logical.root) {
-        let Some(pane) = pane_from_existing(&logical.root, &mut slots) else {
-            return false;
-        };
-        tab.pane = client_local.into_iter().fold(pane, |tree, slot| {
-            Pane::split_node(gpui_kit::Axis::Horizontal, 0.5, tree, Pane::Leaf(slot))
-        });
-    }
-    tab.presentation = logical.presentation;
-    true
-}
 
 pub(crate) fn control_for(cx: &mut App, host: HostId) -> Option<Arc<ControlClient>> {
     if host.is_local() {
@@ -363,7 +238,6 @@ pub(crate) fn newest_remembered_close(cx: &App, client_ws: WorkspaceId) -> Optio
     Some(closed_session_tab(&entry.tab, &machine.panes))
 }
 
-
 /// End, from here, the panes of every remembered close in `dropped` — ops the
 /// machine was sent and refused, or that were never sent at all. Nobody else
 /// is going to stop those panes now, and a close that leaves its shells
@@ -395,8 +269,6 @@ fn tree_workspace_id(cx: &App, client_ws: WorkspaceId) -> WorkspaceId {
         .map(|r| r.workspace)
         .unwrap_or(client_ws)
 }
-
-
 
 /// A name the user typed, and the workspace they typed it for.
 ///
@@ -430,7 +302,6 @@ enum Arrival {
     Adopted,
 }
 
-
 #[derive(Default)]
 pub(crate) struct TreeSync {
     windows: HashMap<WorkspaceId, WindowSync>,
@@ -440,7 +311,11 @@ impl Global for TreeSync {}
 
 /// Publishes a saved local layout; reconnect/retry coordination is not a user edit.
 pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
-    if let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&app.workspace) {
+    if let Some(state) = cx
+        .default_global::<TreeSync>()
+        .windows
+        .get_mut(&app.workspace)
+    {
         state.record_local_write();
     }
     coordinate_window(app, cx);
@@ -463,7 +338,8 @@ fn coordinate_window(app: &LyrelApp, cx: &mut App) {
         return;
     }
     adopt_tab_ids(app, cx);
-    let (desired, desired_active, held) = desired_tabs(&app.tabs, app.tabs.active_index(), client_ws, cx);
+    let (desired, desired_active, held) =
+        desired_tabs(&app.tabs, app.tabs.active_index(), client_ws, cx);
     let machine_ws = tree_workspace_id(cx, client_ws);
 
     let state = cx
@@ -474,7 +350,11 @@ fn coordinate_window(app: &LyrelApp, cx: &mut App) {
     match state.project(client_ws, machine_ws, &desired, desired_active, held) {
         ProjectionResult::Prime => start_prime(cx, client_ws),
         ProjectionResult::Waiting => {}
-        ProjectionResult::Queued { tabs, active, remembered } => {
+        ProjectionResult::Queued {
+            tabs,
+            active,
+            remembered,
+        } => {
             let host = WorkspaceStore::host_of(cx, client_ws);
             // Remember closes before replacing the machine mirror's open tabs.
             crate::ui::machine_mirror::MachineMirrors::note_remembered_closes(
@@ -483,12 +363,16 @@ fn coordinate_window(app: &LyrelApp, cx: &mut App) {
             crate::ui::machine_mirror::MachineMirrors::note_synced_workspace(
                 cx, host, machine_ws, tabs, active,
             );
-            let open: Vec<u64> = app.tabs.iter()
+            let open: Vec<u64> = app
+                .tabs
+                .iter()
                 .flat_map(|t| t.pane.terminals())
                 .map(|v| v.read(cx).pane_id)
                 .collect();
             crate::ui::machine_mirror::MachineMirrors::note_seeded_panes(
-                cx, host, seeded_records(&desired, |pane| open.contains(&pane)),
+                cx,
+                host,
+                seeded_records(&desired, |pane| open.contains(&pane)),
             );
             pump(cx, client_ws);
         }
@@ -562,7 +446,10 @@ pub(crate) fn mark_window_informed(cx: &mut App, client_ws: WorkspaceId) {
 }
 
 fn adopt_tab_ids(app: &LyrelApp, cx: &App) {
-    let Some(state) = cx.try_global::<TreeSync>().and_then(|t| t.windows.get(&app.workspace)) else {
+    let Some(state) = cx
+        .try_global::<TreeSync>()
+        .and_then(|t| t.windows.get(&app.workspace))
+    else {
         return;
     };
     state.adopt_tab_ids(&app.tabs, cx);
@@ -896,7 +783,11 @@ fn finish_prime(
     let host = WorkspaceStore::host_of(cx, client_ws);
     let machine_ws = tree_workspace_id(cx, client_ws);
     crate::ui::machine_mirror::MachineMirrors::note_synced_workspace(
-        cx, host, machine_ws, landed.tabs, landed.active,
+        cx,
+        host,
+        machine_ws,
+        landed.tabs,
+        landed.active,
     );
     // The pull above is the only place this window will hear the workspace's
     // name — it is left out of the deltas its own create raises (#604).
@@ -963,8 +854,11 @@ fn adopt_groups(cx: &mut App, client_ws: WorkspaceId) {
         return;
     }
     cx.defer(move |cx| {
-        let Some(groups) = cx.default_global::<TreeSync>()
-            .windows.get(&client_ws).and_then(WindowSync::groups)
+        let Some(groups) = cx
+            .default_global::<TreeSync>()
+            .windows
+            .get(&client_ws)
+            .and_then(WindowSync::groups)
         else {
             return;
         };
@@ -1002,7 +896,11 @@ fn pump(cx: &mut App, client_ws: WorkspaceId) {
             return;
         }
     };
-    let lifecycle::Batch { epoch, ops: batch, retired } = state.begin_batch().expect("batch ready");
+    let lifecycle::Batch {
+        epoch,
+        ops: batch,
+        retired,
+    } = state.begin_batch().expect("batch ready");
     cx.spawn(async move |cx| {
         let result = cx
             .background_executor()
@@ -1037,7 +935,10 @@ fn apply_batch_result(
     if let Err((_, _, unsent)) = &result {
         end_unsent_retirements(cx, &mut retired, unsent);
     }
-    let current = cx.default_global::<TreeSync>().windows.get_mut(&client_ws)
+    let current = cx
+        .default_global::<TreeSync>()
+        .windows
+        .get_mut(&client_ws)
         .is_some_and(|state| state.finish_batch(epoch));
     if !current {
         return;
@@ -1194,8 +1095,14 @@ pub(crate) fn park_command_while_pulling(
     if !layout_is_pending(cx, client_ws) {
         return false;
     }
-    cx.default_global::<TreeSync>().windows.entry(client_ws).or_default()
-        .park_open(ParkedOpen::Command { cwd: cwd.to_path_buf(), command: command.to_owned() });
+    cx.default_global::<TreeSync>()
+        .windows
+        .entry(client_ws)
+        .or_default()
+        .park_open(ParkedOpen::Command {
+            cwd: cwd.to_path_buf(),
+            command: command.to_owned(),
+        });
     true
 }
 
@@ -1209,7 +1116,10 @@ pub(crate) fn park_ssh_while_pulling(
     if !layout_is_pending(cx, client_ws) {
         return false;
     }
-    cx.default_global::<TreeSync>().windows.entry(client_ws).or_default()
+    cx.default_global::<TreeSync>()
+        .windows
+        .entry(client_ws)
+        .or_default()
         .park_open(ParkedOpen::Ssh(ssh.clone()));
     true
 }
@@ -1222,7 +1132,6 @@ fn layout_is_pending(cx: &mut App, client_ws: WorkspaceId) -> bool {
         .get(&client_ws)
         .is_some_and(WindowSync::is_pending)
 }
-
 
 /// Opens the tabs a launch parked here, now that the layout they waited for is
 /// up. Does nothing for the windows — every other one — that parked nothing.
@@ -1380,7 +1289,10 @@ fn hydrate_with(cx: &mut App, client_ws: WorkspaceId, adopt: Adopt, showing: Vec
 /// dialect behind reads as "lyrel lost my tabs" with nothing anywhere to say
 /// otherwise. This is that "otherwise", said in the window it happened to.
 fn say_why_the_window_is_empty(cx: &mut App, client_ws: WorkspaceId) {
-    if !cx.default_global::<TreeSync>().windows.get_mut(&client_ws)
+    if !cx
+        .default_global::<TreeSync>()
+        .windows
+        .get_mut(&client_ws)
         .is_some_and(WindowSync::explain_empty)
     {
         return;
@@ -1765,7 +1677,7 @@ fn settle_hydration(
 /// workspace that has no tabs — from the machine tree and from the store
 /// both. Granting it before the rebuild handed that permission to a window
 /// whose rebuild had not happened yet, and a rebuild can produce nothing:
-/// `tabs_from_session` drops any tab whose panes all fail to start, which is
+/// `SessionRestore::tabs` drops any tab whose panes all fail to start, which is
 /// what every tab does when the pane socket is unreachable. The window then
 /// sat there, empty and authoritative, and the next switch deleted a
 /// workspace with ten live tabs in it.
@@ -1807,7 +1719,11 @@ fn settle_rebuild(
     wanted_ids: &[TabId],
     showing: &[TabId],
 ) {
-    let failed = cx.default_global::<TreeSync>().windows.entry(client_ws).or_default()
+    let failed = cx
+        .default_global::<TreeSync>()
+        .windows
+        .entry(client_ws)
+        .or_default()
         .settle_rebuild(wanted, wanted_ids, showing);
     if failed != 0 && !showing.is_empty() {
         log::warn!(
@@ -1898,7 +1814,10 @@ pub(crate) fn on_layout_delta(cx: &mut App, host: HostId, key: &str, delta: Layo
         return;
     }
 
-    let Some(mirror_ok) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws)
+    let Some(mirror_ok) = cx
+        .default_global::<TreeSync>()
+        .windows
+        .get_mut(&client_ws)
         .and_then(|state| state.apply_delta(&delta))
     else {
         return;
@@ -1930,7 +1849,6 @@ pub(crate) fn on_layout_delta(cx: &mut App, host: HostId, key: &str, delta: Layo
     }
     app.update(cx, |app, cx| coordinate_window(app, cx));
 }
-
 
 pub(crate) fn resync_window_from_tree(cx: &mut App, client_ws: WorkspaceId) {
     hydrate(cx, client_ws, Adopt::Replace);
@@ -2010,9 +1928,8 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) -> bool {
-        let index_of = |tabs: &[crate::ui::tab::Tab], id: TabId| {
-            tabs.iter().position(|t| t.id() == id)
-        };
+        let index_of =
+            |tabs: &[crate::ui::tab::Tab], id: TabId| tabs.iter().position(|t| t.id() == id);
         let applied = match delta {
             LayoutDelta::WorkspaceCreated { .. }
             | LayoutDelta::WorkspaceTouched { .. }
@@ -2168,7 +2085,7 @@ impl LyrelApp {
         let presentation = tab.presentation.clone();
         if logical_node(&self.tabs[index].pane, remote, cx).as_ref() == Some(&tab.root) {
             let gui = &mut self.tabs[index];
-            gui.presentation = presentation;
+            gui.adopt_presentation(presentation);
             gui.adopt_name(tab.name.clone());
             gui.group.set(tab.group);
             if gui.auto_group.borrow().is_none() {
@@ -2185,7 +2102,7 @@ impl LyrelApp {
                     continue;
                 }
                 PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-                PaneSlot::Connecting(pending) => pending.read(cx).spawn.restore_pane,
+                PaneSlot::Connecting(pending) => pending.read(cx).restore_pane(),
             };
             if let Some(id) = id {
                 existing.insert(id, slot);
@@ -2199,7 +2116,7 @@ impl LyrelApp {
         });
         let gui = &mut self.tabs[index];
         gui.pane = pane;
-        gui.presentation = presentation;
+        gui.adopt_presentation(presentation);
         gui.adopt_name(tab.name.clone());
         gui.group.set(tab.group);
         if gui.auto_group.borrow().is_none() {
@@ -2283,7 +2200,6 @@ mod tests {
     use super::*;
     use crate::core::group_key::{AutoKey, GroupId};
     use lyrel_core::core::machine::{AgentFacts, TabPresentation};
-
 
     /// A reopened tab comes back as the restore reads one: same shape, each
     /// leaf on its old pane id — the key its screen is restored by — with the
@@ -2382,7 +2298,6 @@ mod tests {
         );
     }
 
-
     #[cfg(unix)]
     #[test]
     fn a_peer_without_the_machine_tree_bit_classifies_as_unserved() {
@@ -2427,8 +2342,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-
-
     #[test]
     fn a_ratio_delta_is_clamped_to_the_servers_band_not_a_narrower_one() {
         let mut pane = Pane::split_node(gpui_kit::Axis::Horizontal, 0.5, Pane::Empty, Pane::Empty);
@@ -2443,7 +2356,6 @@ mod tests {
             _ => unreachable!("built as a split"),
         }
     }
-
 
     #[test]
     fn a_lowered_leaf_carries_its_pane_id_and_its_agent_whatever_live_says() {

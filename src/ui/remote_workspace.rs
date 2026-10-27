@@ -444,9 +444,8 @@ impl LyrelApp {
 
     pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &gpui_kit::App) {
         self.editor_context_changed();
-        if crate::core::session::crosses_machines(previous, self.spawn_host(cx)) {
-            self.closed.clear();
-        }
+        let next = self.spawn_host(cx);
+        self.session.host_changed(previous, next);
     }
 
     pub(crate) fn default_shell_label(&self, _cx: &gpui_kit::App) -> String {

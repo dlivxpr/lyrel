@@ -20,7 +20,6 @@ use lyrel_core::core::github::{
 };
 
 use crate::ui::app::LyrelApp;
-use crate::ui::window_chrome::CONTENT_INSET;
 use crate::ui::github::{Fold, now_unix};
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::panel_github::{
@@ -32,6 +31,7 @@ use crate::ui::right_panel::{
 use crate::ui::scm::path::{relative_time, split_display_path};
 use crate::ui::scm::state::RepoKey;
 use crate::ui::scm::status::{status_color, status_glyph};
+use crate::ui::window_chrome::CONTENT_INSET;
 
 const ROW_H: f32 = 26.;
 const SECTION_GAP: f32 = 16.;

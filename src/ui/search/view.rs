@@ -1381,9 +1381,7 @@ mod tests {
     use gpui_kit::{TestAppContext, VisualTestContext};
 
     fn open(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Entity<SearchView> {
-        app.read_with(vcx, |app, _| {
-            app.search.view().expect("the search is open")
-        })
+        app.read_with(vcx, |app, _| app.search.view().expect("the search is open"))
     }
 
     fn first_kind(view: &Entity<SearchView>, vcx: &mut VisualTestContext) -> Option<CommandKind> {
@@ -1556,7 +1554,11 @@ mod tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, _| {
             assert!(!app.search.is_open(), "picking a row closes the search");
-            assert_eq!(app.tabs.active_index(), 2, "back to the tab used before this one");
+            assert_eq!(
+                app.tabs.active_index(),
+                2,
+                "back to the tab used before this one"
+            );
         });
     }
 
@@ -1692,7 +1694,10 @@ mod tests {
     fn wait_for_history(view: &Entity<SearchView>, vcx: &mut VisualTestContext) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while view.read_with(vcx, |view, _| view.sessions_landed) == 0 {
-            assert!(std::time::Instant::now() < deadline, "the scan never landed");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the scan never landed"
+            );
             std::thread::sleep(std::time::Duration::from_millis(10));
             vcx.run_until_parked();
         }
@@ -1704,7 +1709,8 @@ mod tests {
         app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
         vcx.run_until_parked();
         let original = vcx.update(|window, cx| window.focused(cx).unwrap());
-        let chord = vcx.update(|_, cx| crate::ui::keymap::effective_key("TogglePalette", cx).unwrap());
+        let chord =
+            vcx.update(|_, cx| crate::ui::keymap::effective_key("TogglePalette", cx).unwrap());
         vcx.simulate_keystrokes(&chord);
         vcx.run_until_parked();
         let old = open(&app, &mut vcx);
@@ -1743,12 +1749,15 @@ mod tests {
             old.read_with(&vcx, |view, _| assert_eq!(view.sessions_landed, 0));
             let active = app.read_with(&vcx, |app, _| app.tabs.active_index());
             old.update(&mut vcx, |_, cx| {
-                cx.emit(SearchEvent::Confirm(CommandKind::NextTab));
+                cx.emit(SearchEvent::Confirm(CommandKind::SelectNextTab));
                 cx.emit(SearchEvent::Dismiss);
             });
             vcx.run_until_parked();
             assert_eq!(open(&app, &mut vcx), current);
-            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), active);
+            assert_eq!(
+                app.read_with(&vcx, |app, _| app.tabs.active_index()),
+                active
+            );
         }
     }
 

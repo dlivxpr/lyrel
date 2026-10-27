@@ -1,8 +1,10 @@
-use super::*;
+#[cfg(unix)]
+use super::super::test_support::ws;
+use super::super::test_support::{drain, null_writer, test_state};
 use super::super::*;
-use super::super::test_support::{test_state, ws, null_writer, drain};
-use super::output_marks::{OscSniffer};
+use super::output_marks::OscSniffer;
 use super::probes::is_foreground_command;
+use super::*;
 
 /// The client forgets its cwd on every `RemoteContext`, so a replay that
 /// sent the far shell's directory first would have it wiped straight away.
@@ -91,10 +93,16 @@ fn a_remote_panes_prompt_mark_latches_and_a_new_hop_clears_it() {
     /// read detected, then the latch.
     fn read(st: &mut PaneState, shell: Vec<ShellState>, remote: Option<Option<RemoteContext>>) {
         let saw_prompt_mark = shell.iter().any(|s| s.mark_at_prompt);
-        (st).with_facts(|facts, emit| apply_signals(facts, SniffSignals {
-            shell,
-            ..SniffSignals::default()
-        }, emit));
+        (st).with_facts(|facts, emit| {
+            apply_signals(
+                facts,
+                SniffSignals {
+                    shell,
+                    ..SniffSignals::default()
+                },
+                emit,
+            )
+        });
         if let Some(remote) = remote {
             (st).with_facts(|facts, emit| apply_remote_context(facts, remote, emit));
         }
@@ -148,7 +156,9 @@ fn a_shutdown_after_the_foreground_exit_does_not_reclaim_the_pane() {
     use crate::core::cli_agent::{CLIAgent, parse_agent_event_body};
 
     let mut state = test_state(true);
-    (&mut state).with_facts(|facts, emit| apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit));
+    (&mut state).with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
     (&mut state).with_facts(|facts, emit| apply_agent(facts, None, emit));
     let ended = parse_agent_event_body(
         br#"{"agent":"omp","event":"session-end","session_id":"already-exited"}"#,
@@ -168,9 +178,14 @@ fn probed_cwd_corrects_a_pane_whose_shell_never_reports_osc7() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit));
+    (&mut st).with_facts(|facts, emit| {
+        apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit)
+    });
 
-    assert_eq!(st.facts.cwd.as_deref(), Some(Path::new("/Users/alice/dev/lyrel")));
+    assert_eq!(
+        st.facts.cwd.as_deref(),
+        Some(Path::new("/Users/alice/dev/lyrel"))
+    );
     assert!(
         matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/Users/alice/dev/lyrel"))
     );
@@ -192,7 +207,9 @@ fn probed_cwd_keeps_the_shells_spelling_for_a_symlinked_path() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(real.canonicalize().unwrap()), emit));
+    (&mut st).with_facts(|facts, emit| {
+        apply_probed_cwd(facts, Some(real.canonicalize().unwrap()), emit)
+    });
 
     assert_eq!(st.facts.cwd.as_deref(), Some(link.as_path()));
     assert!(rx.try_recv().is_err(), "same directory → nothing to tell");
@@ -208,9 +225,14 @@ fn probed_cwd_matching_the_reported_one_says_nothing() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit));
+    (&mut st).with_facts(|facts, emit| {
+        apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit)
+    });
 
-    assert_eq!(st.facts.cwd.as_deref(), Some(Path::new("/Users/alice/dev/lyrel")));
+    assert_eq!(
+        st.facts.cwd.as_deref(),
+        Some(Path::new("/Users/alice/dev/lyrel"))
+    );
     assert!(rx.try_recv().is_err());
 }
 
@@ -227,7 +249,9 @@ fn probed_cwd_declines_to_speak_for_a_remote_pane() {
     attach_subscriber(&mut st, tx);
     drain(&rx);
 
-    (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit));
+    (&mut st).with_facts(|facts, emit| {
+        apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit)
+    });
 
     assert_eq!(st.facts.cwd, None);
     assert!(rx.try_recv().is_err());
@@ -398,13 +422,13 @@ fn reader_gates_indirect_media_before_first_ssh_bytes_and_restores_local_queries
                     }
                 }),
                 remote: Box::new(move || {
-                    (!unknown && matches!(remote_phase.load(Ordering::SeqCst), 1 | 2)).then(
-                        || RemoteContext {
+                    (!unknown && matches!(remote_phase.load(Ordering::SeqCst), 1 | 2)).then(|| {
+                        RemoteContext {
                             kind: RemoteKind::Ssh,
                             argv: vec!["ssh".into(), "other-host".into()],
                             target: "other-host".into(),
-                        },
-                    )
+                        }
+                    })
                 }),
                 agent: Box::new(|| None),
                 cwd: Box::new(|| None),
@@ -500,49 +524,49 @@ fn reader_poll_applies_the_probed_cwd() {
         matches!(sub_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/Users/alice/dev/lyrel"))
     );
 }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn live_pane_reports_an_uninstrumented_shells_cwd() {
-        let target = std::path::Path::new("/usr");
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn live_pane_reports_an_uninstrumented_shells_cwd() {
+    let target = std::path::Path::new("/usr");
 
-        let (tx, rx) = mpsc::channel();
-        let pane = DaemonPane::spawn(
-            1,
-            Some(PathBuf::from("/")),
-            ws(80, 24),
-            Some(ShellSpec {
-                program: "sh".into(),
-                args: vec!["-c".into(), "cd /usr && exec cat".into()],
-                args_are_lyrel_defaults: false,
-            }),
-            None,
-            None,
-            None,
-            false,
-            || {},
-        )
-        .expect("spawn pane");
-        pane.attach(tx);
+    let (tx, rx) = mpsc::channel();
+    let pane = DaemonPane::spawn(
+        1,
+        Some(PathBuf::from("/")),
+        ws(80, 24),
+        Some(ShellSpec {
+            program: "sh".into(),
+            args: vec!["-c".into(), "cd /usr && exec cat".into()],
+            args_are_lyrel_defaults: false,
+        }),
+        None,
+        None,
+        None,
+        false,
+        || {},
+    )
+    .expect("spawn pane");
+    pane.attach(tx);
 
-        let mut reported = None;
-        for _ in 0..200 {
-            pane.write_input(b"\n");
-            while let Ok(msg) = rx.try_recv() {
-                if let DaemonMsg::Cwd(p) = msg {
-                    reported = Some(p);
-                }
+    let mut reported = None;
+    for _ in 0..200 {
+        pane.write_input(b"\n");
+        while let Ok(msg) = rx.try_recv() {
+            if let DaemonMsg::Cwd(p) = msg {
+                reported = Some(p);
             }
-            if reported.as_deref() == Some(target) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        pane.kill();
-
-        assert_eq!(
-            reported.as_deref(),
-            Some(target),
-            "a pane whose shell emits no OSC 7 must still report where it \
-             actually is — this is what a new tab inherits (issue #187)"
-        );
+        if reported.as_deref() == Some(target) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    pane.kill();
+
+    assert_eq!(
+        reported.as_deref(),
+        Some(target),
+        "a pane whose shell emits no OSC 7 must still report where it \
+             actually is — this is what a new tab inherits (issue #187)"
+    );
+}

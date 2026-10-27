@@ -245,7 +245,11 @@ mod tests {
         let second_tab = key("ActivateTab2", &mut vcx);
         vcx.simulate_keystrokes(&second_tab);
         vcx.run_until_parked();
-        assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 0, "no tab switch");
+        assert_eq!(
+            app.read_with(&vcx, |app, _| app.tabs.active_index()),
+            0,
+            "no tab switch"
+        );
         // Nor one on a shifted editing letter (⌘⇧A is New Agent Tab on macOS):
         // only the unshifted chords, and redo, are the field's.
         vcx.update(|_, cx| {
@@ -257,7 +261,11 @@ mod tests {
         });
         vcx.simulate_keystrokes("secondary-shift-a");
         vcx.run_until_parked();
-        assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 0, "no tab switch");
+        assert_eq!(
+            app.read_with(&vcx, |app, _| app.tabs.active_index()),
+            0,
+            "no tab switch"
+        );
         // Focus pulled back onto the pane: the palette takes it back, and the key.
         app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
         vcx.run_until_parked();

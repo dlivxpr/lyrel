@@ -3,18 +3,18 @@ use gpui_kit::App;
 use lyrel_core::core::machine::{AgentFacts, Axis as TreeAxis, PaneNode, PaneSeed, TabId};
 
 use crate::core::session::{SessionPane, WorkspaceId, WorkspaceStore};
-use crate::ui::tab::Tab;
 use crate::ui::pane::{Pane, PaneSlot};
+use crate::ui::tab::Tab;
 
 use super::desired::{DesiredNode, DesiredTab};
-pub(super) fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {
+pub(crate) fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {
     match slot {
         PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-        PaneSlot::Connecting(pending) => pending.read(cx).spawn.restore_pane,
+        PaneSlot::Connecting(pending) => pending.read(cx).restore_pane(),
     }
 }
 
-pub(super) fn logical_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<PaneNode> {
+pub(crate) fn logical_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<PaneNode> {
     match pane {
         Pane::Leaf(slot) => {
             if remote_window
@@ -87,7 +87,7 @@ pub(crate) fn desired_tabs(
             group: tab.group.get(),
             last_auto: tab.auto_group.borrow().clone(),
             presentation: {
-                let mut presentation = tab.presentation.clone();
+                let mut presentation = tab.presentation().clone();
                 presentation.remap_panes(|pane| root.seed_of(pane).map(|_| pane));
                 presentation
             },
@@ -217,29 +217,24 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
             })
         }
         Pane::Leaf(PaneSlot::Connecting(pending)) => {
-            let spawn = &pending.read(cx).spawn;
-            let pane = spawn.restore_pane?;
-            let agent = spawn.agent.map(|agent| AgentFacts {
-                agent,
-                session_id: spawn.agent_session_id.clone(),
-                launch_argv: spawn.agent_launch_argv.clone(),
-                session_scope: spawn
-                    .agent_session_scope
-                    .as_ref()
-                    .map(lyrel_core::host::session_operations::durable_scope),
-                status: None,
+            pending.read(cx).restore_pane()?;
+            let crate::core::session::SessionPane::Leaf {
+                pane_id, cwd, ssh_spec, agent, agent_session_id, agent_launch_argv,
+                agent_session_scope, shell,
+            } = pending.read(cx).session() else { return None; };
+            let pane = pane_id?;
+            let agent = agent.map(|agent| AgentFacts {
+                agent, session_id: agent_session_id, launch_argv: agent_launch_argv,
+                session_scope: agent_session_scope, status: None,
             });
             Some(DesiredNode::Leaf {
                 pane,
                 seed: PaneSeed {
                     pane,
-                    cwd: spawn
-                        .working_directory
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().into_owned()),
-                    ssh_spec: None,
+                    cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    ssh_spec,
                     agent,
-                    shell: spawn.shell.clone(),
+                    shell,
                 },
             })
         }

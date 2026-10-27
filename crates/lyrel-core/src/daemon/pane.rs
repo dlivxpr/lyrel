@@ -1,12 +1,13 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::Sender;
+#[cfg(test)]
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
 
 use crate::core::clipboard::ClipboardSniffer;
 use crate::core::kitty_graphics::{GraphicsEffect, GraphicsSniffer, GraphicsState};
@@ -20,32 +21,25 @@ mod graphics_admission;
 #[path = "graphics_reader.rs"]
 mod graphics_reader;
 pub use graphics_admission::GraphicsAdmissionBroker;
-mod launch;
-mod replay;
 pub(crate) mod facts;
+mod launch;
+mod lifecycle;
+use lifecycle::{DeathReporter, PaneBackend, PtyLaunch, PtyParts, join_bounded};
+mod replay;
+use facts::probes::{
+    foreground_agent, foreground_command_running, foreground_cwd, foreground_remote_context,
+    pty_foreground_pgid,
+};
 use facts::{FactReader, ForegroundProbes, PaneFacts};
-use facts::probes::{foreground_command_running, foreground_cwd, foreground_remote_context, foreground_agent, pty_foreground_pgid};
 pub mod subscriptions;
 #[cfg(test)]
 mod test_support;
-use subscriptions::{GraphicsReplayAdmission, OutputGate, ReplayState, Subscriptions};
 pub(crate) use launch::LYREL_PANE_ENV;
 use launch::build_spawn_config;
-use replay::ReplayRing;
 #[cfg(test)]
 use replay::RING_CAP;
-
-
-
-
-/// How long the death path will chase a child's exit status before giving up
-/// and reporting `Exited { code: None }`. The pty hits EOF when the last slave
-/// fd closes, which can land a few milliseconds ahead of the child becoming
-/// reapable — that race is all this window exists to cover. Everything past it
-/// is a pane that looks frozen to every attached client, so it stays short.
-const EXIT_CODE_PROBE_WINDOW: Duration = Duration::from_millis(500);
-
-const EXIT_CODE_PROBE_INTERVAL: Duration = Duration::from_millis(10);
+use replay::ReplayRing;
+use subscriptions::{GraphicsReplayAdmission, OutputGate, ReplayState, Subscriptions};
 
 
 struct PaneState {
@@ -79,8 +73,16 @@ fn notify(st: &mut PaneState, msg: DaemonMsg) {
 }
 
 impl PaneState {
-    fn with_facts<R>(&mut self, apply: impl FnOnce(&mut PaneFacts, &mut dyn FnMut(DaemonMsg)) -> R) -> R {
-        let Self { facts, subscriptions, graphics, .. } = self;
+    fn with_facts<R>(
+        &mut self,
+        apply: impl FnOnce(&mut PaneFacts, &mut dyn FnMut(DaemonMsg)) -> R,
+    ) -> R {
+        let Self {
+            facts,
+            subscriptions,
+            graphics,
+            ..
+        } = self;
         apply(facts, &mut |msg| subscriptions.notify(msg, graphics))
     }
 }
@@ -119,49 +121,16 @@ fn resize_state(st: &mut PaneState, size: WinSize, gate: &OutputGate) {
 }
 
 fn publish_graphics_effects(st: &mut PaneState, effects: Vec<GraphicsEffect>, gate: &OutputGate) {
-    st.subscriptions.publish_graphics(effects, gate, &mut st.graphics);
+    st.subscriptions
+        .publish_graphics(effects, gate, &mut st.graphics);
 }
 
 fn fan_out_output(st: &mut PaneState, bytes: &[u8], frames: Vec<GraphicsFrame>, gate: &OutputGate) {
-    st.subscriptions.output(bytes, frames, gate, &mut st.graphics);
-}
-
-enum PaneBackend {
-    Pty(PtyBackend),
-    NativeSsh(NativeSshBackend),
+    st.subscriptions
+        .output(bytes, frames, gate, &mut st.graphics);
 }
 
 
-struct PtyBackend {
-    /// Owns the PTY master until the pane is closed.
-    ///
-    /// Windows takes this value when the shell process exits. Dropping the
-    /// ConPTY master calls `ClosePseudoConsole`, which closes the output side
-    /// only after its pending bytes can be consumed by the dedicated reader.
-    /// Keeping the slot optional lets that monitor end the stream without
-    /// racing the reader for ownership of the exit notification.
-    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
-    #[cfg_attr(windows, allow(dead_code))]
-    shell_pid: Option<u32>,
-    integration_dir: Option<PathBuf>,
-}
-
-/// The pty half of a pane, before it is wired up: opened and spawned into by
-/// [`DaemonPane::spawn`], inherited across an `exec` by [`DaemonPane::adopt`].
-struct PtyParts {
-    master: Box<dyn MasterPty + Send>,
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
-    shell_pid: Option<u32>,
-    integration_dir: Option<PathBuf>,
-    reader_handle: Box<dyn Read + Send>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-}
-
-struct NativeSshBackend {
-    handle: Arc<crate::daemon::ssh::SshSessionHandle>,
-    connection: crate::daemon::ssh::SharedConnection,
-}
 
 pub struct DaemonPane {
     pub id: u64,
@@ -181,123 +150,7 @@ pub struct DaemonPane {
     broker: Option<Arc<crate::daemon::ssh::PromptBroker>>,
 }
 
-struct DeathReporter {
-    reported: AtomicBool,
-    on_dead: Mutex<Option<Box<dyn FnOnce() + Send>>>,
-    exit_code: Mutex<Option<Box<dyn FnMut() -> Option<i32> + Send>>>,
-}
 
-impl DeathReporter {
-    fn new(on_dead: impl FnOnce() + Send + 'static) -> Self {
-        Self {
-            reported: AtomicBool::new(false),
-            on_dead: Mutex::new(Some(Box::new(on_dead))),
-            exit_code: Mutex::new(None),
-        }
-    }
-
-    fn probe_exit_code(&self, probe: impl FnMut() -> Option<i32> + Send + 'static) {
-        *self.exit_code.lock().unwrap() = Some(Box::new(probe));
-    }
-
-    #[cfg(windows)]
-    fn has_reported(&self) -> bool {
-        self.reported.load(Ordering::SeqCst)
-    }
-
-    fn report(&self, state: &Mutex<PaneState>, shutting_down: &AtomicBool) {
-        if self.reported.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let code = self
-            .exit_code
-            .lock()
-            .unwrap()
-            .as_mut()
-            .and_then(|probe| probe());
-        let mut st = state.lock().unwrap();
-        st.alive = false;
-        st.exit_code = code;
-        let PaneState { subscriptions, graphics, .. } = &mut *st;
-        subscriptions.release_graphics(graphics);
-        let pane = st.id;
-        log::info!(
-            "pane {pane} exited; exit_code={code:?} shutdown_requested={}",
-            shutting_down.load(Ordering::SeqCst)
-        );
-        if shutting_down.load(Ordering::SeqCst) {
-            drop(st);
-            crate::core::machine::observe_pane(pane, |p| p.live = false);
-            return;
-        }
-        let subscribed = st.subscriptions.controller_epoch().is_some();
-        notify(&mut st, DaemonMsg::Exited { code });
-        drop(st);
-        crate::core::machine::observe_pane(pane, |p| p.live = false);
-        if subscribed {
-            return;
-        }
-        if let Some(on_dead) = self.on_dead.lock().unwrap().take() {
-            on_dead();
-        }
-    }
-}
-
-/// Releases the PTY master without holding its slot mutex during destruction.
-///
-/// `ClosePseudoConsole` may wait while the output pipe is drained, and the same
-/// slot is what `resize` locks. Dropping the master only after releasing the
-/// mutex keeps a concurrent resize from parking behind a close that is itself
-/// waiting on the reader.
-#[cfg(windows)]
-fn close_pty_master(master: &Mutex<Option<Box<dyn MasterPty + Send>>>) {
-    let owned = master.lock().ok().and_then(|mut slot| slot.take());
-    drop(owned);
-}
-
-/// How long the Windows exit monitor lets the reader announce the death on its
-/// own before doing it itself.
-///
-/// The reader is the better reporter: it publishes `Exited` only after it has
-/// forwarded every byte that preceded EOF, which is what keeps a short-lived
-/// command's final frame ahead of its exit. But EOF is not guaranteed. A
-/// grandchild that inherited the ConPTY output pipe holds it open after the
-/// shell is gone — `cmd /c start …` is enough — and `ClosePseudoConsole` then
-/// never completes. Without this window such a pane would read as alive
-/// forever to every attached client.
-#[cfg(windows)]
-const EXIT_DRAIN_WINDOW: Duration = Duration::from_secs(2);
-
-#[cfg(windows)]
-const EXIT_DRAIN_POLL: Duration = Duration::from_millis(10);
-
-/// Releases the pseudoconsole, then reports the pane's death — preferring the
-/// reader's EOF-ordered report and falling back to its own after `window`.
-///
-/// Must run on a background thread: both halves block.
-#[cfg(windows)]
-fn drain_then_report(
-    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-    state: Arc<Mutex<PaneState>>,
-    shutting_down: Arc<AtomicBool>,
-    death: Arc<DeathReporter>,
-    window: Duration,
-) {
-    // `ClosePseudoConsole` can block until the reader drains the pipe, so it
-    // cannot run on the thread that owns the deadline below.
-    std::thread::Builder::new()
-        .name("lyrel-daemon-pane-pty-close".to_string())
-        .spawn(move || close_pty_master(&master))
-        .expect("spawn daemon pane pty close thread");
-
-    let deadline = std::time::Instant::now() + window;
-    while !death.has_reported() && std::time::Instant::now() < deadline {
-        std::thread::sleep(EXIT_DRAIN_POLL);
-    }
-    // `DeathReporter` is idempotent, so this is a no-op whenever the reader
-    // already got there — which is the ordinary case.
-    death.report(&state, &shutting_down);
-}
 
 /// Out-of-band frames remain interleaved with plain output so placements
 /// reach the consumer at the same cursor position as in the PTY stream.
@@ -377,244 +230,6 @@ pub struct Carried {
     pub head_modes: Option<Vec<u8>>,
 }
 
-/// A pty master this process inherited from its own previous image.
-///
-/// `portable-pty` can only hand out a master it opened, and after an `exec`
-/// there is nothing left of the one it opened except the descriptor number. The
-/// operations a pane actually performs on a master are few enough — resize, ask
-/// the size, clone a reader, take a writer, ask which process group is in the
-/// foreground — and all of them are ioctls on that descriptor.
-#[cfg(unix)]
-struct AdoptedMaster {
-    fd: std::os::fd::OwnedFd,
-}
-
-#[cfg(unix)]
-impl AdoptedMaster {
-    fn from_fd(fd: std::os::fd::RawFd) -> anyhow::Result<Self> {
-        use std::os::fd::FromRawFd as _;
-
-        // A descriptor that no longer refers to a terminal is one the previous
-        // image did not really hold — a number reused after a close, or a blob
-        // that named the wrong one. Adopting it would produce a pane whose
-        // every ioctl fails in a different way; refusing produces a pane that
-        // is simply gone, which is a thing the client already handles.
-        if unsafe { libc::isatty(fd) } != 1 {
-            anyhow::bail!("descriptor {fd} is not a terminal");
-        }
-        // Crossing the exec required stripping close-on-exec; being across is
-        // when it goes back on. Children this daemon spawns from here — shells,
-        // `lsof`, ssh transports — must not inherit another pane's master: a
-        // child holding one keeps the pty open after this pane closes it, and
-        // the hangup the shell should see never comes.
-        if let Err(e) = crate::daemon::handoff::close_on_exec_again(fd) {
-            log::warn!("could not restore close-on-exec on adopted pty {fd}: {e}");
-        }
-        Ok(Self {
-            fd: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) },
-        })
-    }
-
-    fn dup(&self) -> std::io::Result<std::fs::File> {
-        Ok(std::fs::File::from(self.fd.try_clone()?))
-    }
-}
-
-#[cfg(unix)]
-impl MasterPty for AdoptedMaster {
-    fn resize(&self, size: PtySize) -> anyhow::Result<()> {
-        use std::os::fd::AsRawFd as _;
-
-        let ws = libc::winsize {
-            ws_row: size.rows,
-            ws_col: size.cols,
-            ws_xpixel: size.pixel_width,
-            ws_ypixel: size.pixel_height,
-        };
-        if unsafe { libc::ioctl(self.fd.as_raw_fd(), libc::TIOCSWINSZ, &ws as *const _) } != 0 {
-            anyhow::bail!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn get_size(&self) -> anyhow::Result<PtySize> {
-        use std::os::fd::AsRawFd as _;
-
-        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(self.fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws as *mut _) } != 0 {
-            anyhow::bail!("TIOCGWINSZ failed: {}", std::io::Error::last_os_error());
-        }
-        Ok(PtySize {
-            rows: ws.ws_row,
-            cols: ws.ws_col,
-            pixel_width: ws.ws_xpixel,
-            pixel_height: ws.ws_ypixel,
-        })
-    }
-
-    fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
-        Ok(Box::new(self.dup()?))
-    }
-
-    /// Deliberately a plain `File`, unlike the writer `portable-pty` hands out:
-    /// that one sends EOF to the shell when it is dropped. Correct for a pty
-    /// whose pane is being closed, wrong for one whose pane is only changing
-    /// which program serves it.
-    fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
-        Ok(Box::new(self.dup()?))
-    }
-
-    fn as_raw_fd(&self) -> Option<std::os::fd::RawFd> {
-        use std::os::fd::AsRawFd as _;
-        Some(self.fd.as_raw_fd())
-    }
-
-    fn tty_name(&self) -> Option<PathBuf> {
-        use std::ffi::{CStr, OsStr};
-        use std::os::fd::AsRawFd as _;
-        use std::os::unix::ffi::OsStrExt as _;
-
-        // Query the slave name from the inherited master without opening the
-        // slave again: doing so would change this pane's hangup lifetime.
-        // macOS fixes this ioctl's output at 128 bytes; Linux's /dev/pts/N
-        // names fit the same stack buffer.
-        let mut name = [0u8; 128];
-        #[cfg(target_os = "macos")]
-        let result = unsafe {
-            libc::ioctl(
-                self.fd.as_raw_fd(),
-                libc::TIOCPTYGNAME as libc::c_ulong,
-                name.as_mut_ptr(),
-            )
-        };
-        #[cfg(not(target_os = "macos"))]
-        let result =
-            unsafe { libc::ptsname_r(self.fd.as_raw_fd(), name.as_mut_ptr().cast(), name.len()) };
-        if result != 0 {
-            return None;
-        }
-        let name = CStr::from_bytes_until_nul(&name).ok()?;
-        Some(PathBuf::from(OsStr::from_bytes(name.to_bytes())))
-    }
-
-    fn process_group_leader(&self) -> Option<libc::pid_t> {
-        use std::os::fd::AsRawFd as _;
-        match unsafe { libc::tcgetpgrp(self.fd.as_raw_fd()) } {
-            pid if pid > 0 => Some(pid),
-            _ => None,
-        }
-    }
-}
-
-/// A child this process inherited from its own previous image.
-///
-/// Still genuinely our child — `exec` keeps the process, so the kernel's
-/// parent-child bookkeeping is untouched and `waitpid` works. What was lost is
-/// the `Child` value that knew how to ask.
-#[cfg(unix)]
-#[derive(Debug)]
-struct AdoptedChild {
-    pid: libc::pid_t,
-    exited: Option<portable_pty::ExitStatus>,
-}
-
-#[cfg(unix)]
-impl AdoptedChild {
-    fn new(pid: u32) -> Self {
-        Self {
-            pid: pid as libc::pid_t,
-            exited: None,
-        }
-    }
-
-    fn reap(&mut self, flags: libc::c_int) -> std::io::Result<Option<portable_pty::ExitStatus>> {
-        if let Some(status) = &self.exited {
-            return Ok(Some(status.clone()));
-        }
-        let mut raw: libc::c_int = 0;
-        let seen = unsafe { libc::waitpid(self.pid, &mut raw, flags) };
-        if seen == 0 {
-            return Ok(None);
-        }
-        if seen < 0 {
-            let e = std::io::Error::last_os_error();
-            // ECHILD means someone already reaped it, or it was never ours.
-            // Either way there is no status left to collect and no point in
-            // asking again — reporting an exit of zero is what an unknown but
-            // finished child amounts to.
-            if e.raw_os_error() == Some(libc::ECHILD) {
-                let status = portable_pty::ExitStatus::with_exit_code(0);
-                self.exited = Some(status.clone());
-                return Ok(Some(status));
-            }
-            return Err(e);
-        }
-        let code = if libc::WIFEXITED(raw) {
-            libc::WEXITSTATUS(raw) as u32
-        } else if libc::WIFSIGNALED(raw) {
-            128 + libc::WTERMSIG(raw) as u32
-        } else {
-            0
-        };
-        let status = portable_pty::ExitStatus::with_exit_code(code);
-        self.exited = Some(status.clone());
-        Ok(Some(status))
-    }
-}
-
-#[cfg(unix)]
-impl portable_pty::Child for AdoptedChild {
-    fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
-        self.reap(libc::WNOHANG)
-    }
-
-    fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
-        loop {
-            if let Some(status) = self.reap(0)? {
-                return Ok(status);
-            }
-        }
-    }
-
-    fn process_id(&self) -> Option<u32> {
-        Some(self.pid as u32)
-    }
-}
-
-#[cfg(unix)]
-#[derive(Debug)]
-struct AdoptedKiller {
-    pid: libc::pid_t,
-}
-
-#[cfg(unix)]
-impl portable_pty::ChildKiller for AdoptedChild {
-    fn kill(&mut self) -> std::io::Result<()> {
-        AdoptedKiller { pid: self.pid }.kill()
-    }
-
-    fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
-        Box::new(AdoptedKiller { pid: self.pid })
-    }
-}
-
-#[cfg(unix)]
-impl portable_pty::ChildKiller for AdoptedKiller {
-    fn kill(&mut self) -> std::io::Result<()> {
-        if unsafe { libc::kill(self.pid, libc::SIGKILL) } != 0 {
-            let e = std::io::Error::last_os_error();
-            // Already gone is the outcome kill was asked for.
-            if e.raw_os_error() != Some(libc::ESRCH) {
-                return Err(e);
-            }
-        }
-        Ok(())
-    }
-
-    fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
-        Box::new(AdoptedKiller { pid: self.pid })
-    }
-}
 
 /// The screen a restored pane opens with.
 ///
@@ -761,7 +376,11 @@ impl DaemonPane {
     /// smaller consumer must not attach by silently losing accepted content.
     pub fn set_graphics_capacity(&self, encoded: u64, decoded: u64) -> bool {
         let mut state = self.state.lock().unwrap();
-        let PaneState { subscriptions, graphics, .. } = &mut *state;
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *state;
         subscriptions.set_graphics_capacity(graphics, encoded, decoded)
     }
 
@@ -808,13 +427,23 @@ impl DaemonPane {
     ) -> Result<Option<GraphicsReplayAdmission>, String> {
         let (broker, resources, work) = {
             let mut state = self.state.lock().unwrap();
-            let PaneState { subscriptions, graphics, .. } = &mut *state;
+            let PaneState {
+                subscriptions,
+                graphics,
+                ..
+            } = &mut *state;
             let (resources, work) = subscriptions.replay_offers(graphics, &self.gate)?;
             (subscriptions.admission().clone(), resources, work)
         };
         GraphicsReplayAdmission::prepare(endpoint, broker, resources, work, |resources| {
-            self.state.lock().unwrap().graphics.as_ref()
-                .map_or(resources.is_empty(), |graphics| graphics.matches_offers(resources))
+            self.state
+                .lock()
+                .unwrap()
+                .graphics
+                .as_ref()
+                .map_or(resources.is_empty(), |graphics| {
+                    graphics.matches_offers(resources)
+                })
         })
     }
 
@@ -824,10 +453,18 @@ impl DaemonPane {
         allow_clipboard: bool,
         admission: GraphicsReplayAdmission,
     ) -> Result<Option<u64>, String> {
-        let foreground = self.has_foreground_command();
+        let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         let (subscriptions, graphics, replay) = state.subscription_parts();
-        subscriptions.attach_admitted(replay, graphics, subscriber, &self.gate, allow_clipboard, admission, foreground)
+        subscriptions.attach_admitted(
+            replay,
+            graphics,
+            subscriber,
+            &self.gate,
+            allow_clipboard,
+            admission,
+            foreground,
+        )
     }
 
     pub fn observe_admitted(
@@ -836,10 +473,12 @@ impl DaemonPane {
         gate: Arc<OutputGate>,
         admission: GraphicsReplayAdmission,
     ) -> Result<Option<u64>, String> {
-        let foreground = self.has_foreground_command();
+        let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         let (subscriptions, graphics, replay) = state.subscription_parts();
-        subscriptions.observe_admitted(replay, graphics, subscriber, gate, &self.gate, admission, foreground)
+        subscriptions.observe_admitted(
+            replay, graphics, subscriber, gate, &self.gate, admission, foreground,
+        )
     }
 
     pub fn spawn(
@@ -853,30 +492,10 @@ impl DaemonPane {
         allow_remote_clipboard_write: bool,
         on_dead: impl FnOnce() + Send + 'static,
     ) -> anyhow::Result<Arc<Self>> {
-        #[cfg(windows)]
-        crate::daemon::conpty::ensure_prepared()?;
-
-        let pty_size = pty_size(size);
-
-        // Before the shell exists, not after: a ConPTY child inherits the
-        // "ignore Ctrl+C" state of whoever created it, and the daemon can be
-        // carrying it from its own launch. Leaving it on costs the pane every
-        // Ctrl+C it will ever be sent (#451, #314).
-        #[cfg(windows)]
-        crate::daemon::winproc::allow_ctrl_c_in_children();
-
-        let pair = native_pty_system().openpty(pty_size)?;
+        let pty = PtyLaunch::open(size)?;
         let spawn = build_spawn_config(id, cwd, shell, workspace.as_deref())?;
 
-        let child = pair.slave.spawn_command(spawn.cmd)?;
-        let shell_pid = child.process_id();
-        log::info!("pane {id} child started; child_pid={shell_pid:?}");
-        let child = Arc::new(Mutex::new(child));
-
-        drop(pair.slave);
-
-        let reader_handle = pair.master.try_clone_reader()?;
-        let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
+        let parts = pty.spawn(id, spawn.cmd, spawn.integration_dir)?;
 
         let (ring, restored_title) = match restore {
             Some(restore) => {
@@ -891,14 +510,7 @@ impl DaemonPane {
         };
 
         Ok(Self::over_pty(
-            PtyParts {
-                master: pair.master,
-                child,
-                shell_pid,
-                integration_dir: spawn.integration_dir,
-                reader_handle,
-                writer,
-            },
+            parts,
             PaneState {
                 id,
                 ring,
@@ -911,7 +523,12 @@ impl DaemonPane {
                     },
                 )),
                 subscriptions: Subscriptions::new(allow_remote_clipboard_write, None),
-                facts: PaneFacts::new(spawn.initial_cwd, restored_title, spawn.shell.clone(), spawn.remote.clone()),
+                facts: PaneFacts::new(
+                    spawn.initial_cwd,
+                    restored_title,
+                    spawn.shell.clone(),
+                    spawn.remote.clone(),
+                ),
                 ssh_phase: None,
                 modes: TerminalModes::default(),
                 alive: true,
@@ -936,30 +553,17 @@ impl DaemonPane {
         owner: Option<String>,
         on_dead: impl FnOnce() + Send + 'static,
     ) -> Arc<Self> {
-        let PtyParts {
-            master,
-            child,
-            shell_pid,
-            integration_dir,
-            reader_handle,
-            writer,
-        } = parts;
+        let (backend, reader_handle, writer) = parts.connect();
 
         let id = state.id;
         let state = Arc::new(Mutex::new(state));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let gate = Arc::new(OutputGate::new());
-        let master = Arc::new(Mutex::new(Some(master)));
 
         let pane = Arc::new(Self {
             id,
             owner,
-            backend: PaneBackend::Pty(PtyBackend {
-                master: master.clone(),
-                child: child.clone(),
-                shell_pid,
-                integration_dir,
-            }),
+            backend,
             writer: writer.clone(),
             shutting_down: shutting_down.clone(),
             gate: gate.clone(),
@@ -969,60 +573,16 @@ impl DaemonPane {
         });
 
         let death = Arc::new(DeathReporter::new(on_dead));
-        death.probe_exit_code({
-            let child = child.clone();
-            move || {
-                let deadline = std::time::Instant::now() + EXIT_CODE_PROBE_WINDOW;
-                loop {
-                    // try_lock, never lock: DaemonPane::drop holds this very
-                    // mutex across a blocking child.wait(), and this probe runs
-                    // on the reader thread on its way to announcing the death.
-                    // Blocking for the lock would park the Exited notification
-                    // behind a wait() with no bound of its own; the deadline
-                    // below is the only thing clients should ever wait on.
-                    if let Ok(mut child) = child.try_lock() {
-                        match child.try_wait() {
-                            Ok(Some(status)) => return Some(status.exit_code() as i32),
-                            Ok(None) => {}
-                            Err(_) => return None,
-                        }
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return None;
-                    }
-                    std::thread::sleep(EXIT_CODE_PROBE_INTERVAL);
-                }
-            }
-        });
-
-        #[cfg(windows)]
-        Self::spawn_exit_monitor(
-            shell_pid,
-            master.clone(),
-            state.clone(),
-            pane.shutting_down.clone(),
-            death.clone(),
-        );
-
-        let fg_master = master.clone();
-        let group_master = master.clone();
-        let remote_master = master.clone();
-        let agent_master = master.clone();
-        let cwd_master = master.clone();
+        pane.backend.monitor_exit(&state, &shutting_down, &death);
+        let (foreground_running, probes) = pane.backend.reader_probes();
         let reader = Self::spawn_reader(
             state,
             shutting_down,
             gate,
             reader_handle,
             writer.clone(),
-            move || foreground_command_running(&fg_master, shell_pid),
-            ForegroundProbes {
-                group: Box::new(move || pty_foreground_pgid(&group_master)),
-                remote: Box::new(move || foreground_remote_context(&remote_master)),
-                agent: Box::new(move || foreground_agent(&agent_master)),
-                cwd: Box::new(move || foreground_cwd(&cwd_master, shell_pid)),
-                local_group: crate::daemon::procinfo::foreground_group_is_local,
-            },
+            foreground_running,
+            probes,
             death,
         );
         *pane.reader.lock().unwrap() = Some(reader);
@@ -1042,22 +602,14 @@ impl DaemonPane {
     /// would let the new image speak on the wire the old one had encrypted.
     #[cfg(unix)]
     pub fn carry(&self) -> Option<crate::daemon::pane::Carried> {
-        let PaneBackend::Pty(pty) = &self.backend else {
-            return None;
-        };
-        let master_fd = pty
-            .master
-            .lock()
-            .ok()?
-            .as_ref()
-            .and_then(|master| master.as_raw_fd())?;
+        let (master_fd, child_pid, integration_dir) = self.backend.carry()?;
         let st = self.state.lock().unwrap();
         Some(st.facts.write_carried(Carried {
             id: self.id,
             owner: self.owner.clone(),
             master_fd,
-            child_pid: pty.shell_pid?,
-            integration_dir: pty.integration_dir.clone(),
+            child_pid,
+            integration_dir,
             size: st.ring.tail_size(),
             ring: st.ring.snapshot(),
             cwd: None,
@@ -1086,22 +638,7 @@ impl DaemonPane {
         mut carried: crate::daemon::pane::Carried,
         on_dead: impl FnOnce() + Send + 'static,
     ) -> anyhow::Result<Arc<Self>> {
-        let master = AdoptedMaster::from_fd(carried.master_fd)?;
-        let reader_handle = master.try_clone_reader()?;
-        let writer = Arc::new(Mutex::new(master.take_writer()?));
-        let shell_pid = carried.child_pid;
-        // The size the pty is actually at is the kernel's to answer, and it is
-        // the truth: nobody resized it while we were not running. The carried
-        // size only says where the ring's tail was cut.
-        let size = master
-            .get_size()
-            .map(|s| WinSize {
-                cols: s.cols,
-                rows: s.rows,
-                cell_w: carried.size.cell_w,
-                cell_h: carried.size.cell_h,
-            })
-            .unwrap_or(carried.size);
+        let (parts, size) = PtyParts::adopt(&mut carried)?;
         let facts = PaneFacts::from_carried(&mut carried);
 
         let (mut ring, modes) =
@@ -1112,14 +649,7 @@ impl DaemonPane {
         ring.resize(size);
 
         Ok(Self::over_pty(
-            PtyParts {
-                master: Box::new(master),
-                child: Arc::new(Mutex::new(Box::new(AdoptedChild::new(shell_pid)))),
-                shell_pid: Some(shell_pid),
-                integration_dir: carried.integration_dir,
-                reader_handle,
-                writer,
-            },
+            parts,
             PaneState {
                 id: carried.id,
                 ring,
@@ -1173,7 +703,10 @@ impl DaemonPane {
             id,
             ring: ReplayRing::new(size),
             graphics: Some(GraphicsState::new(size)),
-            subscriptions: Subscriptions::new(allow_remote_clipboard_write, Some(allow_remote_clipboard_write)),
+            subscriptions: Subscriptions::new(
+                allow_remote_clipboard_write,
+                Some(allow_remote_clipboard_write),
+            ),
             facts: PaneFacts::new(None, None, None, Some(remote)),
             ssh_phase: None,
             modes: TerminalModes::default(),
@@ -1198,10 +731,7 @@ impl DaemonPane {
         let pane = Arc::new(Self {
             id,
             owner: None,
-            backend: PaneBackend::NativeSsh(NativeSshBackend {
-                handle: bridge.handle,
-                connection: connection.clone(),
-            }),
+            backend: PaneBackend::native_ssh(bridge.handle, connection.clone()),
             writer: writer.clone(),
             shutting_down: shutting_down.clone(),
             gate: gate.clone(),
@@ -1252,10 +782,7 @@ impl DaemonPane {
 
     #[allow(dead_code)]
     pub fn ssh_connection(&self) -> Option<Arc<crate::daemon::ssh::SshConnection>> {
-        match &self.backend {
-            PaneBackend::NativeSsh(b) => b.connection.lock().unwrap().upgrade(),
-            PaneBackend::Pty(_) => None,
-        }
+        self.backend.ssh_connection()
     }
 
     fn spawn_reader(
@@ -1413,7 +940,7 @@ impl DaemonPane {
         // Asked before the state lock, not under it: the probe takes the pty
         // master's lock, and every other caller that holds both takes them in
         // this order.
-        let foreground_command = self.has_foreground_command();
+        let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
         let epoch = attach_subscriber_with_permissions(
             &mut st,
@@ -1438,10 +965,7 @@ impl DaemonPane {
     /// [`redraw_nudge`]. A native ssh pane has no local pty to ask, and its
     /// alternate screen can only be the far program's.
     fn runs_foreground_program(&self, foreground_command: bool) -> bool {
-        match &self.backend {
-            PaneBackend::Pty(_) => foreground_command,
-            PaneBackend::NativeSsh(_) => true,
-        }
+        !self.backend.is_local_pty() || foreground_command
     }
 
     /// Puts the pty at `transient` now and back at the pane's size a moment
@@ -1453,22 +977,7 @@ impl DaemonPane {
     /// back is read when it is put back, so a real resize that lands in
     /// between is what the pane ends up at.
     fn nudge_redraw(&self, transient: WinSize) {
-        let resize: Box<dyn Fn(WinSize) + Send> = match &self.backend {
-            PaneBackend::Pty(p) => {
-                let master = Arc::clone(&p.master);
-                Box::new(move |size| {
-                    if let Ok(master) = master.lock()
-                        && let Some(master) = master.as_ref()
-                    {
-                        let _ = master.resize(pty_size(size));
-                    }
-                })
-            }
-            PaneBackend::NativeSsh(b) => {
-                let handle = Arc::clone(&b.handle);
-                Box::new(move |size| handle.resize(size))
-            }
-        };
+        let resize = self.backend.redraw_resizer();
         let state = Arc::clone(&self.state);
         let _ = run_redraw_nudge(transient, REDRAW_NUDGE_SETTLE, resize, move || {
             let st = state.lock().unwrap();
@@ -1476,29 +985,21 @@ impl DaemonPane {
         });
     }
 
-    /// Whether something other than the pane's own shell owns the terminal.
-    ///
-    /// Answered by the kernel (`tcgetpgrp`), not by the pane's stored shell
-    /// state, which can contradict the last shell mark — see
-    /// [`PaneFacts::prompt`]. A pane with no pty to ask (native ssh, and
-    /// every pane on Windows, where the pty has no foreground process group)
-    /// answers "no", which is what the live suppression already assumes.
-    fn has_foreground_command(&self) -> bool {
-        match &self.backend {
-            PaneBackend::Pty(pty) => foreground_command_running(&pty.master, pty.shell_pid),
-            PaneBackend::NativeSsh(_) => false,
-        }
-    }
 
     pub fn detach(&self, epoch: u64) -> bool {
         let mut st = self.state.lock().unwrap();
-        let PaneState { subscriptions, graphics, alive, .. } = &mut *st;
+        let PaneState {
+            subscriptions,
+            graphics,
+            alive,
+            ..
+        } = &mut *st;
         subscriptions.detach(epoch, &self.gate, graphics);
         !*alive && subscriptions.controller_epoch().is_none()
     }
 
     pub fn observe(&self, observer: Sender<DaemonMsg>, gate: Arc<OutputGate>) -> u64 {
-        let foreground_command = self.has_foreground_command();
+        let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
         let id = observe_subscriber(&mut st, observer, gate, foreground_command);
         let nudge = redraw_nudge(
@@ -1516,12 +1017,20 @@ impl DaemonPane {
     /// A message for one observer alone, such as a refusal of what it sent.
     /// False once the pane has let it go.
     pub fn tell_observer(&self, observer_id: u64, msg: DaemonMsg) -> bool {
-        self.state.lock().unwrap().subscriptions.tell_observer(observer_id, msg)
+        self.state
+            .lock()
+            .unwrap()
+            .subscriptions
+            .tell_observer(observer_id, msg)
     }
 
     pub fn unobserve(&self, observer_id: u64) {
         let mut state = self.state.lock().unwrap();
-        let PaneState { subscriptions, graphics, .. } = &mut *state;
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *state;
         subscriptions.unobserve(observer_id, graphics);
     }
 
@@ -1537,7 +1046,9 @@ impl DaemonPane {
     pub fn poll_agent_events(&self) {
         let observer = {
             let mut state = self.state.lock().unwrap();
-            if !state.alive { return; }
+            if !state.alive {
+                return;
+            }
             state.facts.take_durable_observer()
         };
         let Some(mut observer) = observer else {
@@ -1545,8 +1056,11 @@ impl DaemonPane {
         };
         let events = observer.poll();
         let mut state = self.state.lock().unwrap();
-        if !state.alive { return; }
-        let change = state.with_facts(|facts, emit| facts.accept_durable_observation(observer, events, emit));
+        if !state.alive {
+            return;
+        }
+        let change = state
+            .with_facts(|facts, emit| facts.accept_durable_observation(observer, events, emit));
         drop(state);
         change.publish(self.id, true, self.shutting_down.load(Ordering::SeqCst));
     }
@@ -1558,9 +1072,7 @@ impl DaemonPane {
     /// environment, and a detached `tmux` server or the like carries that
     /// into processes this pane does not own.
     pub fn report_agent_event(&self, pid: u32, body: &str) -> Result<(), String> {
-        let shell = self
-            .pty()
-            .and_then(|pty| pty.shell_pid)
+        let shell = self.backend.local_shell_pid()
             .ok_or_else(|| format!("pane {} runs no local process", self.id))?;
         let event = crate::core::cli_agent::parse_agent_event_body(body.as_bytes())
             .ok_or_else(|| "not an agent event".to_string())?;
@@ -1600,13 +1112,7 @@ impl DaemonPane {
     }
 
     pub fn procs(&self) -> crate::daemon::protocol::PaneProcs {
-        let mut out = match self.pty().and_then(|pty| {
-            pty.shell_pid
-                .map(|pid| crate::daemon::procinfo::snapshot(pid, pty_foreground_pgid(&pty.master)))
-        }) {
-            Some(procs) => procs,
-            None => Default::default(),
-        };
+        let mut out = self.backend.procs();
         out.context = Some(self.context());
         out
     }
@@ -1620,22 +1126,16 @@ impl DaemonPane {
     fn context(&self) -> crate::daemon::protocol::PaneContext {
         let st = self.state.lock().unwrap();
         st.facts.context(
-            matches!(self.backend, PaneBackend::Pty(_)),
+            self.backend.is_local_pty(),
             st.modes.is_on(crate::core::term_modes::BRACKETED_PASTE),
         )
     }
 
-    fn pty(&self) -> Option<&PtyBackend> {
-        match &self.backend {
-            PaneBackend::Pty(p) => Some(p),
-            PaneBackend::NativeSsh(_) => None,
-        }
-    }
 
     /// Resize the shared pane state before applying the new PTY geometry.
     pub fn resize(&self, size: WinSize) {
         resize_state(&mut self.state.lock().unwrap(), size, &self.gate);
-        self.resize_pty(size);
+        self.backend.resize(size);
     }
 
     /// A controller command, not PTY input. All consumers see the same clear
@@ -1654,18 +1154,6 @@ impl DaemonPane {
         fan_out_output(&mut st, &pass, frames, &self.gate);
     }
 
-    fn resize_pty(&self, size: WinSize) {
-        match &self.backend {
-            PaneBackend::Pty(p) => {
-                if let Ok(master) = p.master.lock() {
-                    if let Some(master) = master.as_ref() {
-                        let _ = master.resize(pty_size(size));
-                    }
-                }
-            }
-            PaneBackend::NativeSsh(b) => b.handle.resize(size),
-        }
-    }
 
     pub fn alive(&self) -> bool {
         self.state.lock().unwrap().alive
@@ -1674,12 +1162,16 @@ impl DaemonPane {
     pub fn info(&self) -> PaneInfo {
         let (cwd, osc_title, alive) = {
             let st = self.state.lock().unwrap();
-            (st.facts.cwd().map(PathBuf::from), st.facts.osc_title().map(str::to_owned), st.alive)
+            (
+                st.facts.cwd().map(PathBuf::from),
+                st.facts.osc_title().map(str::to_owned),
+                st.alive,
+            )
         };
         PaneInfo {
             pane_id: self.id,
-            cwd: cwd.or_else(|| self.foreground_cwd()),
-            title: self.foreground_title(),
+            cwd: cwd.or_else(|| self.backend.foreground_cwd()),
+            title: self.backend.foreground_title(),
             osc_title,
             alive,
             owner: self.owner.clone(),
@@ -1688,7 +1180,7 @@ impl DaemonPane {
 
     pub(crate) fn remote_context(&self) -> Option<RemoteContext> {
         let cached = self.state.lock().unwrap().facts.remote().cloned();
-        cached.or_else(|| self.foreground_remote_context())
+        cached.or_else(|| self.backend.foreground_remote_context())
     }
 
     /// The pane's screen, capped for storage, with the mark that says how much
@@ -1715,7 +1207,11 @@ impl DaemonPane {
         let st = self.state.lock().unwrap();
         let mut segments = st.ring.snapshot();
         crate::daemon::scrollback::trim_to(&mut segments, crate::daemon::scrollback::SNAPSHOT_CAP);
-        (segments, st.facts.osc_title().map(str::to_owned), st.ring.appended_mark())
+        (
+            segments,
+            st.facts.osc_title().map(str::to_owned),
+            st.ring.appended_mark(),
+        )
     }
 
     pub fn kill(&self) {
@@ -1726,138 +1222,32 @@ impl DaemonPane {
         self.shutting_down.store(true, Ordering::SeqCst);
         {
             let mut state = self.state.lock().unwrap();
-            let PaneState { subscriptions, graphics, .. } = &mut *state;
+            let PaneState {
+                subscriptions,
+                graphics,
+                ..
+            } = &mut *state;
             subscriptions.shutdown_graphics(graphics);
         }
-        match &self.backend {
-            PaneBackend::Pty(p) => {
-                #[cfg(unix)]
-                Self::signal_group(p, libc::SIGHUP);
-                // The console owns its attached clients; ancestry also includes
-                // detached shared services that must outlive this pane.
-                #[cfg(windows)]
-                {
-                    let master = p.master.clone();
-                    std::thread::Builder::new()
-                        .name("lyrel-daemon-pane-hangup".into())
-                        .spawn(move || close_pty_master(&master))
-                        .expect("spawn daemon pane hangup thread");
-                }
-                if let Ok(mut child) = p.child.lock() {
-                    let _ = child.kill();
-                }
-                #[cfg(unix)]
-                Self::signal_group(p, libc::SIGKILL);
-            }
-            PaneBackend::NativeSsh(b) => b.handle.close(),
-        }
+        self.backend.hangup();
     }
 
-    #[cfg(windows)]
-    fn spawn_exit_monitor(
-        shell_pid: Option<u32>,
-        master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-        state: Arc<Mutex<PaneState>>,
-        shutting_down: Arc<AtomicBool>,
-        death: Arc<DeathReporter>,
-    ) {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-        };
 
-        let Some(pid) = shell_pid else { return };
-        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-        if handle.is_null() {
-            // The process may have exited before OpenProcess ran, so go
-            // straight to the close-and-report path — off this thread, since
-            // pane construction is what calls us.
-            std::thread::Builder::new()
-                .name("lyrel-daemon-pane-exit-fallback".to_string())
-                .spawn(move || {
-                    drain_then_report(master, state, shutting_down, death, EXIT_DRAIN_WINDOW);
-                })
-                .expect("spawn daemon pane exit fallback thread");
-            return;
-        }
-        let handle = handle as isize;
-        std::thread::Builder::new()
-            .name("lyrel-daemon-pane-exit-monitor".to_string())
-            .spawn(move || {
-                let handle = handle as windows_sys::Win32::Foundation::HANDLE;
-                unsafe {
-                    WaitForSingleObject(handle, INFINITE);
-                    CloseHandle(handle);
-                }
-                drain_then_report(master, state, shutting_down, death, EXIT_DRAIN_WINDOW);
-            })
-            .expect("spawn daemon pane exit monitor thread");
-    }
 
-    #[cfg(unix)]
-    fn signal_group(pty: &PtyBackend, sig: libc::c_int) {
-        if let Some(pid) = pty.shell_pid {
-            unsafe {
-                libc::killpg(pid as libc::pid_t, sig);
-            }
-        }
-        let fg = pty
-            .master
-            .lock()
-            .ok()
-            .and_then(|m| m.as_ref().and_then(|m| m.process_group_leader()));
-        if let Some(fg) = fg {
-            if Some(fg as u32) != pty.shell_pid {
-                unsafe {
-                    libc::killpg(fg, sig);
-                }
-            }
-        }
-    }
 
-    fn foreground_cwd(&self) -> Option<PathBuf> {
-        let pty = self.pty()?;
-        foreground_cwd(&pty.master, pty.shell_pid)
-    }
-
-    fn foreground_title(&self) -> String {
-        self.pty().map(|pty| facts::probes::foreground_title(&pty.master, pty.shell_pid)).unwrap_or_default()
-    }
-
-    fn foreground_remote_context(&self) -> Option<RemoteContext> {
-        match &self.backend {
-            PaneBackend::Pty(p) => foreground_remote_context(&p.master),
-            PaneBackend::NativeSsh(_) => None,
-        }
-    }
 }
 
 impl Drop for DaemonPane {
     fn drop(&mut self) {
-        if matches!(self.backend, PaneBackend::NativeSsh(_)) {
+        if !self.backend.is_local_pty() {
             crate::daemon::ssh::SshManager::global().teardown_pane_forwards(self.id);
         }
         self.hangup();
-        if let PaneBackend::Pty(p) = &self.backend {
-            if let Ok(mut child) = p.child.lock() {
-                match child.wait() {
-                    Ok(status) => log::info!(
-                        "pane {} child exited; child_pid={:?} status={status}",
-                        self.id,
-                        p.shell_pid
-                    ),
-                    Err(e) => log::warn!("pane {} child wait failed: {e}", self.id),
-                }
-            }
-        }
+        self.backend.reap(self.id);
         if let Some(handle) = self.reader.lock().unwrap().take() {
             join_bounded(handle, Duration::from_secs(2));
         }
-        if let PaneBackend::Pty(p) = &mut self.backend {
-            if let Some(dir) = p.integration_dir.take() {
-                let _ = std::fs::remove_dir_all(&dir);
-            }
-        }
+        self.backend.remove_integration();
         // The pane is over — by a kill, by the shell exiting, or by the daemon
         // shutting down — so whatever it typed goes back to the history file it
         // was seeded from. A handoff does not come through here: nothing is
@@ -1867,29 +1257,6 @@ impl Drop for DaemonPane {
     }
 }
 
-fn join_bounded(handle: JoinHandle<()>, timeout: Duration) -> bool {
-    let (tx, rx) = mpsc::channel();
-    if std::thread::Builder::new()
-        .name("lyrel-daemon-pane-join".to_string())
-        .spawn(move || {
-            let _ = handle.join();
-            let _ = tx.send(());
-        })
-        .is_err()
-    {
-        return false;
-    }
-    rx.recv_timeout(timeout).is_ok()
-}
-
-fn pty_size(size: WinSize) -> PtySize {
-    PtySize {
-        rows: size.rows.max(1),
-        cols: size.cols.max(1),
-        pixel_width: size.cols.saturating_mul(size.cell_w),
-        pixel_height: size.rows.saturating_mul(size.cell_h),
-    }
-}
 
 /// Everything the pane remembers about a chunk of output: the bytes
 /// themselves, and the modes they switched on. One function so the two can
@@ -1917,7 +1284,11 @@ const DA1_REPLY: &[u8] = b"\x1b[?6c";
 /// write, and nothing else that needs this pane's state should wait on that.
 fn detached_device_attribute_queries(st: &mut PaneState) -> usize {
     let asked = st.modes.take_device_attribute_queries();
-    if st.subscriptions.controller_epoch().is_some() { 0 } else { asked }
+    if st.subscriptions.controller_epoch().is_some() {
+        0
+    } else {
+        asked
+    }
 }
 
 fn answer_device_attributes(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) {
@@ -1931,8 +1302,6 @@ fn answer_device_attributes(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) 
         let _ = writer.flush();
     }
 }
-
-
 
 /// How long the pty stays at the transient size of a [`redraw_nudge`]. Two
 /// size changes in one breath reach a program as one `SIGWINCH` (the kernel
@@ -2023,7 +1392,13 @@ fn attach_subscriber(st: &mut PaneState, subscriber: Sender<DaemonMsg>) -> u64 {
 
 /// Composition only: replay inputs are borrowed under the existing pane lock.
 impl PaneState {
-    fn subscription_parts(&mut self) -> (&mut Subscriptions, &mut Option<GraphicsState>, ReplayState<'_>) {
+    fn subscription_parts(
+        &mut self,
+    ) -> (
+        &mut Subscriptions,
+        &mut Option<GraphicsState>,
+        ReplayState<'_>,
+    ) {
         let replay = ReplayState {
             ring: &self.ring,
             modes: &self.modes,
@@ -2044,7 +1419,14 @@ fn attach_subscriber_with_permissions(
     foreground_command: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
-    subscriptions.attach(replay, graphics, subscriber, gate, allow_remote_clipboard_write, foreground_command)
+    subscriptions.attach(
+        replay,
+        graphics,
+        subscriber,
+        gate,
+        allow_remote_clipboard_write,
+        foreground_command,
+    )
 }
 
 fn observe_subscriber(
@@ -2057,33 +1439,11 @@ fn observe_subscriber(
     subscriptions.observe(replay, graphics, observer, gate, foreground_command)
 }
 
-
 #[cfg(test)]
 mod tests {
 
-    use super::*;
     use super::test_support::{drain, null_writer, test_state, ws};
-    use std::path::Path;
-
-
-
-
-    #[test]
-    fn join_bounded_returns_true_when_the_thread_finishes() {
-        let handle = std::thread::spawn(|| {});
-        assert!(join_bounded(handle, Duration::from_secs(5)));
-    }
-
-    #[test]
-    fn join_bounded_times_out_on_a_stuck_thread() {
-        let (unblock, blocked) = mpsc::channel::<()>();
-        let handle = std::thread::spawn(move || {
-            let _ = blocked.recv();
-        });
-        assert!(!join_bounded(handle, Duration::from_millis(50)));
-        drop(unblock);
-    }
-
+    use super::*;
 
 
     /// Issue #857: the two sniffers that rewrite the stream before the ring
@@ -2144,54 +1504,6 @@ mod tests {
         assert_eq!(run(&bytewise), (frame.to_vec(), frame.to_vec()));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn a_descriptor_that_is_not_a_terminal_is_refused_rather_than_adopted() {
-        use std::os::fd::AsRawFd as _;
-
-        let file = std::fs::File::open("/dev/null").expect("open /dev/null");
-        let err = AdoptedMaster::from_fd(file.as_raw_fd())
-            .err()
-            .expect("a plain file is not a pty");
-        assert!(
-            err.to_string().contains("not a terminal"),
-            "the refusal was {err}"
-        );
-        // Refused means not taken: the caller still owns what it passed, and
-        // dropping `file` here is what closes it. Adopting first and failing
-        // later would have closed a descriptor belonging to someone else.
-        drop(file);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn an_adopted_master_goes_back_to_close_on_exec() {
-        let pair = native_pty_system()
-            .openpty(PtySize::default())
-            .expect("open a pty");
-        let tty = pair
-            .master
-            .tty_name()
-            .expect("a fresh pty has a slave name");
-        let fd = pair
-            .master
-            .as_raw_fd()
-            .expect("a fresh master has a descriptor");
-        // What crossing the exec leaves behind: `dup` hands out a descriptor
-        // with close-on-exec clear, exactly like one that was deliberately
-        // stripped to survive.
-        let inherited = unsafe { libc::dup(fd) };
-        assert!(inherited >= 0, "dup the master");
-        let master = AdoptedMaster::from_fd(inherited).expect("a pty is adoptable");
-        assert_eq!(master.tty_name().as_deref(), Some(tty.as_path()));
-        let flags = unsafe { libc::fcntl(inherited, libc::F_GETFD) };
-        assert!(
-            flags >= 0 && flags & libc::FD_CLOEXEC != 0,
-            "an adopted master left inheritable ends up in every child this daemon spawns, \
-             and a child holding it keeps the pty from ever hanging up"
-        );
-        drop(master);
-    }
 
     #[test]
     fn the_restore_preamble_hands_the_new_shell_a_terminal_it_can_use() {
@@ -2372,9 +1684,6 @@ mod tests {
         }
     }
 
-
-
-
     #[test]
     fn a_window_reattaching_to_an_ssh_pane_learns_it_is_connected() {
         use crate::daemon::protocol::SshPhase;
@@ -2382,7 +1691,8 @@ mod tests {
         st.ssh_phase = Some(SshPhase::Connected);
         let (tx, rx) = std::sync::mpsc::channel();
         attach_subscriber(&mut st, tx);
-        st.subscriptions.detach(1, &OutputGate::new(), &mut st.graphics);
+        st.subscriptions
+            .detach(1, &OutputGate::new(), &mut st.graphics);
         assert!(
             rx.iter().any(|m| matches!(
                 m,
@@ -2397,54 +1707,6 @@ mod tests {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    #[test]
-    fn pty_size_clamps_and_computes_pixels() {
-        let ps = pty_size(WinSize {
-            cols: 80,
-            rows: 24,
-            cell_w: 8,
-            cell_h: 17,
-        });
-        assert_eq!(ps.rows, 24);
-        assert_eq!(ps.cols, 80);
-        assert_eq!(ps.pixel_width, 80 * 8);
-        assert_eq!(ps.pixel_height, 24 * 17);
-
-        let z = pty_size(WinSize {
-            cols: 0,
-            rows: 0,
-            cell_w: 0,
-            cell_h: 0,
-        });
-        assert_eq!(z.rows, 1);
-        assert_eq!(z.cols, 1);
-        assert_eq!(z.pixel_width, 0);
-        assert_eq!(z.pixel_height, 0);
-
-        let big = pty_size(WinSize {
-            cols: u16::MAX,
-            rows: u16::MAX,
-            cell_w: u16::MAX,
-            cell_h: u16::MAX,
-        });
-        assert_eq!(big.pixel_width, u16::MAX);
-        assert_eq!(big.pixel_height, u16::MAX);
-    }
 
 
 
@@ -2507,434 +1769,6 @@ mod tests {
 
 
 
-
-    #[test]
-    fn death_notifies_observers_but_only_controllers_defer_the_reap() {
-        let with_observer_only = Arc::new(Mutex::new(test_state(true)));
-        let (observer_tx, observer_rx) = mpsc::channel();
-        observe_subscriber(
-            &mut with_observer_only.lock().unwrap(),
-            observer_tx,
-            Arc::new(OutputGate::new()),
-            false,
-        );
-        drain(&observer_rx);
-        let (dead_tx, dead_rx) = mpsc::channel();
-        DeathReporter::new(move || dead_tx.send(()).unwrap())
-            .report(&with_observer_only, &AtomicBool::new(false));
-        assert!(matches!(
-            observer_rx.try_recv(),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(
-            dead_rx.try_recv().is_ok(),
-            "read-only observers must not keep a dead pane in the registry"
-        );
-
-        let with_both = Arc::new(Mutex::new(test_state(true)));
-        let (controller_tx, controller_rx) = mpsc::channel();
-        let (observer_tx, observer_rx) = mpsc::channel();
-        {
-            let mut st = with_both.lock().unwrap();
-            attach_subscriber(&mut st, controller_tx);
-            observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
-        }
-        drain(&controller_rx);
-        drain(&observer_rx);
-        let (dead_tx, dead_rx) = mpsc::channel();
-        DeathReporter::new(move || dead_tx.send(()).unwrap())
-            .report(&with_both, &AtomicBool::new(false));
-        assert!(matches!(
-            controller_rx.try_recv(),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(matches!(
-            observer_rx.try_recv(),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(
-            dead_rx.try_recv().is_err(),
-            "an attached death is still the detach path's to reclaim"
-        );
-    }
-
-
-
-    #[test]
-    fn reader_eof_with_subscriber_sends_exited_not_on_dead() {
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        attach_subscriber(&mut state.lock().unwrap(), sub_tx);
-        drain(&sub_rx);
-        let dead = Arc::new(AtomicBool::new(false));
-        let dead_flag = dead.clone();
-
-        let handle = DaemonPane::spawn_reader(
-            state.clone(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(b"tail".to_vec())),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-                local_group: |_| Some(true),
-            },
-            Arc::new(DeathReporter::new(move || {
-                dead_flag.store(true, Ordering::SeqCst)
-            })),
-        );
-        handle.join().unwrap();
-
-        assert!(!state.lock().unwrap().alive);
-        assert_eq!(state.lock().unwrap().ring.flatten(), b"tail");
-        assert!(matches!(sub_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"tail"));
-        assert!(matches!(
-            sub_rx.try_recv(),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(
-            !dead.load(Ordering::SeqCst),
-            "an attached death is the detach path's to reclaim, not on_dead's"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn closing_conpty_waits_for_delayed_reader_output_before_exit() {
-        /// A master whose destruction opens the simulated ConPTY output pipe.
-        /// The production `ConPtyMasterPty` performs the equivalent transition
-        /// by calling `ClosePseudoConsole` from its destructor.
-        struct SignallingMaster {
-            released: Arc<(Mutex<bool>, Condvar)>,
-        }
-
-        impl Drop for SignallingMaster {
-            fn drop(&mut self) {
-                let (lock, ready) = &*self.released;
-                *lock.lock().unwrap() = true;
-                ready.notify_all();
-            }
-        }
-
-        impl MasterPty for SignallingMaster {
-            fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            fn get_size(&self) -> anyhow::Result<PtySize> {
-                Ok(PtySize::default())
-            }
-
-            fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
-                Ok(Box::new(std::io::empty()))
-            }
-
-            fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
-                Ok(Box::new(std::io::sink()))
-            }
-        }
-
-        /// Models a reader that stays delayed well past any plausible grace
-        /// period, then receives a final output chunk followed by EOF.
-        struct DelayedTailReader {
-            released: Arc<(Mutex<bool>, Condvar)>,
-            tail: std::io::Cursor<Vec<u8>>,
-            delayed: bool,
-        }
-
-        impl Read for DelayedTailReader {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                if !self.delayed {
-                    let (lock, ready) = &*self.released;
-                    let mut released = lock.lock().unwrap();
-                    while !*released {
-                        released = ready.wait(released).unwrap();
-                    }
-                    drop(released);
-                    std::thread::sleep(Duration::from_millis(800));
-                    self.delayed = true;
-                }
-                self.tail.read(buf)
-            }
-        }
-
-        let released = Arc::new((Mutex::new(false), Condvar::new()));
-        let master: Mutex<Option<Box<dyn MasterPty + Send>>> =
-            Mutex::new(Some(Box::new(SignallingMaster {
-                released: released.clone(),
-            })));
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        attach_subscriber(&mut state.lock().unwrap(), sub_tx);
-        drain(&sub_rx);
-
-        let reader = DaemonPane::spawn_reader(
-            state,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(OutputGate::new()),
-            Box::new(DelayedTailReader {
-                released,
-                tail: std::io::Cursor::new(b"final output".to_vec()),
-                delayed: false,
-            }),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-                local_group: |_| Some(true),
-            },
-            Arc::new(DeathReporter::new(|| {})),
-        );
-
-        close_pty_master(&master);
-        assert!(
-            sub_rx.recv_timeout(Duration::from_millis(600)).is_err(),
-            "closing the master must not publish Exited while the reader is still delayed"
-        );
-        assert!(matches!(
-            sub_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(DaemonMsg::Output(bytes)) if bytes == b"final output"
-        ));
-        assert!(matches!(
-            sub_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(sub_rx.try_recv().is_err(), "no output may follow Exited");
-        reader.join().unwrap();
-    }
-
-    /// An inert stand-in for the ConPTY master: releasing it is instant, which
-    /// is what `ClosePseudoConsole` does once the pipe has no pending bytes.
-    #[cfg(windows)]
-    struct InertMaster;
-
-    #[cfg(windows)]
-    impl MasterPty for InertMaster {
-        fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn get_size(&self) -> anyhow::Result<PtySize> {
-            Ok(PtySize::default())
-        }
-
-        fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
-            Ok(Box::new(std::io::empty()))
-        }
-
-        fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
-            Ok(Box::new(std::io::sink()))
-        }
-    }
-
-    #[cfg(windows)]
-    fn exit_drain_fixture() -> (
-        Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-        Arc<Mutex<PaneState>>,
-        Arc<AtomicBool>,
-        Arc<DeathReporter>,
-        mpsc::Receiver<DaemonMsg>,
-    ) {
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        attach_subscriber(&mut state.lock().unwrap(), sub_tx);
-        drain(&sub_rx);
-        (
-            Arc::new(Mutex::new(Some(
-                Box::new(InertMaster) as Box<dyn MasterPty + Send>
-            ))),
-            state,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(DeathReporter::new(|| {})),
-            sub_rx,
-        )
-    }
-
-    /// A grandchild that inherited the ConPTY output pipe keeps it open after
-    /// the shell is gone, so the reader never sees EOF and can never publish
-    /// the exit. The monitor's drain window is the only thing that stops such
-    /// a pane from reading as alive forever.
-    #[cfg(windows)]
-    #[test]
-    fn a_pty_that_never_reaches_eof_still_reports_the_exit() {
-        struct NeverEofReader;
-
-        impl Read for NeverEofReader {
-            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-                // Long enough to outlast the window below, bounded so the
-                // thread cannot outlive the test binary.
-                std::thread::sleep(Duration::from_secs(5));
-                Ok(0)
-            }
-        }
-
-        let (master, state, shutting_down, death, sub_rx) = exit_drain_fixture();
-        let _reader = DaemonPane::spawn_reader(
-            state.clone(),
-            shutting_down.clone(),
-            Arc::new(OutputGate::new()),
-            Box::new(NeverEofReader),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-                local_group: |_| Some(true),
-            },
-            death.clone(),
-        );
-
-        drain_then_report(
-            master,
-            state,
-            shutting_down,
-            death,
-            Duration::from_millis(50),
-        );
-        assert!(
-            matches!(
-                sub_rx.recv_timeout(Duration::from_secs(1)),
-                Ok(DaemonMsg::Exited { code: None })
-            ),
-            "the monitor must report the exit once its drain window elapses"
-        );
-    }
-
-    /// The ordinary case: EOF arrives, the reader reports, and the monitor
-    /// neither waits out its window nor publishes a second `Exited`.
-    #[cfg(windows)]
-    #[test]
-    fn the_exit_monitor_defers_to_the_reader_that_saw_eof() {
-        let (master, state, shutting_down, death, sub_rx) = exit_drain_fixture();
-        let reader = DaemonPane::spawn_reader(
-            state.clone(),
-            shutting_down.clone(),
-            Arc::new(OutputGate::new()),
-            Box::new(std::io::empty()),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-                local_group: |_| Some(true),
-            },
-            death.clone(),
-        );
-
-        let started = std::time::Instant::now();
-        drain_then_report(master, state, shutting_down, death, Duration::from_secs(30));
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the monitor must stop waiting as soon as the reader has reported"
-        );
-        assert!(matches!(
-            sub_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(
-            sub_rx.try_recv().is_err(),
-            "the idempotent reporter must not publish a second Exited"
-        );
-        reader.join().unwrap();
-    }
-
-    #[test]
-    fn reader_drains_late_text_without_reviving_graphics_after_exit_report() {
-        struct ControlledReader {
-            entered: Option<Sender<()>>,
-            chunks: mpsc::Receiver<Vec<u8>>,
-        }
-
-        impl Read for ControlledReader {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                if let Some(entered) = self.entered.take() {
-                    entered.send(()).unwrap();
-                }
-                let bytes = self
-                    .chunks
-                    .recv_timeout(Duration::from_secs(5))
-                    .map_err(|error| {
-                        std::io::Error::other(format!("controlled reader: {error}"))
-                    })?;
-                assert!(bytes.len() <= buf.len());
-                buf[..bytes.len()].copy_from_slice(&bytes);
-                Ok(bytes.len())
-            }
-        }
-
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        attach_subscriber(&mut state.lock().unwrap(), sub_tx);
-        drain(&sub_rx);
-        let shutting_down = Arc::new(AtomicBool::new(false));
-        let death = Arc::new(DeathReporter::new(|| {}));
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (chunks_tx, chunks_rx) = mpsc::channel();
-        let reader = DaemonPane::spawn_reader(
-            state.clone(),
-            shutting_down.clone(),
-            Arc::new(OutputGate::new()),
-            Box::new(ControlledReader {
-                entered: Some(entered_tx),
-                chunks: chunks_rx,
-            }),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-                local_group: |_| Some(true),
-            },
-            death.clone(),
-        );
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        // Same ordering as the Windows fallback monitor: report the death
-        // while the reader is blocked, then let pending PTY bytes arrive.
-        death.report(&state, &shutting_down);
-        assert!(state.lock().unwrap().graphics.is_none());
-        assert!(matches!(
-            sub_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(DaemonMsg::Exited { .. })
-        ));
-        chunks_tx.send(b"late ".to_vec()).unwrap();
-        chunks_tx
-            .send(b"\x1b_Ga=T,i=9,f=32,s=1,v=1,q=2;/wAA".to_vec())
-            .unwrap();
-        chunks_tx.send(b"/w==\x1b\\final ".to_vec()).unwrap();
-        chunks_tx.send(b"\x1b]5522;type=write:id=late\x1b\\\x1b]5522;type=wdata:mime=aW1hZ2UvcG5n;cG5nLWRhdGE=\x1b\\\x1b]5522;type=wdata\x1b\\tail".to_vec()).unwrap();
-        chunks_tx.send(Vec::new()).unwrap();
-        reader.join().unwrap();
-
-        let mut output = Vec::new();
-        for message in sub_rx.try_iter() {
-            match message {
-                DaemonMsg::Output(bytes) => output.extend(bytes),
-                DaemonMsg::Graphics(_) => panic!("graphics cannot revive after the pane exits"),
-                DaemonMsg::ClipboardWrite(_) => {
-                    panic!("clipboard permission must still be enforced")
-                }
-                DaemonMsg::Exited { .. } => panic!("exit reporting remains idempotent"),
-                _ => {}
-            }
-        }
-        assert_eq!(output, b"late final tail");
-        let state = state.lock().unwrap();
-        assert_eq!(state.ring.flatten(), b"late final tail");
-        assert!(state.graphics.is_none());
-    }
 
     /// A window that reopens onto a native ssh pane it outlived attaches by
     /// pane id: it never sees the profile that dialled the host, so it sends
@@ -3113,102 +1947,6 @@ mod tests {
 
 
 
-    #[test]
-    fn reader_eof_without_subscriber_fires_on_dead() {
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (dead_tx, dead_rx) = mpsc::channel();
-
-        let handle = DaemonPane::spawn_reader(
-            state.clone(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(Vec::new())),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-                local_group: |_| Some(true),
-            },
-            Arc::new(DeathReporter::new(move || dead_tx.send(()).unwrap())),
-        );
-        handle.join().unwrap();
-
-        assert!(!state.lock().unwrap().alive);
-        assert!(dead_rx.try_recv().is_ok(), "unattached death → on_dead");
-    }
-
-    #[test]
-    fn reader_eof_during_shutdown_is_silent() {
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let dead = Arc::new(AtomicBool::new(false));
-        let dead_flag = dead.clone();
-
-        let handle = DaemonPane::spawn_reader(
-            state.clone(),
-            Arc::new(AtomicBool::new(true)),
-            Arc::new(OutputGate::new()),
-            Box::new(std::io::Cursor::new(Vec::new())),
-            null_writer(),
-            || false,
-            ForegroundProbes {
-                group: Box::new(|| None),
-                remote: Box::new(|| None),
-                agent: Box::new(|| None),
-                cwd: Box::new(|| None),
-                local_group: |_| Some(true),
-            },
-            Arc::new(DeathReporter::new(move || {
-                dead_flag.store(true, Ordering::SeqCst)
-            })),
-        );
-        handle.join().unwrap();
-
-        assert!(!state.lock().unwrap().alive);
-        assert!(!dead.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn death_reporter_notifies_once_across_racing_callers() {
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let (sub_tx, sub_rx) = mpsc::channel();
-        attach_subscriber(&mut state.lock().unwrap(), sub_tx);
-        drain(&sub_rx);
-        let shutting_down = AtomicBool::new(false);
-        let calls = Arc::new(AtomicBool::new(false));
-        let calls_flag = calls.clone();
-        let death = DeathReporter::new(move || calls_flag.store(true, Ordering::SeqCst));
-
-        death.report(&state, &shutting_down);
-        death.report(&state, &shutting_down);
-
-        assert!(!state.lock().unwrap().alive);
-        assert!(matches!(
-            sub_rx.try_recv(),
-            Ok(DaemonMsg::Exited { code: None })
-        ));
-        assert!(
-            sub_rx.try_recv().is_err(),
-            "a second report must not re-notify"
-        );
-    }
-
-    #[test]
-    fn death_reporter_fires_on_dead_at_most_once() {
-        let state = Arc::new(Mutex::new(test_state(true)));
-        let shutting_down = AtomicBool::new(false);
-        let (dead_tx, dead_rx) = mpsc::channel();
-        let death = DeathReporter::new(move || dead_tx.send(()).unwrap());
-
-        death.report(&state, &shutting_down);
-        death.report(&state, &shutting_down);
-
-        assert!(dead_rx.try_recv().is_ok(), "unattached death → on_dead");
-        assert!(dead_rx.try_recv().is_err(), "on_dead must fire only once");
-    }
-
     #[cfg(unix)]
     #[test]
     fn the_two_endpoints_are_siblings_derived_from_one_config_dir() {
@@ -3231,7 +1969,6 @@ mod tests {
         assert_eq!(pane, dir.join("daemon.sock"));
         assert_eq!(control, dir.join("control.sock"));
     }
-
 
     /// A quick launch types the agent's command the moment the shell is up, so
     /// the agent's whole first screen can land inside the poll interval of the
@@ -3429,138 +2166,4 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn closing_a_pane_reaps_console_clients_but_preserves_detached_services() {
-        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-        use std::os::windows::process::CommandExt;
-        use std::process::{Command, Stdio};
-        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
-        use windows_sys::Win32::System::Threading::{
-            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, OpenProcess, PROCESS_SYNCHRONIZE,
-            PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
-        };
-
-        const TEST: &str = "daemon::pane::tests::closing_a_pane_reaps_console_clients_but_preserves_detached_services";
-        const DIRECTORY: &str = "LYREL_TEST_CONSOLE_OWNERSHIP";
-        const ROLE: &str = "LYREL_TEST_CONSOLE_ROLE";
-        let executable = std::env::current_exe().unwrap();
-        if let Some(directory) = std::env::var_os(DIRECTORY) {
-            if std::env::var_os(ROLE).is_some() {
-                loop {
-                    std::thread::sleep(Duration::from_secs(1));
-                }
-            }
-            let directory = PathBuf::from(directory);
-            for role in ["attached", "detached"] {
-                let child = Command::new(&executable)
-                    .args(["--exact", TEST, "--nocapture"])
-                    .env(ROLE, role)
-                    .creation_flags(if role == "detached" {
-                        DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-                    } else {
-                        0
-                    })
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .unwrap();
-                std::fs::write(directory.join(role), child.id().to_string()).unwrap();
-            }
-            while !directory.join("exit").exists() {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            return;
-        }
-
-        struct Clients(Vec<OwnedHandle>);
-        impl Drop for Clients {
-            fn drop(&mut self) {
-                for handle in &self.0 {
-                    unsafe {
-                        TerminateProcess(handle.as_raw_handle(), 1);
-                        WaitForSingleObject(handle.as_raw_handle(), 5_000);
-                    }
-                }
-            }
-        }
-        for natural_exit in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let script = directory.path().join("start.ps1");
-            std::fs::write(&script, format!(
-                "$env:{DIRECTORY}='{}'\n& '{}' --exact {TEST} --nocapture\nexit $LASTEXITCODE\n",
-                directory.path().display().to_string().replace('\'', "''"),
-                executable.display().to_string().replace('\'', "''")
-            )).unwrap();
-            let pane = DaemonPane::spawn(
-                u64::MAX - 10,
-                Some(directory.path().into()),
-                ws(80, 24),
-                Some(ShellSpec {
-                    program: "powershell.exe".into(),
-                    args: vec![
-                        "-NoProfile".into(),
-                        "-NonInteractive".into(),
-                        "-File".into(),
-                        script.to_string_lossy().into_owned(),
-                    ],
-                    args_are_lyrel_defaults: false,
-                }),
-                None,
-                None,
-                None,
-                false,
-                || {},
-            )
-            .unwrap();
-            let mut clients = Clients(Vec::new());
-            for role in ["attached", "detached"] {
-                let path = directory.path().join(role);
-                let deadline = std::time::Instant::now() + Duration::from_secs(20);
-                let pid = loop {
-                    if let Some(pid) = std::fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|text| text.parse().ok())
-                    {
-                        break pid;
-                    }
-                    assert!(std::time::Instant::now() < deadline, "{role} did not start");
-                    std::thread::sleep(Duration::from_millis(20));
-                };
-                let handle =
-                    unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
-                assert!(!handle.is_null(), "open the actual {role} process");
-                clients
-                    .0
-                    .push(unsafe { OwnedHandle::from_raw_handle(handle) });
-            }
-            if natural_exit {
-                let (tx, rx) = mpsc::channel();
-                pane.attach(tx);
-                std::fs::write(directory.path().join("exit"), b"exit").unwrap();
-                loop {
-                    if matches!(
-                        rx.recv_timeout(Duration::from_secs(20)).unwrap(),
-                        DaemonMsg::Exited { .. }
-                    ) {
-                        break;
-                    }
-                }
-            } else {
-                pane.kill();
-            }
-            drop(pane);
-            assert_eq!(
-                unsafe { WaitForSingleObject(clients.0[0].as_raw_handle(), 10_000) },
-                WAIT_OBJECT_0,
-                "attached console client survived pane close (natural_exit={natural_exit})"
-            );
-            assert_eq!(
-                unsafe { WaitForSingleObject(clients.0[1].as_raw_handle(), 0) },
-                WAIT_TIMEOUT,
-                "detached service was killed by pane close (natural_exit={natural_exit})"
-            );
-        }
-    }
 }

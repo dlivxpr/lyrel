@@ -102,7 +102,8 @@ pub(crate) fn item(found: &Found, root: &Path) -> Item {
 impl LyrelApp {
     /// The open local buffers' texts, for measuring places in them.
     fn lsp_open_texts(&self, cx: &App) -> HashMap<PathBuf, Rope> {
-        self.editor.local_files()
+        self.editor
+            .local_files()
             .into_iter()
             .map(|f| (f.path, f.input.read(cx).text().clone()))
             .collect()

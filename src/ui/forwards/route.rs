@@ -1,4 +1,6 @@
-use crate::daemon::protocol::{DaemonMsg, ManagedForward, SshForwardRule, WorkspaceOp, WorkspaceRequest};
+use crate::daemon::protocol::{
+    DaemonMsg, ManagedForward, SshForwardRule, WorkspaceOp, WorkspaceRequest,
+};
 use crate::terminal::{PaneWorkspace, RemoteTerminal};
 
 /// A forwarding registry target, supplied by the workbench or terminal consumer.
@@ -81,7 +83,9 @@ impl ForwardRoute {
         };
         match RemoteTerminal::on_workspace(req)? {
             DaemonMsg::LoopbackForward(f) => Ok(f),
-            other => Err(anyhow::anyhow!("unexpected reply to EnsureLoopback: {other:?}")),
+            other => Err(anyhow::anyhow!(
+                "unexpected reply to EnsureLoopback: {other:?}"
+            )),
         }
     }
 
@@ -90,12 +94,17 @@ impl ForwardRoute {
         forward_id: u64,
         enabled: bool,
     ) -> anyhow::Result<Vec<ManagedForward>> {
-        let Some(req) = self.workspace_op(WorkspaceOp::SetForwardEnabled { forward_id, enabled }) else {
+        let Some(req) = self.workspace_op(WorkspaceOp::SetForwardEnabled {
+            forward_id,
+            enabled,
+        }) else {
             return RemoteTerminal::set_forward_enabled(self.pane_id, forward_id, enabled);
         };
         match RemoteTerminal::on_workspace(req)? {
             DaemonMsg::ForwardList(list) => Ok(list),
-            other => Err(anyhow::anyhow!("unexpected reply to SetForwardEnabled: {other:?}")),
+            other => Err(anyhow::anyhow!(
+                "unexpected reply to SetForwardEnabled: {other:?}"
+            )),
         }
     }
 

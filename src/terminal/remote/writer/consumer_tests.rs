@@ -1,9 +1,9 @@
 use super::MAX_BACKLOG;
-use crate::terminal::remote::{RemoteTerminal, PaneEvent};
-use crate::terminal::size::TermSize;
 use crate::daemon::protocol::ClientMsg;
-use std::sync::atomic::Ordering;
+use crate::terminal::remote::{PaneEvent, RemoteTerminal};
+use crate::terminal::size::TermSize;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::Ordering;
 
 #[test]
 fn write_sends_input_frames() {

@@ -14,12 +14,12 @@ use lyrel_core::core::github::{
 };
 
 use crate::ui::app::LyrelApp;
-use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
 use crate::ui::github::{GhTarget, now_unix};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, ROW_FILL_RADIUS, ROW_INSET, TAB_TEXT, TEXT, TEXT_INSET};
 use crate::ui::scm::path::relative_time;
 use crate::ui::scm::state::RepoKey;
+use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
 
 /// A list row: one line, the Source Control tab's row pitch.
 const ROW_H: f32 = 26.;

@@ -206,6 +206,22 @@ fn a_handoff_keeps_the_process_the_pty_and_the_shell_that_is_on_it() {
         .expect("the shell still takes input");
     collect_until(&mut session, b"lyrel_after_survivor");
 
+    session.input(b"printf 'lyrel_adopted_final_%s\\n' \"$lyrel_kept\"; exit 9\r")
+        .expect("the inherited child can finish normally");
+    let mut final_output = Vec::new();
+    loop {
+        match session.recv().expect("inherited PTY drains before exit") {
+            DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => final_output.extend(bytes),
+            DaemonMsg::Exited { code } => {
+                assert_eq!(code, Some(9), "waitpid must preserve the inherited child's status");
+                assert!(windows_contain(&final_output, b"lyrel_adopted_final_survivor"),
+                    "the inherited PTY must deliver its final output before Exited");
+                break;
+            }
+            _ => {}
+        }
+    }
+
     session.kill().expect("kill the pane");
 }
 

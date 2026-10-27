@@ -1,11 +1,11 @@
-use super::*;
+use super::super::test_support::{drain, test_state};
 use super::super::{
     attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
     observe_subscriber, record_output,
 };
-use super::super::test_support::{drain, test_state};
-use std::sync::mpsc;
+use super::*;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 #[test]
 fn gate_passes_below_high_water() {
@@ -70,7 +70,6 @@ fn gate_tolerates_negative_drift() {
     assert!(t0.elapsed() < Duration::from_millis(100));
 }
 
-
 #[test]
 fn attach_replays_state_in_order_and_installs_subscriber() {
     let mut st = test_state(true);
@@ -89,11 +88,15 @@ fn attach_replays_state_in_order_and_installs_subscriber() {
     assert!(rx.try_recv().is_err());
 }
 
-
 #[test]
 fn attach_replays_initial_cwd_even_before_shell_reports_osc7() {
     let mut st = test_state(true);
-    st.facts = PaneFacts::new(Some(PathBuf::from("/Users/alice/clone/lyrel")), None, None, None);
+    st.facts = PaneFacts::new(
+        Some(PathBuf::from("/Users/alice/clone/lyrel")),
+        None,
+        None,
+        None,
+    );
 
     let (tx, rx) = mpsc::channel();
     attach_subscriber(&mut st, tx);
@@ -278,13 +281,14 @@ fn observe_replays_state_without_displacing_the_controller() {
         st.subscriptions.subscriber_epoch, epoch,
         "observing must not bump the controller epoch"
     );
-    assert!(st.subscriptions.controller_epoch().is_some(), "the controller keeps its seat");
+    assert!(
+        st.subscriptions.controller_epoch().is_some(),
+        "the controller keeps its seat"
+    );
 
     assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Size(_))));
     assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"screen"));
-    assert!(
-        matches!(observer_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/work"))
-    );
+    assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/work")));
     assert!(
         controller_rx.try_recv().is_err(),
         "an observer joining must be invisible to the controller"
@@ -331,7 +335,8 @@ fn a_new_controller_preempts_the_old_while_observers_survive() {
         "a controller handover must not evict read-only observers"
     );
 
-    st.subscriptions.detach(first_epoch, &OutputGate::new(), &mut st.graphics);
+    st.subscriptions
+        .detach(first_epoch, &OutputGate::new(), &mut st.graphics);
     assert!(
         st.subscriptions.controller_epoch().is_some(),
         "a stale epoch's detach must not unseat the new controller"
@@ -407,7 +412,11 @@ fn an_observer_still_reading_a_full_ring_replay_gets_live_output() {
     observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
 
     fan_out_output(&mut st, b"tick", Vec::new(), &OutputGate::new());
-    assert_eq!(st.subscriptions.observers.len(), 1, "the observer is still subscribed");
+    assert_eq!(
+        st.subscriptions.observers.len(),
+        1,
+        "the observer is still subscribed"
+    );
     assert!(
         observer_rx
             .try_iter()
@@ -448,8 +457,7 @@ fn an_observer_that_drained_a_full_ring_replay_keeps_getting_output() {
 
     // The daemon's own writer puts the replay on the wire, as for a phone.
     let (mut client, server) = UnixStream::pair().unwrap();
-    let writer =
-        crate::daemon::server::spawn_writer(observer_rx, server, observer_gate.clone());
+    let writer = crate::daemon::server::spawn_writer(observer_rx, server, observer_gate.clone());
     let mut replayed = 0;
     while replayed < RING_CAP {
         if let DaemonMsg::Snapshot(b) = DaemonMsg::read(&mut client).unwrap() {
@@ -464,7 +472,11 @@ fn an_observer_that_drained_a_full_ring_replay_keeps_getting_output() {
 
     let pane_gate = OutputGate::new();
     fan_out_output(&mut st, b"live", Vec::new(), &pane_gate);
-    assert_eq!(st.subscriptions.observers.len(), 1, "the observer is still subscribed");
+    assert_eq!(
+        st.subscriptions.observers.len(),
+        1,
+        "the observer is still subscribed"
+    );
     assert_eq!(
         DaemonMsg::read(&mut client).unwrap(),
         DaemonMsg::Output(b"live".to_vec())
@@ -517,4 +529,3 @@ fn a_draining_observer_under_the_cap_stays_subscribed() {
     );
     assert_eq!(got, sends * chunk.len(), "and must miss no bytes");
 }
-

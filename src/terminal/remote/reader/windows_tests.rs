@@ -1,6 +1,5 @@
-use super::*;
 use super::super::test_support::socket_pair as tcp_pair;
-
+use super::*;
 
 /// What the daemon replays into a pane restored from a stored screen, in
 /// the frames and the order it sends them: the dead pane's screen, then the

@@ -18,7 +18,6 @@ struct Registry {
     next_id: AtomicU64,
 }
 
-
 impl Registry {
     fn new() -> Self {
         Self {
@@ -1927,7 +1926,11 @@ mod tests {
         fn spawn_writer_frames_messages_then_exits_on_channel_close() {
             let (tx, rx) = mpsc::channel::<DaemonMsg>();
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
+            let writer = spawn_writer(
+                rx,
+                server,
+                Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()),
+            );
 
             tx.send(DaemonMsg::Output(b"hi".to_vec())).unwrap();
             tx.send(DaemonMsg::Exited { code: Some(0) }).unwrap();
@@ -1953,7 +1956,11 @@ mod tests {
             drop(tx);
 
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
+            let writer = spawn_writer(
+                rx,
+                server,
+                Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()),
+            );
 
             assert_eq!(
                 DaemonMsg::read(&mut client).unwrap(),
@@ -1977,7 +1984,11 @@ mod tests {
             drop(tx);
 
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
+            let writer = spawn_writer(
+                rx,
+                server,
+                Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()),
+            );
 
             let mut frames: Vec<Vec<u8>> = Vec::new();
             loop {
@@ -2013,7 +2024,11 @@ mod tests {
             drop(tx);
 
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
+            let writer = spawn_writer(
+                rx,
+                server,
+                Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()),
+            );
 
             assert_eq!(
                 DaemonMsg::read(&mut client).unwrap(),
@@ -2037,7 +2052,11 @@ mod tests {
         fn spawn_writer_exits_on_write_failure_while_sender_is_alive() {
             let (tx, rx) = mpsc::channel::<DaemonMsg>();
             let (client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
+            let writer = spawn_writer(
+                rx,
+                server,
+                Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()),
+            );
 
             drop(client);
 
@@ -2059,7 +2078,11 @@ mod tests {
             let (client, server) = UnixStream::pair().unwrap();
             let mut reader = server.try_clone().expect("clone the read half");
             let (tx, rx) = mpsc::channel::<DaemonMsg>();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
+            let writer = spawn_writer(
+                rx,
+                server,
+                Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()),
+            );
 
             // Exactly where run_stream sits between frames.
             let parked = thread::spawn(move || {

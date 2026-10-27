@@ -1,7 +1,7 @@
 //! Consumer regressions for agent observations and read marks.
 
-use super::*;
 use super::gpui_tests::harness;
+use super::*;
 use crate::daemon::protocol::DaemonMsg;
 use crate::daemon::transport::Stream;
 use gpui_kit::{Entity, TestAppContext};
@@ -160,7 +160,7 @@ fn a_rebuilt_pane_does_not_re_badge_a_turn_the_reader_already_saw(cx: &mut TestA
         "the reader watched it finish"
     );
 
-    // The same daemon pane, rebuilt the way `tabs_from_session` rebuilds it,
+    // The same daemon pane, rebuilt the way `SessionRestore::tabs` rebuilds it,
     // with the reader's focus somewhere else.
     let (after, mut daemon) = window
         .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
@@ -430,9 +430,7 @@ fn a_reattached_pane_takes_back_the_badge_its_reader_left(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn a_reattached_pane_badges_a_turn_that_was_running_when_its_view_went(
-    cx: &mut TestAppContext,
-) {
+fn a_reattached_pane_badges_a_turn_that_was_running_when_its_view_went(cx: &mut TestAppContext) {
     use crate::core::cli_agent::AgentStatus;
     assert!(
         rebuild_by_reattach((AgentStatus::Working, 0), (AgentStatus::Done, 1), cx),

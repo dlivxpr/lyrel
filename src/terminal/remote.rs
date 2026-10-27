@@ -29,12 +29,12 @@ use crate::daemon::transport::Stream;
 
 use super::size::TermSize;
 
-pub(crate) mod handshake;
 mod connection;
+pub(crate) mod handshake;
 mod reader;
-mod writer;
 #[cfg(test)]
 mod test_support;
+mod writer;
 
 use connection::PaneConnection;
 use handshake::{connect, connect_routed};
@@ -412,7 +412,6 @@ impl PaneRoute {
     }
 }
 
-
 #[derive(Clone)]
 pub(super) struct GraphicsViewportReporter {
     term: std::sync::Weak<FairMutex<Crosswords<EventProxy>>>,
@@ -599,14 +598,12 @@ impl SpawnCancellation {
         self.0.store(true, Ordering::Release);
     }
 
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 }
 
-
 impl RemoteTerminal {
-
     /// Remember the directory the daemon was asked to spawn in, so everything
     /// that keys off a pane's cwd — the sidebar's repo grouping above all —
     /// has an answer before the shell gets far enough to report its own via
@@ -621,7 +618,6 @@ impl RemoteTerminal {
         }
     }
 
-
     pub fn adopt_relink(
         &mut self,
         stream: Stream,
@@ -633,8 +629,14 @@ impl RemoteTerminal {
     ) -> anyhow::Result<()> {
         let signals = self.reader_signals(false);
         self.connection.adopt_relink(
-            stream, &self.term, &self.proxy, &self.events, &mut self.exited, signals,
-            buffered, route,
+            stream,
+            &self.term,
+            &self.proxy,
+            &self.events,
+            &mut self.exited,
+            signals,
+            buffered,
+            route,
         )?;
         self.resize(size, cell_w, cell_h);
         Ok(())
@@ -721,7 +723,6 @@ impl RemoteTerminal {
         awaiting_replay: bool,
         images: crate::terminal::images::ImageStore,
     ) -> anyhow::Result<Self> {
-
         let user_config = crate::core::config::Config::load();
         let (tx, rx) = smol::channel::unbounded();
         let proxy = EventProxy {
@@ -878,7 +879,6 @@ impl RemoteTerminal {
         self.connection.send(ClientMsg::Input(bytes.into_owned()));
     }
 
-
     /// Live panes clear only through the daemon's ordered output stream. Once
     /// the reader has observed exit/EOF, the retained presentation belongs to
     /// this client and must remain clearable without a functioning transport.
@@ -886,7 +886,8 @@ impl RemoteTerminal {
     pub fn clear_presentation(&mut self, history: bool) -> bool {
         self.poll_exited();
         if !self.exited && !self.child_exited() {
-            self.connection.send(ClientMsg::ClearPresentation { history });
+            self.connection
+                .send(ClientMsg::ClearPresentation { history });
             return true;
         }
 
@@ -911,8 +912,14 @@ impl RemoteTerminal {
 
     pub fn resize(&mut self, size: TermSize, cell_w: u16, cell_h: u16) {
         self.connection.resize(
-            &self.term, &self.proxy, size, cell_w, cell_h,
-            &self.local_conpty, &self.shell_state, &self.images,
+            &self.term,
+            &self.proxy,
+            size,
+            cell_w,
+            cell_h,
+            &self.local_conpty,
+            &self.shell_state,
+            &self.images,
         );
     }
 
@@ -1085,7 +1092,6 @@ impl RemoteTerminal {
             )),
         }
     }
-
 
     pub fn take_auth_prompt(&self) -> Option<(u64, AuthPromptKind)> {
         self.auth_prompts
@@ -1317,17 +1323,13 @@ impl RemoteTerminal {
     }
 }
 
-
 impl Drop for RemoteTerminal {
     fn drop(&mut self) {
         self.connection.detach(&self.images);
     }
 }
 
-
-
 type OscNotes = Arc<Mutex<VecDeque<Note>>>;
-
 
 /// Builds the pane's emulator from the user's config.
 ///
@@ -1459,11 +1461,10 @@ mod route_header_tests {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use super::test_support::ssh_workspace;
     use super::*;
     use std::io::Write;
     use std::os::unix::net::UnixStream;
-    use super::test_support::ssh_workspace;
-
 
     #[test]
     fn a_local_pane_prefixes_nothing() {
@@ -1556,7 +1557,6 @@ mod tests {
         let err = connect_routed(&route).expect_err("must not reach the local daemon");
         assert!(err.to_string().contains("cannot be routed"), "{err}");
     }
-
 
     #[test]
     fn only_a_local_pane_may_restart_the_local_daemon() {
@@ -1670,7 +1670,6 @@ mod tests {
             "❤️ must hold two columns (glyph + spacer) before the next glyph"
         );
     }
-
 
     #[test]
     fn reader_feeds_local_grid() {
@@ -1937,7 +1936,6 @@ mod tests {
         assert_eq!(ws.cell_h, 17);
     }
 
-
     #[test]
     fn attach_replay_runs_at_the_daemon_reported_size() {
         let (client_side, mut daemon_side) = UnixStream::pair().unwrap();
@@ -1980,7 +1978,6 @@ mod tests {
             "a 100-char line must not wrap on a 120-col grid"
         );
     }
-
 
     #[test]
     fn at_prompt_stays_false_while_shell_integration_is_inactive() {
@@ -2683,4 +2680,3 @@ mod tests {
         );
     }
 }
-

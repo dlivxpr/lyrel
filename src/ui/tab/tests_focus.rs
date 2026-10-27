@@ -1,6 +1,6 @@
 use super::{Pane, PaneSlot};
-use crate::ui::tab::{Tab, TabSet};
 use crate::ui::pending_pane::{PendingPane, PendingSpawn};
+use crate::ui::tab::{Tab, TabSet};
 use gpui_kit::{
     AppContext as _, Axis, Context, Entity, IntoElement, Render, Styled as _, TestAppContext,
     Window, div,
@@ -185,10 +185,7 @@ fn a_landing_pane_inherits_what_its_pending_slot_was_told(cx: &mut TestAppContex
     // Focus arrives while the pane is still connecting, then the pane it
     // was waiting for lands in that slot.
     tabs.remember_leaf(connecting.entity_id());
-    tabs.replace_leaf(
-        connecting.entity_id(),
-        PaneSlot::Connecting(landed.clone()),
-    );
+    tabs.replace_leaf(connecting.entity_id(), PaneSlot::Connecting(landed.clone()));
 
     assert_eq!(
         cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
@@ -383,9 +380,9 @@ fn zooming_from_off_the_panes_zooms_the_remembered_pane(cx: &mut TestAppContext)
 
 #[gpui_kit::test]
 fn reordering_two_split_tabs_keeps_identity_mru_and_each_panes_focus(cx: &mut TestAppContext) {
+    use super::watch_pane_focus;
     use crate::core::actions::{MoveTabRight, SelectNextTab};
     use crate::terminal::view::quiet_test_pane;
-    use super::watch_pane_focus;
 
     let (app, mut vcx, _left, first_right, _elsewhere, _held) = watched_split(cx);
     let (second_right, ids, _second_streams) = app.update_in(&mut vcx, |app, window, cx| {
@@ -424,9 +421,19 @@ fn reordering_two_split_tabs_keeps_identity_mru_and_each_panes_focus(cx: &mut Te
     vcx.dispatch_action(MoveTabRight);
     vcx.run_until_parked();
     app.update_in(&mut vcx, |app, window, cx| {
-        assert_eq!(app.tabs.iter().map(Tab::id).collect::<Vec<_>>(), vec![ids[1], ids[0]]);
+        assert_eq!(
+            app.tabs.iter().map(Tab::id).collect::<Vec<_>>(),
+            vec![ids[1], ids[0]]
+        );
         assert_eq!(app.tabs[app.tabs.active_index()].id(), ids[0]);
-        assert_eq!(app.tabs.by_mru().iter().map(|&index| app.tabs[index].id()).collect::<Vec<_>>(), vec![ids[0], ids[1]]);
+        assert_eq!(
+            app.tabs
+                .by_mru()
+                .iter()
+                .map(|&index| app.tabs[index].id())
+                .collect::<Vec<_>>(),
+            vec![ids[0], ids[1]]
+        );
         assert!(first_right.read(cx).focus_handle.is_focused(window));
     });
 

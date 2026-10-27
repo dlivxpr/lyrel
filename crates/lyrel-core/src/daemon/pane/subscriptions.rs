@@ -5,10 +5,10 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use super::graphics_admission::GraphicsAdmissionBroker;
-use super::replay::{RING_CAP, ReplayRing};
 use super::GraphicsFrame;
 use super::facts::PaneFacts;
+use super::graphics_admission::GraphicsAdmissionBroker;
+use super::replay::{RING_CAP, ReplayRing};
 use crate::core::kitty_graphics::{GraphicsEffect, GraphicsState};
 use crate::core::term_modes::TerminalModes;
 use crate::daemon::protocol::{DaemonMsg, SshPhase, WinSize};
@@ -32,7 +32,12 @@ impl GraphicsReplayAdmission {
         let mut grants = Vec::with_capacity(resources.len());
         for &(key, width, height, encoded, metadata) in &resources {
             let Some(grant) = broker.request_after_release(
-                Some(endpoint), key, width, height, encoded, metadata,
+                Some(endpoint),
+                key,
+                width,
+                height,
+                encoded,
+                metadata,
                 || current(&resources),
             ) else {
                 if !current(&resources) {
@@ -42,11 +47,24 @@ impl GraphicsReplayAdmission {
             };
             grants.push(grant);
         }
-        Ok(Some(Self { endpoint, offers: resources, grants, _work: work }))
+        Ok(Some(Self {
+            endpoint,
+            offers: resources,
+            grants,
+            _work: work,
+        }))
     }
 
-    fn activate(&self, broker: &GraphicsAdmissionBroker, graphics: &Option<GraphicsState>) -> Result<bool, String> {
-        if !graphics.as_ref().map_or(self.offers.is_empty(), |graphics| graphics.matches_offers(&self.offers))
+    fn activate(
+        &self,
+        broker: &GraphicsAdmissionBroker,
+        graphics: &Option<GraphicsState>,
+    ) -> Result<bool, String> {
+        if !graphics
+            .as_ref()
+            .map_or(self.offers.is_empty(), |graphics| {
+                graphics.matches_offers(&self.offers)
+            })
             || !self.grants.iter().all(|grant| grant.valid())
         {
             return Ok(false);
@@ -152,7 +170,6 @@ struct Observer {
     gate: Arc<OutputGate>,
 }
 
-
 pub(super) struct Subscriptions {
     subscriber: Option<Arc<Sender<DaemonMsg>>>,
     subscriber_epoch: u64,
@@ -191,18 +208,36 @@ impl Subscriptions {
         &self.admission
     }
 
-    pub(super) fn set_graphics_capacity(&self, graphics: &mut Option<GraphicsState>, encoded: u64, decoded: u64) -> bool {
-        graphics.as_mut().is_none_or(|graphics| graphics.set_capacity(
-            usize::try_from(encoded).unwrap_or(usize::MAX),
-            usize::try_from(decoded).unwrap_or(usize::MAX),
-        ))
+    pub(super) fn set_graphics_capacity(
+        &self,
+        graphics: &mut Option<GraphicsState>,
+        encoded: u64,
+        decoded: u64,
+    ) -> bool {
+        graphics.as_mut().is_none_or(|graphics| {
+            graphics.set_capacity(
+                usize::try_from(encoded).unwrap_or(usize::MAX),
+                usize::try_from(decoded).unwrap_or(usize::MAX),
+            )
+        })
     }
 
-    pub(super) fn replay_offers(&mut self, graphics: &mut Option<GraphicsState>, gate: &OutputGate) -> Result<(Vec<(u64, u32, u32, usize, usize)>, Option<crate::core::graphics_state::retention::Work>), String> {
+    pub(super) fn replay_offers(
+        &mut self,
+        graphics: &mut Option<GraphicsState>,
+        gate: &OutputGate,
+    ) -> Result<
+        (
+            Vec<(u64, u32, u32, usize, usize)>,
+            Option<crate::core::graphics_state::retention::Work>,
+        ),
+        String,
+    > {
         self.publish_evictions(graphics, gate);
         match graphics {
             Some(graphics) => {
-                let (resources, work) = graphics.offer_resources()
+                let (resources, work) = graphics
+                    .offer_resources()
                     .ok_or("Graphics replay metadata work budget exhausted")?;
                 Ok((resources, Some(work)))
             }
@@ -211,7 +246,10 @@ impl Subscriptions {
     }
 
     fn publish_evictions(&mut self, graphics: &mut Option<GraphicsState>, gate: &OutputGate) {
-        let effects = graphics.as_mut().map(GraphicsState::drain_evictions).unwrap_or_default();
+        let effects = graphics
+            .as_mut()
+            .map(GraphicsState::drain_evictions)
+            .unwrap_or_default();
         self.publish_graphics(effects, gate, graphics);
     }
 
@@ -233,25 +271,36 @@ impl Subscriptions {
     }
 
     pub(super) fn contains(&self, sender: &Arc<Sender<DaemonMsg>>) -> bool {
-        self.subscriber.as_ref().is_some_and(|s| Arc::ptr_eq(s, sender))
+        self.subscriber
+            .as_ref()
+            .is_some_and(|s| Arc::ptr_eq(s, sender))
             || self.observers.iter().any(|o| Arc::ptr_eq(&o.tx, sender))
     }
 
     fn prune_viewports(&self, graphics: &mut Option<GraphicsState>) {
         if let Some(graphics) = graphics {
             graphics.retain_viewports(|owner| {
-                self.subscriber.as_ref().is_some_and(|sender| owner.as_ptr() == Arc::as_ptr(sender))
-                    || self.observers.iter().any(|observer| owner.as_ptr() == Arc::as_ptr(&observer.tx))
+                self.subscriber
+                    .as_ref()
+                    .is_some_and(|sender| owner.as_ptr() == Arc::as_ptr(sender))
+                    || self
+                        .observers
+                        .iter()
+                        .any(|observer| owner.as_ptr() == Arc::as_ptr(&observer.tx))
             });
         }
     }
 
     pub(super) fn tell_controller(&self, msg: DaemonMsg) -> bool {
-        self.subscriber.as_ref().is_some_and(|sub| sub.send(msg).is_ok())
+        self.subscriber
+            .as_ref()
+            .is_some_and(|sub| sub.send(msg).is_ok())
     }
 
     pub(super) fn tell_observer(&self, id: u64, msg: DaemonMsg) -> bool {
-        self.observers.iter().find(|observer| observer.id == id)
+        self.observers
+            .iter()
+            .find(|observer| observer.id == id)
             .is_some_and(|observer| observer.tx.send(msg).is_ok())
     }
 
@@ -260,7 +309,8 @@ impl Subscriptions {
             let _ = sub.send(msg.clone());
         }
         // Status frames retain the existing budget check without a byte charge.
-        self.observers.retain(|observer| send_to_observer(observer, &msg, 0));
+        self.observers
+            .retain(|observer| send_to_observer(observer, &msg, 0));
         self.prune_viewports(graphics);
     }
 
@@ -268,29 +318,45 @@ impl Subscriptions {
         if let Some(sub) = &self.subscriber {
             let _ = sub.send(DaemonMsg::Size(size));
         }
-        self.observers.retain(|observer| observer.tx.send(DaemonMsg::Size(size)).is_ok());
+        self.observers
+            .retain(|observer| observer.tx.send(DaemonMsg::Size(size)).is_ok());
     }
 
     fn transport_failed(&mut self, graphics: &mut Option<GraphicsState>) {
-        self.notify(DaemonMsg::Error(
-            "Graphics transport budget exhausted; reconnect to recover retained content".into(),
-        ), graphics);
+        self.notify(
+            DaemonMsg::Error(
+                "Graphics transport budget exhausted; reconnect to recover retained content".into(),
+            ),
+            graphics,
+        );
         self.subscriber = None;
         self.subscriber_epoch += 1;
         self.observers.clear();
     }
 
-    fn broadcast(&mut self, msg: DaemonMsg, len: usize, gate: &OutputGate, graphics: &mut Option<GraphicsState>) {
+    fn broadcast(
+        &mut self,
+        msg: DaemonMsg,
+        len: usize,
+        gate: &OutputGate,
+        graphics: &mut Option<GraphicsState>,
+    ) {
         if let Some(sub) = &self.subscriber {
             if sub.send(msg.clone()).is_ok() {
                 gate.add(len);
             }
         }
-        self.observers.retain(|observer| send_to_observer(observer, &msg, len));
+        self.observers
+            .retain(|observer| send_to_observer(observer, &msg, len));
         self.prune_viewports(graphics);
     }
 
-    pub(super) fn publish_graphics(&mut self, effects: Vec<GraphicsEffect>, gate: &OutputGate, graphics: &mut Option<GraphicsState>) {
+    pub(super) fn publish_graphics(
+        &mut self,
+        effects: Vec<GraphicsEffect>,
+        gate: &OutputGate,
+        graphics: &mut Option<GraphicsState>,
+    ) {
         for effect in effects {
             let packet = match effect {
                 GraphicsEffect::Update(update) => update.encode_packet(),
@@ -306,10 +372,21 @@ impl Subscriptions {
         }
     }
 
-    pub(super) fn output(&mut self, bytes: &[u8], frames: Vec<GraphicsFrame>, gate: &OutputGate, graphics: &mut Option<GraphicsState>) {
+    pub(super) fn output(
+        &mut self,
+        bytes: &[u8],
+        frames: Vec<GraphicsFrame>,
+        gate: &OutputGate,
+        graphics: &mut Option<GraphicsState>,
+    ) {
         if frames.is_empty() {
             if !bytes.is_empty() {
-                self.broadcast(DaemonMsg::Output(bytes.to_vec()), bytes.len(), gate, graphics);
+                self.broadcast(
+                    DaemonMsg::Output(bytes.to_vec()),
+                    bytes.len(),
+                    gate,
+                    graphics,
+                );
             }
             return;
         }
@@ -339,10 +416,19 @@ impl Subscriptions {
         }
     }
 
-    pub(super) fn attach(&mut self, replay: ReplayState<'_>, graphics: &mut Option<GraphicsState>, subscriber: impl Into<Arc<Sender<DaemonMsg>>>, gate: &OutputGate, allow_clipboard: bool, foreground: bool) -> u64 {
+    pub(super) fn attach(
+        &mut self,
+        replay: ReplayState<'_>,
+        graphics: &mut Option<GraphicsState>,
+        subscriber: impl Into<Arc<Sender<DaemonMsg>>>,
+        gate: &OutputGate,
+        allow_clipboard: bool,
+        foreground: bool,
+    ) -> u64 {
         let subscriber = subscriber.into();
         self.subscriber_epoch += 1;
-        self.allow_remote_clipboard_write = self.clipboard_write_from_spec.unwrap_or(allow_clipboard);
+        self.allow_remote_clipboard_write =
+            self.clipboard_write_from_spec.unwrap_or(allow_clipboard);
         gate.reset();
         let epoch = self.subscriber_epoch;
         let (queued, complete) = replay_state(&replay, graphics.as_ref(), &subscriber, foreground);
@@ -357,24 +443,51 @@ impl Subscriptions {
         epoch
     }
 
-    pub(super) fn observe(&mut self, replay: ReplayState<'_>, graphics: &Option<GraphicsState>, observer: impl Into<Arc<Sender<DaemonMsg>>>, gate: Arc<OutputGate>, foreground: bool) -> u64 {
+    pub(super) fn observe(
+        &mut self,
+        replay: ReplayState<'_>,
+        graphics: &Option<GraphicsState>,
+        observer: impl Into<Arc<Sender<DaemonMsg>>>,
+        gate: Arc<OutputGate>,
+        foreground: bool,
+    ) -> u64 {
         let observer = observer.into();
         self.observer_seq += 1;
         // Charge the entire replay before exposing this observer to live output.
         let (queued, complete) = replay_state(&replay, graphics.as_ref(), &observer, foreground);
         gate.add(queued);
         if complete {
-            self.observers.push(Observer { id: self.observer_seq, tx: observer, gate });
+            self.observers.push(Observer {
+                id: self.observer_seq,
+                tx: observer,
+                gate,
+            });
         }
         self.observer_seq
     }
 
-    pub(super) fn attach_admitted(&mut self, replay: ReplayState<'_>, graphics: &mut Option<GraphicsState>, subscriber: Arc<Sender<DaemonMsg>>, gate: &OutputGate, allow_clipboard: bool, admission: GraphicsReplayAdmission, foreground: bool) -> Result<Option<u64>, String> {
+    pub(super) fn attach_admitted(
+        &mut self,
+        replay: ReplayState<'_>,
+        graphics: &mut Option<GraphicsState>,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        gate: &OutputGate,
+        allow_clipboard: bool,
+        admission: GraphicsReplayAdmission,
+        foreground: bool,
+    ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, gate);
         if !admission.activate(&self.admission, graphics)? {
             return Ok(None);
         }
-        let epoch = self.attach(replay, graphics, subscriber, gate, allow_clipboard, foreground);
+        let epoch = self.attach(
+            replay,
+            graphics,
+            subscriber,
+            gate,
+            allow_clipboard,
+            foreground,
+        );
         if self.controller_epoch() != Some(epoch) {
             return Err("Graphics replay failed".into());
         }
@@ -382,7 +495,16 @@ impl Subscriptions {
         Ok(Some(epoch))
     }
 
-    pub(super) fn observe_admitted(&mut self, replay: ReplayState<'_>, graphics: &mut Option<GraphicsState>, subscriber: Arc<Sender<DaemonMsg>>, gate: Arc<OutputGate>, controller_gate: &OutputGate, admission: GraphicsReplayAdmission, foreground: bool) -> Result<Option<u64>, String> {
+    pub(super) fn observe_admitted(
+        &mut self,
+        replay: ReplayState<'_>,
+        graphics: &mut Option<GraphicsState>,
+        subscriber: Arc<Sender<DaemonMsg>>,
+        gate: Arc<OutputGate>,
+        controller_gate: &OutputGate,
+        admission: GraphicsReplayAdmission,
+        foreground: bool,
+    ) -> Result<Option<u64>, String> {
         self.publish_evictions(graphics, controller_gate);
         if !admission.activate(&self.admission, graphics)? {
             return Ok(None);
@@ -395,8 +517,12 @@ impl Subscriptions {
         Ok(Some(id))
     }
 
-
-    pub(super) fn detach(&mut self, epoch: u64, gate: &OutputGate, graphics: &mut Option<GraphicsState>) {
+    pub(super) fn detach(
+        &mut self,
+        epoch: u64,
+        gate: &OutputGate,
+        graphics: &mut Option<GraphicsState>,
+    ) {
         if self.controls(epoch) {
             self.subscriber = None;
             self.prune_viewports(graphics);
@@ -425,7 +551,9 @@ impl Subscriptions {
 
 fn send_to_observer(observer: &Observer, msg: &DaemonMsg, len: usize) -> bool {
     if observer.gate.queued_bytes() + len as i64 > OBSERVER_BUDGET {
-        let _ = observer.tx.send(DaemonMsg::Error(OBSERVER_BEHIND.to_string()));
+        let _ = observer
+            .tx
+            .send(DaemonMsg::Error(OBSERVER_BEHIND.to_string()));
         return false;
     }
     if observer.tx.send(msg.clone()).is_err() {
@@ -500,7 +628,6 @@ fn replay_state(
     }
     (queued, true)
 }
-
 
 #[cfg(test)]
 mod tests;

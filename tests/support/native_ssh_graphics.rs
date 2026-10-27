@@ -225,7 +225,7 @@ impl NativeSshFixture {
     }
 
     fn endpoint(&self, name: &str) -> PathBuf {
-        self.root.path().join("config").join(format!(
+        self.local_config_dir().join(format!(
             "{name}.{}",
             if cfg!(windows) { "port" } else { "sock" }
         ))

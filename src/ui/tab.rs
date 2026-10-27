@@ -1,14 +1,16 @@
-use std::rc::Rc;
-use gpui_kit::{App, Entity, IntoElement, Window, div, prelude::*, TestSupportExt as _};
+pub(crate) mod presentation;
+
 use crate::core::session::{SessionPane, SessionTab};
 use crate::terminal::view::TerminalView;
 use crate::ui::pane::{Dir, Pane, PaneSlot};
+use gpui_kit::{App, Entity, IntoElement, TestSupportExt as _, Window, div, prelude::*};
+use std::rc::Rc;
 
 pub(crate) struct Tab {
     pub(crate) pane: Pane,
     /// Durable presentation belongs to the machine; focus and geometry remain local.
-    pub(crate) presentation: lyrel_core::core::machine::TabPresentation,
-    pub(crate) foreign_presentation: Option<
+    presentation: lyrel_core::core::machine::TabPresentation,
+    foreign_presentation: Option<
         lyrel_core::core::machine::TabPresentation<lyrel_core::core::pane_sidecar::ScopedPane>,
     >,
     name: Option<String>,
@@ -153,32 +155,51 @@ impl Tab {
     /// A restored sleeping tab owns its presentation and wake record, not views.
     pub(crate) fn from_asleep(st: &SessionTab, home: Option<std::path::PathBuf>) -> Self {
         let mut tab = Self::from_session(st, Pane::Empty, st.presentation.clone());
-        tab.folder_watch.set(crate::core::group_key::EntryWatch::fresh());
+        tab.folder_watch
+            .set(crate::core::group_key::EntryWatch::fresh());
         tab.asleep = Some(Asleep {
             layout: st.pane.clone(),
-            view: st.asleep_view.clone().unwrap_or_else(|| view_of_layout(tab.id(), &st.pane)),
+            view: st
+                .asleep_view
+                .clone()
+                .unwrap_or_else(|| view_of_layout(tab.id(), &st.pane)),
             home,
         });
         tab
     }
 
+    pub(crate) fn id(&self) -> lyrel_core::core::machine::TabId {
+        self.id.get()
+    }
+    pub(crate) fn name(&self) -> &Option<String> {
+        &self.name
+    }
 
-
-    pub(crate) fn id(&self) -> lyrel_core::core::machine::TabId { self.id.get() }
-    pub(crate) fn name(&self) -> &Option<String> { &self.name }
-
-    pub(crate) fn from_session(st: &SessionTab, pane: Pane, presentation: lyrel_core::core::machine::TabPresentation) -> Self {
-        let mut tab = Self::with_identity(pane, st.tree_id.unwrap_or_else(lyrel_core::core::machine::TabId::new));
+    pub(crate) fn from_session(
+        st: &SessionTab,
+        pane: Pane,
+        presentation: lyrel_core::core::machine::TabPresentation,
+    ) -> Self {
+        let mut tab = Self::with_identity(
+            pane,
+            st.tree_id
+                .unwrap_or_else(lyrel_core::core::machine::TabId::new),
+        );
         tab.name = st.name.clone();
         tab.presentation = presentation;
         tab.group.set(st.group);
         *tab.auto_group.borrow_mut() = st.last_auto.clone();
-        tab.folder_watch.set(crate::core::group_key::EntryWatch::baseline());
+        tab.folder_watch
+            .set(crate::core::group_key::EntryWatch::baseline());
         tab
     }
 
     pub(crate) fn reopened(st: SessionTab, pane: Pane) -> Self {
-        let mut tab = Self::with_identity(pane, st.tree_id.unwrap_or_else(lyrel_core::core::machine::TabId::new));
+        let mut tab = Self::with_identity(
+            pane,
+            st.tree_id
+                .unwrap_or_else(lyrel_core::core::machine::TabId::new),
+        );
         tab.name = st.name;
         tab.presentation = st.presentation;
         tab.group.set(st.group);
@@ -186,7 +207,11 @@ impl Tab {
         tab
     }
 
-    pub(crate) fn from_foreign(id: lyrel_core::core::machine::TabId, name: Option<String>, pane: Pane) -> Self {
+    pub(crate) fn from_foreign(
+        id: lyrel_core::core::machine::TabId,
+        name: Option<String>,
+        pane: Pane,
+    ) -> Self {
         let mut tab = Self::with_identity(pane, id);
         tab.name = name;
         tab
@@ -194,9 +219,13 @@ impl Tab {
 
     /// Adopt a daemon name verbatim; interactive rename normalization is owned
     /// by TabSet::rename, not by the synchronization adapter.
-    pub(crate) fn adopt_name(&mut self, name: Option<String>) { self.name = name; }
+    pub(crate) fn adopt_name(&mut self, name: Option<String>) {
+        self.name = name;
+    }
 
-    pub(crate) fn remembered_pane(&self) -> Option<gpui_kit::EntityId> { self.last_focused }
+    pub(crate) fn remembered_pane(&self) -> Option<gpui_kit::EntityId> {
+        self.last_focused
+    }
 
     pub(crate) fn remember_focus(&mut self, window: &Window, cx: &App) {
         if let Some(leaf) = self.pane.focused_leaf(window, cx) {
@@ -205,14 +234,25 @@ impl Tab {
     }
 
     pub(crate) fn remember_leaf(&mut self, leaf: gpui_kit::EntityId) -> bool {
-        if !self.pane.leaves().iter().any(|slot| slot.entity_id() == leaf) { return false; }
+        if !self
+            .pane
+            .leaves()
+            .iter()
+            .any(|slot| slot.entity_id() == leaf)
+        {
+            return false;
+        }
         self.last_focused = Some(leaf);
         true
     }
 
     fn replace_leaf(&mut self, old: gpui_kit::EntityId, new: &PaneSlot) -> bool {
-        if !self.pane.replace_leaf(old, new.clone()) { return false; }
-        if self.last_focused == Some(old) { self.last_focused = Some(new.entity_id()); }
+        if !self.pane.replace_leaf(old, new.clone()) {
+            return false;
+        }
+        if self.last_focused == Some(old) {
+            self.last_focused = Some(new.entity_id());
+        }
         true
     }
 
@@ -221,15 +261,23 @@ impl Tab {
     }
 
     pub(crate) fn is_hibernatable(&self, remote: bool, cx: &App) -> bool {
-        if self.is_asleep() { return false; }
+        if self.is_asleep() {
+            return false;
+        }
         let leaves = self.pane.leaves();
-        !leaves.is_empty() && leaves.iter().all(|leaf| match leaf {
-            PaneSlot::Ready(view) => !(remote && view.read(cx).ssh_spec().is_some()),
-            PaneSlot::Connecting(_) => false,
-        })
+        !leaves.is_empty()
+            && leaves.iter().all(|leaf| match leaf {
+                PaneSlot::Ready(view) => !(remote && view.read(cx).ssh_spec().is_some()),
+                PaneSlot::Connecting(_) => false,
+            })
     }
 
-    pub(crate) fn sleep(&mut self, layout: SessionPane, mut view: lyrel_core::core::tab_view::TabView, home: Option<std::path::PathBuf>) {
+    pub(crate) fn sleep(
+        &mut self,
+        layout: SessionPane,
+        mut view: lyrel_core::core::tab_view::TabView,
+        home: Option<std::path::PathBuf>,
+    ) {
         view.live = false;
         view.status = None;
         let panes = std::mem::replace(&mut self.pane, Pane::Empty);
@@ -240,26 +288,46 @@ impl Tab {
         drop(panes);
     }
 
-    pub(crate) fn finish_wake(&mut self, pane: Pane, presentation: lyrel_core::core::machine::TabPresentation) {
+    pub(crate) fn finish_wake(
+        &mut self,
+        pane: Pane,
+        presentation: lyrel_core::core::machine::TabPresentation,
+    ) {
         self.pane = pane;
         self.presentation = presentation;
         self.last_focused = None;
         self.asleep = None;
     }
 
-    pub(crate) fn clear_zoom(&mut self) { self.zoomed = None; }
-    pub(crate) fn zoomed(&self) -> Option<&Entity<TerminalView>> { self.zoomed.as_ref() }
+    pub(crate) fn clear_zoom(&mut self) {
+        self.zoomed = None;
+    }
+    pub(crate) fn zoomed(&self) -> Option<&Entity<TerminalView>> {
+        self.zoomed.as_ref()
+    }
     #[cfg(test)]
-    pub(crate) fn park_zoom(&mut self, zoom: Option<Entity<TerminalView>>) { self.zoomed = zoom; }
+    pub(crate) fn park_zoom(&mut self, zoom: Option<Entity<TerminalView>>) {
+        self.zoomed = zoom;
+    }
 
     pub(crate) fn discard_parked_zoom(&mut self, cx: &App) {
-        if self.zoomed.as_ref().is_some_and(|view| self.is_parked_slot(&PaneSlot::Ready(view.clone()), cx)) {
+        if self
+            .zoomed
+            .as_ref()
+            .is_some_and(|view| self.is_parked_slot(&PaneSlot::Ready(view.clone()), cx))
+        {
             self.zoomed = None;
         }
     }
 
     pub(crate) fn discard_detached_zoom(&mut self) {
-        if self.zoomed.as_ref().is_some_and(|view| !self.pane.leaves().iter().any(|slot| slot.entity_id() == view.entity_id())) {
+        if self.zoomed.as_ref().is_some_and(|view| {
+            !self
+                .pane
+                .leaves()
+                .iter()
+                .any(|slot| slot.entity_id() == view.entity_id())
+        }) {
             self.zoomed = None;
         }
     }
@@ -272,7 +340,9 @@ impl Tab {
         self.document_layout = Some(layout);
     }
 
-    pub(crate) fn is_diff_on_top(&self) -> bool { self.overlay_top == OverlayTop::Diff }
+    pub(crate) fn is_diff_on_top(&self) -> bool {
+        self.overlay_top == OverlayTop::Diff
+    }
 
     pub(crate) fn document_front(&self) -> Option<OverlayTop> {
         let code = self.code.as_ref().is_some_and(|code| code.visible);
@@ -305,7 +375,7 @@ impl Tab {
         let leaves = self.pane.leaves();
         let matches = |slot: &&PaneSlot| match slot {
             PaneSlot::Ready(view) => view.read(cx).pane_id == pane,
-            PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane == Some(pane),
+            PaneSlot::Connecting(view) => view.read(cx).restore_pane() == Some(pane),
         };
         // A remote workspace may also contain client-local native SSH panes.
         // Their daemon IDs are not identities in the owning machine's tree.
@@ -333,7 +403,7 @@ impl Tab {
         }
         let pane = match slot {
             PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-            PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane,
+            PaneSlot::Connecting(view) => view.read(cx).restore_pane(),
         };
         pane.filter(|pane| self.presentation.is_parked(*pane))
             .and_then(|pane| self.presentation_slot(pane, cx))
@@ -435,7 +505,11 @@ impl Tab {
 
     /// The pane a move in `dir` out of `at` should return to, if it reverses
     /// the move that brought focus to `at`.
-    pub(crate) fn focus_origin(&self, at: gpui_kit::EntityId, dir: Dir) -> Option<gpui_kit::EntityId> {
+    pub(crate) fn focus_origin(
+        &self,
+        at: gpui_kit::EntityId,
+        dir: Dir,
+    ) -> Option<gpui_kit::EntityId> {
         self.focus_origin.get(&(at, dir)).copied()
     }
 
@@ -663,7 +737,6 @@ fn rename_outcome(value: &str, prefill: &str) -> Rename {
     }
 }
 
-
 /// The window's ordered tabs and navigation state. Daemon presentation is held
 /// by each Tab; the active position, MRU stamps and pending reveal are client-only.
 #[derive(Default)]
@@ -676,12 +749,17 @@ pub(crate) struct TabSet {
 
 impl TabSet {
     pub(crate) fn new(tabs: Vec<Tab>, active: usize) -> Self {
-        let mut state = Self { tabs, ..Self::default() };
+        let mut state = Self {
+            tabs,
+            ..Self::default()
+        };
         state.select(active);
         state
     }
 
-    pub(crate) fn active_index(&self) -> usize { self.active }
+    pub(crate) fn active_index(&self) -> usize {
+        self.active
+    }
 
     /// Select a structural landing (restore, insertion or close). Interactive
     /// switching uses activate so outgoing pane focus and zoom travel together.
@@ -694,26 +772,45 @@ impl TabSet {
         self.select(active);
     }
 
-    pub(crate) fn get_mut(&mut self, index: usize) -> Option<&mut Tab> { self.tabs.get_mut(index) }
-    pub(crate) fn active_mut(&mut self) -> Option<&mut Tab> { self.tabs.get_mut(self.active) }
-    pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, Tab> { self.tabs.iter_mut() }
-    pub(crate) fn push(&mut self, tab: Tab) { self.tabs.push(tab); }
+    pub(crate) fn get_mut(&mut self, index: usize) -> Option<&mut Tab> {
+        self.tabs.get_mut(index)
+    }
+    pub(crate) fn active_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(self.active)
+    }
+    pub(crate) fn iter_mut(&mut self) -> std::slice::IterMut<'_, Tab> {
+        self.tabs.iter_mut()
+    }
+    pub(crate) fn push(&mut self, tab: Tab) {
+        self.tabs.push(tab);
+    }
     pub(crate) fn insert(&mut self, at: usize, tab: Tab) {
         let had_tabs = !self.tabs.is_empty();
         self.tabs.insert(at, tab);
-        if had_tabs && at <= self.active { self.active += 1; }
+        if had_tabs && at <= self.active {
+            self.active += 1;
+        }
     }
     pub(crate) fn remove(&mut self, at: usize) -> Tab {
         let tab = self.tabs.remove(at);
-        if at < self.active { self.active -= 1; }
+        if at < self.active {
+            self.active -= 1;
+        }
         self.select(self.active);
         tab
     }
-    pub(crate) fn clear(&mut self) { self.tabs.clear(); self.active = 0; }
+    pub(crate) fn clear(&mut self) {
+        self.tabs.clear();
+        self.active = 0;
+    }
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&Tab) -> bool) {
         let active = self.tabs.get(self.active).map(Tab::id);
         self.tabs.retain(|tab| keep(tab));
-        self.select(active.and_then(|id| self.index_of(id)).unwrap_or(self.active));
+        self.select(
+            active
+                .and_then(|id| self.index_of(id))
+                .unwrap_or(self.active),
+        );
     }
     pub(crate) fn index_of(&self, id: lyrel_core::core::machine::TabId) -> Option<usize> {
         self.tabs.iter().position(|tab| tab.id() == id)
@@ -723,26 +820,44 @@ impl TabSet {
     pub(crate) fn adopt_machine_ids(&self, machine: &[lyrel_core::core::machine::Tab], cx: &App) {
         let known: Vec<_> = self.tabs.iter().map(Tab::id).collect();
         for tab in &self.tabs {
-            if machine.iter().any(|candidate| candidate.id == tab.id()) { continue; }
-            let panes: Vec<_> = tab.pane.terminals().iter().map(|view| view.read(cx).pane_id).collect();
-            if panes.is_empty() { continue; }
-            if let Some(matched) = machine.iter().find(|candidate| !known.contains(&candidate.id) && panes.iter().any(|pane| candidate.root.contains(*pane))) {
+            if machine.iter().any(|candidate| candidate.id == tab.id()) {
+                continue;
+            }
+            let panes: Vec<_> = tab
+                .pane
+                .terminals()
+                .iter()
+                .map(|view| view.read(cx).pane_id)
+                .collect();
+            if panes.is_empty() {
+                continue;
+            }
+            if let Some(matched) = machine.iter().find(|candidate| {
+                !known.contains(&candidate.id)
+                    && panes.iter().any(|pane| candidate.root.contains(*pane))
+            }) {
                 tab.id.set(matched.id);
             }
         }
     }
 
     pub(crate) fn move_to(&mut self, id: lyrel_core::core::machine::TabId, to: usize) {
-        let Some(from) = self.index_of(id) else { return; };
+        let Some(from) = self.index_of(id) else {
+            return;
+        };
         let active = self.tabs.get(self.active).map(Tab::id);
         let moved = self.tabs.remove(from);
         self.tabs.insert(to.min(self.tabs.len()), moved);
-        if let Some(index) = active.and_then(|id| self.index_of(id)) { self.active = index; }
+        if let Some(index) = active.and_then(|id| self.index_of(id)) {
+            self.active = index;
+        }
     }
 
     pub(crate) fn request(&mut self, id: lyrel_core::core::machine::TabId) -> Option<usize> {
         let index = self.index_of(id);
-        if index.is_none() { self.pending = Some(id); }
+        if index.is_none() {
+            self.pending = Some(id);
+        }
         index
     }
     pub(crate) fn claim_pending(&mut self) -> Option<usize> {
@@ -750,10 +865,20 @@ impl TabSet {
         self.pending = None;
         Some(index)
     }
-    pub(crate) fn clear_pending(&mut self) { self.pending = None; }
+    pub(crate) fn clear_pending(&mut self) {
+        self.pending = None;
+    }
 
-    pub(crate) fn activate(&mut self, index: usize, zoom: &mut Option<Entity<TerminalView>>, window: &Window, cx: &App) -> bool {
-        if index >= self.tabs.len() || index == self.active { return false; }
+    pub(crate) fn activate(
+        &mut self,
+        index: usize,
+        zoom: &mut Option<Entity<TerminalView>>,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        if index >= self.tabs.len() || index == self.active {
+            return false;
+        }
         if let Some(outgoing) = self.tabs.get_mut(self.active) {
             outgoing.remember_focus(window, cx);
             outgoing.pip_interaction.cancel();
@@ -769,9 +894,13 @@ impl TabSet {
         true
     }
     pub(crate) fn touch_active(&self) {
-        let Some(tab) = self.tabs.get(self.active) else { return; };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
         let top = self.use_seq.get();
-        if top != 0 && tab.last_used.get() == top { return; }
+        if top != 0 && tab.last_used.get() == top {
+            return;
+        }
         let next = top + 1;
         self.use_seq.set(next);
         tab.last_used.set(next);
@@ -787,27 +916,49 @@ impl TabSet {
         one_slot_move(run, self.tabs.len(), self.active, right)
     }
     pub(crate) fn reorder(&mut self, order: &[usize]) -> bool {
-        if order.len() != self.tabs.len() || order.iter().enumerate().all(|(i, &o)| i == o) { return false; }
+        if order.len() != self.tabs.len() || order.iter().enumerate().all(|(i, &o)| i == o) {
+            return false;
+        }
         let was_active = self.active;
-        let mut slots: Vec<Option<Tab>> = std::mem::take(&mut self.tabs).into_iter().map(Some).collect();
+        let mut slots: Vec<Option<Tab>> = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .map(Some)
+            .collect();
         self.tabs = order.iter().filter_map(|&i| slots[i].take()).collect();
         self.active = order.iter().position(|&i| i == was_active).unwrap_or(0);
         true
     }
     pub(crate) fn awake_besides(&self, index: usize) -> Option<usize> {
-        (0..self.tabs.len()).filter(|&i| i != index && !self.tabs[i].is_asleep()).max_by_key(|&i| {
-            (self.tabs[i].last_used.get(), std::cmp::Reverse(i.abs_diff(index)))
-        })
+        (0..self.tabs.len())
+            .filter(|&i| i != index && !self.tabs[i].is_asleep())
+            .max_by_key(|&i| {
+                (
+                    self.tabs[i].last_used.get(),
+                    std::cmp::Reverse(i.abs_diff(index)),
+                )
+            })
     }
-    pub(crate) fn remember_leaf(&mut self, leaf: gpui_kit::EntityId) -> Option<lyrel_core::core::machine::TabId> {
+    pub(crate) fn remember_leaf(
+        &mut self,
+        leaf: gpui_kit::EntityId,
+    ) -> Option<lyrel_core::core::machine::TabId> {
         for tab in &mut self.tabs {
-            if tab.remember_leaf(leaf) { return Some(tab.id()); }
+            if tab.remember_leaf(leaf) {
+                return Some(tab.id());
+            }
         }
         None
     }
-    pub(crate) fn rename(&mut self, id: lyrel_core::core::machine::TabId, value: &str, prefill: &str) -> bool {
+    pub(crate) fn rename(
+        &mut self,
+        id: lyrel_core::core::machine::TabId,
+        value: &str,
+        prefill: &str,
+    ) -> bool {
         let outcome = rename_outcome(value, prefill);
-        if outcome == Rename::Unchanged { return false; }
+        if outcome == Rename::Unchanged {
+            return false;
+        }
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id() == id) {
             tab.name = match outcome {
                 Rename::Named(name) => Some(name),
@@ -816,31 +967,55 @@ impl TabSet {
         }
         true
     }
+    pub(crate) fn contains_slot(&self, slot: gpui_kit::EntityId) -> bool {
+        fn contains(pane: &Pane, slot: gpui_kit::EntityId) -> bool {
+            match pane {
+                Pane::Leaf(leaf) => leaf.entity_id() == slot,
+                Pane::Split { a, b, .. } => contains(a, slot) || contains(b, slot),
+                Pane::Empty => false,
+            }
+        }
+        self.tabs.iter().any(|tab| contains(&tab.pane, slot))
+    }
     pub(crate) fn replace_leaf(&mut self, old: gpui_kit::EntityId, new: PaneSlot) {
-        for tab in &mut self.tabs { if tab.replace_leaf(old, &new) { break; } }
+        for tab in &mut self.tabs {
+            if tab.replace_leaf(old, &new) {
+                break;
+            }
+        }
     }
 }
 
 impl std::ops::Deref for TabSet {
     type Target = [Tab];
-    fn deref(&self) -> &Self::Target { &self.tabs }
+    fn deref(&self) -> &Self::Target {
+        &self.tabs
+    }
 }
 impl std::ops::Index<usize> for TabSet {
     type Output = Tab;
-    fn index(&self, index: usize) -> &Tab { &self.tabs[index] }
+    fn index(&self, index: usize) -> &Tab {
+        &self.tabs[index]
+    }
 }
 impl std::ops::IndexMut<usize> for TabSet {
-    fn index_mut(&mut self, index: usize) -> &mut Tab { &mut self.tabs[index] }
+    fn index_mut(&mut self, index: usize) -> &mut Tab {
+        &mut self.tabs[index]
+    }
 }
 impl<'a> IntoIterator for &'a TabSet {
     type Item = &'a Tab;
     type IntoIter = std::slice::Iter<'a, Tab>;
-    fn into_iter(self) -> Self::IntoIter { self.tabs.iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.tabs.iter()
+    }
 }
 impl<'a> IntoIterator for &'a mut TabSet {
     type Item = &'a mut Tab;
     type IntoIter = std::slice::IterMut<'a, Tab>;
-    fn into_iter(self) -> Self::IntoIter { self.tabs.iter_mut() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.tabs.iter_mut()
+    }
 }
 
 /// The tab after (or before) `active` in `order`, wrapping round. `None`
@@ -939,11 +1114,14 @@ fn view_of_layout(
 }
 
 #[cfg(test)]
+#[path = "tab/tests_focus_origin.rs"]
+mod focus_origin_tests;
+#[cfg(test)]
 #[path = "tab/tests_name.rs"]
 mod name_tests;
 #[cfg(test)]
 #[path = "tab/tests_navigation.rs"]
 mod navigation_tests;
 #[cfg(test)]
-#[path = "tab/tests_focus_origin.rs"]
-mod focus_origin_tests;
+#[path = "tab/tests_launch.rs"]
+mod launch_tests;

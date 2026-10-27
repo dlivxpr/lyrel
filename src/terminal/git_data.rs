@@ -892,7 +892,10 @@ impl LyrelApp {
         if let Some(repo) = self.scm.active_repo() {
             return Some((repo.host, repo.root.clone()));
         }
-        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let host = view.host_id();
         let root = cx
@@ -912,7 +915,10 @@ impl LyrelApp {
         if !self.file_tree_on_screen(cx) {
             return None;
         }
-        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let host = view.host_id();
         let root = cx

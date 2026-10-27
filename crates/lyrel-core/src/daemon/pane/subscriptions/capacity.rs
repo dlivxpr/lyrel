@@ -68,4 +68,3 @@ impl Drop for GraphicsCapacityLease {
         let _ = self.pane.set_graphics_capacity(effective.0, effective.1);
     }
 }
-

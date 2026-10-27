@@ -10,9 +10,9 @@
 
 mod catalog;
 mod command;
+pub(crate) mod files;
 mod history;
 mod lifecycle;
-pub(crate) mod files;
 mod score;
 mod sources;
 mod view;

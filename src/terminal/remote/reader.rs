@@ -23,11 +23,11 @@ use rio_vt::crosswords::grid::Dimensions as _;
 use rio_vt::event::EventListener;
 
 #[cfg(test)]
+use super::handshake::attach_reply_prefix;
+#[cfg(test)]
 use super::{
     NativeSshSpec, PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize, test_term,
 };
-#[cfg(test)]
-use super::handshake::attach_reply_prefix;
 use crate::core::osc::{OscTokenizer, TitleEffect, TitleLifetime};
 use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
