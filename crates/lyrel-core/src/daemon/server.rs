@@ -5,6 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 
 use crate::daemon::pane::DaemonPane;
+use crate::daemon::pane::subscriptions::capacity::GraphicsCapacityLease;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, DaemonVersion, RemoteKind};
 use crate::daemon::ssh::SshConnection;
 use crate::daemon::transport::{self, Stream};
@@ -17,63 +18,6 @@ struct Registry {
     next_id: AtomicU64,
 }
 
-/// A connection's declared capacity is a lifetime lease, not a mutable hint.
-/// This lock is acquired before a pane lock and is never acquired from a pane.
-struct GraphicsCapacityLease {
-    pane: Arc<DaemonPane>,
-    token: u64,
-}
-
-type GraphicsCapacities = HashMap<(u64, u64), (u64, u64)>;
-
-fn graphics_capacities() -> &'static Mutex<GraphicsCapacities> {
-    static CAPACITIES: std::sync::LazyLock<Mutex<GraphicsCapacities>> =
-        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-    &CAPACITIES
-}
-
-impl GraphicsCapacityLease {
-    fn reserve(
-        pane: &Arc<DaemonPane>,
-        capacity: (u64, u64),
-        mut reply: &Stream,
-    ) -> anyhow::Result<Option<Self>> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let token = NEXT.fetch_add(1, Ordering::Relaxed);
-        let mut capacities = graphics_capacities().lock().unwrap();
-        let effective = capacities
-            .iter()
-            .filter(|((id, _), _)| *id == pane.id)
-            .fold(capacity, |limit, (_, other)| {
-                (limit.0.min(other.0), limit.1.min(other.1))
-            });
-        if !pane.set_graphics_capacity(effective.0, effective.1) {
-            DaemonMsg::Error("graphics capacity cannot hold this pane's retained images; existing session content was preserved".into()).encode(&mut reply)?;
-            return Ok(None);
-        }
-        capacities.insert((pane.id, token), capacity);
-        Ok(Some(Self {
-            pane: pane.clone(),
-            token,
-        }))
-    }
-}
-
-impl Drop for GraphicsCapacityLease {
-    fn drop(&mut self) {
-        let mut capacities = graphics_capacities().lock().unwrap();
-        capacities.remove(&(self.pane.id, self.token));
-        let effective = capacities
-            .iter()
-            .filter(|((id, _), _)| *id == self.pane.id)
-            .fold((u64::MAX, u64::MAX), |limit, (_, other)| {
-                (limit.0.min(other.0), limit.1.min(other.1))
-            });
-        // The authority clamps to its finite pane defaults after the last
-        // consumer leaves. Releasing a lease never revives evicted content.
-        let _ = self.pane.set_graphics_capacity(effective.0, effective.1);
-    }
-}
 
 impl Registry {
     fn new() -> Self {
@@ -1021,7 +965,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 registry,
                 await_claim,
                 allow_remote_clipboard_write,
-                graphics_offers.then_some(_graphics_lease.token),
+                graphics_offers.then_some(_graphics_lease.endpoint()),
             )
         }
 
@@ -1075,7 +1019,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 write_stream,
                 registry,
                 allow_remote_clipboard_write,
-                graphics_offers.then_some(_graphics_lease.token),
+                graphics_offers.then_some(_graphics_lease.endpoint()),
             )
         }
 
@@ -1100,7 +1044,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     write_stream,
                     registry,
                     allow_remote_clipboard_write,
-                    graphics_offers.then_some(_graphics_lease.token),
+                    graphics_offers.then_some(_graphics_lease.endpoint()),
                 )
             }
             None => {
@@ -1130,7 +1074,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     read_stream,
                     write_stream,
                     registry,
-                    graphics_offers.then_some(_graphics_lease.token),
+                    graphics_offers.then_some(_graphics_lease.endpoint()),
                 )
             }
             None => {
@@ -1606,7 +1550,7 @@ fn stream_observer(
     // runs dry and shuts the read below down, rather than the client sitting
     // on a connection nothing will ever be sent down again.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
-    let gate = Arc::new(crate::daemon::pane::OutputGate::new());
+    let gate = Arc::new(crate::daemon::pane::subscriptions::OutputGate::new());
     let observer_id = pane.observe(tx, gate.clone());
     let writer = spawn_writer(rx, write_stream, gate);
 
@@ -1721,7 +1665,7 @@ const OUTPUT_COALESCE_CAP: usize = 256 * 1024;
 pub(crate) fn spawn_writer(
     rx: Receiver<DaemonMsg>,
     mut write_stream: Stream,
-    gate: Arc<crate::daemon::pane::OutputGate>,
+    gate: Arc<crate::daemon::pane::subscriptions::OutputGate>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("lyrel-daemon-writer".to_string())
@@ -1751,7 +1695,7 @@ pub(crate) fn spawn_writer(
                 } else {
                     msg
                 };
-                let drained = crate::daemon::pane::gated_len(&msg);
+                let drained = crate::daemon::pane::subscriptions::gated_len(&msg);
                 let write_ok = msg.encode(&mut write_stream).is_ok();
                 if drained > 0 {
                     gate.sub(drained);
@@ -1983,7 +1927,7 @@ mod tests {
         fn spawn_writer_frames_messages_then_exits_on_channel_close() {
             let (tx, rx) = mpsc::channel::<DaemonMsg>();
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::OutputGate::new()));
+            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
 
             tx.send(DaemonMsg::Output(b"hi".to_vec())).unwrap();
             tx.send(DaemonMsg::Exited { code: Some(0) }).unwrap();
@@ -2009,7 +1953,7 @@ mod tests {
             drop(tx);
 
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::OutputGate::new()));
+            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
 
             assert_eq!(
                 DaemonMsg::read(&mut client).unwrap(),
@@ -2033,7 +1977,7 @@ mod tests {
             drop(tx);
 
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::OutputGate::new()));
+            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
 
             let mut frames: Vec<Vec<u8>> = Vec::new();
             loop {
@@ -2069,7 +2013,7 @@ mod tests {
             drop(tx);
 
             let (mut client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::OutputGate::new()));
+            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
 
             assert_eq!(
                 DaemonMsg::read(&mut client).unwrap(),
@@ -2093,7 +2037,7 @@ mod tests {
         fn spawn_writer_exits_on_write_failure_while_sender_is_alive() {
             let (tx, rx) = mpsc::channel::<DaemonMsg>();
             let (client, server) = UnixStream::pair().unwrap();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::OutputGate::new()));
+            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
 
             drop(client);
 
@@ -2115,7 +2059,7 @@ mod tests {
             let (client, server) = UnixStream::pair().unwrap();
             let mut reader = server.try_clone().expect("clone the read half");
             let (tx, rx) = mpsc::channel::<DaemonMsg>();
-            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::OutputGate::new()));
+            let writer = spawn_writer(rx, server, Arc::new(crate::daemon::pane::subscriptions::OutputGate::new()));
 
             // Exactly where run_stream sits between frames.
             let parked = thread::spawn(move || {

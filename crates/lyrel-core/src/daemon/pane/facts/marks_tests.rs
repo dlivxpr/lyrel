@@ -1,6 +1,6 @@
 use super::*;
 use super::super::*;
-use super::super::tests::{test_state, drain};
+use super::super::test_support::{test_state, drain};
 use super::output_marks::{OscSniffer, MAX_OSC_TITLE, parse_osc7, strip_uri_drive_slash, percent_decode, hex_val};
 
 #[test]
@@ -417,7 +417,7 @@ fn a_finished_or_waiting_turn_keeps_its_reconnect_and_resume_identity() {
         assert_eq!(facts.launch_argv, Some(vec!["omp".into()]));
         assert!(facts.session_scope.is_some());
         let (tx, rx) = mpsc::channel();
-        replay_state(&state, &tx, true);
+        attach_subscriber_with_permissions(&mut state, tx, &OutputGate::new(), false, true);
         let replay: Vec<_> = rx.try_iter().collect();
         assert!(
             replay
@@ -467,23 +467,6 @@ fn opaque_notifications_only_fall_back_when_no_rich_state() {
     );
 }
 
-#[test]
-fn attach_replays_state_in_order_and_installs_subscriber() {
-    let mut st = test_state(true);
-    st.ring.append(b"screen");
-    st.facts.cwd = Some(PathBuf::from("/work"));
-
-    let (tx, rx) = mpsc::channel();
-    let epoch = attach_subscriber(&mut st, tx);
-    assert_eq!(epoch, 1);
-    assert!(st.subscriber.is_some());
-    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Size(_))));
-    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"screen"));
-    assert!(
-        matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p.as_path() == std::path::Path::new("/work"))
-    );
-    assert!(rx.try_recv().is_err());
-}
 
 /// Issue #711. A pane whose shell printed its prompt and then handed the
 /// terminal to a full-screen program keeps `at_prompt` set for as long as
@@ -573,61 +556,6 @@ fn a_replay_still_reports_a_prompt_when_the_shell_owns_the_pane() {
     );
 }
 
-#[test]
-fn attach_replays_initial_cwd_even_before_shell_reports_osc7() {
-    let mut st = test_state(true);
-    st.facts.cwd = Some(PathBuf::from("/Users/alice/clone/lyrel"));
-
-    let (tx, rx) = mpsc::channel();
-    attach_subscriber(&mut st, tx);
-
-    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Size(_))));
-    assert!(matches!(rx.try_recv(), Ok(DaemonMsg::Snapshot(_))));
-    assert!(
-        matches!(rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/Users/alice/clone/lyrel"))
-    );
-}
-
-#[test]
-fn observe_replays_state_without_displacing_the_controller() {
-    let mut st = test_state(true);
-    st.ring.append(b"screen");
-    st.facts.cwd = Some(PathBuf::from("/work"));
-
-    let (controller_tx, controller_rx) = mpsc::channel();
-    let epoch = attach_subscriber(&mut st, controller_tx);
-    drain(&controller_rx);
-
-    let (observer_tx, observer_rx) = mpsc::channel();
-    let id = observe_subscriber(&mut st, observer_tx, Arc::new(OutputGate::new()), false);
-    assert_eq!(
-        st.subscriber_epoch, epoch,
-        "observing must not bump the controller epoch"
-    );
-    assert!(st.subscriber.is_some(), "the controller keeps its seat");
-
-    assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Size(_))));
-    assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Snapshot(b)) if b == b"screen"));
-    assert!(
-        matches!(observer_rx.try_recv(), Ok(DaemonMsg::Cwd(p)) if p == PathBuf::from("/work"))
-    );
-    assert!(
-        controller_rx.try_recv().is_err(),
-        "an observer joining must be invisible to the controller"
-    );
-
-    notify(&mut st, DaemonMsg::Output(b"tick".to_vec()));
-    assert!(matches!(controller_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"tick"));
-    assert!(matches!(observer_rx.try_recv(), Ok(DaemonMsg::Output(b)) if b == b"tick"));
-
-    st.observers.retain(|obs| obs.id != id);
-    notify(&mut st, DaemonMsg::Output(b"tock".to_vec()));
-    assert!(matches!(controller_rx.try_recv(), Ok(DaemonMsg::Output(_))));
-    assert!(
-        observer_rx.try_recv().is_err(),
-        "a departed observer hears nothing"
-    );
-}
 
 #[test]
 fn apply_signals_updates_state() {

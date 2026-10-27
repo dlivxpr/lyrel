@@ -1,6 +1,6 @@
 use super::*;
 use super::super::*;
-use super::super::tests::{test_state, ws, null_writer};
+use super::super::test_support::{test_state, ws, null_writer, drain};
 use super::output_marks::{OscSniffer};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -286,13 +286,13 @@ fn an_explicit_agent_exit_clears_the_live_and_reopened_machine_snapshot() {
         "an explicitly exited agent must not be restored after restarting the daemon"
     );
     assert!(live_agent.is_none(), "the live machine tree must clear too");
-    let state = state.lock().unwrap();
+    let mut state = state.lock().unwrap();
     assert!(state.facts.agent.is_none());
     assert!(state.facts.agent_session.is_none());
     assert!(state.facts.agent_argv.is_none());
     assert!(state.facts.agent_state(state.id).is_none());
     let (tx, rx) = mpsc::channel();
-    replay_state(&state, &tx, false);
+    attach_subscriber(&mut state, tx);
     assert!(!rx.try_iter().any(|msg| matches!(
         msg,
         DaemonMsg::Agent(Some(_)) | DaemonMsg::AgentStatus(Some(_))
@@ -326,7 +326,8 @@ fn sentinel_events_drive_agent_session_state() {
 
     let mut st = test_state(true);
     let (tx, rx) = mpsc::channel();
-    st.subscriber = Some(Arc::new(tx));
+    attach_subscriber(&mut st, tx);
+    drain(&rx);
 
     let mut sniffer = OscSniffer::new();
     let stream = concat!(

@@ -1,6 +1,6 @@
 use super::*;
 use super::super::*;
-use super::super::tests::{test_state, ws, null_writer};
+use super::super::test_support::{test_state, ws, null_writer, drain};
 use super::output_marks::{OscSniffer};
 use super::probes::is_foreground_command;
 
@@ -16,10 +16,9 @@ fn a_window_reattaching_to_an_ssh_pane_keeps_its_remote_directory() {
     });
     st.facts.cwd = Some(PathBuf::from("/home/alice/my_service"));
     let (tx, rx) = std::sync::mpsc::channel();
-    replay_state(&st, &tx, false);
-    drop(tx);
+    attach_subscriber(&mut st, tx);
     let order: Vec<&str> = rx
-        .iter()
+        .try_iter()
         .filter_map(|m| match m {
             DaemonMsg::RemoteContext(_) => Some("remote"),
             DaemonMsg::Cwd(_) => Some("cwd"),
@@ -166,7 +165,8 @@ fn probed_cwd_corrects_a_pane_whose_shell_never_reports_osc7() {
     let mut st = test_state(true);
     st.facts.cwd = Some(PathBuf::from("/Users/alice"));
     let (tx, rx) = mpsc::channel();
-    st.subscriber = Some(Arc::new(tx));
+    attach_subscriber(&mut st, tx);
+    drain(&rx);
 
     (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit));
 
@@ -189,7 +189,8 @@ fn probed_cwd_keeps_the_shells_spelling_for_a_symlinked_path() {
     let mut st = test_state(true);
     st.facts.cwd = Some(link.clone());
     let (tx, rx) = mpsc::channel();
-    st.subscriber = Some(Arc::new(tx));
+    attach_subscriber(&mut st, tx);
+    drain(&rx);
 
     (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(real.canonicalize().unwrap()), emit));
 
@@ -204,7 +205,8 @@ fn probed_cwd_matching_the_reported_one_says_nothing() {
     let mut st = test_state(true);
     st.facts.cwd = Some(PathBuf::from("/Users/alice/dev/lyrel"));
     let (tx, rx) = mpsc::channel();
-    st.subscriber = Some(Arc::new(tx));
+    attach_subscriber(&mut st, tx);
+    drain(&rx);
 
     (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit));
 
@@ -222,7 +224,8 @@ fn probed_cwd_declines_to_speak_for_a_remote_pane() {
     });
     st.facts.cwd = None;
     let (tx, rx) = mpsc::channel();
-    st.subscriber = Some(Arc::new(tx));
+    attach_subscriber(&mut st, tx);
+    drain(&rx);
 
     (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, Some(PathBuf::from("/Users/alice/dev/lyrel")), emit));
 
@@ -235,7 +238,8 @@ fn probed_cwd_absent_leaves_the_reported_cwd_alone() {
     let mut st = test_state(true);
     st.facts.cwd = Some(PathBuf::from("/work"));
     let (tx, rx) = mpsc::channel();
-    st.subscriber = Some(Arc::new(tx));
+    attach_subscriber(&mut st, tx);
+    drain(&rx);
 
     (&mut st).with_facts(|facts, emit| apply_probed_cwd(facts, None, emit));
 
@@ -269,7 +273,8 @@ fn a_prompt_mark_reprobes_the_foreground_inside_the_poll_interval() {
 
     let state = Arc::new(Mutex::new(test_state(true)));
     let (sub_tx, sub_rx) = mpsc::channel();
-    state.lock().unwrap().subscriber = Some(Arc::new(sub_tx));
+    attach_subscriber(&mut state.lock().unwrap(), sub_tx);
+    drain(&sub_rx);
 
     let probes_taken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let taken = probes_taken.clone();
@@ -464,7 +469,8 @@ fn reader_poll_applies_the_probed_cwd() {
     {
         let mut st = state.lock().unwrap();
         st.facts.cwd = Some(PathBuf::from("/Users/alice"));
-        st.subscriber = Some(Arc::new(sub_tx));
+        attach_subscriber(&mut st, sub_tx);
+        drain(&sub_rx);
     }
 
     let handle = DaemonPane::spawn_reader(
