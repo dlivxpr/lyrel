@@ -191,7 +191,7 @@ impl LyrelApp {
         let command = agent.launch_command(&cx.global::<Config>().agent_launch);
         let slot = match at {
             SpawnWhere::NewTab => {
-                let cwd = self.tabs.get(self.active).and_then(|t| {
+                let cwd = self.tabs.get(self.tabs.active_index()).and_then(|t| {
                     t.pane
                         .focused_or_first(window, cx)
                         .and_then(|leaf| leaf.read(cx).spawnable_cwd())
@@ -449,7 +449,7 @@ impl LyrelApp {
     pub(crate) fn save_agent_launch_args(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(view) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
         else {
             return;

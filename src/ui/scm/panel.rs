@@ -188,7 +188,7 @@ impl LyrelApp {
         self.scm_watch_status(cx);
         // An explicit repository pick should outlive a pane switch inside the
         // tab it was made on, and not a jump to a different tab.
-        if self.scm.override_tab != Some(self.active) {
+        if self.scm.override_tab != Some(self.tabs.active_index()) {
             self.scm.repo_override = None;
             self.scm.override_tab = None;
         }
@@ -671,7 +671,7 @@ impl LyrelApp {
                         move |_, _window, cx| {
                             let _ = app.update(cx, |this, cx| {
                                 this.scm.repo_override = Some(other.clone());
-                                this.scm.override_tab = Some(this.active);
+                                this.scm.override_tab = Some(this.tabs.active_index());
                                 cx.notify();
                             });
                         }
@@ -1234,7 +1234,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(SharedHost, PathBuf)> {
-        let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
+        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let cwd = view.effective_host_cwd()?;
         Some((view.host(cx)?, cwd))

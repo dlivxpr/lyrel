@@ -803,7 +803,7 @@ impl LyrelApp {
     ) -> Option<(SharedHost, Vec<PathBuf>)> {
         let id = self.spawn_host(cx);
         let host = self.active_host(cx)?;
-        let leaves = match self.tabs.get(self.active) {
+        let leaves = match self.tabs.get(self.tabs.active_index()) {
             Some(tab) => tab.pane.terminals(),
             None => Vec::new(),
         };
@@ -1628,7 +1628,7 @@ impl LyrelApp {
     fn file_tree_cd(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(leaf) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
         else {
             return;
@@ -1653,7 +1653,10 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppNoRunningCodingAgent));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppNoRunningCodingAgent),
+            );
             return;
         };
         let rel = self
@@ -1946,7 +1949,7 @@ impl LyrelApp {
 
         let sf = cx.global::<crate::ui::presets::Surfaces>().popover;
         let tree_host = self.spawn_host(cx);
-        let dirty = self.editor_is_dirty(tree_host, &path);
+        let dirty = self.editor.is_dirty(tree_host, &path);
 
         let renaming = matches!(
             &self.file_tree.editing,
@@ -2252,7 +2255,7 @@ impl LyrelApp {
                         let _ = app.update(cx, |this, cx| {
                             if let Some(leaf) = this
                                 .tabs
-                                .get(this.active)
+                                .get(this.tabs.active_index())
                                 .and_then(|t| t.pane.focused_or_first(window, cx))
                             {
                                 leaf.update(cx, |view, cx| {

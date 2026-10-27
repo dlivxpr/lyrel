@@ -14,3 +14,23 @@ pub(super) fn socket_pair() -> (Stream, Stream) {
         (client_side, daemon_side)
     }
 }
+
+#[cfg(unix)]
+pub(super) fn ssh_workspace() -> super::PaneWorkspace {
+    super::PaneWorkspace {
+        workspace: crate::core::session::WorkspaceId::new(),
+        target: crate::core::session::RemoteTarget::Direct {
+            user: "me".into(),
+            host: "build-box".into(),
+            port: 22,
+        },
+        spec: Some(Box::new(
+            serde_json::from_str(
+                r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
+            )
+            .unwrap(),
+        )),
+        label: None,
+        resize_echo: false,
+    }
+}

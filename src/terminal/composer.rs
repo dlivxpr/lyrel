@@ -2077,7 +2077,7 @@ impl TerminalView {
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(|this, _: &MouseDownEvent, _w, cx| {
-                        this.context_menu_allowed = false;
+                        this.links.record_menu_permission(true, false);
                         cx.stop_propagation();
                     }),
                 )

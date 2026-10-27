@@ -6,14 +6,13 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
-    App, ClipboardEntry, ClipboardItem, Context, EntityId, ExternalPaths, FocusHandle, Focusable,
-    Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollDelta,
+    App, ClipboardEntry, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable,
+    Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels,
     ScrollWheelEvent, Task, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Direction, Line, Pos, Side};
 use rio_vt::crosswords::{Crosswords, Mode};
-use rio_vt::selection::{Selection, SelectionType};
 
 use super::TermSize;
 use super::cmd_editor::CmdEditor;
@@ -30,6 +29,7 @@ use super::remote::RemoteTerminal;
 use super::history_session::{PromptHistory, TerminalHistory, unix_now};
 use super::reverse_search;
 use super::scrollbar::{GridScroll, TerminalScrollHandle};
+use super::link::{LinkAt, LinkInteraction};
 use super::search::{LinkTarget, SearchState};
 use super::typeahead::{RawInput, Typeahead};
 use crate::core::actions::{
@@ -38,7 +38,7 @@ use crate::core::actions::{
     OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer, SaveAgentLaunchArgs,
     SendBackTab, SendTab, SplitDown, SplitRight, ToggleMaximizePane,
 };
-use crate::core::config::{BellMode, Config, LinkFileOpen, MouseZoomModifier};
+use crate::core::config::{BellMode, Config, LinkFileOpen};
 use crate::core::shell_quote::quote_for_shell;
 use crate::daemon::protocol::{RemoteContext, ShellSpec};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -71,53 +71,6 @@ fn input_caret_paint(
     })
 }
 
-/// Which panes are on screen right now, readable without touching the entity
-/// map. The chrome (tab strip, sidebar, switcher) reads every pane entity
-/// while the window draws, so gpui tracks them all and `notify()` from a
-/// hidden pane still dirties the window — this flag is the out-of-band answer
-/// the output pump consults instead. `LyrelApp::render` declares it each frame
-/// for its own tabs; a pane nobody has declared yet counts as displayed, so a
-/// missed path can only cost extra repaints, never a frozen grid.
-///
-/// A gpui `Global` rather than a `static`: entity ids are only unique within
-/// one `App`, and parallel `#[gpui::test]` apps mint colliding ids — a
-/// process-wide map would let one test's declarations flip another's flags.
-/// In the shipped binary there is exactly one `App`, so the two are the same.
-#[derive(Default)]
-struct DisplayedRegistry(
-    std::sync::Mutex<std::collections::HashMap<EntityId, super::remote::GraphicsViewportReporter>>,
-);
-
-impl gpui_kit::Global for DisplayedRegistry {}
-
-pub fn declare_displayed(cx: &App, panes: impl IntoIterator<Item = (EntityId, bool)>) {
-    // No registry means no pane has ever been built in this app.
-    let Some(registry) = cx.try_global::<DisplayedRegistry>() else {
-        return;
-    };
-    let map = registry.0.lock().unwrap();
-    for (id, on) in panes {
-        if let Some(reporter) = map.get(&id) {
-            reporter.set_displayed(on);
-        }
-    }
-}
-
-/// What the registry holds for `id`: `None` when the pane never registered
-/// (or already released), otherwise the flag the output gate would consult.
-#[cfg(test)]
-pub(crate) fn displayed_for_test(cx: &App, id: EntityId) -> Option<bool> {
-    cx.try_global::<DisplayedRegistry>()?
-        .0
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|reporter| {
-            reporter
-                .displayed()
-                .load(std::sync::atomic::Ordering::Relaxed)
-        })
-}
 
 actions!(
     terminal,
@@ -162,6 +115,7 @@ impl gpui_kit::EventEmitter<AgentDetected> for TerminalView {}
 /// directory and host — and the app opens it, because the editor and the file
 /// tree are its to drive.
 pub struct OpenFileRequested {
+    pub host_id: crate::ui::host_ops::HostId,
     pub path: std::path::PathBuf,
     pub line: Option<u32>,
     pub column: Option<u32>,
@@ -208,70 +162,8 @@ pub struct ShellParts {
     pub(crate) owner: Option<crate::core::session::WorkspaceId>,
 }
 
-/// What the reader was last shown of each pane's finished agent turn, kept for
-/// the life of the app rather than of a view.
-///
-/// A view is thrown away and built again over the same daemon pane whenever a
-/// workspace is switched out and back or a window is reopened from the tray,
-/// and a fresh view sees a `Done` agent arrive from nothing — exactly what a
-/// turn finishing live looks like. This is how the new view tells the two apart
-/// (#870).
-#[derive(Default)]
-struct AgentReadMarks(std::collections::HashMap<(crate::ui::host_ops::HostId, u64), AgentReadMark>);
 
-impl gpui_kit::Global for AgentReadMarks {}
 
-#[derive(Clone)]
-struct AgentReadMark {
-    session: (Option<String>, Option<Vec<String>>),
-    /// The status the pane's last view saw. Kept for every status, not only
-    /// `Done`, so that a pane with no mark at all is one this app never watched
-    /// an agent in — the only case where a reattach's replayed status may be
-    /// taken as a baseline (see `poll_agent_status`).
-    status: Option<crate::core::cli_agent::AgentStatus>,
-    turns: u64,
-    unread: bool,
-}
-
-#[derive(Clone, Copy)]
-struct DragScroll {
-    overshoot: f32,
-    col: usize,
-    side: Side,
-}
-
-/// In-flight wheel animation. `remaining` is what is left to scroll, in lines,
-/// relative to wherever the view happens to be — deliberately not an absolute
-/// target, so output arriving mid-animation shifts the grid under us without
-/// dragging the animation somewhere else.
-#[derive(Clone, Copy)]
-struct ScrollAnim {
-    remaining: f32,
-    last: std::time::Instant,
-}
-
-/// Fraction of the remaining distance consumed per [`SCROLL_ANIM_FRAME`].
-const SCROLL_ANIM_SMOOTH: f32 = 0.4;
-/// The frame `SCROLL_ANIM_SMOOTH` is calibrated against: one nominal 60 Hz
-/// frame. Decay is scaled by real elapsed time, so the same feel holds at any
-/// refresh rate.
-const SCROLL_ANIM_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
-/// Below this much left to travel, land instead of asymptoting toward it. A
-/// twentieth of a line is around a pixel — the tail of an exponential decay is
-/// invisible long before it ends, and every frame of it costs a full repaint.
-const SCROLL_ANIM_MIN: f32 = 0.05;
-/// A jump smaller than this reads as continuous already; spreading it would
-/// only put lag between the hand and the grid. Inching a wheel one detent at a
-/// time lands here, and so does every event a trackpad sends.
-const SCROLL_ANIM_MIN_JUMP: f32 = 1.0;
-/// How long a trackpad gesture stays "live" after its last event. Long enough
-/// to bridge the gaps in a momentum tail, short enough that reaching for the
-/// wheel right after a swipe is not mistaken for more of the swipe.
-const SCROLL_GESTURE_IDLE: std::time::Duration = std::time::Duration::from_millis(150);
-/// How far a trackpad has to travel, in lines, to earn one font-size step while
-/// the platform modifier is held. A wheel detent is one step on its own, so
-/// this only ever applies to the continuous stream a gesture produces.
-const ZOOM_SCROLL_LINES: f32 = 3.0;
 
 fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
     match pane_runs_remotely {
@@ -280,29 +172,6 @@ fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
     }
 }
 
-/// Which path dialect a pane's output is written in.
-///
-/// A pane running on this machine spells paths the way this OS does, and that
-/// is the end of it: `/etc` printed by a `cmd.exe` pane sitting on `C:` means
-/// `C:\etc`, exactly as `cd /etc` would there. Reading it as a rooted POSIX
-/// path would underline a file this machine has not got, and a link that
-/// cannot be opened is worse than no link.
-///
-/// A pane whose paths live somewhere else is asked instead — by the only thing
-/// that host ever says about its own spelling, the directory it reports. A
-/// `/`-rooted cwd is a POSIX host's. A pane that has not said where it is
-/// falls to POSIX: there is no local drive to measure it from either way, and
-/// every host lyrel installs a server on over SSH or WSL spells paths that way.
-fn link_path_style(
-    paths_are_local: bool,
-    host_cwd: Option<&std::path::Path>,
-) -> super::search::PathStyle {
-    use super::search::PathStyle;
-    match paths_are_local {
-        true => PathStyle::NATIVE,
-        false => host_cwd.map_or(PathStyle::Posix, PathStyle::of_dir),
-    }
-}
 
 pub struct TerminalView {
     pub terminal: RemoteTerminal,
@@ -317,9 +186,7 @@ pub struct TerminalView {
     remote_clipboard_write_in_flight: Option<u64>,
     remote_clipboard_write_generation: u64,
     pub focus_handle: FocusHandle,
-    /// See [`displayed_registry`]. Shared with the registry so the app can
-    /// flip it during a draw without an entity access.
-    pub(super) displayed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(super) lifecycle: super::lifecycle::TerminalLifecycle,
     pub font: Font,
     pub font_bold: Option<Font>,
     pub font_italic: Option<Font>,
@@ -347,17 +214,7 @@ pub struct TerminalView {
     /// full-screen program owns the screen) still asks the terminal itself.
     frame_alt_screen: bool,
     frame_has_selection: bool,
-    selecting: bool,
-    grid_word_selection: Option<super::smart_select::GridWordSelection>,
-    drag_scroll: Option<DragScroll>,
-    drag_scroll_epoch: u64,
-    scroll_anim: Option<ScrollAnim>,
-    scroll_anim_epoch: u64,
-    gesture_until: Option<std::time::Instant>,
-    /// Whether the trackpad gesture in flight is zooming, latched at its first
-    /// event. `None` between gestures, and never set for a wheel, which has no
-    /// gesture to belong to and decides notch by notch.
-    gesture_zoom: Option<bool>,
+    pub(super) selection_scroll: super::selection_scroll::SelectionScroll,
     pub title: String,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
@@ -390,39 +247,11 @@ pub struct TerminalView {
     /// The IME anchor this pane last asked the platform to place the
     /// candidate window at, while it had focus.
     ime_anchor: Option<gpui_kit::Bounds<Pixels>>,
-    last_hover_cell: Option<(usize, usize)>,
-    link_modifier_down: bool,
-    /// What this pane's host has said about paths printed in it, for panes
-    /// that cannot answer that from the local filesystem. Empty and unused on
-    /// a local pane, which resolves inline instead.
-    link_probes: super::link_probe::LinkProbeCache,
-    /// The repository the pane's directory sits in, once the host has been
-    /// asked, and the directory that answer belongs to. A second root for
-    /// relative paths: build output routinely names files from the workspace
-    /// root while the shell sits in a member crate.
-    link_repo_root: Option<(std::path::PathBuf, Option<std::path::PathBuf>)>,
-    link_repo_root_pending: bool,
-    /// The verdict of `should_show_context_menu` for the most recent right
-    /// mouse-down, latched so the menu builder — which gpui-component runs on a
-    /// deferred callback, one turn after the click — can still see the
-    /// modifiers the user actually held.
-    pub(super) context_menu_allowed: bool,
-    /// The file link the most recent right mouse-down landed on, latched for
-    /// the same reason [`context_menu_allowed`](Self::context_menu_allowed)
-    /// is: by the time the menu is built the pointer is only a memory.
-    menu_link: Option<super::search::LinkTarget>,
-    scroll_debt: f32,
-    /// Lines travelled under the zoom modifier that have not yet added up to a
-    /// font-size step. Kept apart from [`scroll_debt`](Self::scroll_debt) so
-    /// letting go of the modifier mid-gesture cannot hand the leftovers of one
-    /// to the other.
-    zoom_debt: f32,
-    pub(super) scroll_frac: f32,
+    pub(super) links: LinkInteraction,
     /// The scrollback bar's end of the grid: where it thinks the viewport is,
     /// and where it has asked for it to go. See [`super::scrollbar`].
     pub(super) scroll_handle: TerminalScrollHandle,
     pub search: Option<SearchState>,
-    pub cursor_visible: bool,
     pub(super) search_focused: bool,
     /// The message box docked under an agent, once it has been asked for —
     /// see [`super::composer`].
@@ -448,32 +277,10 @@ pub struct TerminalView {
     running_since: Option<std::time::Instant>,
     running_title: String,
     running_agent: Option<crate::core::cli_agent::CLIAgent>,
-    /// The foreground agent as of the last poll, so a new one is reported
-    /// once ([`AgentDetected`]) rather than on every frame it keeps running.
-    seen_agent: Option<crate::core::cli_agent::CLIAgent>,
-    /// Whether an agent appearing here is news. A pane this view spawned is
-    /// armed from the start; one it reattached to — an app restart, a
-    /// workspace switched back to — may already be running an agent that was
-    /// counted when it started, so it arms only once its shell is seen back
-    /// at the prompt with no agent in front.
-    agent_detection_armed: bool,
-    last_agent_status: Option<crate::core::cli_agent::AgentStatus>,
-    last_agent_session: (Option<String>, Option<Vec<String>>),
-    agent_turn_started: Option<std::time::Instant>,
-    /// The "finished" notification for a turn that just reached `Done`,
-    /// waiting out [`AGENT_DONE_SETTLE`]. Dropped — and so never sent — when
-    /// the status moves on first.
-    pending_finish_notice: Option<Task<()>>,
-    agent_was_rich: bool,
-    agent_result_unread: bool,
-    keep_unread_on_focus: bool,
-    /// Whether this view has seen its pane's agent status move at all. The
-    /// first move is where a rebuilt view consults [`AgentReadMarks`].
-    agent_status_seen: bool,
+    agent_activity: super::agent_activity::AgentActivity,
     git_status_cwd: Option<std::path::PathBuf>,
     /// Command completion can fall entirely between foreground polls.
     git_prompt_cycle: u64,
-    last_agent_activity: u64,
     cmd: CmdEditor,
     /// Mirrors `Config::prompt_editor`. Cached rather than read from the global
     /// because the ownership question ("does this keystroke belong to the local
@@ -494,7 +301,6 @@ pub struct TerminalView {
     editor_select_gesture: bool,
     editor_drag_word: Option<(usize, usize)>,
     editor_goal_col: Option<usize>,
-    pub(super) hovered_link: Option<HoveredLink>,
     /// How opaque the pane wants this terminal painted this frame: 1.0 at
     /// rest, [`crate::ui::pane::INACTIVE_DIM`] for an unfocused pane in a
     /// split, [`crate::ui::pane::LIFTED_DIM`] while the pane is being
@@ -508,25 +314,8 @@ pub struct TerminalView {
     /// the field to 1.0 at the end of every paint, so the value never
     /// outlives the frame it was written for.
     pub(super) dim: f32,
-    _focus_subs: Vec<gpui_kit::Subscription>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct HoveredLink {
-    /// The cells to underline, one run per row. A link in a table cell
-    /// shares its rows with other cells, so its extent is not always one
-    /// stretch of the grid from a start to an end.
-    pub runs: Vec<(Pos, Pos)>,
-    /// Whether the modifier that would open this link is down.
-    ///
-    /// A link underlines as soon as the pointer reaches it, so the user can
-    /// see there is something there without holding anything. Only once the
-    /// modifier is down does it look and behave like something clickable:
-    /// promising a hand cursor over a link a plain click will not follow is
-    /// the kind of small lie that teaches people to stop trusting the
-    /// underline.
-    pub armed: bool,
-}
 
 enum LoopbackOpen {
     Forwarded(String),
@@ -534,29 +323,6 @@ enum LoopbackOpen {
     NotLoopback,
 }
 
-/// What sits under a cell, once the grid has been read.
-enum GridLink {
-    /// An OSC 8 hyperlink the emitter declared, with the extent it declared,
-    /// one run per row.
-    Hyperlink(String, Vec<(Pos, Pos)>),
-    /// The logical line the cell belongs to, the grid point of every character
-    /// in it, and which of those the cell is.
-    Text(String, Vec<Pos>, usize),
-}
-
-/// The outcome of asking what a cell links to.
-enum LinkAt {
-    /// A link, and the cells it covers as one run per row.
-    Found(LinkTarget, Vec<(Pos, Pos)>),
-    /// A token that parses as a path, that nothing has answered for.
-    /// `pending` separates the two reasons: the path is not there, or the host
-    /// that would know has not replied yet.
-    Unresolved {
-        candidate: super::search::FileCandidate,
-        pending: bool,
-    },
-    None,
-}
 
 /// What it takes to open one of a pane's loopback ports from this machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -652,10 +418,6 @@ const GIT_RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(10);
 /// wait for it is still what the reader is doing.
 const TITLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// How long a turn has to stay finished before it is announced. Long enough
-/// for a queued message or a `Stop` hook to start the next turn, short enough
-/// that the notification still reads as the moment the agent stopped.
-const AGENT_DONE_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// What a pane does with a title the program just set — see
 /// `TerminalView::set_title_when_settled`.
@@ -803,7 +565,7 @@ impl TerminalView {
     /// different number from `pane_id`, which the daemon assigns.
     fn notify_pane(&self, lead: Option<&str>, body: &str, cx: &mut Context<Self>) {
         let title = self.notification_title(lead, cx);
-        super::remote::notify_desktop_for_pane(Some(&title), body, Some(cx.entity_id()));
+        super::desktop_notification::notify_desktop_for_pane(Some(&title), body, Some(cx.entity_id()));
     }
 
     /// Desktop notifications the program wrote (OSC 9, 99, 777), such as
@@ -849,7 +611,7 @@ impl TerminalView {
         }
         for (title, body) in notes {
             match title {
-                Some(title) => super::remote::notify_desktop_for_pane(
+                Some(title) => super::desktop_notification::notify_desktop_for_pane(
                     Some(&title),
                     &body,
                     Some(cx.entity_id()),
@@ -1156,7 +918,7 @@ impl TerminalView {
         owner: Option<crate::core::session::WorkspaceId>,
     ) -> anyhow::Result<ShellParts> {
         let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
-        let terminal = RemoteTerminal::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
+        let terminal = super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
         Ok(ShellParts {
             terminal,
             pane_id,
@@ -1177,9 +939,9 @@ impl TerminalView {
     ) -> anyhow::Result<ShellParts> {
         let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
         let attached = match restore_pane {
-            Some(id) => match RemoteTerminal::attach_on(&route, TermSize::new(80, 24), 8, 17, id) {
+            Some(id) => match super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, id) {
                 Ok(terminal) => Some((terminal, id, None)),
-                Err(e) if crate::terminal::attach_refused(&e) => {
+                Err(e) if super::remote::handshake::attach_refused(&e) => {
                     log::info!("pane {id} is gone on its machine ({e:#}); spawning fresh");
                     None
                 }
@@ -1211,7 +973,7 @@ impl TerminalView {
                             .to_string(),
                     ),
                 });
-                let (terminal, id) = RemoteTerminal::spawn_on(
+                let (terminal, id) = super::remote::handshake::PaneHandshake::spawn_on(
                     &route,
                     TermSize::new(80, 24),
                     8,
@@ -1268,7 +1030,7 @@ impl TerminalView {
     ) -> anyhow::Result<NativeSshParts> {
         let persist = Box::new(spec.without_secrets());
         let (terminal, pane_id) =
-            RemoteTerminal::spawn_native_ssh(TermSize::new(80, 24), 8, 17, remote_start_dir, spec)?;
+            super::remote::handshake::PaneHandshake::spawn_native_ssh(TermSize::new(80, 24), 8, 17, remote_start_dir, spec)?;
         Ok(NativeSshParts {
             terminal,
             pane_id,
@@ -1313,7 +1075,7 @@ impl TerminalView {
             .map(crate::core::config::gpui_font_features);
         let report_mouse = config.mouse_reporting;
         let prompt_editor = config.prompt_editor;
-        let agent_detection_armed = !terminal.reattached();
+        let agent_activity = super::agent_activity::AgentActivity::new(terminal.reattached());
         let mut font = gpui_kit::font(font_family);
         font.fallbacks = Some(gpui_kit::FontFallbacks::from_fonts(fallbacks.clone()));
         if let Some(features) = &font_features {
@@ -1334,132 +1096,29 @@ impl TerminalView {
 
         let focus_handle = cx.focus_handle();
 
-        let events = terminal.events.clone();
-        cx.spawn(async move |this, cx| {
-            let mut batch = Vec::new();
-            while let Ok(ev) = events.recv().await {
-                batch.push(ev);
-                while let Ok(ev) = events.try_recv() {
-                    batch.push(ev);
-                }
-                // Output reaches the screen through `handle_event`'s
-                // `notify()`, which gpui scopes to windows currently
-                // rendering this view. A pane in a background tab must stay
-                // out of the frame loop entirely: refreshing the window
-                // directly from here pinned the visible tab at full frame
-                // rate whenever any hidden pane was producing output.
-                let res = this.update_in(cx, |view, window, cx| {
-                    let mut woke = false;
-                    for ev in batch.drain(..) {
-                        if matches!(ev, PaneEvent::Wakeup) && std::mem::replace(&mut woke, true) {
-                            continue;
-                        }
-                        view.handle_event(ev, cx);
+        let lifecycle = super::lifecycle::TerminalLifecycle::new(
+            &terminal,
+            &focus_handle,
+            window,
+            cx,
+            super::lifecycle::LifecycleCallbacks {
+                state: |view| &mut view.lifecycle,
+                event: Self::handle_event,
+                focus: |view, focused, cx| {
+                    if focused {
+                        view.agent_activity.focused((view.host_id, view.pane_id), cx);
+                    } else {
+                        view.marked_text.clear();
                     }
-                    // A daemon may be waiting for this exact GPU lease before
-                    // it can ACK new graphics. Do not depend on a later frame
-                    // or the periodic cleanup to return retired atlas pages.
-                    view.terminal.images().release_retired(window, cx);
-                });
-                if res.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-
-        let focus_subs = vec![
-            cx.on_focus_in(&focus_handle, window, |view, _window, cx| {
-                view.cursor_visible = true;
-                if view.keep_unread_on_focus {
-                    view.keep_unread_on_focus = false;
-                } else {
-                    view.agent_result_unread = false;
-                    view.note_agent_result_unread(cx);
-                }
-                view.report_focus_change(true);
-                cx.notify();
-            }),
-            cx.on_blur(&focus_handle, window, |view, _window, cx| {
-                view.marked_text.clear();
-                view.report_focus_change(false);
-                cx.notify();
-            }),
-        ];
-
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(530))
-                    .await;
-                if this
-                    .update_in(cx, |view, window, cx| {
-                        // A pane can be focused once while it is being built, before
-                        // its leaf is attached to the window. Moving focus away in
-                        // that interval does not deliver the leaf a blur callback,
-                        // so no flag a callback maintains can be trusted to say
-                        // which pane the reader is on. The window's handle is
-                        // authoritative here, just as it is in the paint path.
-                        if view.focus_handle.is_focused(window) {
-                            if cx.global::<Config>().cursor_blink {
-                                view.cursor_visible = !view.cursor_visible;
-                                cx.notify();
-                            } else if !view.cursor_visible {
-                                view.cursor_visible = true;
-                                cx.notify();
-                            }
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
-
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(300))
-                    .await;
-                if this
-                    .update_in(cx, |view, window, cx| {
-                        view.terminal.images().release_retired(window, cx);
-                        view.poll_foreground(window, cx);
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
+                    view.report_focus_change(focused);
+                },
+                foreground: Self::poll_foreground,
+                detach: |view| view.terminal.detach_link(),
+            },
+        );
 
         super::color_scheme::watch(cx);
 
-        let viewport_reporter = terminal.viewport_reporter();
-        let displayed = viewport_reporter.displayed();
-        let entity_id = cx.entity().entity_id();
-        cx.default_global::<DisplayedRegistry>()
-            .0
-            .lock()
-            .unwrap()
-            .insert(entity_id, viewport_reporter);
-
-        // The window may be gone before this entity is released. These owners
-        // must be removed even when on_release_in cannot update that window.
-        cx.on_release(move |view, cx| {
-            if let Some(registry) = cx.try_global::<DisplayedRegistry>() {
-                registry.0.lock().unwrap().remove(&entity_id);
-            }
-            view.terminal.detach_link();
-        })
-        .detach();
-        cx.on_release_in(window, |view, window, cx| {
-            view.terminal.images().release_all(window, cx);
-        })
-        .detach();
 
         window.focus(&focus_handle, cx);
 
@@ -1477,7 +1136,7 @@ impl TerminalView {
             remote_clipboard_write_in_flight: None,
             remote_clipboard_write_generation: 0,
             focus_handle,
-            displayed,
+            lifecycle,
             font,
             font_bold,
             font_italic,
@@ -1491,14 +1150,7 @@ impl TerminalView {
             grid_snap: None,
             frame_alt_screen: false,
             frame_has_selection: false,
-            selecting: false,
-            grid_word_selection: None,
-            drag_scroll: None,
-            drag_scroll_epoch: 0,
-            scroll_anim: None,
-            scroll_anim_epoch: 0,
-            gesture_until: None,
-            gesture_zoom: None,
+            selection_scroll: super::selection_scroll::SelectionScroll::default(),
             title: DEFAULT_TITLE.to_string(),
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
@@ -1509,19 +1161,9 @@ impl TerminalView {
             cell_geom: None,
             ime_anchor: None,
             report_mouse,
-            last_hover_cell: None,
-            link_modifier_down: false,
-            link_probes: Default::default(),
-            link_repo_root: None,
-            link_repo_root_pending: false,
-            context_menu_allowed: true,
-            menu_link: None,
-            scroll_debt: 0.,
-            zoom_debt: 0.,
-            scroll_frac: 0.,
+            links: LinkInteraction::default(),
             scroll_handle: TerminalScrollHandle::default(),
             search: None,
-            cursor_visible: true,
             dim: 1.,
             search_focused: false,
             composer: None,
@@ -1539,19 +1181,9 @@ impl TerminalView {
             running_since: None,
             running_title: String::new(),
             running_agent: None,
-            seen_agent: None,
-            agent_detection_armed,
-            last_agent_status: None,
-            last_agent_session: (None, None),
-            agent_turn_started: None,
-            pending_finish_notice: None,
-            agent_was_rich: false,
-            agent_result_unread: false,
-            keep_unread_on_focus: false,
-            agent_status_seen: false,
+            agent_activity,
             git_status_cwd: None,
             git_prompt_cycle: 0,
-            last_agent_activity: 0,
             cmd: CmdEditor::new(),
             prompt_editor,
             typeahead: Typeahead::new(),
@@ -1567,9 +1199,15 @@ impl TerminalView {
             editor_select_gesture: false,
             editor_drag_word: None,
             editor_goal_col: None,
-            hovered_link: None,
-            _focus_subs: focus_subs,
         }
+    }
+
+    pub fn cursor_visible(&self) -> bool {
+        self.lifecycle.cursor_visible()
+    }
+
+    pub fn show_cursor(&mut self) {
+        self.lifecycle.show_cursor();
     }
 
     pub fn set_grid_size(
@@ -1591,8 +1229,7 @@ impl TerminalView {
         // reflow nothing, so a height-only drag stays cheap.
         let cols_changed = cols != self.terminal.size().cols;
         if (cols, rows) != (self.terminal.size().cols, self.terminal.size().rows) {
-            self.last_hover_cell = None;
-            self.hovered_link = None;
+            self.links.invalidate_geometry();
         }
         self.cell_width = cell_width;
         self.line_height = line_height;
@@ -1711,6 +1348,7 @@ impl TerminalView {
             self.default_title = label;
         }
         self.workspace = workspace;
+        self.links.invalidate_geometry();
     }
 
     pub fn pane_route(&self) -> crate::terminal::PaneRoute {
@@ -1824,41 +1462,12 @@ impl TerminalView {
     }
 
     pub fn agent_result_unread(&self) -> bool {
-        self.agent_result_unread
+        self.agent_activity.unread()
     }
 
     pub fn mark_agent_result_unread(&mut self, refocus_incoming: bool, cx: &mut App) {
-        self.agent_result_unread = true;
-        self.keep_unread_on_focus = refocus_incoming;
-        self.note_agent_result_unread(cx);
-    }
-
-    /// Leave what the reader has seen of this pane's agent where the pane's
-    /// next view will look for it — see [`AgentReadMarks`]. A mark left at any
-    /// status other than `Done` never vouches for a finished turn, but it still
-    /// records that this app was watching: a turn that was running when the
-    /// view went and finished before the next one came must badge.
-    fn record_agent_read_mark(&self, turns: u64, cx: &mut App) {
-        cx.default_global::<AgentReadMarks>().0.insert(
-            (self.host_id, self.pane_id),
-            AgentReadMark {
-                session: self.last_agent_session.clone(),
-                status: self.last_agent_status,
-                turns,
-                unread: self.agent_result_unread,
-            },
-        );
-    }
-
-    /// Carry a change to the badge alone into the mark the last status left.
-    fn note_agent_result_unread(&self, cx: &mut App) {
-        if !cx.has_global::<AgentReadMarks>() {
-            return;
-        }
-        let key = (self.host_id, self.pane_id);
-        if let Some(mark) = cx.global_mut::<AgentReadMarks>().0.get_mut(&key) {
-            mark.unread = self.agent_result_unread;
-        }
+        self.agent_activity
+            .mark_unread((self.host_id, self.pane_id), refocus_incoming, cx);
     }
 
     pub fn git_status(&self, cx: &App) -> Option<crate::terminal::git_status::GitStatus> {
@@ -1888,7 +1497,7 @@ impl TerminalView {
     }
 
     fn recheck_git_root(&self, cx: &mut Context<Self>) {
-        if !self.displayed.load(std::sync::atomic::Ordering::Relaxed) {
+        if !self.lifecycle.is_displayed() {
             return;
         }
         let Some(cwd) = self.git_status_cwd.as_deref() else {
@@ -1919,7 +1528,7 @@ impl TerminalView {
                     let _ = pane.update(cx, |view, cx| {
                         if view.host_id == id
                             && view.git_status_cwd.as_deref() == Some(&cwd)
-                            && view.displayed.load(std::sync::atomic::Ordering::Relaxed)
+                            && view.lifecycle.is_displayed()
                         {
                             view.refresh_git_status(Some(cwd), GitRefresh::Edge, cx);
                         }
@@ -1935,6 +1544,7 @@ impl TerminalView {
     /// no way to do.
     #[cfg(test)]
     pub(crate) fn set_git_status_cwd_for_test(&mut self, cwd: Option<std::path::PathBuf>) {
+        if self.git_status_cwd != cwd { self.links.invalidate_geometry(); }
         self.git_status_cwd = cwd;
     }
 
@@ -2173,13 +1783,7 @@ impl TerminalView {
             PaneEvent::Wakeup => {
                 // The grid moved under whatever the search bar last measured.
                 self.note_output_under_search(cx);
-                // Only a pane that is on screen repaints on output. The
-                // chrome's per-frame entity reads keep every pane in the
-                // window's tracked set, so an ungated notify from a
-                // background tab would dirty the window at output rate.
-                if self.displayed.load(std::sync::atomic::Ordering::Relaxed) {
-                    cx.notify();
-                }
+                self.lifecycle.notify_output(cx);
             }
             PaneEvent::Title(title) => self.set_title_when_settled(title, cx),
             PaneEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
@@ -2399,7 +2003,7 @@ impl TerminalView {
                     });
                 }
             }
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             self.jump_to_prompt();
             cx.notify();
             cx.stop_propagation();
@@ -2478,7 +2082,7 @@ impl TerminalView {
                         self.cmd.delete_to_start();
                     }
                     self.close_completion();
-                    self.cursor_visible = true;
+                    self.lifecycle.show_cursor();
                     cx.notify();
                 } else if cfg!(target_os = "macos") && self.accepts_input(cx) {
                     self.send_shortcut_bytes(&[0x15], "u", cx);
@@ -2491,7 +2095,7 @@ impl TerminalView {
                         self.cmd.delete_to_end();
                     }
                     self.close_completion();
-                    self.cursor_visible = true;
+                    self.lifecycle.show_cursor();
                     cx.notify();
                 } else if cfg!(target_os = "macos") && self.accepts_input(cx) {
                     self.send_shortcut_bytes(&[0x0b], "k", cx);
@@ -2505,7 +2109,7 @@ impl TerminalView {
     fn handle_editor_key(&mut self, ks: &gpui_kit::Keystroke, cx: &mut Context<Self>) {
         let m = &ks.modifiers;
         let key = ks.key.as_str();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.jump_to_prompt();
         self.adopt_typeahead();
 
@@ -2567,7 +2171,7 @@ impl TerminalView {
                 (false, "backspace") if self.cmd.selection().is_none() && !self.cmd.is_empty() => {
                     self.cmd.backspace();
                     self.completion_refilter();
-                    self.cursor_visible = true;
+                    self.lifecycle.show_cursor();
                     cx.notify();
                     return;
                 }
@@ -2624,7 +2228,7 @@ impl TerminalView {
             if cfg!(not(target_os = "macos")) && key == "a" {
                 self.cmd.select_all();
                 self.close_completion();
-                self.cursor_visible = true;
+                self.lifecycle.show_cursor();
                 cx.notify();
                 return;
             }
@@ -2982,13 +2586,10 @@ impl TerminalView {
     }
 
     fn jump_to_prompt(&mut self) {
-        self.cancel_scroll_anim();
         let mut term = self.terminal.term.lock();
-        term.selection = None;
-        term.scroll_display(Scroll::Bottom);
+        self.selection_scroll.jump_to_prompt(&mut term);
         drop(term);
         self.terminal.viewport_reporter().report();
-        self.scroll_frac = 0.;
     }
 
     pub(super) fn send_to_pty(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
@@ -2996,21 +2597,15 @@ impl TerminalView {
             return;
         }
         self.terminal.write(bytes.to_vec());
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.jump_to_prompt();
         cx.notify();
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let mut term = self.terminal.term.lock();
-        let grid = &term.grid;
-        let start = Pos::new(grid.topmost_line(), Column(0));
-        let end = Pos::new(grid.bottommost_line(), grid.last_column());
-        let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
-        sel.update(end, Side::Right);
-        term.selection = Some(sel);
+        self.selection_scroll.select_all(&mut term);
         drop(term);
-        self.grid_word_selection = None;
         cx.notify();
     }
 
@@ -3044,7 +2639,7 @@ impl TerminalView {
             self.history.reset_navigation();
             self.editor_goal_col = None;
             self.close_completion();
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
             return;
         }
@@ -3191,7 +2786,7 @@ impl TerminalView {
         if lines == 0 {
             return;
         }
-        self.cancel_scroll_anim();
+        self.selection_scroll.cancel_animation();
         let mut mode = self.terminal.term.lock().mode();
         if !self.report_mouse {
             mode.remove(Mode::MOUSE_MODE);
@@ -3211,11 +2806,7 @@ impl TerminalView {
                 self.terminal.write(out);
             }
             WheelRoute::Scrollback => {
-                self.scroll_frac = 0.;
-                self.terminal
-                    .term
-                    .lock()
-                    .scroll_display(Scroll::Delta(lines));
+                self.selection_scroll.scroll_lines(&mut self.terminal.term.lock(), lines);
                 self.terminal.viewport_reporter().report();
                 cx.notify();
             }
@@ -3287,7 +2878,7 @@ impl TerminalView {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
             self.cmd.delete_selection();
             self.close_completion();
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
         }
         true
@@ -3569,7 +3160,7 @@ impl TerminalView {
     /// Clear presentation without discarding retained history or restarting
     /// the process. Only a live pane receives Ctrl+L through its own transport.
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
-        self.cancel_scroll_anim();
+        self.selection_scroll.cancel_animation();
         if self.terminal.clear_presentation(false) {
             self.terminal.write(vec![0x0c_u8]);
         }
@@ -3577,11 +3168,10 @@ impl TerminalView {
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
-        self.cancel_scroll_anim();
+        self.selection_scroll.clear_scrollback();
         if self.terminal.clear_presentation(true) {
             self.terminal.write(vec![0x0c_u8]);
         }
-        self.scroll_frac = 0.;
         cx.notify();
     }
 
@@ -3704,7 +3294,7 @@ impl TerminalView {
                 self.running_since = None;
                 if notify_allowed {
                     match agent {
-                        Some(_) if self.agent_was_rich => {}
+                        Some(_) if self.agent_activity.was_rich() => {}
                         Some(agent) => self.notify_agent_finished(agent, elapsed, cx),
                         None => {
                             let threshold = std::time::Duration::from_secs(
@@ -3725,13 +3315,7 @@ impl TerminalView {
         let turn_finished = self.poll_agent_status(notify_allowed, window, cx);
 
         let session = self.terminal.agent_session();
-        let tool_activity = match session.as_ref().map(|s| s.activity) {
-            Some(n) => std::mem::replace(&mut self.last_agent_activity, n) != n,
-            None => {
-                self.last_agent_activity = 0;
-                false
-            }
-        };
+        let tool_activity = self.agent_activity.tool_activity_changed(session.as_ref());
         let cwd_now = self
             .cwd_is_on_host()
             .then(|| {
@@ -3880,6 +3464,7 @@ impl TerminalView {
 
         let changed = self.git_status_cwd != cwd;
         self.git_status_cwd = cwd.clone();
+        if changed { self.links.invalidate_geometry(); }
         let Some(cwd) = cwd else {
             if changed {
                 cx.notify();
@@ -3934,21 +3519,12 @@ impl TerminalView {
         );
     }
 
-    /// Report an agent that has just started in this pane ([`AgentDetected`]),
-    /// once per start, and never one that was already running when this view
-    /// reattached to the pane.
     fn poll_agent_detection(&mut self, at_prompt: bool, cx: &mut Context<Self>) {
-        let agent = self.terminal.foreground_agent();
-        if agent != self.seen_agent {
-            self.seen_agent = agent;
-            if let Some(agent) = agent
-                && self.agent_detection_armed
-            {
-                cx.emit(AgentDetected(agent));
-            }
-        }
-        if agent.is_none() && at_prompt {
-            self.agent_detection_armed = true;
+        if let Some(agent) = self
+            .agent_activity
+            .detect(self.terminal.foreground_agent(), at_prompt)
+        {
+            cx.emit(AgentDetected(agent));
         }
     }
 
@@ -3958,181 +3534,41 @@ impl TerminalView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        use crate::core::cli_agent::AgentStatus;
-
-        // Attaching to a pane the daemon kept alive — the app restarting onto
-        // last session's tabs above all — has the daemon replay the pane's
-        // stored agent status as an ordinary report. When this app has never
-        // watched the pane, that is a baseline, not an edge: the turn it
-        // describes ended before this view existed, often before this process
-        // did, and reading it as "a result just landed" is what used to bring
-        // every restored agent tab up wearing an unread badge for output its
-        // reader had long since read.
-        //
-        // When an earlier view of this app did watch the pane (a workspace
-        // switched out and back, a window reopened from the tray), its read
-        // mark knows more than the replay does, so the replay stays an edge and
-        // the mark decides below: the same finished turn takes its badge back
-        // as the reader left it, anything else is news (#870).
-        let adopted_baseline = match self.terminal.take_replayed_agent_status() {
-            Some(restored)
-                if !cx
-                    .try_global::<AgentReadMarks>()
-                    .is_some_and(|marks| marks.0.contains_key(&(self.host_id, self.pane_id))) =>
-            {
-                self.last_agent_status = restored;
-                self.agent_status_seen = true;
-                true
-            }
-            _ => false,
-        };
-
+        let replayed = self.terminal.take_replayed_agent_status();
         let session = self.terminal.agent_session();
-        if session.as_ref().is_some_and(|s| s.rich) {
-            self.agent_was_rich = true;
-        }
-        if self.terminal.foreground_agent().is_none() && session.is_none() {
-            self.agent_was_rich = false;
-        }
-
-        let identity = (
-            session.as_ref().and_then(|s| s.session_id.clone()),
-            session.as_ref().and_then(|s| s.launch_argv.clone()),
+        let update = self.agent_activity.observe(
+            (self.host_id, self.pane_id),
+            self.terminal.foreground_agent(),
+            session.as_ref(),
+            replayed,
+            self.focus_handle.is_focused(window),
+            notify_allowed,
+            cx,
         );
-        if identity != self.last_agent_session {
-            self.last_agent_session = identity;
+        if update.session_changed {
             cx.emit(AgentSessionChanged);
         }
-
-        let status = session.as_ref().map(|s| s.status);
-        let turns = session.as_ref().map_or(0, |s| s.turns);
-        if adopted_baseline {
-            // From here on this app is watching the pane, so a later rebuild
-            // must find a mark rather than adopt its own replay.
-            self.record_agent_read_mark(turns, cx);
-        }
-        if status == self.last_agent_status {
-            return false;
-        }
-        let prev = std::mem::replace(&mut self.last_agent_status, status);
-        let first_sight = !std::mem::replace(&mut self.agent_status_seen, true);
-        self.pending_finish_notice = None;
-
-        // A view built over a pane that already holds a finished turn sees
-        // `Done` arrive from nothing, the same as a turn finishing now. If the
-        // pane's previous view left a mark for this session at this turn count,
-        // it is the turn the reader was already shown: take their badge back as
-        // they left it instead of raising a new one (#870). A turn that
-        // finished after the old view went has no such mark, or a lower count.
-        if first_sight
-            && status == Some(AgentStatus::Done)
-            && let Some(mark) = cx
-                .try_global::<AgentReadMarks>()
-                .and_then(|marks| marks.0.get(&(self.host_id, self.pane_id)))
-                .filter(|mark| {
-                    mark.status == Some(AgentStatus::Done)
-                        && mark.session == self.last_agent_session
-                        && mark.turns == turns
-                })
-                .cloned()
-        {
-            self.agent_result_unread = mark.unread && !self.focus_handle.is_focused(window);
-            self.keep_unread_on_focus = false;
-            self.record_agent_read_mark(turns, cx);
-            cx.notify();
-            return false;
-        }
-
-        let turn_finished = status == Some(AgentStatus::Done) && prev != Some(AgentStatus::Done);
-
-        match status {
-            Some(AgentStatus::Done) if prev != Some(AgentStatus::Done) => {
-                // Whether the reader saw the result is a question about the
-                // window's live focus, not about the last focus callback this
-                // pane happened to receive. A pane focused while it was being
-                // built, before its leaf was attached, never gets the blur that
-                // would clear `self.focused` — trusting the cached flag there
-                // drops the badge on the one pane the reader is not looking at.
-                self.agent_result_unread = !self.focus_handle.is_focused(window);
-                self.keep_unread_on_focus = false;
-            }
-            Some(AgentStatus::Done) => {}
-            _ => {
-                self.agent_result_unread = false;
-                self.keep_unread_on_focus = false;
-            }
-        }
-        self.record_agent_read_mark(turns, cx);
-
-        let rich = session.as_ref().is_some_and(|s| s.rich);
-        let agent_name = self
-            .terminal
-            .foreground_agent()
-            .map(|a| a.display_name())
-            .unwrap_or("Agent");
-        match status {
-            Some(AgentStatus::Working) => {
-                self.agent_turn_started = Some(std::time::Instant::now());
-            }
-            Some(AgentStatus::Waiting) if rich && notify_allowed => {
-                let body = session
-                    .as_ref()
-                    .and_then(|s| s.message.clone())
-                    .unwrap_or_else(|| t(L10nKey::NotifyAgentWaiting).to_string());
-                self.notify_pane(Some(agent_name), &body, cx);
-            }
-            Some(AgentStatus::Done)
-                if rich
-                    && notify_allowed
-                    && matches!(
-                        prev,
-                        Some(AgentStatus::Working) | Some(AgentStatus::Waiting)
-                    ) =>
-            {
-                let elapsed = self.agent_turn_started.take().map(|start| start.elapsed());
-                let body = match session
-                    .as_ref()
-                    .and_then(|session| session.readout.result.as_ref())
-                {
-                    Some(result) => {
-                        let result = crate::ui::i18n::agent_result_text(result);
-                        match elapsed {
-                            Some(elapsed) => t_fmt(
-                                L10nKey::AgentResultWithDuration,
-                                &[
-                                    ("result", &result),
-                                    ("secs", &elapsed.as_secs().to_string()),
-                                ],
-                            ),
-                            None => result,
-                        }
-                    }
-                    None => match elapsed {
-                        Some(elapsed) => t_fmt(
-                            L10nKey::NotifyAgentFinished,
-                            &[("secs", &elapsed.as_secs().to_string())],
-                        ),
-                        None => t(L10nKey::NotifyTurnFinished).to_string(),
-                    },
-                };
-                // Held back briefly: a turn that ends only for the next one to
-                // start at once — a message queued while the agent worked, a
-                // `Stop` hook sending it back to work — is not finished, and
-                // announcing it would be a notification about nothing.
-                let agent_name = agent_name.to_string();
-                self.pending_finish_notice = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(AGENT_DONE_SETTLE).await;
+        if let Some(notice) = update.notice {
+            if notice.delayed {
+                let task = cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(super::agent_activity::DONE_SETTLE)
+                        .await;
                     this.update(cx, |view, cx| {
-                        view.pending_finish_notice = None;
-                        view.notify_pane(Some(&agent_name), &body, cx);
+                        view.agent_activity.notice_delivered();
+                        view.notify_pane(Some(notice.agent), &notice.body, cx);
                     })
                     .ok();
-                }));
+                });
+                self.agent_activity.await_notice(task);
+            } else {
+                self.notify_pane(Some(notice.agent), &notice.body, cx);
             }
-            _ => {}
         }
-        cx.notify();
-        turn_finished
+        if update.changed {
+            cx.notify();
+        }
+        update.turn_finished
     }
 
     fn at_shell_prompt(&self) -> bool {
@@ -4276,7 +3712,7 @@ impl TerminalView {
         self.editor_select_gesture = true;
         self.editor_goal_col = None;
         self.close_completion();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
         true
     }
@@ -4295,7 +3731,7 @@ impl TerminalView {
         } else {
             self.cmd.extend_to(idx);
         }
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
         true
     }
@@ -4563,7 +3999,7 @@ impl TerminalView {
         }
         self.jump_to_prompt();
         self.close_completion();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.cmd.insert_str("\n");
         self.history.reset_navigation();
         self.editor_goal_col = None;
@@ -4622,7 +4058,7 @@ impl TerminalView {
         let pasted = self.cmd.pasted();
         self.terminal.write(submit_bytes(&line, bracketed, pasted));
         self.cmd.clear();
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         self.jump_to_prompt();
         cx.notify();
     }
@@ -4819,7 +4255,7 @@ impl TerminalView {
                 }).detach();
             },
         }
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
     }
 
@@ -4874,14 +4310,14 @@ impl TerminalView {
 
     fn completion_select(&mut self, forward: bool, cx: &mut Context<Self>) {
         self.completion.select(forward);
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
     }
 
     fn completion_accept(&mut self, cx: &mut Context<Self>) {
         let shell = self.shell_program();
         self.completion.accept(&mut self.cmd, shell.as_deref());
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
     }
 
@@ -4909,7 +4345,7 @@ impl TerminalView {
         // back to the prompt and the letters between them did not.
         self.jump_to_prompt();
         if self.history.push_search_query(text) {
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
             return;
         }
@@ -4920,12 +4356,12 @@ impl TerminalView {
             self.editor_goal_col = None;
             self.history.reset_last_word();
             self.completion_refilter();
-            self.cursor_visible = true;
+            self.lifecycle.show_cursor();
             cx.notify();
             return;
         }
         self.write_gap_text(text, text.as_bytes().to_vec(), false, cx);
-        self.cursor_visible = true;
+        self.lifecycle.show_cursor();
         cx.notify();
     }
 
@@ -4950,56 +4386,16 @@ impl TerminalView {
         shift: bool,
         cx: &mut Context<Self>,
     ) {
-        let cfg = cx.global::<Config>();
         let mut term = self.terminal.term.lock();
-        let display_offset = term.grid.display_offset() as i32;
-        let point = Pos::new(Line(row as i32 - display_offset), Column(col));
-        let side = if left { Side::Left } else { Side::Right };
-        if shift && clicks == 1 && term.selection.is_some() {
-            if let Some(word) = self.grid_word_selection.as_mut() {
-                word.update(&mut term, point, &cfg.word_separators);
-            } else if let Some(sel) = term.selection.as_mut() {
-                sel.update(point, side);
-            }
-            drop(term);
-            self.selecting = true;
-            cx.notify();
-            return;
-        }
-        self.grid_word_selection = None;
-        if clicks == 2 {
-            self.grid_word_selection = Some(super::smart_select::GridWordSelection::start(
-                &mut term,
-                point,
-                &cfg.word_separators,
-                cfg.smart_select,
-            ));
-        } else {
-            let ty = if clicks >= 3 {
-                SelectionType::Lines
-            } else {
-                SelectionType::Simple
-            };
-            term.selection = Some(Selection::new(ty, point, side));
-        }
+        self.selection_scroll.start(&mut term, col, row, left, clicks, shift, cx.global::<Config>());
         drop(term);
-        self.selecting = true;
         cx.notify();
     }
 
     pub fn on_select_update(&mut self, col: usize, row: usize, left: bool, cx: &mut Context<Self>) {
-        if !self.selecting {
-            return;
-        }
+        if !self.selection_scroll.is_selecting() { return; }
         let mut term = self.terminal.term.lock();
-        let display_offset = term.grid.display_offset() as i32;
-        let point = Pos::new(Line(row as i32 - display_offset), Column(col));
-        let side = if left { Side::Left } else { Side::Right };
-        if let Some(word) = self.grid_word_selection.as_mut() {
-            word.update(&mut term, point, &cx.global::<Config>().word_separators);
-        } else if let Some(sel) = term.selection.as_mut() {
-            sel.update(point, side);
-        }
+        self.selection_scroll.update(&mut term, col, row, left, &cx.global::<Config>().word_separators);
         drop(term);
         cx.notify();
     }
@@ -5011,22 +4407,7 @@ impl TerminalView {
         left: bool,
         cx: &mut Context<Self>,
     ) {
-        if !self.selecting || overshoot == 0. {
-            self.drag_scroll = None;
-            return;
-        }
-        let side = if left { Side::Left } else { Side::Right };
-        let was_idle = self.drag_scroll.is_none();
-        self.drag_scroll = Some(DragScroll {
-            overshoot,
-            col,
-            side,
-        });
-        if !was_idle {
-            return;
-        }
-        self.drag_scroll_epoch += 1;
-        let epoch = self.drag_scroll_epoch;
+        let Some(epoch) = self.selection_scroll.autoscroll(overshoot, col, left) else { return; };
         self.drag_scroll_tick(epoch, cx);
         cx.spawn(async move |this, cx| {
             loop {
@@ -5036,60 +4417,29 @@ impl TerminalView {
                 if !matches!(
                     this.update(cx, |view, cx| view.drag_scroll_tick(epoch, cx)),
                     Ok(true)
-                ) {
-                    break;
-                }
+                ) { break; }
             }
-        })
-        .detach();
+        }).detach();
     }
 
     fn drag_scroll_tick(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
-        if epoch != self.drag_scroll_epoch {
-            return false;
-        }
-        if !self.selecting {
-            self.drag_scroll = None;
-        }
-        let Some(ds) = self.drag_scroll else {
-            return false;
-        };
-        self.cancel_scroll_anim();
-        let mut term = self.terminal.term.lock();
-        let before = term.grid.display_offset();
-        term.scroll_display(Scroll::Delta(drag_scroll_step(ds.overshoot)));
-        let offset = term.grid.display_offset();
-        let row = if ds.overshoot > 0. {
-            0
-        } else {
-            term.screen_lines().saturating_sub(1)
-        };
-        let point = Pos::new(Line(row as i32 - offset as i32), Column(ds.col));
-        if let Some(word) = self.grid_word_selection.as_mut() {
-            word.update(&mut term, point, &cx.global::<Config>().word_separators);
-        } else if let Some(sel) = term.selection.as_mut() {
-            sel.update(point, ds.side);
-        }
-        drop(term);
+        let moved = self.selection_scroll.drag_tick(
+            epoch,
+            || self.terminal.term.lock(),
+            &cx.global::<Config>().word_separators,
+        );
+        let Some(moved) = moved else { return false; };
         self.terminal.viewport_reporter().report();
-        if offset != before {
-            self.scroll_frac = 0.;
-            cx.notify();
-        }
+        if moved { cx.notify(); }
         true
     }
 
     pub fn on_select_end(&mut self, cx: &mut Context<Self>) {
-        let copy = select_end_copy(
-            cx.global::<Config>().copy_on_select,
-            self.selecting,
-            self.editor_select_gesture,
-        );
-        self.selecting = false;
+        use super::selection_scroll::SelectEndCopy;
+        let copy = self.selection_scroll.end(cx.global::<Config>().copy_on_select, self.editor_select_gesture);
         self.editor_selecting = false;
         self.editor_select_gesture = false;
         self.editor_drag_word = None;
-        self.drag_scroll = None;
         match copy {
             SelectEndCopy::None => {}
             SelectEndCopy::Grid => self.copy_selection(cx),
@@ -5102,221 +4452,57 @@ impl TerminalView {
     }
 
     fn on_scroll(&mut self, ev: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let gesturing = self.track_scroll_gesture(ev.touch_phase);
-        // One modifier turns the wheel into a zoom, the way it does in a
-        // browser. Which one is the user's to say, because the default is the
-        // platform modifier and on macOS that is a key half the world is
-        // already holding for something else (#668).
-        let wants_zoom = zoom_wheel(cx.global::<Config>().mouse_zoom_modifier, &ev.modifiers);
-        // A trackpad gesture answers "scroll or zoom?" once, on its first
-        // event, and keeps that answer until the stream dies — momentum tail
-        // included. The tail is why: those events are the system's, not the
-        // hand's, yet each one is stamped with whatever modifiers happen to be
-        // down as it is delivered. Reaching for ⌘ during a flick's coast —
-        // ⌘-Tab, ⌘-C, anything — would otherwise turn hundreds of coasting
-        // lines into zoom steps and leave the font at its minimum, from a
-        // gesture that was never a zoom (#912).
-        // The answer is latched per gesture, not per stream: fingers going
-        // back down ask it again. Carrying it over would be the same bug
-        // wearing the other coat — one ⌘-zoom, and every later flick zooms
-        // with nothing held at all, because `Started` keeps the gesture live
-        // and would find the old answer still sitting there.
-        if !gesturing || matches!(ev.touch_phase, gpui_kit::TouchPhase::Started) {
-            self.gesture_zoom = None;
-            // Leftover travel belongs to the gesture that earned it; a new one
-            // must not start already part-way to a step.
-            self.zoom_debt = 0.;
-        }
-        let zoom = if gesturing {
-            *self.gesture_zoom.get_or_insert(wants_zoom)
-        } else {
-            wants_zoom
-        };
-        if zoom {
-            self.zoom_scroll(ev, gesturing, window, cx);
-            return;
-        }
-        let mult = cx.global::<Config>().mouse_scroll_multiplier;
-        let raw = match ev.delta {
-            ScrollDelta::Lines(p) => p.y,
-            ScrollDelta::Pixels(p) => p.y.as_f32() / self.line_height.as_f32(),
-        };
-        let delta = raw * mult;
-
-        let quantized = !ev.modifiers.shift && {
+        use super::selection_scroll::WheelMotion;
+        let quantized = || !ev.modifiers.shift && {
             let mode = self.terminal.term.lock().mode();
             mode.intersects(Mode::MOUSE_MODE)
                 || mode.contains(Mode::ALT_SCREEN | Mode::ALTERNATE_SCROLL)
         };
-        if quantized {
-            // Whole lines are what the application gets told about, so this path
-            // cannot be spread over frames.
-            self.cancel_scroll_anim();
-            let total = self.scroll_debt + delta;
-            let lines = total.trunc() as i32;
-            self.scroll_debt = total - lines as f32;
-            if lines != 0 {
-                let at = self
-                    .cell_geom
-                    .map(|geom| geom.pos_to_cell(ev.position))
-                    .map(|(col, row, _)| (col, row));
-                self.scroll(lines, at, &ev.modifiers, cx);
+        match self.selection_scroll.wheel(ev, self.line_height.as_f32(), cx.global::<Config>(), quantized) {
+            WheelMotion::Zoom(steps) => {
+                // Share clamping and persistence with keyboard and menu zoom.
+                for _ in 0..steps.unsigned_abs() {
+                    if steps > 0 {
+                        window.dispatch_action(Box::new(IncreaseFontSize), cx);
+                    } else {
+                        window.dispatch_action(Box::new(DecreaseFontSize), cx);
+                    }
+                }
             }
-            return;
-        }
-
-        if self.should_animate_scroll(delta, gesturing, cx) {
-            self.queue_scroll_anim(delta, window, cx);
-        } else {
-            self.cancel_scroll_anim();
-            self.smooth_scroll(delta, cx);
-        }
-    }
-
-    /// Resize the terminal font by whole steps under the platform modifier.
-    ///
-    /// The event never reaches the buffer, and never reaches the program
-    /// running in it either: zooming is chrome, and showing a pane to someone
-    /// standing behind you has to work the same whether or not what is running
-    /// asked for the wheel. Steps go out as the same actions the keyboard and
-    /// the View menu send, so the min/max clamp and the saved setting live in
-    /// one place — [`LyrelApp::change_font_size`](crate::ui::app::LyrelApp).
-    fn zoom_scroll(
-        &mut self,
-        ev: &ScrollWheelEvent,
-        gesturing: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Whatever the scrollback still had in flight is dropped: it was
-        // travelling in lines of a font that is about to change size.
-        self.cancel_scroll_anim();
-        let lines = match ev.delta {
-            ScrollDelta::Lines(p) => p.y,
-            ScrollDelta::Pixels(p) => p.y.as_f32() / self.line_height.as_f32(),
-        };
-        let (steps, debt) = zoom_scroll_steps(lines, self.zoom_debt, gesturing);
-        self.zoom_debt = debt;
-        for _ in 0..steps.unsigned_abs() {
-            if steps > 0 {
-                window.dispatch_action(Box::new(IncreaseFontSize), cx);
-            } else {
-                window.dispatch_action(Box::new(DecreaseFontSize), cx);
+            WheelMotion::Quantized(lines) => {
+                if lines != 0 {
+                    let at = self.cell_geom
+                        .map(|geom| geom.pos_to_cell(ev.position))
+                        .map(|(col, row, _)| (col, row));
+                    self.scroll(lines, at, &ev.modifiers, cx);
+                }
             }
+            WheelMotion::Animate(delta) => {
+                if let Some(epoch) = self.selection_scroll.queue_animation(delta) {
+                    schedule_scroll_anim_frame(cx.weak_entity(), epoch, window);
+                    cx.notify();
+                }
+            }
+            WheelMotion::Direct(delta) => { self.smooth_scroll(delta, cx); }
         }
     }
 
-    /// Track whether the pointing device is mid-gesture, which is what tells a
-    /// trackpad apart from a wheel.
-    ///
-    /// Not the delta *type*: macOS reports a wheel mouse as pixels too — one
-    /// notch arrives as a single ~100px event — so `Pixels` says nothing about
-    /// the device. Phase does: only devices that can gesture ever report
-    /// `Started`/`Ended`, and a wheel is `Moved` forever, on every platform.
-    ///
-    /// The gesture is held open on a timer rather than closed on `Ended`,
-    /// because lifting the fingers is not the end of the stream — the momentum
-    /// tail keeps delivering `Moved` events, larger than the gesture itself,
-    /// and animating those would put a second layer of smoothing on scrolling
-    /// the system is already smoothing.
-    fn track_scroll_gesture(&mut self, phase: gpui_kit::TouchPhase) -> bool {
-        let now = std::time::Instant::now();
-        let live = matches!(phase, gpui_kit::TouchPhase::Started)
-            || self.gesture_until.is_some_and(|until| now < until);
-        self.gesture_until = live.then(|| now + SCROLL_GESTURE_IDLE);
-        live
-    }
-
-    fn should_animate_scroll(&self, delta: f32, gesturing: bool, cx: &App) -> bool {
-        if gesturing || !cx.global::<Config>().smooth_scroll {
-            return false;
-        }
-        // Anything already in flight keeps accumulating, or a slow notch
-        // arriving mid-animation would fight the frames still to come.
-        self.scroll_anim.is_some() || delta.abs() >= SCROLL_ANIM_MIN_JUMP
-    }
-
-    /// Add `delta` to the in-flight animation, starting the frame loop if it is
-    /// idle. Successive notches accumulate rather than restart, so spinning the
-    /// wheel fast still lands exactly where the notches asked for.
-    fn queue_scroll_anim(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(anim) = self.scroll_anim.as_mut() {
-            anim.remaining += delta;
-            return;
-        }
-        self.scroll_anim = Some(ScrollAnim {
-            remaining: delta,
-            last: std::time::Instant::now(),
-        });
-        self.scroll_anim_epoch += 1;
-        let epoch = self.scroll_anim_epoch;
-        schedule_scroll_anim_frame(cx.weak_entity(), epoch, window);
-        // Ask for a frame right away: the callback chain's first step then
-        // fires on the next display refresh even on a backend that only draws
-        // when the window is dirty, and the callback keeps it dirty from then
-        // on. Without this, a wheel notch queued on an idle, unfocused pane
-        // could sit dormant instead of spreading over frames.
-        cx.notify();
-    }
-
-    /// Drop whatever is left to travel. Every other way the display offset moves
-    /// — jumping to a prompt, dragging a selection past the edge, the keyboard
-    /// and mouse-reporting paths — has to come through here first, or the
-    /// animation would keep walking away from wherever it put us.
-    fn cancel_scroll_anim(&mut self) {
-        if self.scroll_anim.take().is_some() {
-            self.scroll_anim_epoch += 1;
-        }
-    }
-
-    /// Advance the in-flight animation by the ground it covered since the
-    /// previous frame. Runs at frame time — right before the next frame is
-    /// drawn — so every presented frame shows exactly one decay step and no
-    /// step is ever skipped or doubled against the monitor's cadence. Returns
-    /// whether the animation is still going.
-    fn scroll_anim_frame(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
-        if epoch != self.scroll_anim_epoch {
-            return false;
-        }
-        let Some(anim) = self.scroll_anim.as_mut() else {
-            return false;
-        };
-        let now = std::time::Instant::now();
-        let dt = now.duration_since(anim.last);
-        anim.last = now;
-        let (step, last) = scroll_anim_step(anim.remaining, dt);
-        anim.remaining -= step;
-        if last {
-            self.scroll_anim = None;
-        }
-        // Hitting the top or the bottom of the scrollback consumes nothing; the
-        // remaining distance has nowhere to go, so stop instead of decaying it
-        // against the clamp for another 100ms.
-        let moved = self.smooth_scroll(step, cx);
-        if !moved {
-            self.cancel_scroll_anim();
-            return false;
-        }
-        !last
-    }
-
-    /// Apply `delta` lines right now. Returns whether anything actually moved.
+    /// Apply a direct viewport movement and report only an actual visual change.
     fn smooth_scroll(&mut self, delta: f32, cx: &mut Context<Self>) -> bool {
         let mut term = self.terminal.term.lock();
-        let offset = term.grid.display_offset();
-        let max = term.grid.history_size();
-        let (jump, frac) = smooth_scroll_step(offset, self.scroll_frac, delta, max);
-        if jump != 0 {
-            term.scroll_display(Scroll::Delta(jump));
-        }
+        let moved = self.selection_scroll.smooth_scroll(&mut term, delta);
         drop(term);
         self.terminal.viewport_reporter().report();
-        if jump != 0 || frac != self.scroll_frac {
-            self.scroll_frac = frac;
-            cx.notify();
-            return true;
-        }
-        false
+        if moved { cx.notify(); }
+        moved
+    }
+
+    fn scroll_anim_frame(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
+        let frame = self.selection_scroll.animation_frame(epoch, || self.terminal.term.lock());
+        let Some((moved, running)) = frame else { return false; };
+        self.terminal.viewport_reporter().report();
+        if moved { cx.notify(); }
+        running
     }
 
     /// Settle up with the scrollback bar for this frame: move the viewport
@@ -5327,17 +4513,8 @@ impl TerminalView {
     /// into the terminal behind the pane's back.
     fn sync_scrollbar(&mut self) {
         if let Some(target) = self.scroll_handle.take_pending() {
-            // Whatever the wheel had in flight was heading somewhere else.
-            self.cancel_scroll_anim();
             let mut term = self.terminal.term.lock();
-            let delta = target as i32 - term.grid.display_offset() as i32;
-            if delta != 0 {
-                term.scroll_display(Scroll::Delta(delta));
-            }
-            drop(term);
-            // A sub-line remainder left over from a smooth wheel scroll would
-            // paint the grid shifted off the row the thumb just picked.
-            self.scroll_frac = 0.;
+            self.selection_scroll.scroll_to(&mut term, target);
         }
         // Not worth a wait: the scrollbar is a picture of where the grid is,
         // and a frame that cannot have the lock keeps the picture it drew last
@@ -5392,14 +4569,6 @@ impl TerminalView {
             .child(Scrollbar::vertical(&self.scroll_handle).id("terminal-scrollbar"))
     }
 
-    fn grid_line(
-        term: &Crosswords<crate::terminal::remote::EventProxy>,
-        row: usize,
-    ) -> Option<Line> {
-        let line = Line(row as i32 - term.grid.display_offset() as i32);
-        (line >= term.topmost_line() && line <= term.bottommost_line()).then_some(line)
-    }
-
     pub fn open_link_at(
         &mut self,
         col: usize,
@@ -5441,40 +4610,30 @@ impl TerminalView {
         // click follows one. Without this the menu would go on offering to
         // open files in a pane where link detection is turned off.
         if !cx.global::<Config>().link_url {
-            self.menu_link = None;
+            self.links.forget_menu();
             return;
         }
         let include_loopback = self.can_forward_loopback(cx);
-        self.menu_link = match self.resolve_link_at(col, row, true, include_loopback, cx) {
-            LinkAt::Found(target @ LinkTarget::File { .. }, ..) => Some(target),
-            _ => None,
-        };
+        let target = self.resolve_link_at(col, row, true, include_loopback, cx);
+        self.links.capture_menu(target);
     }
 
     /// Drops a latched link, for a right click the application is taking.
     pub fn forget_menu_link(&mut self) {
-        self.menu_link = None;
+        self.links.forget_menu();
     }
 
     /// The path the context menu is about, if it is about one.
     fn menu_link_path(&self) -> Option<&std::path::Path> {
-        match self.menu_link.as_ref()? {
-            LinkTarget::File { path, .. } => Some(path),
-            LinkTarget::Url(_) => None,
-        }
+        self.links.menu().map(|link| link.path())
     }
 
     fn open_menu_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(LinkTarget::File {
-            path,
-            line,
-            column,
-            is_dir,
-        }) = self.menu_link.clone()
-        else {
-            return;
-        };
-        self.open_file_link(path, line, column, is_dir, window, cx);
+        let Some(link) = self.links.menu() else { return; };
+        let mode = link.open_mode(cx.global::<Config>().file_open_mode());
+        let host_id = link.host();
+        let LinkTarget::File { path, line, column, is_dir } = link.target().clone() else { return; };
+        self.deliver_file_link(path, line, column, is_dir, host_id, mode, window, cx);
     }
 
     /// "Open with Default App": the file link under the menu, handed to the
@@ -5482,7 +4641,7 @@ impl TerminalView {
     fn open_menu_link_with_default_app(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The menu only offers this for a local pane; a key binding could
         // still fire it on a remote one, where the path means nothing here.
-        if !self.host_id.is_local() {
+        if !self.links.menu().is_some_and(|link| link.host().is_local()) {
             return;
         }
         let Some(path) = self.menu_link_path().map(std::path::Path::to_path_buf) else {
@@ -5494,6 +4653,7 @@ impl TerminalView {
     }
 
     fn reveal_menu_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.links.menu().is_some_and(|link| link.host().is_local()) { return; };
         let Some(path) = self.menu_link_path().map(std::path::Path::to_path_buf) else {
             return;
         };
@@ -5525,19 +4685,22 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let cfg = cx.global::<Config>();
-        let mode = cfg.file_open_mode();
-        let command = cfg.link_file_command.clone();
-        // A path that was just resolved on another machine means nothing to a
-        // local opener: `open` and a user's `code --goto` would both be handed
-        // a path this filesystem never had, throwing away the one thing that
-        // made the link right and silently showing this machine's copy when
-        // one happens to exist. The editor is the only one that can reach the
-        // file, so it takes the click whatever the setting says.
-        let mode = match self.host_id.is_local() {
-            true => mode,
-            false => LinkFileOpen::Internal,
-        };
+        let mode = LinkInteraction::file_open_mode(self.host_id, cx.global::<Config>().file_open_mode());
+        self.deliver_file_link(path, line, column, is_dir, self.host_id, mode, window, cx);
+    }
+
+    fn deliver_file_link(
+        &mut self,
+        path: std::path::PathBuf,
+        line: Option<u32>,
+        column: Option<u32>,
+        is_dir: bool,
+        host_id: crate::ui::host_ops::HostId,
+        mode: LinkFileOpen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let command = cx.global::<Config>().link_file_command.clone();
         // Both external arms have to answer for a failed spawn (#542): a
         // misspelled `link_file_command` or a missing opener used to hit only
         // the log, and the link read as dead — while the path was only ever
@@ -5552,6 +4715,7 @@ impl TerminalView {
             // to the built-in editor beats the click doing nothing.
             (LinkFileOpen::Internal | LinkFileOpen::Command, _) => {
                 cx.emit(OpenFileRequested {
+                    host_id,
                     path,
                     line,
                     column,
@@ -5578,36 +4742,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let roots = self.link_roots(cx);
-        // A word that is not written like a path was never a link, and saying
-        // so on every modifier-click over ordinary output would be noise.
-        if !candidate.looks_like_a_path(roots.style) {
-            return false;
-        }
-        // The host has not answered yet. The underline is the promise that it
-        // has; before then, accusing it of losing the file would be a guess.
-        if pending {
-            return false;
-        }
-        // An absolute or `~`-rooted path was never measured from anywhere, so
-        // naming a directory it was "looked for under" would send the user to
-        // somewhere nothing was ever asked about.
-        let rooted = candidate.is_rooted(roots.style);
-        let root = match rooted {
-            true => None,
-            false => roots.dirs.into_iter().next(),
-        };
-        let message = match root {
-            Some(root) => t_fmt(
-                L10nKey::LinkFileNotUnder,
-                &[
-                    ("path", &candidate.path),
-                    ("dir", &root.display().to_string()),
-                ],
-            ),
-            None if rooted => t_fmt(L10nKey::LinkFileMissing, &[("path", &candidate.path)]),
-            None => t_fmt(L10nKey::LinkFileNoDirectory, &[("path", &candidate.path)]),
-        };
+        let Some(message) = self.links.unresolved_message(candidate, pending) else { return false; };
         window.notify_app(
             crate::ui::notification_history::Notification::info(message).pane(
                 self.owner_workspace(),
@@ -5700,6 +4835,15 @@ impl TerminalView {
         port_route_of(&self.loopback_plan(cx), self.host_id().is_local())
     }
 
+    fn sync_link_location(&mut self) {
+        self.links.retarget(
+            self.host_id,
+            self.effective_host_cwd(),
+            self.paths_are_local(),
+            self.cwd_is_on_host(),
+        );
+    }
+
     pub fn hover_link_at(
         &mut self,
         col: usize,
@@ -5707,107 +4851,43 @@ impl TerminalView {
         armed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        // A mouse crossing a pane lands on the same cell many times over.
-        // Nothing about the answer depends on where inside the cell the
-        // pointer is, so the work is worth doing once.
-        if self.last_hover_cell == Some((col, row)) && self.link_modifier_down == armed {
-            return self.hovered_link.is_some();
+        if let Some(found) = self.links.cached_hover(col, row, armed) { return found; }
+        let alt_screen = self.on_alt_screen();
+        if let Some((found, changed)) = self.links.prepare_hover(
+            &self.terminal.term, col, row, armed, cx.global::<Config>().link_url, alt_screen,
+        ) {
+            if changed { cx.notify(); }
+            return found;
         }
-        self.last_hover_cell = Some((col, row));
-        self.link_modifier_down = armed;
-        if !cx.global::<Config>().link_url {
-            self.clear_hovered_link(cx);
-            return false;
-        }
-        // A full-screen application drew what is on the grid and is watching
-        // the mouse itself, so pointing things out inside it is lyrel drawing
-        // on somebody else's window. Holding the modifier says the user wants
-        // lyrel's reading of the screen anyway, and then it is theirs to have.
-        if !armed && self.on_alt_screen() {
-            if self.hovered_link.take().is_some() {
-                cx.notify();
-            }
-            return false;
-        }
-        // Most of a screen is blanks, and reading one cell costs a fraction
-        // of lifting a whole soft-wrapped logical line out of the grid.
-        if self.cell_is_blank(col, row) {
-            if self.hovered_link.take().is_some() {
-                cx.notify();
-            }
-            return false;
-        }
+        self.sync_link_location();
         let include_loopback = self.can_forward_loopback(cx);
-        let next = self.link_span_at(col, row, armed, include_loopback, cx);
-        if next != self.hovered_link {
-            self.hovered_link = next;
-            cx.notify();
-        }
-        self.hovered_link.is_some()
-    }
-
-    /// Whether the cell under the pointer holds anything a link could be made
-    /// of.
-    fn cell_is_blank(&self, col: usize, row: usize) -> bool {
-        let term = self.terminal.term.lock();
-        let Some(line) = Self::grid_line(&term, row) else {
-            return true;
-        };
-        if col >= term.columns() {
-            return true;
-        }
-        let cell = &term.grid[line][Column(col)];
-        // The second column of a wide glyph is written as a space, and the
-        // logical line hands a click there back to the character that owns it.
-        // Reading it as empty would drop the underline on every other column
-        // of a path spelled in CJK or emoji.
-        if cell.wide() != rio_vt::crosswords::square::Wide::Narrow {
-            return false;
-        }
-        cell.c().is_whitespace()
+        let (found, changed) = self.links.resolve_hover(
+            &self.terminal.term, col, row, armed, include_loopback,
+            |host, cwd| cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+                .and_then(|cache| cache.repo_root_for(host, cwd))
+                .map(std::path::Path::to_path_buf),
+        );
+        self.request_link_work(cx);
+        self.flush_link_probes(cx);
+        if changed { cx.notify(); }
+        found
     }
 
     pub fn refresh_link_hover(&mut self, armed: bool, cx: &mut Context<Self>) -> bool {
-        let Some((col, row)) = self.last_hover_cell else {
-            self.link_modifier_down = armed;
-            return false;
-        };
+        let Some((col, row)) = self.links.refresh_cell(armed, false) else { return false; };
         self.hover_link_at(col, row, armed, cx)
     }
 
-    /// Runs the hover again from scratch, for when the answer may have
-    /// changed under a mouse that never moved: a probe landing, a repository
-    /// root arriving.
     fn recompute_link_hover(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some((col, row)) = self.last_hover_cell.take() else {
-            return false;
-        };
-        self.hover_link_at(col, row, self.link_modifier_down, cx)
+        let armed = self.links.modifier_down();
+        let Some((col, row)) = self.links.refresh_cell(armed, true) else { return false; };
+        self.hover_link_at(col, row, armed, cx)
     }
 
-    pub fn link_modifier_down(&self) -> bool {
-        self.link_modifier_down
-    }
+    pub fn link_modifier_down(&self) -> bool { self.links.modifier_down() }
 
     pub fn clear_hovered_link(&mut self, cx: &mut Context<Self>) {
-        self.last_hover_cell = None;
-        if self.hovered_link.take().is_some() {
-            cx.notify();
-        }
-    }
-
-    fn link_span_at(
-        &mut self,
-        col: usize,
-        row: usize,
-        armed: bool,
-        include_loopback: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<HoveredLink> {
-        match self.resolve_link_at(col, row, true, include_loopback, cx) {
-            LinkAt::Found(_, runs) => Some(HoveredLink { runs, armed }),
-            LinkAt::Unresolved { .. } | LinkAt::None => None,
-        }
+        if self.links.clear_hover() { cx.notify(); }
     }
 
     fn resolve_link_at(
@@ -5818,219 +4898,55 @@ impl TerminalView {
         include_loopback: bool,
         cx: &mut Context<Self>,
     ) -> LinkAt {
-        let Some(line) = self.link_line_at(col, row) else {
-            return LinkAt::None;
-        };
-        let (text, points, click_idx) = match line {
-            GridLink::Hyperlink(uri, runs) => {
-                return LinkAt::Found(LinkTarget::Url(uri), runs);
-            }
-            GridLink::Text(text, points, click_idx) => (text, points, click_idx),
-        };
-
-        // A pane whose paths belong to neither its host nor this machine —
-        // an `ssh` typed into a local shell — has nothing that can answer for
-        // them. It used to fall through to the local filesystem, so an
-        // absolute path that happened to exist on both ends opened *this*
-        // machine's copy without a word.
-        let files = include_files && self.cwd_is_on_host();
-        let roots = match files {
-            true => self.link_roots(cx),
-            false => super::search::LinkRoots::default(),
-        };
-        let local = self.host_id.is_local();
-        // Before the first probe, not after: `retarget` empties the cache when
-        // the host has changed, and doing that between recording a wanted path
-        // and draining it would throw the question away unasked.
-        self.link_probes.retarget(self.host_id);
-        let probes = &mut self.link_probes;
-        let mut pending = false;
-        let mut probe = |path: &std::path::Path, require_file: bool| {
-            let answer = match local {
-                true => super::search::local_probe(path, require_file),
-                false => probes.probe(path, require_file),
-            };
-            pending |= matches!(answer, super::search::Probe::Unknown);
-            answer
-        };
-        let link = super::search::link_at(&text, click_idx, &roots, files, &mut probe);
-        // `probe` holds the cache borrow; nothing below touches it, so the
-        // borrow ends here and `self` is whole again for the flush.
-        self.flush_link_probes(cx);
-
-        let link = link.or_else(|| {
-            include_loopback.then(|| {
-                super::loopback::loopback_url_span_at(&text, click_idx).map(|(start, end, url)| {
-                    super::search::LinkMatch {
-                        start,
-                        end,
-                        target: LinkTarget::Url(url),
-                    }
-                })
-            })?
-        });
-        match link {
-            Some(link) => {
-                let term = self.terminal.term.lock();
-                let runs = super::smart_select::row_runs(&term, &points[link.start..=link.end]);
-                LinkAt::Found(link.target, runs)
-            }
-            // Nothing answered. Hand back what the token *said* so a click can
-            // say so out loud instead of looking broken.
-            None => match files
-                .then(|| super::search::unresolved_candidate(&text, click_idx, roots.style))
-                .flatten()
-            {
-                Some(candidate) => LinkAt::Unresolved { candidate, pending },
-                None => LinkAt::None,
-            },
-        }
-    }
-
-    /// The logical line under a cell, or the OSC 8 hyperlink that cell
-    /// declares — which wins outright, because the emitter said what it meant.
-    fn link_line_at(&self, col: usize, row: usize) -> Option<GridLink> {
-        let term = self.terminal.term.lock();
-        let line = Self::grid_line(&term, row)?;
-        if col >= term.columns() {
-            return None;
-        }
-        let click = Pos::new(line, Column(col));
-
-        if let Some(hl) = term.cell_hyperlink(line, Column(col)) {
-            let uri = hl.uri().to_string();
-            if let Some((start, end)) = super::smart_select::hyperlink_run(&term, click) {
-                let runs = super::smart_select::grid_runs(start, end, term.columns());
-                return Some(GridLink::Hyperlink(uri, runs));
-            }
-        }
-
-        let (text, points, click_idx) = super::smart_select::logical_line_at(&term, click, true)?;
-        Some(GridLink::Text(text, points, click_idx))
-    }
-
-    /// The directories a relative path in this pane is measured from, best
-    /// first: where the work is happening, then the repository around it.
-    ///
-    /// Cargo, tsc and friends name files from the workspace root while the
-    /// shell sits in a member directory, so one root resolves only half of
-    /// what a build prints. The pane's own directory stays first, so a name
-    /// that exists in both is the near one.
-    fn link_roots(&mut self, cx: &mut Context<Self>) -> super::search::LinkRoots {
-        let local_home = self.host_id.is_local();
-        let style = self.link_path_style();
-        let Some(cwd) = self.effective_host_cwd() else {
-            return super::search::LinkRoots {
-                dirs: Vec::new(),
-                local_home,
-                style,
-            };
-        };
-        self.request_link_repo_root(&cwd, cx);
-        let mut dirs = vec![cwd.clone()];
-        if let Some((asked_for, Some(root))) = &self.link_repo_root
-            && *asked_for == cwd
-            && *root != cwd
-        {
-            dirs.push(root.clone());
-        }
-        super::search::LinkRoots {
-            dirs,
-            local_home,
-            style,
-        }
-    }
-
-    /// Which path dialect this pane's output is written in — see
-    /// [`link_path_style`].
-    fn link_path_style(&self) -> super::search::PathStyle {
-        link_path_style(self.paths_are_local(), self.effective_host_cwd().as_deref())
-    }
-
-    fn request_link_repo_root(&mut self, cwd: &std::path::Path, cx: &mut Context<Self>) {
-        if self.link_repo_root_pending
-            || self
-                .link_repo_root
-                .as_ref()
-                .is_some_and(|(asked_for, _)| asked_for == cwd)
-        {
-            return;
-        }
-        // The git-status probe asks this same question about this same
-        // directory on its own schedule and files the answer per host, so a
-        // hit there costs nothing and saves a round trip. Only a hit: the
-        // cache cannot tell "asked, and there is no repository" apart from
-        // "never asked", and treating the second as the first would nail a
-        // pane to one root forever.
-        let cached = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
-            .and_then(|cache| cache.repo_root_for(self.host_id, cwd))
-            .map(std::path::Path::to_path_buf);
-        if let Some(root) = cached {
-            self.link_repo_root = Some((cwd.to_path_buf(), Some(root)));
-            return;
-        }
-        let Some(host) = self.host(cx) else {
-            return;
-        };
-        self.link_repo_root_pending = true;
-        let cwd = cwd.to_path_buf();
-        crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
-            {
-                let cwd = cwd.clone();
-                move |h| h.repo_root(&cwd).ok().flatten()
-            },
-            move |view, root, cx| {
-                view.link_repo_root_pending = false;
-                view.link_repo_root = Some((cwd, root));
-                view.recompute_link_hover(cx);
-            },
+        self.sync_link_location();
+        let result = self.links.resolve(
+            &self.terminal.term, col, row, include_files, include_loopback,
+            |host, cwd| cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+                .and_then(|cache| cache.repo_root_for(host, cwd))
+                .map(std::path::Path::to_path_buf),
         );
+        self.request_link_work(cx);
+        self.flush_link_probes(cx);
+        result
     }
 
-    /// Asks the host about every path a lookup could not answer for, in one
-    /// call, and re-runs the hover once the replies are in — the mouse may
-    /// have been resting on the link the whole time it took.
+    fn request_link_work(&mut self, cx: &mut Context<Self>) {
+        if !self.links.wants_root() { return; }
+        // Do not mark work in flight until there is a Host to carry it.
+        let Some(host) = self.host(cx) else { return; };
+        if let Some((epoch, cwd)) = self.links.request_root() {
+            crate::ui::host_ops::HostOps::run(
+                host, cx,
+                move |h| h.repo_root(&cwd).ok().flatten(),
+                move |view, root, cx| {
+                    view.sync_link_location();
+                    if view.links.land_root(epoch, root) { view.recompute_link_hover(cx); }
+                },
+            );
+        }
+    }
+
     fn flush_link_probes(&mut self, cx: &mut Context<Self>) {
-        if self.host_id.is_local() {
-            return;
-        }
-        // The host comes first: `take_wanted` moves the paths into the
-        // in-flight set on the promise that a call is about to carry them, and
-        // a host that has gone away between the hover and here would break
-        // that promise permanently — those paths would stay `Unknown` for the
-        // life of the pane, which looks exactly like the silent nothing this
-        // whole path exists to get rid of.
-        let Some(host) = self.host(cx) else {
-            return;
-        };
-        let wanted = self.link_probes.take_wanted();
-        if wanted.is_empty() {
-            return;
-        }
+        if self.host_id.is_local() { return; }
+        let Some(host) = self.host(cx) else { return; };
+        let (epoch, wanted) = self.links.take_probes();
+        if wanted.is_empty() { return; }
         crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
+            host, cx,
             move |h| {
                 use super::link_probe::Existence;
-                wanted
-                    .into_iter()
-                    .map(|path| {
-                        let existence = match h.stat(&path) {
-                            Ok(meta) if meta.is_dir => Existence::Dir,
-                            Ok(_) => Existence::File,
-                            Err(_) => Existence::Missing,
-                        };
-                        (path, existence)
-                    })
-                    .collect::<Vec<_>>()
+                wanted.into_iter().map(|path| {
+                    let existence = match h.stat(&path) {
+                        Ok(meta) if meta.is_dir => Existence::Dir,
+                        Ok(_) => Existence::File,
+                        Err(_) => Existence::Missing,
+                    };
+                    (path, existence)
+                }).collect::<Vec<_>>()
             },
-            |view, answers, cx| {
-                if view.link_probes.land(answers) {
-                    view.recompute_link_hover(cx);
-                }
+            move |view, answers, cx| {
+                view.sync_link_location();
+                if view.links.land_probes(epoch, answers) { view.recompute_link_hover(cx); }
             },
         );
     }
@@ -6104,7 +5020,7 @@ impl TerminalView {
             let cfg = cx.global::<Config>();
             cfg.prompt_cursor_style.shape().unwrap_or(cfg.cursor_style)
         };
-        let cursor_paint = input_caret_paint(focused, self.cursor_visible, cursor_style);
+        let cursor_paint = input_caret_paint(focused, self.lifecycle.cursor_visible(), cursor_style);
         let cursor_on = cursor_paint.is_some();
         let block_cursor = cursor_paint == Some(InputCaretPaint::Block);
         // A block caret is drawn as reverse video on the cell it covers, not as
@@ -6750,8 +5666,7 @@ impl Render for TerminalView {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, ev: &MouseDownEvent, _window, _cx| {
-                    this.context_menu_allowed =
-                        should_show_context_menu(this.mouse_mode(), ev.modifiers.shift);
+                    this.links.record_menu_permission(this.mouse_mode(), ev.modifiers.shift);
                 }),
             )
             .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(cx.theme().drag_border.opacity(0.12)))
@@ -6847,7 +5762,7 @@ impl Render for TerminalView {
                 // and its right mouse-down listener is registered after ours
                 // (it wraps this element), so we cannot out-order it or veto it
                 // any earlier. See `should_show_context_menu` for the rule.
-                if !menu_view.read(cx).context_menu_allowed {
+                if !menu_view.read(cx).links.menu_allowed() {
                     return menu;
                 }
                 let view = menu_view.read(cx);
@@ -6855,7 +5770,7 @@ impl Render for TerminalView {
                 // what it can do goes above what the pane can do.
                 let menu = match view.menu_link_path() {
                     Some(path) => {
-                        let local = view.host_id.is_local();
+                        let local = view.links.menu().is_some_and(|link| link.host().is_local());
                         let reveal = match cfg!(target_os = "macos") {
                             true => L10nKey::AppMenuRevealInFinder,
                             false => L10nKey::AppMenuRevealInFolder,
@@ -7129,39 +6044,7 @@ fn wheel_route(mode: Mode, shift: bool, up: bool) -> WheelRoute {
     WheelRoute::Scrollback
 }
 
-#[derive(Debug, PartialEq)]
-enum SelectEndCopy {
-    None,
-    Grid,
-    Editor,
-}
 
-/// Whether a right-click belongs to lyrel's own context menu rather than to the
-/// terminal application.
-///
-/// A TUI that has turned mouse reporting on (vim with `set mouse=a`, lazygit,
-/// tmux, …) draws its own right-button menus, so popping the host menu on top
-/// of the application's is a double delivery of one click — #251. While
-/// reporting is active the unmodified click is the application's alone; Shift
-/// is the escape hatch that reaches lyrel, matching how Shift already overrides
-/// mouse reporting for selection (`register_mouse_handlers`) and for the wheel
-/// (`wheel_route`).
-///
-/// This is the exact complement of the "forward the press to the app" branch in
-/// `TerminalElement::register_mouse_handlers`, which is why both call it: one
-/// click must never feed both consumers.
-pub(super) fn should_show_context_menu(mouse_mode: bool, shift: bool) -> bool {
-    !mouse_mode || shift
-}
-
-fn select_end_copy(enabled: bool, grid: bool, editor: bool) -> SelectEndCopy {
-    match (enabled, grid, editor) {
-        (false, ..) => SelectEndCopy::None,
-        (true, true, _) => SelectEndCopy::Grid,
-        (true, false, true) => SelectEndCopy::Editor,
-        (true, false, false) => SelectEndCopy::None,
-    }
-}
 
 /// Whether a file link's menu offers "Open with Default App" beside "Open".
 ///
@@ -7625,60 +6508,10 @@ fn wrapped_click_index(
     }
 }
 
-/// Whether this wheel event is a zoom rather than a scroll.
-///
-/// Exactly one modifier, and it has to be the configured one: anything
-/// alongside it is somebody else's gesture — shift in particular is the escape
-/// hatch that scrolls the scrollback out from under a mouse-reporting program.
-///
-/// Off macOS the platform modifier *is* Ctrl, so `Platform` and `Ctrl` describe
-/// the same key there; the setting still round-trips, so a config file shared
-/// with a Mac keeps meaning what it meant.
-fn zoom_wheel(modifier: MouseZoomModifier, mods: &Modifiers) -> bool {
-    if mods.number_of_modifiers() != 1 {
-        return false;
-    }
-    match modifier {
-        MouseZoomModifier::Platform => mods.secondary(),
-        MouseZoomModifier::Ctrl => mods.control,
-        MouseZoomModifier::Alt => mods.alt,
-        MouseZoomModifier::None => false,
-    }
-}
-
-/// How many font-size steps a zoom event is worth, and what is left over for
-/// the next one.
-///
-/// A wheel detent is a discrete click of intent, so it is one step whatever the
-/// platform says it covers — macOS calls a single notch five lines, and five
-/// points of font per notch would be unusable. A trackpad has no detents and
-/// spends a flick over dozens of events, so those accumulate and only pay out
-/// once the fingers have travelled [`ZOOM_SCROLL_LINES`].
-fn zoom_scroll_steps(lines: f32, debt: f32, gesturing: bool) -> (i32, f32) {
-    if !gesturing {
-        let step = if lines > 0. {
-            1
-        } else if lines < 0. {
-            -1
-        } else {
-            0
-        };
-        return (step, 0.);
-    }
-    let total = debt + lines;
-    let steps = (total / ZOOM_SCROLL_LINES).trunc();
-    (steps as i32, total - steps * ZOOM_SCROLL_LINES)
-}
-
-fn smooth_scroll_step(offset: usize, frac: f32, delta: f32, max: usize) -> (i32, f32) {
-    let pos = (offset as f32 + frac + delta).clamp(0., max as f32);
-    let new_offset = pos.floor();
-    (new_offset as i32 - offset as i32, pos - new_offset)
-}
 
 /// Advance the in-flight scroll animation once per presented frame.
 ///
-/// Registered from [`TerminalView::queue_scroll_anim`]: gpui runs the callback
+/// Registered by the wheel adapter: gpui runs the callback
 /// immediately before the next frame is drawn, and it re-registers itself as
 /// long as the animation lives. Stepping at frame time instead of on a
 /// free-running timer keeps the decay steps locked to the monitor's vblank
@@ -7698,27 +6531,6 @@ fn schedule_scroll_anim_frame(view: WeakEntity<TerminalView>, epoch: u64, window
     });
 }
 
-/// How much of `remaining` to consume this frame, and whether this is the last
-/// one. Decay is scaled by the real elapsed time so a dropped frame covers the
-/// ground it missed instead of stretching the animation out.
-fn scroll_anim_step(remaining: f32, dt: std::time::Duration) -> (f32, bool) {
-    if remaining.abs() <= SCROLL_ANIM_MIN {
-        return (remaining, true);
-    }
-    let frames = (dt.as_secs_f32() / SCROLL_ANIM_FRAME.as_secs_f32()).clamp(0.1, 8.);
-    let consumed = 1. - (1. - SCROLL_ANIM_SMOOTH).powf(frames);
-    let step = remaining * consumed;
-    if (remaining - step).abs() <= SCROLL_ANIM_MIN {
-        (remaining, true)
-    } else {
-        (step, false)
-    }
-}
-
-fn drag_scroll_step(overshoot: f32) -> i32 {
-    let lines = overshoot.abs().ceil().clamp(1., 8.) as i32;
-    if overshoot < 0. { -lines } else { lines }
-}
 
 #[cfg(test)]
 mod tests {
@@ -7809,18 +6621,17 @@ mod tests {
         assert!(!out.contains(" …"), "{out:?}");
     }
     use super::{
-        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, RawInput, SelectEndCopy, Typeahead,
-        WheelRoute, compose_notification_title, cwd_is_on_host, link_path_style, loopback_plan,
+        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, RawInput, Typeahead,
+        WheelRoute, compose_notification_title, cwd_is_on_host, loopback_plan,
         observe_typeahead_for_owner, typeahead_boundary,
     };
-    use super::{SCROLL_ANIM_FRAME, scroll_anim_step};
     use super::{TitleSettle, files_cwd, settle_title, wsl_share_distro, wsl_share_path};
     use super::{
-        before_input, description_budget, drag_scroll_step, elide, encode_mouse,
+        before_input, description_budget, elide, encode_mouse,
         expand_file_command_template, fallback_chain, fig_icon_emoji, fig_icon_glyph,
         focus_report_bytes, highlight_runs, input_cells, input_char_positions,
         input_overflow_shift, input_overlay_rows, input_start, menu_layout, paste_bytes,
-        select_end_copy, should_show_context_menu, smooth_scroll_step, submit_bytes,
+        submit_bytes,
         trim_trailing_spaces, wheel_route, wrapped_click_index,
     };
     use gpui_kit::Modifiers;
@@ -8511,59 +7322,6 @@ mod tests {
         assert_eq!(wheel_route(everything, true, false), WheelRoute::Scrollback);
     }
 
-    #[test]
-    fn right_click_opens_the_host_menu_when_the_app_is_not_reporting_mouse() {
-        assert!(should_show_context_menu(false, false));
-        assert!(should_show_context_menu(false, true));
-    }
-
-    #[test]
-    fn right_click_belongs_to_the_app_while_mouse_reporting_is_active() {
-        assert!(
-            !should_show_context_menu(true, false),
-            "an unmodified right-click in mouse mode is the application's event, \
-             so lyrel must not also pop its own menu over it"
-        );
-    }
-
-    #[test]
-    fn shift_right_click_stays_the_escape_hatch_in_mouse_mode() {
-        assert!(
-            should_show_context_menu(true, true),
-            "Shift is the documented way to reach lyrel's own menu inside a \
-             mouse-reporting TUI"
-        );
-    }
-
-    #[test]
-    fn context_menu_and_mouse_report_never_fire_for_the_same_click() {
-        // The render-time menu gate and the mouse-down forwarder in
-        // `TerminalElement` read the same predicate from opposite sides, so
-        // every (mouse_mode, shift) pair must land in exactly one of them.
-        for mouse_mode in [false, true] {
-            for shift in [false, true] {
-                let menu = should_show_context_menu(mouse_mode, shift);
-                let reported = mouse_mode && !shift;
-                assert_ne!(
-                    menu, reported,
-                    "mouse_mode={mouse_mode} shift={shift} must route to exactly one consumer"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn copy_on_select_copies_the_buffer_the_gesture_touched() {
-        assert_eq!(select_end_copy(false, true, false), SelectEndCopy::None);
-        assert_eq!(select_end_copy(false, false, true), SelectEndCopy::None);
-
-        assert_eq!(select_end_copy(true, true, false), SelectEndCopy::Grid);
-        assert_eq!(select_end_copy(true, false, true), SelectEndCopy::Editor);
-
-        assert_eq!(select_end_copy(true, false, false), SelectEndCopy::None);
-
-        assert_eq!(select_end_copy(true, true, true), SelectEndCopy::Grid);
-    }
 
     #[test]
     fn sgr_mouse_reports_one_based_decimal_with_modifier_bits() {
@@ -8673,82 +7431,6 @@ mod tests {
         assert_eq!(focus_report_bytes(mode, true), Some(b"\x1b[I".as_slice()));
         assert_eq!(focus_report_bytes(mode, false), Some(b"\x1b[O".as_slice()));
         assert_eq!(focus_report_bytes(Mode::MOUSE_MOTION, true), None);
-    }
-
-    #[test]
-    fn smooth_scroll_step_accumulates_and_clamps() {
-        assert_eq!(smooth_scroll_step(0, 0.0, 0.4, 100), (0, 0.4));
-        let (jump, frac) = smooth_scroll_step(0, 0.4, 0.8, 100);
-        assert_eq!(jump, 1);
-        assert!((frac - 0.2).abs() < 1e-4);
-        let (jump, frac) = smooth_scroll_step(5, 0.2, -0.5, 100);
-        assert_eq!(jump, -1);
-        assert!((frac - 0.7).abs() < 1e-4);
-        assert_eq!(smooth_scroll_step(3, 0.5, -10.0, 100), (-3, 0.0));
-        assert_eq!(smooth_scroll_step(98, 0.0, 7.3, 100), (2, 0.0));
-        assert_eq!(smooth_scroll_step(0, 0.0, 2.5, 0), (0, 0.0));
-    }
-
-    #[test]
-    fn scroll_anim_step_converges_and_lands() {
-        let frame = SCROLL_ANIM_FRAME;
-        // A notch is spread over frames instead of being applied whole.
-        let (step, last) = scroll_anim_step(3.0, frame);
-        assert!(!last);
-        assert!(
-            step > 0. && step < 3.0,
-            "took {step} of 3 lines in one frame"
-        );
-
-        // And it converges: no notch is left hanging.
-        let mut remaining = 3.0_f32;
-        let mut frames = 0u32;
-        loop {
-            let (step, last) = scroll_anim_step(remaining, frame);
-            remaining -= step;
-            frames += 1;
-            if last {
-                break;
-            }
-            assert!(frames < 200, "still {remaining} lines short after {frames}");
-        }
-        assert!(remaining.abs() < 1e-4, "landed {remaining} lines off");
-        // Slow enough to read as motion, fast enough not to feel like lag.
-        let ms = frames * SCROLL_ANIM_FRAME.as_millis() as u32;
-        assert!((60..=200).contains(&ms), "a 3-line notch took {ms}ms");
-    }
-
-    #[test]
-    fn scroll_anim_step_covers_dropped_frames() {
-        // A late tick has to make up the ground it missed, or a busy pane would
-        // scroll slower than an idle one.
-        let (one, _) = scroll_anim_step(10.0, SCROLL_ANIM_FRAME);
-        let (four, _) = scroll_anim_step(10.0, SCROLL_ANIM_FRAME * 4);
-        assert!(four > one * 2., "{four} should far outpace {one}");
-        // But the catch-up is capped, so a tick after a long stall never
-        // overshoots what was actually asked for.
-        let (stalled, _) = scroll_anim_step(10.0, std::time::Duration::from_secs(5));
-        assert!(
-            stalled > four && stalled <= 10.0,
-            "stalled tick took {stalled}"
-        );
-    }
-
-    #[test]
-    fn scroll_anim_step_lands_on_a_negligible_remainder() {
-        let (step, last) = scroll_anim_step(-0.005, SCROLL_ANIM_FRAME);
-        assert!(last);
-        assert_eq!(step, -0.005);
-    }
-
-    #[test]
-    fn drag_scroll_step_scales_with_overshoot_and_caps() {
-        assert_eq!(drag_scroll_step(0.2), 1);
-        assert_eq!(drag_scroll_step(-0.2), -1);
-        assert_eq!(drag_scroll_step(3.5), 4);
-        assert_eq!(drag_scroll_step(-3.5), -4);
-        assert_eq!(drag_scroll_step(50.0), 8);
-        assert_eq!(drag_scroll_step(-50.0), -8);
     }
 
     #[test]
@@ -9474,39 +8156,6 @@ mod tests {
         assert!(!cwd_is_on_host(false, false));
     }
 
-    /// Which machine's spelling a pane's paths are read in. Ungated on
-    /// purpose: the bug this settles was a Windows-only one that hid behind a
-    /// `#[cfg(unix)]` on the test that covered it.
-    #[test]
-    fn a_panes_paths_are_read_in_its_own_hosts_spelling() {
-        use super::super::search::PathStyle;
-        use std::path::Path;
-
-        assert_eq!(
-            link_path_style(true, Some(Path::new("/home/u/proj"))),
-            PathStyle::NATIVE,
-            "a pane on this machine reads its own output this OS's way, \
-             whatever its shell spells the cwd like"
-        );
-        assert_eq!(
-            link_path_style(false, Some(Path::new("/home/u/proj"))),
-            PathStyle::Posix,
-            "an SSH host, a remote workspace or a WSL distro reporting a \
-             /-rooted cwd is a POSIX one on every client"
-        );
-        assert_eq!(
-            link_path_style(false, Some(Path::new(r"C:\Users\u\proj"))),
-            PathStyle::Windows,
-            "and a remote Windows host is not"
-        );
-        assert_eq!(
-            link_path_style(false, None),
-            PathStyle::Posix,
-            "a remote pane that has not said where it is still has no local \
-             drive its paths could hang off"
-        );
-    }
-
     #[test]
     fn a_panes_host_is_its_workspaces_machine() {
         use crate::core::session::{RemoteTarget, WorkspaceId};
@@ -9692,13 +8341,23 @@ fn history_fixture(entries: Vec<String>) -> super::history::History {
 fn seed_history(view: &mut TerminalView, entries: Vec<String>) {
     view.history = TerminalHistory::from_loaded(history_fixture(entries));
 }
+#[cfg(test)]
+#[path = "agent_activity_tests.rs"]
+mod agent_activity_tests;
 
 #[cfg(test)]
 mod gpui_tests {
     use super::*;
+    use crate::core::config::MouseZoomModifier;
+    use rio_vt::selection::{Selection, SelectionType};
+
+    mod selection_scroll_consumer_tests {
+        include!("selection_scroll_consumer_tests.rs");
+    }
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
     use crate::daemon::transport::Stream;
     use crate::terminal::remote::PtySource;
+    use crate::terminal::lifecycle::declare_displayed;
     use gpui_kit::{Bounds, Entity, TestAppContext, point};
 
     mod history_scope_consumer_tests {
@@ -9733,7 +8392,11 @@ mod gpui_tests {
         include!("completion_async_consumer_tests.rs");
     }
 
-    fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
+    mod links {
+        include!("link/consumer_tests.rs");
+    }
+
+    pub(super) fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
         let pty = if cfg!(windows) {
             PtySource::LocalConpty
         } else {
@@ -9935,538 +8598,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn a_reported_session_id_asks_the_window_to_save(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::{AgentSessionState, AgentStatus};
-
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        let saves = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let view = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        {
-            let saves = saves.clone();
-            cx.update(|cx| {
-                cx.subscribe(&view, move |_, _: &AgentSessionChanged, _| {
-                    saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                })
-                .detach();
-            });
-        }
-
-        DaemonMsg::AgentStatus(Some(AgentSessionState {
-            status: AgentStatus::Idle,
-            message: None,
-            session_id: Some("sid-abc".into()),
-            launch_argv: Some(vec!["omp".into()]),
-            rich: true,
-            cwd: None,
-            activity: 0,
-            turns: 0,
-            pending_requests: Vec::new(),
-            request_resume_status: Default::default(),
-            pending_stop: false,
-            readout: Default::default(),
-        }))
-        .encode(&mut daemon)
-        .unwrap();
-        for _ in 0..200 {
-            if window
-                .update(cx, |view, _, _| view.terminal.agent_session().is_some())
-                .unwrap()
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, window, cx| {
-                view.poll_agent_status(false, window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        assert_eq!(
-            saves.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "the id has to reach the layout on file"
-        );
-
-        window
-            .update(cx, |view, window, cx| {
-                view.poll_agent_status(false, window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        assert_eq!(
-            saves.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "an unchanged session must not re-save on every poll"
-        );
-    }
-
-    /// Report a session in `status` on `daemon` and wait for `pane` to see it.
-    fn report_agent_status(
-        status: crate::core::cli_agent::AgentStatus,
-        pane: &gpui_kit::Entity<TerminalView>,
-        cx: &mut TestAppContext,
-        daemon: &mut Stream,
-    ) {
-        report_agent_turn(status, 0, pane, cx, daemon);
-    }
-
-    /// The same, for a session that has finished `turns` turns so far.
-    fn report_agent_turn(
-        status: crate::core::cli_agent::AgentStatus,
-        turns: u64,
-        pane: &gpui_kit::Entity<TerminalView>,
-        cx: &mut TestAppContext,
-        daemon: &mut Stream,
-    ) {
-        use crate::core::cli_agent::AgentSessionState;
-
-        let state = AgentSessionState {
-            status,
-            message: None,
-            session_id: Some("sid-abc".into()),
-            launch_argv: Some(vec!["omp".into()]),
-            rich: true,
-            cwd: None,
-            activity: 0,
-            turns,
-            pending_requests: Vec::new(),
-            request_resume_status: Default::default(),
-            pending_stop: false,
-            readout: Default::default(),
-        };
-        DaemonMsg::AgentStatus(Some(state.clone()))
-            .encode(daemon)
-            .unwrap();
-        for _ in 0..200 {
-            if cx.update(|cx| pane.read(cx).terminal.agent_session()) == Some(state.clone()) {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("the agent status never reached the pane");
-    }
-
-    /// Poll `pane`'s agent status inside `window` and read its badge back.
-    fn poll_unread(
-        window: gpui_kit::WindowHandle<TerminalView>,
-        pane: &gpui_kit::Entity<TerminalView>,
-        cx: &mut TestAppContext,
-    ) -> bool {
-        // Through the untyped handle: the typed one leases the root view, and
-        // `pane` may be that view.
-        cx.update_window(window.into(), |_, window, cx| {
-            pane.update(cx, |pane, cx| {
-                pane.poll_agent_status(false, window, cx);
-                pane.agent_result_unread()
-            })
-        })
-        .unwrap()
-    }
-
-    /// Switching workspaces, or reopening a window from the tray, throws the
-    /// pane's view away and builds a new one on the same daemon pane (#870).
-    /// The new view's first look at a `Done` agent is not a turn finishing —
-    /// the reader watched that one finish before the old view went.
-    #[gpui_kit::test]
-    fn a_rebuilt_pane_does_not_re_badge_a_turn_the_reader_already_saw(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &before, cx, &mut before_daemon);
-        assert!(
-            !poll_unread(window, &before, cx),
-            "the reader watched it finish"
-        );
-
-        // The same daemon pane, rebuilt the way `tabs_from_session` rebuilds it,
-        // with the reader's focus somewhere else.
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &after, cx, &mut daemon);
-        assert!(
-            !poll_unread(window, &after, cx),
-            "rebuilding the pane is not a turn finishing"
-        );
-    }
-
-    /// What the rebuild must not swallow: a turn that was still running when
-    /// the view went away and finished before the new one arrived.
-    #[gpui_kit::test]
-    fn a_turn_that_finished_while_the_pane_was_away_still_badges(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Working, 0, &before, cx, &mut before_daemon);
-        assert!(!poll_unread(window, &before, cx));
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &after, cx, &mut daemon);
-        assert!(
-            poll_unread(window, &after, cx),
-            "nobody saw this turn finish"
-        );
-    }
-
-    /// Nor a whole later turn: the reader saw turn one, the agent was sent
-    /// another and finished it while the pane was away. The status reads
-    /// `Done` both times; only the turn count tells them apart.
-    #[gpui_kit::test]
-    fn a_later_turn_that_finished_while_the_pane_was_away_still_badges(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &before, cx, &mut before_daemon);
-        assert!(!poll_unread(window, &before, cx));
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 2, &after, cx, &mut daemon);
-        assert!(
-            poll_unread(window, &after, cx),
-            "the second turn finished unseen"
-        );
-    }
-
-    /// And a badge the reader had not cleared yet comes back with the pane.
-    #[gpui_kit::test]
-    fn an_unread_turn_is_still_unread_after_the_pane_is_rebuilt(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        let (window, mut before_daemon) = harness(cx);
-        let before = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        // Building another pane takes the window's focus off `before`.
-        let (_elsewhere, _elsewhere_daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(5, window, cx))
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &before, cx, &mut before_daemon);
-        assert!(poll_unread(window, &before, cx), "nobody was looking");
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        report_agent_turn(AgentStatus::Done, 1, &after, cx, &mut daemon);
-        assert!(
-            poll_unread(window, &after, cx),
-            "rebuilding the pane is not reading it"
-        );
-    }
-
-    /// The badge answers "did the reader see this?", so it has to read the
-    /// window's live focus rather than anything a focus callback left behind.
-    ///
-    /// A second pane built into the same window is the case that goes wrong:
-    /// it holds no focus and was never told it lost any, so a flag a callback
-    /// maintains says whatever it was born saying — and the badge lands on
-    /// exactly the pane nobody is looking at.
-    #[gpui_kit::test]
-    fn a_finished_turn_on_an_unfocused_pane_is_unread(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let (pane, mut daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(2, window, cx))
-            .unwrap();
-        // Building a pane takes the window's focus (`with_terminal`), and the
-        // reader's next click hands it back. The new pane is not in the element
-        // tree, so nothing delivers it the blur that goes with losing it.
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |_, window, cx| {
-                assert!(
-                    !pane.read(cx).focus_handle.is_focused(window),
-                    "the focus went back to the pane the reader is on"
-                );
-            })
-            .unwrap();
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(pane.agent_result_unread(), "nobody was looking at the pane");
-                });
-            })
-            .unwrap();
-    }
-
-    /// Reinstalling or restarting the app leaves the daemon — and every agent
-    /// in it — running, so each restored tab reattaches to a pane whose agent
-    /// finished its turn long ago. The daemon replays that status, and reading
-    /// it as a turn that just landed put an unread badge on every agent tab in
-    /// the window the moment it opened.
-    #[gpui_kit::test]
-    fn a_restored_pane_does_not_badge_the_turn_it_reattached_to(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let (pane, mut daemon) = window
-            .update(cx, |_, window, cx| {
-                super::quiet_reattached_test_pane(2, window, cx)
-            })
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(
-                        !pane.agent_result_unread(),
-                        "the replayed status is where this pane starts, not a result that \
-                         just arrived"
-                    );
-                });
-            })
-            .unwrap();
-
-        // And the pane is still armed: the next turn it actually watches finish
-        // badges exactly as it would have without the reattach.
-        report_agent_status(AgentStatus::Working, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                });
-            })
-            .unwrap();
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(
-                        pane.agent_result_unread(),
-                        "a turn that finished while the reader was elsewhere is unread"
-                    );
-                });
-            })
-            .unwrap();
-    }
-
-    /// Build `pane_id`'s first view (unfocused), let it watch `status` at
-    /// `turns`, then rebuild the pane the way restoring a workspace does — a
-    /// reattach, whose head is the daemon replaying `replayed` — and read the
-    /// rebuilt view's badge.
-    fn rebuild_by_reattach(
-        watched: (crate::core::cli_agent::AgentStatus, u64),
-        replayed: (crate::core::cli_agent::AgentStatus, u64),
-        cx: &mut TestAppContext,
-    ) -> bool {
-        let (window, _root_daemon) = harness(cx);
-        let focus_root = |cx: &mut TestAppContext| {
-            window
-                .update(cx, |view, window, cx| {
-                    view.focus_handle.clone().focus(window, cx)
-                })
-                .unwrap();
-            cx.run_until_parked();
-        };
-        let (before, mut before_daemon) = window
-            .update(cx, |_, window, cx| super::quiet_test_pane(2, window, cx))
-            .unwrap();
-        focus_root(cx);
-        report_agent_turn(watched.0, watched.1, &before, cx, &mut before_daemon);
-        poll_unread(window, &before, cx);
-        drop(before);
-
-        let (after, mut daemon) = window
-            .update(cx, |_, window, cx| {
-                super::quiet_reattached_test_pane(2, window, cx)
-            })
-            .unwrap();
-        focus_root(cx);
-        report_agent_turn(replayed.0, replayed.1, &after, cx, &mut daemon);
-        poll_unread(window, &after, cx)
-    }
-
-    /// A reattach whose pane this app already watched is a rebuild, not a
-    /// restart: the read mark, not the replay, says whether the turn is news.
-    #[gpui_kit::test]
-    fn a_reattached_pane_takes_back_the_badge_its_reader_left(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-        assert!(
-            rebuild_by_reattach((AgentStatus::Done, 1), (AgentStatus::Done, 1), cx),
-            "the reader never cleared that badge; rebuilding the pane is not reading it"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn a_reattached_pane_badges_a_turn_that_was_running_when_its_view_went(
-        cx: &mut TestAppContext,
-    ) {
-        use crate::core::cli_agent::AgentStatus;
-        assert!(
-            rebuild_by_reattach((AgentStatus::Working, 0), (AgentStatus::Done, 1), cx),
-            "nobody saw this turn finish"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn a_reattached_pane_badges_a_later_turn_that_finished_while_away(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-        // Turn one left a mark; turn two finishing before the reattach is a
-        // different count, so the mark does not vouch for it.
-        assert!(
-            rebuild_by_reattach((AgentStatus::Done, 1), (AgentStatus::Done, 2), cx),
-            "the second turn finished unseen"
-        );
-    }
-
-    /// A relink keeps the view and what it last saw. A turn that was running
-    /// when the link dropped and finished before it came back reaches the view
-    /// only as the daemon's replay, and that replay has to badge: nobody saw
-    /// the turn finish.
-    #[gpui_kit::test]
-    fn a_turn_that_finished_while_the_link_was_down_still_badges(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let (pane, mut daemon) = window
-            .update(cx, |_, window, cx| {
-                super::quiet_reattached_test_pane(2, window, cx)
-            })
-            .unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        report_agent_status(AgentStatus::Working, &pane, cx, &mut daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(!pane.agent_result_unread(), "the turn is still running");
-                });
-            })
-            .unwrap();
-
-        let (new_client, mut new_daemon) = super::test_stream_pair();
-        pane.update(cx, |pane, cx| {
-            pane.adopt_relink(
-                new_client,
-                Vec::new(),
-                &crate::terminal::PaneRoute::Local,
-                TermSize::new(80, 24),
-                8,
-                17,
-                cx,
-            )
-            .expect("the swap itself cannot fail");
-        });
-        drop(daemon);
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut new_daemon);
-        window
-            .update(cx, |_, window, cx| {
-                pane.update(cx, |pane, cx| {
-                    pane.poll_agent_status(false, window, cx);
-                    assert!(
-                        pane.agent_result_unread(),
-                        "the turn finished while the link was down, so nobody read it"
-                    );
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_finished_turn_on_the_focused_pane_is_already_read(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::AgentStatus;
-
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        let pane = window.update(cx, |_, _, cx| cx.entity()).unwrap();
-        window
-            .update(cx, |view, window, cx| {
-                view.focus_handle.clone().focus(window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-
-        report_agent_status(AgentStatus::Done, &pane, cx, &mut daemon);
-        window
-            .update(cx, |view, window, cx| {
-                assert!(view.focus_handle.is_focused(window));
-                view.poll_agent_status(false, window, cx);
-                assert!(
-                    !view.agent_result_unread(),
-                    "the reader watched the turn finish"
-                );
-            })
-            .unwrap();
-    }
 
     /// An agent that moves into a git worktree does not `chdir` — the process
     /// stays put and only its hook stream says where the work went. Every
@@ -10613,6 +8744,7 @@ mod gpui_tests {
     include!("graphics_layout_consumer_tests.rs");
     include!("graphics_recovery_consumer_tests.rs");
     include!("native_ssh_consumer_tests.rs");
+    include!("lifecycle_consumer_tests.rs");
 
     #[gpui_kit::test]
     fn graphics_consumer_streamed_png_and_compression_render_after_rejected_transfer(
@@ -11285,107 +9417,6 @@ mod gpui_tests {
         });
     }
 
-    #[gpui_kit::test]
-    fn graphics_consumer_hidden_decode_keeps_pixels_without_notifying_window(
-        cx: &mut TestAppContext,
-    ) {
-        use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, WireFormat};
-        use std::{cell::Cell, rc::Rc, sync::Arc};
-
-        let (window, mut daemon) = harness_on(cx, PtySource::Raw);
-        let images = window
-            .update(cx, |view, _, _| view.terminal.images())
-            .unwrap();
-        let pane = window
-            .update(cx, |view, _, cx| {
-                view.displayed
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
-                cx.entity()
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let notifications = Rc::new(Cell::new(0));
-        let count = notifications.clone();
-        let _subscription = cx.update(|cx| {
-            cx.observe(&pane, move |_, _| {
-                count.set(count.get() + 1);
-            })
-        });
-        send_admitted_graphics(
-            &images,
-            &mut daemon,
-            GraphicsUpdate::Resource {
-                key: 41,
-                image: Arc::new(Image {
-                    width: 1,
-                    height: 1,
-                    format: WireFormat::Rgba,
-                    compressed: false,
-                    data: vec![1, 2, 3, 64],
-                }),
-            },
-        );
-        let mut placement = graphics_placement(51, 41, 0, 0);
-        placement.x = 0;
-        send_admitted_graphics(&images, &mut daemon, GraphicsUpdate::Place(placement));
-        for _ in 0..200 {
-            cx.run_until_parked();
-            if pane.read_with(cx, |view, _| !view.terminal.images().snapshot().is_empty()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        cx.run_until_parked();
-        pane.read_with(cx, |view, _| {
-            let images = view.terminal.images().snapshot();
-            assert_eq!(
-                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
-                &[3, 2, 1, 64]
-            );
-            assert!(!images[0].painted.load(std::sync::atomic::Ordering::Acquire));
-        });
-        assert_eq!(
-            notifications.get(),
-            0,
-            "decoded hidden output must not dirty the window"
-        );
-        window
-            .update(cx, |view, _, _| {
-                view.displayed
-                    .store(true, std::sync::atomic::Ordering::Relaxed)
-            })
-            .unwrap();
-        pane.read_with(cx, |view, _| {
-            let images = view.terminal.images().snapshot();
-            assert_eq!(
-                images.len(),
-                1,
-                "returning to the pane retains its current image without a resend"
-            );
-            assert_eq!(
-                images[0].data.as_ref().unwrap().as_bytes(0).unwrap(),
-                &[3, 2, 1, 64]
-            );
-        });
-        send_graphics(
-            &mut daemon,
-            GraphicsUpdate::Remove {
-                placements: vec![51],
-                resources: vec![41],
-            },
-        );
-        for _ in 0..200 {
-            cx.run_until_parked();
-            if notifications.get() > 0 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(notifications.get() > 0, "a visible removal must repaint");
-        pane.read_with(cx, |view, _| {
-            assert!(view.terminal.images().snapshot().is_empty())
-        });
-    }
 
     #[gpui_kit::test]
     fn clearing_the_scrollback_drops_the_selection_anchored_in_it(cx: &mut TestAppContext) {
@@ -11462,483 +9493,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-    #[gpui_kit::test]
-    fn the_scrollbar_moves_the_viewport_and_follows_it_back(cx: &mut TestAppContext) {
-        use gpui_kit::component::scroll::ScrollbarHandle as _;
-
-        let (window, mut daemon) = harness(cx);
-
-        // Overflow the 24-row viewport so there is a scrollback to scroll.
-        let mut out = Vec::new();
-        for i in 0..60 {
-            out.extend_from_slice(format!("line {i}\r\n").as_bytes());
-        }
-        DaemonMsg::Output(out).encode(&mut daemon).unwrap();
-        // Wait for the reader to go quiet, not just to start: a scrollback
-        // still filling underneath would move every row this test names.
-        let mut settled = 0;
-        for _ in 0..200 {
-            let now = window
-                .update(cx, |view, _, _| {
-                    view.terminal.term.lock().grid.history_size()
-                })
-                .unwrap();
-            if now > 0 && now == settled {
-                break;
-            }
-            settled = now;
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, _| {
-                view.sync_scrollbar();
-                let history = view.terminal.term.lock().grid.history_size();
-                assert!(history > 0, "the test needs a scrollback to scroll");
-                let row = view.line_height.as_f32();
-                assert_eq!(
-                    view.scroll_handle.offset().y,
-                    px(-(history as f32) * row),
-                    "at the live edge the whole scrollback sits above the viewport"
-                );
-
-                // Drag the thumb a third of the way up its track. The bar only
-                // records the row; the pane applies it on its next render.
-                view.scroll_frac = 0.5;
-                view.scroll_handle
-                    .set_offset(point(px(0.), px(-(history as f32) * row / 3.)));
-                assert_eq!(
-                    view.terminal.term.lock().grid.display_offset(),
-                    0,
-                    "the bar does not reach into the terminal itself"
-                );
-
-                view.sync_scrollbar();
-                let offset = view.terminal.term.lock().grid.display_offset();
-                assert_eq!(
-                    offset,
-                    history - (history as f32 / 3.).round() as usize,
-                    "the viewport lands on the row the thumb was dropped on"
-                );
-                assert_eq!(
-                    view.scroll_frac, 0.,
-                    "a sub-line remainder left over from the wheel would paint \
-                     the grid off the row the thumb picked"
-                );
-                assert_eq!(
-                    view.scroll_handle.offset().y,
-                    px(-((history - offset) as f32) * row),
-                    "and the thumb reports the row the grid actually reached"
-                );
-            })
-            .unwrap();
-    }
-
-    /// The case from the bug report: a relative path printed by a tool, sitting
-    /// in a pane that reported its directory. It resolves; a name that is not
-    /// there does not, and comes back as an unresolved *candidate* so the click
-    /// can say why rather than doing nothing at all.
-    #[gpui_kit::test]
-    fn a_relative_path_links_against_the_panes_own_directory(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-link-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("scratchpad")).expect("create scratchpad dir");
-        let notes = dir.join("scratchpad/notes.md");
-        std::fs::write(&notes, b"# notes").expect("create notes.md");
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output(b"ready (scratchpad/notes.md) and (scratchpad/gone.md)\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.terminal.term.lock().grid[Line(0)][Column(7)].c() == 's'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                assert_eq!(view.cwd().as_deref(), Some(dir.as_path()));
-                assert!(
-                    view.hover_link_at(7, 0, true, cx),
-                    "the file is right there under the pane's directory"
-                );
-                assert!(
-                    view.hovered_link.as_ref().is_some_and(|link| link.armed),
-                    "with the modifier down it is ready to be clicked"
-                );
-                assert!(
-                    view.hover_link_at(7, 0, false, cx),
-                    "a path is pointed out before the modifier is down, not after"
-                );
-                assert!(
-                    view.hovered_link.as_ref().is_some_and(|link| !link.armed),
-                    "but held back, because a plain click will not follow it"
-                );
-
-                let gone = "ready (scratchpad/notes.md) and (".len();
-                assert!(
-                    !view.hover_link_at(gone, 0, true, cx),
-                    "nothing underlines for a name that is not on disk"
-                );
-                match view.resolve_link_at(gone, 0, true, false, cx) {
-                    LinkAt::Unresolved { candidate, pending } => {
-                        assert_eq!(candidate.path, "scratchpad/gone.md");
-                        assert!(
-                            candidate.looks_like_a_path(view.link_path_style()),
-                            "so the click reports it instead of staying silent"
-                        );
-                        assert!(!pending, "a local pane answers on the spot");
-                    }
-                    _ => panic!("expected an unresolved path-shaped candidate"),
-                }
-
-                view.record_menu_link(7, 0, cx);
-                assert!(
-                    matches!(
-                        view.menu_link_path(),
-                        Some(path) if path.ends_with("scratchpad/notes.md")
-                    ),
-                    "a right click over a path opens a menu about that path"
-                );
-                view.record_menu_link(0, 0, cx);
-                assert!(
-                    view.menu_link_path().is_none(),
-                    "and a right click over `ready` opens the ordinary one"
-                );
-
-                let mut off = cx.global::<Config>().clone();
-                off.link_url = false;
-                cx.set_global(off);
-                view.record_menu_link(7, 0, cx);
-                assert!(
-                    view.menu_link_path().is_none(),
-                    "and with link detection turned off the menu offers nothing \
-                     the underline and the click both refuse"
-                );
-                cx.set_global(Config::default());
-
-                // `ready (scratchpad...`: the blank between the two words.
-                assert!(!view.hover_link_at(5, 0, false, cx));
-                assert!(view.hovered_link.is_none(), "a blank holds no link");
-                assert_eq!(
-                    view.last_hover_cell,
-                    Some((5, 0)),
-                    "and the pointer is still remembered, so crossing a run \
-                     of blanks costs one look each rather than one a frame"
-                );
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-
-    /// Absolute paths in a pane that is `ssh`-ed somewhere used to be resolved
-    /// against *this* machine's filesystem, so `/etc/hosts` on the far end
-    /// opened the local copy without a word about it.
-    #[gpui_kit::test]
-    fn a_pane_whose_paths_are_elsewhere_does_not_link_local_files(cx: &mut TestAppContext) {
-        let file = std::env::temp_dir().join(format!("lyrel-elsewhere-{}.txt", std::process::id()));
-        std::fs::write(&file, b"local").expect("create local file");
-        let line = format!("open {} now\r\n", file.display());
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Output(line.clone().into_bytes())
-            .encode(&mut daemon)
-            .unwrap();
-        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
-            kind: crate::daemon::protocol::RemoteKind::Ssh,
-            argv: vec!["ssh".into(), "box".into()],
-            target: "box".into(),
-        }))
-        .encode(&mut daemon)
-        .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| view.remote_context().is_some())
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                assert!(
-                    !view.cwd_is_on_host(),
-                    "a local host cannot answer for the far side of an ssh session"
-                );
-                assert!(
-                    !view.hover_link_at(6, 0, true, cx),
-                    "the local copy of that path is not what the pane printed"
-                );
-            })
-            .unwrap();
-        let _ = std::fs::remove_file(&file);
-    }
-
-    /// A path a remote pane printed stays *wanted* until a host has actually
-    /// been asked about it.
-    ///
-    /// `take_wanted` moves paths into the in-flight set on the promise that a
-    /// call is carrying them; a lookup that finds no host to make that call
-    /// must not have made the promise. Otherwise those paths sit "not answered
-    /// yet" for the life of the pane — no underline, and a click that says
-    /// nothing, which is the silence this whole path exists to remove.
-    ///
-    /// Was unix-only because the path it prints is: `Path::new("/etc/hosts")`
-    /// is not absolute on Windows, so `FileCandidate::paths` measured it from
-    /// the roots rather than letting it stand alone — and a workspace that
-    /// never connected has no roots, so nothing was ever wanted. Which was
-    /// itself the divergence: a Windows lyrel looking at a *remote* Linux pane
-    /// never probed the POSIX paths that pane printed.
-    ///
-    /// #795 settled that. `paths` now asks the pane's own
-    /// [`super::search::PathStyle`] rather than this machine's, and a remote
-    /// pane that has not reported a cwd is read as `Posix`, so `/etc/hosts`
-    /// stands alone on every client. The gate is only still here because
-    /// nothing has run this test on Windows yet; lifting it belongs in a
-    /// change that can show it green, not in a merge.
-    #[cfg(unix)]
-    #[gpui_kit::test]
-    fn a_probe_with_no_host_to_ask_stays_wanted(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Output(b"see /etc/hosts now\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.terminal.term.lock().grid[Line(0)][Column(4)].c() == '/'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                bind_to_a_disconnected_remote_workspace(view, cx);
-                assert!(
-                    view.host(cx).is_none(),
-                    "a workspace that never connected has nothing to ask"
-                );
-                assert!(
-                    view.cwd_is_on_host(),
-                    "the pane's paths are the far side's, whether or not it is up"
-                );
-                assert!(
-                    !view.hover_link_at(4, 0, true, cx),
-                    "nothing underlines while the answer is still unknown"
-                );
-                assert_eq!(
-                    view.link_probes.take_wanted(),
-                    vec![std::path::PathBuf::from("/etc/hosts")],
-                    "and the question survives, ready for a host to answer it"
-                );
-                assert!(
-                    !view.link_roots(cx).local_home,
-                    "this machine's $HOME describes nobody over there"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_stale_hover_row_does_not_index_the_shrunken_grid(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.hover_link_at(0, 23, true, cx);
-                view.terminal.resize(TermSize::new(80, 8), 8, 17);
-                view.last_hover_cell = Some((0, 23));
-                assert!(
-                    !view.refresh_link_hover(true, cx),
-                    "a row outside the grid can't hold a link"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_resize_forgets_the_hovered_cell(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.set_grid_size(80, 24, px(8.), px(17.), 1., cx);
-                view.hover_link_at(0, 23, true, cx);
-                assert_eq!(view.last_hover_cell, Some((0, 23)));
-                view.hovered_link = Some(HoveredLink {
-                    runs: vec![(Pos::new(Line(23), Column(0)), Pos::new(Line(23), Column(3)))],
-                    armed: true,
-                });
-                view.set_grid_size(80, 24, px(8.), px(17.), 1., cx);
-                assert_eq!(view.last_hover_cell, Some((0, 23)));
-                view.set_grid_size(80, 8, px(8.), px(17.), 1., cx);
-                assert!(view.last_hover_cell.is_none(), "the cell is stale");
-                assert!(view.hovered_link.is_none(), "so is the link it resolved");
-            })
-            .unwrap();
-    }
-
-    /// The seam is invisible to the user, so it has to be invisible to the
-    /// hover too: pointing at either half underlines the whole path, and the
-    /// span the element paints reaches across both rows.
-    #[gpui_kit::test]
-    fn a_path_the_terminal_wrapped_is_hovered_as_one_link(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-wrap-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("a/bb/ccc/dddd")).expect("create dirs");
-        std::fs::write(dir.join("a/bb/ccc/dddd/notes.md"), b"# notes").expect("create notes.md");
-
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.set_grid_size(20, 6, px(8.), px(17.), 1., cx);
-            })
-            .unwrap();
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output(b"see a/bb/ccc/dddd/notes.md here\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.terminal.term.lock().grid[Line(1)][Column(0)].c() == 'e'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                // Row 0 holds `see a/bb/ccc/dddd/n`, row 1 the rest.
-                for (col, row, where_) in [(6, 0, "before the seam"), (2, 1, "after it")] {
-                    assert!(
-                        view.hover_link_at(col, row, true, cx),
-                        "the wrapped path is a link from {where_}"
-                    );
-                    let link = view.hovered_link.as_ref().expect("a span");
-                    let (start, end) = (link.runs[0].0, link.runs[link.runs.len() - 1].1);
-                    assert_eq!(
-                        (start.row, end.row),
-                        (Line(0), Line(1)),
-                        "and the span the element paints covers both rows"
-                    );
-                    assert_eq!(start.col, Column(4), "starting at the path itself");
-                }
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A wide character owns two columns, and the second one holds a space.
-    /// The hover has to read that as part of the glyph, or the underline goes
-    /// out on every other column of a path written in CJK.
-    #[gpui_kit::test]
-    fn the_second_column_of_a_wide_character_still_hovers(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-wide-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("文档")).expect("create dirs");
-        std::fs::write(dir.join("文档/笔记.md"), b"# notes").expect("create notes");
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output("see 文档/笔记.md here\r\n".as_bytes().to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.terminal.term.lock().grid[Line(0)][Column(4)].c() == '文'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                // `see 文档/…`: column 4 carries 文, column 5 is its spacer.
-                assert!(!view.cell_is_blank(5, 0), "the spacer belongs to the glyph");
-                for col in [4, 5] {
-                    assert!(
-                        view.hover_link_at(col, 0, true, cx),
-                        "column {col} of the same character is the same link"
-                    );
-                }
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A full-screen application drew the grid and is watching the mouse
-    /// itself, so lyrel stays out of it until asked.
-    #[gpui_kit::test]
-    fn a_path_under_a_full_screen_application_waits_for_the_modifier(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-alt-link-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("scratchpad")).expect("create scratchpad dir");
-        std::fs::write(dir.join("scratchpad/notes.md"), b"# notes").expect("create notes.md");
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output(b"\x1b[?1049hready scratchpad/notes.md\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.on_alt_screen()
-                        && view.terminal.term.lock().grid[Line(0)][Column(6)].c() == 's'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                assert!(view.on_alt_screen(), "the application took the grid");
-                assert!(
-                    !view.hover_link_at(6, 0, false, cx),
-                    "nothing is pointed out over somebody else's window"
-                );
-                assert!(
-                    view.hover_link_at(6, 0, true, cx),
-                    "asking for lyrel's reading of the screen still gets it"
-                );
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_link_menu_is_headed_by_the_file_it_is_about() {
-        assert_eq!(
-            link_menu_label(std::path::Path::new("/a/very/long/way/down/notes.md")),
-            "notes.md",
-            "the name, so the menu is not as wide as the path"
-        );
-        assert_eq!(link_menu_label(std::path::Path::new("/")), "/");
-    }
 
     /// Runs out the wait a new title is held for.
     fn settle(cx: &mut TestAppContext) {
@@ -13764,353 +11318,6 @@ mod gpui_tests {
         wheel(view, lines, gpui_kit::TouchPhase::Moved)
     }
 
-    /// The whole point of the animation: a detent must not land in one go.
-    #[gpui_kit::test]
-    fn a_wheel_notch_is_spread_over_frames(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -4.9);
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(
-                    display_offset(view),
-                    10,
-                    "the detent was applied whole, before a single frame ran"
-                );
-                assert_eq!(view.scroll_frac, 0., "and not even a sliver of it");
-                assert!(view.scroll_anim.is_some(), "nothing was left to animate");
-            })
-            .unwrap();
-    }
-
-    /// Zooming has to take the wheel away from the buffer entirely, or the
-    /// grid would slide under the pointer while the font changed size.
-    #[gpui_kit::test]
-    fn the_zoom_modifier_takes_the_wheel_off_the_scrollback(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::Platform);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut ev = notch(view, -4.9);
-                ev.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(display_offset(view), 10, "the wheel reached the grid");
-                assert!(view.scroll_anim.is_none(), "and queued more of it");
-            })
-            .unwrap();
-    }
-
-    /// #668: the platform modifier is the wrong key to hardwire a zoom to —
-    /// on a Mac it is ⌘, which people are already holding for something
-    /// else — so which key zooms is a setting, all the way down to none.
-    #[test]
-    fn the_zoom_modifier_is_configurable_and_can_be_turned_off() {
-        let secondary = Modifiers::secondary_key();
-        let alt = Modifiers::alt();
-        assert!(zoom_wheel(MouseZoomModifier::Platform, &secondary));
-        assert!(
-            !zoom_wheel(MouseZoomModifier::None, &secondary),
-            "off is off"
-        );
-        assert!(!zoom_wheel(MouseZoomModifier::Alt, &secondary));
-        assert!(zoom_wheel(MouseZoomModifier::Alt, &alt));
-        assert!(!zoom_wheel(MouseZoomModifier::Platform, &alt));
-        assert!(zoom_wheel(MouseZoomModifier::Ctrl, &Modifiers::control()));
-        assert_eq!(
-            zoom_wheel(MouseZoomModifier::Platform, &Modifiers::control()),
-            !cfg!(target_os = "macos"),
-            "off macOS the platform modifier is Ctrl itself"
-        );
-        // A second modifier is somebody else's gesture, whichever key is bound.
-        let both = Modifiers { shift: true, ..alt };
-        assert!(!zoom_wheel(MouseZoomModifier::Alt, &both));
-        assert!(!zoom_wheel(MouseZoomModifier::Platform, &Modifiers::none()));
-    }
-
-    /// The point of turning it off: the modifier goes back to being an
-    /// ordinary scroll, rather than eating the wheel.
-    #[gpui_kit::test]
-    fn zooming_off_hands_the_wheel_back_to_the_scrollback(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| {
-            cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::None;
-        });
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut ev = notch(view, -4.9);
-                ev.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&ev, w, cx);
-                assert!(
-                    view.scroll_anim.is_some(),
-                    "the wheel never reached the scrollback"
-                );
-            })
-            .unwrap();
-    }
-
-    /// The bug this guards: a two-finger flick coasts long after the fingers
-    /// are gone, and every coasting event carries whatever modifiers are down
-    /// when it lands. Grabbing ⌘ for something else mid-coast used to read as
-    /// a zoom and run the font down to its minimum in a blink (#912).
-    #[gpui_kit::test]
-    fn a_modifier_pressed_mid_flick_does_not_hijack_it_into_a_zoom(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                view.on_scroll(&wheel(view, -0.5, gpui_kit::TouchPhase::Started), w, cx);
-                let before = display_offset(view);
-                // The tail, now stamped with ⌘ the hand reached for.
-                let mut tail = wheel(view, -3., gpui_kit::TouchPhase::Moved);
-                tail.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&tail, w, cx);
-                assert!(
-                    display_offset(view) != before || view.scroll_anim.is_some(),
-                    "the tail stayed a scroll, the way the gesture started"
-                );
-                assert_eq!(view.zoom_debt, 0., "and never paid into the zoom");
-            })
-            .unwrap();
-    }
-
-    /// The same latch the other way round: a zoom gesture that outlives the
-    /// modifier keeps zooming rather than dumping its tail into the buffer.
-    #[gpui_kit::test]
-    fn a_zoom_gesture_keeps_zooming_after_the_modifier_is_released(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::Platform);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut start = wheel(view, -0.5, gpui_kit::TouchPhase::Started);
-                start.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&start, w, cx);
-                view.on_scroll(&wheel(view, -0.5, gpui_kit::TouchPhase::Moved), w, cx);
-                assert_eq!(display_offset(view), 10, "the grid never moved");
-                assert!(view.scroll_anim.is_none(), "and nothing was queued for it");
-            })
-            .unwrap();
-    }
-
-    /// The latch is per gesture, not per stream: fingers going down again
-    /// start a fresh question. Carrying the last answer over would mean one
-    /// ⌘-zoom left every later flick zooming with no modifier held at all.
-    #[gpui_kit::test]
-    fn a_new_gesture_is_not_bound_by_what_the_last_one_answered(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::Platform);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut zoom = wheel(view, -0.5, gpui_kit::TouchPhase::Started);
-                zoom.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&zoom, w, cx);
-                assert_eq!(display_offset(view), 10, "that one was a zoom");
-                // Fingers down again, nothing held: a plain scroll.
-                view.on_scroll(&wheel(view, -3., gpui_kit::TouchPhase::Started), w, cx);
-                assert_ne!(
-                    display_offset(view),
-                    10,
-                    "the new gesture asked the question again"
-                );
-            })
-            .unwrap();
-    }
-
-    /// A detent is one step however many lines the platform bills it as —
-    /// macOS calls a single notch five.
-    #[test]
-    fn a_wheel_detent_zooms_by_exactly_one_step() {
-        assert_eq!(zoom_scroll_steps(4.9, 0., false), (1, 0.));
-        assert_eq!(zoom_scroll_steps(-4.9, 0., false), (-1, 0.));
-        assert_eq!(zoom_scroll_steps(0., 0., false), (0, 0.));
-    }
-
-    /// A trackpad has no detents, so a flick arrives as a stream of slivers.
-    /// Paying out a step per sliver would run the font from end to end.
-    #[test]
-    fn a_trackpad_flick_adds_up_to_whole_steps() {
-        let (mut debt, mut steps) = (0., 0);
-        for _ in 0..20 {
-            let (s, d) = zoom_scroll_steps(1. / 3., debt, true);
-            steps += s;
-            debt = d;
-        }
-        assert_eq!(steps, 2, "twenty thirds of a line is two steps, not twenty");
-        assert!(debt > 0., "and the remainder was dropped instead of kept");
-    }
-
-    /// The one thing typing at a prompt must never do is land where the
-    /// person typing cannot see it.
-    #[gpui_kit::test]
-    fn typing_brings_the_view_back_to_the_prompt(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-        window
-            .update(cx, |view, _w, cx| {
-                assert!(
-                    view.input_active(),
-                    "this is the branch that was leaving the view parked"
-                );
-                scroll_into_history(view, 10);
-                view.commit_text("l", cx);
-                assert_eq!(
-                    display_offset(view),
-                    0,
-                    "the character went in while the viewport stayed in the scrollback"
-                );
-                assert_eq!(view.cmd.text(), "l", "and it did reach the line");
-            })
-            .unwrap();
-    }
-
-    /// A paste is a larger change than a keystroke to make out of sight, and
-    /// it went the same way.
-    #[gpui_kit::test]
-    fn pasting_brings_the_view_back_to_the_prompt(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-        window
-            .update(cx, |view, _w, cx| {
-                scroll_into_history(view, 10);
-                view.paste("cargo test\n".to_string(), cx);
-                assert_eq!(display_offset(view), 0, "the paste landed off screen");
-                assert_eq!(
-                    view.cmd.text(),
-                    "cargo test",
-                    "and the trailing newline is still dropped"
-                );
-            })
-            .unwrap();
-    }
-
-    /// A trackpad is already a continuous stream — animating it would only put
-    /// lag between the fingers and the grid. It is told apart by its phase, not
-    /// by its delta type or size: a flick moves further in one event than a
-    /// slowly inched wheel does.
-    #[gpui_kit::test]
-    fn a_trackpad_gesture_scrolls_the_instant_it_is_touched(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = wheel(view, -3., gpui_kit::TouchPhase::Started);
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(display_offset(view), 7, "the gesture was held back");
-                assert!(
-                    view.scroll_anim.is_none(),
-                    "a trackpad started an animation"
-                );
-            })
-            .unwrap();
-    }
-
-    /// Lifting the fingers does not end the stream: macOS keeps sending Moved
-    /// events for the momentum tail, and they are *larger* than the gesture
-    /// that spawned them. Treating those as a wheel would smooth what the
-    /// system is already smoothing.
-    #[gpui_kit::test]
-    fn a_momentum_tail_is_not_mistaken_for_a_wheel(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                for (lines, phase) in [
-                    (-0.5, gpui_kit::TouchPhase::Started),
-                    (-1.2, gpui_kit::TouchPhase::Moved),
-                    (0., gpui_kit::TouchPhase::Ended),
-                    (-2.9, gpui_kit::TouchPhase::Moved),
-                    (-2.4, gpui_kit::TouchPhase::Moved),
-                ] {
-                    let ev = wheel(view, lines, phase);
-                    view.on_scroll(&ev, w, cx);
-                    assert!(
-                        view.scroll_anim.is_none(),
-                        "the momentum tail was animated at {lines} lines"
-                    );
-                }
-                assert_eq!(display_offset(view), 3, "the tail did not all land");
-            })
-            .unwrap();
-    }
-
-    /// Inching the wheel one detent at a time reads as continuous already.
-    #[gpui_kit::test]
-    fn a_scroll_too_small_to_see_jump_stays_direct(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -0.57);
-                view.on_scroll(&ev, w, cx);
-                assert!(view.scroll_anim.is_none(), "half a line was animated");
-                assert!(view.scroll_frac > 0., "and it did not move either");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn turning_smooth_scrolling_off_restores_the_direct_path(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().smooth_scroll = false);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -3.);
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(display_offset(view), 7);
-                assert!(view.scroll_anim.is_none());
-            })
-            .unwrap();
-    }
-
-    /// An animation that kept walking after the view was moved out from under
-    /// it would drag the user back off the prompt they just jumped to.
-    #[gpui_kit::test]
-    fn moving_the_viewport_cancels_an_animation_in_flight(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -4.9);
-                view.on_scroll(&ev, w, cx);
-                assert!(view.scroll_anim.is_some());
-
-                view.jump_to_prompt();
-                assert!(
-                    view.scroll_anim.is_none(),
-                    "the animation outlived the jump"
-                );
-                assert_eq!(display_offset(view), 0);
-            })
-            .unwrap();
-    }
-
-    /// A frame callback that was already queued when the animation was
-    /// cancelled must not walk the viewport on its stale epoch.
-    #[gpui_kit::test]
-    fn a_stale_frame_after_cancellation_does_not_walk(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -4.9);
-                view.on_scroll(&ev, w, cx);
-                let epoch = view.scroll_anim_epoch;
-                view.cancel_scroll_anim();
-
-                assert!(
-                    !view.scroll_anim_frame(epoch, cx),
-                    "a stale frame callback kept the animation alive"
-                );
-                assert_eq!(display_offset(view), 10, "the stale frame moved");
-            })
-            .unwrap();
-    }
-
 
     #[gpui_kit::test]
     fn an_unknown_ctrl_chord_goes_to_the_shell_with_the_line(cx: &mut TestAppContext) {
@@ -15477,201 +12684,6 @@ mod gpui_tests {
         assert_eq!(next_input(&mut daemon), want.into_bytes());
     }
 
-    #[gpui_kit::test]
-    fn daemon_output_reaches_the_grid_through_the_event_pump(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-
-        let read_row = |cx: &mut TestAppContext, len: usize| -> String {
-            window
-                .update(cx, |view, _, _| {
-                    let term = view.terminal.term.clone();
-                    let term = term.lock();
-                    let grid = &term.grid;
-                    (0..len).map(|c| grid[Line(0)][Column(c)].c()).collect()
-                })
-                .unwrap()
-        };
-        let wait_for = |cx: &mut TestAppContext, want: &str| {
-            let mut got = String::new();
-            for _ in 0..400 {
-                cx.run_until_parked();
-                got = read_row(cx, want.chars().count());
-                if got == want {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            got
-        };
-
-        DaemonMsg::Output(b"hello".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        assert_eq!(wait_for(cx, "hello"), "hello");
-
-        DaemonMsg::Output(b" again".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        assert_eq!(wait_for(cx, "hello again"), "hello again");
-    }
-
-    #[gpui_kit::test]
-    fn configured_word_selection_preserves_default_drag_reversal_and_shift(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                {
-                    let mut term = view.terminal.term.lock();
-                    rio_vt::performer::handler::Processor::default()
-                        .advance(&mut *term, b"zero.foo.bar.baz tail");
-                }
-                let selected =
-                    |view: &TerminalView| view.terminal.term.lock().selection_to_string();
-                cx.update_global::<Config, _>(|cfg, _| cfg.smart_select = false);
-                view.on_select_start(6, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("zero.foo.bar.baz"));
-
-                cx.update_global::<Config, _>(|cfg, _| cfg.word_separators.push('.'));
-                view.on_select_start(6, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo"));
-                view.on_select_update(14, 0, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo.bar.baz"));
-                view.on_select_update(1, 0, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("zero.foo"));
-                view.on_select_update(6, 0, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo"));
-                view.on_select_end(cx);
-
-                view.on_select_start(14, 0, false, 1, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo.bar.baz"));
-                view.on_select_update(1, 0, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("zero.foo"));
-                view.on_select_end(cx);
-
-                view.select_all(cx);
-                view.on_select_start(2, 0, false, 1, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("zer"));
-                view.on_select_start(1, 0, true, 1, false, cx);
-                view.on_select_update(2, 0, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("er"));
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn configured_word_selection_keeps_smart_exact_nonexact_and_fallback_ranges(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                {
-                    let mut term = view.terminal.term.lock();
-                    rio_vt::performer::handler::Processor::default()
-                        .advance(&mut *term, "left💙(foo)💙right x(foo)y foo.bar".as_bytes());
-                }
-                let selected =
-                    |view: &TerminalView| view.terminal.term.lock().selection_to_string();
-                cx.update_global::<Config, _>(|cfg, _| cfg.word_separators.push('💙'));
-                view.on_select_start(6, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("(foo)"));
-                view.on_select_start(20, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("(foo)"));
-                view.on_select_start(1, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("left"));
-
-                cx.update_global::<Config, _>(|cfg, _| cfg.word_separators.push('.'));
-                view.on_select_start(28, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo.bar"));
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn configured_word_selection_autoscroll_extends_by_whole_words(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                {
-                    let mut term = view.terminal.term.lock();
-                    let output = b"zero.foo.bar.baz\r\n".repeat(term.screen_lines() + 2);
-                    rio_vt::performer::handler::Processor::default().advance(&mut *term, &output);
-                }
-                cx.update_global::<Config, _>(|cfg, _| {
-                    cfg.smart_select = false;
-                    cfg.word_separators.push('.');
-                });
-                view.on_select_start(6, 0, true, 2, false, cx);
-                view.drag_scroll = Some(DragScroll {
-                    overshoot: 1.,
-                    col: 6,
-                    side: Side::Left,
-                });
-                assert!(view.drag_scroll_tick(view.drag_scroll_epoch, cx));
-                let term = view.terminal.term.lock();
-                assert!(term.grid.display_offset() > 0);
-                let selected = term.selection_to_string().expect("word drag selection");
-                assert!(selected.starts_with("foo.bar.baz"), "{selected:?}");
-                assert!(selected.ends_with("zero.foo"), "{selected:?}");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn copy_on_select_writes_the_clipboard_at_mouse_up(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-
-        DaemonMsg::Output(b"hello world".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..400 {
-            cx.run_until_parked();
-            let row: String = window
-                .update(cx, |view, _, _| {
-                    let term = view.terminal.term.clone();
-                    let term = term.lock();
-                    (0..11).map(|c| term.grid[Line(0)][Column(c)].c()).collect()
-                })
-                .unwrap();
-            if row == "hello world" {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        let drag_hello = |cx: &mut TestAppContext| {
-            window
-                .update(cx, |view, _, cx| {
-                    view.on_select_start(0, 0, true, 1, false, cx);
-                    view.on_select_update(4, 0, false, cx);
-                    view.on_select_end(cx);
-                })
-                .unwrap();
-        };
-        drag_hello(cx);
-        assert_eq!(
-            cx.update(|cx| cx.read_from_clipboard()),
-            None,
-            "default-off must never write the clipboard"
-        );
-
-        cx.update(|cx| cx.update_global::<Config, _>(|cfg, _| cfg.copy_on_select = true));
-        drag_hello(cx);
-        let text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
-        assert_eq!(text.as_deref(), Some("hello"));
-
-        let selected = window
-            .update(cx, |view, _, _| {
-                view.terminal.term.lock().selection.is_some()
-            })
-            .unwrap();
-        assert!(
-            selected,
-            "copy-on-select must keep the selection highlighted"
-        );
-    }
 
     #[gpui_kit::test]
     fn ctrl_c_copy_consumes_the_selection_so_the_next_press_is_sigint(cx: &mut TestAppContext) {
@@ -16342,95 +13354,7 @@ mod gpui_tests {
     }
 
 
-    /// Quick launch counts an agent each time one starts. Reattaching to a pane
-    /// whose agent was already running — every agent tab after an app restart
-    /// — is not a start, and counting it bumped every agent once per launch of
-    /// the app. Once that pane's agent exits, the next one is a start again.
-    #[gpui_kit::test]
-    fn only_an_agent_that_starts_under_this_view_counts_as_detected(cx: &mut TestAppContext) {
-        use crate::core::cli_agent::CLIAgent;
 
-        crate::core::config::pin_test_config_dir();
-        let (window, _root_daemon) = harness(cx);
-        let detected = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let pane = |reattached: bool, cx: &mut TestAppContext| {
-            let (pane, daemon) = window
-                .update(cx, |_, window, cx| {
-                    if reattached {
-                        super::quiet_reattached_test_pane(2, window, cx)
-                    } else {
-                        super::quiet_test_pane(3, window, cx)
-                    }
-                })
-                .unwrap();
-            let seen = detected.clone();
-            cx.update(|cx| {
-                cx.subscribe(&pane, move |_, ev: &AgentDetected, _| {
-                    seen.borrow_mut().push(ev.0)
-                })
-                .detach()
-            });
-            (pane, daemon)
-        };
-        let report = |agent: Option<CLIAgent>,
-                      at_prompt: bool,
-                      pane: &Entity<TerminalView>,
-                      daemon: &mut Stream,
-                      cx: &mut TestAppContext| {
-            DaemonMsg::Agent(agent).encode(daemon).unwrap();
-            for _ in 0..200 {
-                if pane.read_with(cx, |p, _| p.terminal.foreground_agent()) == agent {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            pane.update(cx, |p, cx| p.poll_agent_detection(at_prompt, cx));
-            cx.run_until_parked();
-        };
-
-        let (restored, mut restored_daemon) = pane(true, cx);
-        report(
-            Some(CLIAgent::OhMyPi),
-            false,
-            &restored,
-            &mut restored_daemon,
-            cx,
-        );
-        report(
-            Some(CLIAgent::OhMyPi),
-            false,
-            &restored,
-            &mut restored_daemon,
-            cx,
-        );
-        assert_eq!(
-            *detected.borrow(),
-            vec![],
-            "already running when reattached"
-        );
-        report(None, true, &restored, &mut restored_daemon, cx);
-        report(
-            Some(CLIAgent::Pi),
-            false,
-            &restored,
-            &mut restored_daemon,
-            cx,
-        );
-        assert_eq!(
-            *detected.borrow(),
-            vec![CLIAgent::Pi],
-            "started after the reattach"
-        );
-
-        let (fresh, mut fresh_daemon) = pane(false, cx);
-        report(Some(CLIAgent::OhMyPi), false, &fresh, &mut fresh_daemon, cx);
-        report(Some(CLIAgent::OhMyPi), false, &fresh, &mut fresh_daemon, cx);
-        assert_eq!(
-            *detected.borrow(),
-            vec![CLIAgent::Pi, CLIAgent::OhMyPi],
-            "a spawned pane counts its first agent, once"
-        );
-    }
 
     /// #958: `prompt_cursor_style` shapes the shell's own caret at a prompt,
     /// leaves the running program's cursor alone, and steps aside for a vi-mode

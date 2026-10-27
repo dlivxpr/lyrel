@@ -70,8 +70,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         cx.on_focus_in(handle, window, |this, _, cx| {
-            if let Some(tab) = this.tabs.get(this.active) {
-                this.status_document_focus = Some((tab.tree_id.get(), true));
+            if let Some(tab) = this.tabs.get(this.tabs.active_index()) {
+                this.status_document_focus = Some((tab.id(), true));
                 cx.notify();
             }
         })
@@ -82,12 +82,12 @@ impl LyrelApp {
         &self,
         window: &Window,
         cx: &Context<Self>,
-    ) -> Option<crate::ui::app::OverlayTop> {
+    ) -> Option<crate::ui::tab::OverlayTop> {
         let front = self.document_front()?;
         if self.document_dock_px(window, cx).is_none() {
             return Some(front);
         }
-        let tab = self.tabs.get(self.active)?;
+        let tab = self.tabs.get(self.tabs.active_index())?;
         if tab
             .pane
             .leaves()
@@ -103,7 +103,7 @@ impl LyrelApp {
                 .is_some_and(|diff| diff.focus_handle.contains_focused(window, cx))
             || self
                 .status_document_focus
-                .filter(|(id, _)| *id == tab.tree_id.get())
+                .filter(|(id, _)| *id == tab.id())
                 .is_none_or(|(_, document)| document);
         document.then_some(front)
     }
@@ -112,10 +112,10 @@ impl LyrelApp {
         let document_context = self.status_document_context(window, cx);
         let document = document_context.is_some();
         let location = match document_context {
-            Some(crate::ui::app::OverlayTop::Code) => self.editor_active_location(),
-            Some(crate::ui::app::OverlayTop::Diff) => self
+            Some(crate::ui::tab::OverlayTop::Code) => self.editor_active_location(),
+            Some(crate::ui::tab::OverlayTop::Diff) => self
                 .tabs
-                .get(self.active)
+                .get(self.tabs.active_index())
                 .and_then(|tab| tab.diff_overlay.as_ref())
                 .map(|diff| (diff.host_id, diff.cwd.as_path())),
             None => None,
@@ -156,11 +156,11 @@ impl LyrelApp {
                 }
             })
         } else {
-            self.tab_cwd_text(self.active, window, cx)
+            self.tab_cwd_text(self.tabs.active_index(), window, cx)
         };
         let leaf = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|tab| tab.pane.focused_or_first(window, cx));
         let branch = (!document)
             .then(|| {
@@ -170,7 +170,7 @@ impl LyrelApp {
             })
             .flatten();
         let agent = (!document)
-            .then(|| self.tabs.get(self.active).and_then(|tab| tab.agent_row(cx)))
+            .then(|| self.tabs.get(self.tabs.active_index()).and_then(|tab| tab.agent_row(cx)))
             .flatten();
         let context = h_flex()
             .flex_1()
@@ -265,7 +265,7 @@ impl LyrelApp {
                 )
             })
             .when(
-                document_context == Some(crate::ui::app::OverlayTop::Code),
+                document_context == Some(crate::ui::tab::OverlayTop::Code),
                 |bar| bar.child(self.render_document_status(cx)),
             )
             .child(
@@ -343,7 +343,7 @@ mod tests {
                 },
             );
             let workspace = app.window_workspace(cx);
-            app.tabs[app.active].pane.terminals()[0].update(cx, |pane, _| {
+            app.tabs[app.tabs.active_index()].pane.terminals()[0].update(cx, |pane, _| {
                 pane.set_workspace(workspace);
                 pane.terminal.seed_cwd(Some(path.into()));
             });
@@ -432,7 +432,7 @@ mod tests {
                 settle(&mut vcx);
                 if !filled {
                     app.read_with(&vcx, |app, cx| {
-                        let pane = app.tabs[app.active].pane.terminals()[0].read(cx);
+                        let pane = app.tabs[app.tabs.active_index()].pane.terminals()[0].read(cx);
                         assert!(pane.terminal.term.lock().screen_lines() >= 24,
                             "the terminal must use the content height, not collapse to its intrinsic size");
                     });

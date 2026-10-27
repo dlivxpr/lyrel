@@ -121,7 +121,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
         .unwrap();
     vcx.dispatch_action(SelectNextTab);
     settle(&mut vcx);
-    assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+    assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
     vcx.update(|window, _| {
         assert!(
             window
@@ -133,7 +133,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     });
     vcx.dispatch_action(TogglePanePip);
     settle(&mut vcx);
-    assert!(app.read_with(&vcx, |app, cx| app.tabs[app.active].pip_slot(cx).is_some()));
+    assert!(app.read_with(&vcx, |app, cx| app.tabs[app.tabs.active_index()].pip_slot(cx).is_some()));
     vcx.update(|window, _| {
         assert!(
             window
@@ -146,7 +146,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     assert!(has_sample(&mut vcx));
     vcx.dispatch_action(RestorePanePip);
     settle(&mut vcx);
-    assert!(app.read_with(&vcx, |app, cx| app.tabs[app.active].pip_slot(cx).is_none()));
+    assert!(app.read_with(&vcx, |app, cx| app.tabs[app.tabs.active_index()].pip_slot(cx).is_none()));
     for (width, font) in [(1440., 16.), (720., 20.)] {
         vcx.simulate_resize(size(px(width), px(720.)));
         app.update_in(&mut vcx, |_, _, cx| {
