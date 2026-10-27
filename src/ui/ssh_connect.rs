@@ -12,7 +12,8 @@ use crate::daemon::protocol::{
     NativeSshSpec, SshAlgorithms, SshAuthMode, SshForwardKind, SshForwardRule, SshProxy,
 };
 
-use super::app::{LyrelApp, SpawnAs, SpawnWhere};
+use super::app::{LyrelApp, SpawnWhere};
+use super::tab::presentation::SpawnAs;
 
 impl LyrelApp {
     pub(crate) fn native_ssh_spec_for_profile(

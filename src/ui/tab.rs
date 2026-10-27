@@ -1,3 +1,5 @@
+pub(crate) mod presentation;
+
 use std::rc::Rc;
 use gpui_kit::{App, Entity, IntoElement, Window, div, prelude::*, TestSupportExt as _};
 use crate::core::session::{SessionPane, SessionTab};
@@ -7,8 +9,8 @@ use crate::ui::pane::{Dir, Pane, PaneSlot};
 pub(crate) struct Tab {
     pub(crate) pane: Pane,
     /// Durable presentation belongs to the machine; focus and geometry remain local.
-    pub(crate) presentation: lyrel_core::core::machine::TabPresentation,
-    pub(crate) foreign_presentation: Option<
+    presentation: lyrel_core::core::machine::TabPresentation,
+    foreign_presentation: Option<
         lyrel_core::core::machine::TabPresentation<lyrel_core::core::pane_sidecar::ScopedPane>,
     >,
     name: Option<String>,
@@ -166,10 +168,6 @@ impl Tab {
 
     pub(crate) fn id(&self) -> lyrel_core::core::machine::TabId { self.id.get() }
     pub(crate) fn name(&self) -> &Option<String> { &self.name }
-
-    pub(crate) fn presentation(&self) -> &lyrel_core::core::machine::TabPresentation {
-        &self.presentation
-    }
 
     pub(crate) fn from_session(st: &SessionTab, pane: Pane, presentation: lyrel_core::core::machine::TabPresentation) -> Self {
         let mut tab = Self::with_identity(pane, st.tree_id.unwrap_or_else(lyrel_core::core::machine::TabId::new));
@@ -961,3 +959,7 @@ mod navigation_tests;
 #[cfg(test)]
 #[path = "tab/tests_focus_origin.rs"]
 mod focus_origin_tests;
+
+#[cfg(test)]
+#[path = "tab/tests_launch.rs"]
+mod launch_tests;

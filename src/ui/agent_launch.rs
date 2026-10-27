@@ -23,7 +23,8 @@ use gpui_kit::{App, Axis, Context, Window};
 use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
 use crate::core::config::{Config, ProfileUsage, unix_now};
 use crate::core::session::WorkspaceStore;
-use crate::ui::app::{LyrelApp, SpawnAs, SpawnWhere, join_shell_args};
+use crate::ui::app::{LyrelApp, SpawnWhere, join_shell_args};
+use crate::ui::tab::presentation::SpawnAs;
 use crate::ui::i18n::{L10nKey, t_fmt};
 use crate::ui::pane::PaneSlot;
 
