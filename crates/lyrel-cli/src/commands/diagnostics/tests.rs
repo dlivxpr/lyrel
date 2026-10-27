@@ -8,7 +8,6 @@ use lyrel_core::core::agent_hooks::HooksState;
 use lyrel_core::daemon::control::CONTROL_VERSION;
 use lyrel_core::daemon::control::ReplyOk;
 use lyrel_core::daemon::protocol::PROTOCOL_VERSION;
-use serde_json::json;
 
 fn doctor_backend() -> MockBackend {
     use lyrel_core::daemon::control::ServerStatus;

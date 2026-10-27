@@ -1,3 +1,28 @@
+mod editing;
+pub(crate) mod route;
+
+#[cfg(test)]
+mod native_tests;
+
+use gpui_kit::component::input::InputState;
+
+/// Owns the live form, its edit identity, and the last authoritative registry.
+pub(crate) struct Forwarding {
+    form_pane_id: Option<u64>,
+    managed: Vec<ManagedForward>,
+    mf_kind: SshForwardKind,
+    mf_bind_host: Entity<InputState>,
+    mf_bind_port: Entity<InputState>,
+    mf_target_host: Entity<InputState>,
+    mf_target_port: Entity<InputState>,
+    mf_description: Entity<InputState>,
+    // Recovery needs the original mapping, not just its registry identity.
+    mf_editing: Option<ManagedForward>,
+    mf_error: Option<String>,
+    mf_subs: Vec<gpui_kit::Subscription>,
+    mf_advanced: bool,
+}
+
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{
@@ -378,7 +403,8 @@ impl LyrelApp {
             .cursor_pointer()
             .hover(|s| s.bg(gpui_kit::rgb(sf.hover)))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.edit_managed_forward(forward_for_edit.clone(), window, cx)
+                this.loopback_panel.edit(forward_for_edit.clone(), window, cx);
+                cx.notify();
             }))
             .child(crate::ui::right_panel::git_badge(
                 letter,
@@ -464,7 +490,7 @@ impl LyrelApp {
                         cx.stop_propagation()
                     })
                     .child(
-                        crate::ui::tab_strip::chrome_tile(
+                        crate::ui::window_chrome::chrome_tile(
                             Button::new(("panel-forward-del", forward_id as usize))
                                 .icon(IconName::Close)
                                 .xsmall(),
@@ -498,7 +524,7 @@ impl LyrelApp {
         let kind = self.loopback_panel.mf_kind;
         let editing = self.loopback_panel.mf_editing.is_some();
         let advanced = self.loopback_panel.mf_advanced;
-        let fields = self.managed_forward_fields(cx);
+        let fields = self.loopback_panel.fields(cx);
         // The form used to accept a click on Add and then do nothing at all
         // when the fields did not make a rule. Now Add is only live when there
         // is something to add, and the line below the form says what is still
@@ -540,7 +566,7 @@ impl LyrelApp {
             .gap(px(5.))
             // Escape backs out of the form, the way it backs out of the sftp
             // edit box and every sheet the app puts up. Return is answered by
-            // the boxes themselves — see `arm_managed_forward_form` — because
+            // the boxes themselves — see `Forwarding::open` — because
             // an Input takes Return before it can bubble to here.
             .on_key_down(
                 cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
@@ -600,7 +626,8 @@ impl LyrelApp {
                             2 => SshForwardKind::Dynamic,
                             _ => SshForwardKind::Local,
                         };
-                        this.set_managed_forward_kind(kind, cx);
+                        this.loopback_panel.set_kind(kind);
+                        cx.notify();
                     },
                 ))
                 .child(pair(
@@ -655,7 +682,8 @@ impl LyrelApp {
                                 .ghost()
                                 .xsmall()
                                 .on_click(cx.listener(|this, _, _window, cx| {
-                                    this.toggle_managed_forward_advanced(cx)
+                                    this.loopback_panel.toggle_advanced();
+                                    cx.notify();
                                 })),
                         )
                     }))
@@ -893,5 +921,135 @@ mod tests {
         let mut remote = managed(3, 8080);
         remote.kind = SshForwardKind::Remote;
         assert_eq!(saved_rule_index(&rules, &remote, false), None);
+    }
+}
+// A test window has no daemon behind it — its socket path is under the pinned
+// test config dir and nothing is listening on it — so every forward request
+// fails. That is exactly the case these are about: what the panel and the form
+// are left holding when the far side does not answer.
+#[cfg(test)]
+mod managed_forward_gpui_tests {
+    use gpui_kit::component::input::InputState;
+    use gpui_kit::{Focusable as _, TestAppContext, TestSupportExt as _};
+
+    use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
+    use crate::ui::app::test_window::harness_with_tabs;
+
+    fn listening(id: u64) -> ManagedForward {
+        ManagedForward {
+            id,
+            pane_id: 1,
+            kind: SshForwardKind::Local,
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 8080,
+            target_host: "10.0.0.5".to_string(),
+            target_port: 80,
+            description: None,
+            status: ForwardStatus::Listening,
+            enabled: true,
+        }
+    }
+
+    /// Opening the form transfers focus; closing hands it back to the pane.
+    #[gpui_kit::test]
+    fn opening_the_forward_form_focuses_it_and_closing_returns_to_content(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.toggle_managed_forward_form(1, window, cx);
+
+            assert_eq!(
+                app.loopback_panel.form_pane_id,
+                Some(1),
+                "the form is up for the pane that asked"
+            );
+            assert!(
+                app.loopback_panel
+                    .mf_bind_host
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window),
+                "the form opens with the caret in Bind, so Escape reaches it too"
+            );
+
+            app.close_managed_forward_form(window, cx);
+
+            assert_eq!(app.loopback_panel.form_pane_id, None);
+            assert!(app.tabs[0].pane.terminals()[0]
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn an_add_that_never_reaches_the_session_leaves_the_panel_as_it_was(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.loopback_panel.managed = vec![listening(1)];
+            app.loopback_panel.form_pane_id = Some(1);
+            // These three fields are the long form's; without this the short
+            // form would read them as the one number it asks for.
+            app.loopback_panel.mf_advanced = true;
+            let typed: [(&gpui_kit::Entity<InputState>, &str); 3] = [
+                (&app.loopback_panel.mf_bind_port, "9000"),
+                (&app.loopback_panel.mf_target_host, "127.0.0.1"),
+                (&app.loopback_panel.mf_target_port, "22"),
+            ];
+            for (input, value) in typed {
+                input.update(cx, |input, cx| input.set_value(value, window, cx));
+            }
+
+            app.add_managed_forward(1, window, cx);
+
+            assert_eq!(
+                app.loopback_panel.managed.len(),
+                1,
+                "a request that failed says nothing about the forwards that are up"
+            );
+            assert!(
+                app.loopback_panel.mf_error.is_some(),
+                "and the form has to say why the Add did nothing"
+            );
+            assert_eq!(
+                app.loopback_panel.form_pane_id,
+                Some(1),
+                "the form stays open on what was typed"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_save_that_cannot_be_made_leaves_the_rule_it_would_replace_alone(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.loopback_panel.managed = vec![listening(1)];
+            app.loopback_panel.form_pane_id = Some(1);
+            app.loopback_panel.mf_editing = Some(listening(1));
+            app.loopback_panel.mf_advanced = true;
+            let typed: [(&gpui_kit::Entity<InputState>, &str); 3] = [
+                (&app.loopback_panel.mf_bind_port, "8080"),
+                (&app.loopback_panel.mf_target_host, "10.0.0.6"),
+                (&app.loopback_panel.mf_target_port, "80"),
+            ];
+            for (input, value) in typed {
+                input.update(cx, |input, cx| input.set_value(value, window, cx));
+            }
+
+            app.add_managed_forward(1, window, cx);
+
+            assert_eq!(
+                app.loopback_panel.managed,
+                vec![listening(1)],
+                "the rule being edited must survive an edit that could not be made"
+            );
+            assert!(
+                app.loopback_panel.mf_editing.is_some(),
+                "the form is still editing it"
+            );
+            assert!(app.loopback_panel.mf_error.is_some());
+        });
     }
 }

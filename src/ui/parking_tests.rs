@@ -140,7 +140,7 @@ fn another_clients_parking_delta_preserves_view_and_removes_hidden_input_focus(
         let pane = app.tabs[0].pane.first_leaf().unwrap();
         window.focus(&pane.focus_handle(cx), cx);
         let mut shared = LogicalTab::leaf(pane.terminal().unwrap().read(cx).pane_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         shared.park(shared.root.pane_ids()[0]);
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
@@ -185,7 +185,7 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
     vcx.run_until_parked();
     test_window::quiesce(&mut vcx, None);
     let displayed = app.update_in(&mut vcx, |_, _, cx| {
-        crate::terminal::view::displayed_for_test(cx, pane.entity_id())
+        crate::terminal::lifecycle::displayed_for_test(cx, pane.entity_id())
     });
     assert_eq!(displayed, Some(false));
     render_probe::arm(200);
@@ -210,7 +210,7 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].presentation.parked().is_empty());
         assert_eq!(
-            crate::terminal::view::displayed_for_test(cx, pane.entity_id()),
+            crate::terminal::lifecycle::displayed_for_test(cx, pane.entity_id()),
             Some(true)
         );
     });
@@ -310,7 +310,7 @@ fn restore_after_an_intervening_split_and_sibling_close_keeps_the_new_terminal(
         let current_id = current.terminal().unwrap().read(cx).pane_id;
         let parked_id = parked.terminal().unwrap().read(cx).pane_id;
         let mut shared = LogicalTab::leaf(current_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         shared
             .root
             .split_leaf(current_id, parked_id, LogicalAxis::Vertical, 0.7, false);
@@ -958,7 +958,7 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
             replacement.clone(),
         );
         let mut shared = LogicalTab::leaf(replacement_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         for pane in &parked {
             let id = pane.terminal().unwrap().read(cx).pane_id;
             shared
@@ -1324,7 +1324,7 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
     let mut shared = app.update_in(&mut vcx, |app, window, cx| {
         let current_id = current.terminal().unwrap().read(cx).pane_id;
         let mut shared = LogicalTab::leaf(current_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         for pane in &parked {
             shared.root.split_leaf(
                 current_id,

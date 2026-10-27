@@ -1,5 +1,7 @@
 //! Canonical ordered layout planner. Mutates the supplied optimistic mirror in place.
-use lyrel_core::core::machine::{Axis as TreeAxis, PaneNode, Side, Tab as TreeTab, TabId, TabPresentation};
+use lyrel_core::core::machine::{
+    Axis as TreeAxis, PaneNode, Side, Tab as TreeTab, TabId, TabPresentation,
+};
 use lyrel_core::daemon::control::ControlRequest;
 
 use crate::core::group_key::WorkspaceGroups;
@@ -10,7 +12,11 @@ use super::desired::{DesiredNode, DesiredTab};
 /// showing that the user did not close here. `closing` is pruned on the way to
 /// the intents the mirror still has a tab for — the rest have been carried out,
 /// or were never the machine's to begin with.
-pub(super) fn unaccounted(mirror: &WsMirror, desired: &[DesiredTab], closing: &mut Vec<TabId>) -> Vec<TabId> {
+pub(super) fn unaccounted(
+    mirror: &WsMirror,
+    desired: &[DesiredTab],
+    closing: &mut Vec<TabId>,
+) -> Vec<TabId> {
     closing.retain(|id| mirror.tabs.iter().any(|t| t.id == *id));
     mirror
         .tabs
@@ -717,10 +723,10 @@ fn fix_ratios(
 }
 
 #[cfg(test)]
+mod hibernation_tests;
+#[cfg(test)]
 mod operation_tests;
 #[cfg(test)]
 mod presentation_tests;
 #[cfg(test)]
 mod scope_tests;
-#[cfg(test)]
-mod hibernation_tests;

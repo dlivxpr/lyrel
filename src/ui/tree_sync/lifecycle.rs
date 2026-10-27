@@ -182,23 +182,10 @@ impl WindowSync {
         self.informed = true;
     }
 
-    pub(super) fn match_tab(
-        &self,
-        id: TabId,
-        known: &[TabId],
-        panes: impl FnOnce() -> Vec<u64>,
-    ) -> Option<TabId> {
-        let SyncPhase::Primed(mirror) = &self.sync else { return None };
-        if mirror.tabs.iter().any(|t| t.id == id) {
-            return None;
+    pub(super) fn adopt_tab_ids(&self, tabs: &crate::ui::tab::TabSet, cx: &gpui_kit::App) {
+        if let SyncPhase::Primed(mirror) = &self.sync {
+            tabs.adopt_machine_ids(&mirror.tabs, cx);
         }
-        let panes = panes();
-        if panes.is_empty() {
-            return None;
-        }
-        mirror.tabs.iter()
-            .find(|t| !known.contains(&t.id) && panes.iter().any(|p| t.root.contains(*p)))
-            .map(|t| t.id)
     }
 
     pub(super) fn preempt(&mut self) {

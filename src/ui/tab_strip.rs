@@ -1,5 +1,5 @@
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -23,7 +23,11 @@ use crate::core::cli_agent::CLIAgent;
 use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab};
+use crate::ui::app::{LyrelApp, SpawnWhere};
+use crate::ui::tab::Tab;
+use crate::ui::window_chrome::{
+    BUTTON_ICON_SCALE, TILE_GLYPH, TILE_SIZE, chrome_tile_sized, chrome_tile_variant,
+};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::search::SearchTab;
 
@@ -52,7 +56,7 @@ fn shell_spec(shell: &DetectedShell) -> ShellSpec {
 pub(crate) use lyrel_core::core::tab_view::strip_host_prefix;
 
 /// `home` is the home directory of the machine `path` is on, from
-/// [`Tab::label_view`](crate::ui::app::Tab::label_view) or
+/// [`Tab::label_view`](crate::ui::tab::Tab::label_view) or
 /// the workspace's host; `None` leaves the path spelled out (#580).
 pub(crate) fn abbreviate_home<'a>(
     path: &'a str,
@@ -149,7 +153,7 @@ pub(crate) fn short_title(raw: &str, home: Option<&std::path::Path>) -> String {
 /// [`TabView`](crate::ui::machine_mirror::TabView): the switcher reads one out
 /// of the machine tree for a window it does not own, and the strip builds one
 /// from its own live panes in
-/// [`Tab::label_view`](crate::ui::app::Tab::label_view).
+/// [`Tab::label_view`](crate::ui::tab::Tab::label_view).
 ///
 /// They used to rank their own evidence, and disagreed where it mattered most:
 /// a pane with a working directory and no title — every non-PowerShell shell
@@ -540,36 +544,6 @@ pub(crate) fn chord_tooltip(
     move |_window, cx| cx.new(|_| Tooltip::new(what.clone()).key_binding(kbd.clone()))
 }
 
-pub(crate) fn chrome_tile_variant(cx: &gpui_kit::App) -> ButtonCustomVariant {
-    chrome_tile_variant_for(false, cx)
-}
-
-pub(crate) fn chrome_tile_variant_for(selected: bool, cx: &gpui_kit::App) -> ButtonCustomVariant {
-    ButtonCustomVariant::new(cx)
-        .color(cx.theme().transparent)
-        // Resting chrome is *not* body ink. `sidebar_foreground` is the rung a
-        // tab title is written at, so a toolbar drawn in it made the two
-        // controls at the top of the rail the darkest marks in the whole
-        // sidebar — louder than the twenty rows they exist to act on, which is
-        // the opposite of how a native sidebar ranks itself. One rung down puts
-        // them level with the workspace chip beside them, and the hover fill
-        // this variant already carries is what answers the pointer.
-        .foreground(if selected {
-            cx.theme().foreground
-        } else {
-            cx.theme().muted_foreground
-        })
-        // `sidebar_accent` is the surface's *selected* step, and it was handed
-        // to hover as well — so a hovered tile wore the fill of a selected one
-        // and, with the right panel open, two tiles read as current at once.
-        // Hover takes the step the palette derives for it. (A selected button
-        // never renders the hover style, so this only reaches the rest.)
-        .hover(gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.hover).into())
-        .active(cx.theme().sidebar_accent)
-}
-
-pub(crate) const BUTTON_ICON_SCALE: f32 = 0.75;
-
 /// Compact tiles for document headers and overlays: 26px boxes with a 6px
 /// corner and a glyph a notch under the toolbar's. Sidebar navigation uses
 /// the full title-bar size so opening a panel does not resize its controls.
@@ -590,10 +564,6 @@ pub(crate) const MIN_TARGET: f32 = 24.;
 
 pub(crate) fn hit_target(button: Button) -> Button {
     button.w(px(MIN_TARGET)).h(px(MIN_TARGET))
-}
-
-pub(crate) fn chrome_tile(button: Button, selected: bool, cx: &gpui_kit::App) -> Button {
-    chrome_tile_sized(button, TILE_SIZE, TILE_GLYPH, selected, cx)
 }
 
 /// The right panel's tabs, left to right, by name. Info leads as the default
@@ -642,21 +612,6 @@ pub(crate) fn right_panel_tab_labels_w(window: &Window, cx: &gpui_kit::App) -> f
 pub(crate) const TAB_OUTER_PAD: f32 = 2.;
 /// A label's hover target reaches this far past its word.
 const TAB_INNER_PAD: f32 = 4.;
-
-pub(crate) fn chrome_tile_sized(
-    button: Button,
-    tile: f32,
-    glyph: f32,
-    selected: bool,
-    cx: &gpui_kit::App,
-) -> Button {
-    button
-        .custom(chrome_tile_variant_for(selected, cx))
-        .selected(selected)
-        .with_size(px(glyph / BUTTON_ICON_SCALE))
-        .w(px(tile))
-        .h(px(tile))
-}
 
 /// How many saved hosts the New Tab menu names.
 ///
@@ -1575,7 +1530,7 @@ impl LyrelApp {
     ) -> Option<String> {
         use crate::ui::machine_mirror::TabLabel;
 
-        if let Some(name) = tab.name.as_ref().filter(|n| !n.trim().is_empty()) {
+        if let Some(name) = tab.name().as_ref().filter(|n| !n.trim().is_empty()) {
             return Some(name.trim().to_string());
         }
         let (view, home) = tab.label_view(window, cx);
@@ -1609,7 +1564,7 @@ impl LyrelApp {
         id: &'static str,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
-        self.new_tab_button_sized(id, crate::ui::app::TILE_SIZE, cx)
+        self.new_tab_button_sized(id, crate::ui::window_chrome::TILE_SIZE, cx)
     }
 
     /// [`new_tab_button`](Self::new_tab_button) at another tile size — the
@@ -1621,7 +1576,7 @@ impl LyrelApp {
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
-        let glyph = match tile < crate::ui::app::TILE_SIZE {
+        let glyph = match tile < crate::ui::window_chrome::TILE_SIZE {
             true => RAIL_TILE_GLYPH,
             false => TILE_GLYPH,
         };
@@ -2162,7 +2117,8 @@ mod ssh_host_row_tests {
     use crate::terminal::view::{
         quiet_test_pane, quiet_test_ssh_pane, quiet_test_ssh_pane_of, quiet_test_ssh_pane_with,
     };
-    use crate::ui::app::{Tab, test_window::harness};
+    use crate::ui::app::test_window::harness;
+use crate::ui::tab::Tab;
     use crate::ui::i18n::{L10nKey, set_locale, t};
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::ssh_connect::TabHostForm;
@@ -2191,7 +2147,7 @@ mod ssh_host_row_tests {
             for view in [local, dialled, from_host] {
                 app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
             }
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             (a, b, c)
         });
@@ -2244,7 +2200,7 @@ mod ssh_host_row_tests {
         let _end = app.update_in(&mut vcx, |app, window, cx| {
             let (view, end) = quiet_test_ssh_pane_of(1, Some(uuid::Uuid::new_v4()), window, cx);
             app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             end
         });
@@ -2286,7 +2242,7 @@ mod ssh_host_row_tests {
             spec.login_script = vec!["tmux attach".to_string()];
             let (view, end) = quiet_test_ssh_pane_with(1, spec, window, cx);
             app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             end
         });
@@ -2866,7 +2822,7 @@ mod tests {
 
     /// A tab of this window as the strip reads it: `tab_label` is nothing but
     /// [`label_of`] over the [`TabView`](crate::ui::machine_mirror::TabView)
-    /// that [`Tab::label_view`](crate::ui::app::Tab::label_view) builds from
+    /// that [`Tab::label_view`](crate::ui::tab::Tab::label_view) builds from
     /// the live leaf, so naming one here climbs the same ladder a real tab
     /// climbs. `title` is the placeholder `label_view` fills that slot with —
     /// the machine tree puts a process name there, a live pane has only the
@@ -2955,14 +2911,14 @@ mod tests {
                 .terminal
                 .seed_cwd(Some(std::path::PathBuf::from("/work/repo")));
             app.tabs
-                .push(crate::ui::app::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            app.active = app.tabs.len() - 1;
+                .push(crate::ui::tab::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
+            app.tabs.select(app.tabs.len() - 1);
             stream
         });
         vcx.background_executor.run_until_parked();
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let index = app.active;
+            let index = app.tabs.active_index();
             let tab = &app.tabs[index];
             let (view, home) = tab.label_view(Some(window), cx);
             assert_eq!(view.osc_title, None, "the pane never titled itself");
@@ -2980,7 +2936,7 @@ mod tests {
             // switcher ever has: no title was seen, the cwd is the one above,
             // and `title` is the foreground process name.
             let from_tree = crate::ui::machine_mirror::TabView {
-                id: tab.tree_id.get(),
+                id: tab.id(),
                 name: None,
                 title: "zsh".into(),
                 osc_title: None,

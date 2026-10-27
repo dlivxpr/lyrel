@@ -16,9 +16,7 @@ use crate::{output, resolve};
 pub(super) fn execute(cmd: TabCmd, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcome> {
     match cmd {
         TabCmd::Ls { ws } => tab_ls(ws.as_deref(), ctx, backend),
-        TabCmd::New { ws, cwd, pane } => {
-            tab_new(ws.as_deref(), cwd, pane.as_deref(), ctx, backend)
-        }
+        TabCmd::New { ws, cwd, pane } => tab_new(ws.as_deref(), cwd, pane.as_deref(), ctx, backend),
         TabCmd::Close { tab } => tab_close(&tab, backend),
         TabCmd::Rename { tab, name } => tab_rename(&tab, name, backend),
         TabCmd::Move { tab, index } => tab_move(&tab, index, backend),

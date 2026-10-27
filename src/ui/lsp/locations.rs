@@ -102,7 +102,7 @@ pub(crate) fn item(found: &Found, root: &Path) -> Item {
 impl LyrelApp {
     /// The open local buffers' texts, for measuring places in them.
     fn lsp_open_texts(&self, cx: &App) -> HashMap<PathBuf, Rope> {
-        self.editor_local_files()
+        self.editor.local_files()
             .into_iter()
             .map(|f| (f.path, f.input.read(cx).text().clone()))
             .collect()
@@ -140,7 +140,7 @@ impl LyrelApp {
                     let items = many.iter().map(|f| item(f, &root)).collect();
                     app.open_search(SearchTab::Locations, "", window, cx);
                     app.editor_begin_preview(cx);
-                    if let Some(view) = app.search.clone() {
+                    if let Some(view) = app.search.view() {
                         view.update(cx, |view, cx| {
                             view.set_locations(Some(t(heading)), items, window, cx)
                         });
@@ -254,7 +254,7 @@ impl LyrelApp {
         static LATEST: AtomicU64 = AtomicU64::new(0);
         let seq = LATEST.fetch_add(1, Ordering::Relaxed) + 1;
         if query.trim().is_empty() {
-            if let Some(view) = self.search.clone() {
+            if let Some(view) = self.search.view() {
                 view.update(cx, |view, cx| {
                     view.set_project_symbols(Vec::new(), window, cx)
                 });
@@ -314,7 +314,7 @@ impl LyrelApp {
                 return;
             }
             let _ = app.update_in(cx, |app, window, cx| {
-                if let Some(view) = app.search.clone()
+                if let Some(view) = app.search.view()
                     && view.read(cx).tab() == SearchTab::Symbols
                 {
                     view.update(cx, |view, cx| view.set_project_symbols(items, window, cx));
@@ -335,7 +335,7 @@ impl LyrelApp {
     ) {
         let in_front = self
             .editor_preview_buffer()
-            .and_then(|id| self.editor_local_file(id))
+            .and_then(|id| self.editor.local_file(id))
             .is_some_and(|f| f.path == path);
         if in_front {
             self.editor_symbol_preview(line, column, cx);

@@ -85,7 +85,10 @@ fn main() {
             "run_keep_files_the_pane_so_ls_shows_it",
             execution::run_keep_files_the_pane_so_ls_shows_it,
         ),
-        ("send_then_capture_round_trip", send::send_then_capture_round_trip),
+        (
+            "send_then_capture_round_trip",
+            send::send_then_capture_round_trip,
+        ),
         (
             "parked_shells_keep_cli_identity_input_capture_and_close_scope",
             pane::parked_shells_keep_cli_identity_input_capture_and_close_scope,
@@ -170,7 +173,6 @@ fn main() {
         std::process::exit(1);
     }
 }
-
 
 struct Daemon {
     child: Child,
@@ -367,7 +369,6 @@ fn one_shot(command: &str) -> Vec<String> {
         vec!["/bin/sh".into(), "-c".into(), command.into()]
     }
 }
-
 
 fn collect_pane_output_until(session: &mut lyrel_core::client::PaneSession, marker: &[u8]) {
     let mut seen = Vec::new();

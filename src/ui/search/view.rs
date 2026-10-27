@@ -398,6 +398,7 @@ pub enum SearchEvent {
     /// reflected in the rows.
     RunInPlace(CommandKind),
     Dismiss,
+    SessionError(lyrel_core::host::session_operations::SessionOperationError),
     /// Show the theme at this preset index without persisting it: the theme
     /// picker previews the highlighted row while it stays open.
     PreviewTheme(usize),
@@ -438,6 +439,8 @@ pub struct SearchView {
     /// How many session lists have arrived since the search opened. A test
     /// waits on it: the scan runs on a real thread and lands when it lands.
     sessions_landed: usize,
+    session_generation: u64,
+    retired: bool,
     /// The symbol Go to Symbol opened on — the one around the caret — which
     /// is not previewed until the highlight has moved: opening the picker
     /// must not move the caret.
@@ -487,6 +490,8 @@ impl SearchView {
             parked_query: None,
             previewing: None,
             sessions_landed: 0,
+            session_generation: 0,
+            retired: false,
             symbol_initial: None,
             symbol_moved: false,
             heading: None,
@@ -594,6 +599,25 @@ impl SearchView {
             state.scroll_to_item(IndexPath::default(), ScrollStrategy::Top, window, cx);
         });
         cx.notify();
+    }
+
+    pub(crate) fn refresh_sessions(
+        &mut self,
+        query: super::history::SessionQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.session_generation += 1;
+        query.start(self.session_generation, window, cx);
+    }
+
+    pub(super) fn accepts_session_query(&self, generation: u64) -> bool {
+        !self.retired && self.session_generation == generation
+    }
+
+    pub(super) fn retire(&mut self) {
+        self.retired = true;
+        self.session_generation += 1;
     }
 
     /// The Sessions tab's rows, arrived from a scan that finished after the
@@ -1358,7 +1382,7 @@ mod tests {
 
     fn open(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Entity<SearchView> {
         app.read_with(vcx, |app, _| {
-            app.search.clone().expect("the search is open")
+            app.search.view().expect("the search is open")
         })
     }
 
@@ -1470,7 +1494,7 @@ mod tests {
         });
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+        assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
     }
 
     #[gpui_kit::test]
@@ -1497,7 +1521,7 @@ mod tests {
         vcx.run_until_parked();
         view.read_with(&vcx, |view, _| assert_eq!(view.tab, SearchTab::Sessions));
         assert!(
-            app.read_with(&vcx, |app, _| app.search.is_some()),
+            app.read_with(&vcx, |app, _| app.search.is_open()),
             "Tab stays inside the search instead of walking focus out of it"
         );
     }
@@ -1507,9 +1531,13 @@ mod tests {
     #[gpui_kit::test]
     fn return_on_an_empty_search_goes_to_the_previous_tab(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
-        app.update_in(&mut vcx, |app, _, _| {
-            app.tabs[1].last_used.set(5);
-            app.tabs[2].last_used.set(9);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.activate(1, window, cx);
+            app.tabs.touch_active();
+            app.activate(2, window, cx);
+            app.tabs.touch_active();
+            app.activate(0, window, cx);
+            app.tabs.touch_active();
         });
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::All, "", window, cx)
@@ -1527,8 +1555,8 @@ mod tests {
         vcx.simulate_keystrokes("enter");
         vcx.run_until_parked();
         app.read_with(&vcx, |app, _| {
-            assert!(app.search.is_none(), "picking a row closes the search");
-            assert_eq!(app.active, 2, "back to the tab used before this one");
+            assert!(!app.search.is_open(), "picking a row closes the search");
+            assert_eq!(app.tabs.active_index(), 2, "back to the tab used before this one");
         });
     }
 
@@ -1573,7 +1601,7 @@ mod tests {
 
         app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+        assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
     }
 
     /// A tab reached by its own chord stands alone: Tab does not swap Go to
@@ -1650,6 +1678,80 @@ mod tests {
         ));
     }
 
+    fn isolate_history(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let settings = crate::ui::settings::test_window::open(app, vcx);
+        settings.update_in(vcx, |settings, window, cx| {
+            crate::ui::settings::skills::test_host::install(home.path(), cx);
+            settings.close_settings(window, cx);
+        });
+        vcx.run_until_parked();
+        home
+    }
+
+    fn wait_for_history(view: &Entity<SearchView>, vcx: &mut VisualTestContext) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while view.read_with(vcx, |view, _| view.sessions_landed) == 0 {
+            assert!(std::time::Instant::now() < deadline, "the scan never landed");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            vcx.run_until_parked();
+        }
+    }
+
+    #[gpui_kit::test]
+    fn replacing_search_keeps_the_original_keyboard_return_focus(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
+        vcx.run_until_parked();
+        let original = vcx.update(|window, cx| window.focused(cx).unwrap());
+        let chord = vcx.update(|_, cx| crate::ui::keymap::effective_key("TogglePalette", cx).unwrap());
+        vcx.simulate_keystrokes(&chord);
+        vcx.run_until_parked();
+        let old = open(&app, &mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.open_search(SearchTab::Actions, "", window, cx);
+        });
+        assert_ne!(old, open(&app, &mut vcx));
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(!app.read_with(&vcx, |app, _| app.search.is_open()));
+        vcx.update(|window, _| assert!(original.is_focused(window)));
+    }
+
+    #[gpui_kit::test]
+    fn retired_search_rejects_history_and_navigation_after_reopen_or_workspace_change(
+        cx: &mut TestAppContext,
+    ) {
+        for change_workspace in [false, true] {
+            let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
+            let _home = isolate_history(&app, &mut vcx);
+            // Keep the old Entity alive, and replace it before pumping async
+            // work: Host results must be refused even when upgrade succeeds.
+            let old = app.update_in(&mut vcx, |app, window, cx| {
+                app.open_search(SearchTab::Sessions, "", window, cx);
+                let old = app.search.view().unwrap();
+                if change_workspace {
+                    let id = crate::core::session::WorkspaceStore::claim(cx, None);
+                    app.adopt_workspace(id, crate::core::session::Session::default(), window, cx);
+                }
+                app.open_search(SearchTab::Sessions, "", window, cx);
+                old
+            });
+            let current = open(&app, &mut vcx);
+            wait_for_history(&current, &mut vcx);
+            old.read_with(&vcx, |view, _| assert_eq!(view.sessions_landed, 0));
+            let active = app.read_with(&vcx, |app, _| app.tabs.active_index());
+            old.update(&mut vcx, |_, cx| {
+                cx.emit(SearchEvent::Confirm(CommandKind::NextTab));
+                cx.emit(SearchEvent::Dismiss);
+            });
+            vcx.run_until_parked();
+            assert_eq!(open(&app, &mut vcx), current);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), active);
+        }
+    }
+
     fn past_session(id: &str) -> Item {
         Item::new(
             format!("session {id}"),
@@ -1681,29 +1783,15 @@ mod tests {
     #[gpui_kit::test]
     fn a_past_session_opens_its_actions_and_can_be_removed(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-        let home = tempfile::tempdir().unwrap();
+        let _home = isolate_history(&app, &mut vcx);
         crate::ui::i18n::set_locale("en");
-        let settings = crate::ui::settings::test_window::open(&app, &mut vcx);
-        settings.update_in(&mut vcx, |settings, window, cx| {
-            crate::ui::settings::skills::test_host::install(home.path(), cx);
-            settings.close_settings(window, cx);
-        });
-        vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::Sessions, "", window, cx)
         });
         // The isolated Host scan still lands asynchronously. Let it finish
         // before installing the sessions used by the menu interaction.
         let view = open(&app, &mut vcx);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while view.read_with(&vcx, |view, _| view.sessions_landed) == 0 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the scan never landed"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            vcx.run_until_parked();
-        }
+        wait_for_history(&view, &mut vcx);
         view.update_in(&mut vcx, |view, window, cx| {
             view.set_sessions(vec![past_session("a"), past_session("b")], 0, window, cx)
         });
@@ -1731,7 +1819,7 @@ mod tests {
         vcx.run_until_parked();
         vcx.simulate_keystrokes("enter");
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+        assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
         view.read_with(&vcx, |view, cx| {
             assert_eq!(view.scope(cx), Scope::Tab(SearchTab::Sessions));
             assert_eq!(
@@ -1779,6 +1867,6 @@ mod tests {
         assert!(selected.is_some(), "Return has a row to run");
         vcx.simulate_keystrokes("enter");
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+        assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
     }
 }

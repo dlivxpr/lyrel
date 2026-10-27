@@ -25,7 +25,8 @@ use std::rc::Rc;
 use crate::core::config::{
     Config, DOCUMENT_RATIO_MAX, DOCUMENT_RATIO_MIN, DOCUMENT_RATIO_STOPS, DocumentLayout,
 };
-use crate::ui::app::{DOCUMENT_MIN_W, LyrelApp, OverlayTop, TERMINAL_MIN_W, document_column_px};
+use crate::ui::app::{DOCUMENT_MIN_W, LyrelApp, TERMINAL_MIN_W, document_column_px};
+use crate::ui::tab::OverlayTop;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
 
@@ -271,8 +272,8 @@ impl LyrelApp {
         let theme = cx.theme();
         let name = self
             .tabs
-            .get(self.active)
-            .map(|tab| self.tab_label(tab, self.active, Some(window), cx))
+            .get(self.tabs.active_index())
+            .map(|tab| self.tab_label(tab, self.tabs.active_index(), Some(window), cx))
             .unwrap_or_default();
         let badge_bg = gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().window.selected);
         Some(
@@ -347,8 +348,8 @@ impl LyrelApp {
     /// from. Telling one tab never moves another.
     pub(crate) fn document_layout(&self, cx: &gpui_kit::App) -> DocumentLayout {
         self.tabs
-            .get(self.active)
-            .and_then(|t| t.document_layout)
+            .get(self.tabs.active_index())
+            .and_then(|tab| tab.document_layout())
             .unwrap_or_else(|| cx.global::<Config>().document_layout)
     }
 
@@ -359,14 +360,7 @@ impl LyrelApp {
     /// so the ordering has to become a choice: the surface on top, unless it is
     /// closed, in which case there is no front and the survivor is it.
     pub(crate) fn document_front(&self) -> Option<OverlayTop> {
-        let tab = self.tabs.get(self.active)?;
-        let code = tab.code.as_ref().is_some_and(|c| c.visible);
-        let diff = tab.diff_overlay.is_some();
-        match (tab.overlay_top, code, diff) {
-            (_, false, false) => None,
-            (OverlayTop::Code, true, _) | (OverlayTop::Diff, true, false) => Some(OverlayTop::Code),
-            (OverlayTop::Diff, _, true) | (OverlayTop::Code, false, true) => Some(OverlayTop::Diff),
-        }
+        self.tabs.get(self.tabs.active_index())?.document_front()
     }
 
     /// What the document column has reserved, from a side panel's point of
@@ -452,8 +446,8 @@ impl LyrelApp {
     /// The narrow-window fallback does not come through here either — it is
     /// derived at render time and stored nowhere.
     pub(crate) fn set_document_layout(&mut self, layout: DocumentLayout, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get_mut(self.active) {
-            tab.document_layout = Some(layout);
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.choose_document_layout(layout);
         }
         cx.notify();
     }
@@ -819,7 +813,7 @@ mod gpui_tests {
             )
         });
         app.tabs
-            .push(crate::ui::app::Tab::new(Pane::leaf(PaneSlot::Connecting(
+            .push(crate::ui::tab::Tab::new(Pane::leaf(PaneSlot::Connecting(
                 pending,
             ))));
         cx.notify();
@@ -836,7 +830,7 @@ mod gpui_tests {
             for _ in 0..tabs {
                 push_tab(app, cx);
             }
-            app.active = 0;
+            app.tabs.select(0);
         });
         vcx.simulate_resize(size(px(w), px(900.)));
         vcx.run_until_parked();
@@ -872,20 +866,20 @@ mod gpui_tests {
         // A file open in each tab, both docked to start with.
         for i in [0, 1] {
             app.update_in(&mut vcx, |app, window, cx| {
-                app.active = i;
+                app.tabs.select(i);
                 app.toggle_code_panel(window, cx);
             });
         }
         vcx.run_until_parked();
 
         app.update_in(&mut vcx, |app, _, cx| {
-            app.active = 1;
+            app.tabs.select(1);
             app.toggle_document_fill(cx);
         });
         vcx.run_until_parked();
         assert_eq!(dock_px(&app, &mut vcx), None, "the tab that asked, fills");
 
-        app.update_in(&mut vcx, |app, _, _cx| app.active = 0);
+        app.update_in(&mut vcx, |app, _, _cx| app.tabs.select(0));
         vcx.run_until_parked();
         assert!(
             dock_px(&app, &mut vcx).is_some(),
@@ -897,7 +891,7 @@ mod gpui_tests {
         assert_eq!(layout(&mut vcx), DocumentLayout::Dock);
         app.update_in(&mut vcx, |app, window, cx| {
             push_tab(app, cx);
-            app.active = 2;
+            app.tabs.select(2);
             app.toggle_code_panel(window, cx);
         });
         vcx.run_until_parked();
@@ -920,7 +914,7 @@ mod gpui_tests {
         crate::ui::i18n::set_locale("en");
         let row = |app: &Entity<LyrelApp>, vcx: &mut VisualTestContext| {
             app.update_in(vcx, |app, window, cx| {
-                app.search_actions(window, cx)
+                app.search_input(window, cx).build(cx).actions
                     .into_iter()
                     .find(|c| c.kind == CommandKind::ToggleDocumentFill)
                     .expect("the search offers the fill toggle")
@@ -930,7 +924,7 @@ mod gpui_tests {
         assert_eq!(row(&app, &mut vcx), t(L10nKey::CmdDocumentFill).to_string());
 
         app.update_in(&mut vcx, |app, _, cx| {
-            app.active = 1;
+            app.tabs.select(1);
             app.toggle_document_fill(cx);
         });
         vcx.run_until_parked();
@@ -945,7 +939,7 @@ mod gpui_tests {
             "and the config it did not write still reads dock"
         );
 
-        app.update_in(&mut vcx, |app, _, _| app.active = 0);
+        app.update_in(&mut vcx, |app, _, _| app.tabs.select(0));
         vcx.run_until_parked();
         assert_eq!(
             row(&app, &mut vcx),

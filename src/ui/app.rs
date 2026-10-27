@@ -24,20 +24,21 @@ use crate::core::window_state::{WindowGeometry as _, WindowState};
 use crate::daemon::protocol::{RemoteKind, ShellSpec, ssh_option_takes_value};
 use crate::daemon::spawn::DaemonMismatch;
 use crate::terminal::view::{ChildExited, TerminalView};
-use crate::ui::forwards::{ForwardFields, added_forward, rule_of};
+use crate::ui::forwards::{Forwarding, route::ForwardRoute};
 use crate::ui::host_registry::HostId;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
 use crate::ui::scm::ScmIntent;
 use crate::ui::search::{
-    Avatar, Catalog, ChromeState, CommandGroup, CommandKind, Item, SearchEvent, SearchTab,
-    SearchView,
+    ActionCatalog, ChromeState, CommandKind, SearchCatalog, SearchEvent, SearchState, SearchTab,
+    SearchView, SessionHistory, TerminalCatalog,
 };
 use crate::ui::settings::SettingsSection;
 use crate::ui::settings_window::SettingsWindow;
 mod settings_bridge;
 use crate::ui::theme::{apply_theme, set_menus};
 
+use crate::ui::window_chrome::{ChromeCommand, WindowChrome, window_controls_drawn};
 /// What to start in a pane that is about to be opened.
 pub(crate) enum SpawnAs {
     /// A local shell; `None` is whatever the default one is.
@@ -199,114 +200,9 @@ pub(crate) fn document_column_px(body: f32, ratio: f32) -> Option<f32> {
     Some((body * ratio).clamp(DOCUMENT_MIN_W, body - TERMINAL_MIN_W))
 }
 
-pub(crate) const TITLE_BAR_HEIGHT: f32 = 48.;
-
-/// The rule every title-bar row carries along its bottom edge.
-///
-/// `TitleBar` itself draws one (`gpui-component`'s own `.border_b_1()`), and
-/// taffy sizes a node by its border box, so the bar's content box is this one
-/// point short of its height and `items_center` puts a tile's centre half a
-/// point above the bar's middle. Every row that stands in for the title bar
-/// has to carry the same point — in a transparent ink where the row shows no
-/// rule of its own — or its tiles land half a point below the traffic lights
-/// and below the strip they are meant to read as one line with: one device
-/// pixel on a Retina panel, and visible precisely because the two are side by
-/// side in the same band.
-pub(crate) const TITLE_BAR_BORDER: f32 = 1.;
-
-/// The line the traffic lights and every [`title_strip_row`]'s contents sit
-/// on, from the top of the window's content.
-///
-/// The lights hang from a point, not a centre, so macOS gives this back through
-/// `theme::traffic_light_position` less half the system button's height.
-pub(crate) const TITLE_STRIP_CENTRE: f32 = (TITLE_BAR_HEIGHT - TITLE_BAR_BORDER) / 2.;
-
-pub(crate) fn title_strip_centre() -> gpui_kit::Pixels {
-    gpui_kit::px(TITLE_STRIP_CENTRE)
-}
-
-/// Split the title bar's bottom edge between the rule a row draws and the
-/// padding that stands in for the part of it the rule does not reach.
-fn title_strip_rule_and_pad(rule: gpui_kit::Pixels) -> (gpui_kit::Pixels, gpui_kit::Pixels) {
-    let border = rule.min(gpui_kit::px(TITLE_BAR_BORDER));
-    (border, gpui_kit::px(TITLE_BAR_BORDER - border.as_f32()))
-}
-
-/// The centre of the box a row built by [`title_strip_row`] gives its contents:
-/// the bar's height, less whatever its bottom edge spends on rule and padding.
-#[cfg_attr(not(test), allow(dead_code))]
-fn title_strip_content_centre(rule: gpui_kit::Pixels) -> gpui_kit::Pixels {
-    let (border, pad) = title_strip_rule_and_pad(rule);
-    gpui_kit::px((TITLE_BAR_HEIGHT - border.as_f32() - pad.as_f32()) / 2.)
-}
-
-/// Give a row the title bar's geometry: its height, its vertical centring, and
-/// a bottom edge that leaves the content box the height
-/// [`title_strip_centre`] assumes.
-///
-/// A method rather than a function, because a row's own chain — its insets, its
-/// tiles, its drag band — is what the file is about, and this is one more link in
-/// it. Calling it mid-chain keeps the row readable instead of burying it in an
-/// argument.
-///
-/// `rule` is the border the row wants. A row standing in for the title bar with
-/// no visible rule passes [`TITLE_BAR_BORDER`] in a transparent ink, so the point
-/// is spent on the box and not on the paint. A row that draws its own thinner
-/// hairline keeps that hairline — it stays flush with the box's bottom edge
-/// either way — and makes up the difference as padding, which is what keeps its
-/// tiles on the same line as the lights over them.
-pub(crate) trait TitleStripRow: Sized {
-    fn title_strip_row(self, rule: gpui_kit::Pixels, ink: gpui_kit::Hsla) -> Self;
-}
-
-impl<R: gpui_kit::Styled> TitleStripRow for R {
-    fn title_strip_row(self, rule: gpui_kit::Pixels, ink: gpui_kit::Hsla) -> Self {
-        let (border, pad) = title_strip_rule_and_pad(rule);
-        self.h(gpui_kit::px(TITLE_BAR_HEIGHT))
-            .items_center()
-            .border_b(border)
-            .border_color(ink)
-            .pb(pad)
-    }
-}
-
-pub(crate) const TILE_SIZE: f32 = 32.;
-pub(crate) const TILE_GLYPH: f32 = 16.;
-/// A tile that sits in a body row rather than in chrome: the box shrinks to
-/// the minimum hit target, but the glyph keeps the chrome size. An 11px glyph
-/// here read as a disabled ornament next to 14px text, and put a second,
-/// smaller folder in the same column as the panel's folder tab.
-pub(crate) const TILE_SIZE_SM: f32 = 24.;
-pub(crate) const TILE_GLYPH_SM: f32 = TILE_GLYPH;
-
-/// The tile that lives *inside* a list row rather than beside one, for the
-/// buttons a row reveals on hover.
-///
-/// A box below [`TILE_SIZE_SM`] because of width: three `TILE_SIZE_SM` squares
-/// would eat 72 of the 236px a file name has to live in, where three of these
-/// eat 54.
-pub(crate) const TILE_SIZE_XS: f32 = 18.;
-pub(crate) const TILE_GLYPH_XS: f32 = 11.;
-
-pub(crate) const TILE_PAD: f32 = (TILE_SIZE - TILE_GLYPH) / 2.;
-
 const DOCS_URL: &str = "https://github.com/dlivxpr/lyrel#readme";
 const PROJECT_URL: &str = "https://github.com/dlivxpr/lyrel";
 const ISSUES_URL: &str = "https://github.com/dlivxpr/lyrel/issues/new";
-
-pub(crate) const CONTENT_INSET: f32 = 12.;
-
-const TILE_EDGE_GAP: f32 = 5.;
-
-pub(crate) fn tile_trailing_inset() -> f32 {
-    (CONTENT_INSET - TILE_PAD).max(TILE_EDGE_GAP)
-}
-
-pub(crate) const TITLE_BAR_LEAD: f32 = if cfg!(target_os = "macos") {
-    crate::ui::theme::TRAFFIC_LIGHTS_LEAD
-} else {
-    12.
-};
 
 /// 保存窗口可见内容的边界，供下次启动恢复位置与尺寸。
 /// Windows/macOS 后端的 `inner_window_bounds` 默认与窗口边界一致。
@@ -314,593 +210,8 @@ fn window_bounds_to_remember(window: &Window) -> Bounds<Pixels> {
     window.inner_window_bounds().get_bounds()
 }
 
-pub(crate) const WINDOW_MARK_SIZE: f32 = 20.;
+use crate::ui::tab::{OverlayTop, Tab, TabSet};
 
-pub(crate) fn title_bar_drag(
-    row: gpui_kit::Stateful<gpui_kit::Div>,
-    key: &'static str,
-    window: &mut gpui_kit::Window,
-    cx: &mut gpui_kit::App,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    window_move_gesture(row, key, window, cx).on_double_click(|_, window, _| {
-        window.titlebar_double_click();
-    })
-}
-
-pub(crate) struct WindowMoveArm {
-    should_move: bool,
-}
-
-pub(crate) fn window_move_gesture(
-    row: gpui_kit::Stateful<gpui_kit::Div>,
-    key: &'static str,
-    window: &mut gpui_kit::Window,
-    cx: &mut gpui_kit::App,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    window_move_gesture_with(row, key, window, cx, gpui_kit::Window::start_window_move)
-}
-
-fn window_move_gesture_with(
-    row: gpui_kit::Stateful<gpui_kit::Div>,
-    key: &'static str,
-    window: &mut gpui_kit::Window,
-    cx: &mut gpui_kit::App,
-    start_move: impl Fn(&gpui_kit::Window) + 'static,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let arm = window.use_keyed_state(key, cx, |_, _| WindowMoveArm { should_move: false });
-    row.window_control_area(gpui_kit::WindowControlArea::Drag)
-        .on_mouse_down(
-            gpui_kit::MouseButton::Left,
-            window.listener_for(&arm, |arm, _: &gpui_kit::MouseDownEvent, _, _| {
-                arm.should_move = true;
-            }),
-        )
-        .on_mouse_down_out(
-            window.listener_for(&arm, |arm, _: &gpui_kit::MouseDownEvent, _, _| {
-                arm.should_move = false;
-            }),
-        )
-        .on_mouse_up(
-            gpui_kit::MouseButton::Left,
-            window.listener_for(&arm, |arm, _: &gpui_kit::MouseUpEvent, _, _| {
-                arm.should_move = false;
-            }),
-        )
-        .on_mouse_up_out(
-            gpui_kit::MouseButton::Left,
-            window.listener_for(&arm, |arm, _: &gpui_kit::MouseUpEvent, _, _| {
-                arm.should_move = false;
-            }),
-        )
-        .on_mouse_move(window.listener_for(
-            &arm,
-            move |arm, _: &gpui_kit::MouseMoveEvent, window, _| {
-                if arm.should_move {
-                    arm.should_move = false;
-                    start_move(window);
-                }
-            },
-        ))
-}
-
-pub(crate) fn window_mark() -> impl IntoElement {
-    static LOGO: std::sync::OnceLock<Arc<gpui_kit::Image>> = std::sync::OnceLock::new();
-    let logo = LOGO
-        .get_or_init(|| {
-            Arc::new(gpui_kit::Image::from_bytes(
-                gpui_kit::ImageFormat::Png,
-                include_bytes!("../../assets/logo@256.png").to_vec(),
-            ))
-        })
-        .clone();
-    img(logo)
-        .size(gpui_kit::rems(WINDOW_MARK_SIZE / 16.))
-        .flex_shrink_0()
-}
-
-pub struct Tab {
-    pub pane: Pane,
-    /// Durable presentation belongs to the machine; focus and geometry remain local.
-    pub(crate) presentation: lyrel_core::core::machine::TabPresentation,
-    pub(crate) foreign_presentation: Option<
-        lyrel_core::core::machine::TabPresentation<lyrel_core::core::pane_sidecar::ScopedPane>,
-    >,
-    pub name: Option<String>,
-    pub(crate) last_focused: Option<gpui_kit::EntityId>,
-    /// The pane zoomed in this tab, stashed here by `activate` while another
-    /// tab is on screen — zoom is a tab's view state, not the window's, so
-    /// looking at another tab and coming back must not lose it (#599). `None`
-    /// while the tab is active: then the zoom lives in `LyrelApp::maximized`.
-    pub(crate) zoomed: Option<Entity<TerminalView>>,
-    pub(crate) diff_overlay: Option<crate::ui::diff_overlay::DiffOverlayState>,
-    pub(crate) code: Option<Box<crate::ui::code_editor::TabCode>>,
-    /// The pinned sidebar group this tab was put in, by id, or `None` to
-    /// leave it to auto grouping. A `Cell` because the sidebar files a tab
-    /// that walks into a pinned folder while it is working out where to draw
-    /// it, which it does from `&self`.
-    pub(crate) group: std::cell::Cell<Option<crate::core::group_key::GroupId>>,
-    /// The auto group this tab last resolved to. Stored nowhere — an auto
-    /// group is derived — but remembered here so a tab whose repo probe is
-    /// still in flight stays where it was instead of bouncing through
-    /// Ungrouped for the frames the probe takes.
-    pub(crate) auto_group: std::cell::RefCell<Option<crate::core::group_key::AutoKey>>,
-    /// Which pinned folder this tab was last seen inside, so it joins one only
-    /// on the way *in* — see [`crate::core::group_key::EntryWatch`].
-    pub(crate) folder_watch: std::cell::Cell<crate::core::group_key::EntryWatch>,
-    pub(crate) overlay_top: OverlayTop,
-    /// Whether this tab's document fills the workspace or docks beside the
-    /// terminal, once the tab has been told. `None` follows `document_layout`
-    /// in the config, which is the default a fresh tab starts from and the
-    /// last explicit choice anyone made.
-    ///
-    /// Per tab rather than per window because what you are doing differs per
-    /// tab: reading a long file in one while an agent works in another wants
-    /// the whole window here and half of it there, and a global switch made
-    /// each of those flip the other.
-    pub(crate) document_layout: Option<crate::core::config::DocumentLayout>,
-    pub(crate) tree_id: std::cell::Cell<lyrel_core::core::machine::TabId>,
-    /// Monotonic stamp of when this tab was last activated, used to order the
-    /// switcher's tab column most-recently-used first. Zero means never.
-    pub(crate) last_used: std::cell::Cell<u64>,
-    /// Where a directional focus move started, keyed by the pane it landed on
-    /// and the direction that undoes it, so reversing a move comes back here
-    /// instead of wherever geometry ranks first (#738). Per tab because the
-    /// panes are.
-    ///
-    /// Keyed by pane and not by direction alone: one slot per direction is
-    /// overwritten by the next move the same way, so a walk of two steps left
-    /// and two back right ends somewhere other than it started — the very drift
-    /// this is here to stop. A pane remembering its own way in retraces the
-    /// whole walk.
-    ///
-    /// A recorded pane only ever breaks a tie between the panes already next to
-    /// the one focus is leaving, so an entry left over from an older layout — or
-    /// from before a click moved focus somewhere else entirely — can at worst
-    /// pick a different neighbour, never a distant one. Entries naming a pane
-    /// the tab no longer holds are dropped as the next one is written, so a
-    /// closed pane leaves nothing behind either.
-    focus_origin: std::collections::HashMap<(gpui_kit::EntityId, Dir), gpui_kit::EntityId>,
-    /// Set while the tab is asleep (#762): its panes were stopped and `pane`
-    /// is `Pane::Empty`. What is kept instead is what it takes to bring them
-    /// back — see [`Asleep`].
-    pub(crate) asleep: Option<Asleep>,
-    pub(crate) pip_interaction: Rc<crate::ui::pip_geometry::PipInteraction>,
-}
-
-/// A sleeping tab: nothing of it runs, and everything a wake needs is here.
-///
-/// `layout` is the tab as the restore path reads a tab — pane ids, cwds,
-/// shells, agent sessions — so waking is that restore, run on one tab: each
-/// pane's id asks the daemon for the screen it stored when the pane was
-/// stopped, and an agent with a known session is resumed the way a reboot
-/// resumes it. `view` is what the tab is called in the meantime, read off
-/// the panes as they went to sleep (or off the tree's records, after a
-/// restart), since there is no terminal left to ask.
-pub(crate) struct Asleep {
-    pub(crate) layout: SessionPane,
-    pub(crate) view: lyrel_core::core::tab_view::TabView,
-    pub(crate) home: Option<std::path::PathBuf>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) enum OverlayTop {
-    #[default]
-    Code,
-    Diff,
-}
-
-impl Tab {
-    pub(crate) fn new(pane: Pane) -> Self {
-        Self {
-            pane,
-            presentation: Default::default(),
-            foreign_presentation: None,
-            name: None,
-            last_focused: None,
-            zoomed: None,
-            diff_overlay: None,
-            code: None,
-            overlay_top: OverlayTop::default(),
-            document_layout: None,
-            group: std::cell::Cell::new(None),
-            auto_group: std::cell::RefCell::new(None),
-            folder_watch: std::cell::Cell::new(crate::core::group_key::EntryWatch::fresh()),
-            tree_id: std::cell::Cell::new(lyrel_core::core::machine::TabId::new()),
-            last_used: std::cell::Cell::new(0),
-            focus_origin: Default::default(),
-            asleep: None,
-            pip_interaction: Default::default(),
-        }
-    }
-
-    pub(crate) fn from_tree(tree: &lyrel_core::core::machine::Tab, pane: Pane) -> Self {
-        Self {
-            pane,
-            presentation: tree.presentation.clone(),
-            foreign_presentation: None,
-            name: tree.name.clone(),
-            last_focused: None,
-            zoomed: None,
-            diff_overlay: None,
-            code: None,
-            overlay_top: OverlayTop::default(),
-            document_layout: None,
-            group: std::cell::Cell::new(tree.group),
-            auto_group: std::cell::RefCell::new(tree.last_auto.clone()),
-            // Only ever built for a tab that was just created elsewhere — by
-            // `lyrel tab new`, or another window — so it is as new as one
-            // opened here: opened inside a pinned folder, it joins it. Every
-            // window that hears of it reaches the same answer.
-            folder_watch: std::cell::Cell::new(crate::core::group_key::EntryWatch::fresh()),
-            tree_id: std::cell::Cell::new(tree.id),
-            last_used: std::cell::Cell::new(0),
-            focus_origin: Default::default(),
-            asleep: None,
-            pip_interaction: Default::default(),
-        }
-    }
-
-    pub(crate) fn presentation_slot(&self, pane: u64, cx: &App) -> Option<PaneSlot> {
-        let leaves = self.pane.leaves();
-        let matches = |slot: &&PaneSlot| match slot {
-            PaneSlot::Ready(view) => view.read(cx).pane_id == pane,
-            PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane == Some(pane),
-        };
-        // A remote workspace may also contain client-local native SSH panes.
-        // Their daemon IDs are not identities in the owning machine's tree.
-        leaves.iter().filter(matches).find(|slot| {
-            !matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-        }).cloned().or_else(|| leaves.iter().find(matches).cloned())
-    }
-
-    pub(crate) fn pip_slot(&self, cx: &App) -> Option<PaneSlot> {
-        if let Some(presentation) = &self.foreign_presentation {
-            let pane = presentation.pip()?.pane();
-            return self
-                .pane
-                .leaves()
-                .into_iter()
-                .find(|slot| crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(pane));
-        }
-        self.presentation_slot(self.presentation.pip()?.pane(), cx)
-    }
-
-    pub(crate) fn is_parked_slot(&self, slot: &PaneSlot, cx: &App) -> bool {
-        if let Some(presentation) = &self.foreign_presentation {
-            return crate::ui::pane_sidecar::scoped_pane(slot, cx)
-                .is_some_and(|pane| presentation.is_parked(pane));
-        }
-        let pane = match slot {
-            PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-            PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane,
-        };
-        pane.filter(|pane| self.presentation.is_parked(*pane))
-            .and_then(|pane| self.presentation_slot(pane, cx))
-            .is_some_and(|parked| parked.entity_id() == slot.entity_id())
-    }
-
-    fn parked_slots(&self, cx: &App) -> Vec<PaneSlot> {
-        if let Some(presentation) = &self.foreign_presentation {
-            let leaves = self.pane.leaves();
-            return presentation
-                .parked()
-                .iter()
-                .filter_map(|entry| {
-                    leaves
-                        .iter()
-                        .find(|slot| {
-                            crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(entry.pane())
-                        })
-                        .cloned()
-                })
-                .collect();
-        }
-        self.presentation
-            .parked()
-            .iter()
-            .filter_map(|entry| self.presentation_slot(entry.pane(), cx))
-            .collect()
-    }
-
-    fn render_panes(
-        &self,
-        chrome: &crate::ui::pane::PaneChrome,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> gpui_kit::AnyElement {
-        let pip = self.pip_slot(cx);
-        if pip.is_none() {
-            self.pip_interaction.cancel();
-        }
-        let hidden = self
-            .pane
-            .leaves()
-            .into_iter()
-            .filter(|slot| self.is_parked_slot(slot, cx))
-            .map(|slot| slot.entity_id())
-            .chain(pip.as_ref().map(PaneSlot::entity_id))
-            .collect::<Vec<_>>();
-        let tiled = self.pane.render_without(&hidden, chrome, window, cx);
-        div()
-            .id("pane-presentations")
-            .test_support()
-            .size_full()
-            .relative()
-            .overflow_hidden()
-            .child(tiled)
-            .when_some(pip, |body, slot| {
-                body.child(crate::ui::pip_geometry::render(
-                    slot,
-                    self.tree_id.get(),
-                    self.foreign_presentation
-                        .as_ref()
-                        .map_or(self.presentation.pip_geometry(), |presentation| {
-                            presentation.pip_geometry()
-                        }),
-                    self.pip_interaction.clone(),
-                    chrome,
-                    window,
-                    cx,
-                ))
-            })
-            .into_any_element()
-    }
-
-    pub(crate) fn is_asleep(&self) -> bool {
-        self.asleep.is_some()
-    }
-
-    /// The layout a sleeping tab will wake into; `None` for a tab that is awake.
-    pub(crate) fn asleep_layout(&self) -> Option<&SessionPane> {
-        self.asleep.as_ref().map(|a| &a.layout)
-    }
-
-    /// The agent a sleeping tab was running when it went to sleep, so its row
-    /// still says what it is while nothing in it can.
-    pub(crate) fn asleep_agent(&self) -> Option<crate::core::cli_agent::CLIAgent> {
-        self.asleep.as_ref().and_then(|a| a.view.agent)
-    }
-
-    fn focus_target(&self, cx: &App) -> Option<crate::ui::pane::PaneSlot> {
-        let leaves = self.pane.leaves();
-        let visible = |slot: &&PaneSlot| !self.is_parked_slot(slot, cx);
-        leaves
-            .iter()
-            .filter(visible)
-            .find(|slot| Some(slot.entity_id()) == self.last_focused)
-            .or_else(|| leaves.iter().find(visible))
-            .cloned()
-    }
-
-    /// The pane a move in `dir` out of `at` should return to, if it reverses
-    /// the move that brought focus to `at`.
-    fn focus_origin(&self, at: gpui_kit::EntityId, dir: Dir) -> Option<gpui_kit::EntityId> {
-        self.focus_origin.get(&(at, dir)).copied()
-    }
-
-    /// Remember that a move in `dir` carried focus from `from` to `to`, so the
-    /// move back out of `to` returns. `live` names the panes the tab holds now:
-    /// anything the layout has moved on from is forgotten here rather than
-    /// accumulating for the life of the window.
-    fn remember_focus_origin(
-        &mut self,
-        from: gpui_kit::EntityId,
-        to: gpui_kit::EntityId,
-        dir: Dir,
-        live: &[gpui_kit::EntityId],
-    ) {
-        self.focus_origin
-            .retain(|(at, _), origin| live.contains(at) && live.contains(origin));
-        self.focus_origin.insert((to, dir.opposite()), from);
-    }
-
-    pub(crate) fn detail_pane(
-        &self,
-        window: &Window,
-        cx: &gpui_kit::App,
-    ) -> Option<Entity<TerminalView>> {
-        self.pane
-            .focused_leaf(window, cx)
-            .or_else(|| self.focus_target(cx))
-            .and_then(|slot| slot.terminal().cloned())
-    }
-
-    /// The leaf a tab names itself after — its title and, with it, the home
-    /// that title's path is measured against.
-    fn title_leaf(&self, window: Option<&Window>, cx: &App) -> Option<Entity<TerminalView>> {
-        let leaf = match window {
-            Some(window) => self
-                .pane
-                .focused_leaf(window, cx)
-                .or_else(|| self.focus_target(cx)),
-            None => self.focus_target(cx),
-        };
-        leaf.or_else(|| self.pane.first_leaf())
-            .and_then(|l| l.terminal().cloned())
-    }
-
-    pub(crate) fn leaf_title(&self, window: Option<&Window>, cx: &App) -> String {
-        self.title_leaf(window, cx)
-            .map(|l| l.read(cx).title.clone())
-            .unwrap_or_default()
-    }
-
-    /// This tab as the shared label ladder reads it, together with what a `~`
-    /// in whatever it ends up named would mean.
-    ///
-    /// [`TabView`](lyrel_core::core::tab_view::TabView) is how a tab looks to
-    /// someone who is *not* the window showing it — the switcher listing
-    /// another window's workspace, `lyrel tab ls` on the far side of a socket.
-    /// Building one here from the live pane is what stops this window having a
-    /// second opinion: both sides then rank a given name, a title, an agent and
-    /// a directory through
-    /// [`TabView::label`](lyrel_core::core::tab_view::TabView::label), so the
-    /// strip's answer to "which repo is this?" is the switcher's answer too.
-    ///
-    /// Everything comes off the one leaf the tab names itself after, so the
-    /// title and the directory standing in for it can never describe different
-    /// panes (#580).
-    pub(crate) fn label_view(
-        &self,
-        window: Option<&Window>,
-        cx: &App,
-    ) -> (
-        lyrel_core::core::tab_view::TabView,
-        Option<std::path::PathBuf>,
-    ) {
-        let name = self.name.clone();
-        if let Some(asleep) = &self.asleep {
-            let view = lyrel_core::core::tab_view::TabView {
-                id: self.tree_id.get(),
-                name,
-                ..asleep.view.clone()
-            };
-            return (view, asleep.home.clone());
-        }
-        let Some(leaf) = self.title_leaf(window, cx) else {
-            return (
-                lyrel_core::core::tab_view::TabView {
-                    id: self.tree_id.get(),
-                    name,
-                    title: String::new(),
-                    osc_title: None,
-                    cwd: None,
-                    agent: None,
-                    status: None,
-                    live: false,
-                    panes: 0,
-                },
-                None,
-            );
-        };
-        let leaf = leaf.read(cx);
-        let view = lyrel_core::core::tab_view::TabView {
-            id: self.tree_id.get(),
-            name,
-            // The tree's `title` is the foreground process name — what it falls
-            // back on once a pane has said nothing about itself. A live pane's
-            // equivalent is the placeholder it answers to unprompted: any
-            // *other* default it was given (an SSH host, a workspace name) is a
-            // name lyrel chose for it deliberately, and `stated_title` hands
-            // those up as the title the pane is showing.
-            title: crate::terminal::view::DEFAULT_TITLE.to_string(),
-            osc_title: leaf.stated_title().map(str::to_string),
-            cwd: leaf.cwd().map(|p| p.display().to_string()),
-            agent: leaf.agent(),
-            status: leaf.agent_session().map(|s| s.status),
-            live: !leaf.terminal.exited,
-            panes: self.pane.terminals().len(),
-        };
-        (view, leaf.display_home(cx))
-    }
-
-    pub(crate) fn git_status(
-        &self,
-        window: Option<&Window>,
-        cx: &App,
-    ) -> Option<crate::terminal::git_status::GitStatus> {
-        let leaf = match window {
-            Some(window) => self.pane.focused_or_first(window, cx),
-            None => self.pane.first_leaf().and_then(|s| s.terminal().cloned()),
-        }?;
-        leaf.read(cx).git_status(cx)
-    }
-
-    pub(crate) fn agent(&self, cx: &App) -> Option<crate::core::cli_agent::CLIAgent> {
-        self.pane
-            .terminals()
-            .into_iter()
-            .find_map(|l| l.read(cx).agent())
-    }
-
-    /// The tab's most urgent agent leaf, named and reported by that one leaf.
-    ///
-    /// `agent` and `agent_status` answer independently — the *first* leaf
-    /// carrying an agent, and the highest urgency found *anywhere* in the tab
-    /// — so reading them as a pair can put one pane's name beside another
-    /// pane's state, a row no leaf ever had. Anywhere both halves are shown
-    /// at once reads them from here instead (#543).
-    pub(crate) fn agent_row(
-        &self,
-        cx: &App,
-    ) -> Option<(
-        crate::core::cli_agent::CLIAgent,
-        crate::core::cli_agent::AgentStatus,
-    )> {
-        use crate::core::cli_agent::AgentStatus;
-        let urgency = |s: AgentStatus| match s {
-            AgentStatus::Waiting => 3,
-            AgentStatus::Working => 2,
-            AgentStatus::Done => 1,
-            AgentStatus::Idle => 0,
-        };
-        self.pane
-            .terminals()
-            .into_iter()
-            .filter_map(|l| {
-                let view = l.read(cx);
-                let agent = view.agent()?;
-                // A pane whose agent is running but has never reported a
-                // session reads as idle, the same reading the badge has always
-                // given it.
-                let status = view
-                    .agent_session()
-                    .map(|s| s.status)
-                    .unwrap_or(AgentStatus::Idle);
-                Some((agent, status))
-            })
-            .max_by_key(|(_, status)| urgency(*status))
-    }
-
-    pub(crate) fn agent_status(&self, cx: &App) -> Option<crate::core::cli_agent::AgentStatus> {
-        self.agent_row(cx).map(|(_, status)| status)
-    }
-
-    pub(crate) fn agent_unread_count(&self, cx: &App) -> usize {
-        use crate::core::cli_agent::AgentStatus;
-        if self.agent_status(cx) != Some(AgentStatus::Done) {
-            return 0;
-        }
-        self.pane
-            .terminals()
-            .into_iter()
-            .filter(|l| {
-                let v = l.read(cx);
-                v.agent_session().map(|s| s.status) == Some(AgentStatus::Done)
-                    && v.agent_result_unread()
-            })
-            .count()
-    }
-}
-
-/// What a rename box's contents mean for the tab's name.
-#[derive(Debug, PartialEq, Eq)]
-enum Rename {
-    /// The box still holds what it was seeded with, so nothing was asked for.
-    Unchanged,
-    /// Emptied on purpose: the tab goes back to following its pane.
-    Cleared,
-    /// A name the user typed.
-    Named(String),
-}
-
-/// Read a rename box against the label it was seeded with.
-///
-/// The box is prefilled with the label as rendered, so it is never empty when
-/// it opens and a commit cannot tell "left alone" from "typed the same thing"
-/// by looking at the value alone. `Blur` commits as readily as Enter does, so
-/// without the comparison, opening the box and clicking away stored the label
-/// as a name — and a name is a different thing from the title it was copied
-/// from: it stops following the pane, freezing the tab on whatever it happened
-/// to say at that moment, with no way to undo it.
-fn rename_outcome(value: &str, prefill: &str) -> Rename {
-    let value = value.trim();
-    match value {
-        v if v == prefill.trim() => Rename::Unchanged,
-        "" => Rename::Cleared,
-        v => Rename::Named(v.to_string()),
-    }
-}
 
 pub(crate) struct Renaming {
     /// The tab being renamed, by tree id rather than index: an index drifts
@@ -930,44 +241,9 @@ pub(crate) struct GroupRename {
     pub(crate) _subs: Vec<Subscription>,
 }
 
-pub(crate) struct LoopbackForwardPanelState {
-    pub(crate) form_pane_id: Option<u64>,
-    pub(crate) managed: Vec<crate::daemon::protocol::ManagedForward>,
-    pub(crate) mf_kind: crate::daemon::protocol::SshForwardKind,
-    pub(crate) mf_bind_host: Entity<InputState>,
-    pub(crate) mf_bind_port: Entity<InputState>,
-    pub(crate) mf_target_host: Entity<InputState>,
-    pub(crate) mf_target_port: Entity<InputState>,
-    pub(crate) mf_description: Entity<InputState>,
-    /// The rule the form is editing, whole rather than by id: an edit that
-    /// fails has to be able to put back what it took out, and the id alone
-    /// cannot describe the rule it named.
-    pub(crate) mf_editing: Option<crate::daemon::protocol::ManagedForward>,
-    /// Why the last Add or Save did not take, in the far side's own words.
-    /// Cleared the moment the form is closed or the edit is abandoned.
-    pub(crate) mf_error: Option<String>,
-    /// Return, on each of the boxes. Held here for the same reason the sftp
-    /// form holds its own: a live subscription on a box nothing is showing
-    /// would answer Return for a form that is gone.
-    pub(crate) mf_subs: Vec<Subscription>,
-    /// Whether the form is showing all five fields rather than the one.
-    ///
-    /// Almost every forward anyone builds by hand is "bring the remote's :3000
-    /// over here", which is one number — and asking for five fields to collect
-    /// one number is what made the panel feel like paperwork. The rest of the
-    /// `ssh -L` grammar is still here, one disclosure away, for the forwards
-    /// that really do need it.
-    pub(crate) mf_advanced: bool,
-}
 
 pub struct LyrelApp {
-    pub(crate) tabs: Vec<Tab>,
-    pub(crate) active: usize,
-    /// Hands out `Tab::last_used` stamps. A counter rather than a clock so two
-    /// activations in the same second still order.
-    tab_use_seq: std::cell::Cell<u64>,
-    /// A tab asked for before its workspace finished hydrating.
-    pending_tab: Option<lyrel_core::core::machine::TabId>,
+    pub(crate) tabs: TabSet,
     pub(crate) pending_notification_source: Option<crate::ui::notification_history::Source>,
     pub(crate) font_size: f32,
     pub(crate) line_height: f32,
@@ -987,9 +263,7 @@ pub struct LyrelApp {
     _git_status_watch: Subscription,
     _pane_liveness_watch: Subscription,
     _appearance_watch: Subscription,
-    pub(crate) search: Option<Entity<SearchView>>,
-    search_sub: Option<Subscription>,
-    search_return_focus: Option<gpui_kit::FocusHandle>,
+    pub(crate) search: SearchState,
     /// Preset that was live when the search's theme picker started previewing.
     /// `Some` means the theme on screen is a preview that was never written to
     /// disk, and closing the search without confirming puts this one back.
@@ -1015,7 +289,7 @@ pub struct LyrelApp {
     pub(crate) working_dot_on: bool,
     pub(crate) shells: ShellInventory,
     pub(crate) shells_host: HostId,
-    pub(crate) loopback_panel: LoopbackForwardPanelState,
+    pub(crate) loopback_panel: Forwarding,
     pub(crate) sftp_panel: crate::ui::sftp::SftpPanelState,
     pub(crate) right_panel: crate::ui::right_panel::RightPanelState,
     pub(crate) scm: crate::ui::scm::ScmPanelState,
@@ -1282,19 +556,6 @@ pub(crate) fn window_background_image_layer(cx: &App) -> Option<gpui_kit::Div> {
 /// it and leaving takes it away.
 struct FullscreenHint;
 
-/// Whether the title bar carries minimize, maximize and close right now.
-///
-/// Not in fullscreen. A fullscreen window has no caption: Windows clears
-/// `WS_CAPTION` and answers `HTCLIENT` along the whole top edge, so the three
-/// buttons would draw, light up under the pointer and do nothing when clicked.
-/// The row they sit at the end of stays, because it is also the tab strip.
-///
-/// Never on macOS, which draws no buttons of its own: those are the system's
-/// traffic lights, and the system hides them itself.
-pub(crate) fn window_controls_drawn(fullscreen: bool) -> bool {
-    !cfg!(target_os = "macos") && !fullscreen
-}
-
 impl LyrelApp {
     pub fn for_workspace(
         id: Option<WorkspaceId>,
@@ -1476,13 +737,7 @@ impl LyrelApp {
         let sftp_panel = crate::ui::sftp::SftpPanelState::new(window, cx);
         let file_tree = crate::ui::file_tree::FileTreeState::new(window, cx);
         let editor = crate::ui::code_editor::EditorPanelState::new(window, cx);
-        let mf_bind_host = cx.new(|cx| InputState::new(window, cx).default_value("127.0.0.1"));
-        let mf_bind_port = cx.new(|cx| InputState::new(window, cx).placeholder("8080"));
-        let mf_target_host = cx.new(|cx| InputState::new(window, cx).placeholder("127.0.0.1"));
-        let mf_target_port = cx.new(|cx| InputState::new(window, cx).placeholder("80"));
-        let mf_description = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(L10nKey::AppPlaceholderDescription))
-        });
+        let loopback_panel = Forwarding::new(window, cx);
         let sidebar_width = cx.global::<Config>().sidebar_width;
         let right_panel_width = cx.global::<Config>().right_panel_width;
         let document_ratio = cx.global::<Config>().document_ratio;
@@ -1525,7 +780,7 @@ impl LyrelApp {
                 && (crate::ui::pane_drag::lifted(&this.pane_drag).is_some()
                     || this
                         .tabs
-                        .get(this.active)
+                        .get(this.tabs.active_index())
                         .is_some_and(|tab| tab.pip_interaction.has_gesture()))
             {
                 this.cancel_pane_drag(window, cx);
@@ -1602,7 +857,7 @@ impl LyrelApp {
             window,
             |this, _, event, window, cx| match event {
                 crate::ui::parked_deck::ParkedDeckEvent::Restore(token) => {
-                    let slot = this.tabs.get(this.active).and_then(|tab| {
+                    let slot = this.tabs.get(this.tabs.active_index()).and_then(|tab| {
                         tab.pane
                             .leaves()
                             .into_iter()
@@ -1633,10 +888,7 @@ impl LyrelApp {
         let panel_search =
             crate::ui::panel_search::PanelSearchState::new(file_search.clone(), window, cx);
         let mut app = Self {
-            tabs,
-            active,
-            tab_use_seq: std::cell::Cell::new(0),
-            pending_tab: None,
+            tabs: TabSet::new(tabs, active),
             pending_notification_source: None,
             font_size,
             line_height,
@@ -1654,9 +906,7 @@ impl LyrelApp {
             _git_status_watch: git_status_watch,
             _pane_liveness_watch: pane_liveness_watch,
             _appearance_watch: appearance_watch,
-            search: None,
-            search_sub: None,
-            search_return_focus: None,
+            search: SearchState::default(),
             theme_preview_restore: None,
             closed: Vec::new(),
             renaming: None,
@@ -1669,20 +919,7 @@ impl LyrelApp {
             working_dot_on: true,
             shells: ShellInventory::default(),
             shells_host: HostId::LOCAL,
-            loopback_panel: LoopbackForwardPanelState {
-                form_pane_id: None,
-                managed: Vec::new(),
-                mf_kind: crate::daemon::protocol::SshForwardKind::Local,
-                mf_bind_host,
-                mf_bind_port,
-                mf_target_host,
-                mf_target_port,
-                mf_description,
-                mf_editing: None,
-                mf_error: None,
-                mf_subs: Vec::new(),
-                mf_advanced: false,
-            },
+            loopback_panel,
             sftp_panel,
             right_panel: Default::default(),
             scm: crate::ui::scm::ScmPanelState {
@@ -1959,10 +1196,7 @@ impl LyrelApp {
             .find_map(|leaf| {
                 let view = leaf.read(cx);
                 let workspace = view.workspace().cloned()?;
-                Some(ForwardRoute {
-                    pane_id: view.pane_id,
-                    workspace: Some(workspace),
-                })
+                Some(ForwardRoute::new(view.pane_id, Some(workspace)))
             })
         else {
             return;
@@ -2037,7 +1271,7 @@ impl LyrelApp {
             return;
         }
         // Anything parked for the workspace we are leaving is now meaningless.
-        self.pending_tab = None;
+        self.tabs.clear_pending();
         self.pending_notification_source = None;
         if self.tabs.is_empty() && crate::ui::tree_sync::workspace_is_disposable(cx, previous) {
             crate::ui::tree_sync::fire_workspace_op(cx, previous, |ws| {
@@ -2070,7 +1304,7 @@ impl LyrelApp {
         // This method runs under the app's own update lease, so the tabs the
         // pull must see are the ones just adopted here — reading the app back
         // out of `cx` (as `tabs_on_screen` would) is an abort in gpui.
-        let showing = self.tabs.iter().map(|t| t.tree_id.get()).collect();
+        let showing = self.tabs.iter().map(|t| t.id()).collect();
         crate::ui::tree_sync::hydrate_window_with_tabs(cx, claimed, showing);
     }
 
@@ -2081,6 +1315,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.search.is_open() {
+            self.close_search(window, cx);
+        }
         let previous_host = self.spawn_host(cx);
         self.workspace = id;
         self.rebind_host(previous_host, cx);
@@ -2105,8 +1342,7 @@ impl LyrelApp {
                 cx,
             );
         }
-        self.tabs = tabs;
-        self.active = active;
+        self.tabs.replace(tabs, active);
         self.maximized = None;
         self.wake_active_if_asleep(window, cx);
         self.save_session(cx);
@@ -2226,35 +1462,9 @@ impl LyrelApp {
         let insert_at = self.new_tab_insert_at(cx);
         self.tabs.insert(
             insert_at,
-            Tab {
-                pane,
-                presentation: st.presentation.clone(),
-                foreign_presentation: None,
-                name: st.name,
-                last_focused: None,
-                zoomed: None,
-                diff_overlay: None,
-                code: None,
-                overlay_top: OverlayTop::default(),
-                document_layout: None,
-                group: std::cell::Cell::new(st.group),
-                auto_group: std::cell::RefCell::new(st.last_auto),
-                // Reopened here, so it is this window's new tab: walking into
-                // a pinned folder files it there like any other.
-                folder_watch: std::cell::Cell::new(crate::core::group_key::EntryWatch::fresh()),
-                // A tab the machine kept comes back under its own id; one from
-                // this window's list never had one the machine still knows.
-                tree_id: std::cell::Cell::new(
-                    st.tree_id
-                        .unwrap_or_else(lyrel_core::core::machine::TabId::new),
-                ),
-                last_used: std::cell::Cell::new(0),
-                focus_origin: Default::default(),
-                asleep: None,
-                pip_interaction: Default::default(),
-            },
+            Tab::reopened(st, pane),
         );
-        self.active = insert_at;
+        self.tabs.select(insert_at);
         self.focus_active(window, cx);
         self.save_session(cx);
         cx.notify();
@@ -2336,7 +1546,7 @@ impl LyrelApp {
                         .into_iter()
                         .find(|l| l.entity_id().as_u64() == leaf_id)
                     {
-                        self.tabs[ix].last_focused = Some(leaf.entity_id());
+                        self.tabs[ix].remember_leaf(leaf.entity_id());
                         self.focus_leaf(&leaf, window, cx);
                     }
                     cx.notify();
@@ -2528,7 +1738,7 @@ impl LyrelApp {
                     this.save_session(cx);
                     this.maximized = None;
                     this.tabs.clear();
-                    this.active = 0;
+                    this.tabs.select(0);
                     cx.notify();
                 })
                 .is_err()
@@ -2719,36 +1929,13 @@ impl LyrelApp {
                 let view = leaf.read(cx);
                 (view.pane_id == pane_id).then(|| view.workspace().cloned())?
             });
-        ForwardRoute { pane_id, workspace }
+        ForwardRoute::new(pane_id, workspace)
     }
 
     pub(crate) fn refresh_managed_forwards(&mut self, pane_id: u64, cx: &mut Context<Self>) {
-        self.loopback_panel.managed = self.forward_route(pane_id, cx).list();
+        let route = self.forward_route(pane_id, cx);
+        self.loopback_panel.refresh(&route);
         cx.notify();
-    }
-
-    pub(crate) fn set_managed_forward_kind(
-        &mut self,
-        kind: crate::daemon::protocol::SshForwardKind,
-        cx: &mut Context<Self>,
-    ) {
-        self.loopback_panel.mf_kind = kind;
-        cx.notify();
-    }
-
-    /// The managed-forward form's fields as plain text, for the two callers
-    /// that have to agree on what they add up to.
-    pub(crate) fn managed_forward_fields(&self, cx: &gpui_kit::App) -> ForwardFields {
-        let val = |input: &Entity<InputState>| input.read(cx).value().to_string();
-        ForwardFields {
-            advanced: self.loopback_panel.mf_advanced,
-            kind: self.loopback_panel.mf_kind,
-            bind_host: val(&self.loopback_panel.mf_bind_host),
-            bind_port: val(&self.loopback_panel.mf_bind_port),
-            target_host: val(&self.loopback_panel.mf_target_host),
-            target_port: val(&self.loopback_panel.mf_target_port),
-            description: val(&self.loopback_panel.mf_description),
-        }
     }
 
     pub(crate) fn add_managed_forward(
@@ -2757,199 +1944,8 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let fields = self.managed_forward_fields(cx);
-        let Some(mut rule) = fields.collect() else {
-            // Add is disabled while the fields do not make a rule and the form
-            // already says what is missing, so there is nothing to do here and
-            // nothing left to explain.
-            return;
-        };
         let route = self.forward_route(pane_id, cx);
-        let previous = self.loopback_panel.mf_editing.clone();
-        // Editing a switched-off rule edits it; it does not switch it on.
-        if let Some(old) = &previous {
-            rule.enabled = old.enabled;
-        }
-        // A saved edit is a replace, and the rule being replaced has to come
-        // out first: the ordinary edit keeps the bind port, and the far side
-        // really does bind it, so adding first would collide with the very
-        // rule it is replacing and fail every edit that only renames a rule or
-        // moves its target.
-        if let Some(old) = &previous {
-            let Some(list) = route.remove(old.id) else {
-                // Nothing came back, so what the far side still has is
-                // unknown — most likely the old rule, still listening. Adding
-                // on top of that would collide with it, and putting it back
-                // afterwards would leave two of it. Stop while nothing has
-                // changed.
-                self.loopback_panel.mf_error = Some(t(L10nKey::ForwardRequestFailed).to_string());
-                cx.notify();
-                return;
-            };
-            self.loopback_panel.managed = list;
-        }
-
-        // The short form aims at the same number on both ends because that is
-        // the address people can predict. When it is already taken here, the
-        // useful answer is another port rather than a complaint: somebody who
-        // typed one number to forward one port has not been asked to care
-        // which local port it lands on, and the row says where it came out.
-        let retry_free_port = !fields.advanced && rule.bind_port != 0;
-        let failure = match self.place_forward(&route, rule.clone()) {
-            PlaceOutcome::Placed => None,
-            // Nobody answered, so nothing was bound and nothing would be bound
-            // by asking again — a second round trip would only spend another
-            // timeout on the way to the same sentence.
-            PlaceOutcome::Unreachable(msg) => Some(msg),
-            PlaceOutcome::Rejected(msg) if !retry_free_port => Some(msg),
-            PlaceOutcome::Rejected(_) => {
-                match self.place_forward(
-                    &route,
-                    crate::daemon::protocol::SshForwardRule {
-                        bind_port: 0,
-                        ..rule.clone()
-                    },
-                ) {
-                    PlaceOutcome::Placed => None,
-                    PlaceOutcome::Rejected(msg) | PlaceOutcome::Unreachable(msg) => Some(msg),
-                }
-            }
-        };
-
-        if let Some(msg) = failure {
-            // Put back what the edit took out, so the worst a failed Save can
-            // do is leave everything exactly as it was — with the form still
-            // open on the rule and the reason underneath it.
-            if let Some(old) = &previous {
-                let before: Vec<u64> = self.loopback_panel.managed.iter().map(|m| m.id).collect();
-                if let Some(list) = route.add(rule_of(old)) {
-                    // The rule comes back under a new id and the form is still
-                    // editing it, so the form has to be pointed at the entry
-                    // that now exists — otherwise the next Save would remove
-                    // an id nobody has and add a second copy of the rule.
-                    if let Some(restored) = added_forward(&before, &list) {
-                        self.loopback_panel.mf_editing = Some(restored.clone());
-                    }
-                    self.loopback_panel.managed = list;
-                }
-            }
-            self.loopback_panel.mf_error = Some(msg);
-            cx.notify();
-            return;
-        }
-
-        self.loopback_panel.mf_editing = None;
-        self.loopback_panel.mf_error = None;
-        self.loopback_panel.form_pane_id = None;
-        for input in [
-            &self.loopback_panel.mf_bind_port,
-            &self.loopback_panel.mf_target_host,
-            &self.loopback_panel.mf_target_port,
-            &self.loopback_panel.mf_description,
-        ] {
-            input.update(cx, |input, cx| input.set_value("", window, cx));
-        }
-        cx.notify();
-    }
-
-    /// Ask the far side for one rule, and say what became of it.
-    ///
-    /// A rule that could not be started is registered all the same, with the
-    /// reason in its status, so whether the add worked is a question about the
-    /// entry it appended rather than about whether the call returned. The dead
-    /// entry is taken back out — a forward listed as listening on nothing is
-    /// worse than no forward.
-    fn place_forward(
-        &mut self,
-        route: &ForwardRoute,
-        rule: crate::daemon::protocol::SshForwardRule,
-    ) -> PlaceOutcome {
-        use crate::daemon::protocol::ForwardStatus;
-
-        let before: Vec<u64> = self.loopback_panel.managed.iter().map(|m| m.id).collect();
-        // The request never got an answer. An empty list here is not "this
-        // pane has no forwards", it is "nobody said" — assigning it is what
-        // used to blank the panel on a dropped connection.
-        let Some(list) = route.add(rule) else {
-            return PlaceOutcome::Unreachable(t(L10nKey::ForwardRequestFailed).to_string());
-        };
-        // A switched-off rule reports an error status because it binds
-        // nothing, and that is what it was asked to do.
-        let broken = added_forward(&before, &list)
-            .filter(|added| added.enabled)
-            .and_then(|added| match &added.status {
-                ForwardStatus::Error(msg) => Some((added.id, msg.clone())),
-                ForwardStatus::Listening => None,
-            });
-        self.loopback_panel.managed = list;
-        let Some((id, msg)) = broken else {
-            return PlaceOutcome::Placed;
-        };
-        if let Some(list) = route.remove(id) {
-            self.loopback_panel.managed = list;
-        }
-        PlaceOutcome::Rejected(msg)
-    }
-
-    pub(crate) fn edit_managed_forward(
-        &mut self,
-        forward: crate::daemon::protocol::ManagedForward,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.loopback_panel.mf_kind = forward.kind;
-        self.loopback_panel.form_pane_id = Some(forward.pane_id);
-        self.loopback_panel.mf_error = None;
-        // A rule that already exists is shown whole: the short form cannot
-        // spell a bind host or a remote forward, so editing one through it
-        // would silently rewrite the parts it cannot see.
-        self.loopback_panel.mf_advanced = true;
-        let target_port = if forward.target_port == 0 {
-            String::new()
-        } else {
-            forward.target_port.to_string()
-        };
-        let fields: [(&Entity<InputState>, String); 5] = [
-            (&self.loopback_panel.mf_bind_host, forward.bind_host.clone()),
-            (
-                &self.loopback_panel.mf_bind_port,
-                forward.bind_port.to_string(),
-            ),
-            (
-                &self.loopback_panel.mf_target_host,
-                forward.target_host.clone(),
-            ),
-            (&self.loopback_panel.mf_target_port, target_port),
-            (
-                &self.loopback_panel.mf_description,
-                forward.description.clone().unwrap_or_default(),
-            ),
-        ];
-        for (input, value) in fields {
-            input.update(cx, |input, cx| input.set_value(&value, window, cx));
-        }
-        self.loopback_panel.mf_editing = Some(forward);
-        cx.notify();
-    }
-
-    pub(crate) fn cancel_managed_forward_edit(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.loopback_panel.mf_editing = None;
-        self.loopback_panel.mf_error = None;
-        for input in [
-            &self.loopback_panel.mf_bind_port,
-            &self.loopback_panel.mf_target_host,
-            &self.loopback_panel.mf_target_port,
-            &self.loopback_panel.mf_description,
-        ] {
-            input.update(cx, |input, cx| input.set_value("", window, cx));
-        }
-        self.loopback_panel
-            .mf_bind_host
-            .update(cx, |input, cx| input.set_value("127.0.0.1", window, cx));
+        self.loopback_panel.apply(&route, window, cx);
         cx.notify();
     }
 
@@ -2959,18 +1955,11 @@ impl LyrelApp {
         forward_id: u64,
         cx: &mut Context<Self>,
     ) {
-        // Only what the far side actually answered with. A request that never
-        // got a reply knows nothing about the remaining forwards, and writing
-        // its empty list into the panel would blank a list that is still there.
-        if let Some(list) = self.forward_route(pane_id, cx).remove(forward_id) {
-            self.loopback_panel.managed = list;
-        }
+        let route = self.forward_route(pane_id, cx);
+        self.loopback_panel.remove(&route, forward_id);
         cx.notify();
     }
 
-    /// Switch one forward on or off, and carry the choice into the saved host
-    /// the rule came from, if it came from one — so the next connection opens
-    /// the same set of rules instead of the ones that were saved before.
     pub(crate) fn set_managed_forward_enabled(
         &mut self,
         pane_id: u64,
@@ -2980,31 +1969,16 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let route = self.forward_route(pane_id, cx);
-        let forward = self
-            .loopback_panel
-            .managed
-            .iter()
-            .find(|m| m.id == forward_id)
-            .cloned();
-        match route.set_enabled(forward_id, enabled) {
-            Ok(list) => {
-                self.loopback_panel.managed = list;
-                if let Some(forward) = forward {
-                    self.remember_forward_enabled(pane_id, &forward, enabled, cx);
-                }
-            }
-            Err(e) => {
-                window.notify_app(
-                    crate::ui::host_ops::failure(
-                        t_fmt(L10nKey::ForwardSwitchFailed, &[("error", &e.to_string())]),
-                        &e,
-                    ),
-                    cx,
-                );
-                // The refusal changed nothing, but the panel may be behind
-                // whatever did change — ask rather than guess.
-                self.loopback_panel.managed = route.list();
-            }
+        match self.loopback_panel.set_enabled(&route, forward_id, enabled) {
+            Ok(Some(forward)) => self.remember_forward_enabled(pane_id, &forward, enabled, cx),
+            Ok(None) => {}
+            Err(e) => window.notify_app(
+                crate::ui::host_ops::failure(
+                    t_fmt(L10nKey::ForwardSwitchFailed, &[("error", &e.to_string())]),
+                    &e,
+                ),
+                cx,
+            ),
         }
         cx.notify();
     }
@@ -3061,7 +2035,7 @@ impl LyrelApp {
             return;
         }
         self.set_right_panel_tab(crate::core::config::RightPanelTab::Info, cx);
-        if self.loopback_panel.form_pane_id != Some(ctx.pane_id) {
+        if !self.loopback_panel.is_open_for(ctx.pane_id) {
             self.toggle_managed_forward_form(ctx.pane_id, window, cx);
         }
     }
@@ -3072,63 +2046,12 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loopback_panel.form_pane_id == Some(pane_id) {
+        if self.loopback_panel.is_open_for(pane_id) {
             self.close_managed_forward_form(window, cx);
             return;
         }
-        self.loopback_panel.form_pane_id = Some(pane_id);
-        self.loopback_panel.mf_advanced = false;
-        self.loopback_panel.mf_kind = crate::daemon::protocol::SshForwardKind::Local;
-        self.cancel_managed_forward_edit(window, cx);
-        self.refresh_managed_forwards(pane_id, cx);
-        self.arm_managed_forward_form(pane_id, window, cx);
-    }
-
-    /// Opens the form focused and listening for Return.
-    ///
-    /// It had neither. Every other form in the app opens with the caret in the
-    /// first field and answers Return — this one opened cold, so adding a rule
-    /// meant clicking into Bind first, and once you were there the only way to
-    /// commit was the mouse again. Escape did nothing either, which is handled
-    /// on the form itself in `forwards.rs`; a key event only reaches it while
-    /// something inside it holds focus, so the focus below is what makes that
-    /// work too.
-    fn arm_managed_forward_form(
-        &mut self,
-        pane_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let inputs = [
-            self.loopback_panel.mf_bind_host.clone(),
-            self.loopback_panel.mf_bind_port.clone(),
-            self.loopback_panel.mf_target_host.clone(),
-            self.loopback_panel.mf_target_port.clone(),
-            self.loopback_panel.mf_description.clone(),
-        ];
-        self.loopback_panel.mf_subs = inputs
-            .iter()
-            .map(|input| {
-                cx.subscribe_in(
-                    input,
-                    window,
-                    move |this, _input, ev: &InputEvent, window, cx| {
-                        if let InputEvent::PressEnter { .. } = ev {
-                            // A no-op when the fields do not make a rule yet:
-                            // `add_managed_forward` already guards on that and
-                            // the form already says what is missing.
-                            this.add_managed_forward(pane_id, window, cx);
-                        }
-                    },
-                )
-            })
-            .collect();
-        inputs[0].update(cx, |s, cx| s.focus(window, cx));
-    }
-
-    pub(crate) fn toggle_managed_forward_advanced(&mut self, cx: &mut Context<Self>) {
-        self.loopback_panel.mf_advanced = !self.loopback_panel.mf_advanced;
-        self.loopback_panel.mf_error = None;
+        let route = self.forward_route(pane_id, cx);
+        self.loopback_panel.open(pane_id, &route, window, cx, Self::add_managed_forward);
         cx.notify();
     }
 
@@ -3137,14 +2060,10 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let was_open = self.loopback_panel.form_pane_id.take().is_some();
-        self.loopback_panel.mf_subs.clear();
-        self.cancel_managed_forward_edit(window, cx);
-        if was_open {
-            // The form held the focus, so taking it down has to hand it back —
-            // otherwise the next keystroke goes nowhere until the user clicks.
+        if self.loopback_panel.close(window, cx) {
             self.focus_active(window, cx);
         }
+        cx.notify();
     }
 
     fn open_typed_ssh_connect(&mut self, input: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -3226,7 +2145,7 @@ impl LyrelApp {
             window.focus(&focus, cx);
             return;
         }
-        let Some(tab) = self.tabs.get(self.active) else {
+        let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
             window.focus(&self.home_focus, cx);
             return;
         };
@@ -3256,11 +2175,9 @@ impl LyrelApp {
     /// is detached or a tab is torn down and the layout stops being able to
     /// answer at all.
     pub(crate) fn remember_active_pane(&mut self, window: &Window, cx: &App) {
-        let active = self.active;
+        let active = self.tabs.active_index();
         if let Some(tab) = self.tabs.get_mut(active) {
-            if let Some(leaf) = tab.pane.focused_leaf(window, cx) {
-                tab.last_focused = Some(leaf.entity_id());
-            }
+            tab.remember_focus(window, cx);
         }
     }
 
@@ -3279,14 +2196,8 @@ impl LyrelApp {
     /// into another tab is focused after the move, and it is the tab holding
     /// it now that has to remember it.
     pub(crate) fn remember_focused_leaf(&mut self, leaf: gpui_kit::EntityId) {
-        remember_leaf_in(&mut self.tabs, leaf);
-        if let Some(tab) = self.tabs.iter().find(|tab| {
-            tab.pane
-                .leaves()
-                .iter()
-                .any(|pane| pane.entity_id() == leaf)
-        }) {
-            self.status_document_focus = Some((tab.tree_id.get(), false));
+        if let Some(tab) = self.tabs.remember_leaf(leaf) {
+            self.status_document_focus = Some((tab, false));
         }
     }
 
@@ -3461,7 +2372,7 @@ impl LyrelApp {
                 });
             remap_presentation_slot(&mut tab.presentation, old_id, &new, cx);
         }
-        replace_leaf_in(&mut self.tabs, old, new);
+        self.tabs.replace_leaf(old, new);
     }
 
     fn refresh_git_status_all(&mut self, cx: &mut Context<Self>) {
@@ -3472,7 +2383,7 @@ impl LyrelApp {
 
     fn new_tab_insert_at(&self, cx: &App) -> usize {
         match cx.global::<Config>().new_tab_position {
-            NewTabPosition::AfterCurrent => (self.active + 1).min(self.tabs.len()),
+            NewTabPosition::AfterCurrent => (self.tabs.active_index() + 1).min(self.tabs.len()),
             NewTabPosition::End => self.tabs.len(),
         }
     }
@@ -3485,7 +2396,7 @@ impl LyrelApp {
     pub(crate) fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let source = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
             .map(|view| {
                 let view = view.read(cx);
@@ -3502,7 +2413,7 @@ impl LyrelApp {
                 let before = self.tabs.len();
                 self.open_native_ssh_tab(spec, start_dir, window, cx);
                 if self.tabs.len() > before
-                    && let Some(tab) = self.tabs.get(self.active)
+                    && let Some(tab) = self.tabs.get(self.tabs.active_index())
                 {
                     place.seat(tab);
                     self.save_session(cx);
@@ -3515,7 +2426,7 @@ impl LyrelApp {
                 let line = crate::terminal::git_data::shell_quote(&remote.argv);
                 let place = self.spawn_group(None, cx).on_host(Some(remote.target));
                 if let Some(slot) = self.new_tab_slot(cwd, None, window, cx) {
-                    if let Some(tab) = self.tabs.get(self.active) {
+                    if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
                         place.seat(tab);
                         self.save_session(cx);
                     }
@@ -3563,7 +2474,7 @@ impl LyrelApp {
     pub(crate) fn run_in_active_terminal(&self, command: &str, window: &Window, cx: &mut App) {
         if let Some(slot) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|tab| tab.pane.focused_or_first_slot(window, cx))
         {
             crate::ui::agent_launch::run_when_ready(&slot, command.to_string(), cx);
@@ -3576,7 +2487,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let cwd = self.tabs.get(self.active).and_then(|t| {
+        let cwd = self.tabs.get(self.tabs.active_index()).and_then(|t| {
             t.pane
                 .focused_or_first(window, cx)
                 .and_then(|leaf| leaf.read(cx).spawnable_cwd())
@@ -3655,7 +2566,7 @@ impl LyrelApp {
         let new_tab = Tab::new(Pane::leaf(tab.clone()));
         group.seat(&new_tab);
         self.tabs.insert(insert_at, new_tab);
-        self.active = insert_at;
+        self.tabs.select(insert_at);
         self.focus_active(window, cx);
         self.save_session(cx);
         cx.notify();
@@ -3695,7 +2606,7 @@ impl LyrelApp {
         let insert_at = self.new_tab_insert_at(cx);
         self.tabs
             .insert(insert_at, Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-        self.active = insert_at;
+        self.tabs.select(insert_at);
         self.focus_active(window, cx);
         self.save_session(cx);
         cx.notify();
@@ -3756,9 +2667,9 @@ impl LyrelApp {
         {
             self.maximized = None;
         }
-        self.active = tab;
+        self.tabs.select(tab);
         self.focus_leaf(&slot, window, cx);
-        remember_leaf_in(&mut self.tabs, pane);
+        self.tabs.remember_leaf(pane);
         true
     }
 
@@ -3916,7 +2827,7 @@ impl LyrelApp {
     }
 
     fn toggle_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         let Some(target) = tab
@@ -3955,7 +2866,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn restore_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         let Some(pip) = tab.pip_slot(cx) else {
@@ -3989,7 +2900,7 @@ impl LyrelApp {
     }
 
     fn park_active_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let slot = self.tabs.get(self.active).and_then(|tab| {
+        let slot = self.tabs.get(self.tabs.active_index()).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
                 .or_else(|| tab.focus_target(cx))
@@ -4005,7 +2916,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         let fallback = tab
@@ -4023,7 +2934,7 @@ impl LyrelApp {
         ) {
             return;
         }
-        tab.last_focused = fallback.as_ref().map(PaneSlot::entity_id);
+        tab.remember_fallback(fallback.as_ref());
         self.maximized = None;
         self.pane_drag.borrow_mut().take();
         self.sync_parked_deck(window, cx);
@@ -4044,7 +2955,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         let Some(slot) = tab
@@ -4079,7 +2990,7 @@ impl LyrelApp {
     fn preview_parked_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let first = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|tab| tab.parked_slots(cx).into_iter().next())
             .map(|slot| slot.entity_id());
         let Some(pane) = first else {
@@ -4103,7 +3014,7 @@ impl LyrelApp {
 
     fn sync_parked_deck(&self, window: &mut Window, cx: &mut App) {
         use crate::ui::parked_deck::{ParkedCard, ParkedDeckLabels};
-        let tab = self.tabs.get(self.active);
+        let tab = self.tabs.get(self.tabs.active_index());
         let cards = tab
             .into_iter()
             .flat_map(|tab| tab.parked_slots(cx))
@@ -4147,7 +3058,7 @@ impl LyrelApp {
                 }
             })
             .collect();
-        let tab_id = tab.map(|tab| tab.tree_id.get());
+        let tab_id = tab.map(|tab| tab.id());
         self.parked_deck.update(cx, |deck, cx| {
             deck.set_tab(tab_id, cx);
             deck.set_labels(
@@ -4167,22 +3078,16 @@ impl LyrelApp {
 
     pub(crate) fn refocus_parked_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for tab in &mut self.tabs {
-            if tab
-                .zoomed
-                .as_ref()
-                .is_some_and(|view| tab.is_parked_slot(&PaneSlot::Ready(view.clone()), cx))
-            {
-                tab.zoomed = None;
-            }
+            tab.discard_parked_zoom(cx);
         }
         if self.maximized.as_ref().is_some_and(|view| {
             self.tabs
-                .get(self.active)
+                .get(self.tabs.active_index())
                 .is_some_and(|tab| tab.is_parked_slot(&PaneSlot::Ready(view.clone()), cx))
         }) {
             self.maximized = None;
         }
-        let hidden_focused = self.tabs.get(self.active).is_some_and(|tab| {
+        let hidden_focused = self.tabs.get(self.tabs.active_index()).is_some_and(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
                 .is_some_and(|slot| tab.is_parked_slot(&slot, cx))
@@ -4194,14 +3099,14 @@ impl LyrelApp {
     }
 
     fn move_pane_to_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(slot) = self.tabs.get(self.active).and_then(|tab| {
+        let Some(slot) = self.tabs.get(self.tabs.active_index()).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
                 .or_else(|| tab.focus_target(cx))
         }) else {
             return;
         };
-        self.detach_pane(slot.entity_id(), self.active + 1, window, cx);
+        self.detach_pane(slot.entity_id(), self.tabs.active_index() + 1, window, cx);
     }
 
     fn open_scrollback_in_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4300,7 +3205,7 @@ impl LyrelApp {
         self.replace_pane_slot(pane, fresh.clone(), cx);
         kill_pane_off_thread(route, old_id, cx);
         self.maximized = None;
-        if self.tabs.get(self.active).is_some_and(|tab| {
+        if self.tabs.get(self.tabs.active_index()).is_some_and(|tab| {
             tab.pane
                 .leaves()
                 .iter()
@@ -4339,7 +3244,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PaneSlot> {
-        let target = self.tabs.get(self.active).and_then(|tab| {
+        let target = self.tabs.get(self.tabs.active_index()).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
                 .or_else(|| tab.focus_target(cx))
@@ -4421,7 +3326,7 @@ impl LyrelApp {
                 }
             }
         };
-        let tab = self.tabs.get_mut(self.active)?;
+        let tab = self.tabs.active_mut()?;
         if !tab
             .pane
             .split_leaf(target.entity_id(), axis, false, new.clone())
@@ -4443,7 +3348,7 @@ impl LyrelApp {
     /// so it travels with the close rather than being read back off shared
     /// state a second, unrelated close could have overwritten.
     fn close_pane_inner(&mut self, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(slot) = self.tabs.get(self.active).and_then(|tab| {
+        let Some(slot) = self.tabs.get(self.tabs.active_index()).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
                 .or_else(|| tab.focus_target(cx))
@@ -4457,10 +3362,10 @@ impl LyrelApp {
         if !confirmed
             && self
                 .tabs
-                .get(self.active)
+                .get(self.tabs.active_index())
                 .is_some_and(|tab| tab.pane.leaves().len() <= 1)
         {
-            let unsaved = self.editor_unsaved_in_tab(self.active);
+            let unsaved = self.editor_unsaved_in_tab(self.tabs.active_index());
             if self.editor_guard_unsaved(
                 unsaved,
                 crate::ui::code_editor::AfterUnsaved::ClosePane(pane),
@@ -4475,14 +3380,14 @@ impl LyrelApp {
             return;
         }
         self.maximized = None;
-        let focused = self.tabs.get(self.active).and_then(|tab| {
+        let focused = self.tabs.get(self.tabs.active_index()).and_then(|tab| {
             tab.pane
                 .leaves()
                 .into_iter()
                 .find(|l| l.contains_focused(window, cx))
                 .and_then(|l| l.terminal().cloned())
         });
-        let outcome = match self.tabs.get_mut(self.active) {
+        let outcome = match self.tabs.active_mut() {
             Some(tab) => tab.pane.close_focused(window, cx),
             None => return,
         };
@@ -4491,15 +3396,15 @@ impl LyrelApp {
             // asked about this very pane, so carry the answer across rather
             // than letting the tab re-derive the same reason and ask again.
             CloseOutcome::RemoveSelf => {
-                self.close_tab_inner(self.active, confirmed, window, cx);
+                self.close_tab_inner(self.tabs.active_index(), confirmed, window, cx);
             }
             CloseOutcome::NotFound => {
                 let single = self
                     .tabs
-                    .get(self.active)
+                    .get(self.tabs.active_index())
                     .is_some_and(|tab| tab.pane.leaves().len() <= 1);
                 if single {
-                    self.close_tab_inner(self.active, confirmed, window, cx);
+                    self.close_tab_inner(self.tabs.active_index(), confirmed, window, cx);
                 }
             }
             CloseOutcome::Collapsed => {
@@ -4552,7 +3457,7 @@ impl LyrelApp {
             CloseOutcome::NotFound => {}
             CloseOutcome::Collapsed => {
                 kill_pane_off_thread(view.read(cx).pane_route(), view.read(cx).pane_id, cx);
-                if index == self.active {
+                if index == self.tabs.active_index() {
                     self.maximized = None;
                     self.focus_active(window, cx);
                 }
@@ -4563,7 +3468,7 @@ impl LyrelApp {
     }
 
     fn cycle_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let leaves = match self.tabs.get(self.active) {
+        let leaves = match self.tabs.get(self.tabs.active_index()) {
             Some(tab) => tab.pane.leaves(),
             None => return,
         };
@@ -4586,7 +3491,7 @@ impl LyrelApp {
     }
 
     fn focus_pane_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(self.active) else {
+        let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
             return;
         };
         let Some(from) = tab.pane.focused_leaf(window, cx) else {
@@ -4599,7 +3504,7 @@ impl LyrelApp {
         let live: Vec<gpui_kit::EntityId> =
             tab.pane.leaves().iter().map(|l| l.entity_id()).collect();
         let (from, to) = (from.entity_id(), target.entity_id());
-        let active = self.active;
+        let active = self.tabs.active_index();
         if let Some(tab) = self.tabs.get_mut(active) {
             tab.remember_focus_origin(from, to, dir, &live);
         }
@@ -4611,7 +3516,7 @@ impl LyrelApp {
     fn resize_pane(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
         let changed = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .is_some_and(|tab| tab.pane.resize_focused_pane(dir, RESIZE_STEP, window, cx));
         if changed {
             self.save_session(cx);
@@ -4620,7 +3525,7 @@ impl LyrelApp {
     }
 
     fn swap_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (from, len) = match self.tabs.get(self.active) {
+        let (from, len) = match self.tabs.get(self.tabs.active_index()) {
             Some(tab) => (tab.pane.focused_index(window, cx), tab.pane.leaves().len()),
             None => return,
         };
@@ -4633,7 +3538,7 @@ impl LyrelApp {
         } else {
             (from + len - 1) % len
         };
-        if let Some(tab) = self.tabs.get_mut(self.active) {
+        if let Some(tab) = self.tabs.active_mut() {
             if tab.pane.swap_leaf_indices(from, to) {
                 self.maximized = None;
                 self.save_session(cx);
@@ -4643,7 +3548,7 @@ impl LyrelApp {
     }
 
     fn dragged_parking_pane(&self, cx: &App) -> Option<gpui_kit::EntityId> {
-        let tab = self.tabs.get(self.active)?;
+        let tab = self.tabs.get(self.tabs.active_index())?;
         let source = crate::ui::pane_drag::lifted(&self.pane_drag)
             .or_else(|| tab.pip_interaction.dragged_pane())?;
         tab.pane
@@ -4655,7 +3560,7 @@ impl LyrelApp {
 
     fn cancel_pane_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_drag.borrow_mut().take();
-        if let Some(tab) = self.tabs.get(self.active) {
+        if let Some(tab) = self.tabs.get(self.tabs.active_index()) {
             tab.pip_interaction.cancel();
         }
         cx.stop_active_drag(window);
@@ -4687,7 +3592,7 @@ impl LyrelApp {
                             .read(cx)
                             .drop_target_contains(event.position)
                         {
-                            if let Some(tab) = app.tabs.get(app.active) {
+                            if let Some(tab) = app.tabs.get(app.tabs.active_index()) {
                                 tab.pip_interaction.cancel();
                             }
                             app.park_pane(source, window, cx);
@@ -4702,7 +3607,7 @@ impl LyrelApp {
                             crate::ui::pane_drag::clear_landing(&app.pane_drag);
                             let _ = app.pane_landing(window, cx);
                             let landing = crate::ui::pane_drag::take_landing(&app.pane_drag);
-                            let tiled = app.tabs.get(app.active).is_some_and(|tab| {
+                            let tiled = app.tabs.get(app.tabs.active_index()).is_some_and(|tab| {
                                 !tab.pip_slot(cx)
                                     .is_some_and(|slot| slot.entity_id() == source)
                             });
@@ -4730,7 +3635,7 @@ impl LyrelApp {
                                 if crate::ui::pane_drag::lifted(&app.pane_drag).is_some()
                                     || app
                                         .tabs
-                                        .get(app.active)
+                                        .get(app.tabs.active_index())
                                         .is_some_and(|tab| tab.pip_interaction.has_gesture())
                                 {
                                     app.cancel_pane_drag(window, cx);
@@ -4748,7 +3653,7 @@ impl LyrelApp {
                         if crate::ui::pane_drag::lifted(&app.pane_drag).is_some()
                             || app
                                 .tabs
-                                .get(app.active)
+                                .get(app.tabs.active_index())
                                 .is_some_and(|tab| tab.pip_interaction.has_gesture())
                         {
                             app.cancel_pane_drag(window, cx);
@@ -4772,7 +3677,7 @@ impl LyrelApp {
 
         let from = pane_drag::lifted(&self.pane_drag)?;
         let area = self.pane_area.get()?;
-        let tab = self.tabs.get(self.active)?;
+        let tab = self.tabs.get(self.tabs.active_index())?;
         if self.maximized.is_some()
             || tab
                 .pip_slot(cx)
@@ -4859,11 +3764,11 @@ impl LyrelApp {
             return None;
         }
         let area = self.pane_area.get()?;
-        let host = self.tabs.get(self.active)?;
-        if host.tree_id.get() == id {
+        let host = self.tabs.get(self.tabs.active_index())?;
+        if host.id() == id {
             return None;
         }
-        let sub = &self.tabs.iter().find(|t| t.tree_id.get() == id)?.pane;
+        let sub = &self.tabs.iter().find(|t| t.id() == id)?.pane;
         let leaves = host.pane.leaves();
         let bounds = pane_drag::leaf_bounds(&host.pane, area);
         let zone = pane_drag::tab_zone_at(area, &bounds, window.mouse_position())?;
@@ -4890,13 +3795,13 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(from) = self.tabs.iter().position(|t| t.tree_id.get() == source) else {
+        let Some(from) = self.tabs.iter().position(|t| t.id() == source) else {
             return;
         };
-        let Some(host) = self.tabs.get(self.active) else {
+        let Some(host) = self.tabs.get(self.tabs.active_index()) else {
             return;
         };
-        if host.tree_id.get() == source {
+        if host.id() == source {
             return;
         }
         let leaves = host.pane.leaves();
@@ -4905,28 +3810,22 @@ impl LyrelApp {
         };
 
         let mut moved = self.tabs.remove(from);
-        if from < self.active {
-            self.active -= 1;
-        }
         // Lifted out rather than cloned: these are the live terminals, and a
         // graft that finds nowhere to put them has to be able to hand them
         // back intact.
         let sub = std::mem::replace(&mut moved.pane, crate::ui::pane::Pane::Empty);
         let first = sub.first_leaf();
-        let grafted = match self.tabs.get_mut(self.active) {
+        let grafted = match self.tabs.active_mut() {
             Some(host) => crate::ui::pane_drag::graft(&mut host.pane, sub, zone),
             None => Err(sub),
         };
         if let Err(sub) = grafted {
             moved.pane = sub;
             self.tabs.insert(from, moved);
-            if from <= self.active {
-                self.active += 1;
-            }
             return;
         }
-        let merged_id = moved.tree_id.get();
-        let host = &mut self.tabs[self.active];
+        let merged_id = moved.id();
+        let host = self.tabs.active_mut().expect("active tab exists");
         match (host.code.as_deref_mut(), moved.code) {
             (None, code) => host.code = code,
             // Both had an editor: the files come along into this tab's strip
@@ -4941,7 +3840,7 @@ impl LyrelApp {
         if self
             .renaming
             .as_ref()
-            .is_some_and(|r| !self.tabs.iter().any(|t| t.tree_id.get() == r.tab))
+            .is_some_and(|r| !self.tabs.iter().any(|t| t.id() == r.tab))
         {
             self.renaming = None;
         }
@@ -4962,7 +3861,7 @@ impl LyrelApp {
     /// nothing lights up for it.
     fn detach_caret(&self, window: &Window, cx: &App) -> Option<gpui_kit::AnyElement> {
         let pane = crate::ui::pane_drag::lifted(&self.pane_drag)?;
-        let tab = self.tabs.get(self.active)?;
+        let tab = self.tabs.get(self.tabs.active_index())?;
         if tab.pane.leaves().len() < 2
             || tab
                 .pip_slot(cx)
@@ -5057,7 +3956,7 @@ impl LyrelApp {
         // Which pane the tab being left comes back to, settled while the one
         // that is leaving is still in it to be ruled out.
         self.remember_active_pane(window, cx);
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         let Some(slot) = tab
@@ -5082,7 +3981,7 @@ impl LyrelApp {
         let at = at.min(self.tabs.len());
         self.tabs.insert(at, fresh);
         self.maximized = None;
-        self.active = at;
+        self.tabs.select(at);
         self.focus_active(window, cx);
         self.save_session(cx);
         cx.notify();
@@ -5100,7 +3999,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         let leaves = tab.pane.leaves();
@@ -5126,28 +4025,23 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match self.tabs.iter().position(|t| t.tree_id.get() == id) {
-            Some(index) => self.activate(index, window, cx),
-            None => self.pending_tab = Some(id),
+        if let Some(index) = self.tabs.request(id) {
+            self.activate(index, window, cx);
         }
     }
 
     fn claim_pending_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(want) = self.pending_tab else {
+        let Some(index) = self.tabs.claim_pending() else {
             return;
         };
-        let Some(index) = self.tabs.iter().position(|t| t.tree_id.get() == want) else {
-            return;
-        };
-        self.pending_tab = None;
         self.activate(index, window, cx);
     }
 
     /// Declare which terminals are actually painted. Parked sessions keep
     /// processing output, but their wakeups must not dirty the whole window.
     fn declare_displayed_panes(&self, cx: &App) {
-        let active = self.active;
-        crate::terminal::view::declare_displayed(
+        let active = self.tabs.active_index();
+        crate::terminal::lifecycle::declare_displayed(
             cx,
             self.tabs.iter().enumerate().flat_map(|(i, tab)| {
                 tab.pane.leaves().into_iter().filter_map(move |slot| {
@@ -5158,35 +4052,13 @@ impl LyrelApp {
         );
     }
 
-    /// Stamps whichever tab is active right now. Called once per frame rather
-    /// than from the ten places that assign `self.active` — it is idempotent,
-    /// so the stamp only advances on the first frame after a switch.
-    pub(crate) fn touch_active_tab(&self) {
-        let Some(tab) = self.tabs.get(self.active) else {
-            return;
-        };
-        let top = self.tab_use_seq.get();
-        if top != 0 && tab.last_used.get() == top {
-            return;
-        }
-        let next = top + 1;
-        self.tab_use_seq.set(next);
-        tab.last_used.set(next);
-    }
-
-    /// Tab indices most-recently-used first. The active tab always leads, even
-    /// before its own stamp lands; tabs never activated trail in strip order.
-    pub(crate) fn tabs_by_mru(&self) -> Vec<usize> {
-        let stamps: Vec<u64> = self.tabs.iter().map(|t| t.last_used.get()).collect();
-        mru_order(&stamps, self.active)
-    }
 
     /// The neighbouring tab in the order the strip shows them, wrapping at
     /// the ends — no switcher, no MRU (#867). "Shows" matters with the
     /// sidebar grouping tabs: the next row is not always the next index.
     fn cycle_tab(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let order = self.visual_tab_order(cx);
-        if let Some(next) = step_in_order(&order, self.active, forward) {
+        if let Some(next) = self.tabs.next_in(&order, forward) {
             self.activate(next, window, cx);
         }
     }
@@ -5199,8 +4071,8 @@ impl LyrelApp {
     /// list is the tab's own sidebar group: the grouping keys off the tab,
     /// not its position, so a step out of the group would move nothing.
     fn move_tab(&mut self, right: bool, cx: &mut Context<Self>) {
-        let run = self.tab_run(self.active, cx);
-        if let Some(permutation) = one_slot_move(&run, self.tabs.len(), self.active, right) {
+        let run = self.tab_run(self.tabs.active_index(), cx);
+        if let Some(permutation) = self.tabs.move_permutation(&run, right) {
             self.apply_tab_order(&permutation, cx);
         }
     }
@@ -5213,29 +4085,12 @@ impl LyrelApp {
         if self.tabs.get(index).is_some_and(Tab::is_asleep) && !self.wake_tab(index, window, cx) {
             return;
         }
-        if index < self.tabs.len() && index != self.active {
+        if index < self.tabs.len() && index != self.tabs.active_index() {
             self.cancel_pane_drag(window, cx);
-            self.remember_active_pane(window, cx);
-            // Zoom rides with its tab (#599): stash the outgoing tab's zoom
-            // and bring the incoming tab's back. The clears elsewhere (drag,
-            // split, close) still stand — those genuinely reshape what was
-            // zoomed; merely looking at another tab does not.
-            if let Some(outgoing) = self.tabs.get_mut(self.active) {
-                outgoing.pip_interaction.cancel();
-                outgoing.zoomed = self.maximized.take();
-            }
-            self.active = index;
-            self.maximized = self.tabs[index].zoomed.take().filter(|leaf| {
-                // The zoomed pane may have exited while its tab was away —
-                // a stale entity must not come back as the zoom.
-                self.tabs[index].pane.leaves().iter().any(|slot| {
-                    slot.entity_id() == leaf.entity_id()
-                        && !self.tabs[index].is_parked_slot(slot, cx)
-                })
-            });
+            self.tabs.activate(index, &mut self.maximized, window, cx);
             self.maybe_refresh_diff_overlay(cx);
             self.sidebar_reveal
-                .set(Some(self.tabs[index].tree_id.get()));
+                .set(Some(self.tabs[index].id()));
             if self.code_panel_visible() {
                 self.file_tree_refresh_roots(window, cx);
                 self.file_tree.focus_handle.focus(window, cx);
@@ -5260,33 +4115,15 @@ impl LyrelApp {
         let Some(tab) = self.tabs.get(index) else {
             return false;
         };
-        if tab.is_asleep() || !crate::ui::tree_sync::can_hibernate_on(cx, self.workspace) {
+        if !crate::ui::tree_sync::can_hibernate_on(cx, self.workspace) {
             return false;
         }
         let remote = WorkspaceStore::all(cx)
             .get(self.workspace)
             .is_some_and(|w| w.is_remote());
-        let leaves = tab.pane.leaves();
-        let all_hibernatable = !leaves.is_empty()
-            && leaves.iter().all(|leaf| match leaf {
-                PaneSlot::Ready(view) => !(remote && view.read(cx).ssh_spec().is_some()),
-                PaneSlot::Connecting(_) => false,
-            });
-        all_hibernatable && self.awake_tab_besides(index).is_some()
+        tab.is_hibernatable(remote, cx) && self.tabs.awake_besides(index).is_some()
     }
 
-    /// The tab to show instead of `index` when that one goes to sleep: the
-    /// awake tab used most recently, the nearest one on a tie.
-    fn awake_tab_besides(&self, index: usize) -> Option<usize> {
-        (0..self.tabs.len())
-            .filter(|&i| i != index && !self.tabs[i].is_asleep())
-            .max_by_key(|&i| {
-                (
-                    self.tabs[i].last_used.get(),
-                    std::cmp::Reverse(i.abs_diff(index)),
-                )
-            })
-    }
 
     /// Put tab `index` to sleep: stop its panes, keep its place (#762).
     ///
@@ -5306,8 +4143,8 @@ impl LyrelApp {
         if !self.can_hibernate_tab(index, cx) {
             return;
         }
-        if index == self.active {
-            let Some(next) = self.awake_tab_besides(index) else {
+        if index == self.tabs.active_index() {
+            let Some(next) = self.tabs.awake_besides(index) else {
                 return;
             };
             self.activate(next, window, cx);
@@ -5321,17 +4158,9 @@ impl LyrelApp {
         let Some(tab) = self.tabs.get(index).filter(|t| !t.is_asleep()) else {
             return;
         };
-        let (mut view, home) = tab.label_view(Some(window), cx);
-        view.live = false;
-        view.status = None;
+        let (view, home) = tab.label_view(Some(window), cx);
         let layout = pane_to_session(&tab.pane, cx);
-        let tab = &mut self.tabs[index];
-        let panes = std::mem::replace(&mut tab.pane, Pane::Empty);
-        tab.zoomed = None;
-        tab.last_focused = None;
-        tab.focus_origin.clear();
-        tab.asleep = Some(Asleep { layout, view, home });
-        drop(panes);
+        self.tabs[index].sleep(layout, view, home);
         self.save_session(cx);
         cx.notify();
     }
@@ -5347,11 +4176,11 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(asleep) = self.tabs.get_mut(index).and_then(|t| t.asleep.take()) else {
+        let Some(layout) = self.tabs.get(index).and_then(Tab::asleep_layout) else {
             return true;
         };
+        let layout = redial_native_ssh(layout);
         let pane_ws = self.window_workspace(cx);
-        let layout = redial_native_ssh(&asleep.layout);
         let mut presentation = self.tabs[index].presentation.clone();
         // No listing: every pane in here was stopped on purpose, so the attach
         // each one tries first fails and falls through to the fresh spawn —
@@ -5367,18 +4196,14 @@ impl LyrelApp {
             cx,
             &mut presentation,
         );
-        let tab = &mut self.tabs[index];
         let Some(pane) = pane else {
-            tab.asleep = Some(asleep);
             window.notify_app(
                 crate::ui::notification_history::Notification::error(t(L10nKey::TabWakeFailed)),
                 cx,
             );
             return false;
         };
-        tab.pane = pane;
-        tab.presentation = presentation;
-        tab.last_focused = None;
+        self.tabs[index].finish_wake(pane, presentation);
         self.save_session(cx);
         cx.notify();
         true
@@ -5388,8 +4213,8 @@ impl LyrelApp {
     /// tab without going through [`Self::activate`]: a neighbour taking over
     /// from a closed tab, a window restored onto a sleeping one.
     pub(crate) fn wake_active_if_asleep(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.get(self.active).is_some_and(Tab::is_asleep) {
-            self.wake_tab(self.active, window, cx);
+        if self.tabs.get(self.tabs.active_index()).is_some_and(Tab::is_asleep) {
+            self.wake_tab(self.tabs.active_index(), window, cx);
         }
     }
 
@@ -5404,9 +4229,9 @@ impl LyrelApp {
         let Some(tab) = self.tabs.get(index) else {
             return false;
         };
-        let zoom = match index == self.active {
+        let zoom = match index == self.tabs.active_index() {
             true => self.maximized.as_ref(),
-            false => tab.zoomed.as_ref(),
+            false => tab.zoomed(),
         };
         zoom.is_some_and(|zoom| {
             tab.pane
@@ -5426,12 +4251,12 @@ impl LyrelApp {
     /// and not whichever leaf the layout happens to list first.
     fn toggle_maximize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(leaf) = self.maximized.take() {
-            remember_leaf_in(&mut self.tabs, leaf.entity_id());
+            self.tabs.remember_leaf(leaf.entity_id());
             self.focus_active(window, cx);
             cx.notify();
             return;
         }
-        let Some(tab) = self.tabs.get(self.active) else {
+        let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
             return;
         };
         if tab.pane.leaves().len() < 2 {
@@ -5466,7 +4291,7 @@ impl LyrelApp {
             return;
         }
         if !confirmed {
-            let id = self.tabs[index].tree_id.get();
+            let id = self.tabs[index].id();
             let unsaved = self.editor_unsaved_in_tab(index);
             if self.editor_guard_unsaved(
                 unsaved,
@@ -5478,12 +4303,12 @@ impl LyrelApp {
             }
         }
         if !confirmed && let Some(reason) = self.tab_close_reason(index, cx) {
-            let id = self.tabs[index].tree_id.get();
+            let id = self.tabs[index].id();
             self.ask_before_closing(CloseTarget::Tab(id), reason, window, cx);
             return;
         }
         self.maximized = None;
-        let closing = self.tabs[index].tree_id.get();
+        let closing = self.tabs[index].id();
         self.editor_close_tab_files(index, cx);
         self.editor_forget_tab(closing, cx);
         let worktree_cwd = self.tab_host_cwd(index, window, cx);
@@ -5531,16 +4356,9 @@ impl LyrelApp {
         if self
             .renaming
             .as_ref()
-            .is_some_and(|r| !self.tabs.iter().any(|t| t.tree_id.get() == r.tab))
+            .is_some_and(|r| !self.tabs.iter().any(|t| t.id() == r.tab))
         {
             self.renaming = None;
-        }
-        if self.tabs.is_empty() {
-            self.active = 0;
-        } else if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
-        } else if index < self.active {
-            self.active -= 1;
         }
         self.wake_active_if_asleep(window, cx);
         self.focus_active(window, cx);
@@ -5727,7 +4545,7 @@ impl LyrelApp {
             let count = self
                 .bulk_closable((0..self.tabs.len()).filter(|&i| i != index), cx)
                 .len();
-            let keep = CloseTarget::OtherTabs(self.tabs[index].tree_id.get());
+            let keep = CloseTarget::OtherTabs(self.tabs[index].id());
             if self.ask_before_bulk_close(keep, count, window, cx) {
                 return;
             }
@@ -5769,7 +4587,7 @@ impl LyrelApp {
     ) {
         if !confirmed && let Some(tab) = self.tabs.get(index) {
             let count = self.bulk_closable((index + 1)..self.tabs.len(), cx).len();
-            let from = CloseTarget::TabsRightOf(tab.tree_id.get());
+            let from = CloseTarget::TabsRightOf(tab.id());
             if self.ask_before_bulk_close(from, count, window, cx) {
                 return;
             }
@@ -5788,7 +4606,7 @@ impl LyrelApp {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        let refocus = (index == self.active)
+        let refocus = (index == self.tabs.active_index())
             .then(|| tab.focus_target(cx))
             .flatten();
         for leaf in tab.pane.terminals() {
@@ -5825,7 +4643,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn copy_active_cwd(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.tab_cwd_text(self.active, window, cx) {
+        if let Some(text) = self.tab_cwd_text(self.tabs.active_index(), window, cx) {
             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
         }
     }
@@ -6018,7 +4836,7 @@ impl LyrelApp {
                 let tab = Tab::new(Pane::leaf(new));
                 group.seat(&tab);
                 self.tabs.insert(insert_at, tab);
-                self.active = insert_at;
+                self.tabs.select(insert_at);
                 self.focus_active(window, cx);
             }
             ForkPlacement::Split { axis, before } => {
@@ -6052,12 +4870,12 @@ impl LyrelApp {
     ) {
         let Some(source) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
         else {
             return;
         };
-        self.fork_agent_session(self.active, source, placement, window, cx);
+        self.fork_agent_session(self.tabs.active_index(), source, placement, window, cx);
     }
 
     pub(crate) fn fork_focused_pane_session(
@@ -6173,27 +4991,18 @@ impl LyrelApp {
         self.maximized = None;
         let insert_at = self.new_tab_insert_at(cx);
         let mut tab = Tab::new(Pane::leaf(view));
-        tab.name = Some(wt.branch);
+        tab.adopt_name(Some(wt.branch));
         self.tabs.insert(insert_at, tab);
-        self.active = insert_at;
+        self.tabs.select(insert_at);
         self.focus_active(window, cx);
         self.save_session(cx);
         cx.notify();
     }
 
     pub(crate) fn apply_tab_order(&mut self, order: &[usize], cx: &mut Context<Self>) {
-        if order.len() != self.tabs.len() || order.iter().enumerate().all(|(i, &o)| i == o) {
+        if !self.tabs.reorder(order) {
             return;
         }
-        // The rename box rides out a reorder: it tracks its tab by tree id,
-        // so the drift that once forced it closed here is gone (#598).
-        let was_active = self.active;
-        let mut slots: Vec<Option<Tab>> = std::mem::take(&mut self.tabs)
-            .into_iter()
-            .map(Some)
-            .collect();
-        self.tabs = order.iter().filter_map(|&i| slots[i].take()).collect();
-        self.active = order.iter().position(|&i| i == was_active).unwrap_or(0);
         self.save_session(cx);
         cx.notify();
     }
@@ -6231,7 +5040,7 @@ impl LyrelApp {
             },
         )];
         self.renaming = Some(Renaming {
-            tab: self.tabs[index].tree_id.get(),
+            tab: self.tabs[index].id(),
             input,
             prefill,
             _subs: subs,
@@ -6275,24 +5084,10 @@ impl LyrelApp {
             return;
         };
         let value = renaming.input.read(cx).value();
-        match rename_outcome(&value, &renaming.prefill) {
-            Rename::Unchanged => {
-                self.focus_active(window, cx);
-                cx.notify();
-                return;
-            }
-            outcome => {
-                if let Some(tab) = self
-                    .tabs
-                    .iter_mut()
-                    .find(|t| t.tree_id.get() == renaming.tab)
-                {
-                    tab.name = match outcome {
-                        Rename::Named(name) => Some(name),
-                        _ => None,
-                    };
-                }
-            }
+        if !self.tabs.rename(renaming.tab, &value, &renaming.prefill) {
+            self.focus_active(window, cx);
+            cx.notify();
+            return;
         }
         self.save_session(cx);
         crate::ui::windows::refresh_menu(cx);
@@ -6300,308 +5095,45 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// Everything the search offers from this window, gathered when it opens.
-    pub(crate) fn search_catalog(&self, window: &Window, cx: &App) -> Catalog {
-        let mut catalog = Catalog::new(
-            self.search_actions(window, cx),
-            self.search_terminals(cx),
-            crate::ui::search::host_items(cx),
-        );
-        let last = last_sessions(self.spawn_host(cx));
-        let (sessions, here) = self.search_sessions(last, window, cx);
-        catalog.sessions = sessions;
-        catalog.sessions_here = here;
-        catalog.files = self.file_list_now(cx);
-        catalog
+    /// Project only workbench-owned facts; search owns row construction and ranking.
+    pub(crate) fn search_input(&self, window: &Window, cx: &App) -> SearchCatalog {
+        let actions = ActionCatalog::new(
+            ChromeState {
+                rail_collapsed: self.sidebar_collapsed,
+                right_panel_visible: self.right_panel_visible,
+                document_filled: self.document_layout(cx) == crate::core::config::DocumentLayout::Fill,
+                remote_server: WorkspaceStore::remote_ref(cx, self.workspace)
+                    .filter(|remote| remote.target.hosts_our_server())
+                    .map(|remote| crate::ui::remote_connect::route_label(cx, &remote)),
+            },
+            WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote()),
+            self.unsaved_ssh_session(window, cx).is_some(),
+        ).with_editor(self.editor_palette_items(), self.editor_can_dispatch());
+        let agents = self.offered_agents(cx);
+        let terminals = TerminalCatalog::new(self.workspace, &self.shells, &agents)
+            .items(|id| self.tab_rows_for(id, true, cx), cx);
+        SearchCatalog::new(actions, terminals, self.search_history(window, cx), self.file_list_now(cx))
+            .query_sessions(
+                self.active_host(cx),
+                self.tabs.iter().flat_map(|tab| tab.pane.terminals()).collect(),
+                agents,
+            )
     }
 
-    /// The Sessions tab's rows from `found`: those that ran in the focused
-    /// pane's directory first, under its name, then the rest by recency. The
-    /// second value is how many lead.
-    ///
-    /// `found` are the sessions of the machine this window's workspace is
-    /// on: a remote window's new tab opens there, and so resumes there.
-    pub(crate) fn search_sessions(
-        &self,
-        found: Vec<crate::core::agent_history::PastSession>,
-        window: &Window,
-        cx: &App,
-    ) -> (Vec<Item>, usize) {
-        let here = self
-            .tabs
-            .get(self.active)
-            .and_then(|t| t.pane.focused_or_first(window, cx))
-            .and_then(|leaf| leaf.read(cx).spawnable_cwd());
-        let home = crate::ui::path_display::home_for_host(cx, self.spawn_host(cx));
-        let now = crate::core::config::unix_now();
-        let hidden = &cx.global::<Config>().hidden_agent_sessions;
-        let (mut mine, mut rest): (Vec<_>, Vec<_>) = found
-            .into_iter()
-            .filter(|s| !hidden.contains(&crate::core::agent_history::session_key(s.agent, &s.id)))
-            .partition(|s| here.is_some() && s.cwd == here);
-        let here_section: Option<gpui_kit::SharedString> = here.as_ref().map(|dir| {
-            t_fmt(
-                L10nKey::SearchSectionSessionsHere,
-                &[("dir", &crate::ui::home::display_path(dir, home.as_deref()))],
-            )
-            .into()
-        });
-        let recent: gpui_kit::SharedString = t(L10nKey::SearchSectionSessionsRecent).into();
-        let row = |s: crate::core::agent_history::PastSession, section: gpui_kit::SharedString| {
-            let place = s
-                .cwd
-                .as_deref()
-                .map(|p| crate::ui::home::display_path(p, home.as_deref()));
-            let mut subtitle = match (&place, &s.branch) {
-                (Some(place), Some(branch)) => Some(format!("{place} · {branch}")),
-                (Some(place), None) => Some(place.clone()),
-                (None, Some(branch)) => Some(branch.clone()),
-                (None, None) => None,
-            };
-            if let Some(scope) = &s.scope
-                && let Some(context) = &scope.opencode
-            {
-                let connection = context
-                    .server
-                    .as_ref()
-                    .map(|s| s.urls.join(", "))
-                    .unwrap_or_else(|| context.connection_argv.join(" "));
-                let storage = scope
-                    .environment
-                    .get("OPENCODE_DB")
-                    .or_else(|| scope.environment.get("XDG_DATA_HOME"))
-                    .or_else(|| scope.environment.get("HOME"))
-                    .or_else(|| scope.environment.get("USERPROFILE"));
-                let source = storage.map_or(connection.clone(), |storage| {
-                    format!("{connection} · {storage}")
-                });
-                subtitle =
-                    Some(subtitle.map_or(source.clone(), |place| format!("{place} · {source}")));
-            }
-            let mut item = Item::new(
-                s.title,
-                CommandKind::ResumeSession {
-                    agent: s.agent,
-                    session_id: s.id.clone(),
-                    cwd: s.cwd,
-                    host: self.spawn_host(cx),
-                    scope: s.scope,
-                },
-            )
-            .with_note(crate::ui::home::relative_time(now, s.updated))
-            .with_avatar(Avatar {
-                agent: Some(s.agent),
-                ..Avatar::default()
-            })
-            .with_alias(s.id)
-            .with_alias(s.agent.display_name())
-            .in_section(section);
-            if let Some(subtitle) = subtitle {
-                item = item.with_subtitle(subtitle);
-            }
-            item
-        };
-        let count = mine.len();
-        let mut out: Vec<Item> = match here_section {
-            Some(section) => mine.drain(..).map(|s| row(s, section.clone())).collect(),
-            None => Vec::new(),
-        };
-        out.extend(rest.drain(..).map(|s| row(s, recent.clone())));
-        (out, count)
-    }
-
-    /// The Actions tab: the fixed set, plus the rows only this window can
-    /// judge are worth offering.
-    pub(crate) fn search_actions(&self, window: &Window, cx: &App) -> Vec<Item> {
-        let mut actions = Item::actions(ChromeState {
-            rail_collapsed: self.sidebar_collapsed,
-            right_panel_visible: self.right_panel_visible,
-            document_filled: self.document_layout(cx) == crate::core::config::DocumentLayout::Fill,
-            remote_server: WorkspaceStore::remote_ref(cx, self.workspace)
-                .filter(|remote| remote.target.hosts_our_server())
-                .map(|remote| crate::ui::remote_connect::route_label(cx, &remote)),
-        });
-
-        // The editor's navigation, while there is a file in front of it.
-        actions.extend(self.editor_palette_items());
-
-        // Groups are something the sidebar draws, so they are offered only
-        // while the tabs are in it. Opening a folder as a group asks the
-        // system picker, which browses this computer: a path picked there
-        // names nothing on a remote workspace's machine, where "Pin as
-        // Group" in the file tree is the way in instead.
-        actions.push(
-            Item::localized(L10nKey::CmdNewGroup, CommandKind::NewGroup)
-                .with_subtitle(t(L10nKey::CmdNewGroupSubtitle))
-                .in_group(CommandGroup::TabsPanes),
-        );
-        if !WorkspaceStore::all(cx)
-            .get(self.workspace)
-            .is_some_and(|w| w.is_remote())
-        {
-            actions.push(
-                Item::localized(
-                    L10nKey::CmdOpenFolderAsGroup,
-                    CommandKind::OpenFolderAsGroup,
-                )
-                .with_subtitle(t(L10nKey::CmdOpenFolderAsGroupSubtitle))
-                .in_group(CommandGroup::TabsPanes),
-            );
-        }
-
-        // The editor's text commands, while there is a buffer to run them on.
-        if self.editor_can_dispatch() {
-            actions.extend(
-                [
-                    Item::localized(
-                        L10nKey::CmdEditorTransformUppercase,
-                        CommandKind::EditorTransformUppercase,
-                    ),
-                    Item::localized(
-                        L10nKey::CmdEditorTransformLowercase,
-                        CommandKind::EditorTransformLowercase,
-                    ),
-                    Item::localized(
-                        L10nKey::CmdEditorTransformTitleCase,
-                        CommandKind::EditorTransformTitleCase,
-                    ),
-                    Item::localized(
-                        L10nKey::CmdEditorTrimTrailingWhitespace,
-                        CommandKind::EditorTrimTrailingWhitespace,
-                    ),
-                    Item::localized(L10nKey::CmdEditorJoinLines, CommandKind::EditorJoinLines),
-                    Item::localized(
-                        L10nKey::CmdEditorRemoveSurroundingBrackets,
-                        CommandKind::EditorRemoveSurroundingBrackets,
-                    ),
-                ]
-                .into_iter()
-                .map(|item| item.in_group(CommandGroup::View)),
-            );
-        }
-
-        // Offered only where it would do something. A connection opened from a
-        // saved host has nothing to save, and a pane that is not an SSH one has
-        // no connection at all — either would be a row that quietly did nothing
-        // (#549).
-        if self.unsaved_ssh_session(window, cx).is_some() {
-            actions.push(
-                Item::localized(
-                    L10nKey::CmdSshSaveConnection,
-                    CommandKind::SaveSshSessionAsHost,
-                )
-                .with_subtitle(t(L10nKey::CmdSshSaveConnectionSubtitle))
-                .in_group(CommandGroup::Ssh),
-            );
-        }
-        actions
-    }
-
-    /// The Terminals tab: every open tab of every workspace this process
-    /// knows — this window's first, most recently used first and without the
-    /// one you are in — then every way to open a new one.
-    pub(crate) fn search_terminals(&self, cx: &App) -> Vec<Item> {
-        let mut out = Vec::new();
-        let store = WorkspaceStore::all(cx);
-        let name_of = |id: WorkspaceId| {
-            store
-                .get(id)
-                .and_then(|w| crate::ui::machine_mirror::display_name(cx, w))
-                .unwrap_or_else(|| t(L10nKey::WindowUntitled).to_string())
-        };
-        // This window's own workspace leads, and is listed whether or not the
-        // store has caught up with it: its tabs are right here in the window.
-        let mut others: Vec<_> = store
-            .views
-            .iter()
-            .filter(|w| w.id != self.workspace)
-            .collect();
-        others.sort_by_key(|w| std::cmp::Reverse(w.last_active));
-        let workspaces = std::iter::once(self.workspace).chain(others.into_iter().map(|w| w.id));
-        for id in workspaces {
-            let name = name_of(id);
-            let here = id == self.workspace;
-            for tab in self.tab_rows_for(id, true, cx) {
-                if here && tab.active {
-                    continue;
-                }
-                let mut item = Item::new(
-                    tab.label.clone(),
-                    CommandKind::GoToTab {
-                        workspace: id,
-                        tab: tab.id,
-                    },
-                )
-                .with_avatar(Avatar {
-                    agent: tab.agent,
-                    status: tab.status,
-                    unread: tab.unread,
-                    ssh: tab.ssh,
-                })
-                .with_alias(name.clone())
-                .in_section(name.clone());
-                // A label derived from the path already says where; one that
-                // is a name or an agent leaves the place worth printing.
-                if tab.named && !tab.path.is_empty() {
-                    item = item.with_subtitle(tab.path.clone());
-                } else if !tab.path.is_empty() {
-                    item = item.with_alias(tab.path.clone());
-                }
-                if let Some(agent) = tab.agent {
-                    item = item.with_alias(agent.display_name());
-                }
-                if !here {
-                    item = item.with_note(name.clone());
-                }
-                out.push(item);
-            }
-        }
-
-        let new_terminal: gpui_kit::SharedString = t(L10nKey::SearchSectionNewTerminal).into();
-        // Every shell the window's machine has, named alike in every language
-        // so the New Tab menu's "Other Shells…" row can land on exactly these
-        // by typing one word. Listed in the order that menu uses.
-        let default_shell = self.default_shell_label(cx);
-        let usage = &cx.global::<Config>().shell_frecency;
-        let now = crate::core::config::unix_now();
-        for s in crate::ui::tab_strip::shells_by_frecency(
-            &self.shells.shells,
-            &default_shell,
-            usage,
-            now,
-        ) {
-            let mut item = Item::new(
-                t_fmt(L10nKey::AppCmdShellTitle, &[("title", &s.label)]),
-                CommandKind::OpenShell(s.label.clone()),
-            )
-            .in_section(new_terminal.clone());
-            if s.label == default_shell {
-                item = item.with_subtitle(t(L10nKey::ShellDefault));
-            }
-            out.push(item);
-        }
-        for agent in self.offered_agents(cx) {
-            out.push(
-                Item::new(
-                    t_fmt(
-                        L10nKey::AppCmdAgentLaunchTitle,
-                        &[("name", agent.display_name())],
-                    ),
-                    CommandKind::LaunchAgent(agent),
-                )
-                .with_subtitle(agent.launch_command(&cx.global::<Config>().agent_launch))
-                .with_avatar(Avatar {
-                    agent: Some(agent),
-                    ..Avatar::default()
-                })
-                .in_section(new_terminal.clone()),
-            );
-        }
-        out
+    fn search_history(&self, window: &Window, cx: &App) -> SessionHistory {
+        let focused = self.tabs.get(self.tabs.active_index())
+            .and_then(|tab| tab.pane.focused_or_first(window, cx));
+        let host = self.spawn_host(cx);
+        SessionHistory::new(
+            host,
+            focused.as_ref().and_then(|pane| pane.read(cx).spawnable_cwd()),
+            focused.as_ref().and_then(|pane| pane.read(cx).host_cwd()),
+            crate::ui::path_display::home_for_host(cx, host),
+        )
     }
 
     pub(crate) fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search.is_some() {
+        if self.search.is_open() {
             self.close_search(window, cx);
             return;
         }
@@ -6620,240 +5152,28 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.search_return_focus = window.focused(cx);
-        let catalog = self.search_catalog(window, cx);
-        let view = cx.new(|cx| SearchView::new(catalog, tab, query, window, cx));
+        let catalog = self.search_input(window, cx);
+        let view = self.search.open(catalog, tab, query, Self::on_search_event, window, cx);
         if tab.in_editor_row() {
             let tabs = self.editor_search_tabs();
             view.update(cx, |view, cx| view.set_editor_tabs(tabs, cx));
         }
-        self.search_sub = Some(cx.subscribe_in(&view, window, Self::on_search_event));
-        self.search = Some(view.clone());
-        self.refresh_search_sessions(view, window, cx);
         self.refresh_file_index(window, cx);
         cx.notify();
     }
 
-    /// Asks the machine this window's workspace is on — this one, or a
-    /// remote one's server — for its agents' history, and hands what changed
-    /// to the open search. The search opened on the last scan's answer, so this is
-    /// only ever news: a session run since, or the first scan of the process.
-    fn refresh_search_sessions(
-        &mut self,
-        view: Entity<SearchView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let host_id = self.spawn_host(cx);
-        let Some(host) = self.active_host(cx) else {
-            return;
-        };
-        use lyrel_core::host::session_operations::{
-            SessionOperation, SessionOperationKind, SessionScope,
-        };
-        let opencode = crate::core::cli_agent::CLIAgent::OpenCode;
-        let mut opencode_scopes = Vec::new();
-        let hermes = crate::core::cli_agent::CLIAgent::Hermes;
-        let mut hermes_scopes = Vec::new();
-        let mut hermes_errors = Vec::new();
-        for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
-            let pane = leaf.read(cx);
-            if pane.host_id() == host_id
-                && pane.agent() == Some(hermes)
-                && let Some(state) = pane.agent_session()
-                && let Some(cwd) = pane.host_cwd()
-                && let Some(scope) = state.readout.session_scope.clone()
-                && let Some(launch_argv) =
-                    lyrel_core::host::session_operations::launch_context(hermes, &state)
-                && !hermes_scopes
-                    .iter()
-                    .any(|request: &SessionOperation| request.scope == scope)
-            {
-                hermes_scopes.push(SessionOperation {
-                    expected_host: host_id.0,
-                    agent: hermes,
-                    kind: SessionOperationKind::Resume,
-                    source_id: String::new(),
-                    cwd,
-                    launch_argv,
-                    scope,
-                });
-            }
-            if pane.host_id() != host_id || pane.agent() != Some(opencode) {
-                continue;
-            }
-            let Some(state) = pane.agent_session() else {
-                continue;
-            };
-            let Some(cwd) = pane.host_cwd() else {
-                continue;
-            };
-            let Some(mut scope) = state.readout.session_scope.clone() else {
-                continue;
-            };
-            let Some(launch_argv) =
-                lyrel_core::host::session_operations::launch_context(opencode, &state)
-            else {
-                continue;
-            };
-            if let Some(context) = &mut scope.opencode {
-                context.launch_argv = launch_argv.clone();
-            }
-            if opencode_scopes
-                .iter()
-                .any(|request: &SessionOperation| request.scope == scope)
-            {
-                continue;
-            }
-            opencode_scopes.push(SessionOperation {
-                expected_host: host_id.0,
-                agent: opencode,
-                kind: SessionOperationKind::Resume,
-                source_id: String::new(),
-                cwd,
-                launch_argv,
-                scope,
-            });
-        }
-        // A normal default/configured scope remains discoverable without an open TUI.
-        let default_launch = crate::core::cli_agent::parse_command_argv(
-            &opencode.launch_command(&cx.global::<Config>().agent_launch),
-        );
-        let default_cwd = self
-            .tabs
-            .get(self.active)
-            .and_then(|tab| tab.pane.focused_or_first(window, cx))
-            .and_then(|leaf| leaf.read(cx).host_cwd())
-            .or_else(|| crate::ui::path_display::home_for_host(cx, host_id))
-            .unwrap_or_default();
-        if self.offered_agents(cx).contains(&opencode)
-            && let Ok(launch_argv) = default_launch
-        {
-            opencode_scopes.push(SessionOperation {
-                expected_host: host_id.0,
-                agent: opencode,
-                kind: SessionOperationKind::Resume,
-                source_id: String::new(),
-                cwd: default_cwd.clone(),
-                launch_argv,
-                scope: SessionScope::default(),
-            });
-        }
-        if self.offered_agents(cx).contains(&hermes) {
-            match crate::core::cli_agent::parse_command_argv(
-                &hermes.launch_command(&cx.global::<Config>().agent_launch),
-            ) {
-                Ok(launch_argv) => hermes_scopes.push(SessionOperation {
-                    expected_host: host_id.0,
-                    agent: hermes,
-                    kind: SessionOperationKind::Resume,
-                    source_id: String::new(),
-                    cwd: default_cwd,
-                    launch_argv,
-                    scope: SessionScope::default(),
-                }),
-                Err(message) => hermes_errors.push(
-                    lyrel_core::host::session_operations::SessionOperationError {
-                        kind: lyrel_core::host::session_operations::SessionErrorKind::Unsupported,
-                        message: format!("Hermes history launch context: {message}"),
-                        retained: None,
-                    },
-                ),
-            }
-        }
-        // Weak: a slow host must not keep a closed search alive.
-        let view = view.downgrade();
-        crate::ui::host_ops::HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| {
-                let mut found = h.agent_sessions();
-                let mut errors = hermes_errors;
-                for request in opencode_scopes {
-                    match h.opencode_sessions(&request) {
-                        Ok(sessions) => {
-                            if let Ok(found) = &mut found {
-                                for session in sessions {
-                                    let same =
-                                        |existing: &crate::core::agent_history::PastSession| {
-                                            existing.agent == session.agent
-                                                && existing.id == session.id
-                                                && existing
-                                                    .scope
-                                                    .as_ref()
-                                                    .and_then(|s| s.opencode.as_ref())
-                                                    .map(|s| (&s.server, &s.connection_argv))
-                                                    == session
-                                                        .scope
-                                                        .as_ref()
-                                                        .and_then(|s| s.opencode.as_ref())
-                                                        .map(|s| (&s.server, &s.connection_argv))
-                                        };
-                                    if !found.iter().any(same) {
-                                        found.push(session);
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => errors.push(error),
-                    }
-                }
-                for request in hermes_scopes {
-                    match h.hermes_sessions(&request) {
-                        Ok(sessions) => {
-                            if let Ok(found) = &mut found {
-                                for session in sessions {
-                                    if !found.iter().any(|existing| {
-                                        existing.agent == session.agent
-                                            && existing.id == session.id
-                                            && existing.scope == session.scope
-                                    }) {
-                                        found.push(session);
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => errors.push(error),
-                    }
-                }
-                if let Ok(found) = &mut found {
-                    found.sort_by_key(|s| std::cmp::Reverse(s.updated));
-                }
-                (found, errors)
-            },
-            move |this, (found, errors), window, cx| {
-                for error in errors {
-                    this.notify_session_operation_error(error, window, cx);
-                }
-                let found = match found {
-                    Ok(found) => found,
-                    Err(e) => {
-                        log::warn!("listing agent sessions: {e}");
-                        return;
-                    }
-                };
-                remember_sessions(host_id, found.clone());
-                // Closed, or closed and opened again, since: nothing to update.
-                let Some(view) = view
-                    .upgrade()
-                    .filter(|view| this.search.as_ref() == Some(view))
-                else {
-                    return;
-                };
-                let (sessions, here) = this.search_sessions(found, window, cx);
-                view.update(cx, |view, cx| view.set_sessions(sessions, here, window, cx));
-            },
-        );
-    }
+
 
     fn on_search_event(
         &mut self,
-        _view: &Entity<SearchView>,
+        view: &Entity<SearchView>,
         ev: &SearchEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.search.owns(view) {
+            return;
+        }
         match ev {
             SearchEvent::Confirm(kind) => {
                 let kind = kind.clone();
@@ -6875,6 +5195,7 @@ impl LyrelApp {
             // Done inside the search, which stays open on the list it was.
             SearchEvent::RunInPlace(kind) => self.run_command(kind.clone(), window, cx),
             SearchEvent::Dismiss => self.close_search(window, cx),
+            SearchEvent::SessionError(error) => self.notify_session_operation_error(error.clone(), window, cx),
             SearchEvent::PreviewTheme(i) => {
                 if let Some(id) = crate::ui::presets::all(cx).get(*i).map(|t| t.id.clone()) {
                     self.preview_preset(&id, window, cx);
@@ -6901,12 +5222,11 @@ impl LyrelApp {
     }
 
     pub(crate) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.search = None;
-        self.search_sub = None;
+        let return_focus = self.search.close(cx);
         // A previewed theme was never persisted: closing the search any way
         // other than confirming the pick puts the old one back.
         self.cancel_preset_preview(window, cx);
-        match self.search_return_focus.take() {
+        match return_focus {
             Some(focus) => window.focus(&focus, cx),
             None => self.focus_active(window, cx),
         }
@@ -6917,7 +5237,7 @@ impl LyrelApp {
     }
 
     fn focused_leaf(&self, window: &Window, cx: &App) -> Option<Entity<TerminalView>> {
-        self.tabs.get(self.active).and_then(|tab| {
+        self.tabs.get(self.tabs.active_index()).and_then(|tab| {
             tab.pane
                 .focused_leaf(window, cx)
                 .or_else(|| tab.focus_target(cx))
@@ -7032,15 +5352,15 @@ impl LyrelApp {
                 }
             }
             ReopenClosedTab => self.reopen_closed_tab(window, cx),
-            RenameTab => self.start_rename(self.active, window, cx),
-            NewWorktreeTab => self.new_worktree_tab(self.active, window, cx),
+            RenameTab => self.start_rename(self.tabs.active_index(), window, cx),
+            NewWorktreeTab => self.new_worktree_tab(self.tabs.active_index(), window, cx),
             NewGroup => self.new_empty_group(window, cx),
             OpenFolderAsGroup => self.open_folder_as_group(cx),
-            CloseOtherTabs => self.close_other_tabs(self.active, window, cx),
-            CloseTabsToTheRight => self.close_tabs_right_of(self.active, window, cx),
+            CloseOtherTabs => self.close_other_tabs(self.tabs.active_index(), window, cx),
+            CloseTabsToTheRight => self.close_tabs_right_of(self.tabs.active_index(), window, cx),
             CopyWorkingDirectory => self.copy_active_cwd(window, cx),
-            MarkTabUnread => self.mark_tab_unread(self.active, cx),
-            HibernateTab => self.hibernate_tab(self.active, window, cx),
+            MarkTabUnread => self.mark_tab_unread(self.tabs.active_index(), cx),
+            HibernateTab => self.hibernate_tab(self.tabs.active_index(), window, cx),
             ForkAgentSession => self.fork_active_pane_session(ForkPlacement::NewTab, window, cx),
             NewAgentTab => self.new_agent_tab(window, cx),
             // Picked from the palette with ⌥ held, the way a New Tab menu row
@@ -7049,7 +5369,7 @@ impl LyrelApp {
                 let at = SpawnWhere::from_modifiers(window.modifiers());
                 self.launch_agent(agent, at, window, cx)
             }
-            CopyAgentSessionId => self.copy_agent_session_id(self.active, window, cx),
+            CopyAgentSessionId => self.copy_agent_session_id(self.tabs.active_index(), window, cx),
             RenameWorkspace => self.start_workspace_rename(window, cx),
             OpenSettings => self.toggle_settings(window, cx),
             ShowKeyboardShortcuts => {
@@ -7197,7 +5517,7 @@ impl LyrelApp {
 
     pub(crate) fn agent_target_leaf(&self, cx: &App) -> Option<Entity<TerminalView>> {
         let runs_agent = |leaf: &Entity<TerminalView>| leaf.read(cx).agent().is_some();
-        if let Some(tab) = self.tabs.get(self.active)
+        if let Some(tab) = self.tabs.get(self.tabs.active_index())
             && let Some(leaf) = tab.pane.terminals().into_iter().find(runs_agent)
         {
             return Some(leaf);
@@ -7205,14 +5525,17 @@ impl LyrelApp {
         self.tabs
             .iter()
             .enumerate()
-            .filter(|(i, _)| *i != self.active)
+            .filter(|(i, _)| *i != self.tabs.active_index())
             .flat_map(|(_, t)| t.pane.terminals())
             .find(runs_agent)
     }
 
     fn deliver_agent_prompt(&mut self, prompt: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = self.agent_target_leaf(cx) else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppNoRunningCodingAgent));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppNoRunningCodingAgent),
+            );
             return;
         };
         target.read(cx).send_agent_prompt(prompt);
@@ -7228,14 +5551,17 @@ impl LyrelApp {
     fn send_selection_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let source = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx));
         let (selection, cwd) = match &source {
             Some(view) => (view.read(cx).selection_text(), view.read(cx).cwd()),
             None => (None, None),
         };
         let Some(selection) = selection else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppNothingSelected));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppNothingSelected),
+            );
             return;
         };
         let cwd = cwd.map(|c| c.to_string_lossy().into_owned());
@@ -7249,14 +5575,17 @@ impl LyrelApp {
     fn send_git_diff_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let pane = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx));
         let target = pane.and_then(|view| {
             let view = view.read(cx);
             Some((view.host(cx)?, view.host_cwd()?))
         });
         let Some((host, cwd)) = target else {
-            crate::terminal::notify_desktop(Some("lyrel"), t(L10nKey::AppPaneNoKnownDirectory));
+            crate::terminal::desktop_notification::notify_desktop(
+                Some("lyrel"),
+                t(L10nKey::AppPaneNoKnownDirectory),
+            );
             return;
         };
         crate::ui::host_ops::HostOps::run_in(
@@ -7277,7 +5606,7 @@ impl LyrelApp {
             move |this, (diff, cwd_s), window, cx| {
                 match crate::core::agent_prompt::build_diff_review_prompt(&diff, Some(&cwd_s)) {
                     Some(prompt) => this.deliver_agent_prompt(&prompt, window, cx),
-                    None => crate::terminal::notify_desktop(
+                    None => crate::terminal::desktop_notification::notify_desktop(
                         Some("lyrel"),
                         &t_fmt(L10nKey::AppNoUncommittedChanges, &[("cwd", &cwd_s)]),
                     ),
@@ -7504,7 +5833,7 @@ impl LyrelApp {
         let ends_the_tab = matches!(target, CloseTarget::Tab(_))
             || self
                 .tabs
-                .get(self.active)
+                .get(self.tabs.active_index())
                 .is_some_and(|tab| tab.pane.leaves().len() <= 1);
         let (title, body) = close_prompt(ends_the_tab, &reason);
         let answer = window.prompt(
@@ -7531,7 +5860,7 @@ impl LyrelApp {
                     // The tab may have moved, or gone, while the question was
                     // up; find it by id and let it be if it is already closed.
                     CloseTarget::Tab(id) => {
-                        if let Some(i) = this.tabs.iter().position(|t| t.tree_id.get() == id) {
+                        if let Some(i) = this.tabs.iter().position(|t| t.id() == id) {
                             this.close_tab_inner(i, true, window, cx);
                         }
                     }
@@ -7541,12 +5870,12 @@ impl LyrelApp {
                         }
                     }
                     CloseTarget::OtherTabs(id) => {
-                        if let Some(i) = this.tabs.iter().position(|t| t.tree_id.get() == id) {
+                        if let Some(i) = this.tabs.iter().position(|t| t.id() == id) {
                             this.close_other_tabs_inner(i, true, window, cx);
                         }
                     }
                     CloseTarget::TabsRightOf(id) => {
-                        if let Some(i) = this.tabs.iter().position(|t| t.tree_id.get() == id) {
+                        if let Some(i) = this.tabs.iter().position(|t| t.id() == id) {
                             this.close_tabs_right_of_inner(i, true, window, cx);
                         }
                     }
@@ -7605,7 +5934,7 @@ impl LyrelApp {
     fn focused_pane_close_reason(&self, window: &Window, cx: &App) -> Option<CloseReason> {
         let leaf = self
             .tabs
-            .get(self.active)?
+            .get(self.tabs.active_index())?
             .pane
             .focused_or_first(window, cx)?;
         self.leaf_close_reason(&leaf, cx)
@@ -7731,180 +6060,6 @@ impl LyrelApp {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ForwardRoute {
-    pane_id: u64,
-    workspace: Option<crate::terminal::PaneWorkspace>,
-}
-
-/// What came of asking the far side to put one forward up.
-enum PlaceOutcome {
-    Placed,
-    /// The far side answered and the rule could not be started — a bind that
-    /// collided, a port this process may not have. Another bind port might.
-    Rejected(String),
-    /// Nobody answered. Nothing was bound, and nothing about the rule is what
-    /// went wrong.
-    Unreachable(String),
-}
-
-/// Who a set of forwards belongs to on the far side.
-///
-/// A workspace's forwards outlive any one of its panes and are shared between
-/// all of them, so "have we already offered to forward :3000" is a question
-/// about the workspace — asking it per pane made switching tabs re-announce
-/// every port the workspace had already forwarded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ForwardOwnerKey {
-    Pane(u64),
-    Workspace(crate::core::session::WorkspaceId),
-}
-
-impl ForwardRoute {
-    pub(crate) fn new(pane_id: u64, workspace: Option<crate::terminal::PaneWorkspace>) -> Self {
-        Self { pane_id, workspace }
-    }
-
-    /// Which side of the daemon's own forward registry this route addresses —
-    /// the same split `ForwardOwner` makes there.
-    pub(crate) fn owner_key(&self) -> ForwardOwnerKey {
-        match &self.workspace {
-            Some(ws) => ForwardOwnerKey::Workspace(ws.workspace),
-            None => ForwardOwnerKey::Pane(self.pane_id),
-        }
-    }
-
-    fn workspace_op(
-        &self,
-        op: crate::daemon::protocol::WorkspaceOp,
-    ) -> Option<crate::daemon::protocol::WorkspaceRequest> {
-        crate::terminal::RemoteTerminal::workspace_request(
-            self.workspace.as_ref()?,
-            self.pane_id,
-            op,
-        )
-    }
-
-    /// The list a forward request answered with, or `None` when it did not
-    /// answer at all.
-    ///
-    /// The two are not the same and the panel has to be able to tell them
-    /// apart: an empty list is a pane with no forwards left, while a request
-    /// that failed says nothing about what the far side still has. Reporting
-    /// the second as the first is what blanked the panel whenever the daemon
-    /// was briefly unreachable.
-    fn forwards(
-        reply: anyhow::Result<crate::daemon::protocol::DaemonMsg>,
-    ) -> Option<Vec<crate::daemon::protocol::ManagedForward>> {
-        match reply {
-            Ok(crate::daemon::protocol::DaemonMsg::ForwardList(list)) => Some(list),
-            Ok(other) => {
-                log::warn!("unexpected reply to a workspace forward request: {other:?}");
-                None
-            }
-            Err(e) => {
-                log::warn!("a workspace forward request failed: {e}");
-                None
-            }
-        }
-    }
-
-    pub(crate) fn list(&self) -> Vec<crate::daemon::protocol::ManagedForward> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::ListForwards)
-        else {
-            return crate::terminal::RemoteTerminal::list_forwards(self.pane_id);
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req)).unwrap_or_default()
-    }
-
-    pub(crate) fn add(
-        &self,
-        rule: crate::daemon::protocol::SshForwardRule,
-    ) -> Option<Vec<crate::daemon::protocol::ManagedForward>> {
-        let Some(req) = self
-            .workspace_op(crate::daemon::protocol::WorkspaceOp::AddForward { rule: rule.clone() })
-        else {
-            return crate::terminal::RemoteTerminal::add_forward(self.pane_id, rule);
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req))
-    }
-
-    pub(crate) fn teardown(&self) -> Vec<crate::daemon::protocol::ManagedForward> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::TeardownForwards)
-        else {
-            return Vec::new();
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req)).unwrap_or_default()
-    }
-
-    /// The local port that reaches `remote_host:remote_port` over this route,
-    /// building the forward if there is not one yet.
-    ///
-    /// The far side keeps one automatic forward per endpoint and hands the
-    /// same port back on the next ask, so callers may treat this as "what is
-    /// the address here" rather than as an action with a cost — which is what
-    /// lets the Ports list call it on a click and the watcher call it on a
-    /// port it has only just noticed.
-    pub(crate) fn ensure_loopback(
-        &self,
-        remote_host: &str,
-        remote_port: u16,
-    ) -> anyhow::Result<crate::daemon::protocol::LoopbackForward> {
-        let Some(req) = self.workspace_op(crate::daemon::protocol::WorkspaceOp::EnsureLoopback {
-            remote_host: remote_host.to_string(),
-            remote_port,
-        }) else {
-            return crate::terminal::RemoteTerminal::ensure_loopback_forward(
-                self.pane_id,
-                remote_host,
-                remote_port,
-            );
-        };
-        match crate::terminal::RemoteTerminal::on_workspace(req)? {
-            crate::daemon::protocol::DaemonMsg::LoopbackForward(f) => Ok(f),
-            other => Err(anyhow::anyhow!(
-                "unexpected reply to EnsureLoopback: {other:?}"
-            )),
-        }
-    }
-
-    pub(crate) fn set_enabled(
-        &self,
-        forward_id: u64,
-        enabled: bool,
-    ) -> anyhow::Result<Vec<crate::daemon::protocol::ManagedForward>> {
-        let Some(req) =
-            self.workspace_op(crate::daemon::protocol::WorkspaceOp::SetForwardEnabled {
-                forward_id,
-                enabled,
-            })
-        else {
-            return crate::terminal::RemoteTerminal::set_forward_enabled(
-                self.pane_id,
-                forward_id,
-                enabled,
-            );
-        };
-        match crate::terminal::RemoteTerminal::on_workspace(req)? {
-            crate::daemon::protocol::DaemonMsg::ForwardList(list) => Ok(list),
-            other => Err(anyhow::anyhow!(
-                "unexpected reply to SetForwardEnabled: {other:?}"
-            )),
-        }
-    }
-
-    pub(crate) fn remove(
-        &self,
-        forward_id: u64,
-    ) -> Option<Vec<crate::daemon::protocol::ManagedForward>> {
-        let Some(req) =
-            self.workspace_op(crate::daemon::protocol::WorkspaceOp::RemoveForward { forward_id })
-        else {
-            return crate::terminal::RemoteTerminal::remove_forward(self.pane_id, forward_id);
-        };
-        Self::forwards(crate::terminal::RemoteTerminal::on_workspace(req))
-    }
-}
 
 impl LyrelApp {
     /// 唯一工作区组合入口；终端、文档、面板与内容浮层在此各挂载一次。
@@ -7932,10 +6087,10 @@ impl LyrelApp {
             .then(|| self.tab_sidebar(window, cx).into_any_element());
         let ssh_status = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
             .and_then(|leaf| self.render_ssh_status_strip(&leaf, cx));
-        let body = match self.tabs.get(self.active) {
+        let body = match self.tabs.get(self.tabs.active_index()) {
             None => self.render_home(cx).into_any_element(),
             Some(active_tab) => {
                 let maximized = self.maximized.as_ref().filter(|leaf| {
@@ -8073,8 +6228,8 @@ impl LyrelApp {
                 ];
                 if self
                     .tabs
-                    .get(self.active)
-                    .is_some_and(|t| t.overlay_top == OverlayTop::Diff)
+                    .get(self.tabs.active_index())
+                    .is_some_and(Tab::is_diff_on_top)
                 {
                     pair.reverse();
                 }
@@ -8088,7 +6243,36 @@ impl LyrelApp {
         };
 
         let right_panel = self.render_right_panel(window, cx);
-        let top_chrome = self.render_window_chrome(window, cx);
+        let can_split = self
+            .tabs
+            .get(self.tabs.active_index())
+            .and_then(|tab| tab.detail_pane(window, cx))
+            .is_some();
+        let top_chrome = WindowChrome::new(
+            self.left_panel_open(cx),
+            self.right_panel_open(cx),
+            can_split,
+            self.new_tab_button("titlebar-add", cx),
+            cx,
+            |command| {
+                cx.listener(move |this, _, window, cx| match command {
+                    ChromeCommand::ToggleLeftPanel => {
+                        this.toggle_left_panel(cx);
+                        this.focus_previous_content(window, cx);
+                    }
+                    ChromeCommand::ToggleSearch => match this.search.is_open() {
+                        true => this.close_search(window, cx),
+                        false => this.open_search(SearchTab::All, "", window, cx),
+                    },
+                    ChromeCommand::Split(axis) => this.split(axis, window, cx),
+                    ChromeCommand::ToggleRightPanel => {
+                        this.toggle_right_panel(cx);
+                        this.focus_previous_content(window, cx);
+                    }
+                })
+            },
+        )
+        .render(window, cx);
         let terminal_column = div()
             .flex_1()
             .min_w_0()
@@ -8121,7 +6305,7 @@ impl LyrelApp {
                         && (crate::ui::pane_drag::lifted(&this.pane_drag).is_some()
                             || this
                                 .tabs
-                                .get(this.active)
+                                .get(this.tabs.active_index())
                                 .is_some_and(|tab| tab.pip_interaction.has_gesture()))
                     {
                         this.cancel_pane_drag(window, cx);
@@ -8160,7 +6344,7 @@ impl Render for LyrelApp {
         // Before anything asks where a tab is drawn: a tab that walked into a
         // pinned folder since the last frame is filed there on this one.
         self.settle_sidebar_groups(cx);
-        self.touch_active_tab();
+        self.tabs.touch_active();
         self.declare_displayed_panes(cx);
         self.scm_sync_watchers(window, cx);
         self.editor_sync(window, cx);
@@ -8176,7 +6360,7 @@ impl Render for LyrelApp {
             if crate::ui::pane_drag::lifted(&self.pane_drag).is_some()
                 || self
                     .tabs
-                    .get(self.active)
+                    .get(self.tabs.active_index())
                     .is_some_and(|tab| tab.pip_interaction.has_gesture())
             {
                 self.cancel_pane_drag(window, cx);
@@ -8656,25 +6840,25 @@ impl Render for LyrelApp {
                     this.restart_ssh_session(window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &RenameTab, window, cx| {
-                    this.start_rename(this.active, window, cx)
+                    this.start_rename(this.tabs.active_index(), window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &NewWorktreeTab, window, cx| {
-                    this.new_worktree_tab(this.active, window, cx)
+                    this.new_worktree_tab(this.tabs.active_index(), window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &CloseOtherTabs, window, cx| {
-                    this.close_other_tabs(this.active, window, cx)
+                    this.close_other_tabs(this.tabs.active_index(), window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &CloseTabsToTheRight, window, cx| {
-                    this.close_tabs_right_of(this.active, window, cx)
+                    this.close_tabs_right_of(this.tabs.active_index(), window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &CopyWorkingDirectory, window, cx| {
                     this.copy_active_cwd(window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &MarkTabUnread, _window, cx| {
-                    this.mark_tab_unread(this.active, cx)
+                    this.mark_tab_unread(this.tabs.active_index(), cx)
                 }))
                 .on_action(cx.listener(|this, _: &HibernateTab, window, cx| {
-                    this.hibernate_tab(this.active, window, cx)
+                    this.hibernate_tab(this.tabs.active_index(), window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &ForkAgentSession, window, cx| {
                     this.fork_active_pane_session(ForkPlacement::NewTab, window, cx)
@@ -8692,7 +6876,7 @@ impl Render for LyrelApp {
                     this.fork_focused_pane_session(Axis::Vertical, true, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &CopyAgentSessionId, window, cx| {
-                    this.copy_agent_session_id(this.active, window, cx)
+                    this.copy_agent_session_id(this.tabs.active_index(), window, cx)
                 }))
                 .on_action(
                     cx.listener(|this, _: &NewAgentTab, window, cx| this.new_agent_tab(window, cx)),
@@ -8746,7 +6930,7 @@ impl Render for LyrelApp {
                             this.child(el)
                         })
                         .children(self.render_switcher(window, cx))
-                        .when_some(self.search.clone(), |this, search| this.child(search)),
+                        .when_some(self.search.view(), |this, search| this.child(search)),
                 )
                 .child(self.render_status_bar(window, cx));
         let root = Self::with_editor_text_commands(root, cx);
@@ -8758,70 +6942,10 @@ impl Render for LyrelApp {
     }
 }
 
-/// Orders tab indices most-recently-used first from their `last_used` stamps.
-/// A zero stamp means the tab was never activated, and those keep strip order
-/// at the back. `active` leads regardless — its own stamp only lands on the
-/// next frame.
-/// The tab after (or before) `active` in `order`, wrapping round. `None`
-/// when there is nowhere else to go; a tab missing from `order` starts from
-/// its end, so the step still lands on a tab the user can see.
-fn step_in_order(order: &[usize], active: usize, forward: bool) -> Option<usize> {
-    let n = order.len();
-    if n < 2 {
-        return None;
-    }
-    let pos = order.iter().position(|&i| i == active);
-    let next = match (pos, forward) {
-        (Some(p), true) => (p + 1) % n,
-        (Some(p), false) => (p + n - 1) % n,
-        (None, true) => 0,
-        (None, false) => n - 1,
-    };
-    Some(order[next]).filter(|&i| i != active)
-}
-
-/// The `apply_tab_order` permutation that moves the active tab one slot
-/// within `run` — a move, not a trade: the tab is lifted out and put back at
-/// the neighbour's place, so through a wrap the run it crossed shifts one slot
-/// (`[a, b, c]` with `c` moved right becomes `[c, a, b]`, not `[c, b, a]`).
-/// `run` is the tabs drawn together (a sidebar section, or every tab on a top
-/// bar) as ascending `self.tabs` indices out of `n`; only their slots are
-/// reassigned, so no tab in another run moves, not even out of sight. `None`
-/// when there is nothing to move: a run of fewer than two tabs, or one that
-/// does not hold the active tab.
-fn one_slot_move(run: &[usize], n: usize, active: usize, right: bool) -> Option<Vec<usize>> {
-    let len = run.len();
-    if len < 2 {
-        return None;
-    }
-    let pos = run.iter().position(|&i| i == active)?;
-    let mut moved = run.to_vec();
-    match (right, pos) {
-        (true, p) if p + 1 == len => moved.rotate_right(1),
-        (false, 0) => moved.rotate_left(1),
-        (true, p) => moved.swap(p, p + 1),
-        (false, p) => moved.swap(p, p - 1),
-    }
-    let mut permutation: Vec<usize> = (0..n).collect();
-    for (&slot, &tab) in run.iter().zip(&moved) {
-        permutation[slot] = tab;
-    }
-    Some(permutation)
-}
-
-fn mru_order(stamps: &[u64], active: usize) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..stamps.len()).collect();
-    order.sort_by_key(|&i| (stamps[i] == 0, std::cmp::Reverse(stamps[i]), i));
-    if let Some(pos) = order.iter().position(|&i| i == active) {
-        let lead = order.remove(pos);
-        order.insert(0, lead);
-    }
-    order
-}
 
 fn tab_to_session(tab: &Tab, cx: &App) -> SessionTab {
     SessionTab {
-        name: tab.name.clone(),
+        name: tab.name().clone(),
         pane: match tab.asleep_layout() {
             Some(layout) => layout.clone(),
             None => pane_to_session(&tab.pane, cx),
@@ -9094,7 +7218,7 @@ fn tabs_from_session(
         // tab on screen is awake, so that one is woken here, by the same
         // restore every other tab is getting.
         if st.hibernated && index != session.active {
-            tabs.push(asleep_tab(st, home.clone()));
+            tabs.push(Tab::from_asleep(st, home.clone()));
             continue;
         }
         let mut presentation = st.presentation.clone();
@@ -9114,95 +7238,12 @@ fn tabs_from_session(
             dropped += 1;
             continue;
         };
-        tabs.push(Tab {
-            pane,
-            presentation,
-            foreign_presentation: None,
-            name: st.name.clone(),
-            last_focused: None,
-            zoomed: None,
-            diff_overlay: None,
-            code: None,
-            overlay_top: OverlayTop::default(),
-            document_layout: None,
-            group: std::cell::Cell::new(st.group),
-            // The hint the tree kept: the tab is drawn in its auto group from
-            // the first frame, not parked in Ungrouped until its probe lands.
-            auto_group: std::cell::RefCell::new(st.last_auto.clone()),
-            folder_watch: std::cell::Cell::new(crate::core::group_key::EntryWatch::baseline()),
-            tree_id: std::cell::Cell::new(
-                st.tree_id
-                    .unwrap_or_else(lyrel_core::core::machine::TabId::new),
-            ),
-            last_used: std::cell::Cell::new(0),
-            focus_origin: Default::default(),
-            asleep: None,
-            pip_interaction: Default::default(),
-        });
+        tabs.push(Tab::from_session(st, pane, presentation));
     }
     let active = session.active.min(tabs.len().saturating_sub(1));
     (tabs, active, dropped)
 }
 
-/// A tab restored asleep: its place, its name and its group, and nothing
-/// running behind them.
-fn asleep_tab(st: &SessionTab, home: Option<std::path::PathBuf>) -> Tab {
-    let mut tab = Tab::new(Pane::Empty);
-    tab.name = st.name.clone();
-    tab.presentation = st.presentation.clone();
-    tab.group.set(st.group);
-    *tab.auto_group.borrow_mut() = st.last_auto.clone();
-    if let Some(id) = st.tree_id {
-        tab.tree_id.set(id);
-    }
-    tab.asleep = Some(Asleep {
-        layout: st.pane.clone(),
-        view: st
-            .asleep_view
-            .clone()
-            .unwrap_or_else(|| view_of_layout(tab.tree_id.get(), &st.pane)),
-        home,
-    });
-    tab
-}
-
-/// What to call a sleeping tab when the tree had nothing better to say: the
-/// first directory in its layout, and the agent in it if there was one.
-fn view_of_layout(
-    id: lyrel_core::core::machine::TabId,
-    layout: &SessionPane,
-) -> lyrel_core::core::tab_view::TabView {
-    fn leaves<'a>(pane: &'a SessionPane, out: &mut Vec<&'a SessionPane>) {
-        match pane {
-            SessionPane::Leaf { .. } => out.push(pane),
-            SessionPane::Split { a, b, .. } => {
-                leaves(a, out);
-                leaves(b, out);
-            }
-        }
-    }
-    let mut all = Vec::new();
-    leaves(layout, &mut all);
-    let cwd = all.iter().find_map(|leaf| match leaf {
-        SessionPane::Leaf { cwd, .. } => cwd.as_ref().map(|p| p.display().to_string()),
-        SessionPane::Split { .. } => None,
-    });
-    let agent = all.iter().find_map(|leaf| match leaf {
-        SessionPane::Leaf { agent, .. } => *agent,
-        SessionPane::Split { .. } => None,
-    });
-    lyrel_core::core::tab_view::TabView {
-        id,
-        name: None,
-        title: String::new(),
-        osc_title: None,
-        cwd,
-        agent,
-        status: None,
-        live: false,
-        panes: all.len(),
-    }
-}
 
 /// A sleeping layout as a wake should read it: a native SSH pane dials its
 /// host again rather than standing on its old id. That id belongs to a pane
@@ -9723,52 +7764,19 @@ fn watch_open_file_requests(
     cx.subscribe_in(
         view,
         window,
-        |app, _view, ev: &crate::terminal::view::OpenFileRequested, window, cx| {
-            app.open_linked_file(&ev.path, ev.line, ev.column, ev.is_dir, window, cx);
+        |app, view, ev: &crate::terminal::view::OpenFileRequested, window, cx| {
+            // The popup can outlive focus changes. Resolve its retained pane,
+            // never the workspace that happened to receive the later action.
+            if view.read(cx).host_id() == ev.host_id
+                && app.focus_pane_command_target(view.entity_id(), window, cx)
+            {
+                app.open_linked_file(&ev.path, ev.line, ev.column, ev.is_dir, window, cx);
+            }
         },
     )
     .detach();
 }
 
-/// Record `leaf` as the pane the tab holding it comes back to.
-///
-/// Which tab that is gets asked of the layout rather than assumed to be the
-/// active one: a pane dragged into another tab takes focus with it, and it is
-/// the tab holding it now whose memory the arrival should change. A leaf no
-/// tab holds — one that has just closed, or arrived after its slot went away —
-/// is recorded nowhere.
-fn remember_leaf_in(tabs: &mut [Tab], leaf: gpui_kit::EntityId) {
-    let held = tabs
-        .iter_mut()
-        .find(|tab| tab.pane.leaves().iter().any(|l| l.entity_id() == leaf));
-    if let Some(tab) = held {
-        tab.last_focused = Some(leaf);
-    }
-}
-
-/// Put `new` where the slot `old` named stood, carrying that tab's focus
-/// memory across with it.
-///
-/// The memory has to move because the id it holds does not survive the swap.
-/// Focus arriving in a pane that is still coming up is recorded against the
-/// *pending* slot — that is why connecting slots are watched at all — and that
-/// slot's id dies the moment the pane lands. Left behind, the memory names an
-/// entity no tab holds, so `focus_target` falls back to the first visible leaf:
-/// #843 again, one landing later.
-///
-/// Nothing else writes the answer down in that case. `land_pane` re-focuses
-/// the pane it built only when the pending slot still held focus, and with
-/// focus off the panes the switch-away sample has nothing to read either.
-fn replace_leaf_in(tabs: &mut [Tab], old: gpui_kit::EntityId, new: PaneSlot) {
-    for tab in tabs.iter_mut() {
-        if tab.pane.replace_leaf(old, new.clone()) {
-            if tab.last_focused == Some(old) {
-                tab.last_focused = Some(new.entity_id());
-            }
-            break;
-        }
-    }
-}
 
 /// Repaint the chrome that marks the focused pane, and record the leaf as the
 /// one its tab returns to (#843).
@@ -10105,359 +8113,25 @@ fn apply_ssh_o_option(
     Ok(())
 }
 
-#[cfg(test)]
-mod window_drag_tests {
-    use gpui_kit::{
-        Context, InteractiveElement as _, IntoElement, Modifiers, MouseButton, MouseDownEvent,
-        MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, PlatformInput, Point, Render,
-        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
-    };
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    fn row(
-        key: &'static str,
-        moves: &Rc<Cell<usize>>,
-        window: &mut Window,
-        cx: &mut gpui_kit::App,
-    ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        let moves = moves.clone();
-        super::window_move_gesture_with(
-            div().id(key).w_full().h(px(40.)),
-            key,
-            window,
-            cx,
-            move |_| moves.set(moves.get() + 1),
-        )
-    }
-
-    struct Host {
-        moves: Rc<Cell<usize>>,
-    }
-    impl Render for Host {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .size_full()
-                .child(row("stand-in-title-bar", &self.moves, window, cx))
-        }
-    }
-
-    struct HandleOverRow {
-        occluded: bool,
-        moves: Rc<Cell<usize>>,
-    }
-    impl Render for HandleOverRow {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let handle = div()
-                .absolute()
-                .top_0()
-                .left(px(296.))
-                .w(px(8.))
-                .h_full()
-                .cursor_col_resize()
-                .on_mouse_down(MouseButton::Left, |_, window, _| window.refresh());
-            let handle = if self.occluded {
-                handle.occlude()
-            } else {
-                handle
-            };
-            div()
-                .relative()
-                .size_full()
-                .child(row("stand-in-title-bar", &self.moves, window, cx))
-                .child(handle)
-        }
-    }
-
-    fn down(at: Point<Pixels>) -> PlatformInput {
-        PlatformInput::MouseDown(MouseDownEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::none(),
-            click_count: 1,
-            first_mouse: false,
-        })
-    }
-
-    fn up(at: Point<Pixels>) -> PlatformInput {
-        PlatformInput::MouseUp(MouseUpEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::none(),
-            click_count: 1,
-        })
-    }
-
-    fn moved(at: Point<Pixels>, held: bool) -> PlatformInput {
-        PlatformInput::MouseMove(MouseMoveEvent {
-            position: at,
-            pressed_button: held.then_some(MouseButton::Left),
-            modifiers: Modifiers::none(),
-        })
-    }
-
-    const ON_ROW: Point<Pixels> = Point {
-        x: px(300.),
-        y: px(20.),
-    };
-
-    fn drifted(at: Point<Pixels>) -> Point<Pixels> {
-        point(at.x + px(12.), at.y + px(3.))
-    }
-
-    fn press_repaint_move(vcx: &mut VisualTestContext, at: Point<Pixels>) {
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(at, false), cx);
-            window.dispatch_event(down(at), cx);
-        });
-        vcx.update(|window, _| window.refresh());
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(drifted(at), true), cx);
-        });
-        vcx.run_until_parked();
-    }
-
-    #[gpui_kit::test]
-    fn a_drag_survives_repaint_and_requests_one_native_move(cx: &mut TestAppContext) {
-        let moves = Rc::new(Cell::new(0));
-        let window = cx.add_window(|_, _| Host {
-            moves: moves.clone(),
-        });
-        let mut vcx = VisualTestContext::from_window(window.into(), cx);
-        press_repaint_move(&mut vcx, ON_ROW);
-        assert_eq!(moves.get(), 1);
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(drifted(drifted(ON_ROW)), true), cx);
-        });
-        vcx.run_until_parked();
-        assert_eq!(
-            moves.get(),
-            1,
-            "one press must request only one native move"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn a_press_alone_does_not_move_the_window(cx: &mut TestAppContext) {
-        let moves = Rc::new(Cell::new(0));
-        let window = cx.add_window(|_, _| Host {
-            moves: moves.clone(),
-        });
-        let mut vcx = VisualTestContext::from_window(window.into(), cx);
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(ON_ROW, false), cx);
-            window.dispatch_event(down(ON_ROW), cx);
-            window.dispatch_event(up(ON_ROW), cx);
-        });
-        vcx.run_until_parked();
-        assert_eq!(moves.get(), 0);
-    }
-
-    #[gpui_kit::test]
-    fn a_release_disarms_so_a_later_hover_does_not_drag(cx: &mut TestAppContext) {
-        let moves = Rc::new(Cell::new(0));
-        let window = cx.add_window(|_, _| Host {
-            moves: moves.clone(),
-        });
-        let mut vcx = VisualTestContext::from_window(window.into(), cx);
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(ON_ROW, false), cx);
-            window.dispatch_event(down(ON_ROW), cx);
-            window.dispatch_event(up(ON_ROW), cx);
-        });
-        vcx.update(|window, _| window.refresh());
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(drifted(ON_ROW), false), cx);
-        });
-        vcx.run_until_parked();
-        assert_eq!(moves.get(), 0);
-    }
-
-    #[gpui_kit::test]
-    fn a_press_on_a_resize_handle_does_not_move_the_window(cx: &mut TestAppContext) {
-        let moves = Rc::new(Cell::new(0));
-        let window = cx.add_window(|_, _| HandleOverRow {
-            occluded: true,
-            moves: moves.clone(),
-        });
-        let mut vcx = VisualTestContext::from_window(window.into(), cx);
-        press_repaint_move(&mut vcx, ON_ROW);
-        assert_eq!(moves.get(), 0);
-    }
-
-    #[gpui_kit::test]
-    fn a_handle_without_a_blocking_hitbox_hands_the_press_to_the_row(cx: &mut TestAppContext) {
-        let moves = Rc::new(Cell::new(0));
-        let window = cx.add_window(|_, _| HandleOverRow {
-            occluded: false,
-            moves: moves.clone(),
-        });
-        let mut vcx = VisualTestContext::from_window(window.into(), cx);
-        press_repaint_move(&mut vcx, ON_ROW);
-        assert_eq!(moves.get(), 1);
-    }
-
-    #[gpui_kit::test]
-    fn two_rows_on_screen_keep_separate_arms(cx: &mut TestAppContext) {
-        struct TwoRows {
-            first: Rc<Cell<usize>>,
-            second: Rc<Cell<usize>>,
-        }
-        impl Render for TwoRows {
-            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-                div()
-                    .size_full()
-                    .child(row("row-a", &self.first, window, cx))
-                    .child(row("row-b", &self.second, window, cx))
-            }
-        }
-
-        let first = Rc::new(Cell::new(0));
-        let second = Rc::new(Cell::new(0));
-        let window = cx.add_window(|_, _| TwoRows {
-            first: first.clone(),
-            second: second.clone(),
-        });
-        let mut vcx = VisualTestContext::from_window(window.into(), cx);
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(point(px(300.), px(20.)), false), cx);
-            window.dispatch_event(down(point(px(300.), px(20.))), cx);
-        });
-        vcx.update(|window, _| window.refresh());
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.dispatch_event(moved(point(px(312.), px(60.)), false), cx);
-        });
-        vcx.run_until_parked();
-        assert_eq!((first.get(), second.get()), (0, 0));
-        press_repaint_move(&mut vcx, point(px(300.), px(60.)));
-        assert_eq!((first.get(), second.get()), (0, 1));
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::close_reason;
     use super::{
-        CloseReason, DOCUMENT_MIN_W, Dir, OpenedFrom, Pane, Rename, TERMINAL_MIN_W,
-        TITLE_BAR_BORDER, Tab, TabAgentSession, close_prompt, document_column_px,
-        inherited_start_dir, join_shell_args, leaf_shares_the_window_daemon, mru_order,
-        native_ssh_pane_alive, one_slot_move, pane_free_for, parse_ssh_connect_input,
-        parse_ssh_option_words, rename_outcome, side_panel_max, split_machine_held,
-        split_shell_args, step_in_order, title_strip_centre, title_strip_content_centre,
-        title_strip_rule_and_pad, wd_path_saveable,
+        CloseReason, DOCUMENT_MIN_W, OpenedFrom, TERMINAL_MIN_W,
+        TabAgentSession, close_prompt, document_column_px,
+        inherited_start_dir, join_shell_args, leaf_shares_the_window_daemon,
+        native_ssh_pane_alive, pane_free_for, parse_ssh_connect_input,
+        parse_ssh_option_words, side_panel_max, split_machine_held,
+        split_shell_args, wd_path_saveable,
     };
     use gpui_kit::px;
 
-    /// A title-bar row spends [`TITLE_BAR_BORDER`] of its height below its
-    /// contents, and there are two ways it does that: it carries the whole point
-    /// as a rule painted transparent (the strip's `TitleBar`, the rail's header,
-    /// the code panel's, the settings band), or it draws its own thinner hairline
-    /// and gives the rest back as padding (the diff overlay's 0.5pt rule). Both
-    /// have to leave the contents on the line the traffic lights hang on — the
-    /// rows sit side by side in the same band, and half a point of difference is
-    /// the one device pixel that reads as a step.
-    #[test]
-    fn a_rows_own_hairline_and_the_bars_invisible_rule_reach_the_same_centre() {
-        for rule in [px(0.), px(0.5), px(TITLE_BAR_BORDER), px(2.)] {
-            let (border, pad) = title_strip_rule_and_pad(rule);
-            assert!(
-                border.as_f32() <= TITLE_BAR_BORDER,
-                "a thicker rule than the bar's own point would push the contents \
-                 onto a line nothing else is on"
-            );
-            assert!(
-                pad.as_f32() >= 0.,
-                "negative padding is not padding, and taffy would swallow it"
-            );
-            assert_eq!(
-                title_strip_content_centre(rule),
-                title_strip_centre(),
-                "a rule of {} leaves the box short by {} of border and {} of padding",
-                rule.as_f32(),
-                border.as_f32(),
-                pad.as_f32()
-            );
-        }
-    }
 
-    #[test]
-    fn a_rename_box_left_alone_is_not_a_rename() {
-        // The box opens holding the label already on screen, and `Blur`
-        // commits — so this is what happens when the user opens it, thinks
-        // better of it, and clicks away.
-        assert_eq!(
-            rename_outcome("api", "api"),
-            Rename::Unchanged,
-            "an untouched box asked for nothing"
-        );
-        assert_eq!(
-            rename_outcome("  api  ", "api"),
-            Rename::Unchanged,
-            "whitespace either side is not an edit"
-        );
-    }
-
-    #[test]
-    fn an_emptied_rename_box_gives_the_tab_back_to_its_pane() {
-        // The only way to remove a name once set, so it has to survive the
-        // comparison above.
-        assert_eq!(rename_outcome("", "api"), Rename::Cleared);
-        assert_eq!(rename_outcome("   ", "api"), Rename::Cleared);
-    }
-
-    #[test]
-    fn a_typed_rename_box_names_the_tab() {
-        assert_eq!(
-            rename_outcome("billing", "api"),
-            Rename::Named("billing".into())
-        );
-        assert_eq!(
-            rename_outcome("  billing  ", "api"),
-            Rename::Named("billing".into()),
-            "the name is stored trimmed"
-        );
-    }
 
     const SIDEBAR_MIN: f32 = crate::ui::tab_sidebar::MIN_SIDEBAR_WIDTH;
     const PANEL_MIN: f32 = crate::ui::right_panel::MIN_WIDTH;
 
-    /// #738: which pane a directional move came from is remembered against the
-    /// pane it landed on, not against the direction alone.
-    ///
-    /// One slot per direction is enough for a single move and back, but the
-    /// second step of a walk overwrites the first: left off `3` onto `2` and
-    /// left again onto `1` would leave only `1 -> 2`, and the second move back
-    /// right — the one out of `2` — would be handed no origin and fall to the
-    /// geometry that sent the user to the wrong pane in the first place.
-    #[test]
-    fn each_pane_remembers_the_move_that_landed_on_it() {
-        fn id(n: u64) -> gpui_kit::EntityId {
-            gpui_kit::EntityId::from(n)
-        }
-        let mut tab = Tab::new(Pane::Empty);
-        let live = [id(1), id(2), id(3)];
-
-        tab.remember_focus_origin(id(3), id(2), Dir::Left, &live);
-        tab.remember_focus_origin(id(2), id(1), Dir::Left, &live);
-
-        // Walking back retraces both steps rather than only the last one.
-        assert_eq!(tab.focus_origin(id(1), Dir::Right), Some(id(2)));
-        assert_eq!(tab.focus_origin(id(2), Dir::Right), Some(id(3)));
-        // Nothing is claimed about a direction no move went in, or about a pane
-        // no move has landed on.
-        assert_eq!(tab.focus_origin(id(2), Dir::Left), None);
-        assert_eq!(tab.focus_origin(id(3), Dir::Right), None);
-
-        // A pane the tab no longer holds takes its entries with it, on either
-        // side: with `3` closed, `2` no longer remembers having come from it,
-        // and the move back out of `2` is left to geometry.
-        tab.remember_focus_origin(id(1), id(2), Dir::Right, &[id(1), id(2)]);
-        assert_eq!(tab.focus_origin(id(2), Dir::Right), None);
-        assert_eq!(tab.focus_origin(id(2), Dir::Left), Some(id(1)));
-    }
 
     /// Two panels that each cap themselves at half the window leave the
     /// terminal nothing when both are open, so the cap is what is left after
@@ -10681,102 +8355,6 @@ mod tests {
         assert!(one.contains("1 tab "), "{one}");
     }
 
-    #[test]
-    fn mru_puts_the_active_tab_first_and_the_last_one_used_behind_it() {
-        // Tab 2 is active; 0 was used most recently before it, then 1.
-        assert_eq!(mru_order(&[7, 4, 9], 2), vec![2, 0, 1]);
-    }
-
-    #[test]
-    fn mru_leads_with_the_active_tab_even_before_its_stamp_lands() {
-        assert_eq!(mru_order(&[5, 0, 3], 1), vec![1, 0, 2]);
-    }
-
-    #[test]
-    fn mru_trails_never_activated_tabs_in_strip_order() {
-        assert_eq!(mru_order(&[0, 6, 0, 0], 1), vec![1, 0, 2, 3]);
-    }
-
-    #[test]
-    fn mru_of_a_windowless_workspace_is_empty() {
-        assert!(mru_order(&[], 0).is_empty());
-    }
-
-    #[test]
-    fn stepping_through_tabs_follows_the_strip_and_wraps() {
-        let order = [0, 1, 2];
-        assert_eq!(step_in_order(&order, 0, true), Some(1));
-        assert_eq!(step_in_order(&order, 2, true), Some(0));
-        assert_eq!(step_in_order(&order, 0, false), Some(2));
-        assert_eq!(step_in_order(&order, 1, false), Some(0));
-        // Pressing it again keeps going — this is not the MRU switcher, which
-        // bounces between the last two tabs (#867).
-        let mut at = 0;
-        let seen: Vec<usize> = (0..4)
-            .map(|_| {
-                at = step_in_order(&order, at, true).unwrap();
-                at
-            })
-            .collect();
-        assert_eq!(seen, vec![1, 2, 0, 1]);
-    }
-
-    #[test]
-    fn stepping_follows_the_grouped_sidebar_order_not_the_index() {
-        // Sidebar groups reorder the rows: index 2 is shown second.
-        let order = [0, 2, 1, 3];
-        assert_eq!(step_in_order(&order, 0, true), Some(2));
-        assert_eq!(step_in_order(&order, 2, true), Some(1));
-        assert_eq!(step_in_order(&order, 3, true), Some(0));
-        assert_eq!(step_in_order(&order, 0, false), Some(3));
-    }
-
-    #[test]
-    fn stepping_has_nowhere_to_go_with_one_tab() {
-        assert_eq!(step_in_order(&[], 0, true), None);
-        assert_eq!(step_in_order(&[0], 0, true), None);
-        assert_eq!(step_in_order(&[0], 0, false), None);
-    }
-
-    #[test]
-    fn moving_a_tab_one_slot_puts_it_where_the_neighbour_was() {
-        // A move, not a trade: the neighbour it crossed shifts one slot.
-        assert_eq!(one_slot_move(&[0, 1, 2], 3, 1, true), Some(vec![0, 2, 1]));
-        assert_eq!(one_slot_move(&[0, 1, 2], 3, 1, false), Some(vec![1, 0, 2]));
-    }
-
-    #[test]
-    fn a_tab_moved_past_an_end_carries_the_whole_run_with_it() {
-        // Through the wrap the tab lands at the far end and the run it
-        // crossed shifts one slot — `[c, a, b]`, not `[c, b, a]`.
-        assert_eq!(one_slot_move(&[0, 1, 2], 3, 2, true), Some(vec![2, 0, 1]));
-        assert_eq!(one_slot_move(&[0, 1, 2], 3, 0, false), Some(vec![1, 2, 0]));
-    }
-
-    #[test]
-    fn a_move_inside_a_sidebar_group_leaves_the_other_groups_alone() {
-        // Tabs 0, 2 and 4 are one group, 1 and 3 another: only the group's
-        // own slots are reassigned, and the wrap stays inside it.
-        assert_eq!(
-            one_slot_move(&[0, 2, 4], 5, 2, true),
-            Some(vec![0, 1, 4, 3, 2])
-        );
-        assert_eq!(
-            one_slot_move(&[0, 2, 4], 5, 0, false),
-            Some(vec![2, 1, 4, 3, 0])
-        );
-        assert_eq!(
-            one_slot_move(&[1, 3], 5, 3, true),
-            Some(vec![0, 3, 2, 1, 4])
-        );
-    }
-
-    #[test]
-    fn a_move_with_nothing_to_move_is_refused() {
-        assert_eq!(one_slot_move(&[], 0, 0, true), None);
-        assert_eq!(one_slot_move(&[0], 3, 0, true), None);
-        assert_eq!(one_slot_move(&[0, 1, 2], 3, 7, true), None);
-    }
 
     #[test]
     fn restore_only_attaches_panes_the_workspace_owns_or_nobody_claims() {
@@ -11185,7 +8763,7 @@ pub(crate) mod test_window {
                     .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
                 streams.push(stream);
             }
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             streams
         });
@@ -11214,7 +8792,7 @@ pub(crate) mod test_window {
             super::watch_pane_focus(&view.focus_handle(cx), view.entity_id(), window, cx);
             app.tabs
                 .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            app.active = 0;
+            app.tabs.select(0);
             cx.notify();
             stream
         });
@@ -11330,7 +8908,7 @@ mod cursor_blink_gpui_tests {
                 Pane::leaf(PaneSlot::Ready(left.clone())),
                 Pane::leaf(PaneSlot::Ready(right.clone())),
             )));
-            app.active = 0;
+            app.tabs.select(0);
             let left_focus = left.read(cx).focus_handle.clone();
             left_focus.focus(window, cx);
             cx.notify();
@@ -11341,8 +8919,8 @@ mod cursor_blink_gpui_tests {
         app.update_in(&mut vcx, |_, window, cx| {
             assert!(left.read(cx).focus_handle.is_focused(window));
             assert!(!right.read(cx).focus_handle.is_focused(window));
-            assert!(left.read(cx).cursor_visible);
-            assert!(right.read(cx).cursor_visible);
+            assert!(left.read(cx).cursor_visible());
+            assert!(right.read(cx).cursor_visible());
         });
 
         vcx.executor()
@@ -11350,9 +8928,9 @@ mod cursor_blink_gpui_tests {
         vcx.background_executor.run_until_parked();
 
         app.update(&mut vcx, |_, cx| {
-            assert!(!left.read(cx).cursor_visible, "the focused cursor blinks");
+            assert!(!left.read(cx).cursor_visible(), "the focused cursor blinks");
             assert!(
-                right.read(cx).cursor_visible,
+                right.read(cx).cursor_visible(),
                 "the unfocused cursor must keep a steady phase"
             );
         });
@@ -11402,7 +8980,7 @@ mod ssh_rebuild_gpui_tests {
 
         let applied = app.update_in(&mut vcx, |app, window, cx| {
             let tab = TreeTab {
-                id: app.tabs[0].tree_id.get(),
+                id: app.tabs[0].id(),
                 name: None,
                 group: None,
                 last_auto: None,
@@ -11463,7 +9041,7 @@ mod ssh_rebuild_gpui_tests {
                 .iter()
                 .zip([1u64, 2])
                 .map(|(tab, pane)| TreeTab {
-                    id: tab.tree_id.get(),
+                    id: tab.id(),
                     name: None,
                     group: None,
                     last_auto: None,
@@ -11525,7 +9103,7 @@ mod ssh_rebuild_gpui_tests {
     fn closing_a_tab_closes_it_and_only_it_on_the_machine(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = primed_two_tab_window(cx);
         let (closed, closes) = app.update_in(&mut vcx, |app, window, cx| {
-            let closed = app.tabs[1].tree_id.get();
+            let closed = app.tabs[1].id();
             app.close_tab_inner(1, true, window, cx);
             (closed, queued_closes(app, cx))
         });
@@ -11559,7 +9137,7 @@ mod ssh_rebuild_gpui_tests {
         });
 
         let (desired, _active, held) = app.update_in(&mut vcx, |app, _, cx| {
-            crate::ui::tree_sync::projection::desired_tabs(&app.tabs, app.active, app.workspace, cx)
+            crate::ui::tree_sync::projection::desired_tabs(&app.tabs, app.tabs.active_index(), app.workspace, cx)
         });
         assert_eq!(
             desired.len(),
@@ -11992,83 +9570,8 @@ mod shell_menu_gpui_tests {
 }
 
 #[cfg(test)]
-mod rename_gpui_tests {
-    use gpui_kit::TestAppContext;
-
-    use crate::ui::app::test_window::harness_with_tabs;
-
-    #[gpui_kit::test]
-    fn a_rename_box_opens_with_the_caret_after_the_name(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-
-        app.update_in(&mut vcx, |app, window, cx| app.start_rename(0, window, cx));
-        vcx.background_executor.run_until_parked();
-
-        app.update(&mut vcx, |app, cx| {
-            let input = app
-                .renaming
-                .as_ref()
-                .expect("the rename box is up")
-                .input
-                .clone();
-            let state = input.read(cx);
-            let value = state.value().to_string();
-            assert!(!value.is_empty(), "the box starts on the current name");
-            let end = value.len();
-            assert_eq!(
-                state.selected_range(),
-                end..end,
-                "typing has to continue {value:?}, not land in front of it"
-            );
-        });
-    }
-    #[gpui_kit::test]
-    fn a_rename_rides_out_other_tabs_closing_and_the_strip_reordering(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.start_rename(2, window, cx);
-            let target = app.tabs[2].tree_id.get();
-            let input = app.renaming.as_ref().expect("the box is up").input.clone();
-            input.update(cx, |s, cx| s.set_value("mine", window, cx));
-
-            // An unrelated close used to throw the half-typed name away
-            // (#598).
-            app.close_tab_inner(0, true, window, cx);
-            assert!(
-                app.renaming.is_some(),
-                "closing another tab keeps the rename box"
-            );
-
-            // So did a drag-reorder — and the index the commit once landed
-            // on had by then drifted onto a different tab.
-            let order: Vec<usize> = (0..app.tabs.len()).rev().collect();
-            app.apply_tab_order(&order, cx);
-            assert!(app.renaming.is_some(), "a reorder keeps the rename box");
-
-            app.commit_rename(window, cx);
-            let named: Vec<_> = app
-                .tabs
-                .iter()
-                .filter(|t| t.name.as_deref() == Some("mine"))
-                .collect();
-            assert_eq!(named.len(), 1, "the name landed on exactly one tab");
-            assert_eq!(
-                named[0].tree_id.get(),
-                target,
-                "and that tab is the one the box was opened on"
-            );
-        });
-
-        // Closing the renaming tab itself still ends the rename.
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.start_rename(0, window, cx);
-            assert!(app.renaming.is_some());
-            app.close_tab_inner(0, true, window, cx);
-            assert!(app.renaming.is_none(), "losing its own tab closes the box");
-        });
-    }
-}
+#[path = "tab/tests_rename.rs"]
+mod rename_gpui_tests;
 
 // The output gate: a pane repaints on PTY output only while it is on screen.
 // `LyrelApp::render` declares the active tab's panes displayed each frame and
@@ -12079,7 +9582,8 @@ mod rename_gpui_tests {
 mod displayed_gpui_tests {
     use gpui_kit::TestAppContext;
 
-    use crate::terminal::view::{declare_displayed, displayed_for_test, quiet_test_pane};
+    use crate::terminal::lifecycle::{declare_displayed, displayed_for_test};
+    use crate::terminal::view::quiet_test_pane;
     use crate::ui::app::test_window::harness_with_tabs;
 
     fn pane_id(app: &super::LyrelApp, tab: usize) -> gpui_kit::EntityId {
@@ -12177,278 +9681,9 @@ mod displayed_gpui_tests {
 // Zoom is a tab's view state: it rides with the tab across a switch, while a
 // layout change (drag, split, close) still clears it.
 #[cfg(test)]
-mod zoom_gpui_tests {
-    use gpui_kit::TestAppContext;
+#[path = "tab/tests_zoom.rs"]
+mod zoom_gpui_tests;
 
-    use crate::ui::app::test_window::harness_with_tabs;
-
-    #[gpui_kit::test]
-    fn a_tabs_zoom_survives_a_round_trip_to_another_tab(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            let leaf = app.tabs[0]
-                .pane
-                .first_leaf()
-                .and_then(|slot| slot.terminal().cloned())
-                .expect("tab 0 has a pane");
-            app.maximized = Some(leaf.clone());
-
-            app.activate(1, window, cx);
-            assert!(app.maximized.is_none(), "tab 1 never zoomed anything");
-
-            app.activate(0, window, cx);
-            assert_eq!(
-                app.maximized.as_ref().map(|l| l.entity_id()),
-                Some(leaf.entity_id()),
-                "tab 0's zoom is still where it was left (#599)"
-            );
-
-            // A zoom stashed for a pane that is no longer in the tab does not
-            // come back — it exited (or was closed) while the tab was away.
-            app.maximized = Some(leaf.clone());
-            app.activate(1, window, cx);
-            app.tabs[0].zoomed = Some(leaf);
-            app.tabs[0].pane =
-                crate::ui::pane::Pane::leaf(app.tabs[1].pane.first_leaf().expect("a donor leaf"));
-            app.activate(0, window, cx);
-            assert!(
-                app.maximized.is_none(),
-                "a stashed zoom whose pane is gone stays gone"
-            );
-        });
-    }
-
-    /// The mark the chrome wears (#752) has to go out again by every road the
-    /// zoom itself leaves by, and it has to name the right tab while several
-    /// tabs are each holding one.
-    #[gpui_kit::test]
-    fn the_zoom_mark_is_on_whichever_tabs_are_hiding_panes(cx: &mut TestAppContext) {
-        use crate::terminal::view::quiet_test_pane;
-        use crate::ui::pane::{Pane, PaneSlot};
-
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            // A zoom only hides something where there is a sibling to hide, so
-            // tabs 0 and 1 get a second pane and tab 2 stays single.
-            let mut held = Vec::new();
-            for tab in 0..2 {
-                let (view, stream) = quiet_test_pane(90 + tab as u64, window, cx);
-                held.push(stream);
-                let first = app.tabs[tab].pane.first_leaf().expect("tab has a pane");
-                app.tabs[tab].pane = Pane::split_node(
-                    gpui_kit::Axis::Horizontal,
-                    0.5,
-                    Pane::leaf(first),
-                    Pane::leaf(PaneSlot::Ready(view)),
-                );
-            }
-
-            for i in 0..app.tabs.len() {
-                assert!(!app.tab_is_zoomed(i), "nothing is zoomed yet");
-            }
-
-            // Zooming marks the tab it happened in, and only that one.
-            app.toggle_maximize(window, cx);
-            assert!(app.tab_is_zoomed(0), "the zoomed tab wears the mark");
-            assert!(!app.tab_is_zoomed(1));
-            assert!(!app.tab_is_zoomed(2));
-
-            // And un-zooming takes it away again.
-            app.toggle_maximize(window, cx);
-            assert!(!app.tab_is_zoomed(0), "un-zooming clears the mark");
-
-            // The mark rides with its tab across a switch (#599) — an inactive
-            // tab holding a zoom still wears it — and two tabs can wear one at
-            // the same time, each reading its own handle.
-            app.toggle_maximize(window, cx);
-            app.activate(1, window, cx);
-            assert!(app.tab_is_zoomed(0), "the parked zoom is still a zoom");
-            assert!(!app.tab_is_zoomed(1));
-            app.toggle_maximize(window, cx);
-            assert!(app.tab_is_zoomed(0) && app.tab_is_zoomed(1));
-            assert!(!app.tab_is_zoomed(2), "a single-pane tab hides nothing");
-
-            // A parked zoom naming a pane that has since left the tab is no
-            // zoom: it would not come back on a switch, so it is not marked.
-            let parked = app.tabs[0].zoomed.clone().expect("tab 0 parked a zoom");
-            let elsewhere = app.tabs[2]
-                .pane
-                .first_leaf()
-                .and_then(|slot| slot.terminal().cloned());
-            app.tabs[0].zoomed = elsewhere;
-            assert!(
-                !app.tab_is_zoomed(0),
-                "a zoom over a pane this tab does not hold is not marked"
-            );
-            app.tabs[0].zoomed = Some(parked.clone());
-            assert!(app.tab_is_zoomed(0));
-
-            // Nor is a zoom over the last pane standing: its siblings closed
-            // while the tab was away, and the tab now looks like — and draws
-            // as — an ordinary single pane.
-            app.tabs[0].pane = Pane::leaf(PaneSlot::Ready(parked));
-            assert!(
-                !app.tab_is_zoomed(0),
-                "a zoom that covers nothing stops being marked"
-            );
-
-            assert!(!app.tab_is_zoomed(9), "there is no tab 9 to mark");
-            drop(held);
-        });
-    }
-}
-
-// A test window has no daemon behind it — its socket path is under the pinned
-// test config dir and nothing is listening on it — so every forward request
-// fails. That is exactly the case these are about: what the panel and the form
-// are left holding when the far side does not answer.
-#[cfg(test)]
-mod managed_forward_gpui_tests {
-    use gpui_kit::component::input::InputState;
-    use gpui_kit::{Focusable as _, TestAppContext};
-
-    use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
-    use crate::ui::app::test_window::harness_with_tabs;
-
-    fn listening(id: u64) -> ManagedForward {
-        ManagedForward {
-            id,
-            pane_id: 1,
-            kind: SshForwardKind::Local,
-            bind_host: "127.0.0.1".to_string(),
-            bind_port: 8080,
-            target_host: "10.0.0.5".to_string(),
-            target_port: 80,
-            description: None,
-            status: ForwardStatus::Listening,
-            enabled: true,
-        }
-    }
-
-    /// The form had no keyboard contract at all: no Return, no Escape, and it
-    /// opened cold, with the caret still in the terminal behind it. Every
-    /// sibling form in the app has all three.
-    ///
-    /// Escape is a `on_key_down` on the form itself and only fires while
-    /// something inside it holds focus, so the focus below is what makes both
-    /// halves work; the subscriptions are what answer Return. Asserting on
-    /// both together is the point — arming one without the other is the state
-    /// this test exists to catch.
-    #[gpui_kit::test]
-    fn opening_the_forward_form_arms_the_keyboard_and_closing_disarms_it(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(
-                app.loopback_panel.mf_subs.is_empty(),
-                "nothing is listening before the form is up"
-            );
-
-            app.toggle_managed_forward_form(1, window, cx);
-
-            assert_eq!(
-                app.loopback_panel.form_pane_id,
-                Some(1),
-                "the form is up for the pane that asked"
-            );
-            assert_eq!(
-                app.loopback_panel.mf_subs.len(),
-                5,
-                "Return has to be answered on every box, not just the first"
-            );
-            assert!(
-                app.loopback_panel
-                    .mf_bind_host
-                    .read(cx)
-                    .focus_handle(cx)
-                    .is_focused(window),
-                "the form opens with the caret in Bind, so Escape reaches it too"
-            );
-
-            app.close_managed_forward_form(window, cx);
-
-            assert_eq!(app.loopback_panel.form_pane_id, None);
-            assert!(
-                app.loopback_panel.mf_subs.is_empty(),
-                "a live subscription on a box nothing is showing would answer \
-                 Return for a form that is gone"
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn an_add_that_never_reaches_the_session_leaves_the_panel_as_it_was(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.loopback_panel.managed = vec![listening(1)];
-            app.loopback_panel.form_pane_id = Some(1);
-            // These three fields are the long form's; without this the short
-            // form would read them as the one number it asks for.
-            app.loopback_panel.mf_advanced = true;
-            let typed: [(&gpui_kit::Entity<InputState>, &str); 3] = [
-                (&app.loopback_panel.mf_bind_port, "9000"),
-                (&app.loopback_panel.mf_target_host, "127.0.0.1"),
-                (&app.loopback_panel.mf_target_port, "22"),
-            ];
-            for (input, value) in typed {
-                input.update(cx, |input, cx| input.set_value(value, window, cx));
-            }
-
-            app.add_managed_forward(1, window, cx);
-
-            assert_eq!(
-                app.loopback_panel.managed.len(),
-                1,
-                "a request that failed says nothing about the forwards that are up"
-            );
-            assert!(
-                app.loopback_panel.mf_error.is_some(),
-                "and the form has to say why the Add did nothing"
-            );
-            assert_eq!(
-                app.loopback_panel.form_pane_id,
-                Some(1),
-                "the form stays open on what was typed"
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn a_save_that_cannot_be_made_leaves_the_rule_it_would_replace_alone(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.loopback_panel.managed = vec![listening(1)];
-            app.loopback_panel.form_pane_id = Some(1);
-            app.loopback_panel.mf_editing = Some(listening(1));
-            app.loopback_panel.mf_advanced = true;
-            let typed: [(&gpui_kit::Entity<InputState>, &str); 3] = [
-                (&app.loopback_panel.mf_bind_port, "8080"),
-                (&app.loopback_panel.mf_target_host, "10.0.0.6"),
-                (&app.loopback_panel.mf_target_port, "80"),
-            ];
-            for (input, value) in typed {
-                input.update(cx, |input, cx| input.set_value(value, window, cx));
-            }
-
-            app.add_managed_forward(1, window, cx);
-
-            assert_eq!(
-                app.loopback_panel.managed,
-                vec![listening(1)],
-                "the rule being edited must survive an edit that could not be made"
-            );
-            assert!(
-                app.loopback_panel.mf_editing.is_some(),
-                "the form is still editing it"
-            );
-            assert!(app.loopback_panel.mf_error.is_some());
-        });
-    }
-}
 
 #[cfg(test)]
 mod new_window_action_tests {
@@ -12643,17 +9878,17 @@ mod unfocused_shortcut_tests {
         vcx.run_until_parked();
         vcx.simulate_keystrokes(&key);
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+        assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
     }
 
     #[gpui_kit::test]
     fn palette_after_blur(cx: &mut TestAppContext) {
-        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_some(), true, cx);
+        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_open(), true, cx);
     }
 
     #[gpui_kit::test]
     fn palette_with_orphan_focus(cx: &mut TestAppContext) {
-        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_some(), false, cx);
+        answers_with_focus_off_the_tree("TogglePalette", |a| a.search.is_open(), false, cx);
     }
 
     #[gpui_kit::test]
@@ -12684,7 +9919,7 @@ mod unfocused_shortcut_tests {
         });
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
-            let expected = match app.tabs.get(app.active) {
+            let expected = match app.tabs.get(app.tabs.active_index()) {
                 Some(tab) => tab.focus_target(cx).unwrap().focus_handle(cx),
                 None => app.home_focus.clone(),
             };
@@ -12812,392 +10047,9 @@ mod close_window_action_tests {
     }
 }
 
-/// #843: which pane a tab comes back to.
 #[cfg(test)]
-mod tab_focus_memory_tests {
-    use super::{Pane, PaneSlot, Tab, remember_leaf_in, replace_leaf_in};
-    use crate::ui::pending_pane::{PendingPane, PendingSpawn};
-    use gpui_kit::{
-        AppContext as _, Axis, Context, Entity, IntoElement, Render, Styled as _, TestAppContext,
-        Window, div,
-    };
-
-    /// A window has to exist for focus to live in, but nothing this file asks
-    /// is about what a pane paints.
-    struct Blank;
-    impl Render for Blank {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().size_full()
-        }
-    }
-
-    /// A leaf that owns a real focus handle without owning a shell. Focus
-    /// tracking asks the slot, not the terminal behind it, so a connecting
-    /// pane answers every question here exactly as a running one would — and
-    /// connecting panes are watched for focus now too, so this is not a
-    /// stand-in for the case under test but one of its cases.
-    fn leaf(cx: &mut Context<Blank>) -> Entity<PendingPane> {
-        cx.new(|cx| {
-            PendingPane::new(
-                "test",
-                PendingSpawn {
-                    workspace: None,
-                    working_directory: None,
-                    restore_pane: None,
-                    shell: None,
-                    agent: None,
-                    agent_session_id: None,
-                    agent_launch_argv: None,
-                    agent_session_scope: None,
-                    run_on_land: None,
-                    owner: None,
-                    font_size: 14.,
-                },
-                cx,
-            )
-        })
-    }
-
-    fn two_pane_tab(a: &Entity<PendingPane>, b: &Entity<PendingPane>) -> Tab {
-        Tab::new(Pane::split_node(
-            Axis::Horizontal,
-            0.5,
-            Pane::Leaf(PaneSlot::Connecting(a.clone())),
-            Pane::Leaf(PaneSlot::Connecting(b.clone())),
-        ))
-    }
-
-    fn one_pane_tab(a: &Entity<PendingPane>) -> Tab {
-        Tab::new(Pane::Leaf(PaneSlot::Connecting(a.clone())))
-    }
-
-    /// The mechanism behind the report: `remember_active_pane`'s sample asks
-    /// which leaf holds focus *at that instant*, and a switch begun with focus
-    /// one handle away — the switcher's own search input, a palette closing,
-    /// the tab strip — finds no leaf and has nothing to write. This is why the
-    /// sample cannot be the only writer, and it is pinned here so that a change
-    /// making `focused_leaf` tolerant would have to argue with a test rather
-    /// than silently make this fix look unnecessary.
-    #[gpui_kit::test]
-    fn a_switch_begun_off_the_panes_samples_nothing(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Blank);
-        let (a, b, elsewhere) = window
-            .update(cx, |_, _, cx| (leaf(cx), leaf(cx), cx.focus_handle()))
-            .unwrap();
-        let tab = two_pane_tab(&a, &b);
-
-        window
-            .update(cx, |_, window, cx| {
-                let on_b = b.read(cx).focus_handle.clone();
-                window.focus(&on_b, cx);
-                assert_eq!(
-                    tab.pane.focused_leaf(window, cx).map(|l| l.entity_id()),
-                    Some(b.entity_id()),
-                    "with focus in the pane the sample would have found it"
-                );
-
-                window.focus(&elsewhere, cx);
-                assert!(
-                    tab.pane.focused_leaf(window, cx).is_none(),
-                    "one handle off the pane and the switch-away sample has \
-                     nothing to write"
-                );
-            })
-            .unwrap();
-    }
-
-    /// So focus-in writes instead, and the tab comes back to the pane focus
-    /// was last in even though it had wandered off the panes before the switch
-    /// ever started.
-    #[gpui_kit::test]
-    fn a_tab_comes_back_to_the_pane_focus_was_last_in(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Blank);
-        let (a, b) = window.update(cx, |_, _, cx| (leaf(cx), leaf(cx))).unwrap();
-        let mut tabs = vec![two_pane_tab(&a, &b)];
-        assert_eq!(
-            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
-            Some(a.entity_id()),
-            "a tab nobody has worked in yet still opens on its first leaf"
-        );
-
-        // The reader clicks into the right-hand pane: focus arrives, and that
-        // is the moment the tab is told.
-        remember_leaf_in(&mut tabs, b.entity_id());
-
-        // Focus then leaves the panes — the switcher opens, a palette closes —
-        // and the tab is switched away from. `remember_active_pane` finds no
-        // focused leaf and writes nothing, which is now harmless.
-        assert_eq!(
-            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
-            Some(b.entity_id()),
-            "#843: the tab has to come back to the pane the reader was in"
-        );
-    }
-
-    /// A pane dragged into another tab is focused where it lands, so the
-    /// arrival has to change that tab's memory and not the one it left — the
-    /// reason the tab is found by the leaf rather than taken to be the active
-    /// one.
-    #[gpui_kit::test]
-    fn a_moved_pane_is_remembered_by_the_tab_that_holds_it_now(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Blank);
-        let (a, b, c) = window
-            .update(cx, |_, _, cx| (leaf(cx), leaf(cx), leaf(cx)))
-            .unwrap();
-        // Tab 0 is the active one and holds `a`; `b` and `c` live in tab 1.
-        let mut tabs = vec![one_pane_tab(&a), two_pane_tab(&b, &c)];
-
-        remember_leaf_in(&mut tabs, c.entity_id());
-
-        assert_eq!(
-            cx.update(|cx| tabs[1].focus_target(cx).map(|l| l.entity_id())),
-            Some(c.entity_id()),
-            "the tab holding the focused pane is the one that remembers it"
-        );
-        assert_eq!(
-            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
-            Some(a.entity_id()),
-            "and no other tab's memory is touched"
-        );
-    }
-
-    /// A pane that arrives after its slot has gone — a spawn landing on a
-    /// closed tab, a leaf killed mid-flight — belongs to no tab, and must not
-    /// leave a memory behind for the first tab that happens to be looked at.
-    #[gpui_kit::test]
-    fn a_leaf_no_tab_holds_is_recorded_nowhere(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Blank);
-        let (a, b, gone) = window
-            .update(cx, |_, _, cx| (leaf(cx), leaf(cx), leaf(cx)))
-            .unwrap();
-        let mut tabs = vec![two_pane_tab(&a, &b)];
-
-        remember_leaf_in(&mut tabs, b.entity_id());
-        remember_leaf_in(&mut tabs, gone.entity_id());
-
-        assert_eq!(
-            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
-            Some(b.entity_id()),
-            "a stranger's arrival leaves the tab's own answer alone"
-        );
-    }
-
-    /// A pane focused while it was still coming up is remembered under its
-    /// *pending* slot, and that id dies the moment the pane lands in its
-    /// place. The memory has to come along with the swap, or the landing is
-    /// itself what puts the tab back on its first leaf.
-    ///
-    /// What lands here is another slot rather than a running pane: the swap has
-    /// to move an id from one slot to another, and which kind of slot arrived
-    /// is no part of the question.
-    #[gpui_kit::test]
-    fn a_landing_pane_inherits_what_its_pending_slot_was_told(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Blank);
-        let (a, connecting, landed, other) = window
-            .update(cx, |_, _, cx| (leaf(cx), leaf(cx), leaf(cx), leaf(cx)))
-            .unwrap();
-        let mut tabs = vec![two_pane_tab(&a, &connecting)];
-
-        // Focus arrives while the pane is still connecting, then the pane it
-        // was waiting for lands in that slot.
-        remember_leaf_in(&mut tabs, connecting.entity_id());
-        replace_leaf_in(
-            &mut tabs,
-            connecting.entity_id(),
-            PaneSlot::Connecting(landed.clone()),
-        );
-
-        assert_eq!(
-            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
-            Some(landed.entity_id()),
-            "#843: the memory follows the pane, not the slot it arrived in"
-        );
-
-        // A landing somewhere else in the tab is not an answer to this
-        // question and does not touch it.
-        replace_leaf_in(&mut tabs, a.entity_id(), PaneSlot::Connecting(other));
-        assert_eq!(
-            cx.update(|cx| tabs[0].focus_target(cx).map(|l| l.entity_id())),
-            Some(landed.entity_id()),
-            "another pane landing leaves the tab's answer alone"
-        );
-    }
-
-    /// The wiring, end to end. `watch_pane_focus` is the subscription that
-    /// writes the record, and a real round trip through `activate` has to come
-    /// back to the pane focus last arrived in — with focus off the panes well
-    /// before the switch was made, which is the moment the switch-away sample
-    /// cannot see (#843).
-    #[gpui_kit::test]
-    fn a_tab_switch_returns_to_the_pane_focus_arrived_in(cx: &mut TestAppContext) {
-        use super::{test_window::harness, watch_pane_focus};
-        use crate::terminal::view::quiet_test_pane;
-
-        let (app, mut vcx) = harness(cx);
-        let (left, right, elsewhere, _held) = app.update_in(&mut vcx, |app, window, cx| {
-            let (left, left_stream) = quiet_test_pane(1, window, cx);
-            let (right, right_stream) = quiet_test_pane(2, window, cx);
-            let (only, only_stream) = quiet_test_pane(3, window, cx);
-            app.tabs.push(Tab::new(Pane::split_node(
-                Axis::Horizontal,
-                0.5,
-                Pane::leaf(PaneSlot::Ready(left.clone())),
-                Pane::leaf(PaneSlot::Ready(right.clone())),
-            )));
-            app.tabs.push(Tab::new(Pane::leaf(PaneSlot::Ready(only))));
-            app.active = 0;
-            // The subscription every spawn path registers for the pane it
-            // built.
-            for view in [&left, &right] {
-                let handle = view.read(cx).focus_handle.clone();
-                watch_pane_focus(&handle, view.entity_id(), window, cx);
-            }
-            cx.notify();
-            (
-                left,
-                right,
-                cx.focus_handle(),
-                (left_stream, right_stream, only_stream),
-            )
-        });
-        vcx.background_executor.run_until_parked();
-
-        // The reader clicks into the right-hand pane.
-        app.update_in(&mut vcx, |_, window, cx| {
-            let handle = right.read(cx).focus_handle.clone();
-            handle.focus(window, cx);
-        });
-        vcx.background_executor.run_until_parked();
-
-        // Focus then leaves the panes altogether — a palette closing, the tab
-        // strip, the switcher's own search input — before the tab is left.
-        app.update_in(&mut vcx, |_, window, cx| elsewhere.focus(window, cx));
-        vcx.background_executor.run_until_parked();
-
-        app.update_in(&mut vcx, |app, window, cx| app.activate(1, window, cx));
-        vcx.background_executor.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| app.activate(0, window, cx));
-        vcx.background_executor.run_until_parked();
-
-        app.update_in(&mut vcx, |_, window, cx| {
-            assert!(
-                right.read(cx).focus_handle.is_focused(window),
-                "#843: the tab has to come back to the pane the reader was in"
-            );
-            assert!(
-                !left.read(cx).focus_handle.is_focused(window),
-                "and not to the first leaf"
-            );
-        });
-    }
-
-    /// A split tab on screen with both panes watched the way every spawn path
-    /// watches them, plus a handle off the panes for focus to wander to.
-    #[allow(clippy::type_complexity)]
-    fn watched_split(
-        cx: &mut TestAppContext,
-    ) -> (
-        Entity<super::LyrelApp>,
-        gpui_kit::VisualTestContext,
-        Entity<crate::terminal::view::TerminalView>,
-        Entity<crate::terminal::view::TerminalView>,
-        gpui_kit::FocusHandle,
-        impl Sized,
-    ) {
-        use super::{test_window::harness, watch_pane_focus};
-        use crate::terminal::view::quiet_test_pane;
-
-        let (app, mut vcx) = harness(cx);
-        let (left, right, elsewhere, held) = app.update_in(&mut vcx, |app, window, cx| {
-            let (left, left_stream) = quiet_test_pane(1, window, cx);
-            let (right, right_stream) = quiet_test_pane(2, window, cx);
-            app.tabs.push(Tab::new(Pane::split_node(
-                Axis::Horizontal,
-                0.5,
-                Pane::leaf(PaneSlot::Ready(left.clone())),
-                Pane::leaf(PaneSlot::Ready(right.clone())),
-            )));
-            app.active = 0;
-            for view in [&left, &right] {
-                let handle = view.read(cx).focus_handle.clone();
-                watch_pane_focus(&handle, view.entity_id(), window, cx);
-            }
-            cx.notify();
-            (left, right, cx.focus_handle(), (left_stream, right_stream))
-        });
-        vcx.background_executor.run_until_parked();
-        (app, vcx, left, right, elsewhere, held)
-    }
-
-    /// Zoom in on a pane, zoom back out, and the cursor is still in that pane
-    /// (#869). The pane being un-zoomed is the answer outright — it is the one
-    /// that was on screen to work in — so it is not a question for the tab's
-    /// memory, which only focus-in writes and which nothing guarantees is
-    /// current at the instant the toggle lands.
-    #[gpui_kit::test]
-    fn unzooming_leaves_focus_in_the_pane_that_was_zoomed(cx: &mut TestAppContext) {
-        let (app, mut vcx, left, right, _elsewhere, _held) = watched_split(cx);
-
-        // Into the right-hand pane by keyboard, the road the report took.
-        app.update_in(&mut vcx, |app, window, cx| {
-            left.read(cx).focus_handle.clone().focus(window, cx);
-            app.cycle_pane(true, window, cx);
-        });
-        vcx.background_executor.run_until_parked();
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.toggle_maximize(window, cx);
-            assert_eq!(
-                app.maximized.as_ref().map(|l| l.entity_id()),
-                Some(right.entity_id()),
-                "the pane focus is in is the one zoomed"
-            );
-            // Whatever the tab's memory says while zoomed — here the stale
-            // answer the report found — must not decide where un-zooming goes.
-            app.tabs[0].last_focused = Some(left.entity_id());
-            app.toggle_maximize(window, cx);
-        });
-        vcx.background_executor.run_until_parked();
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.maximized.is_none());
-            assert!(
-                right.read(cx).focus_handle.is_focused(window),
-                "#869: un-zooming keeps focus in the pane that was zoomed"
-            );
-            assert_eq!(
-                app.tabs[0].last_focused,
-                Some(right.entity_id()),
-                "and the tab remembers it, so a switch away and back agrees"
-            );
-        });
-    }
-
-    /// Zooming with focus off the panes — a palette just closed, the tab strip
-    /// clicked — zooms the pane the tab remembers, not whichever leaf happens
-    /// to be first: the same pane switching back to the tab would focus.
-    #[gpui_kit::test]
-    fn zooming_from_off_the_panes_zooms_the_remembered_pane(cx: &mut TestAppContext) {
-        let (app, mut vcx, _left, right, elsewhere, _held) = watched_split(cx);
-
-        app.update_in(&mut vcx, |_, window, cx| {
-            right.read(cx).focus_handle.clone().focus(window, cx);
-        });
-        vcx.background_executor.run_until_parked();
-        app.update_in(&mut vcx, |_, window, cx| elsewhere.focus(window, cx));
-        vcx.background_executor.run_until_parked();
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.toggle_maximize(window, cx);
-            assert_eq!(
-                app.maximized.as_ref().map(|l| l.entity_id()),
-                Some(right.entity_id()),
-                "the zoom lands on the pane the reader was last in"
-            );
-            assert!(right.read(cx).focus_handle.is_focused(window));
-        });
-    }
-}
+#[path = "tab/tests_focus.rs"]
+mod tab_focus_memory_tests;
 
 #[cfg(test)]
 mod hibernate_gpui_tests {
@@ -13248,14 +10100,16 @@ mod hibernate_gpui_tests {
             assert!(!after.live);
 
             let (desired, _, held) = crate::ui::tree_sync::projection::desired_tabs(
-                &app.tabs, app.active, app.workspace, cx,
+                &app.tabs, app.tabs.active_index(), app.workspace, cx,
             );
             assert!(held.is_empty(), "a sleeping tab is not a tab gone missing");
             assert_eq!(desired.len(), 2);
             assert!(!desired[0].hibernated);
             assert!(desired[1].hibernated);
             match &desired[1].root {
-                crate::ui::tree_sync::desired::DesiredNode::Leaf { pane, .. } => assert_eq!(*pane, pane_id),
+                crate::ui::tree_sync::desired::DesiredNode::Leaf { pane, .. } => {
+                    assert_eq!(*pane, pane_id)
+                }
                 other => panic!("expected the one leaf, got {other:?}"),
             }
         });
@@ -13269,15 +10123,19 @@ mod hibernate_gpui_tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
 
         app.update_in(&mut vcx, |app, window, cx| {
-            app.tabs[1].last_used.set(5);
-            app.tabs[2].last_used.set(9);
-            assert_eq!(app.awake_tab_besides(0), Some(2), "the one used last");
+            app.activate(1, window, cx);
+            app.tabs.touch_active();
+            app.activate(2, window, cx);
+            app.tabs.touch_active();
+            app.activate(0, window, cx);
+            app.tabs.touch_active();
+            assert_eq!(app.tabs.awake_besides(0), Some(2), "the one used last");
 
             app.put_to_sleep(2, window, cx);
-            assert_eq!(app.awake_tab_besides(0), Some(1));
+            assert_eq!(app.tabs.awake_besides(0), Some(1));
 
             app.put_to_sleep(1, window, cx);
-            assert_eq!(app.awake_tab_besides(0), None);
+            assert_eq!(app.tabs.awake_besides(0), None);
             assert!(
                 !app.can_hibernate_tab(0, cx),
                 "the last awake tab stays awake"
@@ -13310,37 +10168,6 @@ mod hibernate_gpui_tests {
     }
 }
 
-/// What each host's last session scan found: what the Sessions tab shows
-/// while the next scan runs, so it does not open empty.
-static LAST_SESSIONS: std::sync::LazyLock<
-    std::sync::Mutex<
-        std::collections::HashMap<
-            crate::ui::host_ops::HostId,
-            Vec<crate::core::agent_history::PastSession>,
-        >,
-    >,
-> = std::sync::LazyLock::new(Default::default);
-
-fn last_sessions(
-    host: crate::ui::host_ops::HostId,
-) -> Vec<crate::core::agent_history::PastSession> {
-    LAST_SESSIONS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&host)
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn remember_sessions(
-    host: crate::ui::host_ops::HostId,
-    found: Vec<crate::core::agent_history::PastSession>,
-) {
-    LAST_SESSIONS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(host, found);
-}
 
 #[cfg(test)]
 mod spawn_consumer_tests {
@@ -13374,7 +10201,7 @@ mod spawn_consumer_tests {
         });
         app.tabs
             .push(Tab::new(Pane::leaf(PaneSlot::Connecting(pending.clone()))));
-        app.active = app.tabs.len() - 1;
+        app.tabs.select(app.tabs.len() - 1);
         app.focus_active(window, cx);
         pending
     }
@@ -13389,7 +10216,7 @@ mod spawn_consumer_tests {
                 crate::terminal::view::quiet_test_shell_parts(91, Some(app.workspace));
             // Focus has moved while creation was running. Landing is by slot,
             // never by whichever pane is now active.
-            app.active = 0;
+            app.tabs.select(0);
             app.land_pane(waiting.entity_id(), &waiting, Ok(parts), 14., window, cx);
             assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), original);
             let landed = app.tabs[1].pane.terminals();
@@ -13538,7 +10365,7 @@ mod pane_menu_tests {
                 app.tabs[1].pane.first_leaf().unwrap().entity_id(),
                 right.entity_id()
             );
-            assert_eq!(app.active, 1);
+            assert_eq!(app.tabs.active_index(), 1);
             assert!(right.contains_focused(window, cx));
             assert!(!right.terminal().unwrap().read(cx).pane_route().is_local());
         });
@@ -13615,7 +10442,7 @@ mod pane_menu_tests {
         assert!(vcx.has_pending_prompt());
         // Focus changes while a confirmation is up must not retarget it.
         app.update_in(&mut vcx, |app, window, cx| {
-            app.active = 1;
+            app.tabs.select(1);
             app.focus_active(window, cx);
         });
         vcx.simulate_prompt_answer(t(L10nKey::AppRestart));
@@ -13624,7 +10451,7 @@ mod pane_menu_tests {
             assert_eq!(app.tabs.len(), 2);
             assert_eq!(app.tabs[0].pane.terminals()[0], remote);
             assert!(!remote.read(cx).pane_route().is_local());
-            assert_eq!(app.active, 1);
+            assert_eq!(app.tabs.active_index(), 1);
         });
     }
 
@@ -14070,7 +10897,7 @@ mod pip_native_owned_gpui_tests {
             let (pane, stream) = crate::terminal::view::quiet_test_ssh_pane(41, window, cx);
             app.tabs
                 .push(Tab::new(Pane::Leaf(PaneSlot::Ready(pane.clone()))));
-            app.active = 0;
+            app.tabs.select(0);
             let focus = pane.read(cx).focus_handle.clone();
             window.focus(&focus, cx);
             cx.notify();
@@ -14144,7 +10971,7 @@ mod sidecar_snapshot_gpui_tests {
                     PaneSlot::Ready(native.clone()),
                 );
                 let mut saved = TreeTab::leaf(ScopedPane::workspace(1));
-                saved.id = app.tabs[0].tree_id.get();
+                saved.id = app.tabs[0].id();
                 saved.root.split_leaf(
                     ScopedPane::workspace(1),
                     ScopedPane::client_local(1),
@@ -14618,7 +11445,7 @@ mod sidecar_snapshot_gpui_tests {
     ) {
         let (app, mut vcx, _native, _streams, sidecar) = native_sidecar_window(cx, false);
         app.update_in(&mut vcx, |app, window, cx| {
-            let tab = app.tabs[0].tree_id.get();
+            let tab = app.tabs[0].id();
             assert!(app.apply_layout_delta(
                 &LayoutDelta::TabClosed {
                     tab,
@@ -14641,7 +11468,7 @@ mod sidecar_snapshot_gpui_tests {
         vcx.dispatch_action(ParkPane);
         vcx.run_until_parked();
         app.update_in(&mut vcx, |app, window, cx| {
-            let tab = app.tabs[0].tree_id.get();
+            let tab = app.tabs[0].id();
             assert!(app.apply_layout_delta(
                 &LayoutDelta::TabClosed {
                     tab,
@@ -14653,7 +11480,7 @@ mod sidecar_snapshot_gpui_tests {
             assert!(
                 app.tabs
                     .iter()
-                    .any(|candidate| candidate.tree_id.get() == tab),
+                    .any(|candidate| candidate.id() == tab),
                 "emptying the remote projection must not close its client-local leaves"
             );
         });
@@ -14735,7 +11562,7 @@ mod sidecar_snapshot_gpui_tests {
         let (app, mut vcx, native, _streams, mut sidecar) = native_sidecar_window(cx, false);
         app.update_in(&mut vcx, |app, window, cx| {
             app.maximized = native.terminal().cloned();
-            app.tabs[0].zoomed = native.terminal().cloned();
+            app.tabs[0].park_zoom(native.terminal().cloned());
             window.focus(&app.file_tree.focus_handle, cx);
             cx.notify();
         });
@@ -14751,7 +11578,7 @@ mod sidecar_snapshot_gpui_tests {
         });
         app.update_in(&mut vcx, |app, _, _| {
             assert!(app.maximized.is_none());
-            assert!(app.tabs[0].zoomed.is_none());
+            assert!(app.tabs[0].zoomed().is_none());
         });
     }
 
@@ -14789,7 +11616,7 @@ mod sidecar_snapshot_gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| {
             assert_eq!(app.tabs[0].presentation.pip_geometry(), primary_before);
             let mut primary = TreeTab::leaf(1);
-            primary.id = app.tabs[0].tree_id.get();
+            primary.id = app.tabs[0].id();
             primary
                 .presentation
                 .set_pip_geometry(PipGeometry::new(1., 1., 0.5, 0.5));
@@ -15141,7 +11968,7 @@ mod pip_geometry_gpui_tests {
         });
         app.update_in(&mut vcx, |app, window, cx| {
             let mut remote = TreeTab::leaf(1);
-            remote.id = app.tabs[0].tree_id.get();
+            remote.id = app.tabs[0].id();
             remote.set_pip(Some(1), None);
             remote
                 .presentation

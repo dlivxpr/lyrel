@@ -443,6 +443,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &gpui_kit::App) {
+        self.editor_context_changed();
         if crate::core::session::crosses_machines(previous, self.spawn_host(cx)) {
             self.closed.clear();
         }

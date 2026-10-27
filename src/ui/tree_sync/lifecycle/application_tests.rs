@@ -23,7 +23,7 @@ fn a_late_recovery_keeps_the_users_new_pip_and_terminal_identity(
         );
         crate::ui::windows::WindowRegistry::init(cx);
         crate::ui::windows::WindowRegistry::register(cx, ws, handle, weak);
-        let tab = app.tabs[0].tree_id.get();
+        let tab = app.tabs[0].id();
         let mut machine_tab = TreeTab::leaf(1);
         machine_tab.id = tab;
         let machine = Machine {

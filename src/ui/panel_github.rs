@@ -13,7 +13,8 @@ use lyrel_core::core::github::{
     ApiError, CheckState, GitHubRemote, Item, ItemState, Kind, Label, RepoSlug, StateFilter,
 };
 
-use crate::ui::app::{CONTENT_INSET, LyrelApp, TILE_GLYPH_XS, TILE_SIZE_XS};
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
 use crate::ui::github::{GhTarget, now_unix};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{META, ROW_FILL_RADIUS, ROW_INSET, TAB_TEXT, TEXT, TEXT_INSET};
@@ -705,7 +706,7 @@ pub(crate) fn github_tile(
     tooltip: &'static str,
     cx: &gpui_kit::App,
 ) -> Button {
-    crate::ui::tab_strip::chrome_tile_sized(
+    crate::ui::window_chrome::chrome_tile_sized(
         Button::new(id).icon(icon),
         TILE_SIZE_XS,
         TILE_GLYPH_XS,

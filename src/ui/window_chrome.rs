@@ -1,32 +1,333 @@
 //! 窗口级标题栏与常驻六按钮；独立于标签导航和文档布局。
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, TitleBar, h_flex};
-use gpui_kit::{AnyElement, Context, Window, prelude::*, px, rems};
+use std::sync::Arc;
+
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, TitleBar, h_flex,
+};
+use gpui_kit::{
+    AnyElement, App, Axis, ClickEvent, Pixels, Point, Window, img, point, prelude::*, px, rems,
+};
 
 use crate::core::actions::{
     SplitDown, SplitRight, ToggleLeftPanel, TogglePalette, ToggleRightPanel,
 };
-use crate::ui::app::{LyrelApp, window_controls_drawn};
 use crate::ui::i18n::{L10nKey, t};
-use crate::ui::search::SearchTab;
-use crate::ui::tab_strip::chrome_tile_variant;
 
-/// 原生窗口按钮仍由 TitleBar 留出空间，产品控件尺寸跟随 rem。
-impl LyrelApp {
-    pub(crate) fn render_window_chrome(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let macos_fullscreen = cfg!(target_os = "macos") && window.is_fullscreen();
-        let left_open = self.left_panel_open(cx);
-        let right_open = self.right_panel_open(cx);
-        let can_split = self
-            .tabs
-            .get(self.active)
-            .and_then(|tab| tab.detail_pane(window, cx))
-            .is_some();
+pub(crate) const TITLE_BAR_HEIGHT: f32 = 48.;
+
+/// The rule every title-bar row carries along its bottom edge.
+///
+/// `TitleBar` itself draws one (`gpui-component`'s own `.border_b_1()`), and
+/// taffy sizes a node by its border box, so the bar's content box is this one
+/// point short of its height and `items_center` puts a tile's centre half a
+/// point above the bar's middle. Every row that stands in for the title bar
+/// has to carry the same point — in a transparent ink where the row shows no
+/// rule of its own — or its tiles land half a point below the traffic lights
+/// and below the strip they are meant to read as one line with: one device
+/// pixel on a Retina panel, and visible precisely because the two are side by
+/// side in the same band.
+pub(crate) const TITLE_BAR_BORDER: f32 = 1.;
+
+/// The line the traffic lights and every [`title_strip_row`]'s contents sit
+/// on, from the top of the window's content.
+///
+/// The lights hang from a point, not a centre, so macOS gives this back through
+/// `traffic_light_position` less half the system button's height.
+const TITLE_STRIP_CENTRE: f32 = (TITLE_BAR_HEIGHT - TITLE_BAR_BORDER) / 2.;
+
+pub(crate) fn title_strip_centre() -> gpui_kit::Pixels {
+    gpui_kit::px(TITLE_STRIP_CENTRE)
+}
+
+/// Split the title bar's bottom edge between the rule a row draws and the
+/// padding that stands in for the part of it the rule does not reach.
+fn title_strip_rule_and_pad(rule: gpui_kit::Pixels) -> (gpui_kit::Pixels, gpui_kit::Pixels) {
+    let border = rule.min(gpui_kit::px(TITLE_BAR_BORDER));
+    (border, gpui_kit::px(TITLE_BAR_BORDER - border.as_f32()))
+}
+
+/// The centre of the box a row built by [`title_strip_row`] gives its contents:
+/// the bar's height, less whatever its bottom edge spends on rule and padding.
+#[cfg(test)]
+fn title_strip_content_centre(rule: gpui_kit::Pixels) -> gpui_kit::Pixels {
+    let (border, pad) = title_strip_rule_and_pad(rule);
+    gpui_kit::px((TITLE_BAR_HEIGHT - border.as_f32() - pad.as_f32()) / 2.)
+}
+
+/// Give a row the title bar's geometry: its height, its vertical centring, and
+/// a bottom edge that leaves the content box the height
+/// [`title_strip_centre`] assumes.
+///
+/// A method rather than a function, because a row's own chain — its insets, its
+/// tiles, its drag band — is what the file is about, and this is one more link in
+/// it. Calling it mid-chain keeps the row readable instead of burying it in an
+/// argument.
+///
+/// `rule` is the border the row wants. A row standing in for the title bar with
+/// no visible rule passes [`TITLE_BAR_BORDER`] in a transparent ink, so the point
+/// is spent on the box and not on the paint. A row that draws its own thinner
+/// hairline keeps that hairline — it stays flush with the box's bottom edge
+/// either way — and makes up the difference as padding, which is what keeps its
+/// tiles on the same line as the lights over them.
+pub(crate) trait TitleStripRow: Sized {
+    fn title_strip_row(self, rule: gpui_kit::Pixels, ink: gpui_kit::Hsla) -> Self;
+}
+
+impl<R: gpui_kit::Styled> TitleStripRow for R {
+    fn title_strip_row(self, rule: gpui_kit::Pixels, ink: gpui_kit::Hsla) -> Self {
+        let (border, pad) = title_strip_rule_and_pad(rule);
+        self.h(gpui_kit::px(TITLE_BAR_HEIGHT))
+            .items_center()
+            .border_b(border)
+            .border_color(ink)
+            .pb(pad)
+    }
+}
+
+pub(crate) const TILE_SIZE: f32 = 32.;
+pub(crate) const TILE_GLYPH: f32 = 16.;
+/// A tile that sits in a body row rather than in chrome: the box shrinks to
+/// the minimum hit target, but the glyph keeps the chrome size. An 11px glyph
+/// here read as a disabled ornament next to 14px text, and put a second,
+/// smaller folder in the same column as the panel's folder tab.
+pub(crate) const TILE_SIZE_SM: f32 = 24.;
+pub(crate) const TILE_GLYPH_SM: f32 = TILE_GLYPH;
+
+/// The tile that lives *inside* a list row rather than beside one, for the
+/// buttons a row reveals on hover.
+///
+/// A box below [`TILE_SIZE_SM`] because of width: three `TILE_SIZE_SM` squares
+/// would eat 72 of the 236px a file name has to live in, where three of these
+/// eat 54.
+pub(crate) const TILE_SIZE_XS: f32 = 18.;
+pub(crate) const TILE_GLYPH_XS: f32 = 11.;
+
+const TILE_PAD: f32 = (TILE_SIZE - TILE_GLYPH) / 2.;
+
+pub(crate) const CONTENT_INSET: f32 = 12.;
+
+const TILE_EDGE_GAP: f32 = 5.;
+
+pub(crate) fn tile_trailing_inset() -> f32 {
+    (CONTENT_INSET - TILE_PAD).max(TILE_EDGE_GAP)
+}
+
+const TITLE_BAR_LEAD: f32 = if cfg!(target_os = "macos") {
+    TRAFFIC_LIGHTS_LEAD
+} else {
+    12.
+};
+
+/// Where macOS puts the window's traffic lights over the tab strip: centred on
+/// the row of chrome tiles they share the bar with. `x` matches `y`, as AppKit's
+/// unified toolbar does (19 and 19 in a 52-point bar).
+///
+/// `y` is the gap between the window's top edge and the *top* of the button
+/// frame, and macOS draws those buttons [`TRAFFIC_LIGHT_BUTTON_H`] tall — so the
+/// lights' centre falls half that below it. Deriving the number from
+/// [`crate::ui::window_chrome::title_strip_centre`], the line every title-bar row puts its
+/// contents on, is what keeps the lights on the tile line: the value the 40-point bar needed was
+/// rewritten by hand when the bar grew to 48, without the border in it, and left
+/// the lights half a point — one device pixel on a Retina panel — below
+/// everything beside them.
+pub(crate) fn traffic_light_position() -> Point<Pixels> {
+    point(px(TRAFFIC_LIGHT_INSET), px(TRAFFIC_LIGHT_INSET))
+}
+
+/// The height of AppKit's own standard-window-button frame, which is what the
+/// lights are drawn inside. It does not move with the bar's height.
+const TRAFFIC_LIGHT_BUTTON_H: f32 = 14.;
+
+// The same content centre drives both the native buttons and the rows beside
+// them. Keep the inset const so the leading reserve can follow it at compile
+// time instead of maintaining a second copy of the bar's border arithmetic.
+const TRAFFIC_LIGHT_INSET: f32 = TITLE_STRIP_CENTRE - TRAFFIC_LIGHT_BUTTON_H / 2.;
+
+/// Close to zoom: three 14-point buttons on a 20-point pitch.
+const TRAFFIC_LIGHTS_W: f32 = 54.;
+
+/// The room the lights take at the bar's leading edge on macOS: their span,
+/// with the inset they sit at on either side.
+const TRAFFIC_LIGHTS_LEAD: f32 =
+    TRAFFIC_LIGHT_INSET + TRAFFIC_LIGHTS_W + TRAFFIC_LIGHT_INSET;
+
+
+const WINDOW_MARK_SIZE: f32 = 20.;
+
+fn title_bar_drag(
+    row: gpui_kit::Stateful<gpui_kit::Div>,
+    key: &'static str,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    window_move_gesture(row, key, window, cx).on_double_click(|_, window, _| {
+        window.titlebar_double_click();
+    })
+}
+
+struct WindowMoveArm {
+    should_move: bool,
+}
+
+pub(crate) fn window_move_gesture(
+    row: gpui_kit::Stateful<gpui_kit::Div>,
+    key: &'static str,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    window_move_gesture_with(row, key, window, cx, gpui_kit::Window::start_window_move)
+}
+
+fn window_move_gesture_with(
+    row: gpui_kit::Stateful<gpui_kit::Div>,
+    key: &'static str,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+    start_move: impl Fn(&gpui_kit::Window) + 'static,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let arm = window.use_keyed_state(key, cx, |_, _| WindowMoveArm { should_move: false });
+    row.window_control_area(gpui_kit::WindowControlArea::Drag)
+        .on_mouse_down(
+            gpui_kit::MouseButton::Left,
+            window.listener_for(&arm, |arm, _: &gpui_kit::MouseDownEvent, _, _| {
+                arm.should_move = true;
+            }),
+        )
+        .on_mouse_down_out(
+            window.listener_for(&arm, |arm, _: &gpui_kit::MouseDownEvent, _, _| {
+                arm.should_move = false;
+            }),
+        )
+        .on_mouse_up(
+            gpui_kit::MouseButton::Left,
+            window.listener_for(&arm, |arm, _: &gpui_kit::MouseUpEvent, _, _| {
+                arm.should_move = false;
+            }),
+        )
+        .on_mouse_up_out(
+            gpui_kit::MouseButton::Left,
+            window.listener_for(&arm, |arm, _: &gpui_kit::MouseUpEvent, _, _| {
+                arm.should_move = false;
+            }),
+        )
+        .on_mouse_move(window.listener_for(
+            &arm,
+            move |arm, _: &gpui_kit::MouseMoveEvent, window, _| {
+                if arm.should_move {
+                    arm.should_move = false;
+                    start_move(window);
+                }
+            },
+        ))
+}
+
+fn window_mark() -> impl IntoElement {
+    static LOGO: std::sync::OnceLock<Arc<gpui_kit::Image>> = std::sync::OnceLock::new();
+    let logo = LOGO
+        .get_or_init(|| {
+            Arc::new(gpui_kit::Image::from_bytes(
+                gpui_kit::ImageFormat::Png,
+                include_bytes!("../../assets/logo@256.png").to_vec(),
+            ))
+        })
+        .clone();
+    img(logo)
+        .size(gpui_kit::rems(WINDOW_MARK_SIZE / 16.))
+        .flex_shrink_0()
+}
+
+/// Whether the title bar carries minimize, maximize and close right now.
+///
+/// Not in fullscreen. A fullscreen window has no caption: Windows clears
+/// `WS_CAPTION` and answers `HTCLIENT` along the whole top edge, so the three
+/// buttons would draw, light up under the pointer and do nothing when clicked.
+/// The row they sit at the end of stays, because it is also the tab strip.
+///
+/// Never on macOS, which draws no buttons of its own: those are the system's
+/// traffic lights, and the system hides them itself.
+pub(crate) fn window_controls_drawn(fullscreen: bool) -> bool {
+    !cfg!(target_os = "macos") && !fullscreen
+}
+
+pub(crate) fn chrome_tile_variant(cx: &gpui_kit::App) -> ButtonCustomVariant {
+    chrome_tile_variant_for(false, cx)
+}
+
+fn chrome_tile_variant_for(selected: bool, cx: &gpui_kit::App) -> ButtonCustomVariant {
+    ButtonCustomVariant::new(cx)
+        .color(cx.theme().transparent)
+        // Resting chrome is *not* body ink. `sidebar_foreground` is the rung a
+        // tab title is written at, so a toolbar drawn in it made the two
+        // controls at the top of the rail the darkest marks in the whole
+        // sidebar — louder than the twenty rows they exist to act on, which is
+        // the opposite of how a native sidebar ranks itself. One rung down puts
+        // them level with the workspace chip beside them, and the hover fill
+        // this variant already carries is what answers the pointer.
+        .foreground(if selected {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        })
+        // `sidebar_accent` is the surface's *selected* step, and it was handed
+        // to hover as well — so a hovered tile wore the fill of a selected one
+        // and, with the right panel open, two tiles read as current at once.
+        // Hover takes the step the palette derives for it. (A selected button
+        // never renders the hover style, so this only reaches the rest.)
+        .hover(gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.hover).into())
+        .active(cx.theme().sidebar_accent)
+}
+
+pub(crate) const BUTTON_ICON_SCALE: f32 = 0.75;
+
+pub(crate) fn chrome_tile(button: Button, selected: bool, cx: &gpui_kit::App) -> Button {
+    chrome_tile_sized(button, TILE_SIZE, TILE_GLYPH, selected, cx)
+}
+
+pub(crate) fn chrome_tile_sized(
+    button: Button,
+    tile: f32,
+    glyph: f32,
+    selected: bool,
+    cx: &gpui_kit::App,
+) -> Button {
+    button
+        .custom(chrome_tile_variant_for(selected, cx))
+        .selected(selected)
+        .with_size(px(glyph / BUTTON_ICON_SCALE))
+        .w(px(tile))
+        .h(px(tile))
+}
+
+
+/// 工作台只接收语义意图，窗口 chrome 不持有工作台或标签页的可变访问权。
+#[derive(Clone, Copy)]
+pub(crate) enum ChromeCommand {
+    ToggleLeftPanel,
+    ToggleSearch,
+    Split(Axis),
+    ToggleRightPanel,
+}
+
+/// 常驻控件与原生窗口几何；拖动状态通过窗口内稳定 key 跨重绘保留。
+pub(crate) struct WindowChrome {
+    left: AnyElement,
+    right: AnyElement,
+}
+
+impl WindowChrome {
+    pub(crate) fn new<F>(
+        left_open: bool,
+        right_open: bool,
+        can_split: bool,
+        new_tab: impl IntoElement,
+        cx: &App,
+        on_command: impl Fn(ChromeCommand) -> F,
+    ) -> Self
+    where
+        F: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    {
         let tile = |button: Button| button.custom(chrome_tile_variant(cx)).size_8().rounded_lg();
         let group = || {
             h_flex()
@@ -65,10 +366,7 @@ impl LyrelApp {
                     &ToggleLeftPanel,
                     None,
                 )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_left_panel(cx);
-                    this.focus_previous_content(window, cx);
-                })),
+                .on_click(on_command(ChromeCommand::ToggleLeftPanel)),
             )
             .child(
                 tile(
@@ -77,14 +375,9 @@ impl LyrelApp {
                 )
                 .accessibility_label(t(L10nKey::AppMenuSearchEverywhere))
                 .tooltip_with_action(t(L10nKey::AppMenuSearchEverywhere), &TogglePalette, None)
-                .on_click(
-                    cx.listener(|this, _, window, cx| match this.search.is_some() {
-                        true => this.close_search(window, cx),
-                        false => this.open_search(SearchTab::All, "", window, cx),
-                    }),
-                ),
+                .on_click(on_command(ChromeCommand::ToggleSearch)),
             )
-            .child(self.new_tab_button("titlebar-add", cx));
+            .child(new_tab);
         let right = group()
             .child(
                 tile(
@@ -94,9 +387,7 @@ impl LyrelApp {
                 .disabled(!can_split)
                 .accessibility_label(t(L10nKey::AppMenuSplitRight))
                 .tooltip_with_action(t(L10nKey::AppMenuSplitRight), &SplitRight, None)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.split(gpui_kit::Axis::Horizontal, window, cx)
-                })),
+                .on_click(on_command(ChromeCommand::Split(Axis::Horizontal))),
             )
             .child(
                 tile(
@@ -106,9 +397,7 @@ impl LyrelApp {
                 .disabled(!can_split)
                 .accessibility_label(t(L10nKey::AppMenuSplitDown))
                 .tooltip_with_action(t(L10nKey::AppMenuSplitDown), &SplitDown, None)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.split(gpui_kit::Axis::Vertical, window, cx)
-                })),
+                .on_click(on_command(ChromeCommand::Split(Axis::Vertical))),
             )
             .child(
                 tile(
@@ -136,11 +425,16 @@ impl LyrelApp {
                     &ToggleRightPanel,
                     None,
                 )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_right_panel(cx);
-                    this.focus_previous_content(window, cx);
-                })),
+                .on_click(on_command(ChromeCommand::ToggleRightPanel)),
             );
+        Self {
+            left: left.into_any_element(),
+            right: right.into_any_element(),
+        }
+    }
+
+    pub(crate) fn render(self, window: &mut Window, cx: &mut App) -> AnyElement {
+        let macos_fullscreen = cfg!(target_os = "macos") && window.is_fullscreen();
         let left_row = h_flex()
             .id("workbench-left-drag")
             .w_full()
@@ -150,13 +444,13 @@ impl LyrelApp {
             .border_b_1()
             .border_color(cx.theme().transparent)
             // 仅窗口模式保留原生交通灯几何；全屏恢复产品控件的边距。
-            .pl(px(crate::ui::app::TITLE_BAR_LEAD))
+            .pl(px(TITLE_BAR_LEAD))
             .when(macos_fullscreen, |row| row.pl_3())
             .pr_1()
             .gap_2()
-            .child(crate::ui::app::window_mark())
-            .child(left);
-        let left = crate::ui::app::title_bar_drag(left_row, "workbench-left-drag", window, cx)
+            .child(window_mark())
+            .child(self.left);
+        let left = title_bar_drag(left_row, "workbench-left-drag", window, cx)
             .into_any_element();
         let trailing_inset = if macos_fullscreen { 0.75 } else { 0.25 };
         let strip = h_flex()
@@ -165,7 +459,7 @@ impl LyrelApp {
             .h_full()
             .justify_end()
             .pr(rems(trailing_inset))
-            .child(right);
+            .child(self.right);
         let controls_drawn = window_controls_drawn(window.is_fullscreen());
         let native_width = if controls_drawn {
             let controls = window.window_controls();
@@ -192,7 +486,7 @@ impl LyrelApp {
                 .flex_none()
                 .w_full()
                 .child(strip);
-            crate::ui::app::title_bar_drag(row, "workbench-right-drag", window, cx)
+            title_bar_drag(row, "workbench-right-drag", window, cx)
                 .into_any_element()
         };
         h_flex()
@@ -217,6 +511,66 @@ mod gpui_tests {
     use crate::daemon::protocol::ClientMsg;
     use crate::daemon::transport::Stream;
     use crate::ui::app::{LyrelApp, test_window::harness_with_tabs};
+    use super::{
+        TITLE_BAR_BORDER, title_strip_centre, title_strip_content_centre, title_strip_rule_and_pad,
+        traffic_light_position, TRAFFIC_LIGHT_BUTTON_H,
+    };
+    #[cfg(target_os = "macos")]
+    use super::{TITLE_BAR_LEAD, TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_W};
+    /// A title-bar row spends [`TITLE_BAR_BORDER`] of its height below its
+    /// contents, and there are two ways it does that: it carries the whole point
+    /// as a rule painted transparent (the strip's `TitleBar`, the rail's header,
+    /// the code panel's, the settings band), or it draws its own thinner hairline
+    /// and gives the rest back as padding (the diff overlay's 0.5pt rule). Both
+    /// have to leave the contents on the line the traffic lights hang on — the
+    /// rows sit side by side in the same band, and half a point of difference is
+    /// the one device pixel that reads as a step.
+    #[test]
+    fn a_rows_own_hairline_and_the_bars_invisible_rule_reach_the_same_centre() {
+        for rule in [px(0.), px(0.5), px(TITLE_BAR_BORDER), px(2.)] {
+            let (border, pad) = title_strip_rule_and_pad(rule);
+            assert!(
+                border.as_f32() <= TITLE_BAR_BORDER,
+                "a thicker rule than the bar's own point would push the contents \
+                 onto a line nothing else is on"
+            );
+            assert!(
+                pad.as_f32() >= 0.,
+                "negative padding is not padding, and taffy would swallow it"
+            );
+            assert_eq!(
+                title_strip_content_centre(rule),
+                title_strip_centre(),
+                "a rule of {} leaves the box short by {} of border and {} of padding",
+                rule.as_f32(),
+                border.as_f32(),
+                pad.as_f32()
+            );
+        }
+    }
+    /// The lights share a line with the chrome tiles they sit beside. gpui
+    /// hangs the top of the button frame `y` below the window's top edge, so
+    /// their centre falls half a frame under that, and `title_strip_centre` is
+    /// where every title-bar row puts its contents. Sixteen and a half points
+    /// today, out of the 48pt bar.
+    #[test]
+    fn the_traffic_lights_sit_on_the_chrome_rows_centre() {
+        let position = traffic_light_position();
+        assert_eq!(position.x, position.y);
+        assert_eq!(
+            position.y + px(TRAFFIC_LIGHT_BUTTON_H / 2.),
+            crate::ui::window_chrome::title_strip_centre()
+        );
+    }
+
+    /// The strip, editor header and search band start at the lead, so the
+    /// lights have to end, with their inset after them, before it does.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_title_bar_lead_clears_the_traffic_lights() {
+        let right = traffic_light_position().x + px(TRAFFIC_LIGHTS_W);
+        assert!(right + px(TRAFFIC_LIGHT_INSET) <= px(crate::ui::window_chrome::TITLE_BAR_LEAD));
+    }
 
     fn settle(vcx: &mut VisualTestContext) {
         vcx.run_until_parked();
@@ -242,7 +596,7 @@ mod gpui_tests {
 
     fn terminal_focused(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
         app.update_in(vcx, |app, window, cx| {
-            app.tabs[app.active]
+            app.tabs[app.tabs.active_index()]
                 .pane
                 .leaves()
                 .iter()
@@ -319,6 +673,71 @@ mod gpui_tests {
                 assert!(!window.is_fullscreen());
                 assert_eq!(edge_controls.map(|id| window.find(id).bounds()), windowed);
             });
+        }
+    }
+
+    #[gpui_kit::test]
+    fn zoom_and_fullscreen_preserve_chrome_hit_targets_and_terminal_top(
+        cx: &mut TestAppContext,
+    ) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        let controls = [
+            "titlebar-left-panel",
+            "titlebar-search",
+            "titlebar-add",
+            "titlebar-split-right",
+            "titlebar-split-down",
+            "titlebar-right-panel",
+        ];
+        for (width, font_size) in [(760., 16.), (1440., 20.)] {
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<crate::core::config::Config>().ui_font_size = font_size;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+                cx.notify();
+            });
+            vcx.simulate_resize(size(px(width), px(900.)));
+            settle(&mut vcx);
+            let windowed = vcx.update(|window, _| controls.map(|id| window.find(id).bounds()));
+            for fullscreen in [true, false] {
+                vcx.dispatch_action(crate::core::actions::ToggleFullscreen);
+                settle(&mut vcx);
+                let anchored = vcx.update(|window, _| {
+                    assert_eq!(window.is_fullscreen(), fullscreen);
+                    controls.map(|id| window.find(id).bounds())
+                });
+                for button in [
+                    "titlebar-left-panel",
+                    "titlebar-right-panel",
+                    "titlebar-left-panel",
+                    "titlebar-right-panel",
+                ] {
+                    let before = app.read_with(&vcx, |app, cx| {
+                        (app.left_panel_open(cx), app.right_panel_open(cx))
+                    });
+                    vcx.update(|window, cx| window.click(button, cx));
+                    settle(&mut vcx);
+                    app.read_with(&vcx, |app, cx| {
+                        let expected = if button == "titlebar-left-panel" {
+                            (!before.0, before.1)
+                        } else {
+                            (before.0, !before.1)
+                        };
+                        assert_eq!((app.left_panel_open(cx), app.right_panel_open(cx)), expected);
+                        assert_eq!(app.pane_area.get().unwrap().top(), px(font_size * 3.));
+                    });
+                    vcx.update(|window, _| {
+                        let current = controls.map(|id| window.find(id).bounds());
+                        assert_eq!(current, anchored, "panels cannot move zoomed chrome");
+                        for bounds in current {
+                            assert_eq!(bounds.size, size(px(font_size * 2.), px(font_size * 2.)));
+                            assert!(bounds.bottom() <= px(font_size * 3.));
+                        }
+                    });
+                }
+                if !fullscreen {
+                    assert_eq!(anchored, windowed, "leaving fullscreen restores native reserves");
+                }
+            }
         }
     }
 
@@ -426,7 +845,7 @@ mod gpui_tests {
                 (
                     app.left_panel_open(cx),
                     app.right_panel_open(cx),
-                    app.search.is_some(),
+                    app.search.is_open(),
                 )
             });
             vcx.update(|window, cx| {
@@ -441,7 +860,7 @@ mod gpui_tests {
                 (
                     app.left_panel_open(cx),
                     app.right_panel_open(cx),
-                    app.search.is_some(),
+                    app.search.is_open(),
                 )
             });
             let expected = match button {
@@ -600,7 +1019,7 @@ mod gpui_tests {
                 app.workspace,
                 app.tabs
                     .iter()
-                    .map(|tab| tab.tree_id.get())
+                    .map(|tab| tab.id())
                     .collect::<Vec<_>>(),
                 app.tabs
                     .iter()
@@ -651,7 +1070,7 @@ mod gpui_tests {
             );
             vcx.dispatch_action(ActivateTab2);
             settle(&mut vcx);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
             assert!(terminal_focused(&app, &mut vcx));
             vcx.dispatch_action(ActivateTab1);
             settle(&mut vcx);
@@ -661,7 +1080,7 @@ mod gpui_tests {
             assert_eq!(
                 app.tabs
                     .iter()
-                    .map(|tab| tab.tree_id.get())
+                    .map(|tab| tab.id())
                     .collect::<Vec<_>>(),
                 original.1
             );
@@ -700,21 +1119,21 @@ mod gpui_tests {
             assert!(second_tab.size.width > px(0.));
             vcx.simulate_click(second_tab.center(), gpui_kit::Modifiers::none());
             settle(&mut vcx);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
             assert!(terminal_focused(&app, &mut vcx));
 
             vcx.update(|window, cx| window.click("titlebar-search", cx));
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+            assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
             vcx.simulate_keystrokes(&first_tab_key);
             vcx.simulate_keystrokes("q");
             settle(&mut vcx);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
             assert_eq!(input(&mut streams[0]), None);
             assert_eq!(input(&mut streams[1]), None);
             vcx.simulate_keystrokes("escape");
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+            assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
             assert!(terminal_focused(&app, &mut vcx));
             vcx.simulate_keystrokes("y");
             settle(&mut vcx);
@@ -755,11 +1174,11 @@ mod gpui_tests {
             let before = editor.read_with(&vcx, |editor, _| editor.value().to_string());
             vcx.update(|window, cx| window.click("titlebar-search", cx));
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+            assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
             vcx.simulate_keystrokes("q");
             vcx.simulate_keystrokes("escape");
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+            assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
             assert_eq!(
                 editor.read_with(&vcx, |editor, _| editor.value().to_string()),
                 before
@@ -847,5 +1266,236 @@ mod gpui_tests {
             settle(&mut vcx);
             assert_eq!(input(&mut streams[0]).as_deref(), Some(&b"n"[..]));
         }
+    }
+}
+#[cfg(test)]
+mod window_drag_tests {
+    use gpui_kit::{
+        Context, InteractiveElement as _, IntoElement, Modifiers, MouseButton, MouseDownEvent,
+        MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, PlatformInput, Point, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+    };
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn row(
+        key: &'static str,
+        moves: &Rc<Cell<usize>>,
+        window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        let moves = moves.clone();
+        super::window_move_gesture_with(
+            div().id(key).w_full().h(px(40.)),
+            key,
+            window,
+            cx,
+            move |_| moves.set(moves.get() + 1),
+        )
+    }
+
+    struct Host {
+        moves: Rc<Cell<usize>>,
+    }
+    impl Render for Host {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(row("stand-in-title-bar", &self.moves, window, cx))
+        }
+    }
+
+    struct HandleOverRow {
+        occluded: bool,
+        moves: Rc<Cell<usize>>,
+    }
+    impl Render for HandleOverRow {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let handle = div()
+                .absolute()
+                .top_0()
+                .left(px(296.))
+                .w(px(8.))
+                .h_full()
+                .cursor_col_resize()
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.refresh());
+            let handle = if self.occluded {
+                handle.occlude()
+            } else {
+                handle
+            };
+            div()
+                .relative()
+                .size_full()
+                .child(row("stand-in-title-bar", &self.moves, window, cx))
+                .child(handle)
+        }
+    }
+
+    fn down(at: Point<Pixels>) -> PlatformInput {
+        PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: Modifiers::none(),
+            click_count: 1,
+            first_mouse: false,
+        })
+    }
+
+    fn up(at: Point<Pixels>) -> PlatformInput {
+        PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: Modifiers::none(),
+            click_count: 1,
+        })
+    }
+
+    fn moved(at: Point<Pixels>, held: bool) -> PlatformInput {
+        PlatformInput::MouseMove(MouseMoveEvent {
+            position: at,
+            pressed_button: held.then_some(MouseButton::Left),
+            modifiers: Modifiers::none(),
+        })
+    }
+
+    const ON_ROW: Point<Pixels> = Point {
+        x: px(300.),
+        y: px(20.),
+    };
+
+    fn drifted(at: Point<Pixels>) -> Point<Pixels> {
+        point(at.x + px(12.), at.y + px(3.))
+    }
+
+    fn press_repaint_move(vcx: &mut VisualTestContext, at: Point<Pixels>) {
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(at, false), cx);
+            window.dispatch_event(down(at), cx);
+        });
+        vcx.update(|window, _| window.refresh());
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(drifted(at), true), cx);
+        });
+        vcx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn a_drag_survives_repaint_and_requests_one_native_move(cx: &mut TestAppContext) {
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| Host {
+            moves: moves.clone(),
+        });
+        let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        press_repaint_move(&mut vcx, ON_ROW);
+        assert_eq!(moves.get(), 1);
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(drifted(drifted(ON_ROW)), true), cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(
+            moves.get(),
+            1,
+            "one press must request only one native move"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_press_alone_does_not_move_the_window(cx: &mut TestAppContext) {
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| Host {
+            moves: moves.clone(),
+        });
+        let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(ON_ROW, false), cx);
+            window.dispatch_event(down(ON_ROW), cx);
+            window.dispatch_event(up(ON_ROW), cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(moves.get(), 0);
+    }
+
+    #[gpui_kit::test]
+    fn a_release_disarms_so_a_later_hover_does_not_drag(cx: &mut TestAppContext) {
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| Host {
+            moves: moves.clone(),
+        });
+        let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(ON_ROW, false), cx);
+            window.dispatch_event(down(ON_ROW), cx);
+            window.dispatch_event(up(ON_ROW), cx);
+        });
+        vcx.update(|window, _| window.refresh());
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(drifted(ON_ROW), false), cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!(moves.get(), 0);
+    }
+
+    #[gpui_kit::test]
+    fn a_press_on_a_resize_handle_does_not_move_the_window(cx: &mut TestAppContext) {
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| HandleOverRow {
+            occluded: true,
+            moves: moves.clone(),
+        });
+        let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        press_repaint_move(&mut vcx, ON_ROW);
+        assert_eq!(moves.get(), 0);
+    }
+
+    #[gpui_kit::test]
+    fn a_handle_without_a_blocking_hitbox_hands_the_press_to_the_row(cx: &mut TestAppContext) {
+        let moves = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| HandleOverRow {
+            occluded: false,
+            moves: moves.clone(),
+        });
+        let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        press_repaint_move(&mut vcx, ON_ROW);
+        assert_eq!(moves.get(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn two_rows_on_screen_keep_separate_arms(cx: &mut TestAppContext) {
+        struct TwoRows {
+            first: Rc<Cell<usize>>,
+            second: Rc<Cell<usize>>,
+        }
+        impl Render for TwoRows {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .child(row("row-a", &self.first, window, cx))
+                    .child(row("row-b", &self.second, window, cx))
+            }
+        }
+
+        let first = Rc::new(Cell::new(0));
+        let second = Rc::new(Cell::new(0));
+        let window = cx.add_window(|_, _| TwoRows {
+            first: first.clone(),
+            second: second.clone(),
+        });
+        let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(point(px(300.), px(20.)), false), cx);
+            window.dispatch_event(down(point(px(300.), px(20.))), cx);
+        });
+        vcx.update(|window, _| window.refresh());
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.dispatch_event(moved(point(px(312.), px(60.)), false), cx);
+        });
+        vcx.run_until_parked();
+        assert_eq!((first.get(), second.get()), (0, 0));
+        press_repaint_move(&mut vcx, point(px(300.), px(60.)));
+        assert_eq!((first.get(), second.get()), (0, 1));
     }
 }

@@ -311,7 +311,7 @@ impl LyrelApp {
         if self.tab_code().and_then(TabCode::active_id) == Some(other) {
             return;
         }
-        let focused = self.buffer(other).is_some_and(|f| {
+        let focused = self.editor.buffers.get(other).is_some_and(|f| {
             f.input
                 .read(cx)
                 .focus_handle(cx)
@@ -451,7 +451,7 @@ impl LyrelApp {
         focus_left: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let name: SharedString = self.buffer(id).map(|f| f.label()).unwrap_or_default();
+        let name: SharedString = self.editor.buffers.get(id).map(|f| f.label()).unwrap_or_default();
         let theme = cx.theme();
         v_flex()
             .id("editor-group-same-file")
@@ -709,10 +709,10 @@ mod gpui_tests {
             }),
         };
         // The second tab was split when the window last closed.
-        let tab = app.read_with(&vcx, |app, _| app.tabs[1].tree_id.get());
+        let tab = app.read_with(&vcx, |app, _| app.tabs[1].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state.clone()));
         app.update_in(&mut vcx, |app, window, cx| {
-            app.active = 1;
+            app.tabs.select(1);
             // As on a relaunch: nothing has been put back for it yet.
             app.editor.restored.remove(&tab);
             app.editor_restore_active(window, cx);
@@ -731,7 +731,7 @@ mod gpui_tests {
             let code = app.tab_code().unwrap();
             assert!(code.is_split());
             assert!(!code.focus_is_left(), "the right group had the focus");
-            let path = |id| app.buffer(id).unwrap().path.clone();
+            let path = |id| app.editor.buffers.get(id).unwrap().path.clone();
             assert_eq!(path(code.active_id().unwrap()), c);
             assert_eq!(path(code.other_active_id().unwrap()), b);
         });
@@ -761,7 +761,7 @@ mod gpui_tests {
                 focused: true,
             }),
         };
-        let tab = app.read_with(&vcx, |app, _| app.tabs[0].tree_id.get());
+        let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state.clone()));
         app.update_in(&mut vcx, |app, window, cx| {
             app.editor.restored.remove(&tab);
@@ -783,7 +783,7 @@ mod gpui_tests {
         }
         app.read_with(&vcx, |app, _| {
             let code = app.tab_code().unwrap();
-            assert_eq!(app.buffer(code.active_id().unwrap()).unwrap().path, c);
+            assert_eq!(app.editor.buffers.get(code.active_id().unwrap()).unwrap().path, c);
         });
     }
 
@@ -800,7 +800,7 @@ mod gpui_tests {
         // before anything is drawn.
         vcx.update(|window, cx| {
             let left = app.read(cx).tab_code().unwrap().other_active_id().unwrap();
-            let input = app.read(cx).buffer(left).unwrap().input.clone();
+            let input = app.read(cx).editor.buffers.get(left).unwrap().input.clone();
             input.update(cx, |state, cx| state.focus(window, cx));
             let before = app.read(cx).active_buffer().unwrap().path.clone();
             assert_eq!(
@@ -830,7 +830,7 @@ mod gpui_tests {
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             let left = app.read(cx).tab_code().unwrap().other_active_id().unwrap();
-            let input = app.read(cx).buffer(left).unwrap().input.clone();
+            let input = app.read(cx).editor.buffers.get(left).unwrap().input.clone();
             input.update(cx, |state, cx| state.focus(window, cx));
             let node = window.focused(cx).unwrap();
             node.dispatch_action(&crate::core::actions::EditorGoToLine, window, cx);
@@ -863,7 +863,7 @@ mod gpui_tests {
                 focused: false,
             }),
         };
-        let tab = app.read_with(&vcx, |app, _| app.tabs[0].tree_id.get());
+        let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
         vcx.update(|_, cx| editor_session::put(cx, tab, state));
         app.update_in(&mut vcx, |app, window, cx| {
             app.editor.restored.remove(&tab);
@@ -882,7 +882,7 @@ mod gpui_tests {
         }
         app.read_with(&vcx, |app, _| {
             let code = app.tab_code().unwrap();
-            let path = |id| app.buffer(id).unwrap().path.clone();
+            let path = |id| app.editor.buffers.get(id).unwrap().path.clone();
             assert_eq!(
                 path(code.active_id().unwrap()),
                 PathBuf::from("/split/opened.rs")

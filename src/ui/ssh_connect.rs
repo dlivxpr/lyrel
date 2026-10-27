@@ -141,7 +141,7 @@ impl LyrelApp {
         cx: &gpui_kit::App,
     ) -> Option<gpui_kit::Entity<crate::terminal::view::TerminalView>> {
         self.tabs
-            .get(self.active)?
+            .get(self.tabs.active_index())?
             .pane
             .focused_or_first(window, cx)
     }

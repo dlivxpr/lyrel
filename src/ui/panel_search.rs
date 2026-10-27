@@ -206,7 +206,7 @@ impl LyrelApp {
             // full `/Users/…` path broke across the narrow column mid-name.
             let home = self
                 .tabs
-                .get(self.active)
+                .get(self.tabs.active_index())
                 .and_then(|tab| tab.detail_pane(window, cx))
                 .and_then(|leaf| leaf.read(cx).display_home(cx));
             let root = roots
@@ -260,7 +260,7 @@ impl LyrelApp {
         use crate::daemon::protocol::RemoteKind;
         let Some(leaf) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|tab| tab.detail_pane(window, cx))
         else {
             return false;

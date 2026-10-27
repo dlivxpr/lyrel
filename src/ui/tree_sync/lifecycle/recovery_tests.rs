@@ -471,7 +471,8 @@ use super::super::*;
                 },
             );
             app.workspace = ws;
-            app.tabs[0].tree_id.set(put_up);
+            let pane = std::mem::replace(&mut app.tabs[0].pane, crate::ui::pane::Pane::Empty);
+            app.tabs[0] = crate::ui::tab::Tab::from_foreign(put_up, None, pane);
             {
                 let state = cx
                     .default_global::<TreeSync>()

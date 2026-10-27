@@ -18,11 +18,11 @@ fn a_retired_batch_cannot_discard_successor_window_edits(cx: &mut gpui_kit::Test
                 },
             );
             app.workspace = ws;
-            let tab = app.tabs[0].tree_id.get();
+            let tab = app.tabs[0].id();
             let mut machine_tab = TreeTab::leaf(1);
             machine_tab.id = tab;
             prime_for_test(cx, ws, vec![machine_tab]);
-            app.tabs[0].name = Some("predecessor edit".into());
+            app.tabs.rename(tab, "predecessor edit", "");
             sync_window(app, cx);
             let state = cx.default_global::<TreeSync>().windows.get_mut(&ws).unwrap();
             state.inflight = false;
@@ -38,7 +38,7 @@ fn a_retired_batch_cannot_discard_successor_window_edits(cx: &mut gpui_kit::Test
             let mut machine_tab = TreeTab::leaf(1);
             machine_tab.id = tab;
             prime_for_test(cx, ws, vec![machine_tab]);
-            app.tabs[0].name = Some("successor edit".into());
+            app.tabs.rename(tab, "successor edit", "");
             sync_window(app, cx);
         });
         vcx.update(|_, cx| {

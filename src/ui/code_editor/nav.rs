@@ -427,7 +427,7 @@ impl EditorNav {
 
 impl LyrelApp {
     fn nav_tab(&self) -> Option<TabId> {
-        self.tabs.get(self.active).map(|t| t.tree_id.get())
+        self.tabs.get(self.tabs.active_index()).map(|t| t.id())
     }
 
     /// Where the caret is in the buffer in front, if there is one.
@@ -467,7 +467,7 @@ impl LyrelApp {
     /// A buffer changed: move saved locations by the actual text replacement,
     /// including undo, reload and LSP edits rather than depending on a widget log.
     pub(crate) fn editor_nav_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer(id) else { return };
+        let Some(f) = self.editor.buffers.get(id) else { return };
         let file = NavLocation {
             host: f.host.id(),
             path: f.path.clone(),
@@ -534,7 +534,7 @@ impl LyrelApp {
     ) -> bool {
         let at = Instant::now();
         if let Some(id) = target.buffer {
-            if self.buffer(id).is_none() {
+            if self.editor.buffers.get(id).is_none() {
                 return false;
             }
             self.editor
@@ -544,7 +544,7 @@ impl LyrelApp {
                 .or_default()
                 .expect(target.clone(), at);
             self.editor_show_in_tab(tab, id, true, window, cx);
-            if let Some(f) = self.buffer(id) {
+            if let Some(f) = self.editor.buffers.get(id) {
                 place_cursor(
                     f.input.clone(),
                     target.pos,
@@ -565,12 +565,7 @@ impl LyrelApp {
             .or_default()
             .expect(target.clone(), at);
         // The same road a file link takes, so a file closed since opens again.
-        self.editor.pending_cursor = Some((
-            target.path.clone(),
-            target.pos.line + 1,
-            target.pos.character + 1,
-        ));
-        self.editor_open_on_host(host, &target.path, window, cx);
+        self.editor_open_on_host_at(host, &target.path, Some(target.pos), window, cx);
         true
     }
 
@@ -605,7 +600,7 @@ impl LyrelApp {
         if let Some(provided) = self.editor.nav.provided.get(&id) {
             return Some(provided.clone());
         }
-        let f = self.buffer(id)?;
+        let f = self.editor.buffers.get(id)?;
         let language = f.language();
         let text = f.input.read(cx).text().clone();
         if !outline::supports(&language) {
@@ -665,7 +660,7 @@ impl LyrelApp {
     /// Go to Symbol in the file in front: the search, on its Symbols tab.
     /// The same chord puts it away again.
     pub(crate) fn editor_go_to_symbol(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(view) = self.search.clone() {
+        if let Some(view) = self.search.view() {
             if view.read(cx).tab() == SearchTab::Symbols {
                 self.close_search(window, cx);
                 return;
@@ -679,7 +674,7 @@ impl LyrelApp {
         let input = f.input.clone();
         // A symbol is a place in the source; a rendered Markdown file shows
         // the source to be taken to it.
-        if let Some(f) = self.buffer_mut(id) {
+        if let Some(f) = self.editor.buffers.get_mut(id) {
             f.preview = false;
         }
         let (origin, scroll) = {
@@ -699,7 +694,7 @@ impl LyrelApp {
             scroll,
         });
         let live = self.lsp_project_symbol_query(window, cx);
-        if let Some(view) = self.search.clone() {
+        if let Some(view) = self.search.view() {
             view.update(cx, |view, cx| {
                 view.set_symbols(rows, here, window, cx);
                 if let Some(live) = live {
@@ -724,7 +719,7 @@ impl LyrelApp {
         let Some(buffer) = self.editor.nav.preview.as_ref().map(|p| p.buffer) else {
             return;
         };
-        let Some(f) = self.buffer(buffer) else { return };
+        let Some(f) = self.editor.buffers.get(buffer) else { return };
         f.input.update(cx, |state, cx| {
             let offset = state
                 .text()
@@ -771,7 +766,7 @@ impl LyrelApp {
         let Some(preview) = self.editor.nav.preview.take() else {
             return;
         };
-        let Some(f) = self.buffer(preview.buffer) else {
+        let Some(f) = self.editor.buffers.get(preview.buffer) else {
             return;
         };
         f.input.update(cx, |state, cx| {
@@ -882,7 +877,7 @@ impl LyrelApp {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let f = self.buffer(id)?;
+        let f = self.editor.buffers.get(id)?;
         let caret = f.input.read(cx).cursor_position();
         let segments: Vec<String> = if f.untitled.is_some() {
             vec![f.label().to_string()]
@@ -1007,7 +1002,7 @@ impl LyrelApp {
                 .h(px(22.))
                 .items_center()
                 .overflow_hidden()
-                .px(px(crate::ui::app::CONTENT_INSET))
+                .px(px(crate::ui::window_chrome::CONTENT_INSET))
                 .text_size(gpui_kit::rems(crate::ui::right_panel::META))
                 .child(path)
                 .children(symbols)
@@ -1483,7 +1478,7 @@ pub(super) mod gpui_tests {
         });
         vcx.run_until_parked();
         let symbols = app.read_with(&vcx, |app, cx| {
-            let view = app.search.clone().expect("the search is open");
+            let view = app.search.view().expect("the search is open");
             assert_eq!(view.read(cx).tab(), SearchTab::Symbols);
             view.read(cx).symbol_count()
         });
@@ -1501,7 +1496,7 @@ pub(super) mod gpui_tests {
 
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+        assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
         assert_eq!(caret(&app, &mut vcx), Position::new(5, 4), "and put back");
         draw(&app, &mut vcx);
         app.read_with(&vcx, |app, _| {
@@ -1528,7 +1523,7 @@ pub(super) mod gpui_tests {
         vcx.run_until_parked();
         vcx.simulate_keystrokes("enter");
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+        assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
         assert_eq!(caret(&app, &mut vcx), Position::new(50, 3));
         draw(&app, &mut vcx);
 
@@ -1720,11 +1715,11 @@ pub(super) mod gpui_tests {
             app.editor_go_to_symbol(window, cx)
         });
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+        assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
         vcx.simulate_keystrokes("secondary-shift-o");
         vcx.run_until_parked();
         assert!(
-            app.read_with(&vcx, |app, _| app.search.is_none()),
+            app.read_with(&vcx, |app, _| !app.search.is_open()),
             "the chord that opened it closes it"
         );
         assert_eq!(caret(&app, &mut vcx), Position::new(5, 4));
@@ -1749,7 +1744,7 @@ pub(super) mod gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
         vcx.run_until_parked();
         let tab = |app: &Entity<LyrelApp>, vcx: &mut gpui_kit::VisualTestContext| {
-            app.read_with(vcx, |app, cx| app.search.as_ref().map(|v| v.read(cx).tab()))
+            app.read_with(vcx, |app, cx| app.search.view().map(|v| v.read(cx).tab()))
         };
         assert_eq!(tab(&app, &mut vcx), Some(SearchTab::Files));
         vcx.simulate_keystrokes("tab");
