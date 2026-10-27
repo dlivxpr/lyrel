@@ -222,3 +222,26 @@ fn stale_native_save_as_cannot_write_a_replacement_buffer(cx: &mut TestAppContex
         }
         assert_eq!(std::fs::read(&path).unwrap(), b"one\r\ntwo\r\nthree");
     }
+
+#[gpui_kit::test]
+fn file_save_before_close_keeps_a_later_focused_editor_group(cx: &mut TestAppContext) {
+    use crate::core::actions::EditorSplitRight;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original-group.txt");
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let original = new_edited_file(&app, &mut vcx);
+    vcx.dispatch_action(CloseActiveTab);
+    settle(&mut vcx);
+    vcx.simulate_prompt_answer(t(L10nKey::Save));
+    settle(&mut vcx);
+    let replacement = new_edited_file(&app, &mut vcx);
+    vcx.dispatch_action(EditorSplitRight);
+    settle(&mut vcx);
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| !app.tab_code().unwrap().shows(original)));
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(app.tab_code().unwrap().active_id(), Some(replacement));
+        assert!(app.active_buffer().unwrap().dirty);
+    });
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "original edits");
+}

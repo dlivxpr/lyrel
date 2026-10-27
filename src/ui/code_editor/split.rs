@@ -155,7 +155,7 @@ impl TabCode {
         } else if let Some(other) = self.split.as_mut() {
             remove(&mut other.files, &mut other.active, id)
         } else {
-            false
+            self.forget(id)
         };
         self.collapse();
         closed
