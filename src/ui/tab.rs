@@ -167,6 +167,10 @@ impl Tab {
     pub(crate) fn id(&self) -> lyrel_core::core::machine::TabId { self.id.get() }
     pub(crate) fn name(&self) -> &Option<String> { &self.name }
 
+    pub(crate) fn presentation(&self) -> &lyrel_core::core::machine::TabPresentation {
+        &self.presentation
+    }
+
     pub(crate) fn from_session(st: &SessionTab, pane: Pane, presentation: lyrel_core::core::machine::TabPresentation) -> Self {
         let mut tab = Self::with_identity(pane, st.tree_id.unwrap_or_else(lyrel_core::core::machine::TabId::new));
         tab.name = st.name.clone();

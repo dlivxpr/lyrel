@@ -15,9 +15,7 @@ use crate::core::actions::*;
 use crate::core::config::{
     Config, CursorStyle as ConfigCursorStyle, NewTabPosition, RightPanelTab,
 };
-use crate::core::session::{
-    Session, SessionAxis, SessionPane, SessionTab, WorkspaceId, WorkspaceStore,
-};
+use crate::core::session::{Session, SessionTab, WorkspaceId, WorkspaceStore};
 use crate::core::shells::ShellInventory;
 use crate::core::ssh_config;
 use crate::core::window_state::{WindowGeometry as _, WindowState};
@@ -34,6 +32,7 @@ use crate::ui::search::{
     SearchView, SessionHistory, TerminalCatalog,
 };
 use crate::ui::settings::SettingsSection;
+use crate::ui::session_lifecycle::{self, SessionLifecycle, SessionRestore, WindowDeparture, split_machine_held, tab_to_session};
 use crate::ui::settings_window::SettingsWindow;
 mod settings_bridge;
 use crate::ui::theme::{apply_theme, set_menus};
@@ -118,8 +117,6 @@ pub(crate) const FONT_SIZE_STEP: f32 = 1.0;
 pub(crate) const UI_FONT_SIZE_STEP: f32 = 1.0;
 
 pub(crate) const LINE_HEIGHT_STEP: f32 = 0.05;
-
-const MAX_CLOSED_TABS: usize = 20;
 
 /// How long ⌘⇧T waits for this window's queued edits to reach the machine
 /// before asking it for the newest closed tab: polls of [`REOPEN_SETTLE_POLL`].
@@ -268,7 +265,7 @@ pub struct LyrelApp {
     /// `Some` means the theme on screen is a preview that was never written to
     /// disk, and closing the search without confirming puts this one back.
     theme_preview_restore: Option<String>,
-    pub(crate) closed: Vec<SessionTab>,
+    pub(crate) session: SessionLifecycle,
     pub(crate) renaming: Option<Renaming>,
     pub(crate) worktree_prompt: Option<crate::ui::worktree_prompt::WorktreePrompt>,
     pub(crate) maximized: Option<Entity<TerminalView>>,
@@ -840,7 +837,7 @@ impl LyrelApp {
             },
             some => {
                 let (tabs, active, dropped) =
-                    tabs_from_session(pane_ws.as_ref(), workspace, some, font_size, window, cx);
+                    SessionRestore::tabs(pane_ws.clone(), workspace, some, font_size, window, cx);
                 if dropped > 0 {
                     startup_error = Some(gpui_kit::SharedString::from(t_plural(
                         L10nKey::AppTabsNotRestored,
@@ -908,7 +905,7 @@ impl LyrelApp {
             _appearance_watch: appearance_watch,
             search: SearchState::default(),
             theme_preview_restore: None,
-            closed: Vec::new(),
+            session: SessionLifecycle::default(),
             renaming: None,
             worktree_prompt: None,
             maximized: None,
@@ -1082,45 +1079,18 @@ impl LyrelApp {
     }
 
     pub(crate) fn save_session(&self, cx: &mut App) {
-        for view in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
-            let Some(owner) = view.read(cx).owner_workspace() else {
-                continue;
-            };
-            if owner != self.workspace {
-                log::error!(
-                    "save_session: window of workspace {} is recording pane {} \
-                     that was created for workspace {owner} — cross-workspace \
-                     write detected, please report this",
-                    self.workspace,
-                    view.read(cx).pane_id,
-                );
-            }
-        }
-        WorkspaceStore::record_geometry(
-            cx,
+        session_lifecycle::record_window(
             self.workspace,
+            &self.tabs,
             WindowState::from_bounds(self.window_bounds),
+            cx,
         );
         crate::ui::tree_sync::sync_window(self, cx);
     }
 
     pub(crate) fn detach_workspace(&self, cx: &mut App) {
         self.save_session(cx);
-        let answered = WorkspaceStore::machine_is_connected(cx, self.workspace);
-        if self.tabs.is_empty()
-            && answered
-            && crate::ui::tree_sync::workspace_is_disposable(cx, self.workspace)
-        {
-            crate::ui::tree_sync::fire_workspace_op(cx, self.workspace, |ws| {
-                lyrel_core::daemon::control::ControlRequest::WorkspaceRemove { workspace: ws }
-            });
-            WorkspaceStore::remove(cx, self.workspace);
-        } else {
-            WorkspaceStore::close_window(cx, self.workspace);
-        }
-        crate::ui::windows::WindowRegistry::unregister(cx, self.workspace);
-        crate::ui::tree_sync::forget(cx, self.workspace);
-        crate::ui::windows::refresh_menu(cx);
+        session_lifecycle::depart_window(self.workspace, &self.tabs, WindowDeparture::Close, cx);
     }
 
     /// Opens a second window, on a workspace of its own.
@@ -1143,24 +1113,7 @@ impl LyrelApp {
         let last_window = crate::ui::windows::WindowRegistry::count(cx) <= 1;
         self.detach_workspace(cx);
         if last_window {
-            // With a tray icon, closing the last window retires to the
-            // tray: the daemon stays reachable (show / quit-and-stop)
-            // instead of being orphaned behind a dead icon. Without one
-            // the app quits — the only way it stays visible at all.
-            //
-            // The icon has to actually be up, not merely asked for: the
-            // backend can fail for the whole run (a Linux session with no
-            // StatusNotifier host), and retiring into an icon that never
-            // appeared leaves a process with no window and no tray — no
-            // way back in, and the daemon still held.
-            let retire_to_tray =
-                cx.global::<Config>().show_tray_icon && crate::ui::tray::icon_is_up();
-            if !retire_to_tray {
-                cx.spawn(async move |cx| {
-                    let _ = cx.update(|cx| cx.quit());
-                })
-                .detach();
-            }
+            session_lifecycle::retire_last_window(cx);
         }
     }
 
@@ -1273,18 +1226,10 @@ impl LyrelApp {
         // Anything parked for the workspace we are leaving is now meaningless.
         self.tabs.clear_pending();
         self.pending_notification_source = None;
-        if self.tabs.is_empty() && crate::ui::tree_sync::workspace_is_disposable(cx, previous) {
-            crate::ui::tree_sync::fire_workspace_op(cx, previous, |ws| {
-                lyrel_core::daemon::control::ControlRequest::WorkspaceRemove { workspace: ws }
-            });
-            WorkspaceStore::remove(cx, previous);
-        } else if self.tabs.is_empty() {
-            WorkspaceStore::close_window(cx, previous);
-        } else {
+        if !self.tabs.is_empty() {
             self.save_session(cx);
-            WorkspaceStore::close_window(cx, previous);
         }
-        crate::ui::tree_sync::forget(cx, previous);
+        session_lifecycle::depart_window(previous, &self.tabs, WindowDeparture::Switch, cx);
 
         let claimed = WorkspaceStore::claim(cx, id);
         crate::ui::windows::WindowRegistry::rebind(cx, previous, claimed);
@@ -1324,13 +1269,8 @@ impl LyrelApp {
         self.refresh_shells(cx);
         let font_size = self.font_size;
         let pane_ws = self.window_workspace(cx);
-        let (tabs, active, dropped) = tabs_from_session(
-            pane_ws.as_ref(),
-            self.workspace,
-            Some(session),
-            font_size,
-            window,
-            cx,
+        let (tabs, active, dropped) = SessionRestore::tabs(
+            pane_ws, self.workspace, Some(session), font_size, window, cx,
         );
         if dropped > 0 {
             window.notify_app(
@@ -1400,7 +1340,7 @@ impl LyrelApp {
                         if let Err(st) = app.put_back_closed_tab(st, window, cx) {
                             // The entry is off the machine's list now; keep it
                             // here so another ⌘⇧T can try it again.
-                            app.remember_closed_here(st);
+                            app.session.remember_close(st);
                         }
                     }
                     Ok(ReplyOk::ReopenedTab(None)) => app.reopen_closed_here(window, cx),
@@ -1419,11 +1359,11 @@ impl LyrelApp {
     }
 
     fn reopen_closed_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(st) = self.closed.pop() else {
+        let Some(st) = self.session.take_closed() else {
             return;
         };
         if let Err(st) = self.put_back_closed_tab(st, window, cx) {
-            self.closed.push(st);
+            self.session.remember_close(st);
         }
     }
 
@@ -1433,37 +1373,25 @@ impl LyrelApp {
     /// Hands the tab back when no pane in it would start.
     fn put_back_closed_tab(
         &mut self,
-        mut st: SessionTab,
+        st: SessionTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), SessionTab> {
         let pane_ws = self.window_workspace(cx);
-        let alive = alive_panes_on(&crate::terminal::PaneRoute::for_workspace(pane_ws.as_ref()));
-        let Some(pane) = session_to_pane(
-            pane_ws.as_ref(),
-            self.workspace,
-            &st.pane,
-            alive.as_ref(),
-            self.font_size,
-            window,
-            cx,
-            &mut st.presentation,
-        ) else {
-            window.notify_app(
-                crate::ui::notification_history::Notification::error(t(
-                    L10nKey::AppReopenTabFailed,
-                )),
-                cx,
-            );
-            return Err(st);
+        let tab = match SessionRestore::reopen(pane_ws, self.workspace, self.font_size, st, window, cx) {
+            Ok(tab) => tab,
+            Err(st) => {
+                window.notify_app(
+                    crate::ui::notification_history::Notification::error(t(L10nKey::AppReopenTabFailed)),
+                    cx,
+                );
+                return Err(st);
+            }
         };
         self.remember_active_pane(window, cx);
         self.maximized = None;
         let insert_at = self.new_tab_insert_at(cx);
-        self.tabs.insert(
-            insert_at,
-            Tab::reopened(st, pane),
-        );
+        self.tabs.insert(insert_at, tab);
         self.tabs.select(insert_at);
         self.focus_active(window, cx);
         self.save_session(cx);
@@ -3984,16 +3912,7 @@ impl LyrelApp {
     /// the window has to have something on screen, and looking at a tab is
     /// what wakes it.
     pub(crate) fn can_hibernate_tab(&self, index: usize, cx: &App) -> bool {
-        let Some(tab) = self.tabs.get(index) else {
-            return false;
-        };
-        if !crate::ui::tree_sync::can_hibernate_on(cx, self.workspace) {
-            return false;
-        }
-        let remote = WorkspaceStore::all(cx)
-            .get(self.workspace)
-            .is_some_and(|w| w.is_remote());
-        tab.is_hibernatable(remote, cx) && self.tabs.awake_besides(index).is_some()
+        SessionLifecycle::hibernate_successor(&self.tabs, index, self.workspace, cx).is_some()
     }
 
 
@@ -4012,13 +3931,10 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.can_hibernate_tab(index, cx) {
+        let Some(next) = SessionLifecycle::hibernate_successor(&self.tabs, index, self.workspace, cx) else {
             return;
-        }
+        };
         if index == self.tabs.active_index() {
-            let Some(next) = self.tabs.awake_besides(index) else {
-                return;
-            };
             self.activate(next, window, cx);
         }
         self.put_to_sleep(index, window, cx);
@@ -4027,12 +3943,9 @@ impl LyrelApp {
     /// The part of [`Self::hibernate_tab`] that does not ask whether it may:
     /// the tab lets go of its panes and keeps what a wake needs instead.
     fn put_to_sleep(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(index).filter(|t| !t.is_asleep()) else {
+        if !SessionLifecycle::sleep(&mut self.tabs, index, window, cx) {
             return;
-        };
-        let (view, home) = tab.label_view(Some(window), cx);
-        let layout = pane_to_session(&tab.pane, cx);
-        self.tabs[index].sleep(layout, view, home);
+        }
         self.save_session(cx);
         cx.notify();
     }
@@ -4048,34 +3961,17 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(layout) = self.tabs.get(index).and_then(Tab::asleep_layout) else {
+        if self.tabs.get(index).and_then(Tab::asleep_layout).is_none() {
             return true;
-        };
-        let layout = redial_native_ssh(layout);
+        }
         let pane_ws = self.window_workspace(cx);
-        let mut presentation = self.tabs[index].presentation.clone();
-        // No listing: every pane in here was stopped on purpose, so the attach
-        // each one tries first fails and falls through to the fresh spawn —
-        // unless the stop never landed, in which case attaching to the pane
-        // that is still running is exactly right.
-        let pane = session_to_pane(
-            pane_ws.as_ref(),
-            self.workspace,
-            &layout,
-            None,
-            self.font_size,
-            window,
-            cx,
-            &mut presentation,
-        );
-        let Some(pane) = pane else {
+        if !SessionLifecycle::wake(&mut self.tabs, index, pane_ws, self.workspace, self.font_size, window, cx) {
             window.notify_app(
                 crate::ui::notification_history::Notification::error(t(L10nKey::TabWakeFailed)),
                 cx,
             );
             return false;
         };
-        self.tabs[index].finish_wake(pane, presentation);
         self.save_session(cx);
         cx.notify();
         true
@@ -4214,7 +4110,7 @@ impl LyrelApp {
             };
             crate::ui::tree_sync::retire_tab(cx, self.workspace, retiring);
         } else {
-            self.remember_closed_here(snapshot.clone());
+            self.session.remember_close(snapshot.clone());
         }
         for (pane, route) in match remembered {
             true => here,
@@ -4242,7 +4138,7 @@ impl LyrelApp {
             // The sync never got the close to the machine — the link went, or
             // the window was told to re-pull just now. Close it the way a
             // machine without the list would: kept here, ended from here.
-            self.remember_closed_here(snapshot);
+            self.session.remember_close(snapshot);
             for pane in unsent.panes {
                 kill_pane_off_thread(unsent.route.clone(), pane, cx);
             }
@@ -4251,14 +4147,6 @@ impl LyrelApp {
         self.offer_worktree_cleanup(worktree_cwd, cx);
     }
 
-    /// Keep a closed tab in this window's own list, for a machine that keeps
-    /// none — see [`Self::reopen_closed_tab`].
-    fn remember_closed_here(&mut self, snapshot: SessionTab) {
-        self.closed.push(snapshot);
-        if self.closed.len() > MAX_CLOSED_TABS {
-            self.closed.remove(0);
-        }
-    }
 
     fn offer_worktree_cleanup(
         &mut self,
@@ -6812,23 +6700,8 @@ impl Render for LyrelApp {
 }
 
 
-fn tab_to_session(tab: &Tab, cx: &App) -> SessionTab {
-    SessionTab {
-        name: tab.name().clone(),
-        pane: match tab.asleep_layout() {
-            Some(layout) => layout.clone(),
-            None => pane_to_session(&tab.pane, cx),
-        },
-        presentation: tab.presentation.clone(),
-        group: tab.group.get(),
-        last_auto: tab.auto_group.borrow().clone(),
-        tree_id: None,
-        hibernated: false,
-        asleep_view: None,
-    }
-}
 
-fn restore_agent_in_pane(
+pub(crate) fn restore_agent_in_pane(
     agent: Option<crate::core::cli_agent::CLIAgent>,
     session_id: Option<String>,
     launch_argv: Option<Vec<String>>,
@@ -6903,388 +6776,6 @@ fn pane_shell_program(view: &TerminalView, cx: &App) -> Option<String> {
     })
 }
 
-fn pane_to_session(pane: &Pane, cx: &App) -> SessionPane {
-    match pane {
-        Pane::Leaf(PaneSlot::Connecting(pending)) => pending.read(cx).session(),
-        Pane::Leaf(PaneSlot::Ready(view)) => {
-            let view = view.read(cx);
-            SessionPane::Leaf {
-                // A native SSH leaf keeps the far shell's directory, so a
-                // sleeping SSH tab wakes where it was: the redial that wakes it
-                // takes this as its start directory on the same host, and the
-                // tree record it seeds holds the far directory for such a pane
-                // anyway. Any other remote pane's cwd is on a host no restore
-                // dials, so it is still left out.
-                cwd: match view.ssh_spec() {
-                    Some(_) => view.cwd(),
-                    None => view.spawnable_cwd(),
-                },
-                pane_id: Some(view.pane_id),
-                // `None` for a pane this window attached to rather than
-                // spawned: it never knew what was on the other end. The tree
-                // does — the daemon records it — and that is what a restore
-                // reads, so the gap here costs nothing it can see.
-                shell: view.shell_spec(),
-                ssh_spec: view.ssh_spec(),
-                agent: view.agent(),
-                agent_session_id: view.agent_session().and_then(|s| s.session_id),
-                agent_launch_argv: view.agent().and_then(|agent| {
-                    view.agent_session().and_then(|state| {
-                        lyrel_core::host::session_operations::launch_context(agent, &state)
-                    })
-                }),
-                agent_session_scope: view.agent_session().and_then(|s| {
-                    s.readout
-                        .session_scope
-                        .as_ref()
-                        .map(lyrel_core::host::session_operations::durable_scope)
-                }),
-            }
-        }
-        Pane::Split {
-            axis, a, b, ratio, ..
-        } => SessionPane::Split {
-            axis: match axis {
-                Axis::Horizontal => SessionAxis::Horizontal,
-                Axis::Vertical => SessionAxis::Vertical,
-            },
-            ratio: ratio.get(),
-            a: Box::new(pane_to_session(a, cx)),
-            b: Box::new(pane_to_session(b, cx)),
-        },
-        Pane::Empty => SessionPane::Leaf {
-            cwd: None,
-            pane_id: None,
-            shell: None,
-            ssh_spec: None,
-            agent: None,
-            agent_session_id: None,
-            agent_launch_argv: None,
-            agent_session_scope: None,
-        },
-    }
-}
-
-/// The daemon's account of which panes are alive, or `None` when it could not
-/// be asked at all.
-///
-/// The distinction is the point: a pane absent from a *successful* listing is
-/// genuinely gone and may be respawned, while a failed `List` says nothing
-/// about any pane. Flattening the failure into an empty map made one transient
-/// RPC error read as "every pane is dead", and the restore then spawned fresh
-/// shells over all of them — the same destruction-by-inference this file's
-/// restore path is built to avoid.
-pub(crate) fn alive_panes_on(
-    route: &crate::terminal::PaneRoute,
-) -> Option<std::collections::HashMap<u64, Option<String>>> {
-    if !matches!(route, crate::terminal::PaneRoute::Local) {
-        return Some(std::collections::HashMap::new());
-    }
-    match crate::terminal::RemoteTerminal::try_list_panes_on(route) {
-        Ok(list) => Some(
-            list.into_iter()
-                .filter(|p| p.alive)
-                .map(|p| (p.pane_id, p.owner))
-                .collect(),
-        ),
-        Err(e) => {
-            log::warn!("could not list panes ({e}); leaving each attach to decide");
-            None
-        }
-    }
-}
-
-/// Whether this window may stand on `id` — as the pane it attaches to, or as
-/// the dead predecessor whose screen a fresh pane opens showing.
-///
-/// Liveness deliberately does not come into it, and that is the whole point.
-/// A pane missing from the listing is usually one whose daemon has just
-/// restarted, which is exactly when its stored screen is worth asking for.
-/// Ruling the id out there threw away the only thing that could ask: the
-/// window spawned a pane that had never heard of a predecessor, so no attach
-/// was tried, no restore was requested, and the screen the daemon still had on
-/// disk was swept a tick later, unread.
-///
-/// There used to be a second predicate here that also required the id to be
-/// listed, and the attach site consulted it. Nothing does now: the attach is
-/// simply tried, and a pane that really is gone fails it and falls through to
-/// the fresh spawn — the same outcome the listing was consulted to predict,
-/// reached by asking the daemon instead of guessing ahead of it.
-///
-/// Ownership does come into it. Another workspace's pane is not this window's
-/// to attach to, and its screen is not this window's to show.
-fn pane_free_for(
-    alive: Option<&std::collections::HashMap<u64, Option<String>>>,
-    id: u64,
-    owner: crate::core::session::WorkspaceId,
-) -> bool {
-    let Some(alive) = alive else {
-        // No listing to consult. Attaching is the safe guess in both
-        // directions: if the daemon is really unreachable the attach fails and
-        // the pane falls to the fresh-spawn path anyway, while spawning fresh
-        // on a hunch destroys a session that was merely hard to reach.
-        return true;
-    };
-    match alive.get(&id) {
-        None => true,
-        Some(None) => true,
-        Some(Some(recorded)) => {
-            // Only a workspace id is a claim. Anything else is a client
-            // stamping its own name rather than claiming workspace ownership.
-            // Refusing on it strands CLI-created panes, respawning over a live
-            // shell the tree just told us belongs here.
-            let Ok(recorded) = recorded.parse::<crate::core::session::WorkspaceId>() else {
-                return true;
-            };
-            let ours = recorded == owner;
-            if !ours {
-                log::warn!(
-                    "restore: pane {id} is owned by workspace {recorded}, not {owner}; \
-                     spawning fresh instead of attaching to it"
-                );
-            }
-            ours
-        }
-    }
-}
-
-fn tabs_from_session(
-    workspace: Option<&crate::terminal::PaneWorkspace>,
-    owner: WorkspaceId,
-    session: Option<Session>,
-    font_size: f32,
-    window: &mut Window,
-    cx: &mut Context<LyrelApp>,
-) -> (Vec<Tab>, usize, usize) {
-    let Some(session) = session.filter(|s| !s.tabs.is_empty()) else {
-        return (Vec::new(), 0, 0);
-    };
-    let alive = alive_panes_on(&crate::terminal::PaneRoute::for_workspace(workspace));
-    let mut tabs: Vec<Tab> = Vec::with_capacity(session.tabs.len());
-    let mut dropped = 0usize;
-    let home = crate::ui::path_display::home_for_host(
-        cx,
-        workspace.map_or(HostId::LOCAL, |w| w.target.host_id()),
-    );
-    for (index, st) in session.tabs.iter().enumerate() {
-        // Asleep stays asleep: nothing is spawned or attached for it, which is
-        // the point. The one exception is the tab the window opens onto — a
-        // tab on screen is awake, so that one is woken here, by the same
-        // restore every other tab is getting.
-        if st.hibernated && index != session.active {
-            tabs.push(Tab::from_asleep(st, home.clone()));
-            continue;
-        }
-        let mut presentation = st.presentation.clone();
-        let Some(pane) = session_to_pane(
-            workspace,
-            owner,
-            &st.pane,
-            alive.as_ref(),
-            font_size,
-            window,
-            cx,
-            &mut presentation,
-        ) else {
-            // The layout coming back is the product's headline claim, so a tab
-            // that quietly does not is worth a sentence rather than a log line.
-            log::error!("dropping a restored tab: no pane in it could be started");
-            dropped += 1;
-            continue;
-        };
-        tabs.push(Tab::from_session(st, pane, presentation));
-    }
-    let active = session.active.min(tabs.len().saturating_sub(1));
-    (tabs, active, dropped)
-}
-
-
-/// A sleeping layout as a wake should read it: a native SSH pane dials its
-/// host again rather than standing on its old id. That id belongs to a pane
-/// whose connection is gone, and the restore reading it would put a local
-/// shell in its place.
-fn redial_native_ssh(layout: &SessionPane) -> SessionPane {
-    match layout {
-        SessionPane::Leaf {
-            ssh_spec: Some(_), ..
-        } => {
-            let mut leaf = layout.clone();
-            if let SessionPane::Leaf { pane_id, .. } = &mut leaf {
-                *pane_id = None;
-            }
-            leaf
-        }
-        SessionPane::Leaf { .. } => layout.clone(),
-        SessionPane::Split { axis, ratio, a, b } => SessionPane::Split {
-            axis: *axis,
-            ratio: *ratio,
-            a: Box::new(redial_native_ssh(a)),
-            b: Box::new(redial_native_ssh(b)),
-        },
-    }
-}
-
-/// Whether a native SSH pane can be attached to by its old id: only when the
-/// server lists it. A failed attach falls through to a fresh *local* shell,
-/// and after a server restart that put the user's own machine behind a tab
-/// that had been — and still looked like — a session on another one. Without
-/// a listing the host is dialled again: a second connection is recoverable,
-/// typing into the wrong machine is not.
-fn native_ssh_pane_alive(
-    alive: Option<&std::collections::HashMap<u64, Option<String>>>,
-    id: u64,
-) -> bool {
-    alive.is_some_and(|alive| alive.contains_key(&id))
-}
-
-fn leaf_shares_the_window_daemon(window_is_remote: bool, leaf_is_native_ssh: bool) -> bool {
-    !(window_is_remote && leaf_is_native_ssh)
-}
-
-fn session_to_pane(
-    workspace: Option<&crate::terminal::PaneWorkspace>,
-    owner: WorkspaceId,
-    sp: &SessionPane,
-    alive: Option<&std::collections::HashMap<u64, Option<String>>>,
-    font_size: f32,
-    window: &mut Window,
-    cx: &mut Context<LyrelApp>,
-    presentation: &mut lyrel_core::core::machine::TabPresentation,
-) -> Option<Pane> {
-    match sp {
-        SessionPane::Leaf {
-            cwd,
-            pane_id,
-            shell,
-            ssh_spec,
-            agent,
-            agent_session_id,
-            agent_launch_argv,
-            agent_session_scope,
-        } => {
-            let same_daemon =
-                leaf_shares_the_window_daemon(workspace.is_some(), ssh_spec.is_some());
-            let restore = match workspace.is_some() {
-                true => (*pane_id).filter(|_| same_daemon),
-                // Not `pane_attachable`: a dead pane's id is what the restore
-                // is keyed on, so it has to survive being dead. The attach is
-                // still attempted first and still gives way to a fresh spawn.
-                false => (*pane_id).filter(|id| {
-                    same_daemon
-                        && pane_free_for(alive, *id, owner)
-                        && (ssh_spec.is_none() || native_ssh_pane_alive(alive, *id))
-                }),
-            };
-            if restore.is_none() {
-                if let Some(spec) = ssh_spec.clone() {
-                    let resolved = crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx);
-                    // A native SSH leaf's recorded cwd is the far shell's own
-                    // report, so it is where the redialled shell starts.
-                    let view = new_terminal_native(font_size, owner, cwd.clone(), resolved, window, cx);
-                    if same_daemon {
-                        remap_presentation_slot(presentation, *pane_id, &view, cx);
-                    }
-                    return Some(Pane::leaf(view));
-                }
-            }
-            // Past here the leaf comes back as a shell on the window's own
-            // machine: reattached, or spawned fresh in place of one that is
-            // gone. A native SSH leaf's cwd is a path on the far host, so a
-            // fresh shell standing in for one must not start in it here.
-            let local_cwd = match ssh_spec {
-                Some(_) => None,
-                None => cwd.clone(),
-            };
-            let view = match new_terminal(
-                workspace.cloned(),
-                Some(owner),
-                font_size,
-                local_cwd,
-                restore,
-                shell.clone(),
-                window,
-                cx,
-            ) {
-                Ok(view) => view,
-                Err(e) => {
-                    log::error!("restoring pane failed: {e}");
-                    return None;
-                }
-            };
-            match &view {
-                PaneSlot::Ready(terminal) if !terminal.read(cx).restored() => {
-                    restore_agent_in_pane(
-                        *agent,
-                        agent_session_id.clone(),
-                        agent_launch_argv.clone(),
-                        agent_session_scope.clone(),
-                        terminal.clone(),
-                        window,
-                        cx,
-                    );
-                }
-                PaneSlot::Ready(_) => {}
-                PaneSlot::Connecting(pending) => {
-                    pending.update(cx, |pending, _| {
-                        pending.resume_agent(*agent, agent_session_id.clone(), agent_launch_argv.clone(), agent_session_scope.clone(), false);
-                    });
-                }
-            }
-            if same_daemon {
-                remap_presentation_slot(presentation, *pane_id, &view, cx);
-            }
-            Some(Pane::leaf(view))
-        }
-        SessionPane::Split { axis, ratio, a, b } => {
-            let axis = match axis {
-                SessionAxis::Horizontal => Axis::Horizontal,
-                SessionAxis::Vertical => Axis::Vertical,
-            };
-            match (
-                session_to_pane(
-                    workspace,
-                    owner,
-                    a,
-                    alive,
-                    font_size,
-                    window,
-                    cx,
-                    presentation,
-                ),
-                session_to_pane(
-                    workspace,
-                    owner,
-                    b,
-                    alive,
-                    font_size,
-                    window,
-                    cx,
-                    presentation,
-                ),
-            ) {
-                (Some(a), Some(b)) => Some(Pane::split_node(axis, *ratio, a, b)),
-                (Some(only), None) | (None, Some(only)) => Some(only),
-                (None, None) => None,
-            }
-        }
-    }
-}
-
-fn remap_presentation_slot(
-    presentation: &mut lyrel_core::core::machine::TabPresentation,
-    old: Option<u64>,
-    slot: &PaneSlot,
-    cx: &App,
-) {
-    let Some(old) = old else {
-        return;
-    };
-    let new = match slot {
-        PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-        PaneSlot::Connecting(view) => view.read(cx).restore_pane(),
-    };
-    presentation.remap_panes(|pane| if pane == old { new } else { Some(pane) });
-}
 
 pub(crate) fn new_terminal(
     workspace: Option<crate::terminal::PaneWorkspace>,
@@ -7439,30 +6930,6 @@ fn watch_terminal(
     watch_pane_focus(&handle, view.entity_id(), window, cx);
 }
 
-/// Split a closing tab's panes into the ones its machine stops for it and the
-/// ones this window ends itself: `(pane id, route, is native SSH)` in, and the
-/// same pairs out, machine-held first.
-///
-/// A native SSH pane in a remote window lives in this computer's daemon, not
-/// on the window's machine — the tree never holds it (see
-/// `leaf_shares_the_window_daemon`) — so the machine cannot stop it and it is
-/// ended from here. Without `remote_window` every pane is the machine's.
-fn split_machine_held(
-    remote_window: bool,
-    leaves: &[(u64, crate::terminal::PaneRoute, bool)],
-) -> (
-    Vec<(u64, crate::terminal::PaneRoute)>,
-    Vec<(u64, crate::terminal::PaneRoute)>,
-) {
-    let (held, here): (Vec<_>, Vec<_>) = leaves
-        .iter()
-        .cloned()
-        .partition(|(_, _, native_ssh)| leaf_shares_the_window_daemon(remote_window, *native_ssh));
-    let strip = |v: Vec<(u64, crate::terminal::PaneRoute, bool)>| {
-        v.into_iter().map(|(id, route, _)| (id, route)).collect()
-    };
-    (strip(held), strip(here))
-}
 
 fn kill_pane_off_thread(route: crate::terminal::PaneRoute, pane_id: u64, cx: &mut App) {
     cx.background_executor()
@@ -7821,10 +7288,8 @@ mod tests {
     use super::{
         CloseReason, DOCUMENT_MIN_W, OpenedFrom, TERMINAL_MIN_W,
         TabAgentSession, close_prompt, document_column_px,
-        inherited_start_dir, join_shell_args, leaf_shares_the_window_daemon,
-        native_ssh_pane_alive, pane_free_for, parse_ssh_connect_input,
-        parse_ssh_option_words, side_panel_max, split_machine_held,
-        split_shell_args, wd_path_saveable,
+        inherited_start_dir, join_shell_args, parse_ssh_connect_input,
+        parse_ssh_option_words, side_panel_max, split_shell_args, wd_path_saveable,
     };
     use gpui_kit::px;
 
@@ -8018,117 +7483,9 @@ mod tests {
         assert_eq!(one, "Close 1 tab?");
     }
 
-    /// The machine stops the panes it holds; a native SSH pane in a remote
-    /// window lives in this computer's daemon and is ended from here, because
-    /// nothing on the window's machine could.
-    #[test]
-    fn a_remote_windows_native_ssh_pane_is_ended_here_and_the_rest_by_its_machine() {
-        let local = crate::terminal::PaneRoute::Local;
-        let leaves = vec![(4, local.clone(), false), (5, local.clone(), true)];
-
-        let (held, here) = split_machine_held(true, &leaves);
-        let ids = |v: &[(u64, crate::terminal::PaneRoute)]| {
-            v.iter().map(|(id, _)| *id).collect::<Vec<_>>()
-        };
-        assert_eq!(ids(&held), vec![4]);
-        assert_eq!(ids(&here), vec![5]);
-
-        let (held, here) = split_machine_held(false, &leaves);
-        assert_eq!(
-            ids(&held),
-            vec![4, 5],
-            "a local window's machine holds its SSH panes too"
-        );
-        assert!(here.is_empty());
-    }
-
-    #[test]
-    fn a_layout_that_came_back_short_says_how_short() {
-        crate::ui::i18n::set_locale("en");
-        for n in [1usize, 2, 9] {
-            let text =
-                crate::ui::i18n::t_plural(crate::ui::i18n::L10nKey::AppTabsNotRestored, n, &[]);
-            assert!(text.contains(&n.to_string()), "{n}: {text}");
-            assert!(!text.contains("{count}"), "the placeholder leaked: {text}");
-        }
-        // Singular is not "1 tabs".
-        let one = crate::ui::i18n::t_plural(crate::ui::i18n::L10nKey::AppTabsNotRestored, 1, &[]);
-        assert!(one.contains("1 tab "), "{one}");
-    }
 
 
-    #[test]
-    fn restore_only_attaches_panes_the_workspace_owns_or_nobody_claims() {
-        let ours = crate::core::session::WorkspaceId::new();
-        let theirs = crate::core::session::WorkspaceId::new();
-        let alive: std::collections::HashMap<u64, Option<String>> = [
-            (1, Some(ours.to_string())),
-            (2, Some(theirs.to_string())),
-            (3, None),
-            (5, Some("lyrel-cli".to_string())),
-        ]
-        .into_iter()
-        .collect();
 
-        assert!(
-            pane_free_for(Some(&alive), 1, ours),
-            "our own pane attaches"
-        );
-        assert!(
-            !pane_free_for(Some(&alive), 2, ours),
-            "another workspace's pane must spawn fresh instead"
-        );
-        assert!(
-            pane_free_for(Some(&alive), 3, ours),
-            "an unowned pane is legacy"
-        );
-        assert!(
-            pane_free_for(Some(&alive), 5, ours),
-            "an owner that names no workspace is not a rival's claim: older CLIs \
-             wrote their own name there, and respawning strands the live pane"
-        );
-        assert!(
-            pane_free_for(None, 4, ours),
-            "a failed List says nothing about pane 4; the attach itself must decide, \
-             because respawning on a transient RPC error destroys a live session"
-        );
-    }
-
-    #[test]
-    fn a_dead_pane_keeps_its_id_so_its_screen_can_be_asked_for() {
-        let ours = crate::core::session::WorkspaceId::new();
-        let theirs = crate::core::session::WorkspaceId::new();
-        let alive: std::collections::HashMap<u64, Option<String>> =
-            [(1, Some(ours.to_string())), (2, Some(theirs.to_string()))]
-                .into_iter()
-                .collect();
-
-        // The restart case: every pane the window held is missing from the new
-        // daemon's listing. Their ids are the only handle on the screens it
-        // still has stored, so being dead must not erase them — this is what
-        // made a restarted server come back to a row of blank shells.
-        assert!(
-            pane_free_for(Some(&alive), 4, ours),
-            "a dead pane's id has to survive; the restore is keyed on it"
-        );
-
-        // What being free does not mean: helping yourself to a pane that is
-        // alive and belongs to another workspace, whose screen is not this
-        // window's to show either.
-        assert!(
-            !pane_free_for(Some(&alive), 2, ours),
-            "another workspace's pane is not ours to restore from"
-        );
-        assert!(pane_free_for(Some(&alive), 1, ours), "our own pane is ours");
-    }
-
-    #[test]
-    fn a_native_ssh_leaf_in_a_remote_window_is_not_looked_up_in_the_remote_daemon() {
-        assert!(!leaf_shares_the_window_daemon(true, true));
-        assert!(leaf_shares_the_window_daemon(true, false));
-        assert!(leaf_shares_the_window_daemon(false, true));
-        assert!(leaf_shares_the_window_daemon(false, false));
-    }
 
     #[test]
     fn a_saved_host_opened_from_a_local_pane_does_not_start_in_its_local_directory() {
@@ -8172,20 +7529,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_native_ssh_pane_the_server_no_longer_has_is_dialled_again() {
-        let mut alive = std::collections::HashMap::new();
-        alive.insert(4u64, None);
-        assert!(native_ssh_pane_alive(Some(&alive), 4));
-        assert!(
-            !native_ssh_pane_alive(Some(&alive), 9),
-            "gone: dial, don't attach"
-        );
-        assert!(
-            !native_ssh_pane_alive(None, 4),
-            "no listing: dial, don't guess"
-        );
-    }
 
     #[test]
     fn a_fork_needs_a_command_an_id_and_a_local_pane() {
@@ -8209,51 +7552,6 @@ mod tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn a_connecting_pane_saves_the_agent_it_is_rebuilding(cx: &mut gpui_kit::TestAppContext) {
-        use crate::core::cli_agent::CLIAgent;
-        use crate::core::session::SessionPane;
-        use crate::ui::pane::{Pane, PaneSlot};
-        use crate::ui::pending_pane::{PendingPane, PendingSpawn};
-        use gpui_kit::AppContext as _;
-
-        cx.update(|cx| {
-            let pending = cx.new(|cx| {
-                PendingPane::new(
-                    "build-box",
-                    PendingSpawn {
-                        workspace: None,
-                        working_directory: Some(std::path::PathBuf::from("/work")),
-                        restore_pane: Some(7),
-                        shell: None,
-                        agent: Some(CLIAgent::OhMyPi),
-                        agent_session_id: Some("sid-abc".to_string()),
-                        agent_launch_argv: Some(vec!["omp".to_string()]),
-                        agent_session_scope: None,
-                        run_on_land: None,
-                        owner: None,
-                        font_size: 14.0,
-                    },
-                    cx,
-                )
-            });
-            let saved = super::pane_to_session(&Pane::leaf(PaneSlot::Connecting(pending)), cx);
-            let SessionPane::Leaf {
-                pane_id,
-                agent,
-                agent_session_id,
-                agent_launch_argv,
-                ..
-            } = saved
-            else {
-                panic!("a leaf saves as a leaf");
-            };
-            assert_eq!(pane_id, Some(7), "the id it is re-attaching to");
-            assert_eq!(agent, Some(CLIAgent::OhMyPi));
-            assert_eq!(agent_session_id.as_deref(), Some("sid-abc"));
-            assert_eq!(agent_launch_argv, Some(vec!["omp".to_string()]));
-        });
-    }
 
     #[test]
     fn parses_ssh_option_words_with_quotes() {
@@ -8639,219 +7937,8 @@ mod cursor_blink_gpui_tests {
 }
 
 #[cfg(test)]
-mod ssh_rebuild_gpui_tests {
-    use super::test_window::harness_with_pane;
-    use crate::core::session::{
-        RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
-    };
-    use crate::ui::pane::{Pane, PaneSlot};
-    use gpui_kit::TestAppContext;
-    use lyrel_core::core::machine::{LayoutDelta, PaneNode, Tab as TreeTab};
-
-    #[gpui_kit::test]
-    fn a_tree_rebuild_keeps_the_native_ssh_split_a_remote_tab_holds(cx: &mut TestAppContext) {
-        let (app, mut vcx, _remote_pane_stream) = harness_with_pane(cx);
-
-        let remote = WindowView::on_remote(RemoteRef::new(
-            RemoteTarget::Alias {
-                alias: "build-box".into(),
-            },
-            WorkspaceId::new(),
-        ));
-        let remote_id = remote.id;
-        let _ssh_stream = app.update_in(&mut vcx, |app, window, cx| {
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![remote],
-                    active: None,
-                },
-            );
-            app.workspace = remote_id;
-            let (ssh_view, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
-            let existing = std::mem::replace(&mut app.tabs[0].pane, Pane::Empty);
-            app.tabs[0].pane = Pane::split_node(
-                gpui_kit::Axis::Horizontal,
-                0.5,
-                existing,
-                Pane::leaf(PaneSlot::Ready(ssh_view)),
-            );
-            stream
-        });
-
-        let applied = app.update_in(&mut vcx, |app, window, cx| {
-            let tab = TreeTab {
-                id: app.tabs[0].id(),
-                name: None,
-                group: None,
-                last_auto: None,
-                root: PaneNode::Leaf { pane: 1 },
-                hibernated: false,
-                presentation: Default::default(),
-            };
-            app.apply_layout_delta(
-                &LayoutDelta::TabRestructured { tab, pane: None },
-                window,
-                cx,
-            )
-        });
-        assert!(
-            applied,
-            "the delta must apply without falling back to a resync"
-        );
-
-        app.update_in(&mut vcx, |app, _, cx| {
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves.len(), 2, "the ssh split must survive the rebuild");
-            assert!(
-                leaves.iter().any(|slot| match slot {
-                    PaneSlot::Ready(view) => view.read(cx).ssh_spec().is_some(),
-                    _ => false,
-                }),
-                "one leaf is still the native-SSH pane"
-            );
-            assert!(
-                leaves.iter().any(|slot| match slot {
-                    PaneSlot::Ready(view) => {
-                        let view = view.read(cx);
-                        view.ssh_spec().is_none() && view.pane_id == 1
-                    }
-                    _ => false,
-                }),
-                "the remote pane's existing view is reused, not re-attached"
-            );
-        });
-    }
-
-    /// Two tabs on pane 1 and pane 2, with the window's sync primed on them the
-    /// way a landed pull leaves it.
-    fn primed_two_tab_window(
-        cx: &mut TestAppContext,
-    ) -> (
-        gpui_kit::Entity<super::LyrelApp>,
-        gpui_kit::VisualTestContext,
-        Vec<crate::daemon::transport::Stream>,
-    ) {
-        let (app, mut vcx, first) = harness_with_pane(cx);
-        let second = app.update_in(&mut vcx, |app, window, cx| {
-            let (view, stream) = crate::terminal::view::quiet_test_pane(2, window, cx);
-            app.tabs
-                .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
-            let tabs = app
-                .tabs
-                .iter()
-                .zip([1u64, 2])
-                .map(|(tab, pane)| TreeTab {
-                    id: tab.id(),
-                    name: None,
-                    group: None,
-                    last_auto: None,
-                    root: PaneNode::Leaf { pane },
-                    hibernated: false,
-                    presentation: Default::default(),
-                })
-                .collect();
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![WindowView {
-                        id: app.workspace,
-                        ..WindowView::default()
-                    }],
-                    active: None,
-                },
-            );
-            crate::ui::tree_sync::prime_for_test(cx, app.workspace, tabs);
-            stream
-        });
-        (app, vcx, vec![first, second])
-    }
-
-    fn queued_closes(
-        app: &super::LyrelApp,
-        cx: &mut gpui_kit::App,
-    ) -> Vec<lyrel_core::core::machine::TabId> {
-        use lyrel_core::daemon::control::ControlRequest;
-        crate::ui::tree_sync::queued_for_test(cx, app.workspace)
-            .into_iter()
-            .filter_map(|op| match op {
-                ControlRequest::TabClose { tab, .. }
-                | ControlRequest::TabCloseRemembered { tab, .. } => Some(tab),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Restart Server empties the window and waits out the handoff, and every
-    /// delta that lands meanwhile syncs the emptied window. A window missing
-    /// its tabs is not a user closing them.
-    #[gpui_kit::test]
-    fn emptying_the_window_closes_nothing_on_the_machine(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = primed_two_tab_window(cx);
-        let closes = app.update_in(&mut vcx, |app, _, cx| {
-            app.tabs.clear();
-            app.save_session(cx);
-            queued_closes(app, cx)
-        });
-        assert!(
-            closes.is_empty(),
-            "this is the regression: Restart Server closed all sixteen tabs of a workspace, \
-             unremembered, and left their shells running with no tab to hold them"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn closing_a_tab_closes_it_and_only_it_on_the_machine(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = primed_two_tab_window(cx);
-        let (closed, closes) = app.update_in(&mut vcx, |app, window, cx| {
-            let closed = app.tabs[1].id();
-            app.close_tab_inner(1, true, window, cx);
-            (closed, queued_closes(app, cx))
-        });
-        assert_eq!(closes, vec![closed]);
-    }
-
-    #[gpui_kit::test]
-    fn a_pure_native_ssh_tab_is_invisible_to_the_tree_not_held(cx: &mut TestAppContext) {
-        let (app, mut vcx, _remote_pane_stream) = harness_with_pane(cx);
-
-        let remote = WindowView::on_remote(RemoteRef::new(
-            RemoteTarget::Alias {
-                alias: "build-box".into(),
-            },
-            WorkspaceId::new(),
-        ));
-        let remote_id = remote.id;
-        let _ssh_stream = app.update_in(&mut vcx, |app, window, cx| {
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![remote],
-                    active: None,
-                },
-            );
-            app.workspace = remote_id;
-            let (ssh_view, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
-            app.tabs
-                .push(super::Tab::new(Pane::leaf(PaneSlot::Ready(ssh_view))));
-            stream
-        });
-
-        let (desired, _active, held) = app.update_in(&mut vcx, |app, _, cx| {
-            crate::ui::tree_sync::projection::desired_tabs(&app.tabs, app.tabs.active_index(), app.workspace, cx)
-        });
-        assert_eq!(
-            desired.len(),
-            1,
-            "only the remote-backed tab can be named in the machine's tree"
-        );
-        assert!(
-            held.is_empty(),
-            "the pure-SSH tab is permanently invisible, not held — holding it \
-             would freeze ordering and active-tab sync for the whole window"
-        );
-    }
-}
+#[path = "session_lifecycle/tests_ssh_rebuild.rs"]
+mod ssh_rebuild_gpui_tests;
 
 #[cfg(test)]
 mod keybinding_gpui_tests {
@@ -9669,205 +8756,16 @@ mod unfocused_shortcut_tests {
 }
 
 #[cfg(test)]
-mod close_window_action_tests {
-    use crate::core::actions::CloseWindow;
-    use crate::core::config::Config;
-    use crate::core::session::Session;
-    use crate::ui::app::LyrelApp;
-    use crate::ui::windows::WindowRegistry;
-    use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
-
-    /// `CloseWindow` has to close the window, and close it the way the red
-    /// button does.
-    ///
-    /// The action is otherwise all table entries — the `actions!` row, the
-    /// keymap slot, the palette command, the Keybindings label — and every one
-    /// of those can be in place while the action reaches nothing at all. So
-    /// this drives the real dispatch path and then asks two separate
-    /// questions: the window is gone from gpui, *and* it left the
-    /// `WindowRegistry` on the way out. The second is what makes it the same
-    /// close as the native one — `detach_workspace` is where the session is
-    /// saved and the workspace is retired, and a `remove_window` that skipped
-    /// it would still pass the first assertion while quietly dropping a
-    /// window's tabs on the floor.
-    #[gpui_kit::test]
-    fn dispatching_close_window_takes_the_window_down_with_its_registration(
-        cx: &mut TestAppContext,
-    ) {
-        crate::core::config::pin_test_config_dir();
-        cx.executor().allow_parking();
-        cx.update(|cx| {
-            gpui_kit::component::init(cx);
-            cx.set_global(Config::default());
-            crate::ui::keymap::init(cx);
-            WindowRegistry::init(cx);
-        });
-        let window = cx.add_window(|window, cx| {
-            let app =
-                cx.new(|cx| LyrelApp::with_session(None, Some(Session::default()), window, cx));
-            gpui_kit::component::Root::new(app, window, cx)
-        });
-        let app = window
-            .update(cx, |root, _, _| {
-                root.view()
-                    .clone()
-                    .downcast::<LyrelApp>()
-                    .ok()
-                    .expect("window root wraps a LyrelApp")
-            })
-            .unwrap();
-        // Registered the way an opened window registers itself; the registry
-        // is where the close has to show up, so an unregistered window would
-        // make the assertion below pass for the wrong reason.
-        let handle = window.into();
-        let weak = app.downgrade();
-        app.update(cx, |app, cx| {
-            WindowRegistry::register(cx, app.workspace, handle, weak);
-        });
-
-        let mut vcx = VisualTestContext::from_window(handle, cx);
-        vcx.background_executor.run_until_parked();
-        assert_eq!(
-            vcx.update(|_, cx| WindowRegistry::count(cx)),
-            1,
-            "the harness starts with exactly the one window"
-        );
-
-        vcx.dispatch_action(CloseWindow);
-        drop(vcx);
-
-        assert!(
-            cx.update(|cx| cx.windows().is_empty()),
-            "CloseWindow has to reach `remove_window`; the window is still open"
-        );
-        assert!(
-            cx.update(|cx| WindowRegistry::open_windows(cx).is_empty()),
-            "the close has to run the same cleanup the red button runs, \
-             which is what takes the window out of the registry"
-        );
-    }
-}
+#[path = "session_lifecycle/tests_window.rs"]
+mod close_window_action_tests;
 
 #[cfg(test)]
 #[path = "tab/tests_focus.rs"]
 mod tab_focus_memory_tests;
 
 #[cfg(test)]
-mod hibernate_gpui_tests {
-    use gpui_kit::TestAppContext;
-
-    use crate::core::session::SessionPane;
-    use crate::ui::app::test_window::harness_with_tabs;
-    use crate::ui::pane::Pane;
-
-    fn leaf_pane_id(pane: &SessionPane) -> Option<u64> {
-        match pane {
-            SessionPane::Leaf { pane_id, .. } => *pane_id,
-            SessionPane::Split { .. } => None,
-        }
-    }
-
-    /// Asleep, a tab holds nothing running and still holds its place: the
-    /// pane id the wake restores from, the name it had on screen, and a seat in
-    /// the sync that tells the machine it is asleep rather than gone.
-    #[gpui_kit::test]
-    fn a_sleeping_tab_keeps_its_place_its_pane_and_its_name(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            let pane_id = app.tabs[1]
-                .pane
-                .first_leaf()
-                .and_then(|slot| slot.terminal().cloned())
-                .expect("tab 1 has a pane")
-                .read(cx)
-                .pane_id;
-            let (before, _) = app.tabs[1].label_view(Some(window), cx);
-
-            app.put_to_sleep(1, window, cx);
-
-            assert_eq!(app.tabs.len(), 2, "sleeping is not closing");
-            let tab = &app.tabs[1];
-            assert!(tab.is_asleep());
-            assert!(matches!(tab.pane, Pane::Empty));
-            assert!(tab.pane.terminals().is_empty(), "nothing is left running");
-            assert_eq!(tab.asleep_layout().and_then(leaf_pane_id), Some(pane_id));
-            let (after, _) = tab.label_view(Some(window), cx);
-            assert_eq!(
-                format!("{:?}", after.label()),
-                format!("{:?}", before.label()),
-                "it is called what it was called while awake"
-            );
-            assert!(!after.live);
-
-            let (desired, _, held) = crate::ui::tree_sync::projection::desired_tabs(
-                &app.tabs, app.tabs.active_index(), app.workspace, cx,
-            );
-            assert!(held.is_empty(), "a sleeping tab is not a tab gone missing");
-            assert_eq!(desired.len(), 2);
-            assert!(!desired[0].hibernated);
-            assert!(desired[1].hibernated);
-            match &desired[1].root {
-                crate::ui::tree_sync::desired::DesiredNode::Leaf { pane, .. } => {
-                    assert_eq!(*pane, pane_id)
-                }
-                other => panic!("expected the one leaf, got {other:?}"),
-            }
-        });
-    }
-
-    /// Looking at a tab is what wakes it, so the window has to keep one awake
-    /// to look at; the tab shown in a sleeping one's place is the awake tab
-    /// used last.
-    #[gpui_kit::test]
-    fn the_last_awake_tab_has_nothing_to_hand_the_window_to(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.activate(1, window, cx);
-            app.tabs.touch_active();
-            app.activate(2, window, cx);
-            app.tabs.touch_active();
-            app.activate(0, window, cx);
-            app.tabs.touch_active();
-            assert_eq!(app.tabs.awake_besides(0), Some(2), "the one used last");
-
-            app.put_to_sleep(2, window, cx);
-            assert_eq!(app.tabs.awake_besides(0), Some(1));
-
-            app.put_to_sleep(1, window, cx);
-            assert_eq!(app.tabs.awake_besides(0), None);
-            assert!(
-                !app.can_hibernate_tab(0, cx),
-                "the last awake tab stays awake"
-            );
-            assert!(
-                !app.can_hibernate_tab(1, cx),
-                "nor is a sleeping tab put to sleep twice"
-            );
-        });
-    }
-
-    /// Closing a sleeping tab closes it like any other, and what Reopen Closed
-    /// Tab gets back is the layout it slept with — not the empty stand-in.
-    #[gpui_kit::test]
-    fn a_sleeping_tab_closes_into_what_it_would_have_woken_as(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.put_to_sleep(1, window, cx);
-            let layout_id = app.tabs[1].asleep_layout().and_then(leaf_pane_id);
-            assert!(layout_id.is_some());
-
-            app.close_tab(1, window, cx);
-
-            assert_eq!(app.tabs.len(), 1);
-            let closed = app.closed.last().expect("the closed tab is remembered");
-            assert_eq!(leaf_pane_id(&closed.pane), layout_id);
-            assert!(!closed.hibernated, "reopening brings it back awake");
-        });
-    }
-}
+#[path = "session_lifecycle/tests_hibernate.rs"]
+mod hibernate_gpui_tests;
 
 
 

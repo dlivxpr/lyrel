@@ -160,7 +160,7 @@ fn a_rebuilt_pane_does_not_re_badge_a_turn_the_reader_already_saw(cx: &mut TestA
         "the reader watched it finish"
     );
 
-    // The same daemon pane, rebuilt the way `tabs_from_session` rebuilds it,
+    // The same daemon pane, rebuilt the way `SessionRestore::tabs` rebuilds it,
     // with the reader's focus somewhere else.
     let (after, mut daemon) = window
         .update(cx, |_, window, cx| super::quiet_test_pane(1, window, cx))

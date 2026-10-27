@@ -1765,7 +1765,7 @@ fn settle_hydration(
 /// workspace that has no tabs — from the machine tree and from the store
 /// both. Granting it before the rebuild handed that permission to a window
 /// whose rebuild had not happened yet, and a rebuild can produce nothing:
-/// `tabs_from_session` drops any tab whose panes all fail to start, which is
+/// `SessionRestore::tabs` drops any tab whose panes all fail to start, which is
 /// what every tab does when the pane socket is unreachable. The window then
 /// sat there, empty and authoritative, and the next switch deleted a
 /// workspace with ten live tabs in it.
