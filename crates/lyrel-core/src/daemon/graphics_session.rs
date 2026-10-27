@@ -1,6 +1,7 @@
 //! GUI session setup and grant routing; no offer wait owns a pane lock.
 use super::*;
-use crate::daemon::pane::{GraphicsAdmissionBroker, OutputGate};
+use crate::daemon::pane::GraphicsAdmissionBroker;
+use crate::daemon::pane::subscriptions::OutputGate;
 use std::sync::mpsc::{Sender, sync_channel};
 use std::thread::JoinHandle;
 
