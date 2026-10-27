@@ -88,6 +88,10 @@ impl ReverseSearch {
         self.selected = self.selected.saturating_add_signed(delta).min(last);
     }
 
+    pub(super) fn refresh(&mut self, history: &[String], frecency: &[f64]) {
+        self.update(history, frecency);
+    }
+
     pub(super) fn push_query(&mut self, text: &str, history: &[String], frecency: &[f64]) {
         self.query.push_str(text);
         self.update(history, frecency);

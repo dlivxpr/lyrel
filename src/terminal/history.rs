@@ -33,6 +33,7 @@ pub struct EntryMeta {
     pub exit: Option<i32>,
 }
 
+#[derive(Default)]
 pub struct History {
     pub entries: Vec<String>,
     pub counts: HashMap<String, u32>,
