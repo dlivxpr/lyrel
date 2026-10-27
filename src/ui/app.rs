@@ -8567,8 +8567,14 @@ fn watch_open_file_requests(
     cx.subscribe_in(
         view,
         window,
-        |app, _view, ev: &crate::terminal::view::OpenFileRequested, window, cx| {
-            app.open_linked_file(&ev.path, ev.line, ev.column, ev.is_dir, window, cx);
+        |app, view, ev: &crate::terminal::view::OpenFileRequested, window, cx| {
+            // The popup can outlive focus changes. Resolve its retained pane,
+            // never the workspace that happened to receive the later action.
+            if view.read(cx).host_id() == ev.host_id
+                && app.focus_pane_command_target(view.entity_id(), window, cx)
+            {
+                app.open_linked_file(&ev.path, ev.line, ev.column, ev.is_dir, window, cx);
+            }
         },
     )
     .detach();
