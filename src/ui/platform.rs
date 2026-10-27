@@ -32,10 +32,11 @@ use gpui_kit::{
     BackgroundExecutor, Bounds, ClipboardItem, ClipboardReadError, CursorStyle, DevicePixels, Font,
     FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GraphicalEnvironment, Hsla, Keymap,
     LineLayout, Menu, MenuItem, MissingGlyphSink, OwnedMenu, PathPromptOptions, Pixels, Platform,
-    PlatformDisplay, PlatformGestures, PlatformKeyboardLayout, PlatformKeyboardMapper,
-    PlatformTextSystem, PlatformWindow, RenderGlyphParams, Result, ScreenCaptureSource, Size,
-    SystemNotification, SystemNotificationResponse, Task, TextRenderingMode, ThermalState,
-    WindowAppearance, WindowButtonLayout, WindowParams, WindowingRequest,
+    PlatformDisplay, PlatformGestures, PlatformInfo, PlatformKeyboardLayout,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, RenderGlyphParams, Result,
+    ScreenCaptureSource, Size, SystemNotification, SystemNotificationResponse, Task,
+    TextRenderingMode, ThermalState, WindowAppearance, WindowButtonLayout, WindowParams,
+    WindowingRequest,
 };
 use smallvec::SmallVec;
 
@@ -145,6 +146,10 @@ impl PlatformTextSystem for LyrelTextSystem {
 }
 
 impl Platform for LyrelPlatform {
+    fn platform_info(&self) -> PlatformInfo {
+        self.inner.platform_info()
+    }
+
     fn background_executor(&self) -> BackgroundExecutor {
         self.inner.background_executor()
     }

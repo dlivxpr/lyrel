@@ -2339,7 +2339,9 @@ mod tests {
         // One modifier means one thing. Every other one a hand might be
         // resting on leaves the row doing what it says it does.
         assert_eq!(
-            SpawnWhere::from_modifiers(Modifiers::secondary_key()),
+            SpawnWhere::from_modifiers(
+                gpui_kit::TestAppContext::single().read(Modifiers::secondary_key)
+            ),
             SpawnWhere::NewTab
         );
         assert_eq!(

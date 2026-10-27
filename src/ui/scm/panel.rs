@@ -3003,18 +3003,18 @@ mod tests {
         crate::core::config::pin_test_config_dir();
         let (_app, mut vcx) = harness(cx);
 
-        let (in_box, outside, window_wide) = vcx.update(|window, _cx| {
+        let (in_box, outside, window_wide) = vcx.update(|window, cx| {
             let scoped = gpui_kit::KeyContext::parse(COMMIT_KEY_CONTEXT)
                 .expect("the context the panel installs parses");
             (
                 window.bindings_for_action_in_context(&ScmCommit, scoped),
                 window.bindings_for_action_in_context(
                     &ScmCommit,
-                    gpui_kit::KeyContext::new_with_defaults(),
+                    gpui_kit::KeyContext::new_with_defaults(cx.platform_info().os),
                 ),
                 window.bindings_for_action_in_context(
                     &ToggleFullscreen,
-                    gpui_kit::KeyContext::new_with_defaults(),
+                    gpui_kit::KeyContext::new_with_defaults(cx.platform_info().os),
                 ),
             )
         });

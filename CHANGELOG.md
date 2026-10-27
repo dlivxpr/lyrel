@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+### 变更
+
+- GUI 升级到正式 `gpui-kit 0.8.1` 与配套 `gpui-pre 0.3.10`，同步 HTTP transport、平台信息、动态快捷键、修饰键、菜单提示和滚动 API；保留 `tree-sitter-languages`、测试 `test-support`，不启用 `gpui-fast`。
+
+### 修复
+
+- macOS 正式发行不再静默回退到 ad-hoc：构建与草稿汇总共同验证 Developer ID Application、预期 Team、固定 bundle ID、随包可执行文件及公证票据，复用旧构建同样受门控。ad-hoc 的默认签名身份随代码变化，不能保证升级保留权限；首次迁移到正式签名包需要手动安装并重新授权。真实 Developer ID 两版本升级及 TCC 权限保留尚未验收。
+
+### 已知限制
+
+- omp 表格缺字尚未复现：生产 transcript、终端单元格快照及隔离真实 PTY 重放均保留完整内容；原生截图与 Accessibility 仍被 macOS 拒绝，不能将框架升级记作终端丢字修复。
+
 ### 维护
 
 - 按职责拆分设置窗口状态与工作台桥接、终端文件／图片粘贴，以及 daemon pane 的启动准备与回放缓冲；保持现有 CLI、IPC、配置格式和会话行为。清理无调用的终端辅助方法及测试无用绑定，将测试专用导入、图片快照与 Unix Attach 判别限定到对应测试范围，并把 SSH 十六进制解码夹具移至唯一使用它的 server 测试。

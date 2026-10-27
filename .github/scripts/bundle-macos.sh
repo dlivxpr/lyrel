@@ -12,8 +12,10 @@
 #     APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID.
 #   * APPLE_SIGNING_IDENTITY alone -> that identity from the login keychain,
 #     without a secure timestamp unless notarization credentials are set.
-#   * Otherwise -> adhoc signature, same as before. Fine for local dev, but the
-#     OS will quarantine it on other machines.
+#   * Otherwise -> ad-hoc signature, for local development only; its default
+#     designated requirement changes when the executable changes.
+# LYREL_REQUIRE_RELEASE_SIGNING=1 rejects missing Developer ID / notarization
+# credentials before touching dist, then verifies the resulting release identity.
 #
 # Before either artifact is packaged, every Mach-O inside the bundle is
 # asserted to be a thin <arch-label> binary (the sweep below), so a wrong-arch
@@ -36,6 +38,32 @@ BUNDLE_ID="${LYREL_BUNDLE_ID:-io.github.dlivxpr.lyrel}"
 BIN_DIR="${LYREL_BIN_DIR:-target/${TARGET}/release}"
 DIST="${LYREL_DIST:-dist}"
 APP="$DIST/$APP_NAME.app"
+
+REQUIRE_RELEASE_SIGNING="${LYREL_REQUIRE_RELEASE_SIGNING:-0}"
+if [[ "$REQUIRE_RELEASE_SIGNING" != 0 && "$REQUIRE_RELEASE_SIGNING" != 1 ]]; then
+    echo "bundle-macos: LYREL_REQUIRE_RELEASE_SIGNING must be 0 or 1" >&2
+    exit 1
+fi
+if [[ "$REQUIRE_RELEASE_SIGNING" == 1 ]]; then
+    if [[ -z "${APPLE_CERTIFICATE:-}" || -z "${APPLE_SIGNING_IDENTITY:-}" || "${APPLE_SIGNING_IDENTITY:-}" == - ]]; then
+        echo "bundle-macos: official releases require APPLE_CERTIFICATE and a Developer ID Application APPLE_SIGNING_IDENTITY; ad-hoc fallback is forbidden" >&2
+        exit 1
+    fi
+    if [[ ! "${APPLE_TEAM_ID:-}" =~ ^[A-Z0-9]{10}$ ]]; then
+        echo "bundle-macos: official releases require the expected 10-character APPLE_TEAM_ID" >&2
+        exit 1
+    fi
+    if [[ -z "${ASC_KEY_P8:-}" || -z "${ASC_KEY_ID:-}" || -z "${ASC_ISSUER_ID:-}" ]]; then
+        if [[ -z "${APPLE_ID:-}" || -z "${APPLE_PASSWORD:-}" ]]; then
+            echo "bundle-macos: official releases require complete ASC_KEY_P8/ASC_KEY_ID/ASC_ISSUER_ID or APPLE_ID/APPLE_PASSWORD notarization credentials" >&2
+            exit 1
+        fi
+    fi
+    if [[ "$APP_NAME" != lyrel || "$BUNDLE_ID" != io.github.dlivxpr.lyrel || "$PACKAGE_UPDATE_ZIP" != 1 || "${LYREL_BUNDLE_ONLY:-0}" != 0 ]]; then
+        echo "bundle-macos: official releases require the lyrel bundle identity and complete ZIP/DMG packaging" >&2
+        exit 1
+    fi
+fi
 
 rm -rf "$DIST"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -279,6 +307,10 @@ ENT
 else
     echo "⚠️  no Developer ID secrets — adhoc signing (won't pass Gatekeeper on other machines)"
     codesign --force --deep --sign - "$APP"
+fi
+
+if [[ "$REQUIRE_RELEASE_SIGNING" == 1 ]]; then
+    bash "$(dirname "$0")/verify-macos-release-signing.sh" "$APP" "$APPLE_TEAM_ID"
 fi
 
 # ---- Architecture sweep ----------------------------------------------------

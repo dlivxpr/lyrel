@@ -7836,7 +7836,10 @@ mod keybinding_gpui_tests {
                 None,
                 "the row has no chord left to show"
             );
-            let typed = [gpui_kit::Keystroke::parse(&shipped).expect("the chord parses")];
+            let typed = [
+                gpui_kit::Keystroke::parse_with_os(&shipped, cx.platform_info().os)
+                    .expect("the chord parses"),
+            ];
             let context = [gpui_kit::KeyContext::parse("Terminal").expect("the context parses")];
             assert!(
                 cx.key_bindings()

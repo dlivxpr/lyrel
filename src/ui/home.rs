@@ -151,7 +151,7 @@ fn snap_to_separator(tail: &str) -> &str {
 pub(crate) fn key_stroke(action: &str, cx: &App) -> Option<Keystroke> {
     let spec = crate::ui::keymap::effective_key(action, cx)?;
     let first = spec.split_whitespace().next()?;
-    Keystroke::parse(first).ok()
+    Keystroke::parse_with_os(first, cx.platform_info().os).ok()
 }
 
 /// The first stroke of `action`'s binding, one token per key.

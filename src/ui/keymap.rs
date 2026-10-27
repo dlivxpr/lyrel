@@ -12,6 +12,32 @@ use crate::ui::search::CommandGroup;
 use crate::ui::settings::humanize_action;
 use crate::ui::theme::set_menus;
 
+/// 原生桌面配置的纯解析路径遵循编译目标的键盘约定。
+fn native_os() -> gpui_kit::OperatingSystem {
+    if cfg!(target_os = "macos") {
+        gpui_kit::OperatingSystem::Mac
+    } else if cfg!(target_os = "windows") {
+        gpui_kit::OperatingSystem::Windows
+    } else {
+        gpui_kit::OperatingSystem::Linux
+    }
+}
+
+fn load_binding<A: gpui_kit::Action>(
+    keys: &str,
+    action: A,
+    context: Option<&str>,
+    cx: &App,
+) -> KeyBinding {
+    let predicate = context.map(|context| {
+        gpui_kit::KeyBindingContextPredicate::parse(context)
+            .expect("the keybinding context is valid")
+            .into()
+    });
+    KeyBinding::load(keys, Box::new(action), predicate, false, None, cx)
+        .expect("the keybinding was validated")
+}
+
 /// The bindings that were already in the keymap before lyrel put its own
 /// there. gpui-component installs a table of its own from `gpui_component::
 /// init` — the `Input` context's editing keys, the list and menu navigation,
@@ -48,9 +74,9 @@ pub fn init(cx: &mut App) {
 /// that has no settings row, and the modal-context guards the dispatch path
 /// needs — none of them come from `effective_bindings`, so a rebuild that
 /// only replayed the config would drop them.
-fn fixed_bindings() -> Vec<KeyBinding> {
+fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     let mut bindings = vec![
-        KeyBinding::new("secondary-+", IncreaseFontSize, None),
+        load_binding("secondary-+", IncreaseFontSize, None, cx),
         KeyBinding::new("tab", SendTab, Some("Terminal")),
         KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
     ];
@@ -60,18 +86,19 @@ fn fixed_bindings() -> Vec<KeyBinding> {
     // was therefore losing every Tab to the ellipsis button in its own header —
     // ring and all. A binding on the panel's own context is deeper in the
     // dispatch path, so it wins.
-    bindings.push(KeyBinding::new("tab", SwitcherAcross, Some("Switcher")));
-    bindings.push(KeyBinding::new(
+    bindings.push(load_binding("tab", SwitcherAcross, Some("Switcher"), cx));
+    bindings.push(load_binding(
         "shift-tab",
         SwitcherAcrossBack,
         Some("Switcher"),
+        cx,
     ));
     // Tab walks the search's tabs. Bound on the search's own context for the
     // switcher's reason: Root's focus walker would otherwise take it out of
     // the modal, onto whichever chrome tile is behind it, ring and all.
     let search = Some(crate::ui::search::KEY_CONTEXT);
-    bindings.push(KeyBinding::new("tab", SearchNextTab, search));
-    bindings.push(KeyBinding::new("shift-tab", SearchPrevTab, search));
+    bindings.push(load_binding("tab", SearchNextTab, search, cx));
+    bindings.push(load_binding("shift-tab", SearchPrevTab, search, cx));
     // Editor multi-cursor chords rank after the workspace's pane bindings.
     // Scope them to the actual EditorMode: ordinary fields and terminal panes
     // must keep their own commands rather than consume a no-op cursor action.
@@ -79,22 +106,29 @@ fn fixed_bindings() -> Vec<KeyBinding> {
         use crate::ui::code_editor::commands::{SelectAllOccurrences, SelectNextOccurrence};
         use gpui_kit::base::input::{AddCursorAbove, AddCursorBelow};
         let input = Some("Input && mode == editor");
-        bindings.push(KeyBinding::new("secondary-d", SelectNextOccurrence, input));
-        bindings.push(KeyBinding::new(
+        bindings.push(load_binding("secondary-d", SelectNextOccurrence, input, cx));
+        bindings.push(load_binding(
             "secondary-shift-l",
             SelectAllOccurrences,
             input,
+            cx,
         ));
-        bindings.push(KeyBinding::new("secondary-alt-up", AddCursorAbove, input));
-        bindings.push(KeyBinding::new("secondary-alt-down", AddCursorBelow, input));
+        bindings.push(load_binding("secondary-alt-up", AddCursorAbove, input, cx));
+        bindings.push(load_binding(
+            "secondary-alt-down",
+            AddCursorBelow,
+            input,
+            cx,
+        ));
         // ⌘K ⌘D: a chord whose first key is `ClearScrollback` on macOS. gpui
         // drops a pending chord that ranks below a complete match, so this
         // too has to come after lyrel's table. Code editor only: in any other
         // field ⌘K goes straight through, without waiting for a second key.
-        bindings.push(KeyBinding::new(
+        bindings.push(load_binding(
             "secondary-k secondary-d",
             crate::ui::code_editor::commands::SkipOccurrence,
             Some("Input && mode == editor"),
+            cx,
         ));
     }
     // The language-server commands, on the keys VS Code taught everyone, and
@@ -103,19 +137,19 @@ fn fixed_bindings() -> Vec<KeyBinding> {
     // let the key go on anywhere else. ⌘. / Ctrl+. needs nothing here: the
     // editor binds it to the same code-action menu itself.
     let input = Some("Input");
-    bindings.push(KeyBinding::new("f12", EditorGoToDefinition, input));
-    bindings.push(KeyBinding::new("f2", EditorRenameSymbol, input));
-    bindings.push(KeyBinding::new("shift-alt-f", EditorFormatDocument, input));
-    bindings.push(KeyBinding::new("shift-f12", EditorFindReferences, input));
+    bindings.push(load_binding("f12", EditorGoToDefinition, input, cx));
+    bindings.push(load_binding("f2", EditorRenameSymbol, input, cx));
+    bindings.push(load_binding("shift-alt-f", EditorFormatDocument, input, cx));
+    bindings.push(load_binding("shift-f12", EditorFindReferences, input, cx));
     // The gutter's change markers, on VS Code's chords. Only in an `Input`:
     // a function key bound for the whole window would never reach the shell,
     // and the handlers let the key through when the code editor is not the
     // field that has it.
     {
         let input = Some("Input");
-        bindings.push(KeyBinding::new("alt-f5", EditorNextChange, input));
-        bindings.push(KeyBinding::new("shift-alt-f5", EditorPrevChange, input));
-        bindings.push(KeyBinding::new("alt-f3", EditorPeekChange, input));
+        bindings.push(load_binding("alt-f5", EditorNextChange, input, cx));
+        bindings.push(load_binding("shift-alt-f5", EditorPrevChange, input, cx));
+        bindings.push(load_binding("alt-f3", EditorPeekChange, input, cx));
     }
     // The code editor's line commands, for the same tie: ⌘/ is the shortcut
     // sheet, ⌘↵ fullscreen, ⌘⇧↵ maximize and ⌥↑/⌥↓ pane focus off macOS, all
@@ -129,23 +163,24 @@ fn fixed_bindings() -> Vec<KeyBinding> {
         };
         let editor = Some("Input && mode == editor");
         bindings.extend([
-            KeyBinding::new("secondary-/", ToggleLineComment, editor),
-            KeyBinding::new("alt-shift-a", ToggleBlockComment, editor),
-            KeyBinding::new("alt-up", MoveLineUp, editor),
-            KeyBinding::new("alt-down", MoveLineDown, editor),
-            KeyBinding::new("alt-shift-up", CopyLineUp, editor),
-            KeyBinding::new("alt-shift-down", CopyLineDown, editor),
-            KeyBinding::new("secondary-shift-k", DeleteLine, editor),
-            KeyBinding::new("secondary-enter", InsertLineBelow, editor),
-            KeyBinding::new("secondary-shift-enter", InsertLineAbove, editor),
-            KeyBinding::new("secondary-l", SelectLine, editor),
-            KeyBinding::new("secondary-shift-\\", MoveToMatchingBracket, editor),
+            load_binding("secondary-/", ToggleLineComment, editor, cx),
+            load_binding("alt-shift-a", ToggleBlockComment, editor, cx),
+            load_binding("alt-up", MoveLineUp, editor, cx),
+            load_binding("alt-down", MoveLineDown, editor, cx),
+            load_binding("alt-shift-up", CopyLineUp, editor, cx),
+            load_binding("alt-shift-down", CopyLineDown, editor, cx),
+            load_binding("secondary-shift-k", DeleteLine, editor, cx),
+            load_binding("secondary-enter", InsertLineBelow, editor, cx),
+            load_binding("secondary-shift-enter", InsertLineAbove, editor, cx),
+            load_binding("secondary-l", SelectLine, editor, cx),
+            load_binding("secondary-shift-\\", MoveToMatchingBracket, editor, cx),
         ]);
         #[cfg(target_os = "macos")]
-        bindings.push(KeyBinding::new(
+        bindings.push(load_binding(
             "ctrl-j",
             crate::ui::code_editor::commands::JoinLines,
             editor,
+            cx,
         ));
     }
     bindings
@@ -169,8 +204,8 @@ fn rebuild_keymap(cx: &mut App) {
         .try_global::<BaseBindings>()
         .map(|base| base.0.clone())
         .unwrap_or_default();
-    bindings.extend(action_bindings(&effective));
-    bindings.extend(fixed_bindings());
+    bindings.extend(action_bindings(&effective, cx));
+    bindings.extend(fixed_bindings(cx));
     cx.clear_key_bindings();
     cx.bind_keys(bindings);
 }
@@ -260,23 +295,23 @@ pub(crate) fn extra_bindings(cx: &App) -> Vec<(String, String)> {
 ///
 /// Answers whether the action was known at all, which is the caller's cue to
 /// warn about a name it cannot bind.
-fn push_binding(bindings: &mut Vec<KeyBinding>, action: &str, key: &str) -> bool {
-    let Some(binding) = make_binding(action, key) else {
+fn push_binding(bindings: &mut Vec<KeyBinding>, action: &str, key: &str, cx: &App) -> bool {
+    let Some(binding) = make_binding(action, key, cx) else {
         return false;
     };
     bindings.push(binding);
     if let Some(folded) = folded_spec(key)
-        && let Some(alias) = make_binding(action, &folded)
+        && let Some(alias) = make_binding(action, &folded, cx)
     {
         bindings.push(alias);
     }
     true
 }
 
-fn action_bindings(effective: &[(String, String)]) -> Vec<KeyBinding> {
+fn action_bindings(effective: &[(String, String)], cx: &App) -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     for (action, key) in extra_keystrokes(effective) {
-        push_binding(&mut bindings, action, key);
+        push_binding(&mut bindings, action, key, cx);
     }
     for (action, key) in effective {
         if key.is_empty() {
@@ -314,13 +349,14 @@ fn action_bindings(effective: &[(String, String)]) -> Vec<KeyBinding> {
                 );
             }
         }
-        if !push_binding(&mut bindings, action, key) {
+        if !push_binding(&mut bindings, action, key, cx) {
             log::warn!("ignoring keybinding: unknown action '{action}'");
         } else if is_default_insert_newline_binding(action, key) {
-            bindings.push(KeyBinding::new(
+            bindings.push(load_binding(
                 INSERT_NEWLINE_DEFAULT,
                 InsertNewlineFallback,
                 Some("Terminal"),
+                cx,
             ));
         }
     }
@@ -341,7 +377,7 @@ fn action_bindings(effective: &[(String, String)]) -> Vec<KeyBinding> {
 /// a chord that encodes nothing gets a warning it did not strictly earn,
 /// which is cheaper than a default quietly eating one that does.
 fn steals_a_control_code(chord: &str) -> bool {
-    let Ok(ks) = Keystroke::parse(chord) else {
+    let Ok(ks) = Keystroke::parse_with_os(chord, native_os()) else {
         return false;
     };
     let m = &ks.modifiers;
@@ -1464,7 +1500,7 @@ pub(crate) fn tab_badge_hold(cx: &App) -> Option<Modifiers> {
     let (chord, None) = (chords.next()?, chords.next()) else {
         return None;
     };
-    let ks = Keystroke::parse(chord).ok()?;
+    let ks = Keystroke::parse_with_os(chord, cx.platform_info().os).ok()?;
     (ks.key == "1" && ks.modifiers.modified()).then_some(ks.modifiers)
 }
 
@@ -1562,9 +1598,9 @@ const SHIFTED_GLYPHS: [(char, char); 21] = [
 /// The table is US-layout, and a chord it does not know is left alone rather
 /// than guessed at. It cannot be layout-aware from here: `?` is Shift+ß on a
 /// German keyboard and Shift+, on a French one, and the only mapper that knows
-/// which is gpui's, reached through `KeyBinding::load` rather than the
-/// `KeyBinding::new` that `make_binding` uses — and it exists on Windows only,
-/// where `MacKeyboardMapper` does no shift folding at all. So off a US layout
+/// which is gpui's, reached through `KeyBinding::load` with key equivalents
+/// enabled. Lyrel deliberately leaves that option disabled and adds an alias;
+/// the platform mapper exists on Windows only, so off a US layout
 /// the fold is a widening that may not land: `ctrl-shift-4` picks up `ctrl-$`,
 /// which on AZERTY is a key of its own. Harmless, because the fold only ever
 /// adds — the spec as written stays bound whatever the layout — but it is why
@@ -1582,7 +1618,7 @@ const SHIFTED_GLYPHS: [(char, char); 21] = [
 /// drops it) and Linux names those keys `divide`/`multiply`/`add`/`subtract`,
 /// which are not one character and never reach this.
 fn fold_shift_into_glyph(chord: &str) -> Option<String> {
-    let mut ks = Keystroke::parse(chord).ok()?;
+    let mut ks = Keystroke::parse_with_os(chord, native_os()).ok()?;
     if !ks.modifiers.shift {
         return None;
     }
@@ -1719,7 +1755,7 @@ fn keystroke_is_valid(s: &str) -> bool {
     let mut any = false;
     for token in s.split_whitespace() {
         any = true;
-        if gpui_kit::Keystroke::parse(token).is_err() {
+        if gpui_kit::Keystroke::parse_with_os(token, native_os()).is_err() {
             return false;
         }
     }
@@ -1745,197 +1781,203 @@ fn action_context(action: &str) -> Option<&'static str> {
     }
 }
 
-fn make_binding(action: &str, keystroke: &str) -> Option<KeyBinding> {
+fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
     if let Some(agent) = crate::ui::agent_launch::agent_for_launch_action(action) {
-        return Some(KeyBinding::new(keystroke, LaunchAgent { agent }, None));
+        return Some(load_binding(keystroke, LaunchAgent { agent }, None, cx));
     }
     Some(match action {
-        "NewTab" => KeyBinding::new(keystroke, NewTab, None),
-        "NewWorkspace" => KeyBinding::new(keystroke, NewWorkspace, None),
-        "StopWorkspace" => KeyBinding::new(keystroke, StopWorkspace, None),
-        "DeleteWorkspace" => KeyBinding::new(keystroke, DeleteWorkspace, None),
-        "RenameWorkspace" => KeyBinding::new(keystroke, RenameWorkspace, None),
-        "ToggleSwitcher" => KeyBinding::new(keystroke, ToggleSwitcher, None),
-        "NewWindow" => KeyBinding::new(keystroke, NewWindow, None),
-        "CloseWindow" => KeyBinding::new(keystroke, CloseWindow, None),
-        "CloseActiveTab" => KeyBinding::new(keystroke, CloseActiveTab, None),
-        "RenameTab" => KeyBinding::new(keystroke, RenameTab, None),
-        "NewWorktreeTab" => KeyBinding::new(keystroke, NewWorktreeTab, None),
-        "CloseOtherTabs" => KeyBinding::new(keystroke, CloseOtherTabs, None),
-        "CloseTabsToTheRight" => KeyBinding::new(keystroke, CloseTabsToTheRight, None),
-        "CopyWorkingDirectory" => KeyBinding::new(keystroke, CopyWorkingDirectory, None),
-        "MarkTabUnread" => KeyBinding::new(keystroke, MarkTabUnread, None),
-        "HibernateTab" => KeyBinding::new(keystroke, HibernateTab, None),
-        "ForkAgentSession" => KeyBinding::new(keystroke, ForkAgentSession, None),
-        "ForkAgentSessionRight" => KeyBinding::new(keystroke, ForkAgentSessionRight, None),
-        "ForkAgentSessionLeft" => KeyBinding::new(keystroke, ForkAgentSessionLeft, None),
-        "ForkAgentSessionDown" => KeyBinding::new(keystroke, ForkAgentSessionDown, None),
-        "ForkAgentSessionUp" => KeyBinding::new(keystroke, ForkAgentSessionUp, None),
-        "CopyAgentSessionId" => KeyBinding::new(keystroke, CopyAgentSessionId, None),
-        "NewAgentTab" => KeyBinding::new(keystroke, NewAgentTab, None),
-        "SplitRight" => KeyBinding::new(keystroke, SplitRight, None),
-        "SplitDown" => KeyBinding::new(keystroke, SplitDown, None),
-        "MovePaneToTab" => KeyBinding::new(keystroke, MovePaneToTab, None),
-        "TogglePanePip" => KeyBinding::new(keystroke, TogglePanePip, None),
-        "RestorePanePip" => KeyBinding::new(keystroke, RestorePanePip, None),
-        "ParkPane" => KeyBinding::new(keystroke, ParkPane, None),
-        "RestoreParkedPane" => KeyBinding::new(keystroke, RestoreParkedPane, None),
-        "OpenScrollbackInEditor" => KeyBinding::new(keystroke, OpenScrollbackInEditor, None),
-        "ClearPaneScreen" => KeyBinding::new(keystroke, ClearPaneScreen, None),
-        "RestartPaneShell" => KeyBinding::new(keystroke, RestartPaneShell, None),
-        "FocusNextPane" => KeyBinding::new(keystroke, FocusNextPane, None),
-        "FocusPrevPane" => KeyBinding::new(keystroke, FocusPrevPane, None),
-        "FocusPaneLeft" => KeyBinding::new(keystroke, FocusPaneLeft, None),
-        "FocusPaneRight" => KeyBinding::new(keystroke, FocusPaneRight, None),
-        "FocusPaneUp" => KeyBinding::new(keystroke, FocusPaneUp, None),
-        "FocusPaneDown" => KeyBinding::new(keystroke, FocusPaneDown, None),
-        "ResizePaneLeft" => KeyBinding::new(keystroke, ResizePaneLeft, None),
-        "ResizePaneRight" => KeyBinding::new(keystroke, ResizePaneRight, None),
-        "ResizePaneUp" => KeyBinding::new(keystroke, ResizePaneUp, None),
-        "ResizePaneDown" => KeyBinding::new(keystroke, ResizePaneDown, None),
-        "SwapPaneNext" => KeyBinding::new(keystroke, SwapPaneNext, None),
-        "SwapPanePrev" => KeyBinding::new(keystroke, SwapPanePrev, None),
-        "NextTab" => KeyBinding::new(keystroke, NextTab, None),
-        "PrevTab" => KeyBinding::new(keystroke, PrevTab, None),
-        "SelectNextTab" => KeyBinding::new(keystroke, SelectNextTab, None),
-        "SelectPrevTab" => KeyBinding::new(keystroke, SelectPrevTab, None),
-        "MoveTabLeft" => KeyBinding::new(keystroke, MoveTabLeft, None),
-        "MoveTabRight" => KeyBinding::new(keystroke, MoveTabRight, None),
-        "ActivateTab1" => KeyBinding::new(keystroke, ActivateTab1, None),
-        "ActivateTab2" => KeyBinding::new(keystroke, ActivateTab2, None),
-        "ActivateTab3" => KeyBinding::new(keystroke, ActivateTab3, None),
-        "ActivateTab4" => KeyBinding::new(keystroke, ActivateTab4, None),
-        "ActivateTab5" => KeyBinding::new(keystroke, ActivateTab5, None),
-        "ActivateTab6" => KeyBinding::new(keystroke, ActivateTab6, None),
-        "ActivateTab7" => KeyBinding::new(keystroke, ActivateTab7, None),
-        "ActivateTab8" => KeyBinding::new(keystroke, ActivateTab8, None),
-        "ActivateTab9" => KeyBinding::new(keystroke, ActivateTab9, None),
-        "SelectWorkspace1" => KeyBinding::new(keystroke, SelectWorkspace1, None),
-        "SelectWorkspace2" => KeyBinding::new(keystroke, SelectWorkspace2, None),
-        "SelectWorkspace3" => KeyBinding::new(keystroke, SelectWorkspace3, None),
-        "SelectWorkspace4" => KeyBinding::new(keystroke, SelectWorkspace4, None),
-        "SelectWorkspace5" => KeyBinding::new(keystroke, SelectWorkspace5, None),
-        "SelectWorkspace6" => KeyBinding::new(keystroke, SelectWorkspace6, None),
-        "SelectWorkspace7" => KeyBinding::new(keystroke, SelectWorkspace7, None),
-        "SelectWorkspace8" => KeyBinding::new(keystroke, SelectWorkspace8, None),
-        "SelectWorkspace9" => KeyBinding::new(keystroke, SelectWorkspace9, None),
-        "IncreaseFontSize" => KeyBinding::new(keystroke, IncreaseFontSize, None),
-        "DecreaseFontSize" => KeyBinding::new(keystroke, DecreaseFontSize, None),
-        "ResetFontSize" => KeyBinding::new(keystroke, ResetFontSize, None),
-        "TogglePalette" => KeyBinding::new(keystroke, TogglePalette, None),
-        "QuickOpenFile" => KeyBinding::new(keystroke, QuickOpenFile, None),
-        "ReopenClosedTab" => KeyBinding::new(keystroke, ReopenClosedTab, None),
-        "ToggleMaximizePane" => KeyBinding::new(keystroke, ToggleMaximizePane, None),
-        "ToggleFullscreen" => KeyBinding::new(keystroke, ToggleFullscreen, None),
-        "ToggleLeftPanel" => KeyBinding::new(keystroke, ToggleLeftPanel, None),
-        "ToggleRightPanel" => KeyBinding::new(keystroke, ToggleRightPanel, None),
-        "ShowRightPanelInfo" => KeyBinding::new(keystroke, ShowRightPanelInfo, None),
-        "ShowRightPanelChanges" => KeyBinding::new(keystroke, ShowRightPanelChanges, None),
-        "ShowRightPanelFiles" => KeyBinding::new(keystroke, ShowRightPanelFiles, None),
-        "ShowRightPanelSearch" => KeyBinding::new(keystroke, ShowRightPanelSearch, None),
-        "ShowRightPanelGitHub" => KeyBinding::new(keystroke, ShowRightPanelGitHub, None),
-        "ScmCommit" => KeyBinding::new(keystroke, ScmCommit, action_context(action)),
-        "ScmCommitAmend" => KeyBinding::new(keystroke, ScmCommitAmend, action_context(action)),
-        "ScmStageAll" => KeyBinding::new(keystroke, ScmStageAll, None),
-        "ScmUnstageAll" => KeyBinding::new(keystroke, ScmUnstageAll, None),
-        "ScmDiscardAll" => KeyBinding::new(keystroke, ScmDiscardAll, None),
-        "ScmRefresh" => KeyBinding::new(keystroke, ScmRefresh, None),
-        "ScmSync" => KeyBinding::new(keystroke, ScmSync, None),
-        "ScmPush" => KeyBinding::new(keystroke, ScmPush, None),
-        "ScmPull" => KeyBinding::new(keystroke, ScmPull, None),
-        "ScmFetch" => KeyBinding::new(keystroke, ScmFetch, None),
-        "ScmCheckoutBranch" => KeyBinding::new(keystroke, ScmCheckoutBranch, None),
-        "ScmCreateBranch" => KeyBinding::new(keystroke, ScmCreateBranch, None),
-        "ScmToggleGraph" => KeyBinding::new(keystroke, ScmToggleGraph, None),
-        "ToggleDiffViewMode" => KeyBinding::new(keystroke, ToggleDiffViewMode, None),
-        "FindInTerminal" => KeyBinding::new(keystroke, FindInTerminal, action_context(action)),
-        "FindNext" => KeyBinding::new(keystroke, FindNext, action_context(action)),
-        "ToggleComposer" => KeyBinding::new(keystroke, ToggleComposer, action_context(action)),
-        "FindPrevious" => KeyBinding::new(keystroke, FindPrevious, action_context(action)),
-        "ClearScrollback" => KeyBinding::new(keystroke, ClearScrollback, action_context(action)),
-        "InsertNewline" => KeyBinding::new(keystroke, InsertNewline, action_context(action)),
-        "CopyText" => KeyBinding::new(keystroke, CopyText, action_context(action)),
-        "PasteText" => KeyBinding::new(keystroke, PasteText, action_context(action)),
-        "AlternatePaste" => KeyBinding::new(keystroke, AlternatePaste, action_context(action)),
-        "OpenSettings" => KeyBinding::new(keystroke, OpenSettings, None),
-        "ShowKeyboardShortcuts" => KeyBinding::new(keystroke, ShowKeyboardShortcuts, None),
-        "About" => KeyBinding::new(keystroke, About, None),
-        "CheckForUpdates" => KeyBinding::new(keystroke, CheckForUpdates, None),
-        "OpenDocumentation" => KeyBinding::new(keystroke, OpenDocumentation, None),
-        "OpenProject" => KeyBinding::new(keystroke, OpenProject, None),
-        "ReportIssue" => KeyBinding::new(keystroke, ReportIssue, None),
-        "HideApp" => KeyBinding::new(keystroke, HideApp, None),
-        "HideOthers" => KeyBinding::new(keystroke, HideOthers, None),
-        "ShowAll" => KeyBinding::new(keystroke, ShowAll, None),
-        "MinimizeWindow" => KeyBinding::new(keystroke, MinimizeWindow, None),
-        "ZoomWindow" => KeyBinding::new(keystroke, ZoomWindow, None),
-        "ToggleSftp" => KeyBinding::new(keystroke, ToggleSftp, None),
-        "ShowSshForwards" => KeyBinding::new(keystroke, ShowSshForwards, None),
-        "ToggleCodePanel" => KeyBinding::new(keystroke, ToggleCodePanel, None),
-        "ToggleDocumentFill" => KeyBinding::new(keystroke, ToggleDocumentFill, None),
-        "DocumentWidthThird" => KeyBinding::new(keystroke, DocumentWidthThird, None),
-        "DocumentWidthHalf" => KeyBinding::new(keystroke, DocumentWidthHalf, None),
-        "DocumentWidthTwoThirds" => KeyBinding::new(keystroke, DocumentWidthTwoThirds, None),
-        "ToggleDocumentPreview" => KeyBinding::new(keystroke, ToggleDocumentPreview, None),
-        "ToggleDocumentWrap" => KeyBinding::new(keystroke, ToggleDocumentWrap, None),
-        "EditorSave" => KeyBinding::new(keystroke, EditorSave, None),
-        "EditorSaveAs" => KeyBinding::new(keystroke, EditorSaveAs, None),
-        "EditorGoToLine" => KeyBinding::new(keystroke, EditorGoToLine, None),
-        "EditorGoToSymbol" => KeyBinding::new(
+        "NewTab" => load_binding(keystroke, NewTab, None, cx),
+        "NewWorkspace" => load_binding(keystroke, NewWorkspace, None, cx),
+        "StopWorkspace" => load_binding(keystroke, StopWorkspace, None, cx),
+        "DeleteWorkspace" => load_binding(keystroke, DeleteWorkspace, None, cx),
+        "RenameWorkspace" => load_binding(keystroke, RenameWorkspace, None, cx),
+        "ToggleSwitcher" => load_binding(keystroke, ToggleSwitcher, None, cx),
+        "NewWindow" => load_binding(keystroke, NewWindow, None, cx),
+        "CloseWindow" => load_binding(keystroke, CloseWindow, None, cx),
+        "CloseActiveTab" => load_binding(keystroke, CloseActiveTab, None, cx),
+        "RenameTab" => load_binding(keystroke, RenameTab, None, cx),
+        "NewWorktreeTab" => load_binding(keystroke, NewWorktreeTab, None, cx),
+        "CloseOtherTabs" => load_binding(keystroke, CloseOtherTabs, None, cx),
+        "CloseTabsToTheRight" => load_binding(keystroke, CloseTabsToTheRight, None, cx),
+        "CopyWorkingDirectory" => load_binding(keystroke, CopyWorkingDirectory, None, cx),
+        "MarkTabUnread" => load_binding(keystroke, MarkTabUnread, None, cx),
+        "HibernateTab" => load_binding(keystroke, HibernateTab, None, cx),
+        "ForkAgentSession" => load_binding(keystroke, ForkAgentSession, None, cx),
+        "ForkAgentSessionRight" => load_binding(keystroke, ForkAgentSessionRight, None, cx),
+        "ForkAgentSessionLeft" => load_binding(keystroke, ForkAgentSessionLeft, None, cx),
+        "ForkAgentSessionDown" => load_binding(keystroke, ForkAgentSessionDown, None, cx),
+        "ForkAgentSessionUp" => load_binding(keystroke, ForkAgentSessionUp, None, cx),
+        "CopyAgentSessionId" => load_binding(keystroke, CopyAgentSessionId, None, cx),
+        "NewAgentTab" => load_binding(keystroke, NewAgentTab, None, cx),
+        "SplitRight" => load_binding(keystroke, SplitRight, None, cx),
+        "SplitDown" => load_binding(keystroke, SplitDown, None, cx),
+        "MovePaneToTab" => load_binding(keystroke, MovePaneToTab, None, cx),
+        "TogglePanePip" => load_binding(keystroke, TogglePanePip, None, cx),
+        "RestorePanePip" => load_binding(keystroke, RestorePanePip, None, cx),
+        "ParkPane" => load_binding(keystroke, ParkPane, None, cx),
+        "RestoreParkedPane" => load_binding(keystroke, RestoreParkedPane, None, cx),
+        "OpenScrollbackInEditor" => load_binding(keystroke, OpenScrollbackInEditor, None, cx),
+        "ClearPaneScreen" => load_binding(keystroke, ClearPaneScreen, None, cx),
+        "RestartPaneShell" => load_binding(keystroke, RestartPaneShell, None, cx),
+        "FocusNextPane" => load_binding(keystroke, FocusNextPane, None, cx),
+        "FocusPrevPane" => load_binding(keystroke, FocusPrevPane, None, cx),
+        "FocusPaneLeft" => load_binding(keystroke, FocusPaneLeft, None, cx),
+        "FocusPaneRight" => load_binding(keystroke, FocusPaneRight, None, cx),
+        "FocusPaneUp" => load_binding(keystroke, FocusPaneUp, None, cx),
+        "FocusPaneDown" => load_binding(keystroke, FocusPaneDown, None, cx),
+        "ResizePaneLeft" => load_binding(keystroke, ResizePaneLeft, None, cx),
+        "ResizePaneRight" => load_binding(keystroke, ResizePaneRight, None, cx),
+        "ResizePaneUp" => load_binding(keystroke, ResizePaneUp, None, cx),
+        "ResizePaneDown" => load_binding(keystroke, ResizePaneDown, None, cx),
+        "SwapPaneNext" => load_binding(keystroke, SwapPaneNext, None, cx),
+        "SwapPanePrev" => load_binding(keystroke, SwapPanePrev, None, cx),
+        "NextTab" => load_binding(keystroke, NextTab, None, cx),
+        "PrevTab" => load_binding(keystroke, PrevTab, None, cx),
+        "SelectNextTab" => load_binding(keystroke, SelectNextTab, None, cx),
+        "SelectPrevTab" => load_binding(keystroke, SelectPrevTab, None, cx),
+        "MoveTabLeft" => load_binding(keystroke, MoveTabLeft, None, cx),
+        "MoveTabRight" => load_binding(keystroke, MoveTabRight, None, cx),
+        "ActivateTab1" => load_binding(keystroke, ActivateTab1, None, cx),
+        "ActivateTab2" => load_binding(keystroke, ActivateTab2, None, cx),
+        "ActivateTab3" => load_binding(keystroke, ActivateTab3, None, cx),
+        "ActivateTab4" => load_binding(keystroke, ActivateTab4, None, cx),
+        "ActivateTab5" => load_binding(keystroke, ActivateTab5, None, cx),
+        "ActivateTab6" => load_binding(keystroke, ActivateTab6, None, cx),
+        "ActivateTab7" => load_binding(keystroke, ActivateTab7, None, cx),
+        "ActivateTab8" => load_binding(keystroke, ActivateTab8, None, cx),
+        "ActivateTab9" => load_binding(keystroke, ActivateTab9, None, cx),
+        "SelectWorkspace1" => load_binding(keystroke, SelectWorkspace1, None, cx),
+        "SelectWorkspace2" => load_binding(keystroke, SelectWorkspace2, None, cx),
+        "SelectWorkspace3" => load_binding(keystroke, SelectWorkspace3, None, cx),
+        "SelectWorkspace4" => load_binding(keystroke, SelectWorkspace4, None, cx),
+        "SelectWorkspace5" => load_binding(keystroke, SelectWorkspace5, None, cx),
+        "SelectWorkspace6" => load_binding(keystroke, SelectWorkspace6, None, cx),
+        "SelectWorkspace7" => load_binding(keystroke, SelectWorkspace7, None, cx),
+        "SelectWorkspace8" => load_binding(keystroke, SelectWorkspace8, None, cx),
+        "SelectWorkspace9" => load_binding(keystroke, SelectWorkspace9, None, cx),
+        "IncreaseFontSize" => load_binding(keystroke, IncreaseFontSize, None, cx),
+        "DecreaseFontSize" => load_binding(keystroke, DecreaseFontSize, None, cx),
+        "ResetFontSize" => load_binding(keystroke, ResetFontSize, None, cx),
+        "TogglePalette" => load_binding(keystroke, TogglePalette, None, cx),
+        "QuickOpenFile" => load_binding(keystroke, QuickOpenFile, None, cx),
+        "ReopenClosedTab" => load_binding(keystroke, ReopenClosedTab, None, cx),
+        "ToggleMaximizePane" => load_binding(keystroke, ToggleMaximizePane, None, cx),
+        "ToggleFullscreen" => load_binding(keystroke, ToggleFullscreen, None, cx),
+        "ToggleLeftPanel" => load_binding(keystroke, ToggleLeftPanel, None, cx),
+        "ToggleRightPanel" => load_binding(keystroke, ToggleRightPanel, None, cx),
+        "ShowRightPanelInfo" => load_binding(keystroke, ShowRightPanelInfo, None, cx),
+        "ShowRightPanelChanges" => load_binding(keystroke, ShowRightPanelChanges, None, cx),
+        "ShowRightPanelFiles" => load_binding(keystroke, ShowRightPanelFiles, None, cx),
+        "ShowRightPanelSearch" => load_binding(keystroke, ShowRightPanelSearch, None, cx),
+        "ShowRightPanelGitHub" => load_binding(keystroke, ShowRightPanelGitHub, None, cx),
+        "ScmCommit" => load_binding(keystroke, ScmCommit, action_context(action), cx),
+        "ScmCommitAmend" => load_binding(keystroke, ScmCommitAmend, action_context(action), cx),
+        "ScmStageAll" => load_binding(keystroke, ScmStageAll, None, cx),
+        "ScmUnstageAll" => load_binding(keystroke, ScmUnstageAll, None, cx),
+        "ScmDiscardAll" => load_binding(keystroke, ScmDiscardAll, None, cx),
+        "ScmRefresh" => load_binding(keystroke, ScmRefresh, None, cx),
+        "ScmSync" => load_binding(keystroke, ScmSync, None, cx),
+        "ScmPush" => load_binding(keystroke, ScmPush, None, cx),
+        "ScmPull" => load_binding(keystroke, ScmPull, None, cx),
+        "ScmFetch" => load_binding(keystroke, ScmFetch, None, cx),
+        "ScmCheckoutBranch" => load_binding(keystroke, ScmCheckoutBranch, None, cx),
+        "ScmCreateBranch" => load_binding(keystroke, ScmCreateBranch, None, cx),
+        "ScmToggleGraph" => load_binding(keystroke, ScmToggleGraph, None, cx),
+        "ToggleDiffViewMode" => load_binding(keystroke, ToggleDiffViewMode, None, cx),
+        "FindInTerminal" => load_binding(keystroke, FindInTerminal, action_context(action), cx),
+        "FindNext" => load_binding(keystroke, FindNext, action_context(action), cx),
+        "ToggleComposer" => load_binding(keystroke, ToggleComposer, action_context(action), cx),
+        "FindPrevious" => load_binding(keystroke, FindPrevious, action_context(action), cx),
+        "ClearScrollback" => load_binding(keystroke, ClearScrollback, action_context(action), cx),
+        "InsertNewline" => load_binding(keystroke, InsertNewline, action_context(action), cx),
+        "CopyText" => load_binding(keystroke, CopyText, action_context(action), cx),
+        "PasteText" => load_binding(keystroke, PasteText, action_context(action), cx),
+        "AlternatePaste" => load_binding(keystroke, AlternatePaste, action_context(action), cx),
+        "OpenSettings" => load_binding(keystroke, OpenSettings, None, cx),
+        "ShowKeyboardShortcuts" => load_binding(keystroke, ShowKeyboardShortcuts, None, cx),
+        "About" => load_binding(keystroke, About, None, cx),
+        "CheckForUpdates" => load_binding(keystroke, CheckForUpdates, None, cx),
+        "OpenDocumentation" => load_binding(keystroke, OpenDocumentation, None, cx),
+        "OpenProject" => load_binding(keystroke, OpenProject, None, cx),
+        "ReportIssue" => load_binding(keystroke, ReportIssue, None, cx),
+        "HideApp" => load_binding(keystroke, HideApp, None, cx),
+        "HideOthers" => load_binding(keystroke, HideOthers, None, cx),
+        "ShowAll" => load_binding(keystroke, ShowAll, None, cx),
+        "MinimizeWindow" => load_binding(keystroke, MinimizeWindow, None, cx),
+        "ZoomWindow" => load_binding(keystroke, ZoomWindow, None, cx),
+        "ToggleSftp" => load_binding(keystroke, ToggleSftp, None, cx),
+        "ShowSshForwards" => load_binding(keystroke, ShowSshForwards, None, cx),
+        "ToggleCodePanel" => load_binding(keystroke, ToggleCodePanel, None, cx),
+        "ToggleDocumentFill" => load_binding(keystroke, ToggleDocumentFill, None, cx),
+        "DocumentWidthThird" => load_binding(keystroke, DocumentWidthThird, None, cx),
+        "DocumentWidthHalf" => load_binding(keystroke, DocumentWidthHalf, None, cx),
+        "DocumentWidthTwoThirds" => load_binding(keystroke, DocumentWidthTwoThirds, None, cx),
+        "ToggleDocumentPreview" => load_binding(keystroke, ToggleDocumentPreview, None, cx),
+        "ToggleDocumentWrap" => load_binding(keystroke, ToggleDocumentWrap, None, cx),
+        "EditorSave" => load_binding(keystroke, EditorSave, None, cx),
+        "EditorSaveAs" => load_binding(keystroke, EditorSaveAs, None, cx),
+        "EditorGoToLine" => load_binding(keystroke, EditorGoToLine, None, cx),
+        "EditorGoToSymbol" => load_binding(
             keystroke,
             EditorGoToSymbol,
             Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            cx,
         ),
-        "EditorNavigateBack" => KeyBinding::new(
+        "EditorNavigateBack" => load_binding(
             keystroke,
             EditorNavigateBack,
             Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            cx,
         ),
-        "EditorNavigateForward" => KeyBinding::new(
+        "EditorNavigateForward" => load_binding(
             keystroke,
             EditorNavigateForward,
             Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            cx,
         ),
-        "EditorSplitRight" => KeyBinding::new(
+        "EditorSplitRight" => load_binding(
             keystroke,
             EditorSplitRight,
             Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            cx,
         ),
-        "EditorFocusLeftGroup" => KeyBinding::new(
+        "EditorFocusLeftGroup" => load_binding(
             keystroke,
             EditorFocusLeftGroup,
             Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            cx,
         ),
-        "EditorFocusRightGroup" => KeyBinding::new(
+        "EditorFocusRightGroup" => load_binding(
             keystroke,
             EditorFocusRightGroup,
             Some(crate::ui::code_editor::NAV_KEY_CONTEXT),
+            cx,
         ),
-        "EditorNewFile" => KeyBinding::new(keystroke, EditorNewFile, None),
-        "EditorGoToDefinition" => KeyBinding::new(keystroke, EditorGoToDefinition, None),
-        "EditorQuickFix" => KeyBinding::new(keystroke, EditorQuickFix, None),
-        "EditorRenameSymbol" => KeyBinding::new(keystroke, EditorRenameSymbol, None),
-        "EditorFormatDocument" => KeyBinding::new(keystroke, EditorFormatDocument, None),
-        "EditorTransformUppercase" => KeyBinding::new(keystroke, EditorTransformUppercase, None),
-        "EditorTransformLowercase" => KeyBinding::new(keystroke, EditorTransformLowercase, None),
-        "EditorTransformTitleCase" => KeyBinding::new(keystroke, EditorTransformTitleCase, None),
+        "EditorNewFile" => load_binding(keystroke, EditorNewFile, None, cx),
+        "EditorGoToDefinition" => load_binding(keystroke, EditorGoToDefinition, None, cx),
+        "EditorQuickFix" => load_binding(keystroke, EditorQuickFix, None, cx),
+        "EditorRenameSymbol" => load_binding(keystroke, EditorRenameSymbol, None, cx),
+        "EditorFormatDocument" => load_binding(keystroke, EditorFormatDocument, None, cx),
+        "EditorTransformUppercase" => load_binding(keystroke, EditorTransformUppercase, None, cx),
+        "EditorTransformLowercase" => load_binding(keystroke, EditorTransformLowercase, None, cx),
+        "EditorTransformTitleCase" => load_binding(keystroke, EditorTransformTitleCase, None, cx),
         "EditorTrimTrailingWhitespace" => {
-            KeyBinding::new(keystroke, EditorTrimTrailingWhitespace, None)
+            load_binding(keystroke, EditorTrimTrailingWhitespace, None, cx)
         }
-        "EditorJoinLines" => KeyBinding::new(keystroke, EditorJoinLines, None),
+        "EditorJoinLines" => load_binding(keystroke, EditorJoinLines, None, cx),
         "EditorRemoveSurroundingBrackets" => {
-            KeyBinding::new(keystroke, EditorRemoveSurroundingBrackets, None)
+            load_binding(keystroke, EditorRemoveSurroundingBrackets, None, cx)
         }
-        "EditorFindReferences" => KeyBinding::new(keystroke, EditorFindReferences, None),
-        "EditorNextChange" => KeyBinding::new(keystroke, EditorNextChange, None),
-        "EditorPrevChange" => KeyBinding::new(keystroke, EditorPrevChange, None),
-        "EditorRevertChange" => KeyBinding::new(keystroke, EditorRevertChange, None),
-        "ToggleEditorGitGutter" => KeyBinding::new(keystroke, ToggleEditorGitGutter, None),
-        "EditorPeekChange" => KeyBinding::new(keystroke, EditorPeekChange, None),
-        "ToggleEditorProblems" => KeyBinding::new(keystroke, ToggleEditorProblems, None),
-        "OpenSshProfiles" => KeyBinding::new(keystroke, OpenSshProfiles, None),
-        "RestartSshSession" => KeyBinding::new(keystroke, RestartSshSession, None),
-        "Quit" => KeyBinding::new(keystroke, Quit, None),
+        "EditorFindReferences" => load_binding(keystroke, EditorFindReferences, None, cx),
+        "EditorNextChange" => load_binding(keystroke, EditorNextChange, None, cx),
+        "EditorPrevChange" => load_binding(keystroke, EditorPrevChange, None, cx),
+        "EditorRevertChange" => load_binding(keystroke, EditorRevertChange, None, cx),
+        "ToggleEditorGitGutter" => load_binding(keystroke, ToggleEditorGitGutter, None, cx),
+        "EditorPeekChange" => load_binding(keystroke, EditorPeekChange, None, cx),
+        "ToggleEditorProblems" => load_binding(keystroke, ToggleEditorProblems, None, cx),
+        "OpenSshProfiles" => load_binding(keystroke, OpenSshProfiles, None, cx),
+        "RestartSshSession" => load_binding(keystroke, RestartSshSession, None, cx),
+        "Quit" => load_binding(keystroke, Quit, None, cx),
         _ => return None,
     })
 }
@@ -1944,6 +1986,41 @@ fn make_binding(action: &str, keystroke: &str) -> Option<KeyBinding> {
 mod tests {
     use super::*;
     use gpui_kit::Action as _;
+
+    fn action_bindings(effective: &[(String, String)]) -> Vec<KeyBinding> {
+        gpui_kit::TestAppContext::single().read(|cx| super::action_bindings(effective, cx))
+    }
+
+    fn make_binding(action: &str, keystroke: &str) -> Option<KeyBinding> {
+        gpui_kit::TestAppContext::single().read(|cx| super::make_binding(action, keystroke, cx))
+    }
+
+    #[test]
+    fn dynamic_and_fixed_secondary_bindings_follow_the_app_os() {
+        use gpui_kit::{OperatingSystem, PlatformInfo, PlatformTarget, TestAppContext};
+
+        for os in [OperatingSystem::Mac, OperatingSystem::Windows] {
+            let mut context = TestAppContext::single();
+            context.set_platform_info(PlatformInfo {
+                os,
+                target: PlatformTarget::Native,
+            });
+            context.read(|cx| {
+                let effective = vec![("NewTab".to_string(), "secondary-alt-9".to_string())];
+                let bindings = super::action_bindings(&effective, cx);
+                let typed = [Keystroke::parse_with_os("secondary-alt-9", os).unwrap()];
+                assert!(bindings.iter().any(|binding| {
+                    binding.action().name() == NewTab.name()
+                        && binding.match_keystrokes(&typed) == Some(false)
+                }));
+                let typed = [Keystroke::parse_with_os("secondary-+", os).unwrap()];
+                assert!(fixed_bindings(cx).iter().any(|binding| {
+                    binding.action().name() == IncreaseFontSize.name()
+                        && binding.match_keystrokes(&typed) == Some(false)
+                }));
+            });
+        }
+    }
 
     /// The actions a keymap built from `action_bindings` dispatches for `keys`
     /// typed in `context`, in precedence order — the same lookup gpui performs
@@ -1955,7 +2032,7 @@ mod tests {
     fn dispatched(effective: &[(String, String)], keys: &str, context: &str) -> Vec<&'static str> {
         let input: Vec<Keystroke> = keys
             .split(' ')
-            .map(|k| Keystroke::parse(k).expect("the typed keystroke parses"))
+            .map(|k| Keystroke::parse_with_os(k, native_os()).expect("the typed keystroke parses"))
             .collect();
         dispatched_keystrokes(effective, &input, context)
     }
@@ -2257,15 +2334,15 @@ mod tests {
 
         let mut keymap = gpui_kit::Keymap::default();
         keymap.add_bindings(action_bindings(&effective));
-        let input = [gpui_kit::Keystroke::parse("shift-enter").unwrap()];
+        let input = [gpui_kit::Keystroke::parse_with_os("shift-enter", native_os()).unwrap()];
         let context = [gpui_kit::KeyContext::parse("Terminal").unwrap()];
         let (_, pending) = keymap.bindings_for_input(&input, &context);
 
         assert!(pending, "the keymap must wait for the second key");
 
         let input = [
-            gpui_kit::Keystroke::parse("shift-enter").unwrap(),
-            gpui_kit::Keystroke::parse("x").unwrap(),
+            gpui_kit::Keystroke::parse_with_os("shift-enter", native_os()).unwrap(),
+            gpui_kit::Keystroke::parse_with_os("x", native_os()).unwrap(),
         ];
         let (matched, pending) = keymap.bindings_for_input(&input, &context);
         assert!(!pending);
@@ -2479,7 +2556,7 @@ mod tests {
             let folded = folded_spec(spec);
             for spelling in [Some(spec), folded.as_deref()].into_iter().flatten() {
                 for chord in spelling.split_whitespace() {
-                    Keystroke::parse(chord).expect("default chords parse");
+                    Keystroke::parse_with_os(chord, native_os()).expect("default chords parse");
                     assert!(
                         !steals_a_control_code(chord)
                             || control_code_binding_allowed(action, chord),
@@ -2516,7 +2593,8 @@ mod tests {
         let mut bound = Vec::new();
         for (action, spec) in default_bindings() {
             for chord in spec.split_whitespace() {
-                let ks = Keystroke::parse(chord).expect("default chords parse");
+                let ks =
+                    Keystroke::parse_with_os(chord, native_os()).expect("default chords parse");
                 if crate::terminal::input::is_function_key(&ks.key) {
                     bound.push((action, chord));
                 }
@@ -2621,9 +2699,9 @@ mod tests {
             "ctrl-shift-tab",
             "secondary--",
         ] {
-            let ks = Keystroke::parse(spec).unwrap();
+            let ks = Keystroke::parse_with_os(spec, native_os()).unwrap();
             let round = spec_from_keystroke(&ks).expect("real key produces a spec");
-            let reparsed = Keystroke::parse(&round).unwrap();
+            let reparsed = Keystroke::parse_with_os(&round, native_os()).unwrap();
             assert_eq!(
                 (reparsed.modifiers, reparsed.key),
                 (ks.modifiers, ks.key),
@@ -2793,7 +2871,7 @@ mod tests {
 
     #[test]
     fn spec_from_keystroke_ignores_a_lone_modifier() {
-        let ks = Keystroke::parse("secondary").unwrap();
+        let ks = Keystroke::parse_with_os("secondary", native_os()).unwrap();
         assert_eq!(spec_from_keystroke(&ks), None);
     }
 
@@ -2830,7 +2908,7 @@ mod tests {
             .1 = "ctrl-alt-shift-c".to_string();
         let mut keymap = gpui_kit::Keymap::default();
         keymap.add_bindings(action_bindings(&effective));
-        let typed = [Keystroke::parse("ctrl-alt-shift-c").unwrap()];
+        let typed = [Keystroke::parse_with_os("ctrl-alt-shift-c", native_os()).unwrap()];
         let context = [gpui_kit::KeyContext::parse("Terminal").unwrap()];
         let hits = keymap.bindings_for_input(&typed, &context).0;
         assert_eq!(hits.len(), 1);
@@ -2942,7 +3020,7 @@ mod gpui_tests {
     fn fired(cx: &gpui_kit::App, keys: &str) -> Vec<&'static str> {
         let input: Vec<Keystroke> = keys
             .split(' ')
-            .map(|k| Keystroke::parse(k).expect("the typed keystroke parses"))
+            .map(|k| Keystroke::parse_with_os(k, native_os()).expect("the typed keystroke parses"))
             .collect();
         let context = [gpui_kit::KeyContext::parse("Terminal").expect("the context parses")];
         cx.key_bindings()
@@ -3088,8 +3166,9 @@ mod gpui_tests {
     fn the_badge_hold_follows_the_tab_chord(cx: &mut TestAppContext) {
         cx.update(|cx| {
             running_on_json(cx, "{}");
-            let shipped = Keystroke::parse(per_platform("secondary-1", "alt-1"))
-                .expect("the shipped chord parses");
+            let shipped =
+                Keystroke::parse_with_os(per_platform("secondary-1", "alt-1"), native_os())
+                    .expect("the shipped chord parses");
             assert_eq!(
                 tab_badge_hold(cx),
                 Some(shipped.modifiers),
@@ -3207,7 +3286,7 @@ mod gpui_tests {
             cx.set_global(Config::default());
 
             let backspace = |cx: &App| {
-                let typed = [Keystroke::parse("backspace").unwrap()];
+                let typed = [Keystroke::parse_with_os("backspace", native_os()).unwrap()];
                 cx.key_bindings()
                     .borrow()
                     .all_bindings_for_input(&typed)
@@ -3237,7 +3316,8 @@ mod gpui_tests {
         cx.update(|cx| {
             running_on_json(cx, "{}");
             let hits = |keys: &str, contexts: &[&str]| -> Vec<&'static str> {
-                let input = [Keystroke::parse(keys).expect("the keystroke parses")];
+                let input =
+                    [Keystroke::parse_with_os(keys, native_os()).expect("the keystroke parses")];
                 let context: Vec<_> = contexts
                     .iter()
                     .map(|c| gpui_kit::KeyContext::parse(c).expect("the context parses"))
@@ -3276,7 +3356,8 @@ mod gpui_tests {
         cx.update(|cx| {
             running_on_json(cx, "{}");
             let in_input = |keys: &str| -> Vec<&'static str> {
-                let input = [Keystroke::parse(keys).expect("the keystroke parses")];
+                let input =
+                    [Keystroke::parse_with_os(keys, native_os()).expect("the keystroke parses")];
                 let context = [
                     gpui_kit::KeyContext::parse("Workspace").expect("the context parses"),
                     gpui_kit::KeyContext::parse("Input mode=editor").expect("the context parses"),
@@ -3317,24 +3398,28 @@ mod gpui_tests {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
             let chord = [
-                Keystroke::parse("secondary-k").unwrap(),
-                Keystroke::parse("secondary-d").unwrap(),
+                Keystroke::parse_with_os("secondary-k", native_os()).unwrap(),
+                Keystroke::parse_with_os("secondary-d", native_os()).unwrap(),
             ];
             let (hits, _) = keymap.bindings_for_input(&chord, &editor);
             assert_eq!(
                 hits.first().map(|b| b.action().name()),
                 Some(crate::ui::code_editor::commands::SkipOccurrence::name_for_type())
             );
-            let (_, pending) =
-                keymap.bindings_for_input(&[Keystroke::parse("secondary-k").unwrap()], &editor);
+            let (_, pending) = keymap.bindings_for_input(
+                &[Keystroke::parse_with_os("secondary-k", native_os()).unwrap()],
+                &editor,
+            );
             assert!(pending, "⌘K waits for the chord in the code editor");
             // A plain text field isn't held up.
             let field = [
                 gpui_kit::KeyContext::parse("Workspace").expect("the context parses"),
                 gpui_kit::KeyContext::parse("Input").expect("the context parses"),
             ];
-            let (_, pending) =
-                keymap.bindings_for_input(&[Keystroke::parse("secondary-k").unwrap()], &field);
+            let (_, pending) = keymap.bindings_for_input(
+                &[Keystroke::parse_with_os("secondary-k", native_os()).unwrap()],
+                &field,
+            );
             assert!(!pending, "⌘K goes straight through in other fields");
         });
     }
@@ -3349,7 +3434,8 @@ mod gpui_tests {
         cx.update(|cx| {
             running_on_json(cx, "{}");
             let in_input = |keys: &str| -> Vec<&'static str> {
-                let input = [Keystroke::parse(keys).expect("the keystroke parses")];
+                let input =
+                    [Keystroke::parse_with_os(keys, native_os()).expect("the keystroke parses")];
                 let context = [
                     gpui_kit::KeyContext::parse("Workspace").expect("the context parses"),
                     gpui_kit::KeyContext::parse("Input").expect("the context parses"),

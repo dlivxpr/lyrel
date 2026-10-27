@@ -2177,7 +2177,7 @@ impl TerminalElement {
                         false => v.forget_menu_link(),
                     }
                 }
-                let link_modifier = mods.secondary() || v.link_modifier_down();
+                let link_modifier = mods.secondary(cx) || v.link_modifier_down();
                 if link_modifier
                     && button == MouseButton::Left
                     && v.open_link_at(col, row, window, cx)
@@ -2220,7 +2220,7 @@ impl TerminalElement {
                         if !mods.shift {
                             v.mouse_motion(col, row, &mods);
                         }
-                        let armed = mods.secondary() || v.link_modifier_down();
+                        let armed = mods.secondary(cx) || v.link_modifier_down();
                         v.hover_link_at(col, row, armed, cx);
                     } else {
                         v.clear_hovered_link(cx);

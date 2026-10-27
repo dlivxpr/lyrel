@@ -7,8 +7,8 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
     App, ClipboardEntry, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Font,
-    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollWheelEvent, WeakEntity,
-    Window, actions, div, prelude::*, px,
+    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollEvent, WeakEntity, Window,
+    actions, div, prelude::*, px,
 };
 use rio_vt::crosswords::Mode;
 use rio_vt::crosswords::grid::Dimensions;
@@ -1958,8 +1958,8 @@ impl TerminalView {
     /// `AlternatePaste` carries `Terminal && !alt_screen`, so Ctrl+V pastes at
     /// a prompt, reaches vim as SYN, and can still be handed the whole screen
     /// by rebinding `PasteText` onto it (#677).
-    pub(super) fn key_context(&self) -> gpui_kit::KeyContext {
-        let mut context = gpui_kit::KeyContext::new_with_defaults();
+    pub(super) fn key_context(&self, cx: &App) -> gpui_kit::KeyContext {
+        let mut context = gpui_kit::KeyContext::new_with_defaults(cx.platform_info().os);
         context.add("Terminal");
         // The frame's own answer, not the terminal's. gpui matches keystrokes
         // against the context the last painted frame published, so this was
@@ -3614,7 +3614,7 @@ impl TerminalView {
         }
     }
 
-    fn on_scroll(&mut self, ev: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_scroll(&mut self, ev: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
         use super::selection_scroll::WheelMotion;
         let quantized = || {
             !ev.modifiers.shift && {
@@ -3627,6 +3627,7 @@ impl TerminalView {
             ev,
             self.line_height.as_f32(),
             cx.global::<Config>(),
+            cx.platform_info().os,
             quantized,
         ) {
             WheelMotion::Zoom(steps) => {
@@ -4841,7 +4842,7 @@ impl Render for TerminalView {
             // here is a window whose focused element is the window.
             .role(gpui_kit::Role::MultilineTextInput)
             .track_focus(&self.focus_handle)
-            .key_context(self.key_context())
+            .key_context(self.key_context(cx))
             .size_full()
             .relative()
             // A column so the composer docks under the grid and takes its rows
@@ -4853,7 +4854,7 @@ impl Render for TerminalView {
             .py(px(GRID_PAD_Y))
             .text_color(cx.theme().foreground)
             .on_key_down(cx.listener(Self::on_key_down))
-            .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .on_scroll(cx.listener(Self::on_scroll))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _ev: &MouseDownEvent, window, cx| {
@@ -5123,13 +5124,16 @@ pub(crate) fn menu_row_with_hint(
     label: &'static str,
     key: Option<&'static str>,
 ) -> impl Fn(&mut Window, &mut App) -> gpui_kit::AnyElement {
-    move |_window, _cx| {
+    move |_window, cx| {
         let hint = key.map(|k| {
-            Kbd::new(gpui_kit::Keystroke::parse(k).expect("valid static keystroke"))
-                .p_0()
-                .flex_nowrap()
-                .border_0()
-                .bg(gpui_kit::transparent_white())
+            Kbd::new(
+                gpui_kit::Keystroke::parse_with_os(k, cx.platform_info().os)
+                    .expect("valid static keystroke"),
+            )
+            .p_0()
+            .flex_nowrap()
+            .border_0()
+            .bg(gpui_kit::transparent_white())
         });
         h_flex()
             .w_full()
@@ -8686,7 +8690,7 @@ mod gpui_tests {
         panic!("the local editor never engaged at the prompt");
     }
 
-    fn key(spec: &str) -> gpui_kit::Keystroke {
+    fn key(spec: &'static str) -> gpui_kit::Keystroke {
         gpui_kit::Keystroke::parse(spec).expect("valid keystroke spec")
     }
 
@@ -8778,8 +8782,8 @@ mod gpui_tests {
     /// phase. One wheel detent is ~103px, roughly five lines at a 21px line
     /// height; a trackpad event is a fraction of that but can reach ~3 lines
     /// when flicked, which is why phase and not size decides.
-    fn wheel(view: &TerminalView, lines: f32, phase: gpui_kit::TouchPhase) -> ScrollWheelEvent {
-        ScrollWheelEvent {
+    fn wheel(view: &TerminalView, lines: f32, phase: gpui_kit::TouchPhase) -> ScrollEvent {
+        ScrollEvent {
             delta: gpui_kit::ScrollDelta::Pixels(point(
                 px(0.),
                 px(lines * view.line_height.as_f32()),
@@ -8789,7 +8793,7 @@ mod gpui_tests {
         }
     }
 
-    fn notch(view: &TerminalView, lines: f32) -> ScrollWheelEvent {
+    fn notch(view: &TerminalView, lines: f32) -> ScrollEvent {
         wheel(view, lines, gpui_kit::TouchPhase::Moved)
     }
 

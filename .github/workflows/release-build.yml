@@ -6,6 +6,9 @@ on:
       source_sha:
         required: true
         type: string
+      require_macos_release_signing:
+        default: false
+        type: boolean
       ci_server_run_id:
         default: ''
         type: string
@@ -32,6 +35,12 @@ on:
       APPLE_PASSWORD:
         required: false
       APPLE_TEAM_ID:
+        required: false
+      ASC_KEY_P8:
+        required: false
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
         required: false
 
 permissions:
@@ -215,10 +224,11 @@ jobs:
         shell: bash
         run: tar -xzf desktop-inputs/desktop-aarch64-apple-darwin.tar.gz
 
-      # 无 Apple secrets 时仍由原脚本做 ad-hoc 签名与 Mach-O 校验。
-      - name: Bundle macOS DMG
+      # CI 无凭据时可验证开发包；Release 显式开启门控，禁止 ad-hoc 发行。
+      - name: Bundle macOS DMG + ZIP with requested signing policy
         working-directory: lyrel
         env:
+          LYREL_REQUIRE_RELEASE_SIGNING: ${{ inputs.require_macos_release_signing && '1' || '0' }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -226,6 +236,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: bash .github/scripts/bundle-macos.sh "aarch64-apple-darwin" "arm64"
 
       - uses: actions/upload-artifact@v7

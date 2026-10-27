@@ -2082,7 +2082,7 @@ impl TerminalView {
                         cx.stop_propagation();
                     }),
                 )
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .on_scroll(|_, _, cx| cx.stop_propagation())
                 // Files dropped on the box are attachments, not words for the
                 // terminal's line; the surface's own drop handler would focus
                 // the grid first.

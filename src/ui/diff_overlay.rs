@@ -648,7 +648,7 @@ impl LyrelApp {
                     // then: with nothing selected it falls through to whatever
                     // else the window binds it to.
                     let mods = ev.keystroke.modifiers;
-                    if ev.keystroke.key.as_str() == "c" && mods.secondary() && !mods.alt {
+                    if ev.keystroke.key.as_str() == "c" && mods.secondary(cx) && !mods.alt {
                         this.copy_diff_selection(cx);
                     }
                 }))

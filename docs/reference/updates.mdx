@@ -48,12 +48,30 @@ lyrel 的独立初版版本／标签为 `0.1.0`／`v0.1.0`，发行源仅为
 <AccordionGroup>
   <Accordion title="macOS">
     自动更新要求可安全替换的应用包和可写目录。不满足条件时，通过发布页手动安装。
-    当前 ad-hoc 发行包没有可跨版本验证的签发者身份；其合成 designated requirement
-    中的 `cdhash` 会随版本变化。更新器要求新旧包均明确为 ad-hoc、签名 Identifier
-    相同，并继续验证官方发布归档的 SHA-256、预期版本与完整代码签名，不比较新旧 `cdhash`。
-    发行来源与下载链仍是固定的本项目 GitHub HTTPS 发布，ad-hoc 签名本身不提供签发者认证。
-    证书签名安装则由 `codesign` 对新包求值当前安装的 requirement；不接受降级为 ad-hoc，
-    也不自动跨越两种签名姿态。签名与公证不是同一件事。
+    更新器在原安装路径替换整个 `.app`，不通过更换安装目录保留权限。
+
+    **历史 ad-hoc 包不能提供跨升级的稳定签发者身份。** 即使 `CFBundleIdentifier`
+    与签名 Identifier 不变，默认 designated requirement 中的 `cdhash` 也会随代码变化；
+    隔离签名验证已确认，两份不同二进制使用同一 Identifier 做 ad-hoc 签名后，后者不能满足
+    前者的 requirement。这是权限无法稳定延续的已确认身份条件缺口，不是已完成的 TCC
+    跨升级重授权实验。没有读取或修改 TCC 数据库，也没有借测试申请实际权限。
+
+    正式发布现在要求同一 Apple Developer Team 的 **Developer ID Application** 签名、
+    固定 bundle ID `io.github.dlivxpr.lyrel` 和已附加的公证票据。缺少签名／公证凭据时
+    发布失败，不再静默回退到 ad-hoc；复用旧 run 的 ZIP 与 DMG 同样经过签名身份门控。
+    同 Team、同 Identifier 的合法证书签名提供跨代码版本验证的身份条件，而不是把
+    requirement 放宽为任何人都能仿冒的 bundle ID。
+
+    **从历史 ad-hoc 迁移到 Developer ID 需要手动安装完整新包一次，并重新授予所需权限。**
+    旧授权不能安全地自动迁移到新的签发者身份。更新器不自动跨越两种签名姿态：ad-hoc
+    安装仅接受同 Identifier 的 ad-hoc 更新，仍校验官方归档 SHA-256、预期版本及完整签名；
+    证书签名安装要求新包实际满足当前安装的 requirement，不接受降级为 ad-hoc。
+    本地无证书构建仍可使用 ad-hoc，但不能承诺升级保留权限。不要通过删除签名、重置 TCC
+    或关闭系统安全功能规避身份检查。
+
+    签名身份连续不等于所有权限永不再询问；macOS 版本、具体权限策略、签发 Team 或
+    bundle ID 变化仍可能要求授权。公证用于发行安全检查，不授予辅助功能、完全磁盘访问等
+    用户权限。本项目尚未完成真实 Developer ID 两版本安装与 TCC 保留的端到端验收。
 
     若旧版本内置 updater 已报 `codesign did not report a designated requirement`，
     需从本项目发布页手动安装包含修复的完整新包一次；修改源码不会替换已安装的旧 helper。
@@ -85,6 +103,28 @@ lyrel 的独立初版版本／标签为 `0.1.0`／`v0.1.0`，发行源仅为
 发行使用统一版本，并附带 `checksums.txt`，其中每行是 SHA-256 和裸资产文件名。
 macOS 更新选择 ZIP，Windows 按安装形态选择 Setup 或便携 ZIP；不提供 Linux 桌面包或 AppImage 更新。Linux 远端 server 的安装与校验、Windows 随包 WSL server 不受影响。
 缺少精确包、checksum 条目或校验失败时不会执行替换。
+
+### macOS 正式发布的签名与公证前提
+
+维护者需要自行持有有效的 Apple Developer 会员资格、该 Team 的 Developer ID Application
+证书与私钥，并在仓库 Actions secrets 配置：
+
+- `APPLE_CERTIFICATE`：包含私钥的 `.p12` 文件的 Base64；加密文件还需
+  `APPLE_CERTIFICATE_PASSWORD`。不要把证书、私钥或密码提交到仓库。
+- `APPLE_SIGNING_IDENTITY`：实际 Developer ID Application 签名身份，不能为 `-`。
+- `APPLE_TEAM_ID`：预期的 10 位 Team ID；发布门控验证签名证书中的 Team，不只比较名称。
+- 公证凭据二选一：完整的 `ASC_KEY_P8`、`ASC_KEY_ID`、`ASC_ISSUER_ID`；或
+  `APPLE_ID` 与 `APPLE_PASSWORD`（App 专用密码，结合上述 `APPLE_TEAM_ID`）。
+
+这些凭据不能由构建脚本自动替维护者申请。未配置时，正式发布被阻止；不能把当前源码
+变化解释为已经具备证书或已经完成公证。以后更新继续使用同一 Team 和 bundle ID；更换
+Team 不是普通证书续期，需要单独评估身份迁移和用户授权。
+
+`.github/scripts/bundle-macos.sh` 的本地调用默认保留原有开发签名方式；正式工作流设置
+`LYREL_REQUIRE_RELEASE_SIGNING=1`，并在打包后验证 Apple Developer ID Application
+证书链、Team、bundle ID、随包可执行文件签名及附加的公证票据。发布汇总前再次检查
+ZIP 和只读挂载的 DMG，旧资产不会因为曾经构建成功而豁免。
+
 
 发布列表／资产选择 fixture 与 updater 测试只能证明确定性契约。真正在线更新需要本项目
 已发布且非 draft／prerelease 的新版本、相应平台包和真实校验和；平台安装、UAC、macOS

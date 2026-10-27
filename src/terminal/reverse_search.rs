@@ -144,7 +144,7 @@ mod tests {
         vec![0.0; h.len()]
     }
 
-    fn key(spec: &str) -> gpui_kit::Keystroke {
+    fn key(spec: &'static str) -> gpui_kit::Keystroke {
         gpui_kit::Keystroke::parse(spec).expect("valid keystroke spec")
     }
 

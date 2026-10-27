@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use gpui_kit::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase};
+use gpui_kit::{Modifiers, OperatingSystem, ScrollDelta, ScrollEvent, TouchPhase};
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
@@ -207,9 +207,10 @@ impl SelectionScroll {
     /// The quantized-route check is lazy too: a zoom never needs the grid lock.
     pub(super) fn wheel(
         &mut self,
-        ev: &ScrollWheelEvent,
+        ev: &ScrollEvent,
         line_height: f32,
         cfg: &Config,
+        os: OperatingSystem,
         quantized: impl FnOnce() -> bool,
     ) -> WheelMotion {
         let now = Instant::now();
@@ -220,7 +221,7 @@ impl SelectionScroll {
             self.gesture_zoom = None;
             self.zoom_debt = 0.;
         }
-        let wants_zoom = zoom_wheel(cfg.mouse_zoom_modifier, &ev.modifiers);
+        let wants_zoom = zoom_wheel(cfg.mouse_zoom_modifier, &ev.modifiers, os);
         let zoom = if gesturing {
             *self.gesture_zoom.get_or_insert(wants_zoom)
         } else {
@@ -391,12 +392,18 @@ const ZOOM_SCROLL_LINES: f32 = 3.0;
 /// Off macOS the platform modifier *is* Ctrl, so `Platform` and `Ctrl` describe
 /// the same key there; the setting still round-trips, so a config file shared
 /// with a Mac keeps meaning what it meant.
-fn zoom_wheel(modifier: MouseZoomModifier, mods: &Modifiers) -> bool {
+fn zoom_wheel(modifier: MouseZoomModifier, mods: &Modifiers, os: OperatingSystem) -> bool {
     if mods.number_of_modifiers() != 1 {
         return false;
     }
     match modifier {
-        MouseZoomModifier::Platform => mods.secondary(),
+        MouseZoomModifier::Platform => {
+            if os == OperatingSystem::Mac {
+                mods.platform
+            } else {
+                mods.control
+            }
+        }
         MouseZoomModifier::Ctrl => mods.control,
         MouseZoomModifier::Alt => mods.alt,
         MouseZoomModifier::None => false,

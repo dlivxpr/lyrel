@@ -36,7 +36,7 @@ fn the_zoom_modifier_takes_the_wheel_off_the_scrollback(cx: &mut TestAppContext)
         .update(cx, |view, w, cx| {
             scroll_into_history(view, 10);
             let mut ev = notch(view, -4.9);
-            ev.modifiers = Modifiers::secondary_key();
+            ev.modifiers = Modifiers::secondary_key(cx);
             view.on_scroll(&ev, w, cx);
             assert_eq!(display_offset(view), 10, "the wheel reached the grid");
             assert!(
@@ -59,7 +59,7 @@ fn zooming_off_hands_the_wheel_back_to_the_scrollback(cx: &mut TestAppContext) {
         .update(cx, |view, w, cx| {
             scroll_into_history(view, 10);
             let mut ev = notch(view, -4.9);
-            ev.modifiers = Modifiers::secondary_key();
+            ev.modifiers = Modifiers::secondary_key(cx);
             view.on_scroll(&ev, w, cx);
             assert!(
                 view.selection_scroll.is_animating(),
@@ -83,7 +83,7 @@ fn a_modifier_pressed_mid_flick_does_not_hijack_it_into_a_zoom(cx: &mut TestAppC
             let before = display_offset(view);
             // The tail, now stamped with ⌘ the hand reached for.
             let mut tail = wheel(view, -3., gpui_kit::TouchPhase::Moved);
-            tail.modifiers = Modifiers::secondary_key();
+            tail.modifiers = Modifiers::secondary_key(cx);
             view.on_scroll(&tail, w, cx);
             assert!(
                 display_offset(view) != before || view.selection_scroll.is_animating(),
@@ -103,7 +103,7 @@ fn a_zoom_gesture_keeps_zooming_after_the_modifier_is_released(cx: &mut TestAppC
         .update(cx, |view, w, cx| {
             scroll_into_history(view, 10);
             let mut start = wheel(view, -0.5, gpui_kit::TouchPhase::Started);
-            start.modifiers = Modifiers::secondary_key();
+            start.modifiers = Modifiers::secondary_key(cx);
             view.on_scroll(&start, w, cx);
             view.on_scroll(&wheel(view, -0.5, gpui_kit::TouchPhase::Moved), w, cx);
             assert_eq!(display_offset(view), 10, "the grid never moved");
@@ -126,7 +126,7 @@ fn a_new_gesture_is_not_bound_by_what_the_last_one_answered(cx: &mut TestAppCont
         .update(cx, |view, w, cx| {
             scroll_into_history(view, 10);
             let mut zoom = wheel(view, -0.5, gpui_kit::TouchPhase::Started);
-            zoom.modifiers = Modifiers::secondary_key();
+            zoom.modifiers = Modifiers::secondary_key(cx);
             view.on_scroll(&zoom, w, cx);
             assert_eq!(display_offset(view), 10, "that one was a zoom");
             // Fingers down again, nothing held: a plain scroll.

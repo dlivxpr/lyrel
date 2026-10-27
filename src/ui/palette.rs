@@ -43,9 +43,9 @@ fn is_palette_chord(ks: &Keystroke, cx: &App) -> bool {
 /// The query field's own editing chords, which the modal rule leaves alone.
 /// Shift only with Z (redo): ⌘⇧A is New Agent Tab on macOS, and any other
 /// shifted letter is the workspace's to bind.
-fn edits_text(ks: &Keystroke) -> bool {
+fn edits_text(ks: &Keystroke, cx: &App) -> bool {
     let m = &ks.modifiers;
-    m.secondary()
+    m.secondary(cx)
         && !m.alt
         && match ks.key.as_str() {
             "a" | "c" | "v" | "x" => !m.shift,
@@ -95,7 +95,7 @@ fn intercept(ev: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         search.update(cx, |search, cx| search.focus(window, cx));
         return;
     }
-    if edits_text(ks) {
+    if edits_text(ks, cx) {
         return;
     }
     let (bindings, _) = cx
@@ -253,11 +253,15 @@ mod tests {
         // Nor one on a shifted editing letter (⌘⇧A is New Agent Tab on macOS):
         // only the unshifted chords, and redo, are the field's.
         vcx.update(|_, cx| {
-            cx.bind_keys([KeyBinding::new(
+            cx.bind_keys([KeyBinding::load(
                 "secondary-shift-a",
-                crate::core::actions::ActivateTab2,
+                Box::new(crate::core::actions::ActivateTab2),
                 None,
-            )])
+                false,
+                None,
+                cx,
+            )
+            .expect("the test shortcut is valid")])
         });
         vcx.simulate_keystrokes("secondary-shift-a");
         vcx.run_until_parked();
