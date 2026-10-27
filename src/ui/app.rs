@@ -2246,92 +2246,29 @@ impl LyrelApp {
         window.focus(&handle, cx);
     }
 
-    fn land_pane(
+    pub(super) fn land_pane(
         &mut self,
-        slot_id: gpui_kit::EntityId,
         pending: &Entity<crate::ui::pending_pane::PendingPane>,
-        parts: Result<crate::terminal::view::ShellParts, String>,
-        font_size: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let parts = match parts {
-            Ok(parts) => parts,
-            Err(reason) => {
-                let retry = pending.update(cx, |p, cx| {
-                    p.fail(reason, cx);
-                    p.next_auto_retry()
-                });
-                if let Some(delay) = retry {
-                    let pending = pending.clone();
-                    cx.spawn_in(window, async move |this, cx| {
-                        cx.background_executor().timer(delay).await;
-                        let _ = this.update_in(cx, |app, window, cx| {
-                            let still_there = app.tabs.iter().any(|tab| {
-                                tab.pane.leaves().iter().any(|l| l.entity_id() == slot_id)
-                            });
-                            // Try Again got there first, or the tab is gone.
-                            if !still_there || !pending.read(cx).is_failed() {
-                                return;
-                            }
-                            pending.update(cx, |p, cx| p.retrying(cx));
-                            start_pane_spawn(pending.clone(), window, cx);
-                        });
-                    })
-                    .detach();
-                }
-                return;
-            }
-        };
-        let still_there = self
-            .tabs
-            .iter()
-            .any(|tab| tab.pane.leaves().iter().any(|l| l.entity_id() == slot_id));
-        if !still_there {
-            // A late restore owns only an attachment, not the existing session.
-            // Dropping it detaches; only a fresh, unclaimed spawn is ours to kill.
-            if !parts.restored {
-                log::info!(
-                    "pane {} arrived after its slot closed; killing it",
-                    parts.pane_id
-                );
-                let route = crate::terminal::PaneRoute::for_workspace(parts.workspace.as_ref());
-                kill_pane_off_thread(route, parts.pane_id, cx);
-            }
-            return;
-        }
-        let was_focused = pending.read(cx).focus_handle.contains_focused(window, cx);
-        let restored = parts.restored;
-        let view = build_terminal_view(parts, font_size, window, cx);
-        if pending.read(cx).is_attach_only() {
-            let spec = pending.read(cx).attach_spec();
-            view.update(cx, |view, _| view.set_restored_ssh_spec(spec));
-        }
-        if !restored {
-            let spawn = &pending.read(cx).spawn;
-            if let Some(command) = spawn.run_on_land.clone() {
-                crate::ui::agent_launch::run_when_ready(
-                    &PaneSlot::Ready(view.clone()),
-                    command,
-                    cx,
-                );
-            } else {
-                restore_agent_in_pane(
-                    spawn.agent,
-                    spawn.agent_session_id.clone(),
-                    spawn.agent_launch_argv.clone(),
-                    spawn.agent_session_scope.clone(),
-                    view.clone(),
-                    window,
-                    cx,
-                );
-            }
-        }
+        use crate::ui::pending_pane::PendingLaunch;
+        let installation = pending.update(cx, |pending, cx| {
+            pending.take_installation(&self.tabs, self.workspace, window, cx)
+        });
+        let Some(installation) = installation else { return; };
+        let (view, was_focused, launch) = installation.into_parts();
+        watch_terminal(&view, window, cx);
         let slot = PaneSlot::Ready(view.clone());
-        self.replace_pane_slot(slot_id, slot.clone(), cx);
-        if was_focused {
-            self.focus_leaf(&slot, window, cx);
+        self.replace_pane_slot(pending.entity_id(), slot.clone(), cx);
+        match launch {
+            PendingLaunch::None => {},
+            PendingLaunch::Command(command) => crate::ui::agent_launch::run_when_ready(&slot, command, cx),
+            PendingLaunch::Resume { agent, session, argv, scope } => {
+                restore_agent_in_pane(agent, session, argv, scope, view, window, cx);
+            }
         }
+        if was_focused { self.focus_leaf(&slot, window, cx); }
         self.save_session(cx);
         cx.notify();
     }
@@ -2368,7 +2305,7 @@ impl LyrelApp {
                         None
                     }
                     PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-                    PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane,
+                    PaneSlot::Connecting(view) => view.read(cx).restore_pane(),
                 });
             remap_presentation_slot(&mut tab.presentation, old_id, &new, cx);
         }
@@ -2584,28 +2521,12 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let view = match new_terminal_native(self.font_size, remote_start_dir, spec, window, cx) {
-            Ok(view) => view,
-            Err(e) => {
-                log::error!("native SSH spawn failed: {e}");
-                window.notify_app(
-                    crate::ui::host_ops::failure(
-                        t_fmt(
-                            L10nKey::AppSshConnectionFailed,
-                            &[("error", &e.to_string())],
-                        ),
-                        &e,
-                    ),
-                    cx,
-                );
-                return;
-            }
-        };
+        let view = new_terminal_native(self.font_size, self.workspace, remote_start_dir, spec, window, cx);
         self.remember_active_pane(window, cx);
         self.maximized = None;
         let insert_at = self.new_tab_insert_at(cx);
         self.tabs
-            .insert(insert_at, Tab::new(Pane::leaf(PaneSlot::Ready(view))));
+            .insert(insert_at, Tab::new(Pane::leaf(view)));
         self.tabs.select(insert_at);
         self.focus_active(window, cx);
         self.save_session(cx);
@@ -2622,23 +2543,10 @@ impl LyrelApp {
         // The far shell's last report, not a local path: a native SSH pane's
         // cwd only ever comes from OSC 7 sent across the link.
         let remote_start_dir = dead.read(cx).cwd();
-        let fresh = match new_terminal_native(self.font_size, remote_start_dir, spec, window, cx) {
-            Ok(view) => view,
-            Err(e) => {
-                log::error!("native SSH respawn failed: {e}");
-                window.notify_app(
-                    crate::ui::host_ops::failure(
-                        t_fmt(L10nKey::AppSshReconnectFailed, &[("error", &e.to_string())]),
-                        &e,
-                    ),
-                    cx,
-                );
-                return;
-            }
-        };
-        self.replace_pane_slot(dead.entity_id(), PaneSlot::Ready(fresh.clone()), cx);
+        let fresh = new_terminal_native(self.font_size, self.workspace, remote_start_dir, spec, window, cx);
+        self.replace_pane_slot(dead.entity_id(), fresh.clone(), cx);
         self.maximized = None;
-        self.focus_leaf(&PaneSlot::Ready(fresh), window, cx);
+        self.focus_leaf(&fresh, window, cx);
         self.save_session(cx);
         cx.notify();
     }
@@ -3036,25 +2944,7 @@ impl LyrelApp {
                     }
                 }
                 PaneSlot::Connecting(pending) => {
-                    let pending = pending.read(cx);
-                    let status = match &pending.state {
-                        crate::ui::pending_pane::PendingState::Connecting => {
-                            t_fmt(L10nKey::PendingConnecting, &[("machine", &pending.machine)])
-                        }
-                        crate::ui::pending_pane::PendingState::Failed(reason) => reason.to_string(),
-                    };
-                    ParkedCard::new(
-                        slot.entity_id().as_u64(),
-                        pending.machine.clone(),
-                        pending
-                            .spawn
-                            .working_directory
-                            .as_ref()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_default(),
-                        false,
-                    )
-                    .with_status(status)
+                    pending.read(cx).parked_card(slot.entity_id())
                 }
             })
             .collect();
@@ -3157,14 +3047,14 @@ impl LyrelApp {
         let route = view.pane_route();
         let old_id = view.pane_id;
         let fresh = match view.ssh_spec() {
-            Some(spec) => new_terminal_native(
+            Some(spec) => Ok(new_terminal_native(
                 self.font_size,
+                self.workspace,
                 view.cwd(),
                 crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx),
                 window,
                 cx,
-            )
-            .map(PaneSlot::Ready),
+            )),
             None => {
                 let workspace = view.workspace().cloned();
                 // A remote route must resolve before anything is replaced. A
@@ -3281,25 +3171,7 @@ impl LyrelApp {
             inherited_start_dir(opened, target.cwd(), target.remote_context().is_some())
         };
         let new = match spawn {
-            SpawnAs::Ssh(spec) => {
-                match new_terminal_native(self.font_size, cwd, spec, window, cx) {
-                    Ok(view) => PaneSlot::Ready(view),
-                    Err(e) => {
-                        log::error!("native SSH split spawn failed: {e}");
-                        window.notify_app(
-                            crate::ui::host_ops::failure(
-                                t_fmt(
-                                    L10nKey::AppSshConnectionFailed,
-                                    &[("error", &e.to_string())],
-                                ),
-                                &e,
-                            ),
-                            cx,
-                        );
-                        return None;
-                    }
-                }
-            }
+            SpawnAs::Ssh(spec) => new_terminal_native(self.font_size, self.workspace, cwd, spec, window, cx),
             SpawnAs::Shell(shell) => {
                 match new_terminal(
                     target.read(cx).workspace().cloned(),
@@ -4817,12 +4689,9 @@ impl LyrelApp {
         // the moment it lands.
         if let PaneSlot::Connecting(pending) = &new {
             pending.update(cx, |pending, _| {
-                pending.created_session = prepared.created && prepared.target_id.is_some();
-                pending.spawn.agent = Some(prepared.agent);
-                pending.spawn.agent_session_id = prepared.target_id.clone();
-                pending.spawn.agent_launch_argv = Some(prepared.launch_argv.clone());
-                pending.spawn.agent_session_scope = Some(
-                    lyrel_core::host::session_operations::durable_scope(&prepared.scope),
+                pending.resume_agent(
+                    Some(prepared.agent), prepared.target_id.clone(),
+                    Some(prepared.launch_argv.clone()), Some(prepared.scope.clone()), prepared.created,
                 );
             });
         }
@@ -7036,22 +6905,7 @@ fn pane_shell_program(view: &TerminalView, cx: &App) -> Option<String> {
 
 fn pane_to_session(pane: &Pane, cx: &App) -> SessionPane {
     match pane {
-        Pane::Leaf(PaneSlot::Connecting(pending)) => {
-            let spawn = &pending.read(cx).spawn;
-            SessionPane::Leaf {
-                cwd: spawn.working_directory.clone(),
-                pane_id: spawn.restore_pane,
-                shell: spawn.shell.clone(),
-                ssh_spec: None,
-                agent: spawn.agent,
-                agent_session_id: spawn.agent_session_id.clone(),
-                agent_launch_argv: spawn.agent_launch_argv.clone(),
-                agent_session_scope: spawn
-                    .agent_session_scope
-                    .as_ref()
-                    .map(lyrel_core::host::session_operations::durable_scope),
-            }
-        }
+        Pane::Leaf(PaneSlot::Connecting(pending)) => pending.read(cx).session(),
         Pane::Leaf(PaneSlot::Ready(view)) => {
             let view = view.read(cx);
             SessionPane::Leaf {
@@ -7326,20 +7180,11 @@ fn session_to_pane(
                     let resolved = crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx);
                     // A native SSH leaf's recorded cwd is the far shell's own
                     // report, so it is where the redialled shell starts.
-                    match new_terminal_native(font_size, cwd.clone(), resolved, window, cx) {
-                        Ok(view) => {
-                            if same_daemon {
-                                remap_presentation_slot(
-                                    presentation,
-                                    *pane_id,
-                                    &PaneSlot::Ready(view.clone()),
-                                    cx,
-                                );
-                            }
-                            return Some(Pane::leaf(PaneSlot::Ready(view)));
-                        }
-                        Err(e) => log::error!("restoring native SSH pane failed: {e}"),
+                    let view = new_terminal_native(font_size, owner, cwd.clone(), resolved, window, cx);
+                    if same_daemon {
+                        remap_presentation_slot(presentation, *pane_id, &view, cx);
                     }
+                    return Some(Pane::leaf(view));
                 }
             }
             // Past here the leaf comes back as a shell on the window's own
@@ -7381,12 +7226,7 @@ fn session_to_pane(
                 PaneSlot::Ready(_) => {}
                 PaneSlot::Connecting(pending) => {
                     pending.update(cx, |pending, _| {
-                        pending.spawn.agent = *agent;
-                        pending.spawn.agent_session_id = agent_session_id.clone();
-                        pending.spawn.agent_launch_argv = agent_launch_argv.clone();
-                        pending.spawn.agent_session_scope = agent_session_scope
-                            .as_ref()
-                            .map(lyrel_core::host::session_operations::durable_scope);
+                        pending.resume_agent(*agent, agent_session_id.clone(), agent_launch_argv.clone(), agent_session_scope.clone(), false);
                     });
                 }
             }
@@ -7441,7 +7281,7 @@ fn remap_presentation_slot(
     };
     let new = match slot {
         PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-        PaneSlot::Connecting(view) => view.read(cx).spawn.restore_pane,
+        PaneSlot::Connecting(view) => view.read(cx).restore_pane(),
     };
     presentation.remap_panes(|pane| if pane == old { new } else { Some(pane) });
 }
@@ -7516,178 +7356,56 @@ fn pending_terminal(
     window: &mut Window,
     cx: &mut Context<LyrelApp>,
 ) -> anyhow::Result<PaneSlot> {
-    let spawn = crate::ui::pending_pane::PendingSpawn {
-        workspace,
-        working_directory,
-        restore_pane,
-        shell,
-        agent: None,
-        agent_session_id: None,
-        agent_launch_argv: None,
-        agent_session_scope: None,
-        run_on_land: None,
-        owner,
-        font_size,
-    };
-    // The same leak the reconnect banner had: this name is read out as
-    // "Connecting to {machine}…" and "Could not reach {machine}", and a
-    // `Profile` target spells itself as its config UUID (#485). The pane's own
-    // notifications already resolve it through the live config.
-    let machine = spawn
-        .workspace
-        .as_ref()
-        .map(|w| crate::ui::remote_connect::target_label(cx, &w.target))
-        .unwrap_or_else(|| t(L10nKey::AppLocalServerName).to_string());
     let pending = cx.new(|cx| {
-        let pending = crate::ui::pending_pane::PendingPane::new(machine, spawn, cx);
+        let pending = crate::ui::pending_pane::PendingPane::shell(
+            workspace, owner, font_size, working_directory, restore_pane, shell, cx,
+        );
         if attach_only {
             pending.with_attach_only(attach_spec)
         } else {
             pending
         }
     });
-    cx.subscribe_in(
-        &pending,
-        window,
-        |_app, pending, _: &crate::ui::pending_pane::RetryRequested, window, cx| {
-            start_pane_spawn(pending.clone(), window, cx);
-        },
-    )
-    .detach();
-    let handle = pending.read(cx).focus_handle.clone();
-    watch_pane_focus(&handle, pending.entity_id(), window, cx);
-    start_pane_spawn(pending.clone(), window, cx);
+    watch_pending(&pending, window, cx);
     Ok(PaneSlot::Connecting(pending))
 }
 
-struct PendingShellParts {
-    parts: Option<crate::terminal::view::ShellParts>,
-    executor: gpui_kit::BackgroundExecutor,
-}
-
-impl Drop for PendingShellParts {
-    fn drop(&mut self) {
-        if let Some(parts) = self.parts.take()
-            && !parts.restored
-        {
-            let route = crate::terminal::PaneRoute::for_workspace(parts.workspace.as_ref());
-            if route.is_local() {
-                // An unclaimed local spawn is reclaimed on this connection's
-                // EOF; do not reopen a daemon endpoint to kill a numeric ID.
-                return;
-            }
-            let pane = parts.pane_id;
-            self.executor
-                .spawn(async move { crate::terminal::RemoteTerminal::kill_pane_on(&route, pane) })
-                .detach();
-        }
-    }
-}
-
-struct CancelPendingSpawn(crate::terminal::SpawnCancellation);
-
-impl CancelPendingSpawn {
-    fn cancel(&self) {
-        self.0.cancel();
-    }
-}
-
-impl Drop for CancelPendingSpawn {
-    fn drop(&mut self) {
-        self.cancel();
-    }
-}
-
-fn start_pane_spawn(
-    pending: Entity<crate::ui::pending_pane::PendingPane>,
+fn watch_pending(
+    pending: &Entity<crate::ui::pending_pane::PendingPane>,
     window: &mut Window,
     cx: &mut Context<LyrelApp>,
 ) {
-    let spawn = pending.read(cx).spawn.clone();
-    let attach_only = pending.read(cx).is_attach_only();
-    let slot_id = pending.entity_id();
-    let font_size = spawn.font_size;
-    let pending = pending.downgrade();
-    let cancellation = crate::terminal::SpawnCancellation::default();
-    let worker_cancellation = cancellation.clone();
-    let (sender, receiver) = smol::channel::bounded(1);
-    let executor = cx.background_executor().clone();
-    cx.background_executor()
-        .spawn(async move {
-            let parts = if attach_only {
-                match spawn.restore_pane {
-                    Some(pane) => {
-                        TerminalView::attach_owned_terminal(spawn.workspace, pane, spawn.owner)
-                    }
-                    None => Err(anyhow::anyhow!("an attach-only sidecar has no owning pane")),
-                }
-            } else {
-                TerminalView::spawn_shell_terminal_in(
-                    spawn.workspace,
-                    spawn.working_directory,
-                    spawn.restore_pane,
-                    spawn.shell,
-                    spawn.owner,
-                    Some(&worker_cancellation),
-                )
-            }
-            .map(|parts| PendingShellParts {
-                parts: Some(parts),
-                executor,
-            })
-            .map_err(|error| format!("{error:#}"));
-            // Dropped queued results still own cleanup, including non-provisional
-            // remote spawns; a restored persistent pane is only detached.
-            let _ = sender.send(parts).await;
-        })
-        .detach();
-    let cancellation = CancelPendingSpawn(cancellation);
-    cx.spawn_in(window, async move |this, cx| {
-        loop {
-            let live = this.update_in(cx, |app, _, _| {
-                app.tabs.iter().any(|tab| {
-                    tab.pane
-                        .leaves()
-                        .iter()
-                        .any(|leaf| leaf.entity_id() == slot_id)
-                })
-            });
-            if !matches!(live, Ok(true)) {
-                cancellation.cancel();
-                return;
-            }
-            match receiver.try_recv() {
-                Ok(parts) => {
-                    let _ = this.update_in(cx, |app, window, cx| {
-                        if let Some(pending) = pending.upgrade() {
-                            let parts = parts.map(|mut owned| owned.parts.take().unwrap());
-                            app.land_pane(slot_id, &pending, parts, font_size, window, cx);
-                        }
-                    });
-                    return;
-                }
-                Err(smol::channel::TryRecvError::Closed) => return,
-                Err(smol::channel::TryRecvError::Empty) => {}
-            }
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(50))
-                .await;
-        }
-    })
-    .detach();
+    cx.subscribe_in(pending, window, |app, pending, _: &crate::ui::pending_pane::SpawnFinished, window, cx| {
+        app.land_pane(&pending, window, cx);
+    }).detach();
+    cx.subscribe_in(pending, window, |_app, pending, _: &crate::ui::pending_pane::RetryRequested, window, cx| {
+        start_pane_spawn(&pending, window, cx);
+    }).detach();
+    let handle = pending.read(cx).focus_handle(cx);
+    watch_pane_focus(&handle, pending.entity_id(), window, cx);
+    start_pane_spawn(pending, window, cx);
 }
 
-fn build_terminal_view(
-    parts: crate::terminal::view::ShellParts,
-    font_size: f32,
+fn start_pane_spawn(
+    pending: &Entity<crate::ui::pending_pane::PendingPane>,
     window: &mut Window,
     cx: &mut Context<LyrelApp>,
-) -> Entity<TerminalView> {
-    let view = cx.new(|cx| {
-        let mut view = TerminalView::from_shell_parts(parts, window, cx);
-        view.font_size = px(font_size);
-        view
+) {
+    let app = cx.weak_entity();
+    let lease = std::rc::Rc::new(move |slot, owner: Option<WorkspaceId>, cx: &App| {
+        app.upgrade().is_some_and(|app| {
+            let app = app.read(cx);
+            owner.is_none_or(|owner| owner == app.workspace) && app.tabs.contains_slot(slot)
+        })
     });
+    pending.update(cx, |pending, cx| pending.start(lease, window, cx));
+}
+
+fn watch_terminal(
+    view: &Entity<TerminalView>,
+    window: &mut Window,
+    cx: &mut Context<LyrelApp>,
+) {
     cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
         app.on_child_exited(view.clone(), window, cx);
     })
@@ -7719,7 +7437,6 @@ fn build_terminal_view(
     watch_open_file_requests(&view, window, cx);
     let handle = view.read(cx).focus_handle.clone();
     watch_pane_focus(&handle, view.entity_id(), window, cx);
-    view
 }
 
 /// Split a closing tab's panes into the ones its machine stops for it and the
@@ -7808,33 +7525,17 @@ fn watch_pane_focus(
 /// [`inherited_start_dir`] for which openings carry one.
 pub(crate) fn new_terminal_native(
     font_size: f32,
+    owner: WorkspaceId,
     remote_start_dir: Option<std::path::PathBuf>,
     spec: Box<crate::daemon::protocol::NativeSshSpec>,
     window: &mut Window,
     cx: &mut Context<LyrelApp>,
-) -> anyhow::Result<Entity<TerminalView>> {
-    let parts = TerminalView::spawn_native_ssh_terminal(spec, remote_start_dir)?;
-    let view = cx.new(|cx| {
-        let mut view = TerminalView::from_native_ssh_parts(parts, window, cx);
-        view.font_size = px(font_size);
-        view
-    });
-    cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
-        app.on_child_exited(view.clone(), window, cx);
-    })
-    .detach();
-    cx.subscribe_in(
-        &view,
-        window,
-        |app, view, _: &crate::terminal::view::AuthPromptReady, window, cx| {
-            app.on_auth_prompt_ready(view.clone(), window, cx);
-        },
-    )
-    .detach();
-    watch_open_file_requests(&view, window, cx);
-    let handle = view.read(cx).focus_handle.clone();
-    watch_pane_focus(&handle, view.entity_id(), window, cx);
-    Ok(view)
+) -> PaneSlot {
+    let pending = cx.new(|cx| crate::ui::pending_pane::PendingPane::native_ssh(
+        owner, font_size, remote_start_dir, spec, cx,
+    ));
+    watch_pending(&pending, window, cx);
+    PaneSlot::Connecting(pending)
 }
 
 /// Reads the Settings "Shell Arguments" field as a command line (#551).
@@ -10169,106 +9870,6 @@ mod hibernate_gpui_tests {
 }
 
 
-#[cfg(test)]
-mod spawn_consumer_tests {
-    use super::*;
-    use crate::ui::pending_pane::{PendingPane, PendingSpawn};
-    use gpui_kit::TestAppContext;
-
-    fn pending(
-        app: &mut LyrelApp,
-        window: &mut Window,
-        cx: &mut Context<LyrelApp>,
-    ) -> Entity<PendingPane> {
-        let pending = cx.new(|cx| {
-            PendingPane::new(
-                "local",
-                PendingSpawn {
-                    workspace: None,
-                    working_directory: None,
-                    restore_pane: None,
-                    shell: None,
-                    agent: None,
-                    agent_session_id: None,
-                    agent_launch_argv: None,
-                    agent_session_scope: None,
-                    run_on_land: None,
-                    owner: Some(app.workspace),
-                    font_size: 14.,
-                },
-                cx,
-            )
-        });
-        app.tabs
-            .push(Tab::new(Pane::leaf(PaneSlot::Connecting(pending.clone()))));
-        app.tabs.select(app.tabs.len() - 1);
-        app.focus_active(window, cx);
-        pending
-    }
-
-    #[gpui_kit::test]
-    fn a_late_spawn_lands_in_its_own_slot_and_workspace(cx: &mut TestAppContext) {
-        let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            let original = app.tabs[0].pane.first_leaf().unwrap().entity_id();
-            let waiting = pending(app, window, cx);
-            let (parts, _daemon) =
-                crate::terminal::view::quiet_test_shell_parts(91, Some(app.workspace));
-            // Focus has moved while creation was running. Landing is by slot,
-            // never by whichever pane is now active.
-            app.tabs.select(0);
-            app.land_pane(waiting.entity_id(), &waiting, Ok(parts), 14., window, cx);
-            assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), original);
-            let landed = app.tabs[1].pane.terminals();
-            assert_eq!(landed.len(), 1);
-            assert_eq!(landed[0].read(cx).pane_id, 91);
-            assert_eq!(landed[0].read(cx).owner_workspace(), Some(app.workspace));
-        });
-    }
-
-    #[gpui_kit::test]
-    fn a_failed_spawn_keeps_its_failure_and_never_overwrites_the_original(cx: &mut TestAppContext) {
-        let (app, mut vcx, mut original_stream) = test_window::harness_with_pane(cx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            let original = app.tabs[0].pane.first_leaf().unwrap().entity_id();
-            let waiting = pending(app, window, cx);
-            app.run_in_active_terminal("do-not-send-to-original", window, cx);
-            assert_eq!(
-                waiting.read(cx).spawn.run_on_land.as_deref(),
-                Some("do-not-send-to-original")
-            );
-            app.land_pane(
-                waiting.entity_id(),
-                &waiting,
-                Err("configured shell missing".into()),
-                14.,
-                window,
-                cx,
-            );
-            assert!(waiting.read(cx).is_failed());
-            assert_eq!(app.tabs.len(), 2);
-            assert_eq!(
-                app.tabs[1].pane.first_leaf().unwrap().entity_id(),
-                waiting.entity_id()
-            );
-            assert_eq!(app.tabs[0].pane.first_leaf().unwrap().entity_id(), original);
-            assert!(
-                waiting
-                    .update(cx, |pending, _| pending.next_auto_retry())
-                    .is_none()
-            );
-        });
-        original_stream
-            .set_read_timeout(Some(std::time::Duration::from_millis(100)))
-            .unwrap();
-        while let Ok(message) = crate::daemon::protocol::ClientMsg::read(&mut original_stream) {
-            assert!(
-                !matches!(message, crate::daemon::protocol::ClientMsg::Input(_)),
-                "failed new-pane command reached the original pane"
-            );
-        }
-    }
-}
 
 #[cfg(test)]
 mod pane_menu_tests {
@@ -11383,9 +10984,9 @@ mod sidecar_snapshot_gpui_tests {
                 pending.is_attach_only(),
                 "reconstruction must never spawn a substitute shell"
             );
-            assert_eq!(pending.spawn.restore_pane, Some(1));
+            assert_eq!(pending.restore_pane(), Some(1));
             assert!(
-                pending.spawn.workspace.is_some(),
+                pending.workspace().is_some(),
                 "remote ownership must not fall back to Local"
             );
             remote.entity_id()

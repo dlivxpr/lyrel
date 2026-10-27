@@ -10,6 +10,9 @@ use gpui_kit::{
 use crate::daemon::protocol::ShellSpec;
 use crate::terminal::PaneWorkspace;
 use crate::ui::i18n::{L10nKey, t_fmt};
+mod creation;
+pub(crate) use creation::{PendingLaunch, SpawnFinished};
+
 
 #[derive(Clone)]
 pub struct PendingSpawn {
@@ -29,7 +32,7 @@ pub struct PendingSpawn {
     pub font_size: f32,
 }
 
-pub enum PendingState {
+enum PendingState {
     Connecting,
     Failed(SharedString),
 }
@@ -37,12 +40,13 @@ pub enum PendingState {
 pub struct RetryRequested;
 
 pub struct PendingPane {
-    pub focus_handle: FocusHandle,
-    pub machine: SharedString,
-    pub state: PendingState,
-    pub spawn: PendingSpawn,
+    focus_handle: FocusHandle,
+    machine: SharedString,
+    state: PendingState,
+    spawn: PendingSpawn,
     /// A native fork already exists; retry only opens its captured launch target.
-    pub(crate) created_session: bool,
+    created_session: bool,
+    creation: creation::Creation,
     /// Retries made without anyone pressing Try Again. See
     /// [`PendingPane::next_auto_retry`].
     auto_retries: u32,
@@ -63,6 +67,41 @@ fn auto_retry_delay(restores: bool, made: u32) -> Option<Duration> {
 impl EventEmitter<RetryRequested> for PendingPane {}
 
 impl PendingPane {
+    pub(crate) fn shell(
+        workspace: Option<PaneWorkspace>,
+        owner: Option<crate::core::session::WorkspaceId>,
+        font_size: f32,
+        working_directory: Option<std::path::PathBuf>,
+        restore_pane: Option<u64>,
+        shell: Option<ShellSpec>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let machine = workspace.as_ref()
+            .map(|workspace| crate::ui::remote_connect::target_label(cx, &workspace.target))
+            .unwrap_or_else(|| crate::ui::i18n::t(L10nKey::AppLocalServerName).to_string());
+        Self::new(machine, PendingSpawn {
+            workspace, owner, font_size, working_directory, restore_pane, shell,
+            agent: None, agent_session_id: None, agent_launch_argv: None,
+            agent_session_scope: None, run_on_land: None,
+        }, cx)
+    }
+
+    pub(crate) fn native_ssh(
+        owner: crate::core::session::WorkspaceId,
+        font_size: f32,
+        remote_start_dir: Option<std::path::PathBuf>,
+        spec: Box<crate::daemon::protocol::NativeSshSpec>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let machine = spec.display_name.clone().unwrap_or_else(|| spec.host.clone());
+        Self::new(machine, PendingSpawn {
+            workspace: None, owner: Some(owner), font_size,
+            working_directory: remote_start_dir, restore_pane: None, shell: None,
+            agent: None, agent_session_id: None, agent_launch_argv: None,
+            agent_session_scope: None, run_on_land: None,
+        }, cx).native(spec)
+    }
+
     pub fn new(
         machine: impl Into<SharedString>,
         spawn: PendingSpawn,
@@ -74,6 +113,7 @@ impl PendingPane {
             state: PendingState::Connecting,
             spawn,
             created_session: false,
+            creation: creation::Creation::default(),
             auto_retries: 0,
             attach_only: false,
             attach_spec: None,
@@ -88,11 +128,19 @@ impl PendingPane {
         self.attach_spec = spec;
         self
     }
-    pub(crate) fn is_attach_only(&self) -> bool {
-        self.attach_only
-    }
-    pub(crate) fn attach_spec(&self) -> Option<Box<crate::daemon::protocol::NativeSshSpec>> {
-        self.attach_spec.clone()
+
+    pub(crate) fn is_attach_only(&self) -> bool { self.attach_only }
+
+    pub(crate) fn parked_card(&self, slot: gpui_kit::EntityId) -> crate::ui::parked_deck::ParkedCard {
+        let status = match &self.state {
+            PendingState::Connecting => t_fmt(L10nKey::PendingConnecting, &[("machine", &self.machine)]),
+            PendingState::Failed(reason) => reason.to_string(),
+        };
+        crate::ui::parked_deck::ParkedCard::new(
+            slot.as_u64(), self.machine.clone(),
+            self.spawn.working_directory.as_ref().map(|path| path.display().to_string()).unwrap_or_default(),
+            false,
+        ).with_status(status)
     }
 
     /// How long to wait before asking again on its own, or `None` once it has
@@ -101,22 +149,53 @@ impl PendingPane {
     /// not the pane, and the link usually comes back within seconds — the
     /// pane behind it has been running the whole time. A brand-new pane that
     /// failed has nothing waiting for it; Try Again is the user's call.
-    pub fn next_auto_retry(&mut self) -> Option<Duration> {
+    fn next_auto_retry(&mut self) -> Option<Duration> {
         let delay = auto_retry_delay(self.spawn.restore_pane.is_some(), self.auto_retries)?;
         self.auto_retries += 1;
         Some(delay)
+    }
+
+    pub(crate) fn restore_pane(&self) -> Option<u64> { self.spawn.restore_pane }
+    pub(crate) fn workspace(&self) -> Option<&PaneWorkspace> { self.spawn.workspace.as_ref() }
+    pub(crate) fn run_when_ready(&mut self, command: String) { self.spawn.run_on_land = Some(command); }
+    pub(crate) fn resume_agent(
+        &mut self,
+        agent: Option<crate::core::cli_agent::CLIAgent>,
+        session: Option<String>,
+        argv: Option<Vec<String>>,
+        scope: Option<lyrel_core::host::session_operations::SessionScope>,
+        created: bool,
+    ) {
+        self.spawn.agent = agent;
+        self.spawn.agent_session_id = session;
+        self.spawn.agent_launch_argv = argv;
+        self.spawn.agent_session_scope = scope.as_ref().map(lyrel_core::host::session_operations::durable_scope);
+        self.created_session = created && self.spawn.agent_session_id.is_some();
+    }
+
+    pub(crate) fn session(&self) -> crate::core::session::SessionPane {
+        crate::core::session::SessionPane::Leaf {
+            cwd: self.spawn.working_directory.clone(),
+            pane_id: self.spawn.restore_pane,
+            shell: self.spawn.shell.clone(),
+            ssh_spec: self.creation.ssh_spec().or_else(|| self.attach_spec.clone()),
+            agent: self.spawn.agent,
+            agent_session_id: self.spawn.agent_session_id.clone(),
+            agent_launch_argv: self.spawn.agent_launch_argv.clone(),
+            agent_session_scope: self.spawn.agent_session_scope.as_ref().map(lyrel_core::host::session_operations::durable_scope),
+        }
     }
 
     pub fn is_failed(&self) -> bool {
         matches!(self.state, PendingState::Failed(_))
     }
 
-    pub fn fail(&mut self, reason: impl Into<SharedString>, cx: &mut Context<Self>) {
+    fn fail(&mut self, reason: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.state = PendingState::Failed(reason.into());
         cx.notify();
     }
 
-    pub fn retrying(&mut self, cx: &mut Context<Self>) {
+    fn retrying(&mut self, cx: &mut Context<Self>) {
         self.state = PendingState::Connecting;
         cx.notify();
     }

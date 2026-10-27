@@ -132,6 +132,13 @@ pub struct NativeSshParts {
     persist: Box<crate::daemon::protocol::NativeSshSpec>,
 }
 
+impl NativeSshParts {
+    pub(crate) fn new(terminal: RemoteTerminal, pane_id: u64, persist: Box<crate::daemon::protocol::NativeSshSpec>) -> Self {
+        Self { terminal, pane_id, persist }
+    }
+    pub(crate) fn pane_id(&self) -> u64 { self.pane_id }
+}
+
 /// What a pane is called when nothing running in it has said otherwise.
 pub(crate) const DEFAULT_TITLE: &str = "lyrel";
 
@@ -160,6 +167,16 @@ pub struct ShellParts {
     pub(crate) workspace: Option<crate::terminal::PaneWorkspace>,
     pub(crate) restored: bool,
     pub(crate) owner: Option<crate::core::session::WorkspaceId>,
+}
+
+impl ShellParts {
+    pub(crate) fn new(
+        terminal: RemoteTerminal, pane_id: u64, shell_spec: Option<ShellSpec>,
+        workspace: Option<crate::terminal::PaneWorkspace>, restored: bool,
+        owner: Option<crate::core::session::WorkspaceId>,
+    ) -> Self {
+        Self { terminal, pane_id, shell_spec, workspace, restored, owner }
+    }
 }
 
 
@@ -911,92 +928,6 @@ fn apply_fallback_chain(
 }
 
 impl TerminalView {
-    /// Attaches an existing owned session without ever spawning a substitute.
-    pub(crate) fn attach_owned_terminal(
-        workspace: Option<crate::terminal::PaneWorkspace>,
-        pane_id: u64,
-        owner: Option<crate::core::session::WorkspaceId>,
-    ) -> anyhow::Result<ShellParts> {
-        let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
-        let terminal = super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
-        Ok(ShellParts {
-            terminal,
-            pane_id,
-            shell_spec: None,
-            workspace,
-            restored: true,
-            owner,
-        })
-    }
-
-    pub fn spawn_shell_terminal_in(
-        workspace: Option<crate::terminal::PaneWorkspace>,
-        working_directory: Option<std::path::PathBuf>,
-        restore_pane: Option<u64>,
-        shell: Option<ShellSpec>,
-        owner: Option<crate::core::session::WorkspaceId>,
-        cancellation: Option<&crate::terminal::SpawnCancellation>,
-    ) -> anyhow::Result<ShellParts> {
-        let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
-        let attached = match restore_pane {
-            Some(id) => match super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, id) {
-                Ok(terminal) => Some((terminal, id, None)),
-                Err(e) if super::remote::handshake::attach_refused(&e) => {
-                    log::info!("pane {id} is gone on its machine ({e:#}); spawning fresh");
-                    None
-                }
-                // A refused graphics replay, unanswered attach or broken link
-                // does not mean the pane is gone, even for a local daemon.
-                // Keep its identity and let retry reach the original session.
-                Err(e) => {
-                    log::info!("pane {id} could not be reached to reattach ({e:#})");
-                    return Err(e.context(format!(
-                        "could not reach pane {id}, which may still be running"
-                    )));
-                }
-            },
-            None => None,
-        };
-        let restored = attached.is_some();
-        let (terminal, pane_id, shell_spec) = match attached {
-            Some(parts) => parts,
-            None => {
-                // The pane this one stands in for is gone, but its screen may
-                // not be: if the daemon kept a copy, the new pane opens showing
-                // it, under a line saying the shell below is new. Asking costs
-                // nothing when there is no copy — the daemon answers by
-                // spawning the blank pane it would have spawned anyway.
-                let restore = restore_pane.map(|pane_id| crate::daemon::protocol::RestoreFrom {
-                    pane_id,
-                    banner: Some(
-                        crate::ui::i18n::t(crate::ui::i18n::L10nKey::PaneRestoredScreenBanner)
-                            .to_string(),
-                    ),
-                });
-                let (terminal, id) = super::remote::handshake::PaneHandshake::spawn_on(
-                    &route,
-                    TermSize::new(80, 24),
-                    8,
-                    17,
-                    working_directory,
-                    shell.clone(),
-                    owner.map(|id| id.to_string()),
-                    restore,
-                    cancellation,
-                )?;
-                (terminal, id, shell)
-            }
-        };
-        Ok(ShellParts {
-            terminal,
-            pane_id,
-            shell_spec,
-            workspace,
-            restored,
-            owner,
-        })
-    }
-
     pub fn from_shell_parts(
         mut parts: ShellParts,
         window: &mut Window,
@@ -1017,25 +948,6 @@ impl TerminalView {
 
     pub fn owner_workspace(&self) -> Option<crate::core::session::WorkspaceId> {
         self.owner_workspace
-    }
-
-    /// Dials `spec` through the local daemon. `remote_start_dir` is a
-    /// directory on the far host — see [`ClientMsg::SpawnNativeSsh`]'s `cwd`
-    /// — and never a local one.
-    ///
-    /// [`ClientMsg::SpawnNativeSsh`]: crate::daemon::protocol::ClientMsg::SpawnNativeSsh
-    pub fn spawn_native_ssh_terminal(
-        spec: Box<crate::daemon::protocol::NativeSshSpec>,
-        remote_start_dir: Option<std::path::PathBuf>,
-    ) -> anyhow::Result<NativeSshParts> {
-        let persist = Box::new(spec.without_secrets());
-        let (terminal, pane_id) =
-            super::remote::handshake::PaneHandshake::spawn_native_ssh(TermSize::new(80, 24), 8, 17, remote_start_dir, spec)?;
-        Ok(NativeSshParts {
-            terminal,
-            pane_id,
-            persist,
-        })
     }
 
     pub fn from_native_ssh_parts(
