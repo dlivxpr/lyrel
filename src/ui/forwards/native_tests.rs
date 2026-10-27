@@ -34,6 +34,12 @@ impl Drop for NativePane {
 fn native_pane(fixture: &native_fixture::NativeSshFixture) -> NativePane {
     let mut stream = crate::daemon::transport::connect().unwrap();
     stream.set_read_timeout(Some(native_fixture::STREAM_WITHIN)).unwrap();
+    crate::daemon::protocol::negotiate_pane(&mut stream).unwrap();
+    ClientMsg::GraphicsCapacity {
+        encoded_bytes: 64 << 20,
+        decoded_bytes: 128 << 20,
+        offers: false,
+    }.encode(&mut stream).unwrap();
     ClientMsg::SpawnNativeSsh {
         cwd: None,
         size: native_fixture::win_size(),
