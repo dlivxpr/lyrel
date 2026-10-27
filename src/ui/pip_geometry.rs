@@ -130,27 +130,10 @@ pub(crate) fn commit(
     cx: &mut App,
 ) {
     let _ = app.update(cx, |app, cx| {
-        let Some(tab) = app.tabs.iter_mut().find(|tab| tab.tree_id.get() == tab_id) else {
+        let Some(tab) = app.tabs.iter_mut().find(|tab| tab.id() == tab_id) else {
             return;
         };
-        if !tab
-            .pip_slot(cx)
-            .is_some_and(|slot| slot.entity_id() == pane)
-        {
-            return;
-        }
-        let changed = if let Some(presentation) = &mut tab.foreign_presentation {
-            let changed = presentation.set_pip_geometry(Some(geometry));
-            if presentation
-                .pip()
-                .is_some_and(|pip| !pip.pane().owner().is_client_local())
-            {
-                tab.presentation.set_pip_geometry(Some(geometry));
-            }
-            changed
-        } else {
-            tab.presentation.set_pip_geometry(Some(geometry))
-        };
+        let changed = tab.commit_pip_geometry(pane, geometry, cx);
         if changed {
             app.save_session(cx);
             cx.notify();
@@ -407,7 +390,7 @@ fn render_in_viewport(
     };
     let title: gpui_kit::SharedString = match &slot {
         PaneSlot::Ready(view) => view.read(cx).title.clone().into(),
-        PaneSlot::Connecting(view) => view.read(cx).machine.clone(),
+        PaneSlot::Connecting(view) => view.read(cx).title(),
     };
     let mut header = div()
         .id(("pip-header", id.as_u64() as usize))
@@ -585,8 +568,8 @@ fn render_in_viewport(
                     move |_, window, cx| {
                         let _ = app.update(cx, |app, cx| {
                             // Buttons act on this rendered PiP, never a stale terminal focus.
-                            if !app.tabs.get(app.active).is_some_and(|tab| {
-                                tab.tree_id.get() == tab_id
+                            if !app.tabs.get(app.tabs.active_index()).is_some_and(|tab| {
+                                tab.id() == tab_id
                                     && tab.pip_slot(cx).is_some_and(|pip| pip.entity_id() == id)
                             }) {
                                 return;

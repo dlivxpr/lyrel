@@ -46,6 +46,26 @@ lyrel 注入的命令开始／结束标记带有 `;aid=lyrel` 归属属性，例
 通用 `OSC 133` 输出块不清除仍在运行的 agent 图标。此属性用于区分协议来源，不是安全认证。
 更新后新建 shell 窗格才会加载新的注入脚本；已运行的 shell 不会被自动改写或重启。
 
+daemon 的前台事实由 `crates/lyrel-core/src/daemon/pane/facts.rs` 中的私有 `PaneFacts`
+维护；`facts/output_marks.rs` 解释 shell／agent 标记、目录和标题，`facts/reader.rs`
+持有单一输出流的解析状态与采样节奏，`facts/probes.rs` 负责平台进程观察。
+PTY 与 native SSH 输出都沿同一顺序进入事实转换；窗格客户端接收有序状态帧，机器客户端
+读取变化后的事实。事实仍使用原来的 pane-state 锁，不为采样另建锁或异步输出消费者；
+机器事实只在释放该锁后发布。shell 启动注入和有界回放仍由原有 `launch`、`replay` 模块负责。
+
+近端 shell、嵌套程序和远端提示符不是同一事实：前台程序转发的提示符不能启用近端编辑器，
+但标记自身的提示符读数仍用于判断远端是否忙碌。每次切换远端上下文会清除旧目录和集成证明；
+同一批输出里的新远端上下文先落地，随后才记录它的首个提示符。回到近端提示符时立即重新采样，
+不等下一个轮询周期。间接图片文件／共享内存的许可仍需在接收边界重新证明 Host locality；
+缓存的进程组或远端 UI 上下文都不能单独授予本地文件读取权限。
+
+平台验证必须分别记录：macOS 的目录回退依赖 PTY 前台进程组与 `proc_pidinfo`，
+Linux 依赖可读取的 `/proc/<pid>/cwd` 和 argv；两者的真实 argv 场景需要 `bash` 与本机 PTY。
+Windows ConPTY 没有相同的前台进程组／目录回退，agent 识别依赖带 `aid=lyrel` 的 shell
+命令标记，标题回退使用本机进程快照；Windows 绿灯不证明 Unix probe 已验证。
+真实 native SSH 与嵌套 SSH 的 locality 场景还需要隔离远端主机、已核验 Host key 和对应 shell，
+不得用本机路径或普通标记 fixture 代替远端运行证据。
+
 <a id="what-turns-off-without-it"></a>
 ## 没有集成时哪些功能会受影响
 

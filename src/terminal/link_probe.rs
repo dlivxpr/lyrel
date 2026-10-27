@@ -90,6 +90,13 @@ impl LinkProbeCache {
         wanted
     }
 
+    /// Retire requests without discarding already-known absolute Host paths.
+    /// A geometry change invalidates hover work, not filesystem facts.
+    pub fn cancel_pending(&mut self) {
+        self.wanted.clear();
+        self.in_flight.clear();
+    }
+
     /// Files what the host said. Returns whether anything the cache did not
     /// already know came back — a caller that re-resolves on every answer
     /// would otherwise repaint for replies that change nothing.
@@ -176,5 +183,21 @@ mod tests {
 
         cache.retarget(HostId::from_connection_key("ssh-direct:me@box:22"));
         assert_eq!(cache.probe(Path::new("/etc/hosts"), false), Probe::Unknown);
+    }
+
+    #[test]
+    fn retiring_requests_preserves_facts_and_allows_unanswered_paths_to_be_asked_again() {
+        let mut cache = LinkProbeCache::default();
+        cache.retarget(local());
+        cache.land(vec![(PathBuf::from("/known.rs"), Existence::File)]);
+        assert_eq!(cache.probe(Path::new("/pending.rs"), true), Probe::Unknown);
+        assert_eq!(cache.take_wanted(), vec![PathBuf::from("/pending.rs")]);
+        cache.cancel_pending();
+        assert_eq!(
+            cache.probe(Path::new("/known.rs"), true),
+            Probe::Hit { is_dir: false }
+        );
+        assert_eq!(cache.probe(Path::new("/pending.rs"), true), Probe::Unknown);
+        assert_eq!(cache.take_wanted(), vec![PathBuf::from("/pending.rs")]);
     }
 }

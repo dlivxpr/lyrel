@@ -20,11 +20,12 @@ use crate::core::group_key::{
     place,
 };
 use crate::terminal::git_status::GitStatusCache;
-use crate::ui::app::{LyrelApp, Tab};
+use crate::ui::app::LyrelApp;
 use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
+use crate::ui::tab::Tab;
 use crate::ui::tab_strip::{
     DragTab, REORDER_SLIDE_MS, abbreviate_home, elide_end_clusters, elide_label,
     elide_path_keep_tail, measure_text,
@@ -247,7 +248,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let active = self.active;
+        let active = self.tabs.active_index();
         let sf = cx.global::<crate::ui::presets::Surfaces>().rail;
         let show_badges = self.mod_hint_badges;
         let width = self.sidebar_px(window, cx);
@@ -458,7 +459,7 @@ impl LyrelApp {
         let lifted_is_kept = reorder::dragged_sidebar_tab(&self.reorder).is_some_and(|id| {
             self.tabs
                 .iter()
-                .find(|t| t.tree_id.get() == id)
+                .find(|t| t.id() == id)
                 .and_then(|t| t.group.get())
                 .is_some_and(|g| groups.contains(g))
         });
@@ -547,7 +548,7 @@ impl LyrelApp {
             for (slot, i) in visible.into_iter().enumerate() {
                 let badge_pos = badge_pos[i];
                 let tab = &self.tabs[i];
-                reveal_drawn |= reveal == Some(tab.tree_id.get());
+                reveal_drawn |= reveal == Some(tab.id());
                 let is_active = i == active;
                 let ssh_dot = self.tab_ssh_dot(tab, cx);
                 let asleep = tab.is_asleep();
@@ -771,7 +772,7 @@ impl LyrelApp {
                 let rename_input = self
                     .renaming
                     .as_ref()
-                    .filter(|r| r.tab == tab.tree_id.get())
+                    .filter(|r| r.tab == tab.id())
                     .map(|r| r.input.clone());
 
                 let shown = SidebarRowShown {
@@ -948,7 +949,7 @@ impl LyrelApp {
                         let state = self.reorder.clone();
                         let slots = row_slots.clone();
                         let group_key = group_key.clone();
-                        let id = tab.tree_id.get();
+                        let id = tab.id();
                         move |_drag, grab, _window, cx| {
                             cx.stop_propagation();
                             *state.borrow_mut() = Some(
@@ -997,7 +998,7 @@ impl LyrelApp {
                                 let by_tab = self.sidebar_slots.clone();
                                 let reveal = self.sidebar_reveal.clone();
                                 let scroll = self.sidebar_scroll.clone();
-                                let id = tab.tree_id.get();
+                                let id = tab.id();
                                 // The header sits directly above a group's
                                 // first row, one gap away.
                                 let lead = match slot == 0 && section.name.is_some() {
@@ -1436,7 +1437,7 @@ impl LyrelApp {
                                                     // is one of this group's,
                                                     // the same way a row's counts
                                                     // activate their row first.
-                                                    if !rows.contains(&this.active)
+                                                    if !rows.contains(&this.tabs.active_index())
                                                         && let Some(&first) = rows.first()
                                                     {
                                                         this.activate(first, window, cx);
@@ -1962,7 +1963,7 @@ impl LyrelApp {
     /// row shortened and the card refused to expand.
     fn sidebar_info(
         &self,
-        tab: &crate::ui::app::Tab,
+        tab: &crate::ui::tab::Tab,
         window: &mut Window,
         cx: &gpui_kit::App,
         shown: &SidebarRowShown,
@@ -2017,7 +2018,7 @@ impl LyrelApp {
         let here = self
             .tabs
             .iter()
-            .find(|t| t.tree_id.get() == dragged)
+            .find(|t| t.id() == dragged)
             .and_then(|t| t.group.get())
             .filter(|g| self.sidebar_groups.contains(*g));
         let pointer = window.mouse_position();
@@ -2095,7 +2096,7 @@ impl LyrelApp {
         target: reorder::Regroup,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.tabs.iter().position(|t| t.tree_id.get() == tab) else {
+        let Some(index) = self.tabs.iter().position(|t| t.id() == tab) else {
             return;
         };
         let group = match target {
@@ -2374,7 +2375,7 @@ impl LyrelApp {
     pub(crate) fn active_tab_folder(&self, window: &Window, cx: &gpui_kit::App) -> Option<PathBuf> {
         let leaf = self
             .tabs
-            .get(self.active)?
+            .get(self.tabs.active_index())?
             .pane
             .focused_or_first(window, cx)?;
         leaf.read(cx).effective_host_cwd()
@@ -2411,7 +2412,7 @@ impl LyrelApp {
             return;
         }
         if let GroupKey::Pinned(id) = key
-            && let Some(tab) = self.tabs.get(self.active)
+            && let Some(tab) = self.tabs.get(self.tabs.active_index())
         {
             tab.group.set(Some(id));
             self.save_session(cx);
@@ -2660,7 +2661,7 @@ impl LyrelApp {
     pub(crate) fn spawn_group(&self, cwd: Option<&Path>, cx: &gpui_kit::App) -> SpawnPlace {
         let kept = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.group.get())
             .filter(|g| self.sidebar_groups.contains(*g));
         let known = cwd.and_then(|cwd| {
@@ -3197,7 +3198,7 @@ mod fold_tests {
             plant_repo(app, 0, "/w/probed/sub", "/w/probed", cx);
             let work = label(app, "work", cx);
             app.set_tab_group(0, Some(work), cx);
-            (work, app.tabs[0].tree_id.get())
+            (work, app.tabs[0].id())
         });
         vcx.run_until_parked();
         app.update(&mut vcx, |app, cx| {
@@ -3226,7 +3227,7 @@ mod fold_tests {
     fn a_drop_finds_its_tab_after_the_indexes_shift(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
 
-        let dragged = app.update(&mut vcx, |app, _| app.tabs[2].tree_id.get());
+        let dragged = app.update(&mut vcx, |app, _| app.tabs[2].id());
         let work = app.update_in(&mut vcx, |app, window, cx| {
             let work = label(app, "work", cx);
             app.close_tab(0, window, cx);
@@ -3239,7 +3240,7 @@ mod fold_tests {
             let moved = app
                 .tabs
                 .iter()
-                .find(|t| t.tree_id.get() == dragged)
+                .find(|t| t.id() == dragged)
                 .expect("the dragged tab is still open");
             assert_eq!(
                 moved.group.get(),
@@ -3249,7 +3250,7 @@ mod fold_tests {
             assert!(
                 app.tabs
                     .iter()
-                    .filter(|t| t.tree_id.get() != dragged)
+                    .filter(|t| t.id() != dragged)
                     .all(|t| t.group.get().is_none()),
                 "and no bystander was regrouped in its place"
             );
@@ -3270,7 +3271,7 @@ mod fold_tests {
             plant_repo(app, 0, "/w/probed/sub", "/w/probed", cx);
             let work = label(app, "work", cx);
             app.set_tab_group(0, Some(work), cx);
-            app.active = 0;
+            app.tabs.select(0);
             work
         });
         vcx.run_until_parked();
@@ -3767,7 +3768,7 @@ mod fold_tests {
             for (i, root) in [(0, &alpha), (1, &alpha), (2, &beta)] {
                 *app.tabs[i].auto_group.borrow_mut() = Some(root.clone());
             }
-            app.active = 2;
+            app.tabs.select(2);
             cx.notify();
         });
         vcx.run_until_parked();
@@ -3826,7 +3827,7 @@ mod fold_tests {
             for i in 0..2 {
                 *app.tabs[i].auto_group.borrow_mut() = alpha.auto().cloned();
             }
-            app.active = 0;
+            app.tabs.select(0);
             app.toggle_sidebar_group(Some(&alpha), cx);
         });
         vcx.run_until_parked();
@@ -3899,7 +3900,7 @@ mod fold_tests {
             );
             app.set_tab_group(0, Some(a), cx);
             app.set_tab_group(1, Some(c), cx);
-            let tabs: Vec<_> = app.tabs.iter().map(|t| t.tree_id.get()).collect();
+            let tabs: Vec<_> = app.tabs.iter().map(|t| t.id()).collect();
             app.apply_pinned_order(&[2, 0, 1], cx);
             assert_eq!(
                 app.pinned_group_names()
@@ -3909,7 +3910,7 @@ mod fold_tests {
                 vec![c, a, b]
             );
             assert_eq!(
-                app.tabs.iter().map(|t| t.tree_id.get()).collect::<Vec<_>>(),
+                app.tabs.iter().map(|t| t.id()).collect::<Vec<_>>(),
                 tabs,
                 "the tabs stayed where they were"
             );
@@ -3938,7 +3939,7 @@ mod fold_tests {
             // A harness without a daemon may refuse to spawn; when it does
             // open one, it has to be in the group.
             if app.tabs.len() > before {
-                assert_eq!(app.tabs[app.active].group.get(), Some(work));
+                assert_eq!(app.tabs[app.tabs.active_index()].group.get(), Some(work));
             }
         });
     }
@@ -4000,7 +4001,9 @@ mod fold_tests {
             assert_eq!(app.group_rename.as_ref().map(|r| r.group), Some(id));
             assert!(app.tabs.iter().all(|t| t.group.get().is_none()));
             let kinds: Vec<_> = app
-                .search_actions(window, cx)
+                .search_input(window, cx)
+                .build(cx)
+                .actions
                 .into_iter()
                 .map(|c| c.kind)
                 .collect();
@@ -4050,7 +4053,7 @@ mod fold_tests {
             for i in 0..2 {
                 let pane = std::mem::replace(&mut app.tabs[i].pane, crate::ui::pane::Pane::Empty);
                 let tree = lyrel_core::core::machine::Tab {
-                    id: app.tabs[i].tree_id.get(),
+                    id: app.tabs[i].id(),
                     name: None,
                     group: None,
                     last_auto: Some(AutoKey::Repo(PathBuf::from("/w/alpha"))),
@@ -4058,7 +4061,7 @@ mod fold_tests {
                     hibernated: false,
                     presentation: Default::default(),
                 };
-                app.tabs[i] = crate::ui::app::Tab::from_tree(&tree, pane);
+                app.tabs[i] = crate::ui::tab::Tab::from_tree(&tree, pane);
             }
             let work = label(app, "work", cx);
             app.tabs[1].group.set(Some(work));
@@ -4084,7 +4087,12 @@ mod fold_tests {
                 repo("/w/beta"),
                 "the probe wins"
             );
-            let (desired, _, _) = crate::ui::tree_sync::desired_tabs(app, cx);
+            let (desired, _, _) = crate::ui::tree_sync::projection::desired_tabs(
+                &app.tabs,
+                app.tabs.active_index(),
+                app.workspace,
+                cx,
+            );
             assert_eq!(
                 desired[0].last_auto,
                 Some(AutoKey::Repo(PathBuf::from("/w/beta"))),

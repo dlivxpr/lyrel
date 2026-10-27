@@ -42,7 +42,8 @@ use rio_vt::crosswords::style::StyleFlags;
 use rio_vt::crosswords::{Crosswords, Mode};
 use rio_vt::event::EventListener;
 
-use super::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView, pasted_paths_text, types_cleanly};
+use super::prompt_input::bytes::types_cleanly;
+use super::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView, pasted_paths_text};
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
 use crate::ui::host_ops::{HostId, HostOps};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -2077,7 +2078,7 @@ impl TerminalView {
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(|this, _: &MouseDownEvent, _w, cx| {
-                        this.context_menu_allowed = false;
+                        this.links.record_menu_permission(true, false);
                         cx.stop_propagation();
                     }),
                 )

@@ -110,7 +110,7 @@ fn command(
         if !state.alive {
             return Vec::new();
         }
-        let broker = state.graphics_admission.clone();
+        let broker = state.subscriptions.admission().clone();
         let Some(graphics) = state.graphics.as_mut() else {
             return Vec::new();
         };
@@ -244,7 +244,7 @@ fn display(
 ) -> Vec<u8> {
     let (placement, generation, broker) = {
         let mut state = state.lock().unwrap();
-        let broker = state.graphics_admission.clone();
+        let broker = state.subscriptions.admission().clone();
         let Some(graphics) = state.graphics.as_mut() else {
             return Vec::new();
         };
@@ -362,7 +362,8 @@ pub(super) fn consume<'a>(
                     }
                     Part::Clipboard(ClipboardEvent::Write(write)) => {
                         let mut state = state.lock().unwrap();
-                        if state.subscriber.is_some() && controller == Some(state.subscriber_epoch)
+                        if controller.is_some()
+                            && controller == state.subscriptions.controller_epoch()
                         {
                             fan_out_output(
                                 &mut state,

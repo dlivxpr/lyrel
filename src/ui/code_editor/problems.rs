@@ -160,7 +160,7 @@ impl LyrelApp {
         let header = h_flex()
             .flex_none()
             .h(px(28.))
-            .px(px(crate::ui::app::CONTENT_INSET))
+            .px(px(crate::ui::window_chrome::CONTENT_INSET))
             .gap_2()
             .items_center()
             .border_t(crate::ui::theme::hairline(window))
@@ -199,7 +199,7 @@ impl LyrelApp {
                 h_flex()
                     .id(("editor-problems-file", file_ix))
                     .h(px(24.))
-                    .px(px(crate::ui::app::CONTENT_INSET))
+                    .px(px(crate::ui::window_chrome::CONTENT_INSET))
                     .gap_2()
                     .items_center()
                     .text_sm()
@@ -249,8 +249,8 @@ impl LyrelApp {
                     h_flex()
                         .id(("editor-problem", rows.len()))
                         .h(px(22.))
-                        .pl(px(crate::ui::app::CONTENT_INSET + 12.))
-                        .pr(px(crate::ui::app::CONTENT_INSET))
+                        .pl(px(crate::ui::window_chrome::CONTENT_INSET + 12.))
+                        .pr(px(crate::ui::window_chrome::CONTENT_INSET))
                         .gap_2()
                         .items_center()
                         .text_sm()
@@ -285,7 +285,7 @@ impl LyrelApp {
         if left > 0 {
             rows.push(
                 div()
-                    .px(px(crate::ui::app::CONTENT_INSET))
+                    .px(px(crate::ui::window_chrome::CONTENT_INSET))
                     .py_1()
                     .text_xs()
                     .text_color(muted)
@@ -298,7 +298,7 @@ impl LyrelApp {
         }
         let body: AnyElement = if files.is_empty() {
             div()
-                .px(px(crate::ui::app::CONTENT_INSET))
+                .px(px(crate::ui::window_chrome::CONTENT_INSET))
                 .py_2()
                 .text_sm()
                 .text_color(muted)

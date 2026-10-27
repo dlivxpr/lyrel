@@ -70,9 +70,8 @@ pub(crate) trait Source {
     fn search(&self, query: &str, cx: &App) -> Vec<(i32, Item)>;
 }
 
-/// Everything the search offers, gathered once when it opens. The window
-/// builds it (`LyrelApp::search_catalog`) because most of it — the tabs, the
-/// shells, what the chrome is showing — is the window's to know.
+/// Everything the search offers, assembled by `search::catalog` from bounded
+/// window facts. Search owns the row policy; the workbench executes intents.
 #[derive(Clone, Default)]
 pub(crate) struct Catalog {
     /// In group order, which is what the Actions tab's sections follow.
@@ -83,7 +82,7 @@ pub(crate) struct Catalog {
     pub hosts: Vec<Item>,
     /// Past agent sessions, most recent first — those that ran where this
     /// window's tab is first of all. They arrive after the rest: reading them
-    /// is disk work, done off the window's thread (`LyrelApp::open_search`).
+    /// is Host work coordinated by `search::history` off the window's thread.
     pub sessions: Vec<Item>,
     /// How many of `sessions` lead the list because they ran here.
     pub sessions_here: usize,

@@ -18,7 +18,8 @@ use rio_vt::crosswords::style::StyleFlags;
 use rio_vt::crosswords::{Crosswords, Mode};
 use rio_vt::selection::SelectionRange;
 
-use super::view::{TerminalView, should_show_context_menu};
+use super::link::should_show_context_menu;
+use super::view::TerminalView;
 use crate::core::config::Config;
 use crate::ui::i18n::{L10nKey, t};
 
@@ -2076,10 +2077,10 @@ impl TerminalElement {
         display_offset: i32,
         cx: &App,
     ) {
-        let Some(link) = self.view.read(cx).hovered_link.as_ref() else {
+        let Some(link) = self.view.read(cx).links.hovered() else {
             return;
         };
-        for &(start, end) in &link.runs {
+        for &(start, end) in link.runs() {
             let grid_row = start.row.0 + display_offset;
             if grid_row < 0 || grid_row as usize >= rows {
                 continue;
@@ -2089,7 +2090,7 @@ impl TerminalElement {
                 let cell = &mut buf[row + col];
                 osc8_underline::unmark(cell);
                 cell.link_hover = true;
-                cell.underline_color = link_underline_color(cell, link.armed);
+                cell.underline_color = link_underline_color(cell, link.is_armed());
             }
         }
     }
@@ -2378,7 +2379,7 @@ impl Element for TerminalElement {
     ) {
         let fps_start = super::fps::enabled().then(std::time::Instant::now);
 
-        let frac = self.view.read(cx).scroll_frac.clamp(0., 1.);
+        let frac = self.view.read(cx).selection_scroll.fraction().clamp(0., 1.);
         let input_shift = self.view.read(cx).input_scroll_rows();
         let geom = CellGeom {
             origin: point(
@@ -2397,7 +2398,7 @@ impl Element for TerminalElement {
         let bold_font = self.view.read(cx).font_bold.clone();
         let italic_font = self.view.read(cx).font_italic.clone();
         let focused = self.view.read(cx).focus_handle.is_focused(window);
-        let cursor_visible = self.view.read(cx).cursor_visible;
+        let cursor_visible = self.view.read(cx).cursor_visible();
         let bell_flash = self.view.read(cx).bell_flash;
         let editor_active = self.view.read(cx).input_active();
         // The pane leaf stores its per-frame dim here (see `TerminalView::dim`).
@@ -2489,14 +2490,14 @@ impl Element for TerminalElement {
             super::input::TerminalInputHandler::new(self.view.clone(), cursor_bounds),
             cx,
         );
-        let marked = self.view.read(cx).marked_text.clone();
+        let marked = self.view.read(cx).input.marked().to_owned();
 
         // Kitty-graphics placements for this pane. Each image anchors to an
         // absolute scrollback row (recorded when its command arrived in-stream);
         // map that back to a screen row with the snapshot's scroll state and
         // drop anything scrolled out of the viewport.
         let image_store = self.view.read(cx).terminal.images();
-        let displayed = self.view.read(cx).displayed.clone();
+        let displayed = self.view.read(cx).lifecycle.paint_visibility().clone();
         let images = image_store.snapshot_with_placeholders(&snap.placeholders);
         let notice = images.iter().any(|image| image.evicted).then(|| {
             let text = SharedString::new_static(t(L10nKey::TerminalImageEvicted));
@@ -2670,7 +2671,7 @@ impl Element for TerminalElement {
         self.register_mouse_handlers(geom, bounds, prepaint.hitbox.id, window);
 
         let view = self.view.read(cx);
-        if view.hovered_link.as_ref().is_some_and(|link| link.armed) {
+        if view.links.hovered().is_some_and(|link| link.is_armed()) {
             window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
         } else if !view.mouse_mode() {
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.hitbox);

@@ -23,9 +23,10 @@ use gpui_kit::{App, Axis, Context, Window};
 use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
 use crate::core::config::{Config, ProfileUsage, unix_now};
 use crate::core::session::WorkspaceStore;
-use crate::ui::app::{LyrelApp, SpawnAs, SpawnWhere, join_shell_args};
+use crate::ui::app::{LyrelApp, SpawnWhere, join_shell_args};
 use crate::ui::i18n::{L10nKey, t_fmt};
 use crate::ui::pane::PaneSlot;
+use crate::ui::tab::presentation::SpawnAs;
 
 /// How the keymap spells "launch this agent": `LaunchAgent:omp`.
 const LAUNCH_ACTION_PREFIX: &str = "LaunchAgent:";
@@ -154,7 +155,7 @@ pub(crate) fn run_when_ready(slot: &PaneSlot, command: String, cx: &mut App) {
             .detach();
         }
         PaneSlot::Connecting(pending) => {
-            pending.update(cx, |pending, _| pending.spawn.run_on_land = Some(command));
+            pending.update(cx, |pending, _| pending.run_when_ready(command));
         }
     }
 }
@@ -191,7 +192,7 @@ impl LyrelApp {
         let command = agent.launch_command(&cx.global::<Config>().agent_launch);
         let slot = match at {
             SpawnWhere::NewTab => {
-                let cwd = self.tabs.get(self.active).and_then(|t| {
+                let cwd = self.tabs.get(self.tabs.active_index()).and_then(|t| {
                     t.pane
                         .focused_or_first(window, cx)
                         .and_then(|leaf| leaf.read(cx).spawnable_cwd())
@@ -341,11 +342,12 @@ impl LyrelApp {
             // The failed connection card retries this exact prepared identity,
             // not the source fork operation.
             pending.update(cx, |pending, _| {
-                pending.spawn.agent = Some(prepared.agent);
-                pending.spawn.agent_session_id = prepared.target_id.clone();
-                pending.spawn.agent_launch_argv = Some(prepared.launch_argv.clone());
-                pending.spawn.agent_session_scope = Some(
-                    lyrel_core::host::session_operations::durable_scope(&prepared.scope),
+                pending.resume_agent(
+                    Some(prepared.agent),
+                    prepared.target_id.clone(),
+                    Some(prepared.launch_argv.clone()),
+                    Some(prepared.scope.clone()),
+                    false,
                 );
             });
         }
@@ -449,7 +451,7 @@ impl LyrelApp {
     pub(crate) fn save_agent_launch_args(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(view) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
         else {
             return;

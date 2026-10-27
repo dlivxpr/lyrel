@@ -130,7 +130,7 @@ impl LyrelApp {
         code.by_recency()
             .into_iter()
             .filter_map(|id| {
-                let f = self.buffer(id)?;
+                let f = self.editor.buffers.get(id)?;
                 let dir = if f.untitled.is_some() {
                     String::new()
                 } else {
@@ -279,7 +279,7 @@ impl LyrelApp {
         let open = self.editor.strip_picker.is_some();
         let hidden_dirty = hidden
             .iter()
-            .any(|id| self.buffer(*id).is_some_and(|f| f.dirty));
+            .any(|id| self.editor.buffers.get(*id).is_some_and(|f| f.dirty));
         let button = h_flex()
             .id("editor-strip-more")
             .occlude()
@@ -570,7 +570,7 @@ impl LyrelApp {
             .iter()
             .copied()
             .filter(|id| Some(*id) != front)
-            .filter(|id| !saved_only || self.buffer(*id).is_some_and(|f| !f.dirty))
+            .filter(|id| !saved_only || self.editor.buffers.get(*id).is_some_and(|f| !f.dirty))
             .collect()
     }
 }
@@ -622,6 +622,7 @@ mod tests {
         let ids = ids(4);
         let mut code = code(&ids[..2], 1);
         code.split = Some(super::super::split::OtherGroup {
+            id: super::super::split::GroupId::default(),
             files: ids[2..].to_vec(),
             active: 0,
             focus_left: true,

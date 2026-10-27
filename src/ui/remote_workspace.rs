@@ -443,9 +443,9 @@ impl LyrelApp {
     }
 
     pub(crate) fn rebind_host(&mut self, previous: HostId, cx: &gpui_kit::App) {
-        if crate::core::session::crosses_machines(previous, self.spawn_host(cx)) {
-            self.closed.clear();
-        }
+        self.editor_context_changed();
+        let next = self.spawn_host(cx);
+        self.session.host_changed(previous, next);
     }
 
     pub(crate) fn default_shell_label(&self, _cx: &gpui_kit::App) -> String {
@@ -2222,7 +2222,7 @@ fn relink_panes(cx: &mut gpui_kit::App, workspace: WorkspaceId) {
             let opened = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::terminal::RemoteTerminal::open_relink(
+                    crate::terminal::remote::handshake::PaneHandshake::open_relink(
                         &opening, pane_id, size, cell_w, cell_h, images,
                     )
                     .map_err(|e| e.to_string())
@@ -2352,7 +2352,7 @@ fn relink_dead_panes(
             .map(|(view, (pane_id, size, cell_w, cell_h), images)| {
                 let opening = route.clone();
                 let opened = cx.background_executor().spawn(async move {
-                    crate::terminal::RemoteTerminal::open_relink(
+                    crate::terminal::remote::handshake::PaneHandshake::open_relink(
                         &opening, pane_id, size, cell_w, cell_h, images,
                     )
                 });
@@ -2375,7 +2375,7 @@ fn relink_dead_panes(
                         }
                     }
                 }
-                Err(e) if crate::terminal::attach_refused(&e) => {
+                Err(e) if crate::terminal::remote::handshake::attach_refused(&e) => {
                     // Only an explicit missing-pane reply is final; graphics
                     // admission refusals retain the original pane and retry.
                     view.update(cx, |view, _| view.abandon_relink());

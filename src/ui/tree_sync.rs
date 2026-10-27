@@ -1,187 +1,34 @@
+pub(crate) mod desired;
+mod lifecycle;
+pub(crate) mod projection;
+mod reconcile;
+
+#[cfg(test)]
+mod test_layout;
+
+use desired::seeded_records;
+use lifecycle::{ProjectionResult, WindowSync};
+use projection::{desired_tabs, logical_node};
+use reconcile::WsMirror;
+
 use crate::ui::notification_history::NotificationWindowExt as _;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
 use gpui_kit::{App, Global};
 use lyrel_core::core::machine::{
-    AgentFacts, Axis as TreeAxis, LayoutDelta, Machine, PaneNode, PaneRecord, PaneSeed, Side,
-    Tab as TreeTab, TabId, TabPresentation, Workspace,
+    Axis as TreeAxis, LayoutDelta, Machine, PaneNode, PaneRecord, Side, Tab as TreeTab, TabId,
+    Workspace,
 };
 use lyrel_core::daemon::control::{ControlClient, ControlRequest, ReplyOk};
 use lyrel_core::host::HostId;
 
-use crate::core::group_key::{AutoKey, GroupId, WorkspaceGroups};
+use crate::core::group_key::WorkspaceGroups;
 use crate::core::session::{Session, SessionPane, SessionTab, WorkspaceId, WorkspaceStore};
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneSlot};
-
-fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {
-    match slot {
-        PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-        PaneSlot::Connecting(pending) => pending.read(cx).spawn.restore_pane,
-    }
-}
-
-fn logical_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<PaneNode> {
-    match pane {
-        Pane::Leaf(slot) => {
-            if remote_window
-                && matches!(slot, PaneSlot::Ready(view) if view.read(cx).ssh_spec().is_some())
-            {
-                return None;
-            }
-            slot_pane_id(slot, cx).map(|pane| PaneNode::Leaf { pane })
-        }
-        Pane::Split {
-            axis, ratio, a, b, ..
-        } => {
-            match (
-                logical_node(a, remote_window, cx),
-                logical_node(b, remote_window, cx),
-            ) {
-                (Some(a), Some(b)) => Some(PaneNode::Split {
-                    axis: match axis {
-                        gpui_kit::Axis::Horizontal => TreeAxis::Horizontal,
-                        gpui_kit::Axis::Vertical => TreeAxis::Vertical,
-                    },
-                    ratio: ratio.get(),
-                    a: Box::new(a),
-                    b: Box::new(b),
-                }),
-                (one, other) => one.or(other),
-            }
-        }
-        Pane::Empty => None,
-    }
-}
-
-fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
-    match node {
-        PaneNode::Leaf { pane } => slots.remove(pane).map(Pane::Leaf),
-        PaneNode::Split { axis, ratio, a, b } => Some(Pane::split_node(
-            match axis {
-                TreeAxis::Horizontal => gpui_kit::Axis::Horizontal,
-                TreeAxis::Vertical => gpui_kit::Axis::Vertical,
-            },
-            *ratio,
-            pane_from_existing(a, slots)?,
-            pane_from_existing(b, slots)?,
-        )),
-    }
-}
-
-/// Toggles presentation through the shared domain mutation. Every leaf, including
-/// client-local native SSH, stays in the logical tree and keeps its existing view.
-pub(crate) fn toggle_pip_for_tab(
-    tab: &mut crate::ui::app::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    change_presentation_for_tab(tab, pane, fallback, None, workspace, cx)
-}
-
-pub(crate) fn set_parked_for_tab(
-    tab: &mut crate::ui::app::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    parked: bool,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    change_presentation_for_tab(tab, pane, fallback, Some(parked), workspace, cx)
-}
-
-fn change_presentation_for_tab(
-    tab: &mut crate::ui::app::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    parked: Option<bool>,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    let leaves = tab.pane.leaves();
-    let remote = WorkspaceStore::all(cx)
-        .get(workspace)
-        .is_some_and(|w| w.is_remote());
-    if remote
-        && let Some(changed) =
-            crate::ui::pane_sidecar::change_for_tab(tab, pane, fallback, parked, cx)
-    {
-        return changed;
-    }
-    let Some(target_slot) = leaves.iter().find(|slot| slot.entity_id() == pane) else {
-        return false;
-    };
-    if remote
-        && matches!(target_slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-    {
-        return false;
-    }
-    let Some(target) = slot_pane_id(target_slot, cx) else {
-        return false;
-    };
-    let Some(root) = logical_node(&tab.pane, remote, cx) else {
-        return false;
-    };
-    // An unassigned connecting leaf must not disappear when a restore reshapes.
-    let mut slots = HashMap::with_capacity(leaves.len());
-    let mut client_local = Vec::new();
-    for slot in &leaves {
-        if remote && matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-        {
-            client_local.push(slot.clone());
-            continue;
-        }
-        let Some(id) = slot_pane_id(slot, cx) else {
-            return false;
-        };
-        if slots.insert(id, slot.clone()).is_some() {
-            return false;
-        }
-    }
-    let fallback = fallback
-        .and_then(|id| leaves.iter().find(|slot| slot.entity_id() == id))
-        .filter(|slot| {
-            !remote
-                || !matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-        })
-        .and_then(|slot| slot_pane_id(slot, cx));
-    let mut logical = TreeTab {
-        root,
-        presentation: tab.presentation.clone(),
-        id: tab.tree_id.get(),
-        name: None,
-        group: None,
-        last_auto: None,
-        hibernated: false,
-    };
-    let changed = match parked {
-        Some(true) => logical.park(target),
-        Some(false) => logical.restore_parked(target, fallback),
-        None => {
-            let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target))
-                .then_some(target);
-            logical.set_pip(promote, fallback)
-        }
-    };
-    if !changed {
-        return false;
-    }
-    if logical_node(&tab.pane, remote, cx).as_ref() != Some(&logical.root) {
-        let Some(pane) = pane_from_existing(&logical.root, &mut slots) else {
-            return false;
-        };
-        tab.pane = client_local.into_iter().fold(pane, |tree, slot| {
-            Pane::split_node(gpui_kit::Axis::Horizontal, 0.5, tree, Pane::Leaf(slot))
-        });
-    }
-    tab.presentation = logical.presentation;
-    true
-}
 
 pub(crate) fn control_for(cx: &mut App, host: HostId) -> Option<Arc<ControlClient>> {
     if host.is_local() {
@@ -257,9 +104,7 @@ pub(crate) fn remembers_closed_tab(cx: &App, client_ws: WorkspaceId, tab: TabId)
     else {
         return false;
     };
-    state.informed
-        && state.rehydrate.is_none()
-        && matches!(&state.sync, SyncPhase::Primed(mirror) if mirror.tabs.iter().any(|t| t.id == tab))
+    state.remembers_close(tab)
 }
 
 /// A tab this window closed into its machine's recently-closed list.
@@ -288,29 +133,11 @@ pub(crate) struct Retiring {
 /// it). Absence alone now only ever leaves the machine's tab where it is.
 pub(crate) fn intend_close(cx: &mut App, client_ws: WorkspaceId, tab: TabId) {
     crate::ui::pane_sidecar::intend_close(cx, client_ws, tab);
-    let closing = &mut cx
-        .default_global::<TreeSync>()
+    cx.default_global::<TreeSync>()
         .windows
         .entry(client_ws)
         .or_default()
-        .closing;
-    if !closing.contains(&tab) {
-        closing.push(tab);
-    }
-}
-
-/// The machine's tabs a sync must leave alone: every one the window is not
-/// showing that the user did not close here. `closing` is pruned on the way to
-/// the intents the mirror still has a tab for — the rest have been carried out,
-/// or were never the machine's to begin with.
-fn unaccounted(mirror: &WsMirror, desired: &[DesiredTab], closing: &mut Vec<TabId>) -> Vec<TabId> {
-    closing.retain(|id| mirror.tabs.iter().any(|t| t.id == *id));
-    mirror
-        .tabs
-        .iter()
-        .map(|t| t.id)
-        .filter(|id| !desired.iter().any(|d| d.id == *id) && !closing.contains(id))
-        .collect()
+        .intend_close(tab);
 }
 
 /// Hand a closing tab to the next sync, which tells the machine to remember it
@@ -320,8 +147,7 @@ pub(crate) fn retire_tab(cx: &mut App, client_ws: WorkspaceId, retiring: Retirin
         .windows
         .entry(client_ws)
         .or_default()
-        .retiring
-        .push(retiring);
+        .retire(retiring);
 }
 
 /// After the sync a close ran: the retirement of `tab` if that sync did not
@@ -336,8 +162,7 @@ pub(crate) fn take_unsent_retirement(
         .default_global::<TreeSync>()
         .windows
         .get_mut(&client_ws)?;
-    let at = state.retiring.iter().position(|r| r.tab == tab)?;
-    Some(state.retiring.remove(at))
+    state.withdraw_retirement(tab)
 }
 
 /// Whether everything this window has told its machine has been answered.
@@ -348,7 +173,7 @@ pub(crate) fn take_unsent_retirement(
 pub(crate) fn tree_ops_settled(cx: &App, client_ws: WorkspaceId) -> bool {
     cx.try_global::<TreeSync>()
         .and_then(|t| t.windows.get(&client_ws))
-        .is_none_or(|state| !state.inflight && state.queue.is_empty() && state.retiring.is_empty())
+        .is_none_or(WindowSync::is_settled)
 }
 
 /// The link to ask for a closed tab back on, and the machine's id for the
@@ -412,33 +237,6 @@ pub(crate) fn newest_remembered_close(cx: &App, client_ws: WorkspaceId) -> Optio
     Some(closed_session_tab(&entry.tab, &machine.panes))
 }
 
-/// Turn the sync's `TabClose` for each retiring tab into the close that asks
-/// the machine to remember it, and answer the retirements that went out.
-///
-/// Done on the diff's output rather than inside it: the diff only knows that a
-/// tab is gone from the window, which is the same whether it was closed, moved
-/// to another window or never rebuilt. Only an explicit close registers a
-/// retirement, so only that is remembered.
-fn remember_closes(ops: &mut [ControlRequest], retiring: &mut Vec<Retiring>) -> Vec<Retiring> {
-    let mut sent = Vec::new();
-    for op in ops.iter_mut() {
-        let ControlRequest::TabClose { workspace, tab } = *op else {
-            continue;
-        };
-        let Some(at) = retiring.iter().position(|r| r.tab == tab) else {
-            continue;
-        };
-        let retired = retiring.remove(at);
-        *op = ControlRequest::TabCloseRemembered {
-            workspace,
-            tab,
-            panes: retired.panes.clone(),
-        };
-        sent.push(retired);
-    }
-    sent
-}
-
 /// End, from here, the panes of every remembered close in `dropped` — ops the
 /// machine was sent and refused, or that were never sent at all. Nobody else
 /// is going to stop those panes now, and a close that leaves its shells
@@ -469,1014 +267,6 @@ fn tree_workspace_id(cx: &App, client_ws: WorkspaceId) -> WorkspaceId {
         .and_then(|w| w.host.as_ref())
         .map(|r| r.workspace)
         .unwrap_or(client_ws)
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct DesiredTab {
-    pub id: TabId,
-    pub name: Option<String>,
-    pub group: Option<GroupId>,
-    pub last_auto: Option<AutoKey>,
-    pub root: DesiredNode,
-    pub presentation: TabPresentation,
-    pub presentation_fallback: Option<u64>,
-    /// The tab is asleep, and `root` is the layout it will wake into — the
-    /// same pane ids the machine already holds, none of them running.
-    pub hibernated: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum DesiredNode {
-    Leaf {
-        pane: u64,
-        seed: PaneSeed,
-    },
-    Split {
-        axis: TreeAxis,
-        ratio: f32,
-        a: Box<DesiredNode>,
-        b: Box<DesiredNode>,
-    },
-}
-
-impl DesiredNode {
-    fn first_leaf(&self) -> (&u64, &PaneSeed) {
-        match self {
-            DesiredNode::Leaf { pane, seed } => (pane, seed),
-            DesiredNode::Split { a, .. } => a.first_leaf(),
-        }
-    }
-
-    fn to_pane_node(&self) -> PaneNode {
-        match self {
-            DesiredNode::Leaf { pane, .. } => PaneNode::Leaf { pane: *pane },
-            DesiredNode::Split { axis, ratio, a, b } => PaneNode::Split {
-                axis: *axis,
-                ratio: *ratio,
-                a: Box::new(a.to_pane_node()),
-                b: Box::new(b.to_pane_node()),
-            },
-        }
-    }
-
-    fn seed_of(&self, pane: u64) -> Option<&PaneSeed> {
-        match self {
-            DesiredNode::Leaf { pane: p, seed } => (*p == pane).then_some(seed),
-            DesiredNode::Split { a, b, .. } => a.seed_of(pane).or_else(|| b.seed_of(pane)),
-        }
-    }
-
-    fn sibling_of(&self, pane: u64) -> Option<u64> {
-        let DesiredNode::Split { a, b, .. } = self else {
-            return None;
-        };
-        match (a.as_ref(), b.as_ref()) {
-            (DesiredNode::Leaf { pane: id, .. }, _) if *id == pane => Some(*b.first_leaf().0),
-            (_, DesiredNode::Leaf { pane: id, .. }) if *id == pane => Some(*a.first_leaf().0),
-            _ => a.sibling_of(pane).or_else(|| b.sibling_of(pane)),
-        }
-    }
-}
-
-pub(crate) fn desired_tabs(
-    app: &LyrelApp,
-    cx: &App,
-) -> (Vec<DesiredTab>, Option<TabId>, Vec<TabId>) {
-    let remote = WorkspaceStore::all(cx)
-        .get(app.workspace)
-        .is_some_and(|w| w.is_remote());
-    let mut out = Vec::new();
-    let mut active = None;
-    let mut held = Vec::new();
-    for (index, tab) in app.tabs.iter().enumerate() {
-        // A sleeping tab has nothing on screen to read its layout off, so it
-        // is read off what it will wake into: the same panes, by the same ids,
-        // which is what keeps the diff below from taking it for a tab that
-        // lost them all.
-        let root = match tab.asleep_layout() {
-            Some(layout) => desired_node_from_session(layout, remote),
-            None => desired_node(&tab.pane, remote, cx),
-        };
-        let Some(root) = root else {
-            if !(remote && every_leaf_is_native_ssh(&tab.pane, cx)) {
-                held.push(tab.tree_id.get());
-            }
-            continue;
-        };
-        let id = tab.tree_id.get();
-        if index == app.active {
-            active = Some(id);
-        }
-        out.push(DesiredTab {
-            id,
-            name: tab.name.clone(),
-            // As the tab has it, even when this window does not know the
-            // group: a window whose copy of the groups has not landed yet
-            // would otherwise send every tab it holds back to auto grouping.
-            // A group that really is gone was already cleared by the machine.
-            group: tab.group.get(),
-            last_auto: tab.auto_group.borrow().clone(),
-            presentation: {
-                let mut presentation = tab.presentation.clone();
-                presentation.remap_panes(|pane| root.seed_of(pane).map(|_| pane));
-                presentation
-            },
-            presentation_fallback: tab.last_focused.and_then(|focused| {
-                tab.pane
-                    .leaves()
-                    .into_iter()
-                    .find(|slot| slot.entity_id() == focused)
-                    .and_then(|slot| slot_pane_id(&slot, cx))
-            }),
-            root,
-            hibernated: tab.asleep_layout().is_some(),
-        });
-    }
-    (out, active, held)
-}
-
-/// [`desired_node`] for a layout that is only a record — a sleeping tab's.
-/// A leaf with no id is one the machine never had, and a native SSH leaf in a
-/// remote window lives on this client rather than on the window's machine;
-/// neither is the machine's to hold, exactly as for a live tab.
-fn desired_node_from_session(layout: &SessionPane, remote_window: bool) -> Option<DesiredNode> {
-    match layout {
-        SessionPane::Leaf {
-            cwd,
-            pane_id,
-            shell,
-            ssh_spec,
-            agent,
-            agent_session_id,
-            agent_launch_argv,
-            agent_session_scope,
-        } => {
-            let pane = (*pane_id)?;
-            if remote_window && ssh_spec.is_some() {
-                return None;
-            }
-            Some(DesiredNode::Leaf {
-                pane,
-                seed: PaneSeed {
-                    pane,
-                    cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
-                    ssh_spec: ssh_spec.clone(),
-                    agent: agent.map(|agent| AgentFacts {
-                        agent,
-                        session_id: agent_session_id.clone(),
-                        launch_argv: agent_launch_argv.clone(),
-                        session_scope: agent_session_scope
-                            .as_ref()
-                            .map(lyrel_core::host::session_operations::durable_scope),
-                        status: None,
-                    }),
-                    shell: shell.clone(),
-                },
-            })
-        }
-        SessionPane::Split { axis, ratio, a, b } => {
-            let left = desired_node_from_session(a, remote_window);
-            let right = desired_node_from_session(b, remote_window);
-            match (left, right) {
-                (Some(a), Some(b)) => Some(DesiredNode::Split {
-                    axis: match axis {
-                        crate::core::session::SessionAxis::Horizontal => TreeAxis::Horizontal,
-                        crate::core::session::SessionAxis::Vertical => TreeAxis::Vertical,
-                    },
-                    ratio: *ratio,
-                    a: Box::new(a),
-                    b: Box::new(b),
-                }),
-                (one, other) => one.or(other),
-            }
-        }
-    }
-}
-
-fn every_leaf_is_native_ssh(pane: &Pane, cx: &App) -> bool {
-    match pane {
-        Pane::Leaf(PaneSlot::Ready(view)) => view.read(cx).ssh_spec().is_some(),
-        Pane::Leaf(PaneSlot::Connecting(_)) | Pane::Empty => false,
-        Pane::Split { a, b, .. } => {
-            every_leaf_is_native_ssh(a, cx) && every_leaf_is_native_ssh(b, cx)
-        }
-    }
-}
-
-pub(crate) fn seed_for_slot(slot: &PaneSlot, cx: &App) -> Option<PaneSeed> {
-    let node = desired_node(&Pane::Leaf(slot.clone()), false, cx)?;
-    Some(node.first_leaf().1.clone())
-}
-
-fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNode> {
-    match pane {
-        Pane::Leaf(PaneSlot::Ready(view)) => {
-            let view = view.read(cx);
-            let ssh_spec = view.ssh_spec();
-            if remote_window && ssh_spec.is_some() {
-                return None;
-            }
-            let agent = view.agent().map(|agent| {
-                let session = view.agent_session();
-                AgentFacts {
-                    agent,
-                    session_id: session.as_ref().and_then(|s| s.session_id.clone()),
-                    launch_argv: session.as_ref().and_then(|s| s.launch_argv.clone()),
-                    session_scope: session
-                        .as_ref()
-                        .and_then(|s| s.readout.session_scope.as_ref())
-                        .map(lyrel_core::host::session_operations::durable_scope),
-                    status: None,
-                }
-            });
-            Some(DesiredNode::Leaf {
-                pane: view.pane_id,
-                seed: PaneSeed {
-                    pane: view.pane_id,
-                    cwd: view
-                        .spawnable_cwd()
-                        .map(|p| p.to_string_lossy().into_owned()),
-                    ssh_spec,
-                    agent,
-                    // Only a pane this window spawned knows this; one it
-                    // attached to never saw the command line. The daemon fills
-                    // that gap from its own side, so leaving it empty here
-                    // withholds nothing the tree does not already get.
-                    shell: view.shell_spec(),
-                },
-            })
-        }
-        Pane::Leaf(PaneSlot::Connecting(pending)) => {
-            let spawn = &pending.read(cx).spawn;
-            let pane = spawn.restore_pane?;
-            let agent = spawn.agent.map(|agent| AgentFacts {
-                agent,
-                session_id: spawn.agent_session_id.clone(),
-                launch_argv: spawn.agent_launch_argv.clone(),
-                session_scope: spawn
-                    .agent_session_scope
-                    .as_ref()
-                    .map(lyrel_core::host::session_operations::durable_scope),
-                status: None,
-            });
-            Some(DesiredNode::Leaf {
-                pane,
-                seed: PaneSeed {
-                    pane,
-                    cwd: spawn
-                        .working_directory
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().into_owned()),
-                    ssh_spec: None,
-                    agent,
-                    shell: spawn.shell.clone(),
-                },
-            })
-        }
-        Pane::Split {
-            axis, a, b, ratio, ..
-        } => {
-            let left = desired_node(a, remote_window, cx);
-            let right = desired_node(b, remote_window, cx);
-            match (left, right) {
-                (Some(a), Some(b)) => Some(DesiredNode::Split {
-                    axis: match axis {
-                        gpui_kit::Axis::Horizontal => TreeAxis::Horizontal,
-                        gpui_kit::Axis::Vertical => TreeAxis::Vertical,
-                    },
-                    ratio: ratio.get(),
-                    a: Box::new(a),
-                    b: Box::new(b),
-                }),
-                (one, other) => one.or(other),
-            }
-        }
-        Pane::Empty => None,
-    }
-}
-
-/// The records the machine's `register_pane` will mint from the seeds a sync
-/// pushes, for the window to mirror itself — they come back to it in nothing
-/// it is sent (#612). Its own terminals stand in for the machine's liveness
-/// probe: a pane this window holds open is one that registry answers alive, and
-/// one still connecting is not yet anyone's to call — later facts settle it.
-fn seeded_records(desired: &[DesiredTab], live: impl Fn(u64) -> bool) -> Vec<PaneRecord> {
-    fn walk(node: &DesiredNode, live: &impl Fn(u64) -> bool, out: &mut Vec<PaneRecord>) {
-        match node {
-            DesiredNode::Leaf { pane, seed } => out.push(seed.clone().into_record(live(*pane))),
-            DesiredNode::Split { a, b, .. } => {
-                walk(a, live, out);
-                walk(b, live, out);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    for tab in desired {
-        walk(&tab.root, &live, &mut out);
-    }
-    out
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct WsMirror {
-    pub tabs: Vec<TreeTab>,
-    pub active: Option<TabId>,
-    pub groups: WorkspaceGroups,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum SyncScope {
-    Full,
-    Additive,
-}
-
-pub(crate) fn diff(
-    workspace: WorkspaceId,
-    mirror: &mut WsMirror,
-    desired: &[DesiredTab],
-    desired_active: Option<TabId>,
-    scope: SyncScope,
-    held: &[TabId],
-) -> Vec<ControlRequest> {
-    let mut ops = Vec::new();
-
-    if scope == SyncScope::Full {
-        migrate_panes(workspace, mirror, desired, &mut ops);
-        let mut index = 0;
-        while index < mirror.tabs.len() {
-            let id = mirror.tabs[index].id;
-            if desired.iter().any(|t| t.id == id) || held.contains(&id) {
-                index += 1;
-                continue;
-            }
-            let closed = mirror.tabs.remove(index);
-            ops.push(ControlRequest::TabClose {
-                workspace,
-                tab: closed.id,
-            });
-            heal_active(mirror, index);
-        }
-    }
-
-    // The tabs the machine already has are settled first, and only then are the
-    // new ones built. A pane that left its tab to become one of its own is in
-    // both halves of that — the machine refuses to register a pane it already
-    // holds, so the tab it left has to give it up before the tab it is
-    // becoming can ask for it.
-    for want in desired {
-        if let Some(at) = mirror.tabs.iter().position(|t| t.id == want.id) {
-            reconcile_presentation(workspace, &mut mirror.tabs[at], want, &mut ops);
-            reconcile_tab(workspace, mirror, at, want, &mut ops);
-            reconcile_presentation(workspace, &mut mirror.tabs[at], want, &mut ops);
-        }
-    }
-    for (index, want) in desired.iter().enumerate() {
-        if mirror.tabs.iter().any(|t| t.id == want.id) {
-            continue;
-        }
-        let at = match scope {
-            SyncScope::Full => index,
-            SyncScope::Additive => mirror.tabs.len(),
-        };
-        create_tab(workspace, mirror, at, want, &mut ops);
-    }
-
-    if scope == SyncScope::Additive || !held.is_empty() {
-        return ops;
-    }
-
-    for (index, want) in desired.iter().enumerate() {
-        let at = mirror
-            .tabs
-            .iter()
-            .position(|t| t.id == want.id)
-            .expect("every desired tab exists after the passes above");
-        if at != index {
-            let tab = mirror.tabs.remove(at);
-            mirror.tabs.insert(index, tab);
-            ops.push(ControlRequest::TabMove {
-                workspace,
-                tab: want.id,
-                to: index as u64,
-            });
-        }
-    }
-
-    if let Some(active) = desired_active
-        && mirror.active != Some(active)
-        && mirror.tabs.iter().any(|t| t.id == active)
-    {
-        mirror.active = Some(active);
-        ops.push(ControlRequest::WorkspaceSetActiveTab {
-            workspace,
-            tab: active,
-        });
-    }
-
-    ops
-}
-
-/// Carries panes across to the tab that now wants them, before anything else
-/// gets a chance to read their old tab as one to close.
-///
-/// This is a tab dragged into another tab's layout: every pane it brought
-/// keeps running and changes tab, and the tab it came from goes away once it
-/// has nothing left. Told as `PaneMove`, which is the one op that can say that
-/// — closing the old tab and building the new one would say instead that a
-/// tab's worth of panes went away and a tab's worth arrived.
-///
-/// One move per round, because each move changes where the next one can go:
-/// a pane may only land beside a pane its destination already holds, so a
-/// two-pane tab crosses as its first pane and then the rest beside it. A round
-/// that finds nothing left to do ends the pass, which is also what happens
-/// when a move cannot be spelled this way at all — the passes below then treat
-/// it as the reshape it is.
-fn migrate_panes(
-    workspace: WorkspaceId,
-    mirror: &mut WsMirror,
-    desired: &[DesiredTab],
-    ops: &mut Vec<ControlRequest>,
-) {
-    while let Some((pane, to, axis, first)) = next_migration(mirror, desired) {
-        let holders = |m: &WsMirror, p: u64| m.tabs.iter().position(|t| t.root.contains(p));
-        let (Some(from), Some(dest)) = (holders(mirror, pane), holders(mirror, to)) else {
-            return;
-        };
-        // The destination takes the pane before its old tab gives it up, so a
-        // split that somehow will not take leaves the mirror as it was rather
-        // than a pane short of the tree the daemon has.
-        if !mirror.tabs[dest]
-            .root
-            .split_leaf(to, pane, axis, 0.5, first)
-        {
-            return;
-        }
-        // The rest of the bookkeeping `Machine::pane_move` does at the other
-        // end: a tab that has just lost its last pane is gone, and the active
-        // tab heals onto whatever took its place.
-        if mirror.tabs[from].root.remove_leaf(pane).is_none() {
-            mirror.tabs.remove(from);
-            heal_active(mirror, from);
-        }
-        ops.push(ControlRequest::PaneMove {
-            workspace,
-            pane,
-            to,
-            axis,
-            first,
-        });
-    }
-}
-
-/// The next pane sitting in a tab that no longer wants it, and the pane in the
-/// tab that does that it can be put beside.
-fn next_migration(mirror: &WsMirror, desired: &[DesiredTab]) -> Option<(u64, u64, TreeAxis, bool)> {
-    for want in desired {
-        let Some(at) = mirror.tabs.iter().position(|t| t.id == want.id) else {
-            continue;
-        };
-        let root = want.root.to_pane_node();
-        // Panes the machine has never heard of are splits, not moves: a side
-        // holding one of those is not a side that can cross over.
-        let arriving = |node: &PaneNode| {
-            let ids = node.pane_ids();
-            !ids.is_empty()
-                && ids.iter().all(|p| {
-                    mirror
-                        .tabs
-                        .iter()
-                        .position(|t| t.root.contains(*p))
-                        .is_some_and(|holder| holder != at)
-                })
-        };
-        let settled = |node: &PaneNode| match node {
-            PaneNode::Leaf { pane } => mirror.tabs[at].root.contains(*pane).then_some(*pane),
-            _ => None,
-        };
-        if let Some(step) = arrival_site(&root, &arriving, &settled) {
-            return Some(step);
-        }
-    }
-    None
-}
-
-/// The split in the shape a tab wants where panes still living in another tab
-/// meet a pane that is already here, read as a pane to move and the pane to
-/// put it beside.
-///
-/// The side that is arriving may be a whole subtree — only its first pane
-/// crosses on this round, and the ones behind it follow on later rounds, by
-/// which time this same reading finds them the sites they want inside it. The
-/// side that is staying has to be a single pane, because that is all a move can
-/// split. Nothing else can be said in one move: a tab dropped against the outer
-/// edge of a layout that is more than one pane deep has to go in above the
-/// whole of it, and the passes after this one rebuild the tab instead.
-fn arrival_site(
-    node: &PaneNode,
-    arriving: &impl Fn(&PaneNode) -> bool,
-    settled: &impl Fn(&PaneNode) -> Option<u64>,
-) -> Option<(u64, u64, TreeAxis, bool)> {
-    let PaneNode::Split { axis, a, b, .. } = node else {
-        return None;
-    };
-    let first = |side: &PaneNode| side.pane_ids().first().copied();
-    if let (Some(to), true) = (settled(a), arriving(b)) {
-        return Some((first(b)?, to, *axis, false));
-    }
-    if let (true, Some(to)) = (arriving(a), settled(b)) {
-        return Some((first(a)?, to, *axis, true));
-    }
-    arrival_site(a, arriving, settled).or_else(|| arrival_site(b, arriving, settled))
-}
-
-fn heal_active(mirror: &mut WsMirror, removed: usize) {
-    let named = mirror
-        .active
-        .is_some_and(|active| mirror.tabs.iter().any(|t| t.id == active));
-    if named {
-        return;
-    }
-    if mirror.tabs.is_empty() {
-        mirror.active = None;
-        return;
-    }
-    mirror.active = Some(mirror.tabs[removed.min(mirror.tabs.len() - 1)].id);
-}
-
-fn create_tab(
-    workspace: WorkspaceId,
-    mirror: &mut WsMirror,
-    index: usize,
-    want: &DesiredTab,
-    ops: &mut Vec<ControlRequest>,
-) {
-    let (first, seed) = want.root.first_leaf();
-    ops.push(ControlRequest::TabCreate {
-        workspace,
-        at: Some(index as u64),
-        pane: seed.clone(),
-        tab: Some(want.id),
-    });
-    let mut root = PaneNode::Leaf { pane: *first };
-    materialize_splits(workspace, &want.root, &mut root, ops);
-    if want.name.is_some() {
-        ops.push(ControlRequest::TabRename {
-            workspace,
-            tab: want.id,
-            name: want.name.clone(),
-        });
-    }
-    if want.group.is_some() || want.last_auto.is_some() {
-        ops.push(ControlRequest::TabSetGroup {
-            workspace,
-            tab: want.id,
-            group: want.group,
-            last_auto: want.last_auto.clone(),
-        });
-    }
-    if want.hibernated {
-        ops.push(ControlRequest::TabSetHibernated {
-            workspace,
-            tab: want.id,
-            hibernated: true,
-        });
-    }
-    mirror.tabs.insert(
-        index.min(mirror.tabs.len()),
-        TreeTab {
-            id: want.id,
-            name: want.name.clone(),
-            group: want.group,
-            last_auto: want.last_auto.clone(),
-            root,
-            hibernated: want.hibernated,
-            presentation: TabPresentation::default(),
-        },
-    );
-    let at = index.min(mirror.tabs.len().saturating_sub(1));
-    reconcile_presentation(workspace, &mut mirror.tabs[at], want, ops);
-    mirror.active = Some(want.id);
-}
-
-fn reconcile_presentation(
-    workspace: WorkspaceId,
-    tab: &mut TreeTab,
-    want: &DesiredTab,
-    ops: &mut Vec<ControlRequest>,
-) {
-    // Apply recovery before reconciling the tree, then replay records after
-    // arbitrary reshaping. No parked leaf is ever interpreted as PaneClose.
-    let removed = tab
-        .presentation
-        .parked()
-        .iter()
-        .filter(|entry| !want.presentation.is_parked(entry.pane()))
-        .map(|entry| entry.pane())
-        .collect::<Vec<_>>();
-    for pane in removed {
-        if tab.restore_parked(pane, want.presentation_fallback) {
-            ops.push(ControlRequest::PaneRestore {
-                workspace,
-                pane,
-                fallback: want.presentation_fallback,
-            });
-        }
-    }
-    for restore in want.presentation.parked() {
-        if tab.park_with_restore(restore.pane(), Some(restore.clone())) {
-            ops.push(ControlRequest::PanePark {
-                workspace,
-                pane: restore.pane(),
-                restore: Some(restore.clone()),
-            });
-        }
-    }
-    let have = tab.presentation.pip().map(|pip| pip.pane());
-    let desired = want.presentation.pip().map(|pip| pip.pane());
-    if tab.presentation == want.presentation {
-        return;
-    }
-    let fallback = tab.visible_root().and_then(|root| {
-        have.and_then(|pane| want.root.sibling_of(pane))
-            .filter(|pane| root.contains(*pane) && Some(*pane) != desired)
-            .or_else(|| {
-                want.presentation_fallback
-                    .filter(|pane| root.contains(*pane) && Some(*pane) != desired)
-            })
-            .or_else(|| {
-                root.pane_ids()
-                    .into_iter()
-                    .find(|pane| Some(*pane) != desired)
-            })
-    });
-    let Some(pane) = desired.or(have) else {
-        return;
-    };
-    let restore = want.presentation.pip().cloned();
-    if tab.set_pip_with_restore(desired, fallback, restore.clone()) {
-        ops.push(ControlRequest::PaneSetPresentation {
-            workspace,
-            pane,
-            pip: desired.is_some(),
-            fallback,
-            restore,
-        });
-    }
-    if tab
-        .presentation
-        .set_pip_geometry(want.presentation.pip_geometry())
-        && desired.is_some()
-    {
-        ops.push(ControlRequest::PaneSetPipGeometry {
-            workspace,
-            pane,
-            geometry: want.presentation.pip_geometry(),
-        });
-    }
-}
-
-fn materialize_splits(
-    workspace: WorkspaceId,
-    want: &DesiredNode,
-    root: &mut PaneNode,
-    ops: &mut Vec<ControlRequest>,
-) {
-    let DesiredNode::Split { axis, ratio, a, b } = want else {
-        return;
-    };
-    let (anchor, _) = a.first_leaf();
-    let (new, seed) = b.first_leaf();
-    ops.push(ControlRequest::PaneSplit {
-        workspace,
-        pane: *anchor,
-        axis: *axis,
-        ratio: *ratio,
-        new: seed.clone(),
-        first: false,
-    });
-    root.split_leaf(*anchor, *new, *axis, *ratio, false);
-    materialize_splits(workspace, a, root, ops);
-    materialize_splits(workspace, b, root, ops);
-}
-
-fn reconcile_tab(
-    workspace: WorkspaceId,
-    mirror: &mut WsMirror,
-    at: usize,
-    want: &DesiredTab,
-    ops: &mut Vec<ControlRequest>,
-) {
-    {
-        let tab = &mut mirror.tabs[at];
-        if tab.name != want.name {
-            tab.name = want.name.clone();
-            ops.push(ControlRequest::TabRename {
-                workspace,
-                tab: want.id,
-                name: want.name.clone(),
-            });
-        }
-        // One op for both: the hint rides with the membership, so a tab
-        // whose repo changed costs one message, and the machine never holds
-        // a hint and a group that came from two different moments.
-        if tab.group != want.group || tab.last_auto != want.last_auto {
-            tab.group = want.group;
-            tab.last_auto = want.last_auto.clone();
-            ops.push(ControlRequest::TabSetGroup {
-                workspace,
-                tab: want.id,
-                group: want.group,
-                last_auto: want.last_auto.clone(),
-            });
-        }
-        // Ahead of anything structural. Going to sleep changes nothing else
-        // about the tab; waking swaps every pane for its successor, which may
-        // take a close-and-recreate below — and the mark has to come off the
-        // tab that exists now, before that one is gone.
-        if tab.hibernated != want.hibernated {
-            tab.hibernated = want.hibernated;
-            ops.push(ControlRequest::TabSetHibernated {
-                workspace,
-                tab: want.id,
-                hibernated: want.hibernated,
-            });
-        }
-    }
-
-    let desired_root = want.root.to_pane_node();
-    if mirror.tabs[at].root == desired_root {
-        return;
-    }
-    if same_shape_and_panes(&mirror.tabs[at].root, &desired_root) {
-        fix_ratios(
-            workspace,
-            want.id,
-            &mut mirror.tabs[at].root,
-            &desired_root,
-            ops,
-        );
-        return;
-    }
-
-    let have = mirror.tabs[at].root.pane_ids();
-    let wanted = desired_root.pane_ids();
-    let added: Vec<u64> = wanted
-        .iter()
-        .copied()
-        .filter(|p| !have.contains(p))
-        .collect();
-    let removed: Vec<u64> = have
-        .iter()
-        .copied()
-        .filter(|p| !wanted.contains(p))
-        .collect();
-
-    let done = match (added.as_slice(), removed.as_slice()) {
-        ([new], []) => try_single_split(workspace, mirror, at, want, &desired_root, *new, ops),
-        ([], []) => try_single_move(workspace, mirror, at, &desired_root, ops),
-        ([], gone) if !gone.is_empty() => {
-            for pane in gone {
-                mirror.tabs[at].root.remove_leaf(*pane);
-                ops.push(ControlRequest::PaneClose {
-                    workspace,
-                    pane: *pane,
-                });
-            }
-            same_shape_and_panes(&mirror.tabs[at].root, &desired_root)
-        }
-        ([new], [old]) => {
-            let elsewhere = mirror
-                .tabs
-                .iter()
-                .enumerate()
-                .any(|(i, t)| i != at && t.root.contains(*new));
-            let mut predicted = mirror.tabs[at].root.clone();
-            predicted.replace_leaf(*old, *new);
-            if !elsewhere && same_shape_and_panes(&predicted, &desired_root) {
-                let seed = want
-                    .root
-                    .seed_of(*new)
-                    .expect("the added pane is a desired leaf")
-                    .clone();
-                mirror.tabs[at].root = predicted;
-                ops.push(ControlRequest::PaneReplace {
-                    workspace,
-                    old: *old,
-                    new: seed,
-                });
-                true
-            } else {
-                false
-            }
-        }
-        _ => false,
-    };
-
-    if done {
-        fix_ratios(
-            workspace,
-            want.id,
-            &mut mirror.tabs[at].root,
-            &desired_root,
-            ops,
-        );
-        return;
-    }
-
-    let closed = mirror.tabs.remove(at);
-    ops.push(ControlRequest::TabClose {
-        workspace,
-        tab: closed.id,
-    });
-    heal_active(mirror, at);
-    create_tab(workspace, mirror, at, want, ops);
-}
-
-fn try_single_split(
-    workspace: WorkspaceId,
-    mirror: &mut WsMirror,
-    at: usize,
-    want: &DesiredTab,
-    desired_root: &PaneNode,
-    new: u64,
-    ops: &mut Vec<ControlRequest>,
-) -> bool {
-    let Some((sibling, axis, ratio, first)) = split_site(desired_root, new) else {
-        return false;
-    };
-    let mut predicted = mirror.tabs[at].root.clone();
-    if !predicted.split_leaf(sibling, new, axis, ratio, first) {
-        return false;
-    }
-    if !same_shape_and_panes(&predicted, desired_root) {
-        return false;
-    }
-    let seed = want
-        .root
-        .seed_of(new)
-        .expect("the added pane is a desired leaf")
-        .clone();
-    mirror.tabs[at].root = predicted;
-    ops.push(ControlRequest::PaneSplit {
-        workspace,
-        pane: sibling,
-        axis,
-        ratio,
-        new: seed,
-        first,
-    });
-    true
-}
-
-/// Reshapes a tab that still holds exactly the panes it did, when one pane
-/// changing places accounts for the whole difference.
-///
-/// That is what dragging a pane across the layout is, and it is worth spotting:
-/// the fallback for a reshape is to close the tab and build it again, which
-/// tells every other reader of the machine that a tab went away and came back
-/// when all that happened was a pane sliding sideways.
-///
-/// A swap of two panes that are not each other's siblings is not one move, and
-/// still takes the fallback.
-fn try_single_move(
-    workspace: WorkspaceId,
-    mirror: &mut WsMirror,
-    at: usize,
-    desired_root: &PaneNode,
-    ops: &mut Vec<ControlRequest>,
-) -> bool {
-    for pane in mirror.tabs[at].root.pane_ids() {
-        let Some((to, axis, _, first)) = split_site(desired_root, pane) else {
-            continue;
-        };
-        let mut predicted = mirror.tabs[at].root.clone();
-        if predicted.remove_leaf(pane) != Some(true) {
-            continue;
-        }
-        // The daemon re-splits at a half whatever the wanted ratio is, so the
-        // mirror has to predict that half; `fix_ratios` settles the rest.
-        if !predicted.split_leaf(to, pane, axis, 0.5, first)
-            || !same_shape_and_panes(&predicted, desired_root)
-        {
-            continue;
-        }
-        mirror.tabs[at].root = predicted;
-        ops.push(ControlRequest::PaneMove {
-            workspace,
-            pane,
-            to,
-            axis,
-            first,
-        });
-        return true;
-    }
-    false
-}
-
-fn split_site(node: &PaneNode, new: u64) -> Option<(u64, TreeAxis, f32, bool)> {
-    let PaneNode::Split { axis, ratio, a, b } = node else {
-        return None;
-    };
-    match (&**a, &**b) {
-        (PaneNode::Leaf { pane }, sibling) if *pane == new => {
-            if let PaneNode::Leaf { pane: s } = sibling {
-                return Some((*s, *axis, *ratio, true));
-            }
-            return None;
-        }
-        (sibling, PaneNode::Leaf { pane }) if *pane == new => {
-            if let PaneNode::Leaf { pane: s } = sibling {
-                return Some((*s, *axis, *ratio, false));
-            }
-            return None;
-        }
-        _ => {}
-    }
-    if a.contains(new) {
-        split_site(a, new)
-    } else if b.contains(new) {
-        split_site(b, new)
-    } else {
-        None
-    }
-}
-
-fn same_shape_and_panes(a: &PaneNode, b: &PaneNode) -> bool {
-    match (a, b) {
-        (PaneNode::Leaf { pane: pa }, PaneNode::Leaf { pane: pb }) => pa == pb,
-        (
-            PaneNode::Split {
-                axis: ax,
-                a: aa,
-                b: ab,
-                ..
-            },
-            PaneNode::Split {
-                axis: bx,
-                a: ba,
-                b: bb,
-                ..
-            },
-        ) => ax == bx && same_shape_and_panes(aa, ba) && same_shape_and_panes(ab, bb),
-        _ => false,
-    }
-}
-
-fn fix_ratios(
-    workspace: WorkspaceId,
-    tab: TabId,
-    mirror: &mut PaneNode,
-    desired: &PaneNode,
-    ops: &mut Vec<ControlRequest>,
-) {
-    fn walk(
-        workspace: WorkspaceId,
-        tab: TabId,
-        mirror: &mut PaneNode,
-        desired: &PaneNode,
-        path: &mut Vec<Side>,
-        ops: &mut Vec<ControlRequest>,
-    ) {
-        let (
-            PaneNode::Split {
-                ratio: mr,
-                a: ma,
-                b: mb,
-                ..
-            },
-            PaneNode::Split {
-                ratio: dr,
-                a: da,
-                b: db,
-                ..
-            },
-        ) = (mirror, desired)
-        else {
-            return;
-        };
-        if (*mr - *dr).abs() > 1e-4 {
-            *mr = *dr;
-            ops.push(ControlRequest::PaneSetRatio {
-                workspace,
-                tab,
-                path: path.clone(),
-                ratio: *dr,
-            });
-        }
-        path.push(Side::A);
-        walk(workspace, tab, ma, da, path, ops);
-        path.pop();
-        path.push(Side::B);
-        walk(workspace, tab, mb, db, path, ops);
-        path.pop();
-    }
-    let mut path = Vec::new();
-    walk(workspace, tab, mirror, desired, &mut path, ops);
-}
-
-enum SyncPhase {
-    Unprimed { dirty: bool, priming: bool },
-    Primed(WsMirror),
 }
 
 /// A name the user typed, and the workspace they typed it for.
@@ -1511,137 +301,26 @@ enum Arrival {
     Adopted,
 }
 
-struct WsState {
-    sync: SyncPhase,
-    queue: VecDeque<ControlRequest>,
-    inflight: bool,
-    informed: bool,
-    epoch: u64,
-    /// A hydration that failed and still owes this window its layout.
-    ///
-    /// Whatever the window is showing is not the layout it was told to put up,
-    /// so nothing may be pushed from it until the pull is retried — an emptied
-    /// window diffs into "close every tab" and would wipe the layout off the
-    /// machine, and a window full of dead tabs pushes those back up as truth.
-    rehydrate: Option<Adopt>,
-    /// The tabs the window held when the pull that is owed was ordered.
-    ///
-    /// A `Replace` retry is dropped once the user has filled the window in
-    /// themselves, and this is what "the user" means. A `Replace` is ordered
-    /// precisely *because* what the window is showing cannot be trusted — dead
-    /// panes left by a daemon that came back as a new process, a window emptied
-    /// for a handoff that was then refused — so the tabs that were already
-    /// there are the very thing it exists to replace, and can never be the
-    /// reason to abandon it. Only a tab this debt never saw says the user moved
-    /// on without us.
-    ///
-    /// Rewritten by every attempt, and only ever read while `rehydrate` is
-    /// outstanding, so it always describes the debt currently standing.
-    owed_over: Vec<TabId>,
-    /// The tabs the last rebuild was handed and could not put up — on the
-    /// machine and in the mirror, but not on screen, because no pane in them
-    /// would start (`tabs_from_session` drops such a tab, and says so).
-    ///
-    /// Held out of every diff, the way a tab still connecting is: the window
-    /// cannot speak for them, and its licence to prune must not read their
-    /// absence as the user closing them. A rebuild that put up some of its tabs
-    /// earned the licence — it did put a layout up — and used it to `TabClose`
-    /// exactly the tabs it had failed to rebuild, deleting them off the machine,
-    /// panes and all (#672). Rewritten by the next rebuild, which either puts
-    /// them up or fails them again; a tab the machine drops meanwhile drops
-    /// out here too, so nothing stays held for a tab nobody has.
-    not_rebuilt: Vec<TabId>,
-    /// How many pulls in a row this window has owed, which paces the retry.
-    ///
-    /// Counts consecutive failures, so it is cleared by anything that ends the
-    /// run: a pull that lands (`finish_hydration`), a prime that lands
-    /// (`finish_prime` — the machine answered, which is the whole question),
-    /// and a debt abandoned rather than paid (`take_rehydrate` dropping a
-    /// `Replace` the user has overtaken). A machine that hiccups once is then
-    /// asked again promptly, and one that is really gone is not asked in a
-    /// loop.
-    ///
-    /// Leaving it standing after the run ends is what makes a *first* failure
-    /// wait the cap: the count would still be carrying an outage that is over.
-    rehydrate_attempts: u32,
-    /// Tabs a launch or a LaunchServices open asked for, waiting for this
-    /// window's layout.
-    ///
-    /// Held here rather than opened straight away because a window with a tab
-    /// in it is one `Adopt::IfEmpty` will not adopt into: the pull would land,
-    /// decline the layout, and push the single tab back as the whole workspace.
-    /// Parking it also means a pull that has to be retried still gets the
-    /// folder opened, on whichever attempt finally lands.
-    ///
-    /// A list because more than one can be waiting: a launch parks the folder
-    /// it was given, and the `x-man-page:` or script Finder sent to the same
-    /// cold start parks its own tab behind it.
-    then_open: Vec<ParkedOpen>,
-    /// A name the user typed for a workspace this window is about to create.
-    ///
-    /// It has to travel with the create rather than follow it as a rename: the
-    /// workspace does not exist on the machine yet, so a rename sent now is
-    /// answered `NotFound` and dropped, and the create that runs afterwards
-    /// names it whatever `fresh_workspace_name` rolled (#618). Consumed by
-    /// `start_prime`, which spends it instead of the generated name, and
-    /// cleared by `finish_prime` once the machine has confirmed a name.
-    chosen_name: Option<ChosenName>,
-    /// An edit to the workspace's sidebar groups made before this window's
-    /// pull landed, sent on when it does — see [`push_groups`].
-    unsent_groups: Option<WorkspaceGroups>,
-    /// Tabs closed since the last sync, waiting for it to tell the machine to
-    /// remember them — see [`retire_tab`].
-    retiring: Vec<Retiring>,
-    /// Tabs the user closed in this window that the machine still holds —
-    /// the only tabs a sync may close. See [`intend_close`].
-    closing: Vec<TabId>,
-    /// Remembered closes the sync has queued and the machine has not yet
-    /// answered, kept so a close that fails can still end its panes.
-    retired: Vec<Retiring>,
-    /// Whether this window has already been told why it opened empty.
-    ///
-    /// The retry is as quiet as the failure was, so a window whose machine
-    /// never answers re-enters `hydrate` on every `sync_window` and would say
-    /// the same thing again every fifteen seconds. Saying it once is the
-    /// point; saying it on a loop is noise. Cleared once a pull lands, so a
-    /// later outage is still worth a word.
-    said_why_empty: bool,
-}
-
-impl Default for WsState {
-    fn default() -> Self {
-        WsState {
-            sync: SyncPhase::Unprimed {
-                dirty: false,
-                priming: false,
-            },
-            queue: VecDeque::new(),
-            inflight: false,
-            informed: false,
-            epoch: 0,
-            rehydrate: None,
-            owed_over: Vec::new(),
-            not_rebuilt: Vec::new(),
-            rehydrate_attempts: 0,
-            then_open: Vec::new(),
-            chosen_name: None,
-            unsent_groups: None,
-            retiring: Vec::new(),
-            retired: Vec::new(),
-            closing: Vec::new(),
-            said_why_empty: false,
-        }
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct TreeSync {
-    windows: HashMap<WorkspaceId, WsState>,
+    windows: HashMap<WorkspaceId, WindowSync>,
 }
 
 impl Global for TreeSync {}
 
+/// Publishes a saved local layout; reconnect/retry coordination is not a user edit.
 pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
+    if let Some(state) = cx
+        .default_global::<TreeSync>()
+        .windows
+        .get_mut(&app.workspace)
+    {
+        state.record_local_write();
+    }
+    coordinate_window(app, cx);
+}
+
+fn coordinate_window(app: &LyrelApp, cx: &mut App) {
     let client_ws = app.workspace;
     if !cx.has_global::<crate::core::session::WorkspaceStore>() {
         return;
@@ -1650,7 +329,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
     if crate::ui::remote_workspace::workspace_is_preempted(cx, client_ws) {
         return;
     }
-    let showing: Vec<TabId> = app.tabs.iter().map(|t| t.tree_id.get()).collect();
+    let showing: Vec<TabId> = app.tabs.iter().map(|t| t.id()).collect();
     if let Some(adopt) = take_rehydrate(cx, client_ws, &showing) {
         // The app is mid-update here, so the tabs it knows it is showing come
         // from `app` itself, not from reading the entity back.
@@ -1658,7 +337,8 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
         return;
     }
     adopt_tab_ids(app, cx);
-    let (desired, desired_active, mut held) = desired_tabs(app, cx);
+    let (desired, desired_active, held) =
+        desired_tabs(&app.tabs, app.tabs.active_index(), client_ws, cx);
     let machine_ws = tree_workspace_id(cx, client_ws);
 
     let state = cx
@@ -1666,66 +346,34 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
         .windows
         .entry(client_ws)
         .or_default();
-    match &mut state.sync {
-        SyncPhase::Unprimed { dirty, priming } => {
-            *dirty = true;
-            if !*priming {
-                *priming = true;
-                start_prime(cx, client_ws);
-            }
-        }
-        SyncPhase::Primed(mirror) => {
-            let scope = if state.informed {
-                SyncScope::Full
-            } else {
-                SyncScope::Additive
-            };
-            // The tabs the last rebuild could not put up are the machine's to
-            // keep: not on screen, so `desired` cannot speak for them, and held
-            // so their absence is not read as a close.
-            state
-                .not_rebuilt
-                .retain(|id| mirror.tabs.iter().any(|t| t.id == *id));
-            held.extend(state.not_rebuilt.iter().copied());
-            let mut missing = unaccounted(mirror, &desired, &mut state.closing);
-            missing.retain(|id| !held.contains(id));
-            if scope == SyncScope::Full && !missing.is_empty() {
-                log::warn!(
-                    "workspace {client_ws}: the window is not showing {} tab(s) the user did not \
-                     close here; leaving them on the machine",
-                    missing.len()
-                );
-            }
-            held.extend(missing);
-            let mut ops = diff(machine_ws, mirror, &desired, desired_active, scope, &held);
-            let sent = remember_closes(&mut ops, &mut state.retiring);
-            let remembered: Vec<TabId> = sent.iter().map(|r| r.tab).collect();
-            state.retired.extend(sent);
-            if !ops.is_empty() {
-                let (tabs, active) = (mirror.tabs.clone(), mirror.active);
-                state.queue.extend(ops);
-                let host = WorkspaceStore::host_of(cx, client_ws);
-                // Before the tabs are replaced, while the mirror still has the
-                // closed ones to move onto its list.
-                crate::ui::machine_mirror::MachineMirrors::note_remembered_closes(
-                    cx, host, machine_ws, remembered,
-                );
-                crate::ui::machine_mirror::MachineMirrors::note_synced_workspace(
-                    cx, host, machine_ws, tabs, active,
-                );
-                let open: Vec<u64> = app
-                    .tabs
-                    .iter()
-                    .flat_map(|t| t.pane.terminals())
-                    .map(|v| v.read(cx).pane_id)
-                    .collect();
-                crate::ui::machine_mirror::MachineMirrors::note_seeded_panes(
-                    cx,
-                    host,
-                    seeded_records(&desired, |pane| open.contains(&pane)),
-                );
-                pump(cx, client_ws);
-            }
+    match state.project(client_ws, machine_ws, &desired, desired_active, held) {
+        ProjectionResult::Prime => start_prime(cx, client_ws),
+        ProjectionResult::Waiting => {}
+        ProjectionResult::Queued {
+            tabs,
+            active,
+            remembered,
+        } => {
+            let host = WorkspaceStore::host_of(cx, client_ws);
+            // Remember closes before replacing the machine mirror's open tabs.
+            crate::ui::machine_mirror::MachineMirrors::note_remembered_closes(
+                cx, host, machine_ws, remembered,
+            );
+            crate::ui::machine_mirror::MachineMirrors::note_synced_workspace(
+                cx, host, machine_ws, tabs, active,
+            );
+            let open: Vec<u64> = app
+                .tabs
+                .iter()
+                .flat_map(|t| t.pane.terminals())
+                .map(|v| v.read(cx).pane_id)
+                .collect();
+            crate::ui::machine_mirror::MachineMirrors::note_seeded_panes(
+                cx,
+                host,
+                seeded_records(&desired, |pane| open.contains(&pane)),
+            );
+            pump(cx, client_ws);
         }
     }
 }
@@ -1739,7 +387,7 @@ pub(crate) fn on_link_up(cx: &mut App, host: HostId) {
             continue;
         }
         if let Some(app) = app.upgrade() {
-            app.update(cx, |app, cx| sync_window(app, cx));
+            app.update(cx, |app, cx| coordinate_window(app, cx));
         }
     }
 }
@@ -1762,16 +410,7 @@ fn take_rehydrate(cx: &mut App, client_ws: WorkspaceId, showing: &[TabId]) -> Op
         .default_global::<TreeSync>()
         .windows
         .get_mut(&client_ws)?;
-    let adopt = state.rehydrate.take()?;
-    let overtaken = showing.iter().any(|id| !state.owed_over.contains(id));
-    if overtaken && adopt == Adopt::Replace {
-        // Abandoned, not paid — but the run of failures is over either way, and
-        // a count left standing would make the next window's first failure wait
-        // the cap on an outage that has nothing to do with it.
-        state.rehydrate_attempts = 0;
-        return None;
-    }
-    Some(adopt)
+    state.take_rehydrate(showing)
 }
 
 /// Whether a window with no tabs may delete `client_ws` outright — from the
@@ -1794,7 +433,7 @@ pub(crate) fn workspace_is_disposable(cx: &App, client_ws: WorkspaceId) -> bool 
     else {
         return false;
     };
-    state.informed && matches!(&state.sync, SyncPhase::Primed(mirror) if mirror.tabs.is_empty())
+    state.is_disposable()
 }
 
 pub(crate) fn mark_window_informed(cx: &mut App, client_ws: WorkspaceId) {
@@ -1802,44 +441,17 @@ pub(crate) fn mark_window_informed(cx: &mut App, client_ws: WorkspaceId) {
         .windows
         .entry(client_ws)
         .or_default()
-        .informed = true;
+        .inform();
 }
 
 fn adopt_tab_ids(app: &LyrelApp, cx: &App) {
-    let Some(TreeSync { windows }) = cx.try_global::<TreeSync>() else {
-        return;
-    };
-    let Some(WsState {
-        sync: SyncPhase::Primed(mirror),
-        ..
-    }) = windows.get(&app.workspace)
+    let Some(state) = cx
+        .try_global::<TreeSync>()
+        .and_then(|t| t.windows.get(&app.workspace))
     else {
         return;
     };
-    let known: Vec<TabId> = app.tabs.iter().map(|t| t.tree_id.get()).collect();
-    for tab in &app.tabs {
-        let id = tab.tree_id.get();
-        if mirror.tabs.iter().any(|m| m.id == id) {
-            continue;
-        }
-        let panes: Vec<u64> = tab
-            .pane
-            .terminals()
-            .iter()
-            .map(|v| v.read(cx).pane_id)
-            .collect();
-        if panes.is_empty() {
-            continue;
-        }
-        let Some(matched) = mirror
-            .tabs
-            .iter()
-            .find(|m| !known.contains(&m.id) && panes.iter().any(|p| m.root.contains(*p)))
-        else {
-            continue;
-        };
-        tab.tree_id.set(matched.id);
-    }
+    state.adopt_tab_ids(&app.tabs, cx);
 }
 
 pub(crate) fn on_preempted(cx: &mut App, client_ws: WorkspaceId) {
@@ -1847,12 +459,7 @@ pub(crate) fn on_preempted(cx: &mut App, client_ws: WorkspaceId) {
     let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
         return;
     };
-    state.sync = SyncPhase::Unprimed {
-        dirty: false,
-        priming: false,
-    };
-    state.informed = false;
-    state.epoch += 1;
+    state.preempt();
 }
 
 pub(crate) fn forget(cx: &mut App, client_ws: WorkspaceId) {
@@ -1870,12 +477,8 @@ fn clear_queue(cx: &mut App, client_ws: WorkspaceId) {
     let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
         return;
     };
-    let dropped: Vec<ControlRequest> = state.queue.drain(..).collect();
-    let mut retired = std::mem::take(&mut state.retired);
+    let (dropped, mut retired) = state.discard_queue();
     end_unsent_retirements(cx, &mut retired, &dropped);
-    if let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) {
-        state.retired.extend(retired);
-    }
 }
 
 pub(crate) fn fire_workspace_op(
@@ -1946,11 +549,9 @@ pub(crate) fn name_new_workspace(cx: &mut App, client_ws: WorkspaceId, name: Str
         .windows
         .entry(client_ws)
         .or_default();
-    if matches!(state.sync, SyncPhase::Unprimed { .. }) {
-        state.chosen_name = Some(ChosenName { workspace, name });
-        return;
+    if let Err(name) = state.park_name(workspace, name) {
+        rename_workspace(cx, client_ws, Some(name));
     }
-    rename_workspace(cx, client_ws, Some(name));
 }
 
 /// Puts `client_ws` in the state a window is in once its pull has landed:
@@ -1963,12 +564,7 @@ pub(crate) fn prime_for_test(cx: &mut App, client_ws: WorkspaceId, tabs: Vec<Tre
         .windows
         .entry(client_ws)
         .or_default();
-    state.sync = SyncPhase::Primed(WsMirror {
-        tabs,
-        ..Default::default()
-    });
-    state.informed = true;
-    state.inflight = true;
+    state.prime_for_test(tabs);
 }
 
 #[cfg(test)]
@@ -1976,7 +572,7 @@ pub(crate) fn queued_for_test(cx: &mut App, client_ws: WorkspaceId) -> Vec<Contr
     cx.default_global::<TreeSync>()
         .windows
         .get(&client_ws)
-        .map(|state| state.queue.iter().cloned().collect())
+        .map(WindowSync::queued_for_test)
         .unwrap_or_default()
 }
 
@@ -1987,8 +583,7 @@ pub(crate) fn chosen_name_for(cx: &mut App, client_ws: WorkspaceId) -> Option<St
     cx.default_global::<TreeSync>()
         .windows
         .get(&client_ws)
-        .and_then(|state| state.chosen_name.as_ref())
-        .map(|chosen| chosen.name.clone())
+        .and_then(WindowSync::chosen_name_for_test)
 }
 
 pub(crate) fn rename_workspace(cx: &mut App, client_ws: WorkspaceId, name: Option<String>) {
@@ -2010,10 +605,8 @@ fn start_prime(cx: &mut App, client_ws: WorkspaceId) {
                      the layout will not be synced"
                 );
             }
-            if let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws)
-                && let SyncPhase::Unprimed { priming, .. } = &mut state.sync
-            {
-                *priming = false;
+            if let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) {
+                state.prime_unavailable();
             }
             return;
         }
@@ -2022,7 +615,7 @@ fn start_prime(cx: &mut App, client_ws: WorkspaceId) {
         .default_global::<TreeSync>()
         .windows
         .get(&client_ws)
-        .map(|s| s.epoch)
+        .map(WindowSync::epoch)
         .unwrap_or(0);
     cx.spawn(async move |cx| {
         // Picked on the main thread, where the names already in use are
@@ -2035,9 +628,7 @@ fn start_prime(cx: &mut App, client_ws: WorkspaceId) {
             cx.default_global::<TreeSync>()
                 .windows
                 .get(&client_ws)
-                .and_then(|state| state.chosen_name.as_ref())
-                .filter(|chosen| chosen.workspace == machine_ws)
-                .map(|chosen| chosen.name.clone())
+                .and_then(|state| state.chosen_name(machine_ws))
                 .unwrap_or_else(|| fresh_workspace_name(cx, host))
         });
         let outcome = cx
@@ -2114,22 +705,9 @@ fn settle_chosen_name(
     let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
         return answered;
     };
-    let owed = state
-        .chosen_name
-        .as_ref()
-        .is_some_and(|chosen| chosen.workspace == machine_ws && arrival == Arrival::Created);
-    if !owed {
-        if let Some(parked) = &state.chosen_name {
-            log::debug!(
-                "workspace {client_ws}: keeping the name {} answered, not the parked \
-                 '{}' — nothing was created here",
-                answered.as_deref().unwrap_or("<unnamed>"),
-                parked.name
-            );
-        }
+    let Some(chosen) = state.settle_name(machine_ws, arrival) else {
         return answered;
-    }
-    let chosen = state.chosen_name.take().expect("checked just above").name;
+    };
     if answered.as_deref() == Some(chosen.as_str()) {
         return answered;
     }
@@ -2187,41 +765,34 @@ fn finish_prime(
     let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
         return;
     };
-    if state.epoch != epoch || !matches!(state.sync, SyncPhase::Unprimed { priming: true, .. }) {
+    if !state.accepts_prime(epoch) {
         log::debug!("workspace {client_ws}: dropping a superseded tree pull");
         return;
     }
-    let was_dirty = matches!(state.sync, SyncPhase::Unprimed { dirty: true, .. });
-    let landed = match outcome {
-        Ok((mirror, name, arrival)) => {
-            state.informed |= mirror.tabs.is_empty();
-            // The machine answered, which is the only thing the retry was
-            // waiting to find out, so the next failure starts its backoff over.
-            state.rehydrate_attempts = 0;
-            let landed = (mirror.tabs.clone(), mirror.active, name, arrival);
-            state.sync = SyncPhase::Primed(mirror);
-            landed
-        }
+    let (mirror, name, arrival) = match outcome {
+        Ok(pulled) => pulled,
         Err(e) => {
             log::warn!("could not pull the tree for workspace {client_ws}: {e}");
-            state.sync = SyncPhase::Unprimed {
-                dirty: was_dirty,
-                priming: false,
-            };
+            state.prime_failed();
             return;
         }
     };
+    let landed = state.prime_landed(mirror);
     adopt_groups(cx, client_ws);
     let host = WorkspaceStore::host_of(cx, client_ws);
     let machine_ws = tree_workspace_id(cx, client_ws);
     crate::ui::machine_mirror::MachineMirrors::note_synced_workspace(
-        cx, host, machine_ws, landed.0, landed.1,
+        cx,
+        host,
+        machine_ws,
+        landed.tabs,
+        landed.active,
     );
     // The pull above is the only place this window will hear the workspace's
     // name — it is left out of the deltas its own create raises (#604).
-    let name = settle_chosen_name(cx, client_ws, landed.2, landed.3);
+    let name = settle_chosen_name(cx, client_ws, name, arrival);
     crate::ui::machine_mirror::MachineMirrors::note_workspace_name(cx, host, machine_ws, name);
-    if !was_dirty {
+    if !landed.dirty {
         return;
     }
     let Some(app) =
@@ -2229,7 +800,7 @@ fn finish_prime(
     else {
         return;
     };
-    app.update(cx, |app, cx| sync_window(app, cx));
+    app.update(cx, |app, cx| coordinate_window(app, cx));
 }
 
 /// Sends a window's edit to its workspace's sidebar groups up to the machine.
@@ -2260,19 +831,8 @@ pub(crate) fn push_groups(cx: &mut App, client_ws: WorkspaceId, groups: Workspac
         .windows
         .entry(client_ws)
         .or_default();
-    match &mut state.sync {
-        SyncPhase::Primed(mirror) => {
-            if mirror.groups == groups {
-                return;
-            }
-            mirror.groups = groups.clone();
-            state.queue.push_back(ControlRequest::WorkspaceSetGroups {
-                workspace: machine_ws,
-                groups,
-            });
-            pump(cx, client_ws);
-        }
-        SyncPhase::Unprimed { .. } => state.unsent_groups = Some(groups),
+    if state.push_groups(machine_ws, groups) {
+        pump(cx, client_ws);
     }
 }
 
@@ -2284,22 +844,22 @@ pub(crate) fn push_groups(cx: &mut App, client_ws: WorkspaceId, groups: Workspac
 /// over. Nothing in between can push the window's stale copy, because groups
 /// only ever go up from an edit — see [`push_groups`].
 fn adopt_groups(cx: &mut App, client_ws: WorkspaceId) {
+    let machine_ws = tree_workspace_id(cx, client_ws);
     let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
         return;
     };
-    if let Some(unsent) = state.unsent_groups.take() {
-        push_groups(cx, client_ws, unsent);
+    if !state.adopt_groups_from_pull(machine_ws) {
+        pump(cx, client_ws);
         return;
     }
     cx.defer(move |cx| {
-        let groups = match cx
+        let Some(groups) = cx
             .default_global::<TreeSync>()
             .windows
             .get(&client_ws)
-            .map(|s| &s.sync)
-        {
-            Some(SyncPhase::Primed(mirror)) => mirror.groups.clone(),
-            _ => return,
+            .and_then(WindowSync::groups)
+        else {
+            return;
         };
         if !cx.has_global::<crate::ui::windows::WindowRegistry>() {
             return;
@@ -2321,7 +881,7 @@ fn pump(cx: &mut App, client_ws: WorkspaceId) {
         .windows
         .entry(client_ws)
         .or_default();
-    if state.inflight || state.queue.is_empty() {
+    if !state.has_batch_ready() {
         return;
     }
     let client = match client {
@@ -2335,15 +895,11 @@ fn pump(cx: &mut App, client_ws: WorkspaceId) {
             return;
         }
     };
-    let batch: Vec<ControlRequest> = state.queue.drain(..).collect();
-    let remembered: Vec<TabId> = batch
-        .iter()
-        .filter_map(|op| match op {
-            ControlRequest::TabCloseRemembered { tab, .. } => Some(*tab),
-            _ => None,
-        })
-        .collect();
-    state.inflight = true;
+    let lifecycle::Batch {
+        epoch,
+        ops: batch,
+        retired,
+    } = state.begin_batch().expect("batch ready");
     cx.spawn(async move |cx| {
         let result = cx
             .background_executor()
@@ -2359,31 +915,40 @@ fn pump(cx: &mut App, client_ws: WorkspaceId) {
                 Ok(())
             })
             .await;
-        cx.update(|cx| {
-            let mut retired = Vec::new();
-            if let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) {
-                state.inflight = false;
-                retired = std::mem::take(&mut state.retired);
-            }
-            // The refused op and everything behind it never took; the rest of
-            // the batch did, and the machine has those panes now.
-            if let Err((_, _, unsent)) = &result {
-                end_unsent_retirements(cx, &mut retired, unsent);
-            }
-            retired.retain(|r| !remembered.contains(&r.tab));
-            if let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) {
-                state.retired.extend(retired);
-            }
-            match result {
-                Ok(()) => pump(cx, client_ws),
-                Err((op, e, _)) => {
-                    log::warn!("tree operation {op:?} failed: {e}; re-pulling the tree");
-                    desync(cx, client_ws, "an operation was refused");
-                }
-            }
-        });
+        cx.update(|cx| apply_batch_result(cx, client_ws, epoch, retired, result));
     })
     .detach();
+}
+
+type BatchOutcome = Result<(), (ControlRequest, io::Error, Vec<ControlRequest>)>;
+
+fn apply_batch_result(
+    cx: &mut App,
+    client_ws: WorkspaceId,
+    epoch: u64,
+    mut retired: Vec<Retiring>,
+    result: BatchOutcome,
+) {
+    // The issued batch owns its closes, including when the window or daemon
+    // generation changed while its calls were in flight.
+    if let Err((_, _, unsent)) = &result {
+        end_unsent_retirements(cx, &mut retired, unsent);
+    }
+    let current = cx
+        .default_global::<TreeSync>()
+        .windows
+        .get_mut(&client_ws)
+        .is_some_and(|state| state.finish_batch(epoch));
+    if !current {
+        return;
+    }
+    match result {
+        Ok(()) => pump(cx, client_ws),
+        Err((op, e, _)) => {
+            log::warn!("tree operation {op:?} failed: {e}; re-pulling the tree");
+            desync(cx, client_ws, "an operation was refused");
+        }
+    }
 }
 
 fn desync(cx: &mut App, client_ws: WorkspaceId, why: &str) {
@@ -2392,12 +957,7 @@ fn desync(cx: &mut App, client_ws: WorkspaceId, why: &str) {
     let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
         return;
     };
-    state.inflight = false;
-    state.sync = SyncPhase::Unprimed {
-        dirty: true,
-        priming: true,
-    };
-    state.epoch += 1;
+    state.reprime();
     start_prime(cx, client_ws);
 }
 
@@ -2513,8 +1073,7 @@ pub(crate) fn hydrate_window_then_open(
         .windows
         .entry(client_ws)
         .or_default()
-        .then_open
-        .push(ParkedOpen::Folder(path));
+        .park_open(ParkedOpen::Folder(path));
     hydrate(cx, client_ws, Adopt::IfEmpty);
 }
 
@@ -2535,25 +1094,14 @@ pub(crate) fn park_command_while_pulling(
     if !layout_is_pending(cx, client_ws) {
         return false;
     }
-    let parked = parked_for(cx, client_ws);
-    // Opening a window for this request parks its folder on the way past, in
-    // `for_workspace_at`. The command belongs in that tab, not in a second one
-    // beside it running the same shell.
-    match parked
-        .iter_mut()
-        .find(|open| matches!(open, ParkedOpen::Folder(folder) if folder == cwd))
-    {
-        Some(open) => {
-            *open = ParkedOpen::Command {
-                cwd: cwd.to_path_buf(),
-                command: command.to_owned(),
-            }
-        }
-        None => parked.push(ParkedOpen::Command {
+    cx.default_global::<TreeSync>()
+        .windows
+        .entry(client_ws)
+        .or_default()
+        .park_open(ParkedOpen::Command {
             cwd: cwd.to_path_buf(),
             command: command.to_owned(),
-        }),
-    }
+        });
     true
 }
 
@@ -2567,7 +1115,11 @@ pub(crate) fn park_ssh_while_pulling(
     if !layout_is_pending(cx, client_ws) {
         return false;
     }
-    parked_for(cx, client_ws).push(ParkedOpen::Ssh(ssh.clone()));
+    cx.default_global::<TreeSync>()
+        .windows
+        .entry(client_ws)
+        .or_default()
+        .park_open(ParkedOpen::Ssh(ssh.clone()));
     true
 }
 
@@ -2577,20 +1129,7 @@ fn layout_is_pending(cx: &mut App, client_ws: WorkspaceId) -> bool {
     cx.default_global::<TreeSync>()
         .windows
         .get(&client_ws)
-        .is_some_and(|state| {
-            matches!(state.sync, SyncPhase::Unprimed { priming: true, .. })
-                || state.rehydrate.is_some()
-                || !state.then_open.is_empty()
-        })
-}
-
-fn parked_for(cx: &mut App, client_ws: WorkspaceId) -> &mut Vec<ParkedOpen> {
-    &mut cx
-        .default_global::<TreeSync>()
-        .windows
-        .entry(client_ws)
-        .or_default()
-        .then_open
+        .is_some_and(WindowSync::is_pending)
 }
 
 /// Opens the tabs a launch parked here, now that the layout they waited for is
@@ -2600,7 +1139,7 @@ fn open_parked_path(cx: &mut App, client_ws: WorkspaceId) {
         .default_global::<TreeSync>()
         .windows
         .get_mut(&client_ws)
-        .map(|state| std::mem::take(&mut state.then_open))
+        .map(WindowSync::take_parked)
         .unwrap_or_default();
     if parked.is_empty() {
         return;
@@ -2658,7 +1197,7 @@ fn tabs_on_screen(cx: &mut App, client_ws: WorkspaceId) -> Vec<TabId> {
     }
     crate::ui::windows::WindowRegistry::app_for(cx, client_ws)
         .and_then(|app| app.upgrade())
-        .map(|app| app.read(cx).tabs.iter().map(|t| t.tree_id.get()).collect())
+        .map(|app| app.read(cx).tabs.iter().map(|t| t.id()).collect())
         .unwrap_or_default()
 }
 
@@ -2677,33 +1216,7 @@ fn hydrate_with(cx: &mut App, client_ws: WorkspaceId, adopt: Adopt, showing: Vec
             .windows
             .entry(client_ws)
             .or_default();
-        state.sync = SyncPhase::Unprimed {
-            dirty: false,
-            priming: true,
-        };
-        state.epoch += 1;
-        // This attempt takes over the debt; it re-records it if it fails too.
-        state.rehydrate = None;
-        // What the window is showing as this attempt is ordered, so a debt it
-        // has to record can tell that layout apart from one the user builds
-        // while the pull is out.
-        state.owed_over = showing;
-        if adopt == Adopt::Replace {
-            // A `Replace` is the statement that this window no longer speaks
-            // for its workspace, so the licence to prune goes with it — the
-            // same move `on_preempted` makes, for the same reason. Only a pull
-            // that lands hands it back (`settle_hydration`).
-            //
-            // Without this, a `Replace` that failed and was then abandoned left
-            // a window that had never seen the layout still authorised to diff
-            // at `SyncScope::Full`: one tab the user opened over an emptied
-            // window became `TabClose` for every tab on the machine, deleting
-            // the records of panes whose shells were still running (#579). The
-            // window is left additive instead — it writes its own tabs up and
-            // closes nothing it cannot account for.
-            state.informed = false;
-        }
-        (state.epoch, state.rehydrate_attempts)
+        state.begin_hydration(adopt, showing)
     };
     // How many times in a row this window has already failed, which is what
     // decides whether another failure is news or the same news again.
@@ -2757,9 +1270,7 @@ fn hydrate_with(cx: &mut App, client_ws: WorkspaceId, adopt: Adopt, showing: Vec
             cx.default_global::<TreeSync>()
                 .windows
                 .get(&client_ws)
-                .and_then(|state| state.chosen_name.as_ref())
-                .filter(|chosen| chosen.workspace == machine_ws)
-                .map(|chosen| chosen.name.clone())
+                .and_then(|state| state.chosen_name(machine_ws))
         });
         let outcome = cx
             .background_executor()
@@ -2777,9 +1288,13 @@ fn hydrate_with(cx: &mut App, client_ws: WorkspaceId, adopt: Adopt, showing: Vec
 /// dialect behind reads as "lyrel lost my tabs" with nothing anywhere to say
 /// otherwise. This is that "otherwise", said in the window it happened to.
 fn say_why_the_window_is_empty(cx: &mut App, client_ws: WorkspaceId) {
-    match cx.default_global::<TreeSync>().windows.get_mut(&client_ws) {
-        Some(state) if !state.said_why_empty => state.said_why_empty = true,
-        _ => return,
+    if !cx
+        .default_global::<TreeSync>()
+        .windows
+        .get_mut(&client_ws)
+        .is_some_and(WindowSync::explain_empty)
+    {
+        return;
     }
     let Some(handle) = crate::ui::windows::WindowRegistry::window_for(cx, client_ws) else {
         return;
@@ -2813,15 +1328,9 @@ fn owe_rehydration(cx: &mut App, client_ws: WorkspaceId, epoch: u64, adopt: Adop
     let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
         return false;
     };
-    if state.epoch != epoch {
+    let Some(attempts) = state.owe_rehydration(epoch, adopt) else {
         return false;
-    }
-    if let SyncPhase::Unprimed { priming, .. } = &mut state.sync {
-        *priming = false;
-    }
-    state.rehydrate = Some(adopt);
-    state.rehydrate_attempts = state.rehydrate_attempts.saturating_add(1);
-    let attempts = state.rehydrate_attempts;
+    };
     log::log!(
         // Once settled this line says the same thing every thirty seconds until
         // the window closes, which is a fact about the machine and not an event.
@@ -2840,7 +1349,7 @@ fn owe_rehydration(cx: &mut App, client_ws: WorkspaceId, epoch: u64, adopt: Adop
 fn still_owed(cx: &App, client_ws: WorkspaceId, epoch: u64) -> bool {
     cx.try_global::<TreeSync>()
         .and_then(|t| t.windows.get(&client_ws))
-        .is_some_and(|s| s.rehydrate.is_some() && s.epoch == epoch)
+        .is_some_and(|s| s.still_owed(epoch))
 }
 
 /// The attempt from which the backoff no longer grows.
@@ -2889,8 +1398,7 @@ fn arm_rehydrate_retry(cx: &mut App, client_ws: WorkspaceId, epoch: u64, attempt
             if !still_owed(cx, client_ws, epoch) {
                 return;
             }
-            // No window left to fill, so asking its machine now would be work
-            // for nobody. Closing a window drops its whole `WsState` through
+            // Closing a window drops its `WindowSync` through
             // `forget`, debt and all, so `still_owed` above normally answers
             // first; this covers the window that is on its way out and has
             // already dropped its app.
@@ -2899,7 +1407,7 @@ fn arm_rehydrate_retry(cx: &mut App, client_ws: WorkspaceId, epoch: u64, attempt
             else {
                 return;
             };
-            app.update(cx, |app, cx| sync_window(app, cx));
+            app.update(cx, |app, cx| coordinate_window(app, cx));
         });
     })
     .detach();
@@ -3038,7 +1546,7 @@ fn settle_hydration(
         .default_global::<TreeSync>()
         .windows
         .get(&client_ws)
-        .map(|s| s.epoch);
+        .map(WindowSync::epoch);
     if current != Some(epoch) {
         log::debug!("workspace {client_ws}: dropping a superseded hydration");
         return false;
@@ -3050,7 +1558,7 @@ fn settle_hydration(
                 .default_global::<TreeSync>()
                 .windows
                 .get(&client_ws)
-                .map_or(0, |s| s.rehydrate_attempts);
+                .map_or(0, WindowSync::failures);
             log::log!(
                 hydration_log_level(failures, log::Level::Warn),
                 "could not hydrate workspace {client_ws} from its machine: {e}"
@@ -3092,20 +1600,12 @@ fn settle_hydration(
     crate::ui::machine_mirror::MachineMirrors::install(cx, host, machine);
     let name = settle_chosen_name(cx, client_ws, answered, arrival);
     crate::ui::machine_mirror::MachineMirrors::note_workspace_name(cx, host, machine_ws, name);
-    let machine_was_empty = mirror.tabs.is_empty();
-    let was_dirty = {
+    let showing = tabs_on_screen(cx, client_ws);
+    let landing = {
         let Some(state) = cx.default_global::<TreeSync>().windows.get_mut(&client_ws) else {
             return false;
         };
-        let dirty = matches!(state.sync, SyncPhase::Unprimed { dirty: true, .. });
-        state.informed |= machine_was_empty;
-        state.sync = SyncPhase::Primed(mirror);
-        // The machine answered, so the next failure starts its backoff over.
-        state.rehydrate_attempts = 0;
-        // The machine answered, so the explanation has been overtaken by events
-        // and a later outage deserves its own.
-        state.said_why_empty = false;
-        dirty
+        state.hydration_landed(mirror, adopt, &showing)
     };
     adopt_groups(cx, client_ws);
     let Some(app) =
@@ -3113,7 +1613,7 @@ fn settle_hydration(
     else {
         return false;
     };
-    if adopt == Adopt::IfEmpty && !app.read(cx).tabs.is_empty() {
+    if landing.keep_window {
         // A full window over an empty tree has to write itself back, whether
         // or not an edit was waiting: the machine is missing tabs this window
         // is showing, and nothing else would ever put them there.
@@ -3126,17 +1626,17 @@ fn settle_hydration(
         // The panes it names may well be dead; the window already draws them
         // that way, and a tab the user can close beats a tab that silently
         // stops existing.
-        if was_dirty || machine_was_empty {
-            app.update(cx, |app, cx| sync_window(app, cx));
+        if landing.publish_window {
+            app.update(cx, |app, cx| coordinate_window(app, cx));
         }
         return true;
     }
     if session.tabs.is_empty() && adopt == Adopt::IfEmpty {
-        if was_dirty
+        if landing.dirty
             && let Some(app) =
                 crate::ui::windows::WindowRegistry::app_for(cx, client_ws).and_then(|a| a.upgrade())
         {
-            app.update(cx, |app, cx| sync_window(app, cx));
+            app.update(cx, |app, cx| coordinate_window(app, cx));
         }
         return true;
     }
@@ -3176,7 +1676,7 @@ fn settle_hydration(
 /// workspace that has no tabs — from the machine tree and from the store
 /// both. Granting it before the rebuild handed that permission to a window
 /// whose rebuild had not happened yet, and a rebuild can produce nothing:
-/// `tabs_from_session` drops any tab whose panes all fail to start, which is
+/// `SessionRestore::tabs` drops any tab whose panes all fail to start, which is
 /// what every tab does when the pane socket is unreachable. The window then
 /// sat there, empty and authoritative, and the next switch deleted a
 /// workspace with ten live tabs in it.
@@ -3218,33 +1718,26 @@ fn settle_rebuild(
     wanted_ids: &[TabId],
     showing: &[TabId],
 ) {
-    let not_rebuilt: Vec<TabId> = wanted_ids
-        .iter()
-        .copied()
-        .filter(|id| !showing.contains(id))
-        .collect();
-    if !not_rebuilt.is_empty() && !showing.is_empty() {
+    let failed = cx
+        .default_global::<TreeSync>()
+        .windows
+        .entry(client_ws)
+        .or_default()
+        .settle_rebuild(wanted, wanted_ids, showing);
+    if failed != 0 && !showing.is_empty() {
         log::warn!(
             "workspace {client_ws}: {} of its {wanted} tab(s) could not be rebuilt; they stay on \
              the machine, held out of this window's sync (tab order and active tab are not \
              synced while a tab is held)",
-            not_rebuilt.len()
+            failed
         );
     }
     log::info!(
         "workspace {client_ws} rebuild complete; requested={wanted} restored={} failed={}",
-        wanted.saturating_sub(not_rebuilt.len()),
-        not_rebuilt.len()
+        wanted.saturating_sub(failed),
+        failed
     );
-    let rebuilt = !showing.is_empty();
-    cx.default_global::<TreeSync>()
-        .windows
-        .entry(client_ws)
-        .or_default()
-        .not_rebuilt = not_rebuilt;
-    if rebuilt || wanted == 0 {
-        mark_window_informed(cx, client_ws);
-    } else {
+    if showing.is_empty() && wanted != 0 {
         log::warn!(
             "workspace {client_ws}: none of its {wanted} tab(s) could be rebuilt; leaving the \
              window uninformed so the layout is not mistaken for an empty workspace"
@@ -3320,14 +1813,13 @@ pub(crate) fn on_layout_delta(cx: &mut App, host: HostId, key: &str, delta: Layo
         return;
     }
 
-    let mirror_ok = match cx
+    let Some(mirror_ok) = cx
         .default_global::<TreeSync>()
         .windows
         .get_mut(&client_ws)
-        .map(|s| &mut s.sync)
-    {
-        Some(SyncPhase::Primed(mirror)) => apply_to_mirror(mirror, &delta),
-        _ => return,
+        .and_then(|state| state.apply_delta(&delta))
+    else {
+        return;
     };
 
     let Some(app) =
@@ -3354,89 +1846,7 @@ pub(crate) fn on_layout_delta(cx: &mut App, host: HostId, key: &str, delta: Layo
         resync_window_from_tree(cx, client_ws);
         return;
     }
-    app.update(cx, |app, cx| sync_window(app, cx));
-}
-
-fn apply_to_mirror(mirror: &mut WsMirror, delta: &LayoutDelta) -> bool {
-    match delta {
-        // Nothing here is about a workspace's tab list, so the mirror is
-        // already right. `WorkspaceDeleted` never reaches this far —
-        // `on_layout_delta` hands it to `on_workspace_deleted` and returns —
-        // and is listed only so a new delta cannot join this arm by accident.
-        LayoutDelta::WorkspaceCreated { .. }
-        | LayoutDelta::WorkspaceRenamed { .. }
-        | LayoutDelta::WorkspaceTouched { .. }
-        | LayoutDelta::WorkspaceDeleted
-        | LayoutDelta::PaneFacts { .. } => true,
-        LayoutDelta::ActiveTabChanged { tab } => {
-            mirror.active = Some(*tab);
-            true
-        }
-        LayoutDelta::TabCreated { at, tab } => {
-            mirror.tabs.retain(|t| t.id != tab.id);
-            let at = (*at).min(mirror.tabs.len());
-            mirror.tabs.insert(at, tab.clone());
-            true
-        }
-        LayoutDelta::TabClosed { tab, .. } => {
-            let before = mirror.tabs.len();
-            mirror.tabs.retain(|t| t.id != *tab);
-            if mirror.tabs.is_empty() {
-                mirror.active = None;
-            }
-            mirror.tabs.len() != before
-        }
-        LayoutDelta::TabRenamed { tab, name } => {
-            let Some(t) = mirror.tabs.iter_mut().find(|t| t.id == *tab) else {
-                return false;
-            };
-            t.name = name.clone();
-            true
-        }
-        LayoutDelta::TabRegrouped {
-            tab,
-            group,
-            last_auto,
-        } => {
-            let Some(t) = mirror.tabs.iter_mut().find(|t| t.id == *tab) else {
-                return false;
-            };
-            t.group = *group;
-            t.last_auto = last_auto.clone();
-            true
-        }
-        LayoutDelta::GroupsChanged { groups } => {
-            mirror.groups = groups.clone();
-            true
-        }
-        LayoutDelta::TabMoved { tab, to } => {
-            let Some(from) = mirror.tabs.iter().position(|t| t.id == *tab) else {
-                return false;
-            };
-            let moved = mirror.tabs.remove(from);
-            mirror.tabs.insert((*to).min(mirror.tabs.len()), moved);
-            true
-        }
-        LayoutDelta::TabRestructured { tab, .. } => {
-            let Some(t) = mirror.tabs.iter_mut().find(|t| t.id == tab.id) else {
-                return false;
-            };
-            *t = tab.clone();
-            true
-        }
-        LayoutDelta::RatioChanged { tab, path, ratio } => {
-            let Some(t) = mirror.tabs.iter_mut().find(|t| t.id == *tab) else {
-                return false;
-            };
-            match t.root.descend_mut(path) {
-                Some(PaneNode::Split { ratio: r, .. }) => {
-                    *r = *ratio;
-                    true
-                }
-                _ => false,
-            }
-        }
-    }
+    app.update(cx, |app, cx| coordinate_window(app, cx));
 }
 
 pub(crate) fn resync_window_from_tree(cx: &mut App, client_ws: WorkspaceId) {
@@ -3517,9 +1927,8 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) -> bool {
-        let index_of = |tabs: &[crate::ui::app::Tab], id: TabId| {
-            tabs.iter().position(|t| t.tree_id.get() == id)
-        };
+        let index_of =
+            |tabs: &[crate::ui::tab::Tab], id: TabId| tabs.iter().position(|t| t.id() == id);
         let applied = match delta {
             LayoutDelta::WorkspaceCreated { .. }
             | LayoutDelta::WorkspaceTouched { .. }
@@ -3555,7 +1964,7 @@ impl LyrelApp {
                     if *reason == lyrel_core::core::machine::TabCloseReason::Emptied
                         && crate::ui::pane_sidecar::retain_client_local(&mut self.tabs[index], cx)
                     {
-                        self.tabs[index].zoomed = None;
+                        self.tabs[index].clear_zoom();
                         self.maximized = None;
                         if removed_focus {
                             self.focus_active(window, cx);
@@ -3565,11 +1974,7 @@ impl LyrelApp {
                         cx.notify();
                         return true;
                     }
-                    let active_id = self.tabs.get(self.active).map(|t| t.tree_id.get());
                     self.tabs.remove(index);
-                    self.active = active_id
-                        .and_then(|id| index_of(&self.tabs, id))
-                        .unwrap_or_else(|| index.min(self.tabs.len().saturating_sub(1)));
                     self.maximized = None;
                     self.wake_active_if_asleep(window, cx);
                     self.focus_active(window, cx);
@@ -3578,7 +1983,7 @@ impl LyrelApp {
             }
             LayoutDelta::TabRenamed { tab, name } => {
                 if let Some(index) = index_of(&self.tabs, *tab) {
-                    self.tabs[index].name = name.clone();
+                    self.tabs[index].adopt_name(name.clone());
                 }
                 true
             }
@@ -3606,16 +2011,7 @@ impl LyrelApp {
                 true
             }
             LayoutDelta::TabMoved { tab, to } => {
-                if let Some(from) = index_of(&self.tabs, *tab) {
-                    let active_id = self.tabs.get(self.active).map(|t| t.tree_id.get());
-                    let moved = self.tabs.remove(from);
-                    self.tabs.insert((*to).min(self.tabs.len()), moved);
-                    if let Some(id) = active_id
-                        && let Some(index) = index_of(&self.tabs, id)
-                    {
-                        self.active = index;
-                    }
-                }
+                self.tabs.move_to(*tab, *to);
                 true
             }
             LayoutDelta::TabRestructured { tab, .. } => match index_of(&self.tabs, tab.id) {
@@ -3644,11 +2040,11 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) {
-        if self.active == index {
+        if self.tabs.active_index() == index {
             return;
         }
         self.maximized = None;
-        self.active = index;
+        self.tabs.select(index);
         self.wake_active_if_asleep(window, cx);
         self.focus_active(window, cx);
     }
@@ -3660,18 +2056,15 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) -> bool {
-        if self.tabs.iter().any(|t| t.tree_id.get() == tab.id) {
+        if self.tabs.iter().any(|t| t.id() == tab.id) {
             return true;
         }
         let mut existing = HashMap::new();
         let Some(pane) = self.build_pane_from_tree(&tab.root, &mut existing, window, cx) else {
             return false;
         };
-        let gui = crate::ui::app::Tab::from_tree(tab, pane);
+        let gui = crate::ui::tab::Tab::from_tree(tab, pane);
         self.tabs.insert(at, gui);
-        if self.active >= at && self.tabs.len() > 1 {
-            self.active += 1;
-        }
         true
     }
 
@@ -3691,8 +2084,8 @@ impl LyrelApp {
         let presentation = tab.presentation.clone();
         if logical_node(&self.tabs[index].pane, remote, cx).as_ref() == Some(&tab.root) {
             let gui = &mut self.tabs[index];
-            gui.presentation = presentation;
-            gui.name = tab.name.clone();
+            gui.adopt_presentation(presentation);
+            gui.adopt_name(tab.name.clone());
             gui.group.set(tab.group);
             if gui.auto_group.borrow().is_none() {
                 *gui.auto_group.borrow_mut() = tab.last_auto.clone();
@@ -3708,7 +2101,7 @@ impl LyrelApp {
                     continue;
                 }
                 PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-                PaneSlot::Connecting(pending) => pending.read(cx).spawn.restore_pane,
+                PaneSlot::Connecting(pending) => pending.read(cx).restore_pane(),
             };
             if let Some(id) = id {
                 existing.insert(id, slot);
@@ -3722,8 +2115,8 @@ impl LyrelApp {
         });
         let gui = &mut self.tabs[index];
         gui.pane = pane;
-        gui.presentation = presentation;
-        gui.name = tab.name.clone();
+        gui.adopt_presentation(presentation);
+        gui.adopt_name(tab.name.clone());
         gui.group.set(tab.group);
         if gui.auto_group.borrow().is_none() {
             *gui.auto_group.borrow_mut() = tab.last_auto.clone();
@@ -3802,189 +2195,10 @@ fn set_gui_ratio(pane: &mut Pane, path: &[Side], ratio: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
-
-    #[test]
-    fn pip_sync_keeps_every_logical_pane_and_only_changes_presentation() {
-        let workspace = WorkspaceId::new();
-        let mut logical = TreeTab::leaf(1);
-        logical
-            .root
-            .split_leaf(1, 2, TreeAxis::Horizontal, 0.4, false);
-        let id = logical.id;
-        let mut mirror = WsMirror {
-            tabs: vec![logical.clone()],
-            active: Some(id),
-            ..Default::default()
-        };
-        assert!(logical.set_pip(Some(2), Some(1)));
-        let mut desired = tab(id, split(TreeAxis::Horizontal, 0.4, leaf(1), leaf(2)));
-        desired.presentation = logical.presentation.clone();
-        desired.presentation_fallback = Some(1);
-        assert_eq!(
-            diff(
-                workspace,
-                &mut mirror,
-                &[desired.clone()],
-                Some(id),
-                SyncScope::Full,
-                &[]
-            ),
-            vec![ControlRequest::PaneSetPresentation {
-                workspace,
-                pane: 2,
-                pip: true,
-                fallback: Some(1),
-                restore: logical.presentation.pip().cloned(),
-            }],
-        );
-        assert_eq!(mirror.tabs[0].root.pane_ids(), vec![1, 2]);
-        assert_eq!(mirror.tabs[0].presentation, logical.presentation);
-        desired.presentation = TabPresentation::default();
-        assert_eq!(
-            diff(
-                workspace,
-                &mut mirror,
-                &[desired],
-                Some(id),
-                SyncScope::Full,
-                &[]
-            ),
-            vec![ControlRequest::PaneSetPresentation {
-                workspace,
-                pane: 2,
-                pip: false,
-                fallback: Some(1),
-                restore: None
-            }],
-        );
-        assert_eq!(mirror.tabs[0].root, logical.root);
-        assert!(mirror.tabs[0].presentation.pip().is_none());
-    }
-
-    #[test]
-    fn an_orphan_pip_restore_syncs_beside_the_actual_desired_fallback() {
-        let workspace = WorkspaceId::new();
-        let mut logical = TreeTab::leaf(1);
-        logical
-            .root
-            .split_leaf(1, 2, TreeAxis::Horizontal, 0.4, false);
-        assert!(logical.set_pip(Some(2), Some(1)));
-        logical.root.remove_leaf(1);
-        logical
-            .root
-            .split_leaf(2, 3, TreeAxis::Vertical, 0.6, false);
-        logical
-            .root
-            .split_leaf(3, 4, TreeAxis::Horizontal, 0.7, false);
-        let id = logical.id;
-        let mut mirror = WsMirror {
-            tabs: vec![logical],
-            active: Some(id),
-            ..Default::default()
-        };
-        let mut desired = tab(
-            id,
-            split(
-                TreeAxis::Horizontal,
-                0.7,
-                leaf(3),
-                split(TreeAxis::Horizontal, 0.4, leaf(4), leaf(2)),
-            ),
-        );
-        // The restored pane has already received local focus; that must not
-        // replace the tiled fallback the restore actually used.
-        desired.presentation_fallback = Some(2);
-        let ops = diff(
-            workspace,
-            &mut mirror,
-            &[desired.clone()],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-        assert_eq!(
-            ops,
-            vec![ControlRequest::PaneSetPresentation {
-                workspace,
-                pane: 2,
-                pip: false,
-                fallback: Some(4),
-                restore: None,
-            }]
-        );
-        assert_eq!(mirror.tabs[0].root, desired.root.to_pane_node());
-        assert!(mirror.tabs[0].presentation.pip().is_none());
-    }
-
-    fn retiring(tab: TabId, panes: Vec<u64>) -> Retiring {
-        Retiring {
-            tab,
-            panes,
-            route: crate::terminal::PaneRoute::Local,
-        }
-    }
-
-    /// Only the close the user asked for is remembered. The diff says
-    /// `TabClose` for every tab gone from the window — moved to another window,
-    /// never rebuilt — and those stay plain closes.
-    #[test]
-    fn only_a_retiring_tab_is_closed_into_the_machines_list() {
-        let workspace = WorkspaceId::new();
-        let (closed, moved) = (TabId::new(), TabId::new());
-        let mut ops = vec![
-            ControlRequest::TabClose {
-                workspace,
-                tab: moved,
-            },
-            ControlRequest::TabClose {
-                workspace,
-                tab: closed,
-            },
-        ];
-        let mut waiting = vec![retiring(closed, vec![3, 4])];
-
-        let sent = remember_closes(&mut ops, &mut waiting);
-
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::TabClose {
-                    workspace,
-                    tab: moved,
-                },
-                ControlRequest::TabCloseRemembered {
-                    workspace,
-                    tab: closed,
-                    panes: vec![3, 4],
-                },
-            ]
-        );
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].tab, closed);
-        assert!(
-            waiting.is_empty(),
-            "handed on, so nothing is left to fall back on"
-        );
-    }
-
-    /// A retirement the sync did not reach stays waiting, for the close to
-    /// take back and end the old way.
-    #[test]
-    fn a_retirement_with_no_close_in_the_sync_stays_waiting() {
-        let workspace = WorkspaceId::new();
-        let mut ops = vec![ControlRequest::TabMove {
-            workspace,
-            tab: TabId::new(),
-            to: 0,
-        }];
-        let tab = TabId::new();
-        let mut waiting = vec![retiring(tab, vec![3])];
-
-        assert!(remember_closes(&mut ops, &mut waiting).is_empty());
-        assert_eq!(waiting.len(), 1);
-        assert_eq!(waiting[0].tab, tab);
-    }
+    use crate::core::group_key::{AutoKey, GroupId};
+    use lyrel_core::core::machine::{AgentFacts, TabPresentation};
 
     /// A reopened tab comes back as the restore reads one: same shape, each
     /// leaf on its old pane id — the key its screen is restored by — with the
@@ -4083,320 +2297,6 @@ mod tests {
         );
     }
 
-    /// A name typed into the create form is for a workspace the machine has
-    /// not been told to make yet. Sending it as a rename is sending it into a
-    /// `NotFound`, which `unsendable` swallows, and the create that follows
-    /// then names the workspace whatever it rolled — the user's name lost to a
-    /// generated one every time (#618).
-    #[gpui_kit::test]
-    fn a_typed_name_waits_for_the_create_rather_than_racing_it(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            cx.default_global::<TreeSync>()
-                .windows
-                .entry(ws)
-                .or_default();
-
-            name_new_workspace(cx, ws, "deploy".into());
-
-            let parked = cx.default_global::<TreeSync>().windows[&ws]
-                .chosen_name
-                .clone()
-                .expect("the name rides along with the create instead of chasing it");
-            assert_eq!(parked.name, "deploy");
-            assert_eq!(
-                parked.workspace, ws,
-                "and it is parked against the workspace it was typed for, so a window \
-                 that walks into a different one cannot spend it (#716)"
-            );
-        });
-    }
-
-    /// `start_prime` spends the typed name on the create, so a machine that
-    /// answers with it has settled the matter.
-    #[gpui_kit::test]
-    fn the_machine_reading_back_the_typed_name_settles_it(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let (ws, view) = primed_window(cx, Some("deploy"));
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-
-            finish_prime(
-                cx,
-                ws,
-                epoch,
-                Ok((WsMirror::default(), Some("deploy".into()), Arrival::Created)),
-            );
-
-            assert!(
-                cx.default_global::<TreeSync>().windows[&ws]
-                    .chosen_name
-                    .is_none(),
-                "a name the machine has confirmed is not still owed"
-            );
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("deploy"),
-                "and it is what the window shows"
-            );
-        });
-    }
-
-    /// A create ran and came back under a different name — this window's create
-    /// lost the race to the other pull's, which had rolled a codename before
-    /// the user finished typing. The typed name is still owed and still has to
-    /// beat what the pull answered with, which is #618 and the chip #604 wired.
-    ///
-    /// Reshaped from `a_workspace_the_machine_already_had_still_takes_the_typed_name`,
-    /// which asserted this override for *every* answer, adopted workspaces
-    /// included. The override is right; the blanket was not (#716) — see the
-    /// test below for the half that was wrong.
-    #[gpui_kit::test]
-    fn a_create_that_answered_with_another_name_still_takes_the_typed_one(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        cx.update(|cx| {
-            let (ws, view) = primed_window(cx, Some("deploy"));
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-
-            finish_prime(
-                cx,
-                ws,
-                epoch,
-                Ok((
-                    WsMirror::default(),
-                    Some("keen-marten".into()),
-                    Arrival::Created,
-                )),
-            );
-
-            assert!(
-                cx.default_global::<TreeSync>().windows[&ws]
-                    .chosen_name
-                    .is_none(),
-                "said once, not on every later pull"
-            );
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("deploy"),
-                "the name the user typed outranks the one the create answered with"
-            );
-        });
-    }
-
-    /// The other half of that split, and #716's second failure. A client
-    /// opening a workspace that was already on the machine renamed it to
-    /// whatever that client had parked — a workspace holding nineteen panes
-    /// came back named after the arriving user. Nothing was created here, so
-    /// nothing is owed: the workspace keeps the name it has.
-    #[gpui_kit::test]
-    fn a_workspace_the_window_walked_into_keeps_its_own_name(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let (ws, view) = primed_window(cx, Some("sher1"));
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-
-            finish_prime(
-                cx,
-                ws,
-                epoch,
-                Ok((
-                    WsMirror::default(),
-                    Some("keen-marten".into()),
-                    Arrival::Adopted,
-                )),
-            );
-
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("keen-marten"),
-                "the machine's name stands; an arriving client does not rename it"
-            );
-        });
-    }
-
-    /// The identity check, independently of how the pull arrived. A name typed
-    /// for one workspace must not be spendable on another even when a create
-    /// did run: the pairing is what makes the name mean anything.
-    #[gpui_kit::test]
-    fn a_name_typed_for_another_workspace_is_never_spent_here(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let (ws, view) = primed_window(cx, Some("deploy"));
-            cx.default_global::<TreeSync>()
-                .windows
-                .get_mut(&ws)
-                .expect("primed just above")
-                .chosen_name = Some(ChosenName {
-                workspace: WorkspaceId::new(),
-                name: "deploy".into(),
-            });
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-
-            finish_prime(
-                cx,
-                ws,
-                epoch,
-                Ok((
-                    WsMirror::default(),
-                    Some("keen-marten".into()),
-                    Arrival::Created,
-                )),
-            );
-
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("keen-marten"),
-                "a name owed to another workspace is not this one's to take"
-            );
-        });
-    }
-
-    /// The create that actually runs when a window switches workspaces is
-    /// `pull_workspace`'s, not `start_prime`'s — `hydrate` is what
-    /// `switch_workspace` orders, and it rolled its own codename with no idea a
-    /// name had been typed. Whatever the tree comes back saying, the typed name
-    /// is what the workspace ends up called.
-    #[gpui_kit::test]
-    fn a_hydrating_pull_settles_the_typed_name_too(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            crate::ui::windows::WindowRegistry::init(cx);
-            let (ws, view) = primed_window(cx, Some("deploy"));
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-            let pulled = Machine {
-                workspaces: vec![lyrel_core::core::machine::Workspace {
-                    id: ws,
-                    name: Some("keen-marten".into()),
-                    ..Default::default()
-                }],
-                panes: Vec::new(),
-            };
-
-            settle_hydration(
-                cx,
-                ws,
-                epoch,
-                Adopt::IfEmpty,
-                Ok((
-                    pulled,
-                    WsMirror::default(),
-                    Session::default(),
-                    Arrival::Created,
-                )),
-            );
-
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("deploy"),
-                "the name the user typed, not the codename the pull rolled"
-            );
-            assert!(
-                cx.default_global::<TreeSync>().windows[&ws]
-                    .chosen_name
-                    .is_none(),
-                "and it is owed only once"
-            );
-        });
-    }
-
-    /// The same window arriving at a workspace it did not make, which is the
-    /// path #716 came in through: `switch_workspace` orders the hydration, the
-    /// pull finds the workspace already there, and the name parked on the
-    /// window used to land on it as a rename.
-    #[gpui_kit::test]
-    fn a_hydration_that_adopted_leaves_the_name_it_found(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            crate::ui::windows::WindowRegistry::init(cx);
-            let (ws, view) = primed_window(cx, Some("sher1"));
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-            let pulled = Machine {
-                workspaces: vec![lyrel_core::core::machine::Workspace {
-                    id: ws,
-                    name: Some("keen-marten".into()),
-                    ..Default::default()
-                }],
-                panes: Vec::new(),
-            };
-
-            settle_hydration(
-                cx,
-                ws,
-                epoch,
-                Adopt::IfEmpty,
-                Ok((
-                    pulled,
-                    WsMirror::default(),
-                    Session::default(),
-                    Arrival::Adopted,
-                )),
-            );
-
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("keen-marten"),
-                "walking in is not naming"
-            );
-        });
-    }
-
-    /// A window with no name owed reads whatever the machine says, which is
-    /// the whole of #604 and must survive the arbitration above.
-    #[gpui_kit::test]
-    fn a_window_owing_no_name_still_reads_the_machines(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let (ws, view) = primed_window(cx, None);
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-
-            finish_prime(
-                cx,
-                ws,
-                epoch,
-                Ok((
-                    WsMirror::default(),
-                    Some("keen-marten".into()),
-                    Arrival::Created,
-                )),
-            );
-
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("keen-marten")
-            );
-        });
-    }
-
-    /// A window mid-prime with `chosen` parked on it, and a machine this client
-    /// has pulled, so the mirror has somewhere to write the name.
-    fn primed_window(
-        cx: &mut App,
-        chosen: Option<&str>,
-    ) -> (WorkspaceId, crate::core::session::WindowView) {
-        lyrel_core::core::config::set_config_dir(
-            std::env::temp_dir().join(format!("lyrel-chosen-name-{}", std::process::id())),
-        );
-        let view = crate::core::session::WindowView::default();
-        let ws = view.id;
-        WorkspaceStore::install_for_test(
-            cx,
-            crate::core::session::WindowViews {
-                views: vec![view.clone()],
-                active: Some(ws),
-            },
-        );
-        crate::ui::machine_mirror::MachineMirrors::install(cx, HostId::LOCAL, Machine::default());
-        let state = cx
-            .default_global::<TreeSync>()
-            .windows
-            .entry(ws)
-            .or_default();
-        state.sync = SyncPhase::Unprimed {
-            dirty: false,
-            priming: true,
-        };
-        state.chosen_name = chosen.map(|name| ChosenName {
-            workspace: ws,
-            name: name.to_string(),
-        });
-        (ws, view)
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_peer_without_the_machine_tree_bit_classifies_as_unserved() {
@@ -4441,1041 +2341,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[gpui_kit::test]
-    fn a_parked_folder_outlives_the_pull_that_has_to_be_retried(cx: &mut gpui_kit::TestAppContext) {
-        // The folder an Explorer launch asked for is opened by whichever
-        // attempt finally lands, so re-entering `hydrate` — which is how every
-        // retry gets here — must not reset it along with the rest of the pull
-        // state. Losing it would mean the double-clicked folder never opens.
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let path = std::path::PathBuf::from("/tmp/from-explorer");
-            crate::core::session::WorkspaceStore::install_for_test(
-                cx,
-                crate::core::session::WindowViews::default(),
-            );
-            crate::ui::windows::WindowRegistry::init(cx);
-
-            let parked = |cx: &mut gpui_kit::App| -> Vec<std::path::PathBuf> {
-                cx.default_global::<TreeSync>().windows[&ws]
-                    .then_open
-                    .iter()
-                    .map(|open| match open {
-                        ParkedOpen::Folder(cwd) => cwd.clone(),
-                        ParkedOpen::Command { cwd, .. } => cwd.clone(),
-                        ParkedOpen::Ssh(_) => std::path::PathBuf::from("<ssh>"),
-                    })
-                    .collect()
-            };
-
-            hydrate_window_then_open(cx, ws, path.clone());
-            assert_eq!(
-                parked(cx),
-                vec![path.clone()],
-                "the request must be parked, not opened over a layout still in flight"
-            );
-
-            hydrate_with(cx, ws, Adopt::IfEmpty, Vec::new());
-            assert_eq!(
-                parked(cx),
-                vec![path.clone()],
-                "a retry must still owe the folder"
-            );
-
-            // The command for the folder this window was opened for lands in
-            // that parked tab rather than adding a second one beside it.
-            assert!(park_command_while_pulling(cx, ws, &path, "./build.sh"));
-            assert_eq!(parked(cx), vec![path.clone()]);
-            assert!(matches!(
-                &cx.default_global::<TreeSync>().windows[&ws].then_open[0],
-                ParkedOpen::Command { command, .. } if command == "./build.sh"
-            ));
-
-            // A LaunchServices open for somewhere else queues behind it rather
-            // than replacing it.
-            let script = std::path::PathBuf::from("/tmp/from-finder");
-            assert!(park_command_while_pulling(cx, ws, &script, "./deploy.sh"));
-            assert_eq!(parked(cx), vec![path.clone(), script]);
-
-            // With no window to put them in there is nothing to open, and the
-            // requests must not survive to surface in some unrelated window.
-            open_parked_path(cx, ws);
-            assert!(parked(cx).is_empty());
-
-            // A window whose layout has settled is opened into directly.
-            cx.default_global::<TreeSync>()
-                .windows
-                .get_mut(&ws)
-                .unwrap()
-                .sync = SyncPhase::Primed(WsMirror::default());
-            assert!(!park_command_while_pulling(cx, ws, &path, "./build.sh"));
-        });
-    }
-
-    #[gpui_kit::test]
-    fn preemption_drops_the_mirror_the_queue_and_the_informed_licence(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.sync = SyncPhase::Primed(WsMirror::default());
-                state.informed = true;
-                state.queue.push_back(ControlRequest::Ping);
-            }
-            on_preempted(cx, ws);
-            let state = &cx.default_global::<TreeSync>().windows[&ws];
-            assert!(matches!(
-                state.sync,
-                SyncPhase::Unprimed {
-                    dirty: false,
-                    priming: false,
-                }
-            ));
-            assert!(
-                state.queue.is_empty(),
-                "queued ops belong to the lost session"
-            );
-            assert!(
-                !state.informed,
-                "the licence to prune must not survive a takeover"
-            );
-        });
-    }
-
-    /// The destructive half of a deletion. It erases state only this client
-    /// holds — geometry, the label, a remote binding — so the fence in front of
-    /// it ("no window is showing this workspace") is the whole safety of it.
-    ///
-    /// The other half needs a live `LyrelApp` in a real window to reach, so it
-    /// is not tested here; what it does is hydrate, which the hydration tests
-    /// cover, and it touches neither the store nor the registry.
-    #[gpui_kit::test]
-    fn a_deletion_nothing_has_open_forgets_the_workspace_here_too(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        use crate::core::session::{WindowView, WindowViews};
-
-        cx.update(|cx| {
-            // Removing a workspace saves the views, and a test has no business
-            // writing the real ones.
-            let _ = lyrel_core::core::config::set_config_dir(
-                std::env::temp_dir().join(format!("lyrel-deleted-test-{}", std::process::id())),
-            );
-            crate::ui::windows::WindowRegistry::init(cx);
-
-            let deleted = WindowView::default();
-            let gone = deleted.id;
-            let untouched = WindowView::default();
-            let survivor = untouched.id;
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![deleted, untouched],
-                    active: Some(gone),
-                },
-            );
-            cx.default_global::<TreeSync>()
-                .windows
-                .entry(gone)
-                .or_default()
-                .sync = SyncPhase::Primed(WsMirror::default());
-
-            on_workspace_deleted(cx, gone);
-
-            assert!(
-                WorkspaceStore::all(cx).get(gone).is_none(),
-                "a row that opens onto nothing is worse than no row at all"
-            );
-            assert_eq!(
-                WorkspaceStore::all(cx).active,
-                None,
-                "the active workspace cannot be one that no longer exists"
-            );
-            assert!(
-                WorkspaceStore::all(cx).get(survivor).is_some(),
-                "a deletion is about one workspace, not about the store"
-            );
-            assert!(
-                !cx.default_global::<TreeSync>().windows.contains_key(&gone),
-                "its sync state has nothing left to be about"
-            );
-        });
-    }
-
-    /// The rule that stops a failed rebuild from being read as "empty".
-    ///
-    /// A window with no tabs may delete its workspace outright — tree and store
-    /// both — so the two ways of having no tabs must not look alike. Genuinely
-    /// empty is a reason; "the panes would not start" is not, and it is what
-    /// every tab looks like when the pane socket has gone away.
-    #[gpui_kit::test]
-    fn only_a_mirror_that_agrees_lets_an_empty_window_delete_its_workspace(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let set = |cx: &mut App, informed: bool, sync: SyncPhase| {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.informed = informed;
-                state.sync = sync;
-            };
-            let unprimed = || SyncPhase::Unprimed {
-                dirty: false,
-                priming: false,
-            };
-            let primed_with = |tabs: Vec<TreeTab>| {
-                SyncPhase::Primed(WsMirror {
-                    tabs,
-                    ..Default::default()
-                })
-            };
-            let a_tab = || TreeTab {
-                id: TabId::new(),
-                name: None,
-                group: None,
-                last_auto: None,
-                presentation: TabPresentation::default(),
-                root: PaneNode::Leaf { pane: 1 },
-                hibernated: false,
-            };
-
-            assert!(
-                !workspace_is_disposable(cx, WorkspaceId::new()),
-                "a workspace nothing is tracking is not a workspace to delete"
-            );
-
-            set(cx, true, unprimed());
-            assert!(
-                !workspace_is_disposable(cx, ws),
-                "an unpulled mirror knows nothing, and not knowing must never authorize this"
-            );
-
-            set(cx, true, primed_with(vec![a_tab()]));
-            assert!(
-                !workspace_is_disposable(cx, ws),
-                "this is the regression: the window came up empty because the rebuild failed, \
-                 while the machine still held the tabs. Deleting here destroyed them."
-            );
-
-            set(cx, false, primed_with(vec![]));
-            assert!(
-                !workspace_is_disposable(cx, ws),
-                "a window that never put up a layout does not get to say what belongs here"
-            );
-
-            set(cx, true, primed_with(vec![]));
-            assert!(
-                workspace_is_disposable(cx, ws),
-                "informed, and the machine agrees it holds nothing — the one case that is"
-            );
-        });
-    }
-
-    /// A sync closes only what the user closed here. Restart Server empties
-    /// the window and waits out the handoff while deltas keep arriving, each
-    /// ending in a `Full` sync of no tabs; reading the absence as a close sent
-    /// `TabClose` for all sixteen tabs of a workspace and orphaned their shells.
-    #[test]
-    fn a_sync_closes_only_the_tabs_the_user_closed() {
-        let ws = WorkspaceId::new();
-        let tab = |pane| TreeTab {
-            id: TabId::new(),
-            name: None,
-            group: None,
-            last_auto: None,
-            presentation: TabPresentation::default(),
-            root: PaneNode::Leaf { pane },
-            hibernated: false,
-        };
-        let mirror = WsMirror {
-            tabs: vec![tab(1), tab(2)],
-            ..Default::default()
-        };
-        let (a, b) = (mirror.tabs[0].id, mirror.tabs[1].id);
-        let sync = |closing: &mut Vec<TabId>| {
-            let mut mirror = mirror.clone();
-            let held = unaccounted(&mirror, &[], closing);
-            diff(ws, &mut mirror, &[], None, SyncScope::Full, &held)
-        };
-
-        assert!(
-            sync(&mut Vec::new()).is_empty(),
-            "this is the regression: an emptied window closed every tab on the machine"
-        );
-
-        let mut closing = vec![b];
-        assert_eq!(
-            sync(&mut closing),
-            vec![ControlRequest::TabClose {
-                workspace: ws,
-                tab: b
-            }],
-            "the tab the user closed goes; the one merely missing stays"
-        );
-        assert_ne!(a, b);
-
-        let mut closing = vec![TabId::new(), b];
-        let _ = sync(&mut closing);
-        assert_eq!(
-            closing,
-            vec![b],
-            "an intent the machine has no tab for is spent; one it still has stays until it lands"
-        );
-    }
-
-    /// #554: Restart Server empties the window *before* it tries the handoff,
-    /// and a refused handoff leaves the daemon exactly as it was, still serving
-    /// every pane the window just dropped.
-    ///
-    /// What makes that recoverable is the window giving up its claim to speak
-    /// for the machine the moment the failure lands. An emptied window that is
-    /// still `informed` over a `Primed` mirror is the dangerous shape: the next
-    /// sync diffs it into "close every tab", and closing the window authorizes
-    /// a `WorkspaceRemove` outright — the shells stay alive, but their records
-    /// go, and nothing tree-driven can ever reach them again.
-    ///
-    /// Tested on `resync_window_from_tree`, which is the per-window step both
-    /// [`resync_after_local_daemon_change`] and [`resync_local_windows_from_tree`]
-    /// do their work through — the pair above it only decides whether the link
-    /// is dropped first and which windows are walked, neither of which is what
-    /// keeps the emptied window quiet.
-    #[gpui_kit::test]
-    fn a_failed_daemon_change_stops_the_emptied_window_speaking_for_the_machine(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let tab = TabId::new();
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.informed = true;
-                // The mirror the emptied window would have been diffed against,
-                // already drained the way `save_session` drains it on the way
-                // out of a window that has no tabs left.
-                state.sync = SyncPhase::Primed(WsMirror::default());
-                state
-                    .queue
-                    .push_back(ControlRequest::TabClose { workspace: ws, tab });
-            }
-            assert!(
-                workspace_is_disposable(cx, ws),
-                "the shape #554 leaves behind: an emptied window that still speaks for a \
-                 machine holding live panes, and may delete the workspace off it"
-            );
-
-            resync_window_from_tree(cx, ws);
-
-            assert!(
-                !workspace_is_disposable(cx, ws),
-                "this is the regression: closing the window after a refused handoff sent \
-                 WorkspaceRemove and took the whole workspace, live panes and all"
-            );
-            let state = &cx.default_global::<TreeSync>().windows[&ws];
-            assert!(
-                matches!(state.sync, SyncPhase::Unprimed { .. }),
-                "the mirror the emptied window would diff into 'close every tab' has to be \
-                 dropped, not carried into the next sync"
-            );
-            assert!(
-                state.queue.is_empty(),
-                "operations queued from the emptied window speak for a layout that is being \
-                 pulled again; sending them would close the tabs it is pulling"
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn a_hydration_that_died_on_a_stale_link_is_owed_back(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let epoch = {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.sync = SyncPhase::Unprimed {
-                    dirty: false,
-                    priming: true,
-                };
-                state.epoch
-            };
-            owe_rehydration(cx, ws, epoch, Adopt::Replace);
-            let state = &cx.default_global::<TreeSync>().windows[&ws];
-            assert!(
-                matches!(state.sync, SyncPhase::Unprimed { priming: false, .. }),
-                "the attempt is over; another one must be able to start"
-            );
-            assert!(
-                state.rehydrate.is_some(),
-                "dropping the failure here is what left the window on the home page"
-            );
-
-            // A newer attempt has already taken over — the loser must not
-            // re-arm a retry behind its back.
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .get_mut(&ws)
-                    .unwrap();
-                state.rehydrate = None;
-                state.epoch += 1;
-            }
-            owe_rehydration(cx, ws, epoch, Adopt::Replace);
-            assert!(
-                cx.default_global::<TreeSync>().windows[&ws]
-                    .rehydrate
-                    .is_none()
-            );
-        });
-    }
-
-    /// The debt an owed pull records is worth nothing without something that
-    /// pays it. A pull can fail with the link up and healthy — a `MachineGet`
-    /// past its deadline on a slow link, a create that lost its race — and
-    /// then no reconnect ever happens to notice, and an empty window has no
-    /// edit in it to drive a sync. The window sat there empty, with every tab
-    /// still on the machine, until the app was restarted.
-    #[gpui_kit::test]
-    fn an_owed_pull_is_retried_until_it_is_paid_or_superseded(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let epoch = cx
-                .default_global::<TreeSync>()
-                .windows
-                .entry(ws)
-                .or_default()
-                .epoch;
-            owe_rehydration(cx, ws, epoch, Adopt::IfEmpty);
-            assert!(
-                still_owed(cx, ws, epoch),
-                "the retry armed for this debt must still recognise it"
-            );
-
-            // Paid: the pull landed, so the retry that is still in flight has
-            // to stand down rather than replay the machine over the window.
-            cx.default_global::<TreeSync>()
-                .windows
-                .get_mut(&ws)
-                .expect("owed above")
-                .rehydrate = None;
-            assert!(!still_owed(cx, ws, epoch));
-
-            // Superseded: a newer hydration owns the window now.
-            let state = cx
-                .default_global::<TreeSync>()
-                .windows
-                .get_mut(&ws)
-                .expect("owed above");
-            state.rehydrate = Some(Adopt::IfEmpty);
-            state.epoch += 1;
-            assert!(!still_owed(cx, ws, epoch));
-            assert!(still_owed(cx, ws, epoch + 1));
-        });
-    }
-
-    #[test]
-    fn the_retry_backs_off_and_settles_at_a_cap() {
-        let secs = |n| rehydrate_backoff(n).as_secs();
-        assert_eq!(secs(1), 2, "the first retry is prompt: a window is empty");
-        assert!(
-            secs(1) < secs(2) && secs(2) < secs(3),
-            "a machine that keeps refusing must be asked less often, not more"
-        );
-        assert_eq!(secs(REHYDRATE_SETTLED), 30);
-        assert_eq!(
-            secs(50),
-            30,
-            "a window left open on an unreachable machine settles at the cap"
-        );
-    }
-
-    /// Once the backoff stops growing the same failure repeats every thirty
-    /// seconds for as long as the window stays open. Reporting each one at full
-    /// volume turns one unreachable machine into a log nobody can read past.
-    #[test]
-    fn a_standing_failure_stops_shouting_once_the_backoff_settles() {
-        assert_eq!(
-            hydration_log_level(1, log::Level::Warn),
-            log::Level::Warn,
-            "the first failures are news and must stay news"
-        );
-        assert_eq!(
-            hydration_log_level(REHYDRATE_SETTLED, log::Level::Warn),
-            log::Level::Debug
-        );
-        assert_eq!(
-            hydration_log_level(REHYDRATE_SETTLED, log::Level::Info),
-            log::Level::Debug,
-            "the step down is to debug from wherever it started, not to warn"
-        );
-    }
-
-    /// #604: the answer to the create this window asked for is the only place
-    /// it will ever hear the workspace's name — a client is left out of the
-    /// deltas its own ops raise — so priming has to hand that name to the
-    /// mirror. Dropping it left the window showing an unnamed workspace, and
-    /// the name it had had all along arrived with the next full pull looking
-    /// like a rename.
-    #[gpui_kit::test]
-    fn priming_teaches_the_mirror_the_name_the_machine_gave_the_workspace(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        cx.update(|cx| {
-            lyrel_core::core::config::set_config_dir(
-                std::env::temp_dir().join(format!("lyrel-prime-name-{}", std::process::id())),
-            );
-            let view = crate::core::session::WindowView::default();
-            let ws = view.id;
-            WorkspaceStore::install_for_test(
-                cx,
-                crate::core::session::WindowViews {
-                    views: vec![view.clone()],
-                    active: Some(ws),
-                },
-            );
-            // A machine this client has pulled, from before the workspace it is
-            // about to create existed on it.
-            crate::ui::machine_mirror::MachineMirrors::install(
-                cx,
-                HostId::LOCAL,
-                Machine::default(),
-            );
-            cx.default_global::<TreeSync>()
-                .windows
-                .entry(ws)
-                .or_default()
-                .sync = SyncPhase::Unprimed {
-                dirty: false,
-                priming: true,
-            };
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-
-            finish_prime(
-                cx,
-                ws,
-                epoch,
-                Ok((
-                    WsMirror::default(),
-                    Some("keen-marten".to_string()),
-                    Arrival::Created,
-                )),
-            );
-
-            assert_eq!(
-                crate::ui::machine_mirror::display_name(cx, &view).as_deref(),
-                Some("keen-marten"),
-                "the window knows what its workspace is called as soon as it exists"
-            );
-        });
-    }
-
-    /// The count paces the retry, so it has to mean "failures in a row". Left
-    /// standing after the run ends, it makes the next *first* failure wait the
-    /// cap on an outage that was already over.
-    #[gpui_kit::test]
-    fn the_backoff_count_ends_with_the_run_of_failures(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let _ = lyrel_core::core::config::set_config_dir(
-                std::env::temp_dir().join(format!("lyrel-backoff-count-{}", std::process::id())),
-            );
-            let view = crate::core::session::WindowView::default();
-            let ws = view.id;
-            WorkspaceStore::install_for_test(
-                cx,
-                crate::core::session::WindowViews {
-                    views: vec![view],
-                    active: Some(ws),
-                },
-            );
-            let unprimed = |cx: &mut App| {
-                cx.default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default()
-                    .sync = SyncPhase::Unprimed {
-                    dirty: false,
-                    priming: true,
-                };
-            };
-            let attempts =
-                |cx: &mut App| cx.default_global::<TreeSync>().windows[&ws].rehydrate_attempts;
-
-            unprimed(cx);
-            let epoch = cx.default_global::<TreeSync>().windows[&ws].epoch;
-            for expected in 1..=3 {
-                unprimed(cx);
-                owe_rehydration(cx, ws, epoch, Adopt::IfEmpty);
-                assert_eq!(
-                    attempts(cx),
-                    expected,
-                    "each failure in the run paces the next"
-                );
-            }
-
-            // The machine answered. Whatever it was, it is over.
-            unprimed(cx);
-            finish_prime(
-                cx,
-                ws,
-                epoch,
-                Ok((WsMirror::default(), None, Arrival::Created)),
-            );
-            assert_eq!(
-                attempts(cx),
-                0,
-                "a prime landing is the machine answering, which is the whole question"
-            );
-
-            // Abandoned rather than paid: the user filled the window in
-            // themselves, so the `Replace` is dropped — and the run is over too.
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .get_mut(&ws)
-                    .unwrap();
-                state.rehydrate = Some(Adopt::Replace);
-                state.owed_over = Vec::new();
-                state.rehydrate_attempts = 4;
-            }
-            assert!(take_rehydrate(cx, ws, &[TabId::new()]).is_none());
-            assert_eq!(
-                attempts(cx),
-                0,
-                "a debt nobody owes any more cannot go on pacing the next one"
-            );
-        });
-    }
-
-    /// The retry fires on a timer, so the window it was armed for can be gone
-    /// by the time it runs. It has to notice and stand down — and leave the
-    /// debt where it is, because a window that is not there is not one that
-    /// has been paid.
-    #[gpui_kit::test]
-    async fn a_retry_that_finds_no_window_stands_down(cx: &mut gpui_kit::TestAppContext) {
-        let ws = cx.update(|cx| {
-            crate::ui::windows::WindowRegistry::init(cx);
-            let ws = WorkspaceId::new();
-            let epoch = cx
-                .default_global::<TreeSync>()
-                .windows
-                .entry(ws)
-                .or_default()
-                .epoch;
-            owe_rehydration(cx, ws, epoch, Adopt::IfEmpty);
-            ws
-        });
-
-        // Well past the first backoff: the armed retry really runs, rather than
-        // the test ending while it is still asleep.
-        cx.executor().advance_clock(rehydrate_backoff(1) * 2);
-        cx.executor().run_until_parked();
-
-        cx.update(|cx| {
-            assert!(
-                cx.default_global::<TreeSync>().windows[&ws]
-                    .rehydrate
-                    .is_some(),
-                "the debt outlives a retry that found nothing to pay it into"
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn a_window_that_filled_up_while_owed_keeps_what_it_has(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let stale = [TabId::new(), TabId::new()];
-            let arm = |cx: &mut App, adopt, over: &[TabId]| {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.rehydrate = Some(adopt);
-                state.owed_over = over.to_vec();
-            };
-
-            arm(cx, Adopt::Replace, &[]);
-            assert!(
-                take_rehydrate(cx, ws, &[]).is_some(),
-                "an empty window is exactly the one that still needs its layout"
-            );
-            assert!(
-                take_rehydrate(cx, ws, &[]).is_none(),
-                "the debt is claimed once"
-            );
-
-            // #579: the tabs a `Replace` was ordered over are the ones it exists
-            // to replace. Reading them as "the user moved on" abandoned the
-            // retry on its first attempt for every resync of a window that kept
-            // its tabs — a daemon back as a new process, a remote server
-            // restarted — and the resync silently did nothing at all.
-            arm(cx, Adopt::Replace, &stale);
-            assert!(
-                take_rehydrate(cx, ws, &stale).is_some(),
-                "the dead tabs the resync was ordered over cannot be the reason to drop it"
-            );
-
-            arm(cx, Adopt::Replace, &stale);
-            assert!(
-                take_rehydrate(cx, ws, &stale[..1]).is_some(),
-                "closing some of them is not filling the window in either"
-            );
-
-            arm(cx, Adopt::Replace, &stale);
-            assert!(
-                take_rehydrate(cx, ws, &[stale[0], TabId::new()]).is_none(),
-                "replaying an older layout over the user's new tabs is worse than not retrying"
-            );
-            assert!(
-                cx.default_global::<TreeSync>().windows[&ws]
-                    .rehydrate
-                    .is_none(),
-                "and the dropped retry must not linger"
-            );
-
-            arm(cx, Adopt::IfEmpty, &[]);
-            assert!(
-                take_rehydrate(cx, ws, &[TabId::new()]).is_some(),
-                "IfEmpty polices that itself, and still owes the mirror a pull"
-            );
-        });
-    }
-
-    /// #579: the other half of an abandoned `Replace`. Dropping the retry is a
-    /// decision about what to *put up*; it says nothing about the window having
-    /// learned what belongs in the workspace, and it never did learn — the pull
-    /// it was told to make failed.
-    ///
-    /// Left `informed`, that window went on to diff at `SyncScope::Full`
-    /// against a mirror `start_prime` had just refilled from the machine, so
-    /// the one tab the user opened over an emptied window emitted `TabClose`
-    /// for every other tab on it. Those panes' records went with them while
-    /// their shells kept running, and nothing tree-driven could reach them
-    /// again — the same damage as #554, through a door #554 did not close.
-    #[gpui_kit::test]
-    fn a_resync_takes_back_the_licence_to_prune_until_a_pull_lands(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.informed = true;
-            }
-
-            resync_window_from_tree(cx, ws);
-            assert!(
-                !cx.default_global::<TreeSync>().windows[&ws].informed,
-                "a window told its contents are not the workspace cannot still speak for it"
-            );
-
-            // The shape the damage needs: the mirror back from the machine,
-            // full of the tabs the window never adopted. Without the licence
-            // the sync is additive, which
-            // `an_additive_diff_never_closes_tabs_the_window_has_not_seen`
-            // pins as closing nothing.
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .get_mut(&ws)
-                    .unwrap();
-                state.rehydrate = None;
-                state.sync = SyncPhase::Primed(WsMirror {
-                    tabs: vec![TreeTab::leaf(1), TreeTab::leaf(2)],
-                    ..Default::default()
-                });
-            }
-            assert!(
-                !workspace_is_disposable(cx, ws),
-                "and it cannot delete the workspace out from under those panes either"
-            );
-
-            // A pull that lands is the only thing that hands the licence back.
-            mark_window_informed(cx, ws);
-            assert!(cx.default_global::<TreeSync>().windows[&ws].informed);
-        });
-    }
-
-    /// An `IfEmpty` hydration says the opposite of a `Replace`: keep whatever
-    /// the window has. A window that opened onto a workspace deleted under it
-    /// is put back by writing its own tabs up, and needs the licence to do it.
-    #[gpui_kit::test]
-    fn an_if_empty_pull_leaves_the_licence_where_it_found_it(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            cx.default_global::<TreeSync>()
-                .windows
-                .entry(ws)
-                .or_default()
-                .informed = true;
-            hydrate_window_from_tree(cx, ws);
-            assert!(cx.default_global::<TreeSync>().windows[&ws].informed);
-        });
-    }
-
-    /// #672's residual: a rebuild that put up some of the tabs the tree asked
-    /// for and dropped the rest (`tabs_from_session` drops a tab none of whose
-    /// panes would start). It earns the licence — it did put a layout up — and
-    /// the tabs it dropped are not tabs the user closed, so they must be held
-    /// out of the diff rather than the licence withheld from the whole window.
-    #[gpui_kit::test]
-    fn a_partial_rebuild_holds_the_tabs_it_could_not_put_up(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let (put_up, failed) = (TabId::new(), TabId::new());
-            let settled = |cx: &mut App| {
-                let state = &cx.default_global::<TreeSync>().windows[&ws];
-                (state.informed, state.not_rebuilt.clone())
-            };
-
-            settle_rebuild(cx, ws, 2, &[put_up, failed], &[put_up]);
-            assert_eq!(
-                settled(cx),
-                (true, vec![failed]),
-                "the window speaks for the tab it put up, and holds the one it could not"
-            );
-
-            settle_rebuild(cx, ws, 2, &[put_up, failed], &[put_up, failed]);
-            assert_eq!(
-                settled(cx),
-                (true, vec![]),
-                "a later rebuild that puts them all up holds nothing back"
-            );
-
-            cx.default_global::<TreeSync>()
-                .windows
-                .get_mut(&ws)
-                .unwrap()
-                .informed = false;
-            settle_rebuild(cx, ws, 2, &[put_up, failed], &[]);
-            assert_eq!(
-                settled(cx),
-                (false, vec![put_up, failed]),
-                "a rebuild that produced nothing still does not get to speak for the workspace"
-            );
-
-            settle_rebuild(cx, ws, 0, &[], &[]);
-            assert_eq!(
-                settled(cx),
-                (true, vec![]),
-                "an empty tree rebuilt into an empty window is the one case that is genuinely empty"
-            );
-
-            // A session with tabs but no ids — what a disk-loaded session
-            // looks like, since `tree_id` is not serialized — that rebuilt
-            // nothing. "No ids" must not read as "no tabs wanted".
-            cx.default_global::<TreeSync>()
-                .windows
-                .get_mut(&ws)
-                .unwrap()
-                .informed = false;
-            settle_rebuild(cx, ws, 2, &[], &[]);
-            assert_eq!(
-                settled(cx),
-                (false, vec![]),
-                "the guard counts the tabs asked for, not the ids found"
-            );
-        });
-    }
-
-    /// The consequence, on the sync that follows: the mirror holds both tabs,
-    /// the window shows one, and the one it could not put up must not come out
-    /// of a `Full` diff as `TabClose` — that op deleted from the machine exactly
-    /// the tabs a restart had failed to bring back, panes and all (#672).
-    #[gpui_kit::test]
-    fn the_next_sync_leaves_a_tab_the_rebuild_could_not_put_up_on_the_machine(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        let (app, mut vcx, _pane_stream) = crate::ui::app::test_window::harness_with_pane(cx);
-        let (put_up, failed) = (TabId::new(), TabId::new());
-        app.update_in(&mut vcx, |app, _, cx| {
-            let view = crate::core::session::WindowView::default();
-            let ws = view.id;
-            WorkspaceStore::install_for_test(
-                cx,
-                crate::core::session::WindowViews {
-                    views: vec![view],
-                    active: Some(ws),
-                },
-            );
-            app.workspace = ws;
-            app.tabs[0].tree_id.set(put_up);
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.sync = SyncPhase::Primed(WsMirror {
-                    tabs: vec![
-                        TreeTab {
-                            id: put_up,
-                            name: None,
-                            group: None,
-                            last_auto: None,
-                            presentation: TabPresentation::default(),
-                            root: PaneNode::Leaf { pane: 1 },
-                            hibernated: false,
-                        },
-                        TreeTab {
-                            id: failed,
-                            name: None,
-                            group: None,
-                            last_auto: None,
-                            presentation: TabPresentation::default(),
-                            root: PaneNode::Leaf { pane: 2 },
-                            hibernated: false,
-                        },
-                    ],
-                    active: Some(put_up),
-                    ..Default::default()
-                });
-                // Keeps whatever the sync queues where the test can read it:
-                // with no link, `pump` would otherwise clear the queue and drop
-                // the mirror on its way to a re-pull.
-                state.inflight = true;
-            }
-            settle_rebuild(cx, ws, 2, &[put_up, failed], &[put_up]);
-            assert!(
-                cx.default_global::<TreeSync>().windows[&ws].informed,
-                "the shape the damage needs: a window licensed to prune, over a mirror \
-                 holding a tab it is not showing"
-            );
-
-            sync_window(app, cx);
-
-            let state = &cx.default_global::<TreeSync>().windows[&ws];
-            assert!(
-                !state
-                    .queue
-                    .iter()
-                    .any(|op| matches!(op, ControlRequest::TabClose { .. })),
-                "the tab that failed to come back is not one the user closed: {:?}",
-                state.queue
-            );
-            match &state.sync {
-                SyncPhase::Primed(mirror) => assert_eq!(
-                    mirror.tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
-                    vec![put_up, failed],
-                    "and it stays on the machine for the next rebuild to put up"
-                ),
-                SyncPhase::Unprimed { .. } => {
-                    panic!("the sync must not have thrown the mirror away")
-                }
-            }
-        });
-    }
-
-    /// #716: switching into a workspace put its empty session up and saved
-    /// it — a window showing nothing, syncing at Full scope against the
-    /// mirror and licence the last visit left behind, which closes every tab
-    /// on the machine before the pull that would have populated the window
-    /// has even been ordered. Arriving must speak for nothing.
-    ///
-    /// The licence is what the assertion holds. The closes it authorises are
-    /// queued and pumped inside `adopt_workspace`, and the hydrate ordered
-    /// straight after clears the queue, so by the time a test can look the
-    /// ops are gone either way — while `informed` outliving the arrival is
-    /// both durable and the thing that made them possible.
-    #[gpui_kit::test]
-    fn arriving_at_a_workspace_does_not_prune_what_is_already_in_it(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        let (app, mut vcx, _pane_stream) = crate::ui::app::test_window::harness_with_pane(cx);
-        let theirs = (TabId::new(), TabId::new());
-        app.update_in(&mut vcx, |app, window, cx| {
-            crate::ui::windows::WindowRegistry::init(cx);
-            let here = crate::core::session::WindowView::default();
-            let there = crate::core::session::WindowView::default();
-            let (here_id, there_id) = (here.id, there.id);
-            WorkspaceStore::install_for_test(
-                cx,
-                crate::core::session::WindowViews {
-                    views: vec![here, there],
-                    active: Some(here_id),
-                },
-            );
-            app.workspace = here_id;
-
-            // The workspace being switched to, as an earlier visit left it:
-            // primed with the tabs it holds, and licensed to prune them.
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(there_id)
-                    .or_default();
-                state.sync = SyncPhase::Primed(WsMirror {
-                    tabs: vec![
-                        TreeTab {
-                            id: theirs.0,
-                            name: None,
-                            group: None,
-                            last_auto: None,
-                            presentation: TabPresentation::default(),
-                            root: PaneNode::Leaf { pane: 11 },
-                            hibernated: false,
-                        },
-                        TreeTab {
-                            id: theirs.1,
-                            name: None,
-                            group: None,
-                            last_auto: None,
-                            presentation: TabPresentation::default(),
-                            root: PaneNode::Leaf { pane: 12 },
-                            hibernated: false,
-                        },
-                    ],
-                    active: Some(theirs.0),
-                    ..Default::default()
-                });
-                state.informed = true;
-                // Keeps whatever the switch queues where the test can read it.
-                state.inflight = true;
-            }
-
-            app.switch_workspace(Some(there_id), window, cx);
-
-            let state = &cx.default_global::<TreeSync>().windows[&there_id];
-            assert!(
-                !state.informed,
-                "a window that has just arrived speaks for nothing in the workspace \
-                 until its own pull lands — least of all that it is empty"
-            );
-            assert!(
-                !state
-                    .queue
-                    .iter()
-                    .any(|op| matches!(op, ControlRequest::TabClose { .. })),
-                "and it closes nothing it never showed: {:?}",
-                state.queue
-            );
-        });
-    }
-
     #[test]
     fn a_ratio_delta_is_clamped_to_the_servers_band_not_a_narrower_one() {
         let mut pane = Pane::split_node(gpui_kit::Axis::Horizontal, 0.5, Pane::Empty, Pane::Empty);
@@ -5489,869 +2354,6 @@ mod tests {
             Pane::Split { ratio, .. } => assert_eq!(ratio.get(), 0.05),
             _ => unreachable!("built as a split"),
         }
-    }
-
-    #[test]
-    fn a_tab_created_delta_that_straddled_a_repull_lands_once_in_the_window_mirror() {
-        let mut mirror = WsMirror::default();
-        let delta = LayoutDelta::TabCreated {
-            at: 0,
-            tab: TreeTab::leaf(1),
-        };
-        assert!(apply_to_mirror(&mut mirror, &delta));
-        assert!(apply_to_mirror(&mut mirror, &delta));
-        assert_eq!(mirror.tabs.len(), 1);
-    }
-
-    #[gpui_kit::test]
-    fn a_superseded_prime_result_does_not_roll_the_mirror_back(cx: &mut gpui_kit::TestAppContext) {
-        cx.update(|cx| {
-            let ws = WorkspaceId::new();
-            let stale_epoch = {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .entry(ws)
-                    .or_default();
-                state.sync = SyncPhase::Unprimed {
-                    dirty: false,
-                    priming: true,
-                };
-                state.epoch
-            };
-            let advanced = WsMirror {
-                tabs: vec![TreeTab::leaf(7)],
-                ..Default::default()
-            };
-            {
-                let state = cx
-                    .default_global::<TreeSync>()
-                    .windows
-                    .get_mut(&ws)
-                    .unwrap();
-                state.epoch += 1;
-                state.sync = SyncPhase::Primed(advanced.clone());
-            }
-
-            finish_prime(
-                cx,
-                ws,
-                stale_epoch,
-                Ok((WsMirror::default(), None, Arrival::Created)),
-            );
-
-            match &cx.default_global::<TreeSync>().windows[&ws].sync {
-                SyncPhase::Primed(mirror) => assert_eq!(
-                    *mirror, advanced,
-                    "the stale pull's empty answer must not replace the advanced mirror"
-                ),
-                _ => panic!("the mirror was dropped entirely"),
-            }
-        });
-    }
-
-    fn seed(pane: u64) -> PaneSeed {
-        PaneSeed {
-            pane,
-            cwd: Some(format!("/work/{pane}")),
-            ssh_spec: None,
-            agent: None,
-            shell: None,
-        }
-    }
-
-    fn leaf(pane: u64) -> DesiredNode {
-        DesiredNode::Leaf {
-            pane,
-            seed: seed(pane),
-        }
-    }
-
-    fn split(axis: TreeAxis, ratio: f32, a: DesiredNode, b: DesiredNode) -> DesiredNode {
-        DesiredNode::Split {
-            axis,
-            ratio,
-            a: Box::new(a),
-            b: Box::new(b),
-        }
-    }
-
-    fn tab(id: TabId, root: DesiredNode) -> DesiredTab {
-        DesiredTab {
-            id,
-            name: None,
-            group: None,
-            last_auto: None,
-            root,
-            presentation: TabPresentation::default(),
-            presentation_fallback: None,
-            hibernated: false,
-        }
-    }
-
-    #[test]
-    fn seeded_records_carry_the_seed_and_the_windows_own_liveness() {
-        let desired = vec![
-            tab(
-                TabId::new(),
-                split(TreeAxis::Vertical, 0.5, leaf(1), leaf(2)),
-            ),
-            tab(TabId::new(), leaf(3)),
-        ];
-        let records = seeded_records(&desired, |pane| pane != 2);
-        assert_eq!(
-            records.iter().map(|r| r.id).collect::<Vec<_>>(),
-            vec![1, 2, 3]
-        );
-        assert_eq!(records[0].cwd.as_deref(), Some("/work/1"));
-        assert!(records[0].live, "a pane the window holds open is live");
-        assert!(!records[1].live, "one still connecting is not yet");
-        assert!(records[2].live);
-    }
-
-    fn assert_converged(mirror: &WsMirror, desired: &[DesiredTab]) {
-        assert_eq!(mirror.tabs.len(), desired.len());
-        for (m, d) in mirror.tabs.iter().zip(desired) {
-            assert_eq!(m.id, d.id);
-            assert_eq!(m.name, d.name);
-            assert_eq!(m.group, d.group);
-            assert_eq!(m.root, d.root.to_pane_node());
-            assert_eq!(m.presentation, d.presentation);
-        }
-    }
-
-    #[test]
-    fn opening_the_first_tab_emits_a_create_carrying_the_client_identity() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let desired = vec![tab(id, leaf(7))];
-
-        let ops = diff(ws, &mut mirror, &desired, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::TabCreate {
-                workspace: ws,
-                at: Some(0),
-                pane: seed(7),
-                tab: Some(id),
-            }],
-            "a created tab is active on the server, so no separate active op"
-        );
-        assert_converged(&mirror, &desired);
-        assert_eq!(mirror.active, Some(id));
-    }
-
-    #[test]
-    fn a_split_emits_one_pane_split_against_its_sibling() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let one = vec![tab(id, leaf(1))];
-        diff(ws, &mut mirror, &one, Some(id), SyncScope::Full, &[]);
-
-        let two = vec![tab(id, split(TreeAxis::Vertical, 0.5, leaf(1), leaf(2)))];
-        let ops = diff(ws, &mut mirror, &two, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::PaneSplit {
-                workspace: ws,
-                pane: 1,
-                axis: TreeAxis::Vertical,
-                ratio: 0.5,
-                new: seed(2),
-                first: false,
-            }]
-        );
-        assert_converged(&mirror, &two);
-    }
-
-    #[test]
-    fn a_new_pane_on_the_upper_side_splits_with_first_set() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(id, leaf(1))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let want = vec![tab(id, split(TreeAxis::Horizontal, 0.4, leaf(2), leaf(1)))];
-        let ops = diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::PaneSplit {
-                workspace: ws,
-                pane: 1,
-                axis: TreeAxis::Horizontal,
-                ratio: 0.4,
-                new: seed(2),
-                first: true,
-            }]
-        );
-        assert_converged(&mirror, &want);
-    }
-
-    #[test]
-    fn closing_a_pane_emits_pane_close_and_the_split_collapses() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(id, split(TreeAxis::Vertical, 0.5, leaf(1), leaf(2)))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let want = vec![tab(id, leaf(1))];
-        let ops = diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::PaneClose {
-                workspace: ws,
-                pane: 2
-            }]
-        );
-        assert_converged(&mirror, &want);
-    }
-
-    #[test]
-    fn dragging_a_pane_across_the_layout_emits_one_pane_move() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        // 1 | 2
-        // ——+——
-        //   3
-        let grid = |a: DesiredNode, b: DesiredNode| split(TreeAxis::Vertical, 0.5, a, b);
-        let before = vec![tab(
-            id,
-            grid(split(TreeAxis::Horizontal, 0.5, leaf(1), leaf(2)), leaf(3)),
-        )];
-        diff(ws, &mut mirror, &before, Some(id), SyncScope::Full, &[]);
-
-        // 1 dropped below 3, which leaves 2 holding the top row alone.
-        let after = vec![tab(
-            id,
-            grid(leaf(2), split(TreeAxis::Vertical, 0.5, leaf(3), leaf(1))),
-        )];
-        let ops = diff(ws, &mut mirror, &after, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::PaneMove {
-                workspace: ws,
-                pane: 1,
-                to: 3,
-                axis: TreeAxis::Vertical,
-                first: false,
-            }],
-            "the tab is reshaped in place, not closed and rebuilt"
-        );
-        assert_converged(&mirror, &after);
-    }
-
-    #[test]
-    fn merging_a_tab_into_another_moves_its_panes_and_takes_the_tab_with_them() {
-        let ws = WorkspaceId::new();
-        let (host, guest) = (TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        let before = vec![
-            tab(host, leaf(1)),
-            tab(guest, split(TreeAxis::Horizontal, 0.5, leaf(2), leaf(3))),
-        ];
-        diff(ws, &mut mirror, &before, Some(host), SyncScope::Full, &[]);
-
-        // The guest tab dropped on the right of pane 1, arriving as the column
-        // of two it already was.
-        let after = vec![tab(
-            host,
-            split(
-                TreeAxis::Horizontal,
-                0.5,
-                leaf(1),
-                split(TreeAxis::Vertical, 0.5, leaf(2), leaf(3)),
-            ),
-        )];
-        let ops = diff(ws, &mut mirror, &after, Some(host), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::PaneMove {
-                    workspace: ws,
-                    pane: 2,
-                    to: 1,
-                    axis: TreeAxis::Horizontal,
-                    first: false,
-                },
-                ControlRequest::PaneMove {
-                    workspace: ws,
-                    pane: 3,
-                    to: 2,
-                    axis: TreeAxis::Vertical,
-                    first: false,
-                },
-            ],
-            "the panes cross one at a time and the emptied tab goes with them, \
-             rather than a tab's worth of panes being closed and respawned"
-        );
-        assert_converged(&mirror, &after);
-        assert_eq!(mirror.active, Some(host));
-    }
-
-    #[test]
-    fn a_tab_grafted_above_a_whole_layout_still_converges() {
-        let ws = WorkspaceId::new();
-        let (host, guest) = (TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        let before = vec![
-            tab(host, split(TreeAxis::Horizontal, 0.5, leaf(1), leaf(2))),
-            tab(guest, leaf(3)),
-        ];
-        diff(ws, &mut mirror, &before, Some(host), SyncScope::Full, &[]);
-
-        // Dropped against the host's outer edge, so the newcomer sits above the
-        // whole two-pane layout rather than beside one of its panes. No single
-        // `PaneMove` can say that, and `migrate_panes` says nothing at all: the
-        // passes after it have to land the tab anyway, by the rebuild they have
-        // always fallen back to.
-        let after = vec![tab(
-            host,
-            split(
-                TreeAxis::Horizontal,
-                0.33,
-                leaf(3),
-                split(TreeAxis::Horizontal, 0.5, leaf(1), leaf(2)),
-            ),
-        )];
-        diff(ws, &mut mirror, &after, Some(host), SyncScope::Full, &[]);
-        assert_converged(&mirror, &after);
-    }
-
-    #[test]
-    fn a_pane_leaving_for_a_tab_of_its_own_gives_it_up_before_it_asks_for_it() {
-        let ws = WorkspaceId::new();
-        let (held, fresh) = (TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        let before = vec![tab(
-            held,
-            split(TreeAxis::Horizontal, 0.5, leaf(1), leaf(2)),
-        )];
-        diff(ws, &mut mirror, &before, Some(held), SyncScope::Full, &[]);
-
-        // Pane 2 dropped on the strip ahead of the tab it came from, so the tab
-        // it becomes is desired *first*.
-        let after = vec![tab(fresh, leaf(2)), tab(held, leaf(1))];
-        let ops = diff(ws, &mut mirror, &after, Some(fresh), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::PaneClose {
-                    workspace: ws,
-                    pane: 2,
-                },
-                ControlRequest::TabCreate {
-                    workspace: ws,
-                    at: Some(0),
-                    pane: seed(2),
-                    tab: Some(fresh),
-                },
-            ],
-            "the machine refuses a pane that is in two tabs at once, so the old \
-             tab lets go before the new one is built"
-        );
-        assert_converged(&mirror, &after);
-    }
-
-    #[test]
-    fn a_move_that_lands_on_a_new_ratio_settles_it_after_the_move() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let before = vec![tab(
-            id,
-            split(
-                TreeAxis::Vertical,
-                0.5,
-                split(TreeAxis::Horizontal, 0.5, leaf(1), leaf(2)),
-                leaf(3),
-            ),
-        )];
-        diff(ws, &mut mirror, &before, Some(id), SyncScope::Full, &[]);
-
-        let after = vec![tab(
-            id,
-            split(
-                TreeAxis::Vertical,
-                0.5,
-                leaf(2),
-                split(TreeAxis::Vertical, 0.25, leaf(3), leaf(1)),
-            ),
-        )];
-        let ops = diff(ws, &mut mirror, &after, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::PaneMove {
-                    workspace: ws,
-                    pane: 1,
-                    to: 3,
-                    axis: TreeAxis::Vertical,
-                    first: false,
-                },
-                ControlRequest::PaneSetRatio {
-                    workspace: ws,
-                    tab: id,
-                    path: vec![Side::B],
-                    ratio: 0.25,
-                },
-            ],
-            "a move splits at a half, so a wanted ratio needs its own op"
-        );
-        assert_converged(&mirror, &after);
-    }
-
-    #[test]
-    fn a_swap_no_single_op_expresses_rebuilds_the_tab_whole() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let mut before = vec![tab(
-            id,
-            split(
-                TreeAxis::Vertical,
-                0.5,
-                split(TreeAxis::Horizontal, 0.5, leaf(1), leaf(2)),
-                split(TreeAxis::Horizontal, 0.5, leaf(3), leaf(4)),
-            ),
-        )];
-        let mut original = TreeTab {
-            root: before[0].root.to_pane_node(),
-            ..TreeTab::leaf(1)
-        };
-        assert!(original.set_pip(Some(1), Some(2)));
-        before[0].presentation = original.presentation.clone();
-        diff(ws, &mut mirror, &before, Some(id), SyncScope::Full, &[]);
-
-        // 1 and 4 trade corners: two panes moved, which no one op describes.
-        let mut after = vec![tab(
-            id,
-            split(
-                TreeAxis::Vertical,
-                0.5,
-                split(TreeAxis::Horizontal, 0.5, leaf(4), leaf(2)),
-                split(TreeAxis::Horizontal, 0.5, leaf(3), leaf(1)),
-            ),
-        )];
-        after[0].presentation = original.presentation.clone();
-        let ops = diff(ws, &mut mirror, &after, Some(id), SyncScope::Full, &[]);
-        assert!(
-            matches!(ops.first(), Some(ControlRequest::TabClose { .. })),
-            "expected the rebuild fallback, got {ops:?}"
-        );
-        assert!(
-            matches!(ops.last(), Some(ControlRequest::PaneSetPresentation {
-            pane: 1, pip: true, restore: Some(restore), ..
-        }) if Some(restore) == original.presentation.pip())
-        );
-        assert_eq!(mirror.tabs[0].presentation, original.presentation);
-        assert_converged(&mirror, &after);
-    }
-
-    #[test]
-    fn a_revived_leaf_emits_pane_replace_with_the_successors_seed() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(id, split(TreeAxis::Vertical, 0.5, leaf(1), leaf(2)))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let want = vec![tab(id, split(TreeAxis::Vertical, 0.5, leaf(1), leaf(9)))];
-        let ops = diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::PaneReplace {
-                workspace: ws,
-                old: 2,
-                new: seed(9),
-            }]
-        );
-        assert_converged(&mirror, &want);
-    }
-
-    #[test]
-    fn a_ratio_drag_emits_set_ratio_with_the_splits_path() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let nested = |r| {
-            split(
-                TreeAxis::Vertical,
-                0.5,
-                leaf(1),
-                split(TreeAxis::Horizontal, r, leaf(2), leaf(3)),
-            )
-        };
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(id, nested(0.5))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let want = vec![tab(id, nested(0.7))];
-        let ops = diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::PaneSetRatio {
-                workspace: ws,
-                tab: id,
-                path: vec![Side::B],
-                ratio: 0.7,
-            }]
-        );
-        assert_converged(&mirror, &want);
-    }
-
-    #[test]
-    fn closing_a_tab_emits_tab_close_and_heals_the_active_tab() {
-        let ws = WorkspaceId::new();
-        let (a, b) = (TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(a, leaf(1)), tab(b, leaf(2))],
-            Some(b),
-            SyncScope::Full,
-            &[],
-        );
-
-        let want = vec![tab(a, leaf(1))];
-        let ops = diff(ws, &mut mirror, &want, None, SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::TabClose {
-                workspace: ws,
-                tab: b
-            }],
-            "the heal is the server's own rule, so no active op crosses"
-        );
-        assert_converged(&mirror, &want);
-        assert_eq!(mirror.active, Some(a));
-    }
-
-    #[test]
-    fn a_tab_reorder_emits_moves_that_land_the_windows_order() {
-        let ws = WorkspaceId::new();
-        let (a, b, c) = (TabId::new(), TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        let before = [tab(a, leaf(1)), tab(b, leaf(2)), tab(c, leaf(3))];
-        diff(ws, &mut mirror, &before, Some(c), SyncScope::Full, &[]);
-
-        let want = vec![tab(c, leaf(3)), tab(a, leaf(1)), tab(b, leaf(2))];
-        let ops = diff(ws, &mut mirror, &want, Some(c), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::TabMove {
-                workspace: ws,
-                tab: c,
-                to: 0
-            }]
-        );
-        assert_converged(&mirror, &want);
-    }
-
-    #[test]
-    fn renaming_and_regrouping_emit_their_label_ops() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(id, leaf(1))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let mut named = tab(id, leaf(1));
-        named.name = Some("build".into());
-        let group = GroupId::new();
-        named.group = Some(group);
-        let want = vec![named];
-        let ops = diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::TabRename {
-                    workspace: ws,
-                    tab: id,
-                    name: Some("build".into()),
-                },
-                ControlRequest::TabSetGroup {
-                    workspace: ws,
-                    tab: id,
-                    group: Some(group),
-                    last_auto: None,
-                },
-            ]
-        );
-        assert_converged(&mirror, &want);
-    }
-
-    #[test]
-    fn switching_tabs_emits_only_set_active_tab() {
-        let ws = WorkspaceId::new();
-        let (a, b) = (TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        let both = [tab(a, leaf(1)), tab(b, leaf(2))];
-        diff(ws, &mut mirror, &both, Some(b), SyncScope::Full, &[]);
-
-        let ops = diff(ws, &mut mirror, &both, Some(a), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![ControlRequest::WorkspaceSetActiveTab {
-                workspace: ws,
-                tab: a
-            }]
-        );
-        assert_eq!(mirror.active, Some(a));
-    }
-
-    #[test]
-    fn a_deep_tree_materializes_top_split_first_and_converges() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let want = vec![tab(
-            id,
-            split(
-                TreeAxis::Horizontal,
-                0.6,
-                split(TreeAxis::Vertical, 0.3, leaf(1), leaf(2)),
-                split(TreeAxis::Vertical, 0.7, leaf(3), leaf(4)),
-            ),
-        )];
-        let ops = diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::TabCreate {
-                    workspace: ws,
-                    at: Some(0),
-                    pane: seed(1),
-                    tab: Some(id),
-                },
-                ControlRequest::PaneSplit {
-                    workspace: ws,
-                    pane: 1,
-                    axis: TreeAxis::Horizontal,
-                    ratio: 0.6,
-                    new: seed(3),
-                    first: false,
-                },
-                ControlRequest::PaneSplit {
-                    workspace: ws,
-                    pane: 1,
-                    axis: TreeAxis::Vertical,
-                    ratio: 0.3,
-                    new: seed(2),
-                    first: false,
-                },
-                ControlRequest::PaneSplit {
-                    workspace: ws,
-                    pane: 3,
-                    axis: TreeAxis::Vertical,
-                    ratio: 0.7,
-                    new: seed(4),
-                    first: false,
-                },
-            ]
-        );
-        assert_converged(&mirror, &want);
-    }
-
-    #[test]
-    fn an_unchanged_window_emits_nothing() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let want = vec![tab(id, split(TreeAxis::Vertical, 0.5, leaf(1), leaf(2)))];
-        diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]),
-            Vec::new()
-        );
-    }
-
-    #[test]
-    fn a_tab_whose_panes_are_all_still_spawning_is_held_not_closed() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(id, leaf(1))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let ops = diff(ws, &mut mirror, &[], None, SyncScope::Full, &[id]);
-        assert_eq!(ops, Vec::new());
-        assert_eq!(mirror.tabs.len(), 1, "the daemon tab survives the wait");
-    }
-
-    #[test]
-    fn an_additive_diff_never_closes_tabs_the_window_has_not_seen() {
-        let ws = WorkspaceId::new();
-        let (a, b) = (TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(a, leaf(1)), tab(b, leaf(2))],
-            Some(b),
-            SyncScope::Full,
-            &[],
-        );
-
-        let fresh = TabId::new();
-        let ops = diff(
-            ws,
-            &mut mirror,
-            &[tab(fresh, leaf(9))],
-            Some(fresh),
-            SyncScope::Additive,
-            &[],
-        );
-        assert_eq!(
-            ops,
-            vec![ControlRequest::TabCreate {
-                workspace: ws,
-                at: Some(2),
-                pane: seed(9),
-                tab: Some(fresh),
-            }],
-            "appended after the tabs it has not seen; nothing closed or moved"
-        );
-        assert_eq!(mirror.tabs.len(), 3);
-    }
-
-    #[test]
-    fn deltas_advance_the_mirror_exactly_as_the_writers_operations_did() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut watcher = WsMirror::default();
-
-        let tree_tab = TreeTab {
-            id,
-            name: None,
-            group: None,
-            last_auto: None,
-            presentation: TabPresentation::default(),
-            root: PaneNode::Leaf { pane: 1 },
-            hibernated: false,
-        };
-        assert!(apply_to_mirror(
-            &mut watcher,
-            &LayoutDelta::TabCreated {
-                at: 0,
-                tab: tree_tab,
-            },
-        ));
-        assert!(apply_to_mirror(
-            &mut watcher,
-            &LayoutDelta::ActiveTabChanged { tab: id },
-        ));
-        assert!(apply_to_mirror(
-            &mut watcher,
-            &LayoutDelta::TabRestructured {
-                tab: TreeTab {
-                    id,
-                    name: None,
-                    group: None,
-                    last_auto: None,
-                    presentation: TabPresentation::default(),
-                    root: PaneNode::Split {
-                        axis: TreeAxis::Vertical,
-                        ratio: 0.5,
-                        a: Box::new(PaneNode::Leaf { pane: 1 }),
-                        b: Box::new(PaneNode::Leaf { pane: 2 }),
-                    },
-                    hibernated: false,
-                },
-                pane: None,
-            },
-        ));
-        assert!(apply_to_mirror(
-            &mut watcher,
-            &LayoutDelta::RatioChanged {
-                tab: id,
-                path: Vec::new(),
-                ratio: 0.7,
-            },
-        ));
-
-        let mut writer = WsMirror::default();
-        diff(
-            ws,
-            &mut writer,
-            &[tab(id, leaf(1))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-        let final_state = vec![tab(id, split(TreeAxis::Vertical, 0.7, leaf(1), leaf(2)))];
-        diff(
-            ws,
-            &mut writer,
-            &final_state,
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        assert_eq!(watcher, writer);
-    }
-
-    #[test]
-    fn a_delta_about_a_tab_the_mirror_does_not_hold_reports_itself() {
-        let mut mirror = WsMirror::default();
-        assert!(
-            !apply_to_mirror(
-                &mut mirror,
-                &LayoutDelta::TabRenamed {
-                    tab: TabId::new(),
-                    name: Some("x".into()),
-                },
-            ),
-            "an unappliable delta must say so, so the caller re-pulls"
-        );
-        assert!(!apply_to_mirror(
-            &mut mirror,
-            &LayoutDelta::TabClosed {
-                tab: TabId::new(),
-                reason: lyrel_core::core::machine::TabCloseReason::Explicit
-            },
-        ),);
     }
 
     #[test]
@@ -6508,217 +2510,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(session_from_tree(&ws, &[]).active, 0);
-    }
-
-    #[test]
-    fn a_pane_id_reused_in_another_tab_is_never_read_as_a_replace() {
-        let ws = WorkspaceId::new();
-        let (a, b) = (TabId::new(), TabId::new());
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(a, leaf(1)), tab(b, leaf(2))],
-            Some(b),
-            SyncScope::Full,
-            &[],
-        );
-
-        let want = vec![tab(a, leaf(2)), tab(b, leaf(2))];
-        let ops = diff(ws, &mut mirror, &want, Some(b), SyncScope::Full, &[]);
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ControlRequest::PaneReplace { .. })),
-            "got {ops:?}"
-        );
-    }
-
-    fn asleep(id: TabId, root: DesiredNode) -> DesiredTab {
-        DesiredTab {
-            hibernated: true,
-            ..tab(id, root)
-        }
-    }
-
-    /// Going to sleep changes nothing about the tab's shape — the same panes,
-    /// by the same ids — so the only thing the machine hears is the mark. A
-    /// tab that lost its panes would have been a close, and the close would
-    /// have taken every record the wake needs with it.
-    #[test]
-    fn a_tab_going_to_sleep_says_so_and_nothing_else() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let root = || split(TreeAxis::Vertical, 0.5, leaf(1), leaf(2));
-        diff(
-            ws,
-            &mut mirror,
-            &[tab(id, root())],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let ops = diff(
-            ws,
-            &mut mirror,
-            &[asleep(id, root())],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-        assert_eq!(
-            ops,
-            vec![ControlRequest::TabSetHibernated {
-                workspace: ws,
-                tab: id,
-                hibernated: true,
-            }]
-        );
-        assert!(mirror.tabs[0].hibernated);
-        assert!(
-            diff(
-                ws,
-                &mut mirror,
-                &[asleep(id, root())],
-                Some(id),
-                SyncScope::Full,
-                &[]
-            )
-            .is_empty(),
-            "a tab that stays asleep is not told again"
-        );
-    }
-
-    /// Waking swaps each stopped pane for its successor. The mark comes off
-    /// first, while the tab it belongs to is certainly still the one the
-    /// machine has.
-    #[test]
-    fn a_waking_tab_clears_its_mark_before_its_panes_are_replaced() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        diff(
-            ws,
-            &mut mirror,
-            &[asleep(id, leaf(1))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-
-        let want = vec![tab(id, leaf(9))];
-        let ops = diff(ws, &mut mirror, &want, Some(id), SyncScope::Full, &[]);
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::TabSetHibernated {
-                    workspace: ws,
-                    tab: id,
-                    hibernated: false,
-                },
-                ControlRequest::PaneReplace {
-                    workspace: ws,
-                    old: 1,
-                    new: seed(9),
-                },
-            ]
-        );
-        assert!(!mirror.tabs[0].hibernated);
-        assert_converged(&mirror, &want);
-    }
-
-    /// A window writing a sleeping tab onto a machine that lost it — a store
-    /// wiped under a remote workspace — writes it back asleep, not as a tab
-    /// the next restore would spawn.
-    #[test]
-    fn a_tab_created_asleep_is_marked_as_it_is_created() {
-        let ws = WorkspaceId::new();
-        let id = TabId::new();
-        let mut mirror = WsMirror::default();
-        let ops = diff(
-            ws,
-            &mut mirror,
-            &[asleep(id, leaf(4))],
-            Some(id),
-            SyncScope::Full,
-            &[],
-        );
-        assert!(
-            matches!(ops.first(), Some(ControlRequest::TabCreate { .. })),
-            "{ops:?}"
-        );
-        assert!(
-            ops.contains(&ControlRequest::TabSetHibernated {
-                workspace: ws,
-                tab: id,
-                hibernated: true,
-            }),
-            "{ops:?}"
-        );
-        assert!(mirror.tabs[0].hibernated);
-    }
-
-    /// The window reads a sleeping tab's layout off the record it kept, and
-    /// has to hand the machine the very tab the machine already holds: same
-    /// ids, same seeds, same shape.
-    #[test]
-    fn a_sleeping_layout_reads_back_as_the_tree_it_came_from() {
-        use crate::core::session::SessionAxis;
-        let leaf_of = |pane: u64, cwd: &str| SessionPane::Leaf {
-            cwd: Some(std::path::PathBuf::from(cwd)),
-            pane_id: Some(pane),
-            shell: None,
-            ssh_spec: None,
-            agent: Some(crate::core::cli_agent::CLIAgent::OhMyPi),
-            agent_session_id: Some(format!("sess-{pane}")),
-            agent_launch_argv: None,
-            agent_session_scope: None,
-        };
-        let layout = SessionPane::Split {
-            axis: SessionAxis::Horizontal,
-            ratio: 0.3,
-            a: Box::new(leaf_of(3, "/a")),
-            b: Box::new(leaf_of(4, "/b")),
-        };
-        let node = desired_node_from_session(&layout, false).expect("both leaves have ids");
-        assert_eq!(
-            node.to_pane_node(),
-            PaneNode::Split {
-                axis: TreeAxis::Horizontal,
-                ratio: 0.3,
-                a: Box::new(PaneNode::Leaf { pane: 3 }),
-                b: Box::new(PaneNode::Leaf { pane: 4 }),
-            }
-        );
-        let seed = node.seed_of(4).expect("pane 4 is a leaf");
-        assert_eq!(seed.cwd.as_deref(), Some("/b"));
-        assert_eq!(
-            seed.agent.as_ref().and_then(|a| a.session_id.as_deref()),
-            Some("sess-4"),
-            "the session a wake resumes stays on the record"
-        );
-
-        // A leaf the machine never had is left out, as for a live tab.
-        let unknown = SessionPane::Split {
-            axis: SessionAxis::Vertical,
-            ratio: 0.5,
-            a: Box::new(leaf_of(3, "/a")),
-            b: Box::new(SessionPane::Leaf {
-                cwd: None,
-                pane_id: None,
-                shell: None,
-                ssh_spec: None,
-                agent: None,
-                agent_session_id: None,
-                agent_launch_argv: None,
-                agent_session_scope: None,
-            }),
-        };
-        assert_eq!(
-            desired_node_from_session(&unknown, false).map(|n| n.to_pane_node()),
-            Some(PaneNode::Leaf { pane: 3 })
-        );
     }
 
     /// A restore reads the mark off the tree: the sleeping tab keeps its pane

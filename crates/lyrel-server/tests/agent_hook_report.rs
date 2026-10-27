@@ -135,6 +135,172 @@ fn a_hook_the_daemon_turns_away_falls_back_to_the_tty() {
 }
 
 #[test]
+fn shell_output_marks_reach_pane_replay_and_machine_clients() {
+    use lyrel_core::client::ControlClient;
+    use lyrel_core::core::cli_agent::CLIAgent;
+    use lyrel_core::core::machine::PaneSeed;
+    use lyrel_core::daemon::control::{ControlHello, ControlRequest, ReplyOk};
+
+    let daemon = Daemon::start();
+    let directory = daemon.dir.path().join("work space");
+    std::fs::create_dir(&directory).unwrap();
+    let directory = directory.canonicalize().unwrap();
+    let encoded_directory = directory
+        .to_str()
+        .unwrap()
+        .replace('%', "%25")
+        .replace(' ', "%20");
+    let script = format!(
+        "printf 'shell_ready\\n'; read -r start; \
+         printf '\\033]7;file://localhost{encoded_directory}\\007\\033]2;fact-title\\007\\033]133;B\\007\\033]133;C\\007'; \
+         printf '\\033]777;notify;lyrel://cli-agent;%s\\007' \
+         '{{\"agent\":\"omp\",\"event\":\"session-start\",\"session_id\":\"facts-session\"}}' \
+         '{{\"agent\":\"omp\",\"event\":\"permission-request\",\"session_id\":\"facts-session\",\"request\":{{\"id\":\"facts-permission\",\"kind\":\"permission\"}}}}'; \
+         read -r finish; exec /bin/sh -c \"$1\""
+    );
+    let finish_script = "printf '\\033]777;notify;lyrel://cli-agent;%s\\007\\033]2;\\007' \
+        '{\"agent\":\"omp\",\"event\":\"session-end\",\"session_id\":\"facts-session\"}'; exec cat";
+    let size = WinSize {
+        cols: 100,
+        rows: 30,
+        cell_w: 8,
+        cell_h: 16,
+    };
+    // A real PTY process with an agent argv identity, emitting the same formal
+    // marks as a hook. No installed agent, model, or user's daemon is involved.
+    let mut session = daemon
+        .panes()
+        .spawn(
+            Some(directory.clone()),
+            size,
+            Some(ShellSpec {
+                program: "bash".into(),
+                args: vec![
+                    "-c".into(),
+                    "exec -a omp /bin/sh -c \"$1\" lyrel-facts \"$2\"".into(),
+                    "lyrel-facts".into(),
+                    script,
+                    finish_script.into(),
+                ],
+                args_are_lyrel_defaults: false,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let pane = session.pane_id();
+    let deadline = Instant::now() + READY_WITHIN;
+    let control = loop {
+        match ControlClient::connect_at(
+            &daemon.dir.path().join("control.sock"),
+            &ControlHello::host_rpc("facts", "facts"),
+        ) {
+            Ok(control) => break control,
+            Err(error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "control endpoint unavailable: {error}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+    let workspace = match control
+        .request(ControlRequest::WorkspaceCreate {
+            name: Some("facts".into()),
+            workspace: None,
+        })
+        .unwrap()
+    {
+        ReplyOk::WorkspaceTree(workspace) => workspace.id,
+        other => panic!("expected workspace, got {other:?}"),
+    };
+    control
+        .request(ControlRequest::TabCreate {
+            workspace,
+            at: None,
+            pane: PaneSeed::bare(pane),
+            tab: None,
+        })
+        .unwrap();
+    let mut output = Vec::new();
+    while !output.windows(11).any(|bytes| bytes == b"shell_ready") {
+        if let DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) = session.recv().unwrap() {
+            output.extend(bytes);
+        }
+    }
+    session.input(b"start\n").unwrap();
+    loop {
+        if let DaemonMsg::AgentStatus(Some(state)) = session.recv().unwrap()
+            && state.status == AgentStatus::Waiting
+        {
+            assert_eq!(state.session_id.as_deref(), Some("facts-session"));
+            assert_eq!(state.pending_requests.len(), 1);
+            break;
+        }
+    }
+    let observed = |waiting: bool| {
+        let deadline = Instant::now() + STREAM_WITHIN;
+        loop {
+            let ReplyOk::MachineTree(machine) =
+                control.request(ControlRequest::MachineGet).unwrap()
+            else {
+                panic!("expected machine");
+            };
+            let record = machine
+                .panes
+                .iter()
+                .find(|record| record.id == pane)
+                .unwrap();
+            if waiting
+                && record
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.status == Some(AgentStatus::Waiting))
+            {
+                assert_eq!(record.cwd.as_deref(), directory.to_str());
+                assert_eq!(record.osc_title.as_deref(), Some("fact-title"));
+                let agent = record.agent.as_ref().unwrap();
+                assert_eq!(agent.agent, CLIAgent::OhMyPi);
+                assert_eq!(agent.session_id.as_deref(), Some("facts-session"));
+                break;
+            }
+            if !waiting && record.agent.is_none() && record.osc_title.is_none() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "facts did not land: {record:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    observed(true);
+    session.detach().unwrap();
+    let mut session = daemon.panes().attach(pane, size).unwrap();
+    session.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let mut replayed_cwd = None;
+    loop {
+        match session.recv().unwrap() {
+            DaemonMsg::Cwd(cwd) => replayed_cwd = Some(cwd),
+            DaemonMsg::AgentStatus(Some(state)) => {
+                assert_eq!(state.session_id.as_deref(), Some("facts-session"));
+                assert_eq!(state.status, AgentStatus::Waiting);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(replayed_cwd.as_deref(), Some(directory.as_path()));
+    session.input(b"finish\n").unwrap();
+    loop {
+        if matches!(session.recv().unwrap(), DaemonMsg::AgentStatus(None)) {
+            break;
+        }
+    }
+    observed(false);
+    session.kill().unwrap();
+}
+
+#[test]
 fn every_agent_result_is_refused_by_a_daemon_without_result_support() {
     use lyrel_core::daemon::protocol::{ClientMsg, DaemonVersion};
     use std::io::Write as _;

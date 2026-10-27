@@ -892,7 +892,10 @@ impl LyrelApp {
         if let Some(repo) = self.scm.active_repo() {
             return Some((repo.host, repo.root.clone()));
         }
-        let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let host = view.host_id();
         let root = cx
@@ -912,7 +915,10 @@ impl LyrelApp {
         if !self.file_tree_on_screen(cx) {
             return None;
         }
-        let leaf = self.tabs.get(self.active)?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let host = view.host_id();
         let root = cx
@@ -927,7 +933,7 @@ impl LyrelApp {
     /// anyone a gutter, and holding a watch per open file would put a `status`
     /// probe behind every repository the user has visited this session.
     fn scm_editor_target(&self, cx: &gpui_kit::App) -> Option<(HostId, PathBuf)> {
-        let code = self.tabs.get(self.active)?.code.as_ref()?;
+        let code = self.tabs.get(self.tabs.active_index())?.code.as_ref()?;
         if !code.visible {
             return None;
         }

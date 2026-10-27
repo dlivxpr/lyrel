@@ -2,14 +2,15 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui_kit::{App, Context, EntityId, Global, Window};
-use lyrel_core::core::machine::{PaneNode, Tab as TreeTab, TabId, TabPresentation, Workspace};
+use gpui_kit::{App, Context, Global, Window};
+use lyrel_core::core::machine::{PaneNode, Tab as TreeTab, TabId, Workspace};
 use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
 use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
 
 use crate::core::session::{RemoteRef, WorkspaceId, WorkspaceStore};
-use crate::ui::app::{LyrelApp, Tab};
+use crate::ui::app::LyrelApp;
 use crate::ui::pane::{Pane, PaneSlot};
+use crate::ui::tab::Tab;
 
 #[derive(Default)]
 struct SidecarState {
@@ -39,9 +40,9 @@ pub(crate) fn scoped_pane(slot: &PaneSlot, cx: &App) -> Option<ScopedPane> {
             })
         }
         PaneSlot::Connecting(pending) => {
-            let spawn = &pending.read(cx).spawn;
-            let pane = spawn.restore_pane?;
-            Some(if spawn.workspace.is_some() {
+            let pending = pending.read(cx);
+            let pane = pending.restore_pane()?;
+            Some(if pending.workspace().is_some() {
                 ScopedPane::workspace(pane)
             } else {
                 ScopedPane::client_local(pane)
@@ -74,14 +75,14 @@ fn logical_node(pane: &Pane, cx: &App) -> Option<PaneNode<ScopedPane>> {
 
 pub(crate) fn snapshot(tab: &Tab, cx: &App) -> Option<TreeTab<ScopedPane>> {
     let root = logical_node(&tab.pane, cx)?;
-    let mut presentation = tab.foreign_presentation.clone().unwrap_or_else(|| {
-        tab.presentation
+    let mut presentation = tab.scoped_presentation().cloned().unwrap_or_else(|| {
+        tab.presentation()
             .map_panes(|pane| Some(ScopedPane::workspace(pane)))
     });
     presentation.remap_panes(|pane| root.contains(pane).then_some(pane));
     Some(TreeTab {
-        id: tab.tree_id.get(),
-        name: tab.name.clone(),
+        id: tab.id(),
+        name: tab.name().clone(),
         group: tab.group.get(),
         last_auto: tab.auto_group.borrow().clone(),
         root,
@@ -90,8 +91,8 @@ pub(crate) fn snapshot(tab: &Tab, cx: &App) -> Option<TreeTab<ScopedPane>> {
     })
 }
 
-fn mixed(tab: &Tab, cx: &App) -> bool {
-    tab.foreign_presentation.is_some()
+pub(crate) fn mixed(tab: &Tab, cx: &App) -> bool {
+    tab.scoped_presentation().is_some()
         || tab
             .pane
             .leaves()
@@ -123,20 +124,7 @@ fn pane_from_existing(
     }
 }
 
-fn install_tab_presentation(tab: &mut Tab, presentation: TabPresentation<ScopedPane>) {
-    let mut primary =
-        presentation.map_panes(|pane| (!pane.owner().is_client_local()).then_some(pane.pane()));
-    if presentation
-        .pip()
-        .is_none_or(|pip| pip.pane().owner().is_client_local())
-    {
-        primary.set_pip_geometry(tab.presentation.pip_geometry());
-    }
-    tab.presentation = primary;
-    tab.foreign_presentation = Some(presentation);
-}
-
-fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, cx: &App) -> bool {
+pub(crate) fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, cx: &App) -> bool {
     if logical_node(&tab.pane, cx).as_ref() != Some(&logical.root) {
         let mut slots = tab
             .pane
@@ -149,42 +137,8 @@ fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, cx: &App) -
         };
         tab.pane = pane;
     }
-    install_tab_presentation(tab, logical.presentation);
+    tab.adopt_scoped_presentation(logical.presentation);
     true
-}
-
-pub(crate) fn change_for_tab(
-    tab: &mut Tab,
-    pane: EntityId,
-    fallback: Option<EntityId>,
-    parked: Option<bool>,
-    cx: &App,
-) -> Option<bool> {
-    if !mixed(tab, cx) {
-        return None;
-    }
-    let leaves = tab.pane.leaves();
-    let target = leaves
-        .iter()
-        .find(|slot| slot.entity_id() == pane)
-        .and_then(|slot| scoped_pane(slot, cx))?;
-    let fallback = fallback
-        .and_then(|id| leaves.iter().find(|slot| slot.entity_id() == id))
-        .and_then(|slot| scoped_pane(slot, cx));
-    let mut logical = snapshot(tab, cx)?;
-    let changed = match parked {
-        Some(true) => logical.park(target),
-        Some(false) => logical.restore_parked(target, fallback),
-        None => {
-            let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target))
-                .then_some(target);
-            logical.set_pip(promote, fallback)
-        }
-    };
-    if !changed {
-        return Some(false);
-    }
-    Some(install_presentation(tab, logical, cx))
 }
 
 pub(crate) fn retain_client_local(tab: &mut Tab, cx: &App) -> bool {
@@ -197,29 +151,29 @@ pub(crate) fn retain_client_local(tab: &mut Tab, cx: &App) -> bool {
 }
 
 pub(crate) fn note_primary_tab(tab: &mut Tab, primary: &TreeTab, cx: &App) {
-    if tab.foreign_presentation.is_none() {
+    if tab.scoped_presentation().is_none() {
         return;
     }
-    let before = tab.presentation.pip().map(|pip| pip.pane());
+    let before = tab.presentation().pip().map(|pip| pip.pane());
     let after = primary.presentation.pip().map(|pip| pip.pane());
     let Some(mut logical) = snapshot(tab, cx) else {
         return;
     };
     let initial = logical.presentation.clone();
     let fallback = logical.root.pane_ids().first().copied();
-    for entry in tab.presentation.parked() {
+    for entry in tab.presentation().parked() {
         if !primary.presentation.is_parked(entry.pane()) {
             logical.restore_parked(ScopedPane::workspace(entry.pane()), fallback);
         }
     }
     for entry in primary.presentation.parked() {
-        if !tab.presentation.parked().contains(entry) {
+        if !tab.presentation().parked().contains(entry) {
             let restore = entry.map_panes(|pane| Some(ScopedPane::workspace(pane)));
             logical.park_with_restore(ScopedPane::workspace(entry.pane()), restore);
         }
     }
     let current = logical.presentation.pip().map(|pip| pip.pane());
-    if before != after || primary.presentation.pip() != tab.presentation.pip() {
+    if before != after || primary.presentation.pip() != tab.presentation().pip() {
         if let Some(after) = after {
             let restore = primary
                 .presentation
@@ -324,7 +278,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
             .iter()
             .flat_map(|tab| tab.pane.leaves())
             .filter(|slot| scoped_pane(slot, cx).is_some_and(|pane| pane.owner().is_client_local()))
-            .filter_map(|slot| crate::ui::tree_sync::seed_for_slot(&slot, cx))
+            .filter_map(|slot| crate::ui::tree_sync::projection::seed_for_slot(&slot, cx))
             .collect();
         let state = cx
             .default_global::<PaneSidecars>()
@@ -610,7 +564,7 @@ fn adopt(
     let Some(foreign) = &sidecar.foreign_view else {
         return;
     };
-    let active = app.tabs.get(app.active).map(|tab| tab.tree_id.get());
+    let active = app.tabs.get(app.tabs.active_index()).map(|tab| tab.id());
     let mut slots: HashMap<ScopedPane, PaneSlot> = app
         .tabs
         .iter()
@@ -624,9 +578,8 @@ fn adopt(
         .flat_map(|tab| tab.pane.leaves())
         .find(|slot| slot.contains_focused(window, cx))
         .map(|slot| slot.entity_id());
-    app.tabs.retain(|tab| {
-        tab.foreign_presentation.is_none() || authoritative.contains(&tab.tree_id.get())
-    });
+    app.tabs
+        .retain(|tab| tab.scoped_presentation().is_none() || authoritative.contains(&tab.id()));
     for source in foreign.tabs() {
         let pruned;
         let source = if closed_local.is_empty() {
@@ -635,7 +588,7 @@ fn adopt(
             let Some(source_pruned) =
                 source.map_panes(|pane| (!closed_local.contains(&pane)).then_some(pane))
             else {
-                app.tabs.retain(|tab| tab.tree_id.get() != source.id);
+                app.tabs.retain(|tab| tab.id() != source.id);
                 continue;
             };
             pruned = source_pruned;
@@ -691,38 +644,31 @@ fn adopt(
             .filter_map(|slot| scoped_pane(&slot, cx))
             .collect::<HashSet<_>>();
         presentation.remap_panes(|key| existing.contains(&key).then_some(key));
-        if let Some(tab) = app
-            .tabs
-            .iter_mut()
-            .find(|tab| tab.tree_id.get() == source.id)
-        {
+        if let Some(tab) = app.tabs.iter_mut().find(|tab| tab.id() == source.id) {
             // Preserve every existing view and focus owner; only composition is shared.
             tab.pane = pane;
-            install_tab_presentation(tab, presentation);
+            tab.adopt_scoped_presentation(presentation);
         } else {
-            let mut tab = Tab::new(pane);
-            tab.tree_id.set(source.id);
-            tab.name = source.name.clone();
+            let mut tab = Tab::from_foreign(source.id, source.name.clone(), pane);
             tab.group.set(source.group);
-            install_tab_presentation(&mut tab, presentation);
+            tab.adopt_scoped_presentation(presentation);
             app.tabs.push(tab);
         }
     }
-    app.active = active
-        .and_then(|active| app.tabs.iter().position(|tab| tab.tree_id.get() == active))
-        .unwrap_or_else(|| app.active.min(app.tabs.len().saturating_sub(1)));
+    app.tabs.select(
+        active
+            .and_then(|active| app.tabs.iter().position(|tab| tab.id() == active))
+            .unwrap_or_else(|| {
+                app.tabs
+                    .active_index()
+                    .min(app.tabs.len().saturating_sub(1))
+            }),
+    );
     for tab in &mut app.tabs {
-        if tab.zoomed.as_ref().is_some_and(|view| {
-            !tab.pane
-                .leaves()
-                .iter()
-                .any(|slot| slot.entity_id() == view.entity_id())
-        }) {
-            tab.zoomed = None;
-        }
+        tab.discard_detached_zoom();
     }
     if app.maximized.as_ref().is_some_and(|view| {
-        !app.tabs.get(app.active).is_some_and(|tab| {
+        !app.tabs.get(app.tabs.active_index()).is_some_and(|tab| {
             tab.pane
                 .leaves()
                 .iter()
@@ -737,7 +683,11 @@ fn adopt(
             .flat_map(|tab| tab.pane.leaves())
             .any(|slot| slot.entity_id() == focused)
     }) {
-        app.active = app.active.min(app.tabs.len().saturating_sub(1));
+        app.tabs.select(
+            app.tabs
+                .active_index()
+                .min(app.tabs.len().saturating_sub(1)),
+        );
         app.focus_active(window, cx);
     }
     app.refocus_parked_pane(window, cx);

@@ -44,7 +44,7 @@ use lyrel_core::core::git::log::{Commit, CommitFile, RefKind};
 use lyrel_core::core::git::status::DecoStatus;
 
 use crate::terminal::git_diff::DiffSource;
-use crate::ui::app::{CONTENT_INSET, LyrelApp};
+use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_plural};
 use crate::ui::right_panel::{
     HEADING, META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, git_badge, info_chip,
@@ -52,6 +52,7 @@ use crate::ui::right_panel::{
 use crate::ui::scm::path::{relative_time, split_display_path};
 use crate::ui::scm::state::{CommitDetailView, RepoKey};
 use crate::ui::scm::status::{status_color, status_glyph};
+use crate::ui::window_chrome::CONTENT_INSET;
 
 // A file row, the same height as the working tree's, and inset the same way:
 // the two lists sit in one column and have to read as one grid, so a reader who

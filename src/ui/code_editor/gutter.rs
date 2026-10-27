@@ -402,7 +402,7 @@ impl LyrelApp {
         if !enabled(cx) {
             return None;
         }
-        let file = self.buffer(id)?;
+        let file = self.editor.buffers.get(id)?;
         let input = file.input.clone();
         let hunks = file.gutter.hunks.clone();
         let app = cx.entity().downgrade();
@@ -534,7 +534,7 @@ impl LyrelApp {
     }
 
     fn editor_gutter_sync_buffer(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return;
         };
         if f.untitled.is_some() || f.gutter.fetching {
@@ -553,7 +553,7 @@ impl LyrelApp {
             return;
         }
         let format = f.format;
-        if let Some(f) = self.buffer_mut(id) {
+        if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.fetching = true;
         }
         let path = wanted.path.clone();
@@ -570,7 +570,7 @@ impl LyrelApp {
                     })
             },
             move |app, fetched: Fetched, cx| {
-                let Some(f) = app.buffer_mut(id) else {
+                let Some(f) = app.editor.buffers.get_mut(id) else {
                     return;
                 };
                 f.gutter.fetching = false;
@@ -600,14 +600,14 @@ impl LyrelApp {
     /// Read the base again on the next frame — after a save, or when the
     /// setting comes back on.
     pub(crate) fn editor_gutter_refetch(&mut self, id: BufferId) {
-        if let Some(f) = self.buffer_mut(id) {
+        if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.fetched = None;
         }
     }
 
     /// The buffer's text changed.
     pub(crate) fn editor_gutter_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         f.gutter.edits += 1;
@@ -619,7 +619,7 @@ impl LyrelApp {
 
     /// Diff the buffer against its base after `delay`, off the UI thread.
     fn editor_gutter_schedule(&mut self, id: BufferId, delay: Duration, cx: &mut Context<Self>) {
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         let task = cx.spawn(async move |this, cx| {
@@ -627,7 +627,7 @@ impl LyrelApp {
                 cx.background_executor().timer(delay).await;
             }
             let Ok(Some((base, text, at))) = this.update(cx, |app, cx| {
-                let f = app.buffer(id)?;
+                let f = app.editor.buffers.get(id)?;
                 let base = f.gutter.base.clone()?;
                 Some((base, f.input.read(cx).text().clone(), f.gutter.edits))
             }) else {
@@ -649,7 +649,7 @@ impl LyrelApp {
         hunks: Vec<Hunk>,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         // An edit landed while this was computing; its own diff is on the way.
@@ -664,7 +664,7 @@ impl LyrelApp {
     /// The hunks for the text as it is right now, diffing on the spot if an
     /// edit is still waiting out its debounce.
     fn editor_gutter_hunks_now(&mut self, id: BufferId, cx: &mut Context<Self>) -> Arc<Vec<Hunk>> {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return Arc::default();
         };
         let Some(base) = f.gutter.base.clone().filter(|_| enabled(cx)) else {
@@ -676,7 +676,9 @@ impl LyrelApp {
             let hunks = diff_hunks(&base, &text);
             self.editor_gutter_install(id, at, hunks, cx);
         }
-        self.buffer(id)
+        self.editor
+            .buffers
+            .get(id)
             .map(|f| f.gutter.hunks.clone())
             .unwrap_or_default()
     }
@@ -701,7 +703,7 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return false;
         };
         let input = f.input.clone();
@@ -720,7 +722,7 @@ impl LyrelApp {
     /// Whether the cursor sits in a change that could be reverted — for the
     /// right-click menu, which reads the hunks as they were last drawn.
     pub(crate) fn editor_gutter_can_revert(&self, id: BufferId, cx: &gpui_kit::App) -> bool {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return false;
         };
         if f.gutter.base.is_none() || !enabled(cx) {
@@ -740,7 +742,7 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return false;
         };
         let line = f.input.read(cx).cursor_position().line as usize;
@@ -757,7 +759,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return false;
         };
         let Some(base) = f.gutter.base.clone() else {
@@ -778,7 +780,7 @@ impl LyrelApp {
                 state.focus(window, cx);
             }
         });
-        if let Some(f) = self.buffer_mut(id) {
+        if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.peek = None;
             // The input's Change event lands after this returns; until then
             // the hunks must not look current.
@@ -805,7 +807,7 @@ impl LyrelApp {
     pub(crate) fn apply_editor_git_gutter(&mut self, on: bool, cx: &mut Context<Self>) {
         let ids: Vec<BufferId> = self.editor.buffers.iter().map(|f| f.id()).collect();
         for id in ids {
-            let Some(f) = self.buffer_mut(id) else {
+            let Some(f) = self.editor.buffers.get_mut(id) else {
                 continue;
             };
             f.gutter.peek = None;
@@ -827,7 +829,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return false;
         };
         let Some(base) = f.gutter.base.clone() else {
@@ -849,7 +851,7 @@ impl LyrelApp {
             .collect();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        if let Some(f) = self.buffer_mut(id) {
+        if let Some(f) = self.editor.buffers.get_mut(id) {
             f.gutter.peek = Some(Peek {
                 hunk,
                 original,
@@ -872,7 +874,7 @@ impl LyrelApp {
             return false;
         };
         let hunks = self.editor_gutter_hunks_now(id, cx);
-        let Some(f) = self.buffer(id) else {
+        let Some(f) = self.editor.buffers.get(id) else {
             return false;
         };
         let input = f.input.clone();
@@ -901,7 +903,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return;
         };
         if f.gutter.peek.take().is_some() {
@@ -916,7 +918,7 @@ impl LyrelApp {
         let Some(id) = self.tab_code().and_then(TabCode::active_id) else {
             return false;
         };
-        let Some(f) = self.buffer_mut(id) else {
+        let Some(f) = self.editor.buffers.get_mut(id) else {
             return false;
         };
         if f.gutter.peek.take().is_none() {
@@ -933,7 +935,7 @@ impl LyrelApp {
         id: BufferId,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let f = self.buffer(id)?;
+        let f = self.editor.buffers.get(id)?;
         let peek = f.gutter.peek.as_ref()?;
         let position = match peek.anchor {
             PeekAnchor::Point(p) => p + gpui_kit::point(px(8.), px(4.)),
@@ -1260,12 +1262,23 @@ mod tests {
                 .tab_code()
                 .and_then(TabCode::active_id)
                 .expect("a buffer");
-            let input = app.buffer(id).expect("the buffer").input.clone();
+            let input = app
+                .editor
+                .buffers
+                .get(id)
+                .expect("the buffer")
+                .input
+                .clone();
             input.update(cx, |state, cx| {
                 state.set_value("one\nTWO\nthree\nfour\nfive\n", window, cx);
                 state.focus(window, cx);
             });
-            app.buffer_mut(id).unwrap().gutter.set_base_for_test(base);
+            app.editor
+                .buffers
+                .get_mut(id)
+                .unwrap()
+                .gutter
+                .set_base_for_test(base);
             (id, input)
         });
         vcx.run_until_parked();
@@ -1307,7 +1320,7 @@ mod tests {
         let peek_open = |app: &gpui_kit::Entity<LyrelApp>,
                          vcx: &mut gpui_kit::VisualTestContext| {
             app.update_in(vcx, |app, _, _| {
-                app.buffer(id).unwrap().gutter.peek.is_some()
+                app.editor.buffers.get(id).unwrap().gutter.peek.is_some()
             })
         };
         app.update_in(&mut vcx, |app, window, cx| {

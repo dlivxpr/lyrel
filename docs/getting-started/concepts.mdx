@@ -43,10 +43,69 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 - **崩溃并不意味着一切丢失。** 窗格恢复时会显示之前的内容：每个窗格输出末尾的一段内容会按容量上限保存在磁盘上，并在具有相同 ID 的窗格重新打开时交给它。
 - **停止所有进程需要明确操作。** 托盘菜单中的*退出并停止服务器…*是结束所有进程的唯一常规方式，而且操作前会发出警告。
 
-实现中，`lyrel-core` 的 `daemon/pane.rs` 持有会话运行态、PTY 和连接；`daemon/pane/launch.rs`
-负责 shell、工作目录与环境准备，`daemon/pane/replay.rs` 负责有界输出缓冲、几何分段与回放。
+实现中，`lyrel-core` 的 `daemon/pane.rs` 中 `DaemonPane` 持有会话身份与生命周期权威；
+`daemon/pane/lifecycle.rs` 私有持有 PTY master／child、集成临时目录及原生 SSH channel handle，负责平台资源接入、进程探测、resize 和关闭。
+`daemon/pane/launch.rs` 仍是 shell、工作目录与环境准备的唯一实现，`daemon/pane/replay.rs` 仍负责有界输出缓冲及几何分段。
+`daemon/pane/subscriptions.rs` 拥有控制器／观察者身份、epoch、顺序回放、广播、剪贴板权限和各输出流的背压；
+`daemon/pane/subscriptions/capacity.rs` 拥有随连接存活的图形容量租约。
 桌面的 `src/terminal/paste.rs` 独立处理剪贴板文件／图片路径、远端私有暂存目录及上传生命周期；
 `TerminalView` 只负责输入投递和失败提示。这些内部职责拆分不改变协议、配置或会话恢复规则。
+
+新控制器先接收模式、文字／几何和图形回放，再接收对应状态与实时输出；接管只替换旧控制器，不替换观察者。
+观察者始终只读，其回放与实时输出共用独立预算：停止读取或已经断开的观察者会被移除，不能阻塞控制器输出。
+图形权威状态仍属于原 pane，回放准入不创建新的 shell，也不在容量不足时静默丢图。
+订阅转换与输出排序仍在原有 `PaneState` 锁内完成；图形授权等待在锁外进行，容量租约锁仍先于 pane 锁。
+退出协调位于 `daemon/pane/lifecycle/exit.rs`：reader 在转发 EOF 前的输出后报告退出，Windows 监视器在后台释放 ConPTY master，释放时不持有 master slot 锁。
+监视器沿用既有 2 秒排空窗口；继承输出管道的后代进程阻止 EOF 时，仍按原策略有界报告，不把窗口误当作无限排空保证。
+reader 与监视器共享同一个单次报告者；退出码探测继续使用有界 `try_lock`，主动 teardown 不额外广播 `Exited` 或竞争回收。
+Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor／child，恢复 close-on-exec、查询内核尺寸，并保留原进程组信号规则；不重启 shell。
+原生 SSH 关闭 shell channel，不使用本地 PTY 的信号或 ConPTY 排空规则。所有 facts／subscriptions／graphics 的退出转换仍分借同一 `PaneState` 锁，未增加锁或 UI join。
+相关回归分别归入 `lifecycle/tests.rs`、`lifecycle/exit/tests.rs` 和 `lifecycle/inherited/tests.rs`；真实 daemon 消费者继续覆盖最终输出与退出码，
+显式 `native_ssh_lifecycle` 集成用例复用隔离 SSH fixture，验证真实原生 shell channel 的最终输出、单次退出和主动关闭静默语义。
+这些是验证入口，不是本轮已执行的通过声明；Windows、Unix 与真实 SSH 的运行证据需要分别记录。
+
+桌面的 `src/terminal/remote/reader.rs` 由 `ReaderTask` 管理单次 reader 生命周期，
+私有 `FrameReader` 同时拥有 parser、键盘／终端模式、回放位置和帧缓冲；连接编排只启动或退休 reader。
+回放与实时文字、尺寸回显、剪贴板请求及图形更新仍由同一线程按流顺序消费，回放期间不重新回答历史查询或重放副作用。
+退休先设置取消栅栏并使旧 decoder 代次失效，不等待静默连接退出；图形权威仍在 daemon，桌面只维护派生缓存与视口报告。
+
+连接接入由 `src/terminal/remote/handshake.rs` 的 `PaneHandshake` 负责：路由、协议协商、
+图形容量通告、Spawn／Attach 的应答分类及预读字节移交集中在此处。只有明确的“pane 不存在”
+应答允许放弃原会话；静默、断流和图形 admission 失败不等于会话消失。本地、远程工作区与
+原生 SSH 仍分别保留原有 Host、PTY 来源及远程剪贴板授权规则。
+
+`remote/connection.rs` 的私有 `PaneConnection` 拥有 reader／writer 的配对、链接替换、
+resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/writer.rs` 独立拥有写队列、
+背压与每条链接只报告一次的输入失败。替换时先退休旧 reader／decoder，再清理旧事件与
+剪贴板请求、重置呈现、安装 successor，随后替换 writer、重新发布 viewport 并同步当前尺寸。
+写入只入队，关闭最多等待既有短暂排空宽限，不在 UI 线程 join 静默 socket 线程。
+冷 attach 的 agent 回放仍是初始基线；relink 则沿用原视图的活动基线，不吞掉断线期间完成的状态变化。
+
+连接迁移后的原生验收必须使用专用配置与会话，以下步骤是验收流程，不代表已经执行：
+
+1. 为 GUI、CLI 和 daemon 指定同一个全新的 `--config-dir <isolated-dir>`，为测试远端另建隔离 daemon 配置；不要连接已安装实例或真实工作会话。
+2. 在隔离 GUI 新建 pane，记录 CLI `pane ls --json` 的 pane ID、工作区归属和 shell PID；通过 GUI 输入 `echo before-link`，用同一隔离 CLI 的 `capture <pane> --plain` 确认输出。
+3. 对专用远程工作区仅中断其测试 transport，保留远端 daemon 和 shell。断开期间调整分屏尺寸，确认其他 pane 仍能输入、窗口仍可交互；恢复同一 transport 后等待原 pane 重连，而不是重启服务器或新建 shell。
+4. 再次记录 pane ID、归属和 shell PID，必须与断开前一致；通过 GUI 输入 `echo after-link`，确认原 pane 和 CLI capture 都出现新输出，且当前尺寸生效、输入没有落到相邻 pane。
+5. 在同一专用会话中往返切换可见／隐藏 pane，并单独退出、重开 GUI 验证冷 attach。记录重连期间及冷 attach 后的 agent 未读／完成提示；Windows 的静默旧 peer、旧 reader 不能覆盖 successor 网格／decoder 的回归另由真实 socket 消费者覆盖。Windows 与 macOS 的原生结果分别记录，不能互相替代。
+
+### 内部职责归属
+
+这些模块将状态与转换规则放在一起，而不只是把协调器的方法分散到文件中：
+
+| 能力 | 状态与行为所有者 | 协调器保留的工作 |
+|---|---|---|
+| 工作台 | `ui/tab` 的 `Tab`／`TabSet`、`session_lifecycle`、`pending_pane`、`window_chrome`、搜索与转发表单模块 | `LyrelApp` 组合窗口、执行跨能力导航并交接焦点 |
+| 终端交互 | `PromptInput`、`TerminalHistory`、`TerminalCompletion`、`SelectionScroll`、`AgentActivity`、`LinkInteraction`、`TerminalLifecycle` | `TerminalView` 保留 GPUI 实体身份、绘制、事件适配与任务调度 |
+| 文档编辑 | `EditorBuffers` 管理 Host-aware 缓冲区与加载／监视；`EditorPanelState` 管理保存与未保存提示 | 工作台执行保存成功后捕获的关闭意图；退休分组不能转而关闭新的呈现 |
+| 布局同步 | `tree_sync/projection`、`reconcile`、`lifecycle::WindowSync` 分别拥有投影、操作排序、队列与恢复转换 | 原同步入口执行 I/O 与 GPUI 结果应用；`MachineMirrors` 仍独立 |
+| 连接与 daemon | `PaneConnection`、`LinkWriter`、`FrameReader` 与 daemon 的 facts／subscriptions／lifecycle | `RemoteTerminal` 装配客户端；`DaemonPane` 保留会话权威和原有锁内顺序 |
+| CLI | `crates/lyrel-cli/src/commands/` 按命令族处理目标、执行与输出 | 原 `execute`、`Outcome` 和 `Backend` 契约不变 |
+
+接口传递目标身份、Host、借用数据或语义结果，不向能力模块开放整个可变工作台。
+本次迁移没有改变协议版本、持久化格式、第三方依赖或平台范围；既有 settings、paste、launch 与 replay 实现仍是唯一入口。
+协调器并非零方法：视图组合、跨能力操作与单流排序仍需集中；搜索文件索引、SCM、SFTP 等未纳入独立所有权重写的功能不因主文件缩短就被视为已解耦。
+
 
 <Warning>
   重启服务器会结束该机器上所有窗格中的所有进程，包括 shell、智能体和 SSH 会话。布局会保留，并在恢复时启动新的 shell。未经询问，切勿代他人执行此操作。
