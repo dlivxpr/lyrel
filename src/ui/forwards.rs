@@ -1055,4 +1055,24 @@ mod managed_forward_gpui_tests {
             assert!(app.loopback_panel.mf_error.is_some());
         });
     }
+
+    #[gpui_kit::test]
+    fn an_unanswered_refresh_preserves_known_forward_rules(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.loopback_panel.managed = vec![listening(1)];
+            app.refresh_managed_forwards(1, cx);
+            assert_eq!(app.loopback_panel.managed(), &[listening(1)]);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn an_unanswered_switch_and_refresh_preserve_known_forward_rules(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.loopback_panel.managed = vec![listening(1)];
+            app.set_managed_forward_enabled(1, 1, false, window, cx);
+            assert_eq!(app.loopback_panel.managed(), &[listening(1)]);
+        });
+    }
 }
