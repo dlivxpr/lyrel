@@ -30,7 +30,7 @@ fn browser_import_uses_selected_profile_keeps_material_out_of_vault_and_refuses_
     sample_firefox(&root, "a.personal", "unselected-personal-token");
     let selected = sample_firefox(&root, "z.work", "selected-work-token");
     std::fs::write(root.join("profiles.ini"), "[Profile0]\nName=Personal\nIsRelative=1\nPath=Profiles/a.personal\n[Profile1]\nName=Work\nIsRelative=1\nPath=Profiles/z.work\n").unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     let vault = Arc::new(InMemoryCredentialStore::new());
     let http = Arc::new(Http::default());
     install(
@@ -40,7 +40,7 @@ fn browser_import_uses_selected_profile_keeps_material_out_of_vault_and_refuses_
         http.clone(),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-source");
     vcx.simulate_keystrokes("down down enter");
@@ -186,7 +186,7 @@ fn harness_grant_settings_workflow_uses_real_http_header_and_persists_only_valid
     });
     let dir = tempfile::tempdir().unwrap();
     let vault = Arc::new(InMemoryCredentialStore::new());
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     install(
         &mut vcx,
         dir.path().join("usage.json"),
@@ -194,7 +194,7 @@ fn harness_grant_settings_workflow_uses_real_http_header_and_persists_only_valid
         Arc::new(LoopbackHttp(format!("http://{address}/controlled-summary"))),
         false,
     );
-    open(&app, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-source");
     vcx.simulate_keystrokes("down enter");
@@ -231,7 +231,7 @@ fn harness_grant_settings_workflow_uses_real_http_header_and_persists_only_valid
 #[gpui_kit::test]
 fn escape_dismisses_source_picker_before_form_and_restores_previous_focus(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = harness(cx);
+    let (workspace, mut vcx) = harness(cx);
     install(
         &mut vcx,
         dir.path().join("usage.json"),
@@ -239,7 +239,7 @@ fn escape_dismisses_source_picker_before_form_and_restores_previous_focus(cx: &m
         Arc::new(Http::default()),
         false,
     );
-    open(&app, &mut vcx);
+    let app = open(&workspace, &mut vcx);
     // The themed native Button deliberately preserves focus on pointer activation.
     // Keyboard-trigger focus restoration is exercised by the narrow-window test.
     let previous_focus = vcx.update(|window, cx| window.focused(cx).unwrap());

@@ -9,11 +9,19 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use fixture::{NativeSshFixture, hex, status, unhex, win_size};
+use fixture::{NativeSshFixture, hex, status, win_size};
 use lyrel_core::core::kitty_graphics::{GraphicsUpdate, Image, Placement};
 use lyrel_core::daemon::protocol::{self, ClientMsg, DaemonMsg, ShellSpec};
 use lyrel_core::daemon::transport::Stream;
 use lyrel_core::host::Host;
+
+fn unhex(text: &str) -> Vec<u8> {
+    assert_eq!(text.len() % 2, 0);
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+        .collect()
+}
 
 fn next_serial() -> u64 {
     // A fresh consumer receives the sender's old DONE/REPLY lines in Snapshot.

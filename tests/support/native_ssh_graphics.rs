@@ -44,14 +44,6 @@ pub fn hex(bytes: &[u8]) -> String {
     result
 }
 
-pub fn unhex(text: &str) -> Vec<u8> {
-    assert_eq!(text.len() % 2, 0);
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
-}
-
 pub fn win_size() -> WinSize {
     WinSize {
         cols: 80,

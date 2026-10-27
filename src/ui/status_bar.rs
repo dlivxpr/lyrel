@@ -406,7 +406,7 @@ mod tests {
             settle(&mut vcx);
             vcx.update(|window, cx| window.click("status-settings", cx));
             settle(&mut vcx);
-            assert!(app.read_with(&vcx, |app, _| app.active_settings().is_some()));
+            assert!(app.read_with(&vcx, |app, _| app.settings.is_some()));
             vcx.simulate_keystrokes("escape");
             settle(&mut vcx);
         }
@@ -469,10 +469,10 @@ mod tests {
                     window.click("status-settings", cx);
                 });
                 settle(&mut vcx);
-                assert!(app.read_with(&vcx, |app, _| app.active_settings().is_some()));
+                assert!(app.read_with(&vcx, |app, _| app.settings.is_some()));
                 vcx.simulate_keystrokes("escape");
                 settle(&mut vcx);
-                assert!(app.read_with(&vcx, |app, _| app.active_settings().is_none()));
+                assert!(app.read_with(&vcx, |app, _| app.settings.is_none()));
                 if filled {
                     vcx.dispatch_action(ToggleCodePanel);
                     settle(&mut vcx);

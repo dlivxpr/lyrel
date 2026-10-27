@@ -19,7 +19,7 @@ fn cli_agent(agent: HookAgent) -> crate::core::cli_agent::CLIAgent {
     }
 }
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn render_settings_agents(&self, cx: &mut Context<Self>) -> AnyElement {
         Self::settings_page([
             self.render_agent_hooks_group(cx),
@@ -538,5 +538,243 @@ fn integration_diagnostic(diagnostic: &crate::core::agent_hooks::HooksDiagnostic
             L10nKey::IntegrationOpenCodeDisabled,
             &[("path", &path.display().to_string()), ("pattern", pattern)],
         ),
+    }
+}
+
+impl SettingsWindow {
+    pub(crate) fn agent_hooks_machines(
+        &self,
+        cx: &mut App,
+    ) -> Vec<crate::ui::settings::AgentHooksMachine> {
+        use crate::ui::settings::AgentHooksMachine;
+        let mut out = vec![AgentHooksMachine {
+            host: crate::ui::host_ops::HostId::LOCAL,
+            label: t(L10nKey::AppAgentHooksThisComputer).to_string(),
+        }];
+        let configured = crate::ui::remote_connect::available_hosts(cx);
+        for id in crate::ui::host_registry::HostRegistry::ids(cx) {
+            if id.is_local() {
+                continue;
+            }
+            let label = configured
+                .iter()
+                .find(|h| h.target.host_id() == id)
+                .map(|h| h.label.clone())
+                .unwrap_or_else(|| t(L10nKey::AppAgentHooksRemoteMachine).to_string());
+            out.push(AgentHooksMachine { host: id, label });
+        }
+        out
+    }
+
+    pub(crate) fn agent_hooks_offline_count(&self, cx: &mut App) -> usize {
+        let connected = crate::ui::host_registry::HostRegistry::ids(cx);
+        cx.global::<Config>()
+            .ssh_profiles
+            .iter()
+            .filter(|p| {
+                !connected
+                    .contains(&crate::core::session::RemoteTarget::Profile { id: p.id }.host_id())
+            })
+            .count()
+    }
+
+    pub(crate) fn select_agent_hooks_host(
+        &mut self,
+        host: crate::ui::host_ops::HostId,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(s) = self.settings.as_mut() {
+            if s.agent_hooks_host == host {
+                return;
+            }
+            s.agent_hooks_host = host;
+            s.agent_hooks_note = None;
+            s.agent_hooks_states = crate::ui::settings::AgentHooksView::Loading;
+        }
+        self.load_agent_hooks_states(cx);
+        cx.notify();
+    }
+
+    pub(super) fn load_agent_hooks_states(&mut self, cx: &mut Context<Self>) {
+        use crate::core::agent_hooks::{HookAgent, HookTarget};
+        use crate::ui::settings::{AgentHookRow, AgentHooksView};
+
+        let Some(host_id) = self.settings.as_ref().map(|s| s.agent_hooks_host) else {
+            return;
+        };
+        let seq = match self.settings.as_mut() {
+            Some(s) => {
+                s.agent_hooks_seq += 1;
+                s.agent_hooks_seq
+            }
+            None => return,
+        };
+        let Some((host, home)) = self.agent_hooks_link(host_id, cx) else {
+            if let Some(s) = self.settings.as_mut() {
+                s.agent_hooks_states = AgentHooksView::Unavailable(Self::agent_hooks_offline_msg());
+            }
+            cx.notify();
+            return;
+        };
+        let launch_commands = cx.global::<Config>().agent_launch.clone();
+
+        crate::ui::host_ops::HostOps::run(
+            host,
+            cx,
+            move |h| {
+                let target = match &home {
+                    Some(home) => HookTarget::remote(h, home.clone()),
+                    None => HookTarget::local(h)?,
+                }
+                .with_launch_commands(&launch_commands);
+                Some(
+                    HookAgent::ALL
+                        .into_iter()
+                        .map(|agent| AgentHookRow {
+                            agent,
+                            state: crate::core::agent_hooks::hooks_state(&target, agent),
+                            target: agent.target_display(&target),
+                            diagnostic: crate::core::agent_hooks::hooks_diagnostic(&target, agent),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            },
+            move |this, rows, cx| {
+                if let Some(s) = this.settings.as_mut()
+                    && s.agent_hooks_seq == seq
+                {
+                    s.agent_hooks_states = match rows {
+                        Some(rows) => AgentHooksView::Ready(rows),
+                        None => AgentHooksView::Unavailable(
+                            t(L10nKey::AppAgentHooksNoHomeDir).to_string(),
+                        ),
+                    };
+                    cx.notify();
+                }
+            },
+        );
+    }
+
+    fn agent_hooks_offline_msg() -> String {
+        t(L10nKey::AppAgentHooksOffline).to_string()
+    }
+
+    fn agent_hooks_link(
+        &self,
+        host_id: crate::ui::host_ops::HostId,
+        cx: &mut App,
+    ) -> Option<(crate::ui::host_ops::SharedHost, Option<std::path::PathBuf>)> {
+        let host = crate::ui::host_registry::HostRegistry::get(cx, host_id)?;
+        if host_id.is_local() {
+            return Some((host, None));
+        }
+        if !host.is_connected() {
+            return None;
+        }
+        let home = crate::ui::remote_connect::HostLinks::home(cx, host_id)?;
+        Some((host, Some(home)))
+    }
+
+    pub(crate) fn settings_install_agent_hooks(
+        &mut self,
+        agent: crate::core::agent_hooks::HookAgent,
+        cx: &mut Context<Self>,
+    ) {
+        self.run_agent_hooks_action(agent, true, cx);
+    }
+
+    pub(crate) fn settings_uninstall_agent_hooks(
+        &mut self,
+        agent: crate::core::agent_hooks::HookAgent,
+        cx: &mut Context<Self>,
+    ) {
+        self.run_agent_hooks_action(agent, false, cx);
+    }
+
+    /// Words a hook install or removal for the note in Settings.
+    ///
+    /// `agent_hooks` returns what it did rather than a sentence, because it
+    /// lives in `lyrel-core` and cannot reach `src/ui/i18n` — it used to hand
+    /// back English prose, which a Chinese or Japanese UI then showed as-is.
+    fn agent_hooks_outcome_msg(outcome: &crate::core::agent_hooks::HookOutcome) -> String {
+        use crate::core::agent_hooks::HookOutcome as O;
+        match outcome {
+            O::Installed => t(L10nKey::AppAgentHooksInstalled).to_string(),
+            O::Removed => t(L10nKey::AppAgentHooksRemoved).to_string(),
+            O::NothingInstalled => t(L10nKey::AppAgentHooksNothingInstalled).to_string(),
+            O::NoLyrelHooks => t(L10nKey::AppAgentHooksNoLyrelHooks).to_string(),
+        }
+    }
+
+    fn run_agent_hooks_action(
+        &mut self,
+        agent: crate::core::agent_hooks::HookAgent,
+        install: bool,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::core::agent_hooks::HookTarget;
+
+        let Some(host_id) = self.settings.as_ref().map(|s| s.agent_hooks_host) else {
+            return;
+        };
+        let Some((host, home)) = self.agent_hooks_link(host_id, cx) else {
+            if let Some(s) = self.settings.as_mut() {
+                s.agent_hooks_note = Some((agent, Self::agent_hooks_offline_msg()));
+                s.agent_hooks_states = crate::ui::settings::AgentHooksView::Unavailable(
+                    Self::agent_hooks_offline_msg(),
+                );
+            }
+            cx.notify();
+            return;
+        };
+
+        if let Some(s) = self.settings.as_mut() {
+            s.agent_busy.insert(agent);
+            s.agent_touched.insert(agent);
+        }
+        cx.notify();
+        let launch_commands = cx.global::<Config>().agent_launch.clone();
+        crate::ui::host_ops::HostOps::run(
+            host,
+            cx,
+            move |h| {
+                let target = match &home {
+                    Some(home) => HookTarget::remote(h, home.clone()),
+                    None => HookTarget::local(h).ok_or_else(|| {
+                        anyhow::anyhow!("{}", t(L10nKey::AppAgentHooksHomeDirUnresolved))
+                    })?,
+                }
+                .with_launch_commands(&launch_commands);
+                if install {
+                    crate::core::agent_hooks::install_hooks(&target, agent)
+                } else {
+                    crate::core::agent_hooks::uninstall_hooks(&target, agent)
+                }
+            },
+            move |this, result, cx| {
+                if let Some(s) = this.settings.as_mut() {
+                    s.agent_busy.remove(&agent);
+                    s.agent_hooks_note = Some((
+                        agent,
+                        match result {
+                            Ok(outcome) => Self::agent_hooks_outcome_msg(&outcome),
+                            // Every sibling error names its action; this one
+                            // said only "Failed:", leaving the note that
+                            // reports it silent about which half of the
+                            // toggle had not happened.
+                            Err(e) => t_fmt(
+                                match install {
+                                    true => L10nKey::AppAgentHooksInstallFailed,
+                                    false => L10nKey::AppAgentHooksRemoveFailed,
+                                },
+                                &[("error", &e.to_string())],
+                            ),
+                        },
+                    ));
+                }
+                this.load_agent_hooks_states(cx);
+                cx.notify();
+            },
+        );
     }
 }

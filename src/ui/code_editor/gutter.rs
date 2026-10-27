@@ -799,6 +799,10 @@ impl LyrelApp {
             return;
         }
         self.update_config(cx, |cfg| cfg.editor_git_gutter = on);
+        self.apply_editor_git_gutter(on, cx);
+    }
+
+    pub(crate) fn apply_editor_git_gutter(&mut self, on: bool, cx: &mut Context<Self>) {
         let ids: Vec<BufferId> = self.editor.buffers.iter().map(|f| f.id()).collect();
         for id in ids {
             let Some(f) = self.buffer_mut(id) else {

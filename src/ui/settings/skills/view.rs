@@ -5,7 +5,7 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::text::TextView;
 use gpui_kit::rems;
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn render_settings_skills(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(s) = self.active_settings() else {
             return div().into_any_element();

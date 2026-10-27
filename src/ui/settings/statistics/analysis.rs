@@ -30,7 +30,7 @@ enum GroupKind {
     Projects,
 }
 impl AnalysisState {
-    pub(super) fn new(cx: &mut Context<LyrelApp>) -> Self {
+    pub(super) fn new(cx: &mut Context<SettingsWindow>) -> Self {
         let date = chrono::Local::now().date_naive();
         let state = Self {
             agent: None,
@@ -220,7 +220,7 @@ pub(super) fn detail(totals: &Totals) -> String {
         format!("{native}\n{estimates}")
     }
 }
-impl LyrelApp {
+impl SettingsWindow {
     pub(in crate::ui::settings) fn analysis_button(
         &self,
         id: &'static str,

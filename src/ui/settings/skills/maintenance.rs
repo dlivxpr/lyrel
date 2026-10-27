@@ -144,7 +144,7 @@ fn removal_message(status: &RemovalStatus) -> String {
         ),
     }
 }
-impl LyrelApp {
+impl SettingsWindow {
     fn maintenance_current(
         &mut self,
         session: u64,

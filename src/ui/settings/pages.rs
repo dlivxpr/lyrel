@@ -7,7 +7,7 @@ use super::kit::{self, BtnKind, Stepper, Tk, fs};
 use super::shell::{MenuEntry, SearchOption};
 use super::*;
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn render_settings_general(&self, cx: &mut Context<Self>) -> AnyElement {
         let cfg = cx.global::<Config>();
         let current_lang = Self::normalize_gui_language(&cfg.gui_language);
@@ -314,8 +314,8 @@ impl LyrelApp {
                     .iter()
                     .any(|(tag, value)| tag == "liga" && *value != 0)
         });
-        let font_size = self.font_size;
-        let line_height = self.line_height;
+        let font_size = cfg.font_size;
+        let line_height = cfg.line_height;
         let ui_font_size = self.ui_font_size(cx);
 
         let font_family_control = self.font_dropdown(
@@ -551,7 +551,7 @@ impl LyrelApp {
         let config = cx.global::<Config>();
         let overridden = window_overrides_active(config, cfg!(target_os = "windows"));
         let dim_inactive_panes = config.dim_inactive_panes;
-        let opacity = LyrelApp::effective_window_opacity(cx);
+        let opacity = SettingsWindow::effective_window_opacity(cx);
 
         const MIN: f32 = 0.2;
         const MAX: f32 = 1.0;
@@ -582,7 +582,7 @@ impl LyrelApp {
                 .into_iter()
                 .map(|backdrop| {
                     MenuEntry::item(
-                        t(crate::ui::app::window_backdrop_label_key(backdrop)),
+                        t(window_backdrop_label_key(backdrop)),
                         backdrop == current,
                         move |this, window, cx| this.set_window_backdrop(backdrop, window, cx),
                     )
@@ -590,7 +590,7 @@ impl LyrelApp {
                 .collect();
             self.settings_dropdown(
                 "window-backdrop",
-                t(crate::ui::app::window_backdrop_label_key(current)),
+                t(window_backdrop_label_key(current)),
                 None,
                 entries,
                 cx,
@@ -710,13 +710,7 @@ impl LyrelApp {
         // stays: a shell lyrel did not find still has to be reachable by path.
         // Detected shells only: a `custom_shells` row carries arguments this
         // picker would silently drop.
-        let shells: Vec<_> = self
-            .shells
-            .shells
-            .iter()
-            .filter(|shell| !shell.user_authored)
-            .cloned()
-            .collect();
+        let shells = (self.workspace.shells)(cx);
         let current_program = program_input.read(cx).value().trim().to_string();
         let platform_default_item: SharedString = if cfg!(windows) {
             "PowerShell".into()

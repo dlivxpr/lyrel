@@ -28,7 +28,7 @@ impl Transport for PublicRepository {
         false
     }
 }
-fn settle_install(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
+fn settle_install(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         cx.run_until_parked();
@@ -57,7 +57,7 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
     );
     let project = root.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&root.join("home"), cx);
@@ -204,7 +204,7 @@ fn public_install_review_cancel_and_confirm_write_only_explicit_project(cx: &mut
 #[gpui_kit::test]
 fn search_results_require_discovery_and_never_install_on_selection(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
@@ -265,7 +265,7 @@ impl Transport for SearchUnavailable {
 #[gpui_kit::test]
 fn registry_failure_stays_visible_and_does_not_create_candidates(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
@@ -294,7 +294,7 @@ fn registry_failure_stays_visible_and_does_not_create_candidates(cx: &mut TestAp
 #[gpui_kit::test]
 fn installer_escape_returns_to_browsing_without_writes_in_a_narrow_window(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);
@@ -360,7 +360,7 @@ fn late_repository_response_cannot_replace_new_source_or_explicit_project(cx: &m
     std::fs::create_dir(&project).unwrap();
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&temp.path().join("home"), cx);
@@ -424,7 +424,7 @@ fn remote_install_review_freezes_host_home_and_source_without_touching_local_twi
     let remote = root.join("remote/home");
     std::fs::create_dir_all(&remote).unwrap();
     let remote_id = HostId(404);
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&local, cx);
@@ -543,7 +543,7 @@ fn github_failures_explain_authorization_visibility_limits_and_network_without_w
 ) {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     vcx.simulate_resize(gpui_kit::size(px(1200.), px(1800.)));
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&home, cx);

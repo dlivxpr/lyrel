@@ -967,6 +967,7 @@ impl ImageStore {
             .min_by_key(|(_, received, unreferenced)| (!*unreferenced, *received))
     }
 
+    #[cfg(test)]
     pub fn snapshot(&self) -> Vec<RenderPlacement> {
         self.snapshot_with_placeholders(&[])
     }

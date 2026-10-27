@@ -1512,17 +1512,6 @@ impl RemoteTerminal {
         })
     }
 
-    /// The signals the sender thread raises a refused frame through, bundled
-    /// for the `LinkWriter` about to be installed. Read after `reader_quit` has
-    /// been swapped, so a relink's new sender answers to the new reader.
-    fn input_loss(&self) -> InputLoss {
-        InputLoss::new(
-            self.reader_quit.clone(),
-            self.exited_flag.clone(),
-            self.proxy.clone(),
-        )
-    }
-
     pub fn detach_link(&mut self) {
         self.link.send(ClientMsg::Detach);
         self.stop_reader();
@@ -3055,7 +3044,8 @@ impl std::error::Error for AttachUnanswered {}
 
 /// Whether `err` is an `Attach` that went unanswered, as opposed to refused or
 /// hung up on. The pane behind an unanswered attach may still be alive.
-pub fn attach_unanswered(err: &anyhow::Error) -> bool {
+#[cfg(all(test, unix))]
+fn attach_unanswered(err: &anyhow::Error) -> bool {
     err.chain()
         .any(|cause| cause.downcast_ref::<AttachUnanswered>().is_some())
 }

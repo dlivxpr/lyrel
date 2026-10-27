@@ -32,7 +32,7 @@ mod tests {
     use super::*;
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{TestAppContext, VisualTestContext};
-    fn settle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
+    fn settle(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             cx.background_executor.run_until_parked();
@@ -82,7 +82,7 @@ mod tests {
         std::fs::create_dir_all(&install).unwrap();
         let original = "---\nname: needle\ndescription: A uniquely searchable reference\n---\n# Actual project skill\n";
         std::fs::write(install.join("SKILL.md"), original).unwrap();
-        let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
         vcx.simulate_resize(gpui_kit::size(px(1200.), px(800.)));
         app.update_in(&mut vcx, |app, window, cx| {
             isolate_native_roots(&temp.path().join("native-home"), cx);
@@ -172,7 +172,7 @@ mod tests {
             original
         );
     }
-    pub(super) fn isolate_native_roots(home: &Path, cx: &mut Context<LyrelApp>) {
+    pub(super) fn isolate_native_roots(home: &Path, cx: &mut Context<SettingsWindow>) {
         std::fs::create_dir_all(home).unwrap();
         super::test_host::install(home, cx);
         let home = home.to_string_lossy();
@@ -199,7 +199,8 @@ mod tests {
             )
             .unwrap();
         }
-        let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
         app.update_in(&mut vcx, |app, window, cx| {
             isolate_native_roots(&temp.path().join("native-home"), cx);
             app.open_settings_section(SettingsSection::Skills, window, cx);
@@ -220,6 +221,10 @@ mod tests {
             assert_eq!(snapshot.filtered("new-installation", None).count(), 1);
             app.refresh_skills(cx);
             app.close_settings(window, cx);
+        });
+        vcx.run_until_parked();
+        let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
+        app.update_in(&mut vcx, |app, window, cx| {
             app.open_settings_section(SettingsSection::Skills, window, cx);
         });
         settle(&app, &mut vcx);
@@ -265,7 +270,7 @@ pub(crate) struct SkillsState {
     maintenance: maintenance::MaintenanceState,
 }
 impl SkillsState {
-    pub(crate) fn refresh_locale(&self, window: &mut Window, cx: &mut Context<LyrelApp>) {
+    pub(crate) fn refresh_locale(&self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
         self.query.update(cx, |input, cx| {
             input.set_placeholder(t(L10nKey::SkillsSearch), window, cx)
         });
@@ -296,7 +301,7 @@ fn state_key(state: DiscoveryState) -> L10nKey {
     }
 }
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn build_skills_state(
         &self,
         subs: &mut Vec<Subscription>,
@@ -508,9 +513,8 @@ impl LyrelApp {
             cx.notify();
             return;
         };
-        self.close_settings_then(window, cx, move |this, window, cx| {
-            this.editor_open_on_host(host, &path, window, cx)
-        });
+        self.close_settings(window, cx);
+        cx.emit(SettingsEvent::OpenFile(host, path));
     }
     fn skills_browse(&mut self, host_id: HostId, path: PathBuf, cx: &mut Context<Self>) {
         let Some(host) = HostRegistry::get(cx, host_id).filter(|h| h.is_connected()) else {

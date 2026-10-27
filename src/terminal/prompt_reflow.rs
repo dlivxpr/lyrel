@@ -30,7 +30,6 @@
 use rio_vt::ansi::ClearMode;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::Mode;
-use rio_vt::crosswords::grid::Dimensions as _;
 use rio_vt::crosswords::pos::{Column, Line, Pos};
 use rio_vt::event::EventListener;
 use rio_vt::performer::handler::Handler as _;
@@ -192,6 +191,7 @@ fn wrapped_line_start<T: EventListener>(term: &Crosswords<T>, line: Line) -> Lin
 mod tests {
     use super::*;
     use rio_vt::ansi::CursorShape;
+    use rio_vt::crosswords::grid::Dimensions as _;
     use rio_vt::event::{VoidListener, WindowId};
     use rio_vt::performer::handler::Processor;
 

@@ -31,7 +31,7 @@ impl Swatch {
     }
 }
 
-impl LyrelApp {
+impl SettingsWindow {
     fn theme_mode(cx: &App) -> ThemeMode {
         let cfg = cx.global::<Config>();
         if cfg.theme_follow_system {
@@ -561,12 +561,7 @@ impl LyrelApp {
         let seed: Vec<(String, Entity<ColorPickerState>)> = editor
             .seed
             .iter()
-            .map(|(edit, state)| {
-                (
-                    crate::ui::app::theme_edit_label(*edit).to_string(),
-                    state.clone(),
-                )
-            })
+            .map(|(edit, state)| (theme_edit_label(*edit).to_string(), state.clone()))
             .collect();
         let ansi: Vec<Entity<ColorPickerState>> =
             editor.ansi.iter().map(|(_, s)| s.clone()).collect();

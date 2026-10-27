@@ -202,16 +202,19 @@ impl LyrelApp {
     ) {
         let profile = profile_from_live_spec(spec);
         let jumped = spec.jump.is_some();
-        self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
-            this.open_ssh_profile_form(profile, window, cx);
-            if jumped {
-                // Silently dropping the hop would leave a host that saves fine and
-                // then cannot be reached.
-                window.notify_app(
-                    crate::ui::i18n::t(crate::ui::i18n::L10nKey::SshSaveDroppedJumpHost),
-                    cx,
-                );
-            }
+        self.open_settings_then(window, cx, move |this, window, cx| {
+            this.with_settings_edits_resolved(window, cx, move |this, window, cx| {
+                this.navigate_settings(crate::ui::settings::SettingsSection::Ssh, None, window, cx);
+                this.ssh_form_load(&profile, window, cx);
+                if jumped {
+                    // Silently dropping the hop would leave a host that saves fine and
+                    // then cannot be reached.
+                    window.notify_app(
+                        crate::ui::i18n::t(crate::ui::i18n::L10nKey::SshSaveDroppedJumpHost),
+                        cx,
+                    );
+                }
+            });
         });
     }
 

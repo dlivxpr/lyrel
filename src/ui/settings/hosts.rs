@@ -18,7 +18,7 @@ enum HostLine {
     Host(SshProfile),
 }
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(crate) fn render_settings_ssh(&self, cx: &mut Context<Self>) -> AnyElement {
         Self::settings_page([
             self.render_hosts_group(cx),
@@ -618,9 +618,8 @@ impl LyrelApp {
                         )
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
-                                this.close_settings_then(window, cx, move |this, window, cx| {
-                                    this.connect_ssh_profile(id, window, cx)
-                                });
+                                this.close_settings(window, cx);
+                                cx.emit(SettingsEvent::ConnectSsh(id));
                             },
                         )),
                     )

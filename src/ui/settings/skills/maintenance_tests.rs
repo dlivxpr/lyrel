@@ -27,7 +27,7 @@ impl Transport for UpdatedRepository {
         false
     }
 }
-fn settle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
+fn settle(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         cx.background_executor.run_until_parked();
@@ -45,7 +45,7 @@ fn settle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext) {
     }
 }
 /// Continues the real install workflow with actual user edits and cancellation.
-pub(crate) fn lifecycle(app: &Entity<LyrelApp>, cx: &mut VisualTestContext, project: &Path) {
+pub(crate) fn lifecycle(app: &Entity<SettingsWindow>, cx: &mut VisualTestContext, project: &Path) {
     let installation = project.join(".agents/skills/needle");
     let document = installation.join("SKILL.md");
     let lock = project.join("skills-lock.json");
@@ -182,7 +182,7 @@ fn ancestor_skill_requires_explicit_owner_project_switch_before_removal(
     )
     .unwrap();
     std::fs::write(project.join("skills-lock.json"), br#"{"version":1,"skills":{"ancestor":{"source":"example/skills","sourceType":"github","skillPath":"ancestor/SKILL.md"}}}"#).unwrap();
-    let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+    let (app, mut vcx) = crate::ui::settings::test_window::harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         super::super::tests::isolate_native_roots(&root.join("home"), cx);
         app.open_settings_section(SettingsSection::Skills, window, cx);

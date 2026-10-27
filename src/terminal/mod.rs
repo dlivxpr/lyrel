@@ -22,6 +22,7 @@ mod loopback;
 pub mod palette;
 pub(crate) mod pane_liveness;
 pub(crate) mod parked_cursor;
+mod paste;
 pub(crate) mod prompt_reflow;
 mod remote;
 mod reverse_search;
@@ -33,6 +34,6 @@ mod smart_select;
 mod typeahead;
 pub mod view;
 
-pub use remote::{PaneRoute, PaneWorkspace, RemoteTerminal, attach_refused, attach_unanswered};
+pub use remote::{PaneRoute, PaneWorkspace, RemoteTerminal, attach_refused};
 pub(crate) use remote::{SpawnCancellation, notify_desktop};
 pub use size::TermSize;

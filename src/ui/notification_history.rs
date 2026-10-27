@@ -522,11 +522,17 @@ fn source_app(window: &Window, cx: &App) -> Option<Entity<LyrelApp>> {
     if let Ok(app) = view.clone().downcast::<LyrelApp>() {
         return Some(app);
     }
-    view.downcast::<crate::ui::settings_window::SettingsWindow>()
+    let owner = view
+        .downcast::<crate::ui::settings_window::SettingsWindow>()
         .ok()?
         .read(cx)
-        .app
-        .upgrade()
+        .owner();
+    owner
+        .read(cx, |root: Entity<gpui_kit::component::Root>, cx| {
+            root.read(cx).view().clone().downcast::<LyrelApp>().ok()
+        })
+        .ok()
+        .flatten()
 }
 
 impl LyrelApp {

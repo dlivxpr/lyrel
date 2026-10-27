@@ -3,7 +3,7 @@
 
 use super::*;
 
-impl LyrelApp {
+impl SettingsWindow {
     pub(super) fn render_editor_group(&self, cx: &mut Context<Self>) -> AnyElement {
         let cfg = cx.global::<Config>();
         let (git_gutter, lsp, soft_wrap, markdown) = (
