@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Direction, Line, Pos, Side};
-use rio_vt::crosswords::{Crosswords, Mode};
+use rio_vt::crosswords::Mode;
 use rio_vt::selection::{Selection, SelectionType};
 
 use super::TermSize;
@@ -28,6 +28,7 @@ use super::paste::{
 use super::remote::RemoteTerminal;
 use super::reverse_search::{self, ReverseSearch};
 use super::scrollbar::{GridScroll, TerminalScrollHandle};
+use super::link::{LinkAt, LinkInteraction};
 use super::search::{LinkTarget, SearchState};
 use super::typeahead::{RawInput, Typeahead};
 use crate::core::actions::{
@@ -160,6 +161,7 @@ impl gpui_kit::EventEmitter<AgentDetected> for TerminalView {}
 /// directory and host — and the app opens it, because the editor and the file
 /// tree are its to drive.
 pub struct OpenFileRequested {
+    pub host_id: crate::ui::host_ops::HostId,
     pub path: std::path::PathBuf,
     pub line: Option<u32>,
     pub column: Option<u32>,
@@ -278,29 +280,6 @@ fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
     }
 }
 
-/// Which path dialect a pane's output is written in.
-///
-/// A pane running on this machine spells paths the way this OS does, and that
-/// is the end of it: `/etc` printed by a `cmd.exe` pane sitting on `C:` means
-/// `C:\etc`, exactly as `cd /etc` would there. Reading it as a rooted POSIX
-/// path would underline a file this machine has not got, and a link that
-/// cannot be opened is worse than no link.
-///
-/// A pane whose paths live somewhere else is asked instead — by the only thing
-/// that host ever says about its own spelling, the directory it reports. A
-/// `/`-rooted cwd is a POSIX host's. A pane that has not said where it is
-/// falls to POSIX: there is no local drive to measure it from either way, and
-/// every host lyrel installs a server on over SSH or WSL spells paths that way.
-fn link_path_style(
-    paths_are_local: bool,
-    host_cwd: Option<&std::path::Path>,
-) -> super::search::PathStyle {
-    use super::search::PathStyle;
-    match paths_are_local {
-        true => PathStyle::NATIVE,
-        false => host_cwd.map_or(PathStyle::Posix, PathStyle::of_dir),
-    }
-}
 
 pub struct TerminalView {
     pub terminal: RemoteTerminal,
@@ -388,27 +367,7 @@ pub struct TerminalView {
     /// The IME anchor this pane last asked the platform to place the
     /// candidate window at, while it had focus.
     ime_anchor: Option<gpui_kit::Bounds<Pixels>>,
-    last_hover_cell: Option<(usize, usize)>,
-    link_modifier_down: bool,
-    /// What this pane's host has said about paths printed in it, for panes
-    /// that cannot answer that from the local filesystem. Empty and unused on
-    /// a local pane, which resolves inline instead.
-    link_probes: super::link_probe::LinkProbeCache,
-    /// The repository the pane's directory sits in, once the host has been
-    /// asked, and the directory that answer belongs to. A second root for
-    /// relative paths: build output routinely names files from the workspace
-    /// root while the shell sits in a member crate.
-    link_repo_root: Option<(std::path::PathBuf, Option<std::path::PathBuf>)>,
-    link_repo_root_pending: bool,
-    /// The verdict of `should_show_context_menu` for the most recent right
-    /// mouse-down, latched so the menu builder — which gpui-component runs on a
-    /// deferred callback, one turn after the click — can still see the
-    /// modifiers the user actually held.
-    pub(super) context_menu_allowed: bool,
-    /// The file link the most recent right mouse-down landed on, latched for
-    /// the same reason [`context_menu_allowed`](Self::context_menu_allowed)
-    /// is: by the time the menu is built the pointer is only a memory.
-    menu_link: Option<super::search::LinkTarget>,
+    pub(super) links: LinkInteraction,
     scroll_debt: f32,
     /// Lines travelled under the zoom modifier that have not yet added up to a
     /// font-size step. Kept apart from [`scroll_debt`](Self::scroll_debt) so
@@ -519,7 +478,6 @@ pub struct TerminalView {
     editor_select_gesture: bool,
     editor_drag_word: Option<(usize, usize)>,
     editor_goal_col: Option<usize>,
-    pub(super) hovered_link: Option<HoveredLink>,
     /// How opaque the pane wants this terminal painted this frame: 1.0 at
     /// rest, [`crate::ui::pane::INACTIVE_DIM`] for an unfocused pane in a
     /// split, [`crate::ui::pane::LIFTED_DIM`] while the pane is being
@@ -536,22 +494,6 @@ pub struct TerminalView {
     _focus_subs: Vec<gpui_kit::Subscription>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct HoveredLink {
-    /// The cells to underline, one run per row. A link in a table cell
-    /// shares its rows with other cells, so its extent is not always one
-    /// stretch of the grid from a start to an end.
-    pub runs: Vec<(Pos, Pos)>,
-    /// Whether the modifier that would open this link is down.
-    ///
-    /// A link underlines as soon as the pointer reaches it, so the user can
-    /// see there is something there without holding anything. Only once the
-    /// modifier is down does it look and behave like something clickable:
-    /// promising a hand cursor over a link a plain click will not follow is
-    /// the kind of small lie that teaches people to stop trusting the
-    /// underline.
-    pub armed: bool,
-}
 
 enum LoopbackOpen {
     Forwarded(String),
@@ -559,29 +501,6 @@ enum LoopbackOpen {
     NotLoopback,
 }
 
-/// What sits under a cell, once the grid has been read.
-enum GridLink {
-    /// An OSC 8 hyperlink the emitter declared, with the extent it declared,
-    /// one run per row.
-    Hyperlink(String, Vec<(Pos, Pos)>),
-    /// The logical line the cell belongs to, the grid point of every character
-    /// in it, and which of those the cell is.
-    Text(String, Vec<Pos>, usize),
-}
-
-/// The outcome of asking what a cell links to.
-enum LinkAt {
-    /// A link, and the cells it covers as one run per row.
-    Found(LinkTarget, Vec<(Pos, Pos)>),
-    /// A token that parses as a path, that nothing has answered for.
-    /// `pending` separates the two reasons: the path is not there, or the host
-    /// that would know has not replied yet.
-    Unresolved {
-        candidate: super::search::FileCandidate,
-        pending: bool,
-    },
-    None,
-}
 
 /// What it takes to open one of a pane's loopback ports from this machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1556,13 +1475,7 @@ impl TerminalView {
             cell_geom: None,
             ime_anchor: None,
             report_mouse,
-            last_hover_cell: None,
-            link_modifier_down: false,
-            link_probes: Default::default(),
-            link_repo_root: None,
-            link_repo_root_pending: false,
-            context_menu_allowed: true,
-            menu_link: None,
+            links: LinkInteraction::default(),
             scroll_debt: 0.,
             zoom_debt: 0.,
             scroll_frac: 0.,
@@ -1631,7 +1544,6 @@ impl TerminalView {
             editor_select_gesture: false,
             editor_drag_word: None,
             editor_goal_col: None,
-            hovered_link: None,
             _focus_subs: focus_subs,
         }
     }
@@ -1655,8 +1567,7 @@ impl TerminalView {
         // reflow nothing, so a height-only drag stays cheap.
         let cols_changed = cols != self.terminal.size().cols;
         if (cols, rows) != (self.terminal.size().cols, self.terminal.size().rows) {
-            self.last_hover_cell = None;
-            self.hovered_link = None;
+            self.links.invalidate_geometry();
         }
         self.cell_width = cell_width;
         self.line_height = line_height;
@@ -1775,6 +1686,7 @@ impl TerminalView {
             self.default_title = label;
         }
         self.workspace = workspace;
+        self.links.invalidate_geometry();
     }
 
     pub fn pane_route(&self) -> crate::terminal::PaneRoute {
@@ -1999,6 +1911,7 @@ impl TerminalView {
     /// no way to do.
     #[cfg(test)]
     pub(crate) fn set_git_status_cwd_for_test(&mut self, cwd: Option<std::path::PathBuf>) {
+        if self.git_status_cwd != cwd { self.links.invalidate_geometry(); }
         self.git_status_cwd = cwd;
     }
 
@@ -4007,6 +3920,7 @@ impl TerminalView {
 
         let changed = self.git_status_cwd != cwd;
         self.git_status_cwd = cwd.clone();
+        if changed { self.links.invalidate_geometry(); }
         let Some(cwd) = cwd else {
             if changed {
                 cx.notify();
@@ -6002,14 +5916,6 @@ impl TerminalView {
             .child(Scrollbar::vertical(&self.scroll_handle).id("terminal-scrollbar"))
     }
 
-    fn grid_line(
-        term: &Crosswords<crate::terminal::remote::EventProxy>,
-        row: usize,
-    ) -> Option<Line> {
-        let line = Line(row as i32 - term.grid.display_offset() as i32);
-        (line >= term.topmost_line() && line <= term.bottommost_line()).then_some(line)
-    }
-
     pub fn open_link_at(
         &mut self,
         col: usize,
@@ -6051,40 +5957,30 @@ impl TerminalView {
         // click follows one. Without this the menu would go on offering to
         // open files in a pane where link detection is turned off.
         if !cx.global::<Config>().link_url {
-            self.menu_link = None;
+            self.links.forget_menu();
             return;
         }
         let include_loopback = self.can_forward_loopback(cx);
-        self.menu_link = match self.resolve_link_at(col, row, true, include_loopback, cx) {
-            LinkAt::Found(target @ LinkTarget::File { .. }, ..) => Some(target),
-            _ => None,
-        };
+        let target = self.resolve_link_at(col, row, true, include_loopback, cx);
+        self.links.capture_menu(target);
     }
 
     /// Drops a latched link, for a right click the application is taking.
     pub fn forget_menu_link(&mut self) {
-        self.menu_link = None;
+        self.links.forget_menu();
     }
 
     /// The path the context menu is about, if it is about one.
     fn menu_link_path(&self) -> Option<&std::path::Path> {
-        match self.menu_link.as_ref()? {
-            LinkTarget::File { path, .. } => Some(path),
-            LinkTarget::Url(_) => None,
-        }
+        self.links.menu().map(|link| link.path())
     }
 
     fn open_menu_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(LinkTarget::File {
-            path,
-            line,
-            column,
-            is_dir,
-        }) = self.menu_link.clone()
-        else {
-            return;
-        };
-        self.open_file_link(path, line, column, is_dir, window, cx);
+        let Some(link) = self.links.menu() else { return; };
+        let mode = link.open_mode(cx.global::<Config>().file_open_mode());
+        let host_id = link.host();
+        let LinkTarget::File { path, line, column, is_dir } = link.target().clone() else { return; };
+        self.deliver_file_link(path, line, column, is_dir, host_id, mode, window, cx);
     }
 
     /// "Open with Default App": the file link under the menu, handed to the
@@ -6092,7 +5988,7 @@ impl TerminalView {
     fn open_menu_link_with_default_app(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The menu only offers this for a local pane; a key binding could
         // still fire it on a remote one, where the path means nothing here.
-        if !self.host_id.is_local() {
+        if !self.links.menu().is_some_and(|link| link.host().is_local()) {
             return;
         }
         let Some(path) = self.menu_link_path().map(std::path::Path::to_path_buf) else {
@@ -6104,6 +6000,7 @@ impl TerminalView {
     }
 
     fn reveal_menu_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.links.menu().is_some_and(|link| link.host().is_local()) { return; };
         let Some(path) = self.menu_link_path().map(std::path::Path::to_path_buf) else {
             return;
         };
@@ -6135,19 +6032,22 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let cfg = cx.global::<Config>();
-        let mode = cfg.file_open_mode();
-        let command = cfg.link_file_command.clone();
-        // A path that was just resolved on another machine means nothing to a
-        // local opener: `open` and a user's `code --goto` would both be handed
-        // a path this filesystem never had, throwing away the one thing that
-        // made the link right and silently showing this machine's copy when
-        // one happens to exist. The editor is the only one that can reach the
-        // file, so it takes the click whatever the setting says.
-        let mode = match self.host_id.is_local() {
-            true => mode,
-            false => LinkFileOpen::Internal,
-        };
+        let mode = LinkInteraction::file_open_mode(self.host_id, cx.global::<Config>().file_open_mode());
+        self.deliver_file_link(path, line, column, is_dir, self.host_id, mode, window, cx);
+    }
+
+    fn deliver_file_link(
+        &mut self,
+        path: std::path::PathBuf,
+        line: Option<u32>,
+        column: Option<u32>,
+        is_dir: bool,
+        host_id: crate::ui::host_ops::HostId,
+        mode: LinkFileOpen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let command = cx.global::<Config>().link_file_command.clone();
         // Both external arms have to answer for a failed spawn (#542): a
         // misspelled `link_file_command` or a missing opener used to hit only
         // the log, and the link read as dead — while the path was only ever
@@ -6162,6 +6062,7 @@ impl TerminalView {
             // to the built-in editor beats the click doing nothing.
             (LinkFileOpen::Internal | LinkFileOpen::Command, _) => {
                 cx.emit(OpenFileRequested {
+                    host_id,
                     path,
                     line,
                     column,
@@ -6188,36 +6089,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let roots = self.link_roots(cx);
-        // A word that is not written like a path was never a link, and saying
-        // so on every modifier-click over ordinary output would be noise.
-        if !candidate.looks_like_a_path(roots.style) {
-            return false;
-        }
-        // The host has not answered yet. The underline is the promise that it
-        // has; before then, accusing it of losing the file would be a guess.
-        if pending {
-            return false;
-        }
-        // An absolute or `~`-rooted path was never measured from anywhere, so
-        // naming a directory it was "looked for under" would send the user to
-        // somewhere nothing was ever asked about.
-        let rooted = candidate.is_rooted(roots.style);
-        let root = match rooted {
-            true => None,
-            false => roots.dirs.into_iter().next(),
-        };
-        let message = match root {
-            Some(root) => t_fmt(
-                L10nKey::LinkFileNotUnder,
-                &[
-                    ("path", &candidate.path),
-                    ("dir", &root.display().to_string()),
-                ],
-            ),
-            None if rooted => t_fmt(L10nKey::LinkFileMissing, &[("path", &candidate.path)]),
-            None => t_fmt(L10nKey::LinkFileNoDirectory, &[("path", &candidate.path)]),
-        };
+        let Some(message) = self.links.unresolved_message(candidate, pending) else { return false; };
         window.notify_app(
             crate::ui::notification_history::Notification::info(message).pane(
                 self.owner_workspace(),
@@ -6310,6 +6182,15 @@ impl TerminalView {
         port_route_of(&self.loopback_plan(cx), self.host_id().is_local())
     }
 
+    fn sync_link_location(&mut self) {
+        self.links.retarget(
+            self.host_id,
+            self.effective_host_cwd(),
+            self.paths_are_local(),
+            self.cwd_is_on_host(),
+        );
+    }
+
     pub fn hover_link_at(
         &mut self,
         col: usize,
@@ -6317,107 +6198,43 @@ impl TerminalView {
         armed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        // A mouse crossing a pane lands on the same cell many times over.
-        // Nothing about the answer depends on where inside the cell the
-        // pointer is, so the work is worth doing once.
-        if self.last_hover_cell == Some((col, row)) && self.link_modifier_down == armed {
-            return self.hovered_link.is_some();
+        if let Some(found) = self.links.cached_hover(col, row, armed) { return found; }
+        let alt_screen = self.on_alt_screen();
+        if let Some((found, changed)) = self.links.prepare_hover(
+            &self.terminal.term, col, row, armed, cx.global::<Config>().link_url, alt_screen,
+        ) {
+            if changed { cx.notify(); }
+            return found;
         }
-        self.last_hover_cell = Some((col, row));
-        self.link_modifier_down = armed;
-        if !cx.global::<Config>().link_url {
-            self.clear_hovered_link(cx);
-            return false;
-        }
-        // A full-screen application drew what is on the grid and is watching
-        // the mouse itself, so pointing things out inside it is lyrel drawing
-        // on somebody else's window. Holding the modifier says the user wants
-        // lyrel's reading of the screen anyway, and then it is theirs to have.
-        if !armed && self.on_alt_screen() {
-            if self.hovered_link.take().is_some() {
-                cx.notify();
-            }
-            return false;
-        }
-        // Most of a screen is blanks, and reading one cell costs a fraction
-        // of lifting a whole soft-wrapped logical line out of the grid.
-        if self.cell_is_blank(col, row) {
-            if self.hovered_link.take().is_some() {
-                cx.notify();
-            }
-            return false;
-        }
+        self.sync_link_location();
         let include_loopback = self.can_forward_loopback(cx);
-        let next = self.link_span_at(col, row, armed, include_loopback, cx);
-        if next != self.hovered_link {
-            self.hovered_link = next;
-            cx.notify();
-        }
-        self.hovered_link.is_some()
-    }
-
-    /// Whether the cell under the pointer holds anything a link could be made
-    /// of.
-    fn cell_is_blank(&self, col: usize, row: usize) -> bool {
-        let term = self.terminal.term.lock();
-        let Some(line) = Self::grid_line(&term, row) else {
-            return true;
-        };
-        if col >= term.columns() {
-            return true;
-        }
-        let cell = &term.grid[line][Column(col)];
-        // The second column of a wide glyph is written as a space, and the
-        // logical line hands a click there back to the character that owns it.
-        // Reading it as empty would drop the underline on every other column
-        // of a path spelled in CJK or emoji.
-        if cell.wide() != rio_vt::crosswords::square::Wide::Narrow {
-            return false;
-        }
-        cell.c().is_whitespace()
+        let (found, changed) = self.links.resolve_hover(
+            &self.terminal.term, col, row, armed, include_loopback,
+            |host, cwd| cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+                .and_then(|cache| cache.repo_root_for(host, cwd))
+                .map(std::path::Path::to_path_buf),
+        );
+        self.request_link_work(cx);
+        self.flush_link_probes(cx);
+        if changed { cx.notify(); }
+        found
     }
 
     pub fn refresh_link_hover(&mut self, armed: bool, cx: &mut Context<Self>) -> bool {
-        let Some((col, row)) = self.last_hover_cell else {
-            self.link_modifier_down = armed;
-            return false;
-        };
+        let Some((col, row)) = self.links.refresh_cell(armed, false) else { return false; };
         self.hover_link_at(col, row, armed, cx)
     }
 
-    /// Runs the hover again from scratch, for when the answer may have
-    /// changed under a mouse that never moved: a probe landing, a repository
-    /// root arriving.
     fn recompute_link_hover(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some((col, row)) = self.last_hover_cell.take() else {
-            return false;
-        };
-        self.hover_link_at(col, row, self.link_modifier_down, cx)
+        let armed = self.links.modifier_down();
+        let Some((col, row)) = self.links.refresh_cell(armed, true) else { return false; };
+        self.hover_link_at(col, row, armed, cx)
     }
 
-    pub fn link_modifier_down(&self) -> bool {
-        self.link_modifier_down
-    }
+    pub fn link_modifier_down(&self) -> bool { self.links.modifier_down() }
 
     pub fn clear_hovered_link(&mut self, cx: &mut Context<Self>) {
-        self.last_hover_cell = None;
-        if self.hovered_link.take().is_some() {
-            cx.notify();
-        }
-    }
-
-    fn link_span_at(
-        &mut self,
-        col: usize,
-        row: usize,
-        armed: bool,
-        include_loopback: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<HoveredLink> {
-        match self.resolve_link_at(col, row, true, include_loopback, cx) {
-            LinkAt::Found(_, runs) => Some(HoveredLink { runs, armed }),
-            LinkAt::Unresolved { .. } | LinkAt::None => None,
-        }
+        if self.links.clear_hover() { cx.notify(); }
     }
 
     fn resolve_link_at(
@@ -6428,219 +6245,55 @@ impl TerminalView {
         include_loopback: bool,
         cx: &mut Context<Self>,
     ) -> LinkAt {
-        let Some(line) = self.link_line_at(col, row) else {
-            return LinkAt::None;
-        };
-        let (text, points, click_idx) = match line {
-            GridLink::Hyperlink(uri, runs) => {
-                return LinkAt::Found(LinkTarget::Url(uri), runs);
-            }
-            GridLink::Text(text, points, click_idx) => (text, points, click_idx),
-        };
-
-        // A pane whose paths belong to neither its host nor this machine —
-        // an `ssh` typed into a local shell — has nothing that can answer for
-        // them. It used to fall through to the local filesystem, so an
-        // absolute path that happened to exist on both ends opened *this*
-        // machine's copy without a word.
-        let files = include_files && self.cwd_is_on_host();
-        let roots = match files {
-            true => self.link_roots(cx),
-            false => super::search::LinkRoots::default(),
-        };
-        let local = self.host_id.is_local();
-        // Before the first probe, not after: `retarget` empties the cache when
-        // the host has changed, and doing that between recording a wanted path
-        // and draining it would throw the question away unasked.
-        self.link_probes.retarget(self.host_id);
-        let probes = &mut self.link_probes;
-        let mut pending = false;
-        let mut probe = |path: &std::path::Path, require_file: bool| {
-            let answer = match local {
-                true => super::search::local_probe(path, require_file),
-                false => probes.probe(path, require_file),
-            };
-            pending |= matches!(answer, super::search::Probe::Unknown);
-            answer
-        };
-        let link = super::search::link_at(&text, click_idx, &roots, files, &mut probe);
-        // `probe` holds the cache borrow; nothing below touches it, so the
-        // borrow ends here and `self` is whole again for the flush.
-        self.flush_link_probes(cx);
-
-        let link = link.or_else(|| {
-            include_loopback.then(|| {
-                super::loopback::loopback_url_span_at(&text, click_idx).map(|(start, end, url)| {
-                    super::search::LinkMatch {
-                        start,
-                        end,
-                        target: LinkTarget::Url(url),
-                    }
-                })
-            })?
-        });
-        match link {
-            Some(link) => {
-                let term = self.terminal.term.lock();
-                let runs = super::smart_select::row_runs(&term, &points[link.start..=link.end]);
-                LinkAt::Found(link.target, runs)
-            }
-            // Nothing answered. Hand back what the token *said* so a click can
-            // say so out loud instead of looking broken.
-            None => match files
-                .then(|| super::search::unresolved_candidate(&text, click_idx, roots.style))
-                .flatten()
-            {
-                Some(candidate) => LinkAt::Unresolved { candidate, pending },
-                None => LinkAt::None,
-            },
-        }
-    }
-
-    /// The logical line under a cell, or the OSC 8 hyperlink that cell
-    /// declares — which wins outright, because the emitter said what it meant.
-    fn link_line_at(&self, col: usize, row: usize) -> Option<GridLink> {
-        let term = self.terminal.term.lock();
-        let line = Self::grid_line(&term, row)?;
-        if col >= term.columns() {
-            return None;
-        }
-        let click = Pos::new(line, Column(col));
-
-        if let Some(hl) = term.cell_hyperlink(line, Column(col)) {
-            let uri = hl.uri().to_string();
-            if let Some((start, end)) = super::smart_select::hyperlink_run(&term, click) {
-                let runs = super::smart_select::grid_runs(start, end, term.columns());
-                return Some(GridLink::Hyperlink(uri, runs));
-            }
-        }
-
-        let (text, points, click_idx) = super::smart_select::logical_line_at(&term, click, true)?;
-        Some(GridLink::Text(text, points, click_idx))
-    }
-
-    /// The directories a relative path in this pane is measured from, best
-    /// first: where the work is happening, then the repository around it.
-    ///
-    /// Cargo, tsc and friends name files from the workspace root while the
-    /// shell sits in a member directory, so one root resolves only half of
-    /// what a build prints. The pane's own directory stays first, so a name
-    /// that exists in both is the near one.
-    fn link_roots(&mut self, cx: &mut Context<Self>) -> super::search::LinkRoots {
-        let local_home = self.host_id.is_local();
-        let style = self.link_path_style();
-        let Some(cwd) = self.effective_host_cwd() else {
-            return super::search::LinkRoots {
-                dirs: Vec::new(),
-                local_home,
-                style,
-            };
-        };
-        self.request_link_repo_root(&cwd, cx);
-        let mut dirs = vec![cwd.clone()];
-        if let Some((asked_for, Some(root))) = &self.link_repo_root
-            && *asked_for == cwd
-            && *root != cwd
-        {
-            dirs.push(root.clone());
-        }
-        super::search::LinkRoots {
-            dirs,
-            local_home,
-            style,
-        }
-    }
-
-    /// Which path dialect this pane's output is written in — see
-    /// [`link_path_style`].
-    fn link_path_style(&self) -> super::search::PathStyle {
-        link_path_style(self.paths_are_local(), self.effective_host_cwd().as_deref())
-    }
-
-    fn request_link_repo_root(&mut self, cwd: &std::path::Path, cx: &mut Context<Self>) {
-        if self.link_repo_root_pending
-            || self
-                .link_repo_root
-                .as_ref()
-                .is_some_and(|(asked_for, _)| asked_for == cwd)
-        {
-            return;
-        }
-        // The git-status probe asks this same question about this same
-        // directory on its own schedule and files the answer per host, so a
-        // hit there costs nothing and saves a round trip. Only a hit: the
-        // cache cannot tell "asked, and there is no repository" apart from
-        // "never asked", and treating the second as the first would nail a
-        // pane to one root forever.
-        let cached = cx
-            .try_global::<crate::terminal::git_status::GitStatusCache>()
-            .and_then(|cache| cache.repo_root_for(self.host_id, cwd))
-            .map(std::path::Path::to_path_buf);
-        if let Some(root) = cached {
-            self.link_repo_root = Some((cwd.to_path_buf(), Some(root)));
-            return;
-        }
-        let Some(host) = self.host(cx) else {
-            return;
-        };
-        self.link_repo_root_pending = true;
-        let cwd = cwd.to_path_buf();
-        crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
-            {
-                let cwd = cwd.clone();
-                move |h| h.repo_root(&cwd).ok().flatten()
-            },
-            move |view, root, cx| {
-                view.link_repo_root_pending = false;
-                view.link_repo_root = Some((cwd, root));
-                view.recompute_link_hover(cx);
-            },
+        self.sync_link_location();
+        let result = self.links.resolve(
+            &self.terminal.term, col, row, include_files, include_loopback,
+            |host, cwd| cx.try_global::<crate::terminal::git_status::GitStatusCache>()
+                .and_then(|cache| cache.repo_root_for(host, cwd))
+                .map(std::path::Path::to_path_buf),
         );
+        self.request_link_work(cx);
+        self.flush_link_probes(cx);
+        result
     }
 
-    /// Asks the host about every path a lookup could not answer for, in one
-    /// call, and re-runs the hover once the replies are in — the mouse may
-    /// have been resting on the link the whole time it took.
+    fn request_link_work(&mut self, cx: &mut Context<Self>) {
+        if !self.links.wants_root() { return; }
+        // Do not mark work in flight until there is a Host to carry it.
+        let Some(host) = self.host(cx) else { return; };
+        if let Some((epoch, cwd)) = self.links.request_root() {
+            crate::ui::host_ops::HostOps::run(
+                host, cx,
+                move |h| h.repo_root(&cwd).ok().flatten(),
+                move |view, root, cx| {
+                    view.sync_link_location();
+                    if view.links.land_root(epoch, root) { view.recompute_link_hover(cx); }
+                },
+            );
+        }
+    }
+
     fn flush_link_probes(&mut self, cx: &mut Context<Self>) {
-        if self.host_id.is_local() {
-            return;
-        }
-        // The host comes first: `take_wanted` moves the paths into the
-        // in-flight set on the promise that a call is about to carry them, and
-        // a host that has gone away between the hover and here would break
-        // that promise permanently — those paths would stay `Unknown` for the
-        // life of the pane, which looks exactly like the silent nothing this
-        // whole path exists to get rid of.
-        let Some(host) = self.host(cx) else {
-            return;
-        };
-        let wanted = self.link_probes.take_wanted();
-        if wanted.is_empty() {
-            return;
-        }
+        if self.host_id.is_local() { return; }
+        let Some(host) = self.host(cx) else { return; };
+        let (epoch, wanted) = self.links.take_probes();
+        if wanted.is_empty() { return; }
         crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
+            host, cx,
             move |h| {
                 use super::link_probe::Existence;
-                wanted
-                    .into_iter()
-                    .map(|path| {
-                        let existence = match h.stat(&path) {
-                            Ok(meta) if meta.is_dir => Existence::Dir,
-                            Ok(_) => Existence::File,
-                            Err(_) => Existence::Missing,
-                        };
-                        (path, existence)
-                    })
-                    .collect::<Vec<_>>()
+                wanted.into_iter().map(|path| {
+                    let existence = match h.stat(&path) {
+                        Ok(meta) if meta.is_dir => Existence::Dir,
+                        Ok(_) => Existence::File,
+                        Err(_) => Existence::Missing,
+                    };
+                    (path, existence)
+                }).collect::<Vec<_>>()
             },
-            |view, answers, cx| {
-                if view.link_probes.land(answers) {
-                    view.recompute_link_hover(cx);
-                }
+            move |view, answers, cx| {
+                view.sync_link_location();
+                if view.links.land_probes(epoch, answers) { view.recompute_link_hover(cx); }
             },
         );
     }
@@ -7365,8 +7018,7 @@ impl Render for TerminalView {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, ev: &MouseDownEvent, _window, _cx| {
-                    this.context_menu_allowed =
-                        should_show_context_menu(this.mouse_mode(), ev.modifiers.shift);
+                    this.links.record_menu_permission(this.mouse_mode(), ev.modifiers.shift);
                 }),
             )
             .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(cx.theme().drag_border.opacity(0.12)))
@@ -7462,7 +7114,7 @@ impl Render for TerminalView {
                 // and its right mouse-down listener is registered after ours
                 // (it wraps this element), so we cannot out-order it or veto it
                 // any earlier. See `should_show_context_menu` for the rule.
-                if !menu_view.read(cx).context_menu_allowed {
+                if !menu_view.read(cx).links.menu_allowed() {
                     return menu;
                 }
                 let view = menu_view.read(cx);
@@ -7470,7 +7122,7 @@ impl Render for TerminalView {
                 // what it can do goes above what the pane can do.
                 let menu = match view.menu_link_path() {
                     Some(path) => {
-                        let local = view.host_id.is_local();
+                        let local = view.links.menu().is_some_and(|link| link.host().is_local());
                         let reveal = match cfg!(target_os = "macos") {
                             true => L10nKey::AppMenuRevealInFinder,
                             false => L10nKey::AppMenuRevealInFolder,
@@ -7757,24 +7409,6 @@ enum SelectEndCopy {
     None,
     Grid,
     Editor,
-}
-
-/// Whether a right-click belongs to lyrel's own context menu rather than to the
-/// terminal application.
-///
-/// A TUI that has turned mouse reporting on (vim with `set mouse=a`, lazygit,
-/// tmux, …) draws its own right-button menus, so popping the host menu on top
-/// of the application's is a double delivery of one click — #251. While
-/// reporting is active the unmodified click is the application's alone; Shift
-/// is the escape hatch that reaches lyrel, matching how Shift already overrides
-/// mouse reporting for selection (`register_mouse_handlers`) and for the wheel
-/// (`wheel_route`).
-///
-/// This is the exact complement of the "forward the press to the app" branch in
-/// `TerminalElement::register_mouse_handlers`, which is why both call it: one
-/// click must never feed both consumers.
-pub(super) fn should_show_context_menu(mouse_mode: bool, shift: bool) -> bool {
-    !mouse_mode || shift
 }
 
 fn select_end_copy(enabled: bool, grid: bool, editor: bool) -> SelectEndCopy {
@@ -8433,7 +8067,7 @@ mod tests {
     }
     use super::{
         COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, RawInput, SelectEndCopy, Typeahead,
-        WheelRoute, compose_notification_title, cwd_is_on_host, link_path_style, loopback_plan,
+        WheelRoute, compose_notification_title, cwd_is_on_host, loopback_plan,
         observe_typeahead_for_owner, typeahead_boundary,
     };
     use super::{SCROLL_ANIM_FRAME, scroll_anim_step};
@@ -8443,7 +8077,7 @@ mod tests {
         expand_file_command_template, fallback_chain, fig_icon_emoji, fig_icon_glyph,
         focus_report_bytes, highlight_runs, input_cells, input_char_positions,
         input_overflow_shift, input_overlay_rows, input_start, menu_layout, paste_bytes,
-        select_end_copy, should_show_context_menu, smooth_scroll_step, submit_bytes,
+        select_end_copy, smooth_scroll_step, submit_bytes,
         trim_trailing_spaces, wheel_route, wrapped_click_index,
     };
     use gpui_kit::Modifiers;
@@ -9132,47 +8766,6 @@ mod tests {
             Mode::MOUSE_MOTION | Mode::ALT_SCREEN | Mode::ALTERNATE_SCROLL | Mode::APP_CURSOR;
         assert_eq!(wheel_route(everything, true, true), WheelRoute::Scrollback);
         assert_eq!(wheel_route(everything, true, false), WheelRoute::Scrollback);
-    }
-
-    #[test]
-    fn right_click_opens_the_host_menu_when_the_app_is_not_reporting_mouse() {
-        assert!(should_show_context_menu(false, false));
-        assert!(should_show_context_menu(false, true));
-    }
-
-    #[test]
-    fn right_click_belongs_to_the_app_while_mouse_reporting_is_active() {
-        assert!(
-            !should_show_context_menu(true, false),
-            "an unmodified right-click in mouse mode is the application's event, \
-             so lyrel must not also pop its own menu over it"
-        );
-    }
-
-    #[test]
-    fn shift_right_click_stays_the_escape_hatch_in_mouse_mode() {
-        assert!(
-            should_show_context_menu(true, true),
-            "Shift is the documented way to reach lyrel's own menu inside a \
-             mouse-reporting TUI"
-        );
-    }
-
-    #[test]
-    fn context_menu_and_mouse_report_never_fire_for_the_same_click() {
-        // The render-time menu gate and the mouse-down forwarder in
-        // `TerminalElement` read the same predicate from opposite sides, so
-        // every (mouse_mode, shift) pair must land in exactly one of them.
-        for mouse_mode in [false, true] {
-            for shift in [false, true] {
-                let menu = should_show_context_menu(mouse_mode, shift);
-                let reported = mouse_mode && !shift;
-                assert_ne!(
-                    menu, reported,
-                    "mouse_mode={mouse_mode} shift={shift} must route to exactly one consumer"
-                );
-            }
-        }
     }
 
     #[test]
@@ -10097,39 +9690,6 @@ mod tests {
         assert!(!cwd_is_on_host(false, false));
     }
 
-    /// Which machine's spelling a pane's paths are read in. Ungated on
-    /// purpose: the bug this settles was a Windows-only one that hid behind a
-    /// `#[cfg(unix)]` on the test that covered it.
-    #[test]
-    fn a_panes_paths_are_read_in_its_own_hosts_spelling() {
-        use super::super::search::PathStyle;
-        use std::path::Path;
-
-        assert_eq!(
-            link_path_style(true, Some(Path::new("/home/u/proj"))),
-            PathStyle::NATIVE,
-            "a pane on this machine reads its own output this OS's way, \
-             whatever its shell spells the cwd like"
-        );
-        assert_eq!(
-            link_path_style(false, Some(Path::new("/home/u/proj"))),
-            PathStyle::Posix,
-            "an SSH host, a remote workspace or a WSL distro reporting a \
-             /-rooted cwd is a POSIX one on every client"
-        );
-        assert_eq!(
-            link_path_style(false, Some(Path::new(r"C:\Users\u\proj"))),
-            PathStyle::Windows,
-            "and a remote Windows host is not"
-        );
-        assert_eq!(
-            link_path_style(false, None),
-            PathStyle::Posix,
-            "a remote pane that has not said where it is still has no local \
-             drive its paths could hang off"
-        );
-    }
-
     #[test]
     fn a_panes_host_is_its_workspaces_machine() {
         use crate::core::session::{RemoteTarget, WorkspaceId};
@@ -10313,6 +9873,10 @@ mod gpui_tests {
     use crate::daemon::transport::Stream;
     use crate::terminal::remote::PtySource;
     use gpui_kit::{Bounds, Entity, TestAppContext, point};
+
+    mod links {
+        include!("link/consumer_tests.rs");
+    }
 
     fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
         let pty = if cfg!(windows) {
@@ -12115,111 +11679,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-    /// The case from the bug report: a relative path printed by a tool, sitting
-    /// in a pane that reported its directory. It resolves; a name that is not
-    /// there does not, and comes back as an unresolved *candidate* so the click
-    /// can say why rather than doing nothing at all.
-    #[gpui_kit::test]
-    fn a_relative_path_links_against_the_panes_own_directory(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-link-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("scratchpad")).expect("create scratchpad dir");
-        let notes = dir.join("scratchpad/notes.md");
-        std::fs::write(&notes, b"# notes").expect("create notes.md");
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output(b"ready (scratchpad/notes.md) and (scratchpad/gone.md)\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.terminal.term.lock().grid[Line(0)][Column(7)].c() == 's'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                assert_eq!(view.cwd().as_deref(), Some(dir.as_path()));
-                assert!(
-                    view.hover_link_at(7, 0, true, cx),
-                    "the file is right there under the pane's directory"
-                );
-                assert!(
-                    view.hovered_link.as_ref().is_some_and(|link| link.armed),
-                    "with the modifier down it is ready to be clicked"
-                );
-                assert!(
-                    view.hover_link_at(7, 0, false, cx),
-                    "a path is pointed out before the modifier is down, not after"
-                );
-                assert!(
-                    view.hovered_link.as_ref().is_some_and(|link| !link.armed),
-                    "but held back, because a plain click will not follow it"
-                );
-
-                let gone = "ready (scratchpad/notes.md) and (".len();
-                assert!(
-                    !view.hover_link_at(gone, 0, true, cx),
-                    "nothing underlines for a name that is not on disk"
-                );
-                match view.resolve_link_at(gone, 0, true, false, cx) {
-                    LinkAt::Unresolved { candidate, pending } => {
-                        assert_eq!(candidate.path, "scratchpad/gone.md");
-                        assert!(
-                            candidate.looks_like_a_path(view.link_path_style()),
-                            "so the click reports it instead of staying silent"
-                        );
-                        assert!(!pending, "a local pane answers on the spot");
-                    }
-                    _ => panic!("expected an unresolved path-shaped candidate"),
-                }
-
-                view.record_menu_link(7, 0, cx);
-                assert!(
-                    matches!(
-                        view.menu_link_path(),
-                        Some(path) if path.ends_with("scratchpad/notes.md")
-                    ),
-                    "a right click over a path opens a menu about that path"
-                );
-                view.record_menu_link(0, 0, cx);
-                assert!(
-                    view.menu_link_path().is_none(),
-                    "and a right click over `ready` opens the ordinary one"
-                );
-
-                let mut off = cx.global::<Config>().clone();
-                off.link_url = false;
-                cx.set_global(off);
-                view.record_menu_link(7, 0, cx);
-                assert!(
-                    view.menu_link_path().is_none(),
-                    "and with link detection turned off the menu offers nothing \
-                     the underline and the click both refuse"
-                );
-                cx.set_global(Config::default());
-
-                // `ready (scratchpad...`: the blank between the two words.
-                assert!(!view.hover_link_at(5, 0, false, cx));
-                assert!(view.hovered_link.is_none(), "a blank holds no link");
-                assert_eq!(
-                    view.last_hover_cell,
-                    Some((5, 0)),
-                    "and the pointer is still remembered, so crossing a run \
-                     of blanks costs one look each rather than one a frame"
-                );
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// Coming back from an `ssh` session left the pane with no history at all:
     /// the scope switch cleared the list, and the reload that refills it is a
     /// background task, so ↑ recalled nothing until that landed (#817).
@@ -12319,306 +11778,6 @@ mod gpui_tests {
                 );
             })
             .unwrap();
-    }
-
-    /// Absolute paths in a pane that is `ssh`-ed somewhere used to be resolved
-    /// against *this* machine's filesystem, so `/etc/hosts` on the far end
-    /// opened the local copy without a word about it.
-    #[gpui_kit::test]
-    fn a_pane_whose_paths_are_elsewhere_does_not_link_local_files(cx: &mut TestAppContext) {
-        let file = std::env::temp_dir().join(format!("lyrel-elsewhere-{}.txt", std::process::id()));
-        std::fs::write(&file, b"local").expect("create local file");
-        let line = format!("open {} now\r\n", file.display());
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Output(line.clone().into_bytes())
-            .encode(&mut daemon)
-            .unwrap();
-        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
-            kind: crate::daemon::protocol::RemoteKind::Ssh,
-            argv: vec!["ssh".into(), "box".into()],
-            target: "box".into(),
-        }))
-        .encode(&mut daemon)
-        .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| view.remote_context().is_some())
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                assert!(
-                    !view.cwd_is_on_host(),
-                    "a local host cannot answer for the far side of an ssh session"
-                );
-                assert!(
-                    !view.hover_link_at(6, 0, true, cx),
-                    "the local copy of that path is not what the pane printed"
-                );
-            })
-            .unwrap();
-        let _ = std::fs::remove_file(&file);
-    }
-
-    /// A path a remote pane printed stays *wanted* until a host has actually
-    /// been asked about it.
-    ///
-    /// `take_wanted` moves paths into the in-flight set on the promise that a
-    /// call is carrying them; a lookup that finds no host to make that call
-    /// must not have made the promise. Otherwise those paths sit "not answered
-    /// yet" for the life of the pane — no underline, and a click that says
-    /// nothing, which is the silence this whole path exists to remove.
-    ///
-    /// Was unix-only because the path it prints is: `Path::new("/etc/hosts")`
-    /// is not absolute on Windows, so `FileCandidate::paths` measured it from
-    /// the roots rather than letting it stand alone — and a workspace that
-    /// never connected has no roots, so nothing was ever wanted. Which was
-    /// itself the divergence: a Windows lyrel looking at a *remote* Linux pane
-    /// never probed the POSIX paths that pane printed.
-    ///
-    /// #795 settled that. `paths` now asks the pane's own
-    /// [`super::search::PathStyle`] rather than this machine's, and a remote
-    /// pane that has not reported a cwd is read as `Posix`, so `/etc/hosts`
-    /// stands alone on every client. The gate is only still here because
-    /// nothing has run this test on Windows yet; lifting it belongs in a
-    /// change that can show it green, not in a merge.
-    #[cfg(unix)]
-    #[gpui_kit::test]
-    fn a_probe_with_no_host_to_ask_stays_wanted(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Output(b"see /etc/hosts now\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.terminal.term.lock().grid[Line(0)][Column(4)].c() == '/'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                bind_to_a_disconnected_remote_workspace(view, cx);
-                assert!(
-                    view.host(cx).is_none(),
-                    "a workspace that never connected has nothing to ask"
-                );
-                assert!(
-                    view.cwd_is_on_host(),
-                    "the pane's paths are the far side's, whether or not it is up"
-                );
-                assert!(
-                    !view.hover_link_at(4, 0, true, cx),
-                    "nothing underlines while the answer is still unknown"
-                );
-                assert_eq!(
-                    view.link_probes.take_wanted(),
-                    vec![std::path::PathBuf::from("/etc/hosts")],
-                    "and the question survives, ready for a host to answer it"
-                );
-                assert!(
-                    !view.link_roots(cx).local_home,
-                    "this machine's $HOME describes nobody over there"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_stale_hover_row_does_not_index_the_shrunken_grid(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.hover_link_at(0, 23, true, cx);
-                view.terminal.resize(TermSize::new(80, 8), 8, 17);
-                view.last_hover_cell = Some((0, 23));
-                assert!(
-                    !view.refresh_link_hover(true, cx),
-                    "a row outside the grid can't hold a link"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_resize_forgets_the_hovered_cell(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.set_grid_size(80, 24, px(8.), px(17.), 1., cx);
-                view.hover_link_at(0, 23, true, cx);
-                assert_eq!(view.last_hover_cell, Some((0, 23)));
-                view.hovered_link = Some(HoveredLink {
-                    runs: vec![(Pos::new(Line(23), Column(0)), Pos::new(Line(23), Column(3)))],
-                    armed: true,
-                });
-                view.set_grid_size(80, 24, px(8.), px(17.), 1., cx);
-                assert_eq!(view.last_hover_cell, Some((0, 23)));
-                view.set_grid_size(80, 8, px(8.), px(17.), 1., cx);
-                assert!(view.last_hover_cell.is_none(), "the cell is stale");
-                assert!(view.hovered_link.is_none(), "so is the link it resolved");
-            })
-            .unwrap();
-    }
-
-    /// The seam is invisible to the user, so it has to be invisible to the
-    /// hover too: pointing at either half underlines the whole path, and the
-    /// span the element paints reaches across both rows.
-    #[gpui_kit::test]
-    fn a_path_the_terminal_wrapped_is_hovered_as_one_link(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-wrap-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("a/bb/ccc/dddd")).expect("create dirs");
-        std::fs::write(dir.join("a/bb/ccc/dddd/notes.md"), b"# notes").expect("create notes.md");
-
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.set_grid_size(20, 6, px(8.), px(17.), 1., cx);
-            })
-            .unwrap();
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output(b"see a/bb/ccc/dddd/notes.md here\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.terminal.term.lock().grid[Line(1)][Column(0)].c() == 'e'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                // Row 0 holds `see a/bb/ccc/dddd/n`, row 1 the rest.
-                for (col, row, where_) in [(6, 0, "before the seam"), (2, 1, "after it")] {
-                    assert!(
-                        view.hover_link_at(col, row, true, cx),
-                        "the wrapped path is a link from {where_}"
-                    );
-                    let link = view.hovered_link.as_ref().expect("a span");
-                    let (start, end) = (link.runs[0].0, link.runs[link.runs.len() - 1].1);
-                    assert_eq!(
-                        (start.row, end.row),
-                        (Line(0), Line(1)),
-                        "and the span the element paints covers both rows"
-                    );
-                    assert_eq!(start.col, Column(4), "starting at the path itself");
-                }
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A wide character owns two columns, and the second one holds a space.
-    /// The hover has to read that as part of the glyph, or the underline goes
-    /// out on every other column of a path written in CJK.
-    #[gpui_kit::test]
-    fn the_second_column_of_a_wide_character_still_hovers(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-wide-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("文档")).expect("create dirs");
-        std::fs::write(dir.join("文档/笔记.md"), b"# notes").expect("create notes");
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output("see 文档/笔记.md here\r\n".as_bytes().to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.terminal.term.lock().grid[Line(0)][Column(4)].c() == '文'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                // `see 文档/…`: column 4 carries 文, column 5 is its spacer.
-                assert!(!view.cell_is_blank(5, 0), "the spacer belongs to the glyph");
-                for col in [4, 5] {
-                    assert!(
-                        view.hover_link_at(col, 0, true, cx),
-                        "column {col} of the same character is the same link"
-                    );
-                }
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A full-screen application drew the grid and is watching the mouse
-    /// itself, so lyrel stays out of it until asked.
-    #[gpui_kit::test]
-    fn a_path_under_a_full_screen_application_waits_for_the_modifier(cx: &mut TestAppContext) {
-        let dir = std::env::temp_dir().join(format!("lyrel-view-alt-link-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("scratchpad")).expect("create scratchpad dir");
-        std::fs::write(dir.join("scratchpad/notes.md"), b"# notes").expect("create notes.md");
-
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Cwd(dir.clone()).encode(&mut daemon).unwrap();
-        DaemonMsg::Output(b"\x1b[?1049hready scratchpad/notes.md\r\n".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            let seen = window
-                .update(cx, |view, _, _| {
-                    view.cwd().is_some()
-                        && view.on_alt_screen()
-                        && view.terminal.term.lock().grid[Line(0)][Column(6)].c() == 's'
-                })
-                .unwrap();
-            if seen {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                assert!(view.on_alt_screen(), "the application took the grid");
-                assert!(
-                    !view.hover_link_at(6, 0, false, cx),
-                    "nothing is pointed out over somebody else's window"
-                );
-                assert!(
-                    view.hover_link_at(6, 0, true, cx),
-                    "asking for lyrel's reading of the screen still gets it"
-                );
-            })
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_link_menu_is_headed_by_the_file_it_is_about() {
-        assert_eq!(
-            link_menu_label(std::path::Path::new("/a/very/long/way/down/notes.md")),
-            "notes.md",
-            "the name, so the menu is not as wide as the path"
-        );
-        assert_eq!(link_menu_label(std::path::Path::new("/")), "/");
     }
 
     /// Runs out the wait a new title is held for.

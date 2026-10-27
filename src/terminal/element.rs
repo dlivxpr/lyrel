@@ -18,7 +18,8 @@ use rio_vt::crosswords::style::StyleFlags;
 use rio_vt::crosswords::{Crosswords, Mode};
 use rio_vt::selection::SelectionRange;
 
-use super::view::{TerminalView, should_show_context_menu};
+use super::view::TerminalView;
+use super::link::should_show_context_menu;
 use crate::core::config::Config;
 use crate::ui::i18n::{L10nKey, t};
 
@@ -2076,10 +2077,10 @@ impl TerminalElement {
         display_offset: i32,
         cx: &App,
     ) {
-        let Some(link) = self.view.read(cx).hovered_link.as_ref() else {
+        let Some(link) = self.view.read(cx).links.hovered() else {
             return;
         };
-        for &(start, end) in &link.runs {
+        for &(start, end) in link.runs() {
             let grid_row = start.row.0 + display_offset;
             if grid_row < 0 || grid_row as usize >= rows {
                 continue;
@@ -2089,7 +2090,7 @@ impl TerminalElement {
                 let cell = &mut buf[row + col];
                 osc8_underline::unmark(cell);
                 cell.link_hover = true;
-                cell.underline_color = link_underline_color(cell, link.armed);
+                cell.underline_color = link_underline_color(cell, link.is_armed());
             }
         }
     }
@@ -2670,7 +2671,7 @@ impl Element for TerminalElement {
         self.register_mouse_handlers(geom, bounds, prepaint.hitbox.id, window);
 
         let view = self.view.read(cx);
-        if view.hovered_link.as_ref().is_some_and(|link| link.armed) {
+        if view.links.hovered().is_some_and(|link| link.is_armed()) {
             window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
         } else if !view.mouse_mode() {
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.hitbox);

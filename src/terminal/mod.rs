@@ -17,6 +17,7 @@ mod history;
 mod hold;
 pub(crate) mod images;
 pub mod input;
+mod link;
 mod link_probe;
 mod loopback;
 pub mod palette;
