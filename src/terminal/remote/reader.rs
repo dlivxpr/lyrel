@@ -24,9 +24,10 @@ use rio_vt::event::EventListener;
 
 #[cfg(test)]
 use super::{
-    NativeSshSpec, PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize,
-    attach_reply_prefix, test_term,
+    NativeSshSpec, PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize, test_term,
 };
+#[cfg(test)]
+use super::handshake::attach_reply_prefix;
 use crate::core::osc::{OscTokenizer, TitleEffect, TitleLifetime};
 use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
 use crate::terminal::parked_cursor::{CursorCut, ParkedCursorRepair, ParkedCursorScanner};
@@ -122,7 +123,7 @@ impl ReaderTask {
     }
 
     #[cfg(all(test, windows))]
-    fn take_thread(&mut self) -> JoinHandle<()> {
+    pub(super) fn take_thread(&mut self) -> JoinHandle<()> {
         self.thread
             .take()
             .expect("the reader thread is still owned")
