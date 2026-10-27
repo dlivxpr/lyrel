@@ -19,7 +19,8 @@ use lyrel_core::core::github::{
     readiness,
 };
 
-use crate::ui::app::{CONTENT_INSET, LyrelApp};
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::CONTENT_INSET;
 use crate::ui::github::{Fold, now_unix};
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::panel_github::{

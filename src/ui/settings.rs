@@ -25,7 +25,8 @@ use crate::core::keychain::{
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
 };
-use crate::ui::app::{FONT_SIZE_STEP, LINE_HEIGHT_STEP, TITLE_BAR_HEIGHT, UI_FONT_SIZE_STEP};
+use crate::ui::app::{FONT_SIZE_STEP, LINE_HEIGHT_STEP, UI_FONT_SIZE_STEP};
+use crate::ui::window_chrome::TITLE_BAR_HEIGHT;
 use crate::ui::host_ops::HostId;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::presets;
