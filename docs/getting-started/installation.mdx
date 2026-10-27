@@ -5,8 +5,8 @@ description: "macOS、Windows 桌面构建，以及保留的 Linux server／CLI 
 
 {/* 本文件源自 l0ng-ai/tty7，lyrel 已修改（含本声明）；原有版权与许可保留。 */}
 
-lyrel 当前 stable 版本为 `0.2.2`，从独立初版 `0.1.0` 递增。安装包及校验和以
-[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 中对应版本的正式资产为准。历史 macOS 包采用 ad-hoc 签名，未经过 Developer ID 签名或 Apple 公证；新的正式 macOS 桌面包必须完成 Developer ID 签名和公证，缺少凭据时阻止发行，不回退为 ad-hoc。Windows 包未签名。签名前提见[更新说明](/reference/updates)；缺少所需安装包时，请从源码构建，不要回退下载上游安装包。
+lyrel 当前源码版本为 `0.2.3`，从独立初版 `0.1.0` 递增。stable 安装包及校验和以
+[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 中对应版本的正式资产为准。macOS 包暂时采用 ad-hoc 签名，未经 Developer ID 签名或 Apple 公证，不因缺少 Apple 凭据阻止发行；升级后仍可能需要重新授予系统权限。Windows 包未签名。身份与更新限制见[更新说明](/reference/updates)；缺少所需安装包时，请从源码构建，不要回退下载上游安装包。
 
 桌面端仅支持 macOS、Windows，字体内嵌于二进制文件中，无需预先安装运行时。
 Linux 不再提供 GUI、AppImage 或桌面 updater；共享核心、server、CLI、SSH 远程开发与 Windows WSL 仍受支持。
@@ -242,8 +242,8 @@ DMG 和更新 ZIP 都承载 `lyrel.app`。`Contents/MacOS/` 内包含 `lyrel-app
 `lyrel-updater`；`Contents/Resources/` 内包含 `lyrel.icns`、`completions/` 和
 `LICENSE.txt`（项目许可证及必要的第三方声明）。
 图标从已批准图形的 `assets/lyrel.icns` 派生资源复制而来，生产脚本与打包脚本使用同一文件名。
-脚本会进行架构与签名检查；无证书时采用 ad-hoc 签名，不等于 Developer ID 签名或
-Apple 公证。公开分发所需的签名／公证是独立前提，本任务不授权配置外部凭据。
+脚本会进行架构与完整代码签名检查；无证书时采用 ad-hoc 签名，不等于 Developer ID
+签名或 Apple 公证。本阶段允许以该方式公开发行，但不承诺通过 Gatekeeper 或跨升级保留系统权限，不自动申请／配置外部签名凭据。
 
 
 ### server 资产及 SHA-256 清单
@@ -254,8 +254,8 @@ Windows 桌面与 server 均只发布 x86-64。
 
 | 平台 | 桌面包 | server 资产 |
 | --- | --- | --- |
-| macOS | `lyrel-0.2.2-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
-| Windows | `lyrel-0.2.2-windows-x86_64.zip`、对应 `-setup.exe` | `lyrel-server-windows-x86_64.zip` |
+| macOS | `lyrel-0.2.3-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
+| Windows | `lyrel-0.2.3-windows-x86_64.zip`、对应 `-setup.exe` | `lyrel-server-windows-x86_64.zip` |
 | Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
 
 server 将同一份项目许可证及第三方声明内嵌到二进制中，可运行
@@ -324,7 +324,7 @@ node scripts/rerun-failed-ci.cjs <run-id>
 草稿汇总先解析远端标签及附注标签链，确认最终目标为真实提交；创建 Release 时，`target_commitish` 使用该提交的完整 SHA，不直接填写版本标签名。无法解析、非提交目标或无效 SHA 会在创建草稿／上传资产前失败；无需为解决此 API 参数错误配置代码签名证书。
 桌面与 server 并行编译，桌面一次编译 GUI、CLI 和 updater。Windows 打包只等待本平台编译和真实 WSL musl server，macOS 打包只等待本平台编译，不跨平台互相阻塞。编译与打包间使用 tar 保留可执行权限，归档及恢复均使用相对路径，避免 GNU tar 把 Windows 的 `drive:` 绝对路径当作远程主机；已压缩包不再做外层压缩。Thin LTO 和单 codegen unit 的发行配置不变。
 
-正式发布与 CI 的发布流程验证共用 `.github/workflows/release-build.yml`。它只授予 `contents: read` 和 `actions: read`，仅生成构建／打包 artifacts，不包含创建草稿或发布的 job。CI 调用不传 Apple 签名凭据，macOS 开发验证包仍可执行 ad-hoc 路径；正式 Release 必须提供 Developer ID 签名和公证所需凭据，缺少凭据时构建失败，不降级发行。草稿写权限只留在 `.github/workflows/release.yml` 的汇总 job，签名前提与权限边界见[更新说明](/reference/updates)。发布流程变化需要真实打包验证，不能只用普通 Rust 测试替代。
+正式发布与 CI 的发布流程验证共用 `.github/workflows/release-build.yml`。它只授予 `contents: read` 和 `actions: read`，仅生成构建／打包 artifacts，不包含创建草稿或发布的 job。CI 调用不传 Apple 签名凭据；正式 Release 也允许无凭据的 ad-hoc macOS 包，继续执行架构、完整签名及归档校验。若维护者主动配置 Apple 凭据，打包脚本沿用既有证书签名与可选公证路径，不自动申请凭据。草稿写权限只留在 `.github/workflows/release.yml` 的汇总 job，身份与权限限制见[更新说明](/reference/updates)。发布流程变化需要真实打包验证，不能只用普通 Rust 测试替代。
 
 可信 main push 在三个独立 server 构建及平台断言成功后上传 `ci-server-<target>`，保存 7 天。Release 可复用同仓库、同 SHA、已完整成功的 main CI 产物；PR、fork 和手动 CI 产物不作为发布来源。下载固定 artifact ID，核验来源 run、目标、文件 SHA-256、Cargo 输入及 Rust／Zig／SDK 构建契约，再执行原有静态链接／Mach-O／签名检查。缺失、过期、下载失败或契约不匹配时正常重新构建，不放宽校验；Windows server 不参与此复用。该机制不是字节级可重现构建声明。路径裁剪未生成该 SHA 的 server artifact 时，同样由 Release 正常构建。
 
