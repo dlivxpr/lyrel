@@ -53,6 +53,7 @@ pub mod rounding;
 pub mod scm;
 pub mod scrollbar;
 pub mod search;
+pub(crate) mod session_lifecycle;
 pub mod settings;
 pub mod settings_window;
 pub mod sftp;

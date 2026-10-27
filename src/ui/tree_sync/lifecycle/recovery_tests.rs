@@ -386,7 +386,7 @@ use super::super::*;
     }
 
     /// #672's residual: a rebuild that put up some of the tabs the tree asked
-    /// for and dropped the rest (`tabs_from_session` drops a tab none of whose
+    /// for and dropped the rest (`SessionRestore::tabs` drops a tab none of whose
     /// panes would start). It earns the licence — it did put a layout up — and
     /// the tabs it dropped are not tabs the user closed, so they must be held
     /// out of the diff rather than the licence withheld from the whole window.
