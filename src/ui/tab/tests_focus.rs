@@ -2,8 +2,8 @@ use super::{Pane, PaneSlot};
 use crate::ui::pending_pane::{PendingPane, PendingSpawn};
 use crate::ui::tab::{Tab, TabSet};
 use gpui_kit::{
-    AppContext as _, Axis, Context, Entity, IntoElement, Render, Styled as _, TestAppContext,
-    Window, div,
+    AppContext as _, Axis, Context, Entity, Focusable as _, IntoElement, Render, Styled as _,
+    TestAppContext, Window, div,
 };
 
 /// A window has to exist for focus to live in, but nothing this file asks
@@ -72,7 +72,7 @@ fn a_switch_begun_off_the_panes_samples_nothing(cx: &mut TestAppContext) {
 
     window
         .update(cx, |_, window, cx| {
-            let on_b = b.read(cx).focus_handle.clone();
+            let on_b = b.read(cx).focus_handle(cx);
             window.focus(&on_b, cx);
             assert_eq!(
                 tab.pane.focused_leaf(window, cx).map(|l| l.entity_id()),

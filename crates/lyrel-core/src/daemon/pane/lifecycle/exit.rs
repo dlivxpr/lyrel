@@ -1,7 +1,7 @@
 //! EOF、进程终止与 Windows 输出排空共享同一单次退出报告。
 
-use super::*;
 use super::super::{DaemonMsg, notify};
+use super::*;
 /// How long the death path will chase a child's exit status before giving up
 /// and reporting `Exited { code: None }`. The pty hits EOF when the last slave
 /// fd closes, which can land a few milliseconds ahead of the child becoming
@@ -37,7 +37,9 @@ impl DeathReporter {
                         Err(_) => return None,
                     }
                 }
-                if std::time::Instant::now() >= deadline { return None; }
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
                 std::thread::sleep(EXIT_CODE_PROBE_INTERVAL);
             }
         }));
@@ -48,7 +50,11 @@ impl DeathReporter {
         self.reported.load(Ordering::SeqCst)
     }
 
-    pub(in crate::daemon::pane) fn report(&self, state: &Mutex<PaneState>, shutting_down: &AtomicBool) {
+    pub(in crate::daemon::pane) fn report(
+        &self,
+        state: &Mutex<PaneState>,
+        shutting_down: &AtomicBool,
+    ) {
         if self.reported.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -61,7 +67,11 @@ impl DeathReporter {
         let mut st = state.lock().unwrap();
         st.alive = false;
         st.exit_code = code;
-        let PaneState { subscriptions, graphics, .. } = &mut *st;
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *st;
         subscriptions.release_graphics(graphics);
         let pane = st.id;
         log::info!(
@@ -141,46 +151,46 @@ fn drain_then_report(
     // already got there — which is the ordinary case.
     death.report(&state, &shutting_down);
 }
-    #[cfg(windows)]
-    pub(super) fn spawn_exit_monitor(
-        shell_pid: Option<u32>,
-        master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
-        state: Arc<Mutex<PaneState>>,
-        shutting_down: Arc<AtomicBool>,
-        death: Arc<DeathReporter>,
-    ) {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-        };
+#[cfg(windows)]
+pub(super) fn spawn_exit_monitor(
+    shell_pid: Option<u32>,
+    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    state: Arc<Mutex<PaneState>>,
+    shutting_down: Arc<AtomicBool>,
+    death: Arc<DeathReporter>,
+) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
 
-        let Some(pid) = shell_pid else { return };
-        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-        if handle.is_null() {
-            // The process may have exited before OpenProcess ran, so go
-            // straight to the close-and-report path — off this thread, since
-            // pane construction is what calls us.
-            std::thread::Builder::new()
-                .name("lyrel-daemon-pane-exit-fallback".to_string())
-                .spawn(move || {
-                    drain_then_report(master, state, shutting_down, death, EXIT_DRAIN_WINDOW);
-                })
-                .expect("spawn daemon pane exit fallback thread");
-            return;
-        }
-        let handle = handle as isize;
+    let Some(pid) = shell_pid else { return };
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        // The process may have exited before OpenProcess ran, so go
+        // straight to the close-and-report path — off this thread, since
+        // pane construction is what calls us.
         std::thread::Builder::new()
-            .name("lyrel-daemon-pane-exit-monitor".to_string())
+            .name("lyrel-daemon-pane-exit-fallback".to_string())
             .spawn(move || {
-                let handle = handle as windows_sys::Win32::Foundation::HANDLE;
-                unsafe {
-                    WaitForSingleObject(handle, INFINITE);
-                    CloseHandle(handle);
-                }
                 drain_then_report(master, state, shutting_down, death, EXIT_DRAIN_WINDOW);
             })
-            .expect("spawn daemon pane exit monitor thread");
+            .expect("spawn daemon pane exit fallback thread");
+        return;
     }
+    let handle = handle as isize;
+    std::thread::Builder::new()
+        .name("lyrel-daemon-pane-exit-monitor".to_string())
+        .spawn(move || {
+            let handle = handle as windows_sys::Win32::Foundation::HANDLE;
+            unsafe {
+                WaitForSingleObject(handle, INFINITE);
+                CloseHandle(handle);
+            }
+            drain_then_report(master, state, shutting_down, death, EXIT_DRAIN_WINDOW);
+        })
+        .expect("spawn daemon pane exit monitor thread");
+}
 
 #[cfg(test)]
 mod tests;

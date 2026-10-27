@@ -1117,11 +1117,11 @@ fn view_of_layout(
 #[path = "tab/tests_focus_origin.rs"]
 mod focus_origin_tests;
 #[cfg(test)]
+#[path = "tab/tests_launch.rs"]
+mod launch_tests;
+#[cfg(test)]
 #[path = "tab/tests_name.rs"]
 mod name_tests;
 #[cfg(test)]
 #[path = "tab/tests_navigation.rs"]
 mod navigation_tests;
-#[cfg(test)]
-#[path = "tab/tests_launch.rs"]
-mod launch_tests;

@@ -4,9 +4,7 @@ use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
 
 #[gpui_kit::test]
-fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(
-    cx: &mut TestAppContext,
-) {
+fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(cx: &mut TestAppContext) {
     let (app, mut vcx, _remote_stream) = test_window::harness_with_pane(cx);
     let remote = WindowView::on_remote(RemoteRef::new(
         RemoteTarget::Alias {

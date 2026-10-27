@@ -25,15 +25,17 @@ use crate::ui::forwards::{Forwarding, route::ForwardRoute};
 use crate::ui::host_registry::HostId;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::pane::{CloseOutcome, Dir, Pane, PaneSlot};
-use crate::ui::tab::presentation::{SpawnAs, OpenedFrom, inherited_start_dir};
 use crate::ui::scm::ScmIntent;
 use crate::ui::search::{
     ActionCatalog, ChromeState, CommandKind, SearchCatalog, SearchEvent, SearchState, SearchTab,
     SearchView, SessionHistory, TerminalCatalog,
 };
+use crate::ui::session_lifecycle::{
+    self, SessionLifecycle, SessionRestore, WindowDeparture, split_machine_held, tab_to_session,
+};
 use crate::ui::settings::SettingsSection;
-use crate::ui::session_lifecycle::{self, SessionLifecycle, SessionRestore, WindowDeparture, split_machine_held, tab_to_session};
 use crate::ui::settings_window::SettingsWindow;
+use crate::ui::tab::presentation::{OpenedFrom, SpawnAs, inherited_start_dir};
 mod settings_bridge;
 use crate::ui::theme::{apply_theme, set_menus};
 
@@ -1229,7 +1231,12 @@ impl LyrelApp {
         let font_size = self.font_size;
         let pane_ws = self.window_workspace(cx);
         let (tabs, active, dropped) = SessionRestore::tabs(
-            pane_ws, self.workspace, Some(session), font_size, window, cx,
+            pane_ws,
+            self.workspace,
+            Some(session),
+            font_size,
+            window,
+            cx,
         );
         if dropped > 0 {
             window.notify_app(
@@ -1337,16 +1344,19 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Result<(), SessionTab> {
         let pane_ws = self.window_workspace(cx);
-        let tab = match SessionRestore::reopen(pane_ws, self.workspace, self.font_size, st, window, cx) {
-            Ok(tab) => tab,
-            Err(st) => {
-                window.notify_app(
-                    crate::ui::notification_history::Notification::error(t(L10nKey::AppReopenTabFailed)),
-                    cx,
-                );
-                return Err(st);
-            }
-        };
+        let tab =
+            match SessionRestore::reopen(pane_ws, self.workspace, self.font_size, st, window, cx) {
+                Ok(tab) => tab,
+                Err(st) => {
+                    window.notify_app(
+                        crate::ui::notification_history::Notification::error(t(
+                            L10nKey::AppReopenTabFailed,
+                        )),
+                        cx,
+                    );
+                    return Err(st);
+                }
+            };
         self.remember_active_pane(window, cx);
         self.maximized = None;
         let insert_at = self.new_tab_insert_at(cx);
@@ -2144,19 +2154,30 @@ impl LyrelApp {
         let installation = pending.update(cx, |pending, cx| {
             pending.take_installation(&self.tabs, self.workspace, window, cx)
         });
-        let Some(installation) = installation else { return; };
+        let Some(installation) = installation else {
+            return;
+        };
         let (view, was_focused, launch) = installation.into_parts();
         watch_terminal(&view, window, cx);
         let slot = PaneSlot::Ready(view.clone());
         self.replace_pane_slot(pending.entity_id(), slot.clone(), cx);
         match launch {
-            PendingLaunch::None => {},
-            PendingLaunch::Command(command) => crate::ui::agent_launch::run_when_ready(&slot, command, cx),
-            PendingLaunch::Resume { agent, session, argv, scope } => {
+            PendingLaunch::None => {}
+            PendingLaunch::Command(command) => {
+                crate::ui::agent_launch::run_when_ready(&slot, command, cx)
+            }
+            PendingLaunch::Resume {
+                agent,
+                session,
+                argv,
+                scope,
+            } => {
                 restore_agent_in_pane(agent, session, argv, scope, view, window, cx);
             }
         }
-        if was_focused { self.focus_leaf(&slot, window, cx); }
+        if was_focused {
+            self.focus_leaf(&slot, window, cx);
+        }
         self.save_session(cx);
         cx.notify();
     }
@@ -2384,12 +2405,18 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let view = new_terminal_native(self.font_size, self.workspace, remote_start_dir, spec, window, cx);
+        let view = new_terminal_native(
+            self.font_size,
+            self.workspace,
+            remote_start_dir,
+            spec,
+            window,
+            cx,
+        );
         self.remember_active_pane(window, cx);
         self.maximized = None;
         let insert_at = self.new_tab_insert_at(cx);
-        self.tabs
-            .insert(insert_at, Tab::new(Pane::leaf(view)));
+        self.tabs.insert(insert_at, Tab::new(Pane::leaf(view)));
         self.tabs.select(insert_at);
         self.focus_active(window, cx);
         self.save_session(cx);
@@ -2406,7 +2433,14 @@ impl LyrelApp {
         // The far shell's last report, not a local path: a native SSH pane's
         // cwd only ever comes from OSC 7 sent across the link.
         let remote_start_dir = dead.read(cx).cwd();
-        let fresh = new_terminal_native(self.font_size, self.workspace, remote_start_dir, spec, window, cx);
+        let fresh = new_terminal_native(
+            self.font_size,
+            self.workspace,
+            remote_start_dir,
+            spec,
+            window,
+            cx,
+        );
         self.replace_pane_slot(dead.entity_id(), fresh.clone(), cx);
         self.maximized = None;
         self.focus_leaf(&fresh, window, cx);
@@ -2578,7 +2612,11 @@ impl LyrelApp {
     }
 
     fn toggle_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.tabs.active_mut().and_then(|tab| tab.toggle_focused_pip(self.workspace, window, cx)) else {
+        let Some(target) = self
+            .tabs
+            .active_mut()
+            .and_then(|tab| tab.toggle_focused_pip(self.workspace, window, cx))
+        else {
             return;
         };
         self.maximized = None;
@@ -2589,7 +2627,11 @@ impl LyrelApp {
     }
 
     pub(crate) fn restore_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pip) = self.tabs.active_mut().and_then(|tab| tab.restore_pip(self.workspace, window, cx)) else {
+        let Some(pip) = self
+            .tabs
+            .active_mut()
+            .and_then(|tab| tab.restore_pip(self.workspace, window, cx))
+        else {
             return;
         };
         self.maximized = None;
@@ -2616,7 +2658,11 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(fallback) = self.tabs.active_mut().and_then(|tab| tab.park(target, self.workspace, cx)) else {
+        let Some(fallback) = self
+            .tabs
+            .active_mut()
+            .and_then(|tab| tab.park(target, self.workspace, cx))
+        else {
             return;
         };
         self.maximized = None;
@@ -2639,7 +2685,11 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(slot) = self.tabs.active_mut().and_then(|tab| tab.restore_parked(target, self.workspace, cx)) else {
+        let Some(slot) = self
+            .tabs
+            .active_mut()
+            .and_then(|tab| tab.restore_parked(target, self.workspace, cx))
+        else {
             return;
         };
         self.maximized = None;
@@ -2697,9 +2747,7 @@ impl LyrelApp {
                         card
                     }
                 }
-                PaneSlot::Connecting(pending) => {
-                    pending.read(cx).parked_card(slot.entity_id())
-                }
+                PaneSlot::Connecting(pending) => pending.read(cx).parked_card(slot.entity_id()),
             })
             .collect();
         let tab_id = tab.map(|tab| tab.id());
@@ -2888,13 +2936,18 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PaneSlot> {
-        let request = self.tabs.get(self.tabs.active_index())?.prepare_split(spawn, window, cx)?;
+        let request = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .prepare_split(spawn, window, cx)?;
         if !self.guard_local_spawn(window, cx) {
             return None;
         }
         let (tab_id, target, spawn, cwd, workspace) = request.into_parts();
         let new = match spawn {
-            SpawnAs::Ssh(spec) => new_terminal_native(self.font_size, self.workspace, cwd, spec, window, cx),
+            SpawnAs::Ssh(spec) => {
+                new_terminal_native(self.font_size, self.workspace, cwd, spec, window, cx)
+            }
             SpawnAs::Shell(shell) => {
                 match new_terminal(
                     workspace,
@@ -3060,7 +3113,11 @@ impl LyrelApp {
     }
 
     fn cycle_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(leaf) = self.tabs.get(self.tabs.active_index()).and_then(|tab| tab.cycle_focus(forward, window, cx)) else {
+        let Some(leaf) = self
+            .tabs
+            .get(self.tabs.active_index())
+            .and_then(|tab| tab.cycle_focus(forward, window, cx))
+        else {
             return;
         };
         self.maximized = None;
@@ -3069,7 +3126,11 @@ impl LyrelApp {
     }
 
     fn focus_pane_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.tabs.active_mut().and_then(|tab| tab.directional_focus(dir, window, cx)) else {
+        let Some(target) = self
+            .tabs
+            .active_mut()
+            .and_then(|tab| tab.directional_focus(dir, window, cx))
+        else {
             return;
         };
         self.maximized = None;
@@ -3089,7 +3150,11 @@ impl LyrelApp {
     }
 
     fn swap_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.active_mut().is_some_and(|tab| tab.swap_pane(forward, window, cx)) {
+        if self
+            .tabs
+            .active_mut()
+            .is_some_and(|tab| tab.swap_pane(forward, window, cx))
+        {
             self.maximized = None;
             self.save_session(cx);
             cx.notify();
@@ -3624,7 +3689,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(next) = SessionLifecycle::hibernate_successor(&self.tabs, index, self.workspace, cx) else {
+        let Some(next) =
+            SessionLifecycle::hibernate_successor(&self.tabs, index, self.workspace, cx)
+        else {
             return;
         };
         if index == self.tabs.active_index() {
@@ -3658,7 +3725,15 @@ impl LyrelApp {
             return true;
         }
         let pane_ws = self.window_workspace(cx);
-        if !SessionLifecycle::wake(&mut self.tabs, index, pane_ws, self.workspace, self.font_size, window, cx) {
+        if !SessionLifecycle::wake(
+            &mut self.tabs,
+            index,
+            pane_ws,
+            self.workspace,
+            self.font_size,
+            window,
+            cx,
+        ) {
             window.notify_app(
                 crate::ui::notification_history::Notification::error(t(L10nKey::TabWakeFailed)),
                 cx,
@@ -3716,10 +3791,18 @@ impl LyrelApp {
     /// and not whichever leaf the layout happens to list first.
     fn toggle_maximize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let restoring = self.maximized.is_some();
-        let Some(target) = self.tabs.active_mut().and_then(|tab| tab.toggle_zoom(&mut self.maximized, window, cx)) else {
+        let Some(target) = self
+            .tabs
+            .active_mut()
+            .and_then(|tab| tab.toggle_zoom(&mut self.maximized, window, cx))
+        else {
             return;
         };
-        if restoring { self.focus_active(window, cx); } else { self.focus_leaf(&target, window, cx); }
+        if restoring {
+            self.focus_active(window, cx);
+        } else {
+            self.focus_leaf(&target, window, cx);
+        }
         cx.notify();
     }
 
@@ -3826,7 +3909,6 @@ impl LyrelApp {
         cx.notify();
         self.offer_worktree_cleanup(worktree_cwd, cx);
     }
-
 
     fn offer_worktree_cleanup(
         &mut self,
@@ -4258,8 +4340,11 @@ impl LyrelApp {
         if let PaneSlot::Connecting(pending) = &new {
             pending.update(cx, |pending, _| {
                 pending.resume_agent(
-                    Some(prepared.agent), prepared.target_id.clone(),
-                    Some(prepared.launch_argv.clone()), Some(prepared.scope.clone()), prepared.created,
+                    Some(prepared.agent),
+                    prepared.target_id.clone(),
+                    Some(prepared.launch_argv.clone()),
+                    Some(prepared.scope.clone()),
+                    prepared.created,
                 );
             });
         }
@@ -6395,8 +6480,6 @@ impl Render for LyrelApp {
     }
 }
 
-
-
 pub(crate) fn restore_agent_in_pane(
     agent: Option<crate::core::cli_agent::CLIAgent>,
     session_id: Option<String>,
@@ -6472,8 +6555,6 @@ fn pane_shell_program(view: &TerminalView, cx: &App) -> Option<String> {
     })
 }
 
-
-
 pub(crate) fn new_terminal(
     workspace: Option<crate::terminal::PaneWorkspace>,
     owner: Option<WorkspaceId>,
@@ -6546,7 +6627,13 @@ fn pending_terminal(
 ) -> anyhow::Result<PaneSlot> {
     let pending = cx.new(|cx| {
         let pending = crate::ui::pending_pane::PendingPane::shell(
-            workspace, owner, font_size, working_directory, restore_pane, shell, cx,
+            workspace,
+            owner,
+            font_size,
+            working_directory,
+            restore_pane,
+            shell,
+            cx,
         );
         if attach_only {
             pending.with_attach_only(attach_spec)
@@ -6563,12 +6650,22 @@ fn watch_pending(
     window: &mut Window,
     cx: &mut Context<LyrelApp>,
 ) {
-    cx.subscribe_in(pending, window, |app, pending, _: &crate::ui::pending_pane::SpawnFinished, window, cx| {
-        app.land_pane(&pending, window, cx);
-    }).detach();
-    cx.subscribe_in(pending, window, |_app, pending, _: &crate::ui::pending_pane::RetryRequested, window, cx| {
-        start_pane_spawn(&pending, window, cx);
-    }).detach();
+    cx.subscribe_in(
+        pending,
+        window,
+        |app, pending, _: &crate::ui::pending_pane::SpawnFinished, window, cx| {
+            app.land_pane(&pending, window, cx);
+        },
+    )
+    .detach();
+    cx.subscribe_in(
+        pending,
+        window,
+        |_app, pending, _: &crate::ui::pending_pane::RetryRequested, window, cx| {
+            start_pane_spawn(&pending, window, cx);
+        },
+    )
+    .detach();
     let handle = pending.read(cx).focus_handle(cx);
     watch_pane_focus(&handle, pending.entity_id(), window, cx);
     start_pane_spawn(pending, window, cx);
@@ -6589,11 +6686,7 @@ fn start_pane_spawn(
     pending.update(cx, |pending, cx| pending.start(lease, window, cx));
 }
 
-fn watch_terminal(
-    view: &Entity<TerminalView>,
-    window: &mut Window,
-    cx: &mut Context<LyrelApp>,
-) {
+fn watch_terminal(view: &Entity<TerminalView>, window: &mut Window, cx: &mut Context<LyrelApp>) {
     cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
         app.on_child_exited(view.clone(), window, cx);
     })
@@ -6626,7 +6719,6 @@ fn watch_terminal(
     let handle = view.read(cx).focus_handle.clone();
     watch_pane_focus(&handle, view.entity_id(), window, cx);
 }
-
 
 fn kill_pane_off_thread(route: crate::terminal::PaneRoute, pane_id: u64, cx: &mut App) {
     cx.background_executor()
@@ -6694,9 +6786,15 @@ pub(crate) fn new_terminal_native(
     window: &mut Window,
     cx: &mut Context<LyrelApp>,
 ) -> PaneSlot {
-    let pending = cx.new(|cx| crate::ui::pending_pane::PendingPane::native_ssh(
-        owner, font_size, remote_start_dir, spec, cx,
-    ));
+    let pending = cx.new(|cx| {
+        crate::ui::pending_pane::PendingPane::native_ssh(
+            owner,
+            font_size,
+            remote_start_dir,
+            spec,
+            cx,
+        )
+    });
     watch_pending(&pending, window, cx);
     PaneSlot::Connecting(pending)
 }
@@ -6981,10 +7079,9 @@ fn apply_ssh_o_option(
 mod tests {
     use super::close_reason;
     use super::{
-        CloseReason, DOCUMENT_MIN_W, TERMINAL_MIN_W,
-        TabAgentSession, close_prompt, document_column_px,
-        join_shell_args, parse_ssh_connect_input,
-        parse_ssh_option_words, side_panel_max, split_shell_args, wd_path_saveable,
+        CloseReason, DOCUMENT_MIN_W, TERMINAL_MIN_W, TabAgentSession, close_prompt,
+        document_column_px, join_shell_args, parse_ssh_connect_input, parse_ssh_option_words,
+        side_panel_max, split_shell_args, wd_path_saveable,
     };
 
     const SIDEBAR_MIN: f32 = crate::ui::tab_sidebar::MIN_SIDEBAR_WIDTH;
@@ -7174,12 +7271,6 @@ mod tests {
         assert_eq!(one, "Close 1 tab?");
     }
 
-
-
-
-
-
-
     #[test]
     fn a_fork_needs_a_command_an_id_and_a_local_pane() {
         let session = |fork_label, session_id: Option<&str>, remote| TabAgentSession {
@@ -7201,7 +7292,6 @@ mod tests {
             "a remote pane would fork the wrong machine's session"
         );
     }
-
 
     #[test]
     fn parses_ssh_option_words_with_quotes() {
@@ -8416,8 +8506,6 @@ mod tab_focus_memory_tests;
 #[path = "session_lifecycle/tests_hibernate.rs"]
 mod hibernate_gpui_tests;
 
-
-
 #[cfg(test)]
 #[path = "tab/tests_menu.rs"]
 mod pane_menu_tests;
@@ -8443,11 +8531,11 @@ mod pip_remote_identity_gpui_tests;
 mod pip_native_owned_gpui_tests;
 
 #[cfg(test)]
-#[path = "tab/tests_sidecar.rs"]
-mod sidecar_snapshot_gpui_tests;
-#[cfg(test)]
 #[path = "tab/tests_pip_geometry.rs"]
 mod pip_geometry_gpui_tests;
+#[cfg(test)]
+#[path = "tab/tests_sidecar.rs"]
+mod sidecar_snapshot_gpui_tests;
 
 #[cfg(test)]
 #[path = "tab/tests_parking.rs"]

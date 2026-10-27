@@ -13,7 +13,6 @@ use crate::ui::i18n::{L10nKey, t_fmt};
 mod creation;
 pub(crate) use creation::{PendingLaunch, SpawnFinished};
 
-
 #[derive(Clone)]
 pub struct PendingSpawn {
     pub workspace: Option<PaneWorkspace>,
@@ -76,14 +75,27 @@ impl PendingPane {
         shell: Option<ShellSpec>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let machine = workspace.as_ref()
+        let machine = workspace
+            .as_ref()
             .map(|workspace| crate::ui::remote_connect::target_label(cx, &workspace.target))
             .unwrap_or_else(|| crate::ui::i18n::t(L10nKey::AppLocalServerName).to_string());
-        Self::new(machine, PendingSpawn {
-            workspace, owner, font_size, working_directory, restore_pane, shell,
-            agent: None, agent_session_id: None, agent_launch_argv: None,
-            agent_session_scope: None, run_on_land: None,
-        }, cx)
+        Self::new(
+            machine,
+            PendingSpawn {
+                workspace,
+                owner,
+                font_size,
+                working_directory,
+                restore_pane,
+                shell,
+                agent: None,
+                agent_session_id: None,
+                agent_launch_argv: None,
+                agent_session_scope: None,
+                run_on_land: None,
+            },
+            cx,
+        )
     }
 
     pub(crate) fn native_ssh(
@@ -93,13 +105,28 @@ impl PendingPane {
         spec: Box<crate::daemon::protocol::NativeSshSpec>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let machine = spec.display_name.clone().unwrap_or_else(|| spec.host.clone());
-        Self::new(machine, PendingSpawn {
-            workspace: None, owner: Some(owner), font_size,
-            working_directory: remote_start_dir, restore_pane: None, shell: None,
-            agent: None, agent_session_id: None, agent_launch_argv: None,
-            agent_session_scope: None, run_on_land: None,
-        }, cx).native(spec)
+        let machine = spec
+            .display_name
+            .clone()
+            .unwrap_or_else(|| spec.host.clone());
+        Self::new(
+            machine,
+            PendingSpawn {
+                workspace: None,
+                owner: Some(owner),
+                font_size,
+                working_directory: remote_start_dir,
+                restore_pane: None,
+                shell: None,
+                agent: None,
+                agent_session_id: None,
+                agent_launch_argv: None,
+                agent_session_scope: None,
+                run_on_land: None,
+            },
+            cx,
+        )
+        .native(spec)
     }
 
     pub fn new(
@@ -129,18 +156,35 @@ impl PendingPane {
         self
     }
 
-    pub(crate) fn is_attach_only(&self) -> bool { self.attach_only }
+    pub(crate) fn is_attach_only(&self) -> bool {
+        self.attach_only
+    }
 
-    pub(crate) fn parked_card(&self, slot: gpui_kit::EntityId) -> crate::ui::parked_deck::ParkedCard {
+    pub(crate) fn title(&self) -> SharedString {
+        self.machine.clone()
+    }
+
+    pub(crate) fn parked_card(
+        &self,
+        slot: gpui_kit::EntityId,
+    ) -> crate::ui::parked_deck::ParkedCard {
         let status = match &self.state {
-            PendingState::Connecting => t_fmt(L10nKey::PendingConnecting, &[("machine", &self.machine)]),
+            PendingState::Connecting => {
+                t_fmt(L10nKey::PendingConnecting, &[("machine", &self.machine)])
+            }
             PendingState::Failed(reason) => reason.to_string(),
         };
         crate::ui::parked_deck::ParkedCard::new(
-            slot.as_u64(), self.machine.clone(),
-            self.spawn.working_directory.as_ref().map(|path| path.display().to_string()).unwrap_or_default(),
+            slot.as_u64(),
+            self.machine.clone(),
+            self.spawn
+                .working_directory
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
             false,
-        ).with_status(status)
+        )
+        .with_status(status)
     }
 
     /// How long to wait before asking again on its own, or `None` once it has
@@ -155,9 +199,15 @@ impl PendingPane {
         Some(delay)
     }
 
-    pub(crate) fn restore_pane(&self) -> Option<u64> { self.spawn.restore_pane }
-    pub(crate) fn workspace(&self) -> Option<&PaneWorkspace> { self.spawn.workspace.as_ref() }
-    pub(crate) fn run_when_ready(&mut self, command: String) { self.spawn.run_on_land = Some(command); }
+    pub(crate) fn restore_pane(&self) -> Option<u64> {
+        self.spawn.restore_pane
+    }
+    pub(crate) fn workspace(&self) -> Option<&PaneWorkspace> {
+        self.spawn.workspace.as_ref()
+    }
+    pub(crate) fn run_when_ready(&mut self, command: String) {
+        self.spawn.run_on_land = Some(command);
+    }
     pub(crate) fn resume_agent(
         &mut self,
         agent: Option<crate::core::cli_agent::CLIAgent>,
@@ -169,7 +219,9 @@ impl PendingPane {
         self.spawn.agent = agent;
         self.spawn.agent_session_id = session;
         self.spawn.agent_launch_argv = argv;
-        self.spawn.agent_session_scope = scope.as_ref().map(lyrel_core::host::session_operations::durable_scope);
+        self.spawn.agent_session_scope = scope
+            .as_ref()
+            .map(lyrel_core::host::session_operations::durable_scope);
         self.created_session = created && self.spawn.agent_session_id.is_some();
     }
 
@@ -178,11 +230,18 @@ impl PendingPane {
             cwd: self.spawn.working_directory.clone(),
             pane_id: self.spawn.restore_pane,
             shell: self.spawn.shell.clone(),
-            ssh_spec: self.creation.ssh_spec().or_else(|| self.attach_spec.clone()),
+            ssh_spec: self
+                .creation
+                .ssh_spec()
+                .or_else(|| self.attach_spec.clone()),
             agent: self.spawn.agent,
             agent_session_id: self.spawn.agent_session_id.clone(),
             agent_launch_argv: self.spawn.agent_launch_argv.clone(),
-            agent_session_scope: self.spawn.agent_session_scope.as_ref().map(lyrel_core::host::session_operations::durable_scope),
+            agent_session_scope: self
+                .spawn
+                .agent_session_scope
+                .as_ref()
+                .map(lyrel_core::host::session_operations::durable_scope),
         }
     }
 

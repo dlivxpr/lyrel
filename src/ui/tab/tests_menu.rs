@@ -3,9 +3,7 @@ use gpui_kit::TestAppContext;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 
 #[gpui_kit::test]
-fn a_single_pane_handle_opens_by_keyboard_and_escape_returns_to_its_pane(
-    cx: &mut TestAppContext,
-) {
+fn a_single_pane_handle_opens_by_keyboard_and_escape_returns_to_its_pane(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
     let pane = app.update_in(&mut vcx, |app, _, _| app.tabs[0].pane.first_leaf().unwrap());
     let id = ("pane-drag-handle", pane.entity_id().as_u64() as usize);
@@ -144,9 +142,7 @@ fn menu_zoom_targets_the_clicked_pane_without_changing_fonts(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn restarting_an_unreachable_remote_never_replaces_it_with_a_local_shell(
-    cx: &mut TestAppContext,
-) {
+fn restarting_an_unreachable_remote_never_replaces_it_with_a_local_shell(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     let remote = app.update_in(&mut vcx, |app, window, cx| {
         let remote = app.tabs[0].pane.terminals()[0].clone();

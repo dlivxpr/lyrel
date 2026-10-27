@@ -390,7 +390,7 @@ fn render_in_viewport(
     };
     let title: gpui_kit::SharedString = match &slot {
         PaneSlot::Ready(view) => view.read(cx).title.clone().into(),
-        PaneSlot::Connecting(view) => view.read(cx).machine.clone(),
+        PaneSlot::Connecting(view) => view.read(cx).title(),
     };
     let mut header = div()
         .id(("pip-header", id.as_u64() as usize))

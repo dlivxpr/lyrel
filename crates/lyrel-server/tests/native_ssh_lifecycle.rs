@@ -30,7 +30,9 @@ impl NativePane {
             encoded_bytes: 64 << 20,
             decoded_bytes: 128 << 20,
             offers: false,
-        }.encode(&mut stream).unwrap();
+        }
+        .encode(&mut stream)
+        .unwrap();
         let mut spec = fixture.spec();
         // The literal ready marker never appears in terminal input echo.
         spec.login_script = vec!["stty -echo; printf 'LIFECYCLE_%s\\n' READY".into()];
@@ -38,20 +40,30 @@ impl NativePane {
             cwd: Some(fixture.remote_home().into()),
             size: win_size(),
             spec: Box::new(spec),
-        }.encode(&mut stream).unwrap();
+        }
+        .encode(&mut stream)
+        .unwrap();
         let id = match DaemonMsg::read(&mut stream).unwrap() {
             DaemonMsg::Spawned { pane_id } => pane_id,
             other => panic!("expected native shell-channel pane, got {other:?}"),
         };
-        let mut pane = Self { endpoint, id, stream };
+        let mut pane = Self {
+            endpoint,
+            id,
+            stream,
+        };
         let mut output = Vec::new();
         loop {
             match pane.recv() {
                 DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => output.extend(bytes),
-                DaemonMsg::Exited { code } => panic!("native shell exited during startup: {code:?}"),
+                DaemonMsg::Exited { code } => {
+                    panic!("native shell exited during startup: {code:?}")
+                }
                 _ => {}
             }
-            if contains(&output, b"LIFECYCLE_READY") { return pane; }
+            if contains(&output, b"LIFECYCLE_READY") {
+                return pane;
+            }
         }
     }
 
@@ -59,7 +71,9 @@ impl NativePane {
         let message = DaemonMsg::read(&mut self.stream).expect("bounded real native SSH stream");
         match &message {
             DaemonMsg::AuthPrompt { .. } => panic!("fixed key/pin fixture must never prompt"),
-            DaemonMsg::SshStatus { phase: SshPhase::Failed { reason } } => panic!("native SSH failed: {reason}"),
+            DaemonMsg::SshStatus {
+                phase: SshPhase::Failed { reason },
+            } => panic!("native SSH failed: {reason}"),
             DaemonMsg::Error(reason) => panic!("native pane failed: {reason}"),
             _ => {}
         }
@@ -69,22 +83,40 @@ impl NativePane {
     fn kill(&self) {
         let mut stream = transport::connect_endpoint_at(&self.endpoint).unwrap();
         protocol::negotiate_pane(&mut stream).unwrap();
-        ClientMsg::Kill { pane_id: self.id }.encode(&mut stream).unwrap();
+        ClientMsg::Kill { pane_id: self.id }
+            .encode(&mut stream)
+            .unwrap();
         let deadline = Instant::now() + STREAM_WITHIN;
-        while PaneClient::at(self.endpoint.clone()).list().unwrap().iter().any(|pane| pane.pane_id == self.id && pane.alive) {
-            assert!(Instant::now() < deadline, "native SSH pane remained alive after Kill");
+        while PaneClient::at(self.endpoint.clone())
+            .list()
+            .unwrap()
+            .iter()
+            .any(|pane| pane.pane_id == self.id && pane.alive)
+        {
+            assert!(
+                Instant::now() < deadline,
+                "native SSH pane remained alive after Kill"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
 
     fn assert_no_competing_exit(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(1);
-        self.stream.set_read_timeout(Some(Duration::from_millis(250))).unwrap();
+        self.stream
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
         while Instant::now() < deadline {
             match DaemonMsg::read(&mut self.stream) {
-                Ok(DaemonMsg::Exited { .. }) => panic!("termination must not publish a competing Exited"),
+                Ok(DaemonMsg::Exited { .. }) => {
+                    panic!("termination must not publish a competing Exited")
+                }
                 Ok(_) => {}
-                Err(error) if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) => {}
                 Err(_) => break,
             }
         }
@@ -110,13 +142,17 @@ fn native_shell_channel_drains_final_output_and_intentional_shutdown_is_silent()
     let fixture = NativeSshFixture::start(Path::new(env!("CARGO_BIN_EXE_lyrel-server")));
     let mut natural = NativePane::spawn(&fixture);
     ClientMsg::Input(b"printf 'LIFECYCLE_%s\\n' FINAL; exit 7\n".to_vec())
-        .encode(&mut natural.stream).unwrap();
+        .encode(&mut natural.stream)
+        .unwrap();
     let mut output = Vec::new();
     loop {
         match natural.recv() {
             DaemonMsg::Output(bytes) | DaemonMsg::Snapshot(bytes) => output.extend(bytes),
             DaemonMsg::Exited { code } => {
-                assert!(contains(&output, b"LIFECYCLE_FINAL"), "native bridge must drain before Exited");
+                assert!(
+                    contains(&output, b"LIFECYCLE_FINAL"),
+                    "native bridge must drain before Exited"
+                );
                 // Native SSH has no local child status probe; do not invent one.
                 assert_eq!(code, None);
                 break;

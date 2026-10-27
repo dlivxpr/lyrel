@@ -3,9 +3,7 @@ use gpui_kit::TestAppContext;
 use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt as _};
 
 #[gpui_kit::test]
-fn pip_menu_acts_on_its_captured_terminal_not_the_previously_focused_one(
-    cx: &mut TestAppContext,
-) {
+fn pip_menu_acts_on_its_captured_terminal_not_the_previously_focused_one(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
         let left = app.tabs[0].pane.first_leaf().unwrap();
