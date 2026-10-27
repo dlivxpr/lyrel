@@ -108,8 +108,9 @@ fn remote_save_as_bar_keeps_its_host_and_local_shared_path_independent(cx: &mut 
 #[gpui_kit::test]
 fn a_delayed_save_cannot_close_a_replacement_editor_group(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let left_path = dir.path().join("left.txt");
-    let path = dir.path().join("saved.txt");
+    let root = crate::ui::code_editor::tests::test_real_dir(dir.path());
+    let left_path = root.join("left.txt");
+    let path = root.join("saved.txt");
     std::fs::write(&left_path, "left").unwrap();
     std::fs::write(&path, "before").unwrap();
     let host = FileHost::new(HostId(702));
