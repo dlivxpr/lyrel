@@ -1,6 +1,9 @@
 //! 连接路由、协议协商、Spawn/Attach 判定与接入前图形 admission。
 //! reader 接管之后不再读取此流；attach 预读字节完整移交单一 reader。
-use super::{NativeSshSpec, PaneRoute, PtySource, RemoteTerminal, RestoreFrom, ShellSpec, SpawnCancellation, TermSize, win_size};
+use super::{
+    NativeSshSpec, PaneRoute, PtySource, RemoteTerminal, RestoreFrom, ShellSpec, SpawnCancellation,
+    TermSize, win_size,
+};
 use crate::daemon::protocol::{ClientMsg, DaemonMsg};
 use crate::daemon::transport::{self, Stream};
 use std::io::Read as _;
@@ -182,7 +185,8 @@ impl PaneHandshake {
             false,
             images,
         )?;
-        term.connection.finish_spawn(route.clone(), await_claim.then_some((pane_id, win)));
+        term.connection
+            .finish_spawn(route.clone(), await_claim.then_some((pane_id, win)));
         term.seed_cwd(spawned_in);
         Ok((term, pane_id))
     }
@@ -353,8 +357,14 @@ impl PaneHandshake {
         // The local daemon dialled this one, but it opened no pty for it: the
         // pane is an ssh channel bridged straight through, so the bytes are the
         // far host's raw pty and no conhost ever sees them.
-        let mut term =
-            RemoteTerminal::from_stream_parts(stream, size, Vec::new(), PtySource::Raw, false, images)?;
+        let mut term = RemoteTerminal::from_stream_parts(
+            stream,
+            size,
+            Vec::new(),
+            PtySource::Raw,
+            false,
+            images,
+        )?;
         term.ssh_endpoint = Some(endpoint);
         term.ssh_user = Some(user);
         term.auto_supplied_password = auto_supplied_password;

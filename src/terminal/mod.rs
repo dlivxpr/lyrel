@@ -20,9 +20,9 @@ mod history_session;
 mod hold;
 pub(crate) mod images;
 pub mod input;
+pub(crate) mod lifecycle;
 mod link;
 mod link_probe;
-pub(crate) mod lifecycle;
 mod loopback;
 pub mod palette;
 pub(crate) mod pane_liveness;
@@ -40,6 +40,6 @@ mod smart_select;
 mod typeahead;
 pub mod view;
 
-pub use remote::{PaneRoute, PaneWorkspace, RemoteTerminal};
 pub(crate) use remote::SpawnCancellation;
+pub use remote::{PaneRoute, PaneWorkspace, RemoteTerminal};
 pub use size::TermSize;

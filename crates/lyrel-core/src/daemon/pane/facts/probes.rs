@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use portable_pty::MasterPty;
 use crate::daemon::protocol::RemoteContext;
+use portable_pty::MasterPty;
 
 pub(in super::super) fn foreground_command_running(
     master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
@@ -12,7 +12,9 @@ pub(in super::super) fn foreground_command_running(
 }
 
 #[cfg(unix)]
-pub(in super::super) fn pty_foreground_pgid(master: &Mutex<Option<Box<dyn MasterPty + Send>>>) -> Option<i32> {
+pub(in super::super) fn pty_foreground_pgid(
+    master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
+) -> Option<i32> {
     master
         .lock()
         .ok()
@@ -20,11 +22,16 @@ pub(in super::super) fn pty_foreground_pgid(master: &Mutex<Option<Box<dyn Master
 }
 
 #[cfg(not(unix))]
-pub(in super::super) fn pty_foreground_pgid(_master: &Mutex<Option<Box<dyn MasterPty + Send>>>) -> Option<i32> {
+pub(in super::super) fn pty_foreground_pgid(
+    _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
+) -> Option<i32> {
     None
 }
 
-pub(in super::super) fn is_foreground_command(fg_pgid: Option<i32>, shell_pid: Option<u32>) -> bool {
+pub(in super::super) fn is_foreground_command(
+    fg_pgid: Option<i32>,
+    shell_pid: Option<u32>,
+) -> bool {
     match (fg_pgid, shell_pid) {
         (Some(pg), Some(shell)) if pg > 0 => pg as u32 != shell,
         _ => false,
@@ -142,16 +149,31 @@ pub(in super::super) fn foreground_agent(
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(in super::super) fn foreground_title(master: &Mutex<Option<Box<dyn MasterPty + Send>>>, _shell_pid: Option<u32>) -> String {
-    pty_foreground_pgid(master).and_then(crate::daemon::procinfo::proc_name).unwrap_or_default()
+pub(in super::super) fn foreground_title(
+    master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
+    _shell_pid: Option<u32>,
+) -> String {
+    pty_foreground_pgid(master)
+        .and_then(crate::daemon::procinfo::proc_name)
+        .unwrap_or_default()
 }
 
 #[cfg(windows)]
-pub(in super::super) fn foreground_title(_master: &Mutex<Option<Box<dyn MasterPty + Send>>>, shell_pid: Option<u32>) -> String {
-    let Some(pid) = shell_pid else { return String::new() };
+pub(in super::super) fn foreground_title(
+    _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
+    shell_pid: Option<u32>,
+) -> String {
+    let Some(pid) = shell_pid else {
+        return String::new();
+    };
     let procs = crate::daemon::winproc::snapshot();
     crate::daemon::winproc::foreground_name(&procs, pid).unwrap_or_default()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-pub(in super::super) fn foreground_title(_master: &Mutex<Option<Box<dyn MasterPty + Send>>>, _shell_pid: Option<u32>) -> String { String::new() }
+pub(in super::super) fn foreground_title(
+    _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
+    _shell_pid: Option<u32>,
+) -> String {
+    String::new()
+}

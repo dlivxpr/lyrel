@@ -60,13 +60,13 @@ use lyrel_core::core::git::log::{
 use lyrel_core::core::git::ops::{GitOp, ResetMode};
 
 use crate::ui::app::LyrelApp;
-use crate::ui::window_chrome::CONTENT_INSET;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::presets::{ActiveLanes, LANE_SLOTS, Lanes};
 use crate::ui::right_panel::{META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, info_chip};
 use crate::ui::scm::panel::GROUP_CHEVRON;
 use crate::ui::scm::path::{elide_middle, relative_time};
 use crate::ui::scm::state::RepoKey;
+use crate::ui::window_chrome::CONTENT_INSET;
 
 /// One commit per row. 24px rather than the file list's 26: a graph row has no
 /// icon column, and the vertical pitch wants to stay close to the lane pitch or

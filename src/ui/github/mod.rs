@@ -267,7 +267,10 @@ impl LyrelApp {
         if !self.right_panel_visible || self.right_panel_tab != RightPanelTab::GitHub {
             return None;
         }
-        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let host = view.host_id();
         let cwd = view.effective_host_cwd()?;

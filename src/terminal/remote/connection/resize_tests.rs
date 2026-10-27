@@ -1,6 +1,6 @@
 use super::*;
-use crate::terminal::remote::RemoteTerminal;
 use crate::daemon::protocol::DaemonMsg;
+use crate::terminal::remote::RemoteTerminal;
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 
@@ -22,7 +22,6 @@ fn first_resize_always_syncs_then_dedups() {
         other => panic!("expected Input (dup resize sends nothing), got {other:?}"),
     }
 }
-
 
 #[test]
 fn layout_resize_reasserts_geometry_after_a_late_size_frame() {
@@ -337,5 +336,8 @@ fn a_remote_route_without_the_advertised_echo_reflows_at_request_time() {
 
     // The other route with no daemon to promise anything.
     term.connection.route = PaneRoute::Unroutable("no ssh details".into());
-    assert!(!term.connection.resize_echoed(), "no route, no echo to wait for");
+    assert!(
+        !term.connection.resize_echoed(),
+        "no route, no echo to wait for"
+    );
 }

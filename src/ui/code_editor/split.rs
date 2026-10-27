@@ -464,7 +464,12 @@ impl LyrelApp {
         focus_left: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let name: SharedString = self.editor.buffers.get(id).map(|f| f.label()).unwrap_or_default();
+        let name: SharedString = self
+            .editor
+            .buffers
+            .get(id)
+            .map(|f| f.label())
+            .unwrap_or_default();
         let theme = cx.theme();
         v_flex()
             .id("editor-group-same-file")
@@ -796,7 +801,14 @@ mod gpui_tests {
         }
         app.read_with(&vcx, |app, _| {
             let code = app.tab_code().unwrap();
-            assert_eq!(app.editor.buffers.get(code.active_id().unwrap()).unwrap().path, c);
+            assert_eq!(
+                app.editor
+                    .buffers
+                    .get(code.active_id().unwrap())
+                    .unwrap()
+                    .path,
+                c
+            );
         });
     }
 

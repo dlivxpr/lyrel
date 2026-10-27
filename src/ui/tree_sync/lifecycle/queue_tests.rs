@@ -1,5 +1,5 @@
-use super::*;
 use super::super::*;
+use super::*;
 
 /// The predecessor's refused operations must not clear work queued for a new
 /// hydration or a fresh visit to the same workspace.
@@ -24,15 +24,26 @@ fn a_retired_batch_cannot_discard_successor_window_edits(cx: &mut gpui_kit::Test
             prime_for_test(cx, ws, vec![machine_tab]);
             app.tabs.rename(tab, "predecessor edit", "");
             sync_window(app, cx);
-            let state = cx.default_global::<TreeSync>().windows.get_mut(&ws).unwrap();
+            let state = cx
+                .default_global::<TreeSync>()
+                .windows
+                .get_mut(&ws)
+                .unwrap();
             state.inflight = false;
-            (ws, tab, state.begin_batch().expect("the window queued its edit"))
+            (
+                ws,
+                tab,
+                state.begin_batch().expect("the window queued its edit"),
+            )
         });
         app.update_in(&mut vcx, |app, _, cx| {
             if revisit {
                 forget(cx, ws);
             } else {
-                cx.default_global::<TreeSync>().windows.get_mut(&ws).unwrap()
+                cx.default_global::<TreeSync>()
+                    .windows
+                    .get_mut(&ws)
+                    .unwrap()
                     .begin_hydration(Adopt::Replace, vec![tab]);
             }
             let mut machine_tab = TreeTab::leaf(1);
@@ -50,78 +61,81 @@ fn a_retired_batch_cannot_discard_successor_window_edits(cx: &mut gpui_kit::Test
                 batch.retired,
                 Err((refused, io::Error::other("retired link"), batch.ops)),
             );
-            assert!(queued_for_test(cx, ws).iter().any(|op| {
-                matches!(op, ControlRequest::TabRename { tab: id, name, .. }
+            assert!(
+                queued_for_test(cx, ws).iter().any(|op| {
+                    matches!(op, ControlRequest::TabRename { tab: id, name, .. }
                     if *id == tab && name.as_deref() == Some("successor edit"))
-            }), "a late refusal must leave the successor's queued rename intact");
+                }),
+                "a late refusal must leave the successor's queued rename intact"
+            );
         });
     }
 }
-    fn retiring(tab: TabId, panes: Vec<u64>) -> Retiring {
-        Retiring {
-            tab,
-            panes,
-            route: crate::terminal::PaneRoute::Local,
-        }
+fn retiring(tab: TabId, panes: Vec<u64>) -> Retiring {
+    Retiring {
+        tab,
+        panes,
+        route: crate::terminal::PaneRoute::Local,
     }
+}
 
-    /// Only the close the user asked for is remembered. The diff says
-    /// `TabClose` for every tab gone from the window — moved to another window,
-    /// never rebuilt — and those stay plain closes.
-    #[test]
-    fn only_a_retiring_tab_is_closed_into_the_machines_list() {
-        let workspace = WorkspaceId::new();
-        let (closed, moved) = (TabId::new(), TabId::new());
-        let mut ops = vec![
+/// Only the close the user asked for is remembered. The diff says
+/// `TabClose` for every tab gone from the window — moved to another window,
+/// never rebuilt — and those stay plain closes.
+#[test]
+fn only_a_retiring_tab_is_closed_into_the_machines_list() {
+    let workspace = WorkspaceId::new();
+    let (closed, moved) = (TabId::new(), TabId::new());
+    let mut ops = vec![
+        ControlRequest::TabClose {
+            workspace,
+            tab: moved,
+        },
+        ControlRequest::TabClose {
+            workspace,
+            tab: closed,
+        },
+    ];
+    let mut waiting = vec![retiring(closed, vec![3, 4])];
+
+    let sent = remember_closes(&mut ops, &mut waiting);
+
+    assert_eq!(
+        ops,
+        vec![
             ControlRequest::TabClose {
                 workspace,
                 tab: moved,
             },
-            ControlRequest::TabClose {
+            ControlRequest::TabCloseRemembered {
                 workspace,
                 tab: closed,
+                panes: vec![3, 4],
             },
-        ];
-        let mut waiting = vec![retiring(closed, vec![3, 4])];
+        ]
+    );
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].tab, closed);
+    assert!(
+        waiting.is_empty(),
+        "handed on, so nothing is left to fall back on"
+    );
+}
 
-        let sent = remember_closes(&mut ops, &mut waiting);
+/// A retirement the sync did not reach stays waiting, for the close to
+/// take back and end the old way.
+#[test]
+fn a_retirement_with_no_close_in_the_sync_stays_waiting() {
+    let workspace = WorkspaceId::new();
+    let mut ops = vec![ControlRequest::TabMove {
+        workspace,
+        tab: TabId::new(),
+        to: 0,
+    }];
+    let tab = TabId::new();
+    let mut waiting = vec![retiring(tab, vec![3])];
 
-        assert_eq!(
-            ops,
-            vec![
-                ControlRequest::TabClose {
-                    workspace,
-                    tab: moved,
-                },
-                ControlRequest::TabCloseRemembered {
-                    workspace,
-                    tab: closed,
-                    panes: vec![3, 4],
-                },
-            ]
-        );
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].tab, closed);
-        assert!(
-            waiting.is_empty(),
-            "handed on, so nothing is left to fall back on"
-        );
-    }
-
-    /// A retirement the sync did not reach stays waiting, for the close to
-    /// take back and end the old way.
-    #[test]
-    fn a_retirement_with_no_close_in_the_sync_stays_waiting() {
-        let workspace = WorkspaceId::new();
-        let mut ops = vec![ControlRequest::TabMove {
-            workspace,
-            tab: TabId::new(),
-            to: 0,
-        }];
-        let tab = TabId::new();
-        let mut waiting = vec![retiring(tab, vec![3])];
-
-        assert!(remember_closes(&mut ops, &mut waiting).is_empty());
-        assert_eq!(waiting.len(), 1);
-        assert_eq!(waiting[0].tab, tab);
-    }
+    assert!(remember_closes(&mut ops, &mut waiting).is_empty());
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].tab, tab);
+}

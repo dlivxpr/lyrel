@@ -10,7 +10,6 @@ pub(super) fn ws(cols: u16, rows: u16) -> WinSize {
     }
 }
 
-
 pub(super) fn test_state(alive: bool) -> PaneState {
     PaneState {
         id: 0,
@@ -26,7 +25,6 @@ pub(super) fn test_state(alive: bool) -> PaneState {
     }
 }
 
-
 pub(super) fn drain(rx: &mpsc::Receiver<DaemonMsg>) -> Vec<DaemonMsg> {
     let mut got = Vec::new();
     while let Ok(msg) = rx.try_recv() {
@@ -35,10 +33,8 @@ pub(super) fn drain(rx: &mpsc::Receiver<DaemonMsg>) -> Vec<DaemonMsg> {
     got
 }
 
-
 /// A discard writer for `spawn_reader` tests that don't inspect the PTY
 /// write-back path (graphics query replies).
 pub(super) fn null_writer() -> Arc<Mutex<Box<dyn Write + Send>>> {
     Arc::new(Mutex::new(Box::new(std::io::sink())))
 }
-

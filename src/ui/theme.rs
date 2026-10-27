@@ -1367,7 +1367,6 @@ mod tests {
     use gpui_kit::TestAppContext;
     use gpui_kit::point;
 
-
     #[gpui_kit::test]
     fn effective_preset_follows_the_cached_system_appearance(cx: &mut TestAppContext) {
         cx.update(|cx| {

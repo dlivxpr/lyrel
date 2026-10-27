@@ -3,8 +3,8 @@
 use gpui_kit::App;
 
 use super::command::{Avatar, ChromeState, CommandGroup, CommandKind, Item};
-use super::{Catalog, FileList};
 use super::history::SessionHistory;
+use super::{Catalog, FileList};
 use crate::core::cli_agent::CLIAgent;
 use crate::core::config::Config;
 use crate::core::session::{WorkspaceId, WorkspaceStore};
@@ -22,7 +22,13 @@ pub(crate) struct ActionCatalog {
 
 impl ActionCatalog {
     pub(crate) fn new(chrome: ChromeState, remote: bool, save_ssh: bool) -> Self {
-        Self { chrome, editor_navigation: Vec::new(), editor_dispatch: false, remote, save_ssh }
+        Self {
+            chrome,
+            editor_navigation: Vec::new(),
+            editor_dispatch: false,
+            remote,
+            save_ssh,
+        }
     }
 
     pub(crate) fn with_editor(mut self, navigation: Vec<Item>, dispatch: bool) -> Self {
@@ -114,11 +120,23 @@ pub(crate) struct TerminalCatalog<'a> {
 }
 
 impl<'a> TerminalCatalog<'a> {
-    pub(crate) fn new(workspace: WorkspaceId, shells: &'a ShellInventory, agents: &'a [CLIAgent]) -> Self {
-        Self { workspace, shells, agents }
+    pub(crate) fn new(
+        workspace: WorkspaceId,
+        shells: &'a ShellInventory,
+        agents: &'a [CLIAgent],
+    ) -> Self {
+        Self {
+            workspace,
+            shells,
+            agents,
+        }
     }
 
-    pub(crate) fn items(self, mut rows_for: impl FnMut(WorkspaceId) -> Vec<TabRow>, cx: &App) -> Vec<Item> {
+    pub(crate) fn items(
+        self,
+        mut rows_for: impl FnMut(WorkspaceId) -> Vec<TabRow>,
+        cx: &App,
+    ) -> Vec<Item> {
         let mut out = Vec::new();
         let store = WorkspaceStore::all(cx);
         let name_of = |id: WorkspaceId| {
@@ -232,8 +250,19 @@ pub(crate) struct SearchCatalog {
 }
 
 impl SearchCatalog {
-    pub(crate) fn new(actions: ActionCatalog, terminals: Vec<Item>, history: SessionHistory, files: FileList) -> Self {
-        Self { actions, terminals, history, files, query: None }
+    pub(crate) fn new(
+        actions: ActionCatalog,
+        terminals: Vec<Item>,
+        history: SessionHistory,
+        files: FileList,
+    ) -> Self {
+        Self {
+            actions,
+            terminals,
+            history,
+            files,
+            query: None,
+        }
     }
 
     pub(crate) fn query_sessions(
@@ -247,12 +276,18 @@ impl SearchCatalog {
     }
 
     pub(super) fn prepare(self, cx: &App) -> (Catalog, Option<super::history::SessionQuery>) {
-        let mut catalog = Catalog::new(self.actions.items(), self.terminals, super::sources::host_items(cx));
+        let mut catalog = Catalog::new(
+            self.actions.items(),
+            self.terminals,
+            super::sources::host_items(cx),
+        );
         let (sessions, here) = self.history.cached_items(cx);
         catalog.sessions = sessions;
         catalog.sessions_here = here;
         catalog.files = self.files;
-        let query = self.query.map(|(host, panes, agents)| self.history.query(host, panes, agents));
+        let query = self
+            .query
+            .map(|(host, panes, agents)| self.history.query(host, panes, agents));
         (catalog, query)
     }
 

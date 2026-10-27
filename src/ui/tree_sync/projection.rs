@@ -3,8 +3,8 @@ use gpui_kit::App;
 use lyrel_core::core::machine::{AgentFacts, Axis as TreeAxis, PaneNode, PaneSeed, TabId};
 
 use crate::core::session::{SessionPane, WorkspaceId, WorkspaceStore};
-use crate::ui::tab::Tab;
 use crate::ui::pane::{Pane, PaneSlot};
+use crate::ui::tab::Tab;
 
 use super::desired::{DesiredNode, DesiredTab};
 pub(crate) fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {

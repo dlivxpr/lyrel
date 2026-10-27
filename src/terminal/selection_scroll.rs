@@ -1,9 +1,9 @@
 use std::time::Instant;
 
 use gpui_kit::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase};
+use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
-use rio_vt::crosswords::Crosswords;
 use rio_vt::selection::{Selection, SelectionType};
 
 use super::remote::EventProxy;
@@ -77,7 +77,10 @@ impl SelectionScroll {
         shift: bool,
         cfg: &Config,
     ) {
-        let point = Pos::new(Line(row as i32 - term.grid.display_offset() as i32), Column(col));
+        let point = Pos::new(
+            Line(row as i32 - term.grid.display_offset() as i32),
+            Column(col),
+        );
         let side = if left { Side::Left } else { Side::Right };
         if shift && clicks == 1 && term.selection.is_some() {
             self.extend(term, point, side, &cfg.word_separators);
@@ -85,19 +88,41 @@ impl SelectionScroll {
             self.word = None;
             if clicks == 2 {
                 self.word = Some(GridWordSelection::start(
-                    term, point, &cfg.word_separators, cfg.smart_select,
+                    term,
+                    point,
+                    &cfg.word_separators,
+                    cfg.smart_select,
                 ));
             } else {
-                let ty = if clicks >= 3 { SelectionType::Lines } else { SelectionType::Simple };
+                let ty = if clicks >= 3 {
+                    SelectionType::Lines
+                } else {
+                    SelectionType::Simple
+                };
                 term.selection = Some(Selection::new(ty, point, side));
             }
         }
         self.selecting = true;
     }
 
-    pub(super) fn update(&mut self, term: &mut Grid, col: usize, row: usize, left: bool, separators: &str) {
-        let point = Pos::new(Line(row as i32 - term.grid.display_offset() as i32), Column(col));
-        self.extend(term, point, if left { Side::Left } else { Side::Right }, separators);
+    pub(super) fn update(
+        &mut self,
+        term: &mut Grid,
+        col: usize,
+        row: usize,
+        left: bool,
+        separators: &str,
+    ) {
+        let point = Pos::new(
+            Line(row as i32 - term.grid.display_offset() as i32),
+            Column(col),
+        );
+        self.extend(
+            term,
+            point,
+            if left { Side::Left } else { Side::Right },
+            separators,
+        );
     }
 
     fn extend(&mut self, term: &mut Grid, point: Pos, side: Side, separators: &str) {
@@ -133,8 +158,14 @@ impl SelectionScroll {
             return None;
         }
         let idle = self.drag.is_none();
-        self.drag = Some(DragScroll { overshoot, col, side: if left { Side::Left } else { Side::Right } });
-        if !idle { return None; }
+        self.drag = Some(DragScroll {
+            overshoot,
+            col,
+            side: if left { Side::Left } else { Side::Right },
+        });
+        if !idle {
+            return None;
+        }
         self.drag_epoch += 1;
         Some(self.drag_epoch)
     }
@@ -145,18 +176,28 @@ impl SelectionScroll {
         grid: impl FnOnce() -> G,
         separators: &str,
     ) -> Option<bool> {
-        if epoch != self.drag_epoch { return None; }
-        if !self.selecting { self.drag = None; }
+        if epoch != self.drag_epoch {
+            return None;
+        }
+        if !self.selecting {
+            self.drag = None;
+        }
         let drag = self.drag?;
         self.cancel_animation();
         let mut term = grid();
         let before = term.grid.display_offset();
         term.scroll_display(Scroll::Delta(drag_scroll_step(drag.overshoot)));
         let offset = term.grid.display_offset();
-        let row = if drag.overshoot > 0. { 0 } else { term.screen_lines().saturating_sub(1) };
+        let row = if drag.overshoot > 0. {
+            0
+        } else {
+            term.screen_lines().saturating_sub(1)
+        };
         let point = Pos::new(Line(row as i32 - offset as i32), Column(drag.col));
         self.extend(&mut term, point, drag.side, separators);
-        if offset != before { self.fraction = 0.; }
+        if offset != before {
+            self.fraction = 0.;
+        }
         Some(offset != before)
     }
 
@@ -164,7 +205,13 @@ impl SelectionScroll {
     /// momentum tail. A fresh Started event or idle timeout asks again. Wheel
     /// detents never latch; their modifiers are considered notch by notch.
     /// The quantized-route check is lazy too: a zoom never needs the grid lock.
-    pub(super) fn wheel(&mut self, ev: &ScrollWheelEvent, line_height: f32, cfg: &Config, quantized: impl FnOnce() -> bool) -> WheelMotion {
+    pub(super) fn wheel(
+        &mut self,
+        ev: &ScrollWheelEvent,
+        line_height: f32,
+        cfg: &Config,
+        quantized: impl FnOnce() -> bool,
+    ) -> WheelMotion {
         let now = Instant::now();
         let gesturing = matches!(ev.touch_phase, TouchPhase::Started)
             || self.gesture_until.is_some_and(|until| now < until);
@@ -174,7 +221,11 @@ impl SelectionScroll {
             self.zoom_debt = 0.;
         }
         let wants_zoom = zoom_wheel(cfg.mouse_zoom_modifier, &ev.modifiers);
-        let zoom = if gesturing { *self.gesture_zoom.get_or_insert(wants_zoom) } else { wants_zoom };
+        let zoom = if gesturing {
+            *self.gesture_zoom.get_or_insert(wants_zoom)
+        } else {
+            wants_zoom
+        };
         let raw = match ev.delta {
             ScrollDelta::Lines(point) => point.y,
             ScrollDelta::Pixels(point) => point.y.as_f32() / line_height,
@@ -192,7 +243,10 @@ impl SelectionScroll {
             let lines = total.trunc() as i32;
             self.scroll_debt = total - lines as f32;
             WheelMotion::Quantized(lines)
-        } else if !gesturing && cfg.smooth_scroll && (self.is_animating() || delta.abs() >= SCROLL_ANIM_MIN_JUMP) {
+        } else if !gesturing
+            && cfg.smooth_scroll
+            && (self.is_animating() || delta.abs() >= SCROLL_ANIM_MIN_JUMP)
+        {
             WheelMotion::Animate(delta)
         } else {
             self.cancel_animation();
@@ -205,14 +259,19 @@ impl SelectionScroll {
             animation.remaining += delta;
             return None;
         }
-        self.animation = Some(ScrollAnim { remaining: delta, last: Instant::now() });
+        self.animation = Some(ScrollAnim {
+            remaining: delta,
+            last: Instant::now(),
+        });
         self.animation_epoch += 1;
         Some(self.animation_epoch)
     }
 
     /// Every non-animation viewport move retires the pending frame chain.
     pub(super) fn cancel_animation(&mut self) {
-        if self.animation.take().is_some() { self.animation_epoch += 1; }
+        if self.animation.take().is_some() {
+            self.animation_epoch += 1;
+        }
     }
 
     pub(super) fn animation_frame<G: std::ops::DerefMut<Target = Grid>>(
@@ -220,22 +279,35 @@ impl SelectionScroll {
         epoch: u64,
         grid: impl FnOnce() -> G,
     ) -> Option<(bool, bool)> {
-        if epoch != self.animation_epoch { return None; }
+        if epoch != self.animation_epoch {
+            return None;
+        }
         let animation = self.animation.as_mut()?;
         let now = Instant::now();
         let dt = now.duration_since(animation.last);
         animation.last = now;
         let (step, last) = scroll_anim_step(animation.remaining, dt);
         animation.remaining -= step;
-        if last { self.animation = None; }
+        if last {
+            self.animation = None;
+        }
         let moved = self.smooth_scroll(&mut grid(), step);
-        if !moved { self.cancel_animation(); }
+        if !moved {
+            self.cancel_animation();
+        }
         Some((moved, moved && !last))
     }
 
     pub(super) fn smooth_scroll(&mut self, term: &mut Grid, delta: f32) -> bool {
-        let (jump, fraction) = smooth_scroll_step(term.grid.display_offset(), self.fraction, delta, term.grid.history_size());
-        if jump != 0 { term.scroll_display(Scroll::Delta(jump)); }
+        let (jump, fraction) = smooth_scroll_step(
+            term.grid.display_offset(),
+            self.fraction,
+            delta,
+            term.grid.history_size(),
+        );
+        if jump != 0 {
+            term.scroll_display(Scroll::Delta(jump));
+        }
         let moved = jump != 0 || fraction != self.fraction;
         self.fraction = fraction;
         moved
@@ -256,7 +328,9 @@ impl SelectionScroll {
     pub(super) fn scroll_to(&mut self, term: &mut Grid, target: usize) {
         self.cancel_animation();
         let delta = target as i32 - term.grid.display_offset() as i32;
-        if delta != 0 { term.scroll_display(Scroll::Delta(delta)); }
+        if delta != 0 {
+            term.scroll_display(Scroll::Delta(delta));
+        }
         self.fraction = 0.;
     }
 
@@ -266,11 +340,17 @@ impl SelectionScroll {
     }
 
     #[cfg(test)]
-    pub(super) fn animation_epoch(&self) -> u64 { self.animation_epoch }
+    pub(super) fn animation_epoch(&self) -> u64 {
+        self.animation_epoch
+    }
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum SelectEndCopy { None, Grid, Editor }
+pub(super) enum SelectEndCopy {
+    None,
+    Grid,
+    Editor,
+}
 
 fn select_end_copy(enabled: bool, grid: bool, editor: bool) -> SelectEndCopy {
     match (enabled, grid, editor) {

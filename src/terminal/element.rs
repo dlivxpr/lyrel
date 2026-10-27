@@ -18,8 +18,8 @@ use rio_vt::crosswords::style::StyleFlags;
 use rio_vt::crosswords::{Crosswords, Mode};
 use rio_vt::selection::SelectionRange;
 
-use super::view::TerminalView;
 use super::link::should_show_context_menu;
+use super::view::TerminalView;
 use crate::core::config::Config;
 use crate::ui::i18n::{L10nKey, t};
 

@@ -1,6 +1,6 @@
 use super::*;
-use crate::terminal::remote::test_support::ssh_workspace;
 use crate::daemon::protocol::WinSize;
+use crate::terminal::remote::test_support::ssh_workspace;
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 
@@ -161,9 +161,8 @@ fn graphics_budget_refusal_is_not_evidence_that_the_pane_is_gone() {
             .encode(&mut daemon_side)
             .unwrap();
         daemon_side.flush().unwrap();
-        let error =
-            attach_reply_prefix(&mut client_side, 7, std::time::Duration::from_millis(200))
-                .expect_err("admission refused");
+        let error = attach_reply_prefix(&mut client_side, 7, std::time::Duration::from_millis(200))
+            .expect_err("admission refused");
         assert!(
             !attach_refused(&error),
             "only an explicit missing-pane verdict can abandon the original session: {error:#}"
@@ -187,9 +186,8 @@ fn a_size_frame_alone_is_a_live_attach() {
     .unwrap();
     daemon_side.flush().unwrap();
 
-    let buffered =
-        attach_reply_prefix(&mut client_side, 7, std::time::Duration::from_millis(200))
-            .expect("the daemon's first frame is the attach ack");
+    let buffered = attach_reply_prefix(&mut client_side, 7, std::time::Duration::from_millis(200))
+        .expect("the daemon's first frame is the attach ack");
     assert!(
         !buffered.is_empty(),
         "the Size frame was read to classify the reply; it must reach the reader"
@@ -216,9 +214,8 @@ fn a_live_attach_hands_its_replay_bytes_to_the_reader() {
         .unwrap();
     daemon_side.flush().unwrap();
 
-    let buffered =
-        attach_reply_prefix(&mut client_side, 7, attach_reply_wait(&PaneRoute::Local))
-            .expect("a live pane attaches");
+    let buffered = attach_reply_prefix(&mut client_side, 7, attach_reply_wait(&PaneRoute::Local))
+        .expect("a live pane attaches");
     assert!(
         !buffered.is_empty(),
         "the classification read the Snapshot frame; it must come back"
@@ -239,9 +236,8 @@ fn a_live_attach_hands_its_replay_bytes_to_the_reader() {
             got.clear();
             for col in 0..5usize {
                 got.push(
-                    grid[rio_vt::crosswords::pos::Line(0)]
-                        [rio_vt::crosswords::pos::Column(col)]
-                    .c(),
+                    grid[rio_vt::crosswords::pos::Line(0)][rio_vt::crosswords::pos::Column(col)]
+                        .c(),
                 );
             }
         }
