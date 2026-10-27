@@ -2,7 +2,7 @@ use super::*;
 use crate::ui::app::{LyrelApp, test_window};
 use crate::ui::pane::{Pane, PaneSlot};
 use crate::ui::tab::Tab;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 use gpui_kit::test::TestWindowExt as _;
 
 fn pending(app: &mut LyrelApp, window: &mut Window, cx: &mut Context<LyrelApp>) -> Entity<PendingPane> {
