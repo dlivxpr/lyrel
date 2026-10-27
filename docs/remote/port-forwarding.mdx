@@ -47,6 +47,12 @@ description: "本地、远程和动态转发——可预先配置，也可在会
 
 这些转发仅在当前会话期间有效，除非将它们保存到配置档案中。
 
+点击已有规则可编辑完整映射。编辑关闭状态的规则不会将其开启。保存时先移除旧规则，再应用新规则；如果新规则被拒绝，会尝试恢复旧规则，保留已输入的内容并在表单下方显示错误。恢复后的规则可能获得新的内部身份，继续保存仍针对实际恢复的规则，不会因为旧身份失效而重复添加。
+
+请求没有回应不等于转发列表为空：添加或移除未得到回复时保留已知列表，不把断连伪装成“没有规则”。只有短表单在端口绑定被明确拒绝后才尝试由操作系统分配另一个本地端口；高级表单保留指定的监听端口，不自动替换。
+
+实现上，`src/ui/forwards.rs` 的 `Forwarding` 持有表单输入、编辑身份、应用结果和失败恢复，`src/ui/forwards/editing.rs` 实现这些状态转换。`src/ui/forwards/route.rs` 区分 pane 与 workspace 的转发注册表；工作台只提供目标，并协调设置档案持久化与内容焦点恢复。信息面板、终端链接与自动转发共用该路由，workspace 转发仍独立于其中某个 pane 的生命周期。
+
 <a id="switching-a-rule-off"></a>
 ## 关闭规则
 
@@ -73,3 +79,19 @@ description: "本地、远程和动态转发——可预先配置，也可在会
 <Note>
   这些代理设置用于连接 SSH 服务器。lyrel *自身*的网络流量——更新检查、发行包下载、远程服务器安装——使用 `config.json` 中的 `http_proxy`、系统代理或 `HTTP_PROXY` 系列环境变量。窗格中运行的程序不受这两类设置影响；与任何终端一样，它们从自身环境中继承代理配置。
 </Note>
+
+## 开发验证
+
+桌面消费者回归通过真实 GPUI 工作台执行，常规检查不要求 SSH 端点：
+
+```sh
+cargo test --locked -p lyrel --bin lyrel-app ui::forwards:: -- --test-threads=1
+```
+
+真实转发用例复用 `tests/support/native_ssh_graphics.rs` 的隔离 SSH fixture；它会在远端启动受跟踪的 Node 回显进程，分别通过 pane 与 workspace 路由验证实际字节、短表单端口冲突、高级表单拒绝与恢复、继续编辑、关闭状态编辑、开关和移除。该用例默认忽略，不代表通过，必须显式运行：
+
+```sh
+cargo test --locked -p lyrel --bin lyrel-app managed_forward_real_routes_reject_recover_and_continue_editing -- --ignored --test-threads=1 --nocapture
+```
+
+前提是同一提交构建的本机 `lyrel-server`，以及明确授权的隔离 Linux SSH 端点。沿用 fixture 的 `LYREL_TEST_SSH_LOCAL_SERVER`、`LYREL_TEST_SSH_HOST`、`LYREL_TEST_SSH_PORT`、`LYREL_TEST_SSH_USER`、`LYREL_TEST_SSH_IDENTITY`、`LYREL_TEST_SSH_KNOWN_HOSTS`、`LYREL_TEST_SSH_REMOTE_HOME` 和 `LYREL_TEST_SSH_NODE`；私钥与固定主机公钥必须属于该 fixture，远端 Node 使用 Linux 绝对路径，不能指向 Windows 的 `node.exe`。所有配置、路由守护进程、远端进程与目录均由 fixture 隔离；不得使用已安装 daemon 或用户工作区作为测试对象。没有这些前提时，真实转发保持未验证；GPUI 测试也不替代 Windows/macOS 原生窗口的焦点、Return/Escape 和错误可见性 smoke。
