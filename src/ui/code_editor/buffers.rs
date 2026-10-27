@@ -414,7 +414,7 @@ impl EditorBuffers {
 
     /// Returns whether the clean buffer needs reloading; conflicts never
     /// replace text and therefore preserve every tab's unsaved edits.
-    pub(super) fn apply_external_change<E>(&mut self, id: BufferId, observed: Observed, cx: &mut Context<E>) -> bool {
+    pub(super) fn apply_external_change<E: 'static>(&mut self, id: BufferId, observed: Observed, cx: &mut Context<E>) -> bool {
         let Some(file) = self.get_mut(id) else { return false };
         match classify_external_change(file.saving, file.dirty, file.disk_mtime, observed) {
             ExternalChange::Ignore => {}
