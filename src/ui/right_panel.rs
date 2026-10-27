@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use crate::core::config::{Config, RightPanelTab};
 use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
-use crate::ui::app::{
-    CONTENT_INSET, LyrelApp, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, tile_trailing_inset,
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::{
+    CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, tile_trailing_inset,
 };
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::scrollbar::with_vertical_scrollbar;
@@ -40,7 +41,7 @@ fn right_panel_tabs_floor(window: &Window, cx: &gpui_kit::App) -> f32 {
 /// The tab row's leading inset: the selected tab's pill starts on
 /// `CONTENT_INSET`, the edge every row fill below it starts on, and each tab's
 /// click target reaches `TAB_OUTER_PAD` past its pill.
-const TAB_ROW_LEAD: f32 = crate::ui::app::CONTENT_INSET - crate::ui::tab_strip::TAB_OUTER_PAD;
+const TAB_ROW_LEAD: f32 = crate::ui::window_chrome::CONTENT_INSET - crate::ui::tab_strip::TAB_OUTER_PAD;
 
 /// How tall the tab row is where it sits below the title bar (Windows and
 /// Linux): the tab's 26px hover pill plus 2px either side. A full title-bar
@@ -104,7 +105,7 @@ const INFO_LABEL_GAP: f32 = 9.;
 /// The leading glyph on a panel row — the file tree's folder and file marks.
 ///
 /// Keep row glyphs on the same 16px grid as the toolbar.
-pub(crate) const ROW_GLYPH: f32 = crate::ui::app::TILE_GLYPH;
+pub(crate) const ROW_GLYPH: f32 = crate::ui::window_chrome::TILE_GLYPH;
 
 // The right panel's type ramp: four steps, a point apart, that the Info and
 // Source Control tabs both draw from so switching between them does not change
@@ -1157,7 +1158,7 @@ impl LyrelApp {
         tooltip: &'static str,
         cx: &mut Context<Self>,
     ) -> Button {
-        crate::ui::tab_strip::chrome_tile_sized(
+        crate::ui::window_chrome::chrome_tile_sized(
             Button::new(id).icon(Icon::new(icon)),
             TILE_SIZE_XS,
             TILE_GLYPH_XS,
@@ -1379,7 +1380,7 @@ impl LyrelApp {
                 // comes out as a row of its own with the switch to turn it
                 // back on.
                 actions = actions.child(
-                    crate::ui::tab_strip::chrome_tile_sized(
+                    crate::ui::window_chrome::chrome_tile_sized(
                         Button::new(("panel-port-switch-off", i))
                             .icon(Icon::empty().path("icons/power.svg")),
                         TILE_SIZE_XS,
@@ -1459,7 +1460,7 @@ impl LyrelApp {
         }
 
         let add = ctx.route.is_some().then(|| {
-            crate::ui::tab_strip::chrome_tile_sized(
+            crate::ui::window_chrome::chrome_tile_sized(
                 Button::new(("ssh-forward-add-toggle", pane_id))
                     .icon(Icon::empty().path("icons/plus.svg")),
                 HEADING_TILE,

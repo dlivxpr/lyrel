@@ -17,7 +17,8 @@ use gpui_kit::{
 };
 use lyrel_core::core::machine::TabId;
 
-use crate::ui::app::{LyrelApp, TITLE_BAR_BORDER, TitleStripRow as _};
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
 use crate::ui::document_column::DocumentChrome;
 use crate::ui::editor_session::{self, TabEditor};
 use crate::ui::editor_text::{self, EditorConfig, Indent, LineEnding, TextFormat};
@@ -3506,16 +3507,16 @@ impl LyrelApp {
             // Docked, the row leads with the file tabs instead, and the same
             // subtraction put their first
             // glyph at 4pt rather than the `CONTENT_INSET` this bar is built on.
-            .pl(px(crate::ui::app::CONTENT_INSET))
+            .pl(px(crate::ui::window_chrome::CONTENT_INSET))
             // The glyph, not the tile, lands on `CONTENT_INSET`, the column
             // the file name starts on at the other end of the bar.
-            .pr(px(crate::ui::app::CONTENT_INSET - (tile - glyph) / 2.))
+            .pr(px(crate::ui::window_chrome::CONTENT_INSET - (tile - glyph) / 2.))
             .children(back)
             .child(strip)
             .children(self.render_strip_overflow(&hidden, cap, cx))
             .child(
                 div().occlude().flex_none().child(
-                    crate::ui::tab_strip::chrome_tile_sized(
+                    crate::ui::window_chrome::chrome_tile_sized(
                         Button::new("editor-new-file").icon(Icon::new(IconName::Plus)),
                         tile,
                         glyph,
@@ -3534,7 +3535,7 @@ impl LyrelApp {
             .child(self.document_layout_switch(chrome, cx))
             .child(
                 div().occlude().flex_none().ml(px(4.)).child(
-                    crate::ui::tab_strip::chrome_tile_sized(
+                    crate::ui::window_chrome::chrome_tile_sized(
                         Button::new("editor-panel-close").icon(Icon::new(IconName::Close)),
                         tile,
                         glyph,
@@ -3686,7 +3687,7 @@ impl LyrelApp {
                 .w_full()
                 .items_center()
                 .gap_2()
-                .px(px(crate::ui::app::CONTENT_INSET))
+                .px(px(crate::ui::window_chrome::CONTENT_INSET))
                 .py_1()
                 .border_b_1()
                 .border_color(cx.theme().sidebar_border)

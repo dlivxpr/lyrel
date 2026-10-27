@@ -464,7 +464,7 @@ impl LyrelApp {
                         cx.stop_propagation()
                     })
                     .child(
-                        crate::ui::tab_strip::chrome_tile(
+                        crate::ui::window_chrome::chrome_tile(
                             Button::new(("panel-forward-del", forward_id as usize))
                                 .icon(IconName::Close)
                                 .xsmall(),

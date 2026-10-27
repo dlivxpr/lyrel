@@ -1,5 +1,5 @@
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -23,7 +23,10 @@ use crate::core::cli_agent::CLIAgent;
 use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
-use crate::ui::app::{LyrelApp, SpawnWhere, TILE_GLYPH, TILE_SIZE, Tab};
+use crate::ui::app::{LyrelApp, SpawnWhere, Tab};
+use crate::ui::window_chrome::{
+    BUTTON_ICON_SCALE, TILE_GLYPH, TILE_SIZE, chrome_tile_sized, chrome_tile_variant,
+};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::search::SearchTab;
 
@@ -540,36 +543,6 @@ pub(crate) fn chord_tooltip(
     move |_window, cx| cx.new(|_| Tooltip::new(what.clone()).key_binding(kbd.clone()))
 }
 
-pub(crate) fn chrome_tile_variant(cx: &gpui_kit::App) -> ButtonCustomVariant {
-    chrome_tile_variant_for(false, cx)
-}
-
-pub(crate) fn chrome_tile_variant_for(selected: bool, cx: &gpui_kit::App) -> ButtonCustomVariant {
-    ButtonCustomVariant::new(cx)
-        .color(cx.theme().transparent)
-        // Resting chrome is *not* body ink. `sidebar_foreground` is the rung a
-        // tab title is written at, so a toolbar drawn in it made the two
-        // controls at the top of the rail the darkest marks in the whole
-        // sidebar — louder than the twenty rows they exist to act on, which is
-        // the opposite of how a native sidebar ranks itself. One rung down puts
-        // them level with the workspace chip beside them, and the hover fill
-        // this variant already carries is what answers the pointer.
-        .foreground(if selected {
-            cx.theme().foreground
-        } else {
-            cx.theme().muted_foreground
-        })
-        // `sidebar_accent` is the surface's *selected* step, and it was handed
-        // to hover as well — so a hovered tile wore the fill of a selected one
-        // and, with the right panel open, two tiles read as current at once.
-        // Hover takes the step the palette derives for it. (A selected button
-        // never renders the hover style, so this only reaches the rest.)
-        .hover(gpui_kit::rgb(cx.global::<crate::ui::presets::Surfaces>().sidebar.hover).into())
-        .active(cx.theme().sidebar_accent)
-}
-
-pub(crate) const BUTTON_ICON_SCALE: f32 = 0.75;
-
 /// Compact tiles for document headers and overlays: 26px boxes with a 6px
 /// corner and a glyph a notch under the toolbar's. Sidebar navigation uses
 /// the full title-bar size so opening a panel does not resize its controls.
@@ -590,10 +563,6 @@ pub(crate) const MIN_TARGET: f32 = 24.;
 
 pub(crate) fn hit_target(button: Button) -> Button {
     button.w(px(MIN_TARGET)).h(px(MIN_TARGET))
-}
-
-pub(crate) fn chrome_tile(button: Button, selected: bool, cx: &gpui_kit::App) -> Button {
-    chrome_tile_sized(button, TILE_SIZE, TILE_GLYPH, selected, cx)
 }
 
 /// The right panel's tabs, left to right, by name. Info leads as the default
@@ -642,21 +611,6 @@ pub(crate) fn right_panel_tab_labels_w(window: &Window, cx: &gpui_kit::App) -> f
 pub(crate) const TAB_OUTER_PAD: f32 = 2.;
 /// A label's hover target reaches this far past its word.
 const TAB_INNER_PAD: f32 = 4.;
-
-pub(crate) fn chrome_tile_sized(
-    button: Button,
-    tile: f32,
-    glyph: f32,
-    selected: bool,
-    cx: &gpui_kit::App,
-) -> Button {
-    button
-        .custom(chrome_tile_variant_for(selected, cx))
-        .selected(selected)
-        .with_size(px(glyph / BUTTON_ICON_SCALE))
-        .w(px(tile))
-        .h(px(tile))
-}
 
 /// How many saved hosts the New Tab menu names.
 ///
@@ -1609,7 +1563,7 @@ impl LyrelApp {
         id: &'static str,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
-        self.new_tab_button_sized(id, crate::ui::app::TILE_SIZE, cx)
+        self.new_tab_button_sized(id, crate::ui::window_chrome::TILE_SIZE, cx)
     }
 
     /// [`new_tab_button`](Self::new_tab_button) at another tile size — the
@@ -1621,7 +1575,7 @@ impl LyrelApp {
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
-        let glyph = match tile < crate::ui::app::TILE_SIZE {
+        let glyph = match tile < crate::ui::window_chrome::TILE_SIZE {
             true => RAIL_TILE_GLYPH,
             false => TILE_GLYPH,
         };

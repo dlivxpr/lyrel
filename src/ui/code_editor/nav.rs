@@ -1007,7 +1007,7 @@ impl LyrelApp {
                 .h(px(22.))
                 .items_center()
                 .overflow_hidden()
-                .px(px(crate::ui::app::CONTENT_INSET))
+                .px(px(crate::ui::window_chrome::CONTENT_INSET))
                 .text_size(gpui_kit::rems(crate::ui::right_panel::META))
                 .child(path)
                 .children(symbols)

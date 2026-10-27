@@ -28,7 +28,8 @@ use lyrel_core::core::git::status::{
 
 use crate::terminal::git_data::status_of;
 use crate::terminal::git_diff::DiffSource;
-use crate::ui::app::{CONTENT_INSET, LyrelApp, TILE_GLYPH_XS, TILE_SIZE_XS};
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
 use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::right_panel::{
@@ -472,7 +473,7 @@ impl LyrelApp {
                 )
             })
             .child(
-                crate::ui::tab_strip::chrome_tile_sized(
+                crate::ui::window_chrome::chrome_tile_sized(
                     Button::new("scm-sync").icon(if busy {
                         Icon::new(IconName::LoaderCircle)
                     } else {
@@ -1118,7 +1119,7 @@ impl LyrelApp {
             // `Button` sizes an icon off its own `Size`, so the glyph is asked
             // for by way of the size that produces it — the same conversion
             // `chrome_tile_sized` does.
-            .with_size(px(COMMIT_GLYPH / crate::ui::tab_strip::BUTTON_ICON_SCALE))
+            .with_size(px(COMMIT_GLYPH / crate::ui::window_chrome::BUTTON_ICON_SCALE))
             .w(px(COMMIT_CHEVRON_W))
             .h_full()
             .rounded_corners(segment_corners(1, 2, COMMIT_RADIUS, HAIRLINE))
@@ -1505,10 +1506,10 @@ impl LyrelApp {
             true => ("icons/list-flat.svg", t(L10nKey::ScmViewAsList)),
             false => ("icons/list-tree.svg", t(L10nKey::ScmViewAsTree)),
         };
-        let toggle = crate::ui::tab_strip::chrome_tile_sized(
+        let toggle = crate::ui::window_chrome::chrome_tile_sized(
             Button::new("scm-changes-view").icon(Icon::empty().path(glyph)),
-            crate::ui::app::TILE_SIZE_SM,
-            crate::ui::app::TILE_GLYPH_SM,
+            crate::ui::window_chrome::TILE_SIZE_SM,
+            crate::ui::window_chrome::TILE_GLYPH_SM,
             false,
             cx,
         )
@@ -1903,7 +1904,7 @@ impl LyrelApp {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> Button {
-        crate::ui::tab_strip::chrome_tile_sized(
+        crate::ui::window_chrome::chrome_tile_sized(
             Button::new(id).icon(Icon::new(icon.clone())),
             TILE_SIZE_XS,
             TILE_GLYPH_XS,
