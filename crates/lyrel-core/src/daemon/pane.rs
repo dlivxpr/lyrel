@@ -21,25 +21,25 @@ mod graphics_admission;
 #[path = "graphics_reader.rs"]
 mod graphics_reader;
 pub use graphics_admission::GraphicsAdmissionBroker;
+pub(crate) mod facts;
 mod launch;
 mod lifecycle;
 use lifecycle::{DeathReporter, PaneBackend, PtyLaunch, PtyParts, join_bounded};
 mod replay;
-pub(crate) mod facts;
+use facts::probes::{
+    foreground_agent, foreground_command_running, foreground_cwd, foreground_remote_context,
+    pty_foreground_pgid,
+};
 use facts::{FactReader, ForegroundProbes, PaneFacts};
 pub mod subscriptions;
 #[cfg(test)]
 mod test_support;
-use subscriptions::{GraphicsReplayAdmission, OutputGate, ReplayState, Subscriptions};
 pub(crate) use launch::LYREL_PANE_ENV;
 use launch::build_spawn_config;
-use replay::ReplayRing;
 #[cfg(test)]
 use replay::RING_CAP;
-
-
-
-
+use replay::ReplayRing;
+use subscriptions::{GraphicsReplayAdmission, OutputGate, ReplayState, Subscriptions};
 
 
 struct PaneState {
@@ -73,8 +73,16 @@ fn notify(st: &mut PaneState, msg: DaemonMsg) {
 }
 
 impl PaneState {
-    fn with_facts<R>(&mut self, apply: impl FnOnce(&mut PaneFacts, &mut dyn FnMut(DaemonMsg)) -> R) -> R {
-        let Self { facts, subscriptions, graphics, .. } = self;
+    fn with_facts<R>(
+        &mut self,
+        apply: impl FnOnce(&mut PaneFacts, &mut dyn FnMut(DaemonMsg)) -> R,
+    ) -> R {
+        let Self {
+            facts,
+            subscriptions,
+            graphics,
+            ..
+        } = self;
         apply(facts, &mut |msg| subscriptions.notify(msg, graphics))
     }
 }
@@ -113,12 +121,15 @@ fn resize_state(st: &mut PaneState, size: WinSize, gate: &OutputGate) {
 }
 
 fn publish_graphics_effects(st: &mut PaneState, effects: Vec<GraphicsEffect>, gate: &OutputGate) {
-    st.subscriptions.publish_graphics(effects, gate, &mut st.graphics);
+    st.subscriptions
+        .publish_graphics(effects, gate, &mut st.graphics);
 }
 
 fn fan_out_output(st: &mut PaneState, bytes: &[u8], frames: Vec<GraphicsFrame>, gate: &OutputGate) {
-    st.subscriptions.output(bytes, frames, gate, &mut st.graphics);
+    st.subscriptions
+        .output(bytes, frames, gate, &mut st.graphics);
 }
+
 
 
 pub struct DaemonPane {
@@ -138,6 +149,7 @@ pub struct DaemonPane {
     reader: Mutex<Option<JoinHandle<()>>>,
     broker: Option<Arc<crate::daemon::ssh::PromptBroker>>,
 }
+
 
 
 /// Out-of-band frames remain interleaved with plain output so placements
@@ -364,7 +376,11 @@ impl DaemonPane {
     /// smaller consumer must not attach by silently losing accepted content.
     pub fn set_graphics_capacity(&self, encoded: u64, decoded: u64) -> bool {
         let mut state = self.state.lock().unwrap();
-        let PaneState { subscriptions, graphics, .. } = &mut *state;
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *state;
         subscriptions.set_graphics_capacity(graphics, encoded, decoded)
     }
 
@@ -411,13 +427,23 @@ impl DaemonPane {
     ) -> Result<Option<GraphicsReplayAdmission>, String> {
         let (broker, resources, work) = {
             let mut state = self.state.lock().unwrap();
-            let PaneState { subscriptions, graphics, .. } = &mut *state;
+            let PaneState {
+                subscriptions,
+                graphics,
+                ..
+            } = &mut *state;
             let (resources, work) = subscriptions.replay_offers(graphics, &self.gate)?;
             (subscriptions.admission().clone(), resources, work)
         };
         GraphicsReplayAdmission::prepare(endpoint, broker, resources, work, |resources| {
-            self.state.lock().unwrap().graphics.as_ref()
-                .map_or(resources.is_empty(), |graphics| graphics.matches_offers(resources))
+            self.state
+                .lock()
+                .unwrap()
+                .graphics
+                .as_ref()
+                .map_or(resources.is_empty(), |graphics| {
+                    graphics.matches_offers(resources)
+                })
         })
     }
 
@@ -430,7 +456,15 @@ impl DaemonPane {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         let (subscriptions, graphics, replay) = state.subscription_parts();
-        subscriptions.attach_admitted(replay, graphics, subscriber, &self.gate, allow_clipboard, admission, foreground)
+        subscriptions.attach_admitted(
+            replay,
+            graphics,
+            subscriber,
+            &self.gate,
+            allow_clipboard,
+            admission,
+            foreground,
+        )
     }
 
     pub fn observe_admitted(
@@ -442,7 +476,9 @@ impl DaemonPane {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
         let (subscriptions, graphics, replay) = state.subscription_parts();
-        subscriptions.observe_admitted(replay, graphics, subscriber, gate, &self.gate, admission, foreground)
+        subscriptions.observe_admitted(
+            replay, graphics, subscriber, gate, &self.gate, admission, foreground,
+        )
     }
 
     pub fn spawn(
@@ -487,7 +523,12 @@ impl DaemonPane {
                     },
                 )),
                 subscriptions: Subscriptions::new(allow_remote_clipboard_write, None),
-                facts: PaneFacts::new(spawn.initial_cwd, restored_title, spawn.shell.clone(), spawn.remote.clone()),
+                facts: PaneFacts::new(
+                    spawn.initial_cwd,
+                    restored_title,
+                    spawn.shell.clone(),
+                    spawn.remote.clone(),
+                ),
                 ssh_phase: None,
                 modes: TerminalModes::default(),
                 alive: true,
@@ -662,7 +703,10 @@ impl DaemonPane {
             id,
             ring: ReplayRing::new(size),
             graphics: Some(GraphicsState::new(size)),
-            subscriptions: Subscriptions::new(allow_remote_clipboard_write, Some(allow_remote_clipboard_write)),
+            subscriptions: Subscriptions::new(
+                allow_remote_clipboard_write,
+                Some(allow_remote_clipboard_write),
+            ),
             facts: PaneFacts::new(None, None, None, Some(remote)),
             ssh_phase: None,
             modes: TerminalModes::default(),
@@ -944,7 +988,12 @@ impl DaemonPane {
 
     pub fn detach(&self, epoch: u64) -> bool {
         let mut st = self.state.lock().unwrap();
-        let PaneState { subscriptions, graphics, alive, .. } = &mut *st;
+        let PaneState {
+            subscriptions,
+            graphics,
+            alive,
+            ..
+        } = &mut *st;
         subscriptions.detach(epoch, &self.gate, graphics);
         !*alive && subscriptions.controller_epoch().is_none()
     }
@@ -968,12 +1017,20 @@ impl DaemonPane {
     /// A message for one observer alone, such as a refusal of what it sent.
     /// False once the pane has let it go.
     pub fn tell_observer(&self, observer_id: u64, msg: DaemonMsg) -> bool {
-        self.state.lock().unwrap().subscriptions.tell_observer(observer_id, msg)
+        self.state
+            .lock()
+            .unwrap()
+            .subscriptions
+            .tell_observer(observer_id, msg)
     }
 
     pub fn unobserve(&self, observer_id: u64) {
         let mut state = self.state.lock().unwrap();
-        let PaneState { subscriptions, graphics, .. } = &mut *state;
+        let PaneState {
+            subscriptions,
+            graphics,
+            ..
+        } = &mut *state;
         subscriptions.unobserve(observer_id, graphics);
     }
 
@@ -989,7 +1046,9 @@ impl DaemonPane {
     pub fn poll_agent_events(&self) {
         let observer = {
             let mut state = self.state.lock().unwrap();
-            if !state.alive { return; }
+            if !state.alive {
+                return;
+            }
             state.facts.take_durable_observer()
         };
         let Some(mut observer) = observer else {
@@ -997,8 +1056,11 @@ impl DaemonPane {
         };
         let events = observer.poll();
         let mut state = self.state.lock().unwrap();
-        if !state.alive { return; }
-        let change = state.with_facts(|facts, emit| facts.accept_durable_observation(observer, events, emit));
+        if !state.alive {
+            return;
+        }
+        let change = state
+            .with_facts(|facts, emit| facts.accept_durable_observation(observer, events, emit));
         drop(state);
         change.publish(self.id, true, self.shutting_down.load(Ordering::SeqCst));
     }
@@ -1100,7 +1162,11 @@ impl DaemonPane {
     pub fn info(&self) -> PaneInfo {
         let (cwd, osc_title, alive) = {
             let st = self.state.lock().unwrap();
-            (st.facts.cwd().map(PathBuf::from), st.facts.osc_title().map(str::to_owned), st.alive)
+            (
+                st.facts.cwd().map(PathBuf::from),
+                st.facts.osc_title().map(str::to_owned),
+                st.alive,
+            )
         };
         PaneInfo {
             pane_id: self.id,
@@ -1141,7 +1207,11 @@ impl DaemonPane {
         let st = self.state.lock().unwrap();
         let mut segments = st.ring.snapshot();
         crate::daemon::scrollback::trim_to(&mut segments, crate::daemon::scrollback::SNAPSHOT_CAP);
-        (segments, st.facts.osc_title().map(str::to_owned), st.ring.appended_mark())
+        (
+            segments,
+            st.facts.osc_title().map(str::to_owned),
+            st.ring.appended_mark(),
+        )
     }
 
     pub fn kill(&self) {
@@ -1152,11 +1222,16 @@ impl DaemonPane {
         self.shutting_down.store(true, Ordering::SeqCst);
         {
             let mut state = self.state.lock().unwrap();
-            let PaneState { subscriptions, graphics, .. } = &mut *state;
+            let PaneState {
+                subscriptions,
+                graphics,
+                ..
+            } = &mut *state;
             subscriptions.shutdown_graphics(graphics);
         }
         self.backend.hangup();
     }
+
 
 
 
@@ -1209,7 +1284,11 @@ const DA1_REPLY: &[u8] = b"\x1b[?6c";
 /// write, and nothing else that needs this pane's state should wait on that.
 fn detached_device_attribute_queries(st: &mut PaneState) -> usize {
     let asked = st.modes.take_device_attribute_queries();
-    if st.subscriptions.controller_epoch().is_some() { 0 } else { asked }
+    if st.subscriptions.controller_epoch().is_some() {
+        0
+    } else {
+        asked
+    }
 }
 
 fn answer_device_attributes(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) {
@@ -1223,8 +1302,6 @@ fn answer_device_attributes(writer: &Mutex<Box<dyn Write + Send>>, owed: usize) 
         let _ = writer.flush();
     }
 }
-
-
 
 /// How long the pty stays at the transient size of a [`redraw_nudge`]. Two
 /// size changes in one breath reach a program as one `SIGWINCH` (the kernel
@@ -1315,7 +1392,13 @@ fn attach_subscriber(st: &mut PaneState, subscriber: Sender<DaemonMsg>) -> u64 {
 
 /// Composition only: replay inputs are borrowed under the existing pane lock.
 impl PaneState {
-    fn subscription_parts(&mut self) -> (&mut Subscriptions, &mut Option<GraphicsState>, ReplayState<'_>) {
+    fn subscription_parts(
+        &mut self,
+    ) -> (
+        &mut Subscriptions,
+        &mut Option<GraphicsState>,
+        ReplayState<'_>,
+    ) {
         let replay = ReplayState {
             ring: &self.ring,
             modes: &self.modes,
@@ -1336,7 +1419,14 @@ fn attach_subscriber_with_permissions(
     foreground_command: bool,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
-    subscriptions.attach(replay, graphics, subscriber, gate, allow_remote_clipboard_write, foreground_command)
+    subscriptions.attach(
+        replay,
+        graphics,
+        subscriber,
+        gate,
+        allow_remote_clipboard_write,
+        foreground_command,
+    )
 }
 
 fn observe_subscriber(
@@ -1349,17 +1439,11 @@ fn observe_subscriber(
     subscriptions.observe(replay, graphics, observer, gate, foreground_command)
 }
 
-
 #[cfg(test)]
 mod tests {
 
-    use super::*;
     use super::test_support::{drain, null_writer, test_state, ws};
-
-
-
-
-
+    use super::*;
 
 
     /// Issue #857: the two sniffers that rewrite the stream before the ring
@@ -1600,9 +1684,6 @@ mod tests {
         }
     }
 
-
-
-
     #[test]
     fn a_window_reattaching_to_an_ssh_pane_learns_it_is_connected() {
         use crate::daemon::protocol::SshPhase;
@@ -1610,7 +1691,8 @@ mod tests {
         st.ssh_phase = Some(SshPhase::Connected);
         let (tx, rx) = std::sync::mpsc::channel();
         attach_subscriber(&mut st, tx);
-        st.subscriptions.detach(1, &OutputGate::new(), &mut st.graphics);
+        st.subscriptions
+            .detach(1, &OutputGate::new(), &mut st.graphics);
         assert!(
             rx.iter().any(|m| matches!(
                 m,
@@ -1621,21 +1703,6 @@ mod tests {
             "the replay must carry the connection phase"
         );
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1689,7 +1756,6 @@ mod tests {
             "the client answers"
         );
     }
-
 
 
 
@@ -1881,7 +1947,6 @@ mod tests {
 
 
 
-
     #[cfg(unix)]
     #[test]
     fn the_two_endpoints_are_siblings_derived_from_one_config_dir() {
@@ -1904,7 +1969,6 @@ mod tests {
         assert_eq!(pane, dir.join("daemon.sock"));
         assert_eq!(control, dir.join("control.sock"));
     }
-
 
     /// A quick launch types the agent's command the moment the shell is up, so
     /// the agent's whole first screen can land inside the poll interval of the

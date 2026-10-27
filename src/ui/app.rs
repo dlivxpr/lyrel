@@ -1,7 +1,7 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, InteractiveElementExt as _, WindowExt as _};
+use gpui_kit::component::{ActiveTheme as _, WindowExt as _};
 use gpui_kit::{
     App, Axis, Bounds, Context, Entity, Focusable, Pixels, PromptLevel, Subscription, Window, div,
     img, point, prelude::*, px, size,
@@ -9,7 +9,6 @@ use gpui_kit::{
 use lyrel_core::core::machine::TabId;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use crate::core::actions::*;
 use crate::core::config::{
@@ -171,7 +170,6 @@ fn window_bounds_to_remember(window: &Window) -> Bounds<Pixels> {
 
 use crate::ui::tab::{OverlayTop, Tab, TabSet};
 
-
 pub(crate) struct Renaming {
     /// The tab being renamed, by tree id rather than index: an index drifts
     /// the moment any other tab closes or the strip reorders, which used to
@@ -199,7 +197,6 @@ pub(crate) struct GroupRename {
     pub(crate) input: Entity<InputState>,
     pub(crate) _subs: Vec<Subscription>,
 }
-
 
 pub struct LyrelApp {
     pub(crate) tabs: TabSet,
@@ -1941,7 +1938,8 @@ impl LyrelApp {
             return;
         }
         let route = self.forward_route(pane_id, cx);
-        self.loopback_panel.open(pane_id, &route, window, cx, Self::add_managed_forward);
+        self.loopback_panel
+            .open(pane_id, &route, window, cx, Self::add_managed_forward);
         cx.notify();
     }
 
@@ -3550,7 +3548,6 @@ impl LyrelApp {
         );
     }
 
-
     /// The neighbouring tab in the order the strip shows them, wrapping at
     /// the ends — no switcher, no MRU (#867). "Shows" matters with the
     /// sidebar grouping tabs: the next row is not always the next index.
@@ -3587,8 +3584,7 @@ impl LyrelApp {
             self.cancel_pane_drag(window, cx);
             self.tabs.activate(index, &mut self.maximized, window, cx);
             self.maybe_refresh_diff_overlay(cx);
-            self.sidebar_reveal
-                .set(Some(self.tabs[index].id()));
+            self.sidebar_reveal.set(Some(self.tabs[index].id()));
             if self.code_panel_visible() {
                 self.file_tree_refresh_roots(window, cx);
                 self.file_tree.focus_handle.focus(window, cx);
@@ -3612,7 +3608,6 @@ impl LyrelApp {
     pub(crate) fn can_hibernate_tab(&self, index: usize, cx: &App) -> bool {
         SessionLifecycle::hibernate_successor(&self.tabs, index, self.workspace, cx).is_some()
     }
-
 
     /// Put tab `index` to sleep: stop its panes, keep its place (#762).
     ///
@@ -3679,7 +3674,11 @@ impl LyrelApp {
     /// tab without going through [`Self::activate`]: a neighbour taking over
     /// from a closed tab, a window restored onto a sleeping one.
     pub(crate) fn wake_active_if_asleep(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.get(self.tabs.active_index()).is_some_and(Tab::is_asleep) {
+        if self
+            .tabs
+            .get(self.tabs.active_index())
+            .is_some_and(Tab::is_asleep)
+        {
             self.wake_tab(self.tabs.active_index(), window, cx);
         }
     }
@@ -4538,32 +4537,48 @@ impl LyrelApp {
             ChromeState {
                 rail_collapsed: self.sidebar_collapsed,
                 right_panel_visible: self.right_panel_visible,
-                document_filled: self.document_layout(cx) == crate::core::config::DocumentLayout::Fill,
+                document_filled: self.document_layout(cx)
+                    == crate::core::config::DocumentLayout::Fill,
                 remote_server: WorkspaceStore::remote_ref(cx, self.workspace)
                     .filter(|remote| remote.target.hosts_our_server())
                     .map(|remote| crate::ui::remote_connect::route_label(cx, &remote)),
             },
-            WorkspaceStore::all(cx).get(self.workspace).is_some_and(|w| w.is_remote()),
+            WorkspaceStore::all(cx)
+                .get(self.workspace)
+                .is_some_and(|w| w.is_remote()),
             self.unsaved_ssh_session(window, cx).is_some(),
-        ).with_editor(self.editor_palette_items(), self.editor_can_dispatch());
+        )
+        .with_editor(self.editor_palette_items(), self.editor_can_dispatch());
         let agents = self.offered_agents(cx);
         let terminals = TerminalCatalog::new(self.workspace, &self.shells, &agents)
             .items(|id| self.tab_rows_for(id, true, cx), cx);
-        SearchCatalog::new(actions, terminals, self.search_history(window, cx), self.file_list_now(cx))
-            .query_sessions(
-                self.active_host(cx),
-                self.tabs.iter().flat_map(|tab| tab.pane.terminals()).collect(),
-                agents,
-            )
+        SearchCatalog::new(
+            actions,
+            terminals,
+            self.search_history(window, cx),
+            self.file_list_now(cx),
+        )
+        .query_sessions(
+            self.active_host(cx),
+            self.tabs
+                .iter()
+                .flat_map(|tab| tab.pane.terminals())
+                .collect(),
+            agents,
+        )
     }
 
     fn search_history(&self, window: &Window, cx: &App) -> SessionHistory {
-        let focused = self.tabs.get(self.tabs.active_index())
+        let focused = self
+            .tabs
+            .get(self.tabs.active_index())
             .and_then(|tab| tab.pane.focused_or_first(window, cx));
         let host = self.spawn_host(cx);
         SessionHistory::new(
             host,
-            focused.as_ref().and_then(|pane| pane.read(cx).spawnable_cwd()),
+            focused
+                .as_ref()
+                .and_then(|pane| pane.read(cx).spawnable_cwd()),
             focused.as_ref().and_then(|pane| pane.read(cx).host_cwd()),
             crate::ui::path_display::home_for_host(cx, host),
         )
@@ -4590,7 +4605,9 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let catalog = self.search_input(window, cx);
-        let view = self.search.open(catalog, tab, query, Self::on_search_event, window, cx);
+        let view = self
+            .search
+            .open(catalog, tab, query, Self::on_search_event, window, cx);
         if tab.in_editor_row() {
             let tabs = self.editor_search_tabs();
             view.update(cx, |view, cx| view.set_editor_tabs(tabs, cx));
@@ -4598,8 +4615,6 @@ impl LyrelApp {
         self.refresh_file_index(window, cx);
         cx.notify();
     }
-
-
 
     fn on_search_event(
         &mut self,
@@ -4632,7 +4647,9 @@ impl LyrelApp {
             // Done inside the search, which stays open on the list it was.
             SearchEvent::RunInPlace(kind) => self.run_command(kind.clone(), window, cx),
             SearchEvent::Dismiss => self.close_search(window, cx),
-            SearchEvent::SessionError(error) => self.notify_session_operation_error(error.clone(), window, cx),
+            SearchEvent::SessionError(error) => {
+                self.notify_session_operation_error(error.clone(), window, cx)
+            }
             SearchEvent::PreviewTheme(i) => {
                 if let Some(id) = crate::ui::presets::all(cx).get(*i).map(|t| t.id.clone()) {
                     self.preview_preset(&id, window, cx);
@@ -5496,7 +5513,6 @@ impl LyrelApp {
         )
     }
 }
-
 
 impl LyrelApp {
     /// 唯一工作区组合入口；终端、文档、面板与内容浮层在此各挂载一次。
@@ -6457,6 +6473,7 @@ fn pane_shell_program(view: &TerminalView, cx: &App) -> Option<String> {
 }
 
 
+
 pub(crate) fn new_terminal(
     workspace: Option<crate::terminal::PaneWorkspace>,
     owner: Option<WorkspaceId>,
@@ -6640,7 +6657,6 @@ fn watch_open_file_requests(
     )
     .detach();
 }
-
 
 /// Repaint the chrome that marks the focused pane, and record the leaf as the
 /// one its tab returns to (#843).
@@ -6961,7 +6977,6 @@ fn apply_ssh_o_option(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::close_reason;
@@ -6971,13 +6986,9 @@ mod tests {
         join_shell_args, parse_ssh_connect_input,
         parse_ssh_option_words, side_panel_max, split_shell_args, wd_path_saveable,
     };
-    use gpui_kit::px;
-
-
 
     const SIDEBAR_MIN: f32 = crate::ui::tab_sidebar::MIN_SIDEBAR_WIDTH;
     const PANEL_MIN: f32 = crate::ui::right_panel::MIN_WIDTH;
-
 
     /// Two panels that each cap themselves at half the window leave the
     /// terminal nothing when both are open, so the cap is what is left after
@@ -8110,7 +8121,6 @@ mod displayed_gpui_tests {
 #[cfg(test)]
 #[path = "tab/tests_zoom.rs"]
 mod zoom_gpui_tests;
-
 
 #[cfg(test)]
 mod new_window_action_tests {

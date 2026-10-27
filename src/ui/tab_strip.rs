@@ -4,9 +4,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Selectable as _, Side, Sizable as _, h_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Side, Sizable as _, h_flex};
 use gpui_kit::{
     AnyElement, App, Axis, Context, FontWeight, MouseButton, Pixels, SharedString, Window, div,
     prelude::*, px,
@@ -24,12 +22,12 @@ use crate::core::config::{Config, RightPanelTab};
 use crate::core::shells::DetectedShell;
 use crate::daemon::protocol::ShellSpec;
 use crate::ui::app::{LyrelApp, SpawnWhere};
-use crate::ui::tab::Tab;
-use crate::ui::window_chrome::{
-    BUTTON_ICON_SCALE, TILE_GLYPH, TILE_SIZE, chrome_tile_sized, chrome_tile_variant,
-};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::search::SearchTab;
+use crate::ui::tab::Tab;
+use crate::ui::window_chrome::{
+    BUTTON_ICON_SCALE, TILE_GLYPH, chrome_tile_sized, chrome_tile_variant,
+};
 
 /// One duration and one curve for every transition the app runs, so a fade and
 /// a slide read as the same hand. Long enough to be seen as movement, short
@@ -2118,10 +2116,10 @@ mod ssh_host_row_tests {
         quiet_test_pane, quiet_test_ssh_pane, quiet_test_ssh_pane_of, quiet_test_ssh_pane_with,
     };
     use crate::ui::app::test_window::harness;
-use crate::ui::tab::Tab;
     use crate::ui::i18n::{L10nKey, set_locale, t};
     use crate::ui::pane::{Pane, PaneSlot};
     use crate::ui::ssh_connect::TabHostForm;
+    use crate::ui::tab::Tab;
     use gpui_kit::TestAppContext;
 
     #[gpui_kit::test]

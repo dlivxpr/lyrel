@@ -2,15 +2,15 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{App, Context, Entity, EventEmitter as _, Window};
+use super::command::{Avatar, CommandKind, Item};
+use super::{SearchEvent, SearchView};
 use crate::core::agent_history::PastSession;
 use crate::core::cli_agent::CLIAgent;
 use crate::core::config::Config;
 use crate::terminal::view::TerminalView;
 use crate::ui::host_ops::{HostId, HostOps, SharedHost};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use super::command::{Avatar, CommandKind, Item};
-use super::{SearchEvent, SearchView};
+use gpui_kit::{App, Context, Entity, Window};
 
 pub(crate) struct SessionHistory {
     host: HostId,
@@ -20,8 +20,18 @@ pub(crate) struct SessionHistory {
 }
 
 impl SessionHistory {
-    pub(crate) fn new(host: HostId, here: Option<PathBuf>, default_cwd: Option<PathBuf>, home: Option<PathBuf>) -> Self {
-        Self { host, here, default_cwd, home }
+    pub(crate) fn new(
+        host: HostId,
+        here: Option<PathBuf>,
+        default_cwd: Option<PathBuf>,
+        home: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            host,
+            here,
+            default_cwd,
+            home,
+        }
     }
 
     pub(crate) fn cached_items(&self, cx: &App) -> (Vec<Item>, usize) {
@@ -108,8 +118,18 @@ impl SessionHistory {
         (out, count)
     }
 
-    pub(crate) fn query(self, host: SharedHost, panes: Vec<Entity<TerminalView>>, agents: Vec<CLIAgent>) -> SessionQuery {
-        SessionQuery { history: self, host, panes, agents }
+    pub(crate) fn query(
+        self,
+        host: SharedHost,
+        panes: Vec<Entity<TerminalView>>,
+        agents: Vec<CLIAgent>,
+    ) -> SessionQuery {
+        SessionQuery {
+            history: self,
+            host,
+            panes,
+            agents,
+        }
     }
 }
 
@@ -195,7 +215,11 @@ impl SessionQuery {
         let default_launch = crate::core::cli_agent::parse_command_argv(
             &opencode.launch_command(&cx.global::<Config>().agent_launch),
         );
-        let default_cwd = history.default_cwd.clone().or_else(|| history.home.clone()).unwrap_or_default();
+        let default_cwd = history
+            .default_cwd
+            .clone()
+            .or_else(|| history.home.clone())
+            .unwrap_or_default();
         if self.agents.contains(&opencode)
             && let Ok(launch_argv) = default_launch
         {
