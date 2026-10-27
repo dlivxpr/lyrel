@@ -924,7 +924,7 @@ impl TerminalView {
         owner: Option<crate::core::session::WorkspaceId>,
     ) -> anyhow::Result<ShellParts> {
         let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
-        let terminal = RemoteTerminal::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
+        let terminal = super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, pane_id)?;
         Ok(ShellParts {
             terminal,
             pane_id,
@@ -945,9 +945,9 @@ impl TerminalView {
     ) -> anyhow::Result<ShellParts> {
         let route = crate::terminal::PaneRoute::for_workspace(workspace.as_ref());
         let attached = match restore_pane {
-            Some(id) => match RemoteTerminal::attach_on(&route, TermSize::new(80, 24), 8, 17, id) {
+            Some(id) => match super::remote::handshake::PaneHandshake::attach_on(&route, TermSize::new(80, 24), 8, 17, id) {
                 Ok(terminal) => Some((terminal, id, None)),
-                Err(e) if crate::terminal::attach_refused(&e) => {
+                Err(e) if super::remote::handshake::attach_refused(&e) => {
                     log::info!("pane {id} is gone on its machine ({e:#}); spawning fresh");
                     None
                 }
@@ -979,7 +979,7 @@ impl TerminalView {
                             .to_string(),
                     ),
                 });
-                let (terminal, id) = RemoteTerminal::spawn_on(
+                let (terminal, id) = super::remote::handshake::PaneHandshake::spawn_on(
                     &route,
                     TermSize::new(80, 24),
                     8,
@@ -1036,7 +1036,7 @@ impl TerminalView {
     ) -> anyhow::Result<NativeSshParts> {
         let persist = Box::new(spec.without_secrets());
         let (terminal, pane_id) =
-            RemoteTerminal::spawn_native_ssh(TermSize::new(80, 24), 8, 17, remote_start_dir, spec)?;
+            super::remote::handshake::PaneHandshake::spawn_native_ssh(TermSize::new(80, 24), 8, 17, remote_start_dir, spec)?;
         Ok(NativeSshParts {
             terminal,
             pane_id,

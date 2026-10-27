@@ -69,6 +69,26 @@ Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor�
 回放与实时文字、尺寸回显、剪贴板请求及图形更新仍由同一线程按流顺序消费，回放期间不重新回答历史查询或重放副作用。
 退休先设置取消栅栏并使旧 decoder 代次失效，不等待静默连接退出；图形权威仍在 daemon，桌面只维护派生缓存与视口报告。
 
+连接接入由 `src/terminal/remote/handshake.rs` 的 `PaneHandshake` 负责：路由、协议协商、
+图形容量通告、Spawn／Attach 的应答分类及预读字节移交集中在此处。只有明确的“pane 不存在”
+应答允许放弃原会话；静默、断流和图形 admission 失败不等于会话消失。本地、远程工作区与
+原生 SSH 仍分别保留原有 Host、PTY 来源及远程剪贴板授权规则。
+
+`remote/connection.rs` 的私有 `PaneConnection` 拥有 reader／writer 的配对、链接替换、
+resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/writer.rs` 独立拥有写队列、
+背压与每条链接只报告一次的输入失败。替换时先退休旧 reader／decoder，再清理旧事件与
+剪贴板请求、重置呈现、安装 successor，随后替换 writer、重新发布 viewport 并同步当前尺寸。
+写入只入队，关闭最多等待既有短暂排空宽限，不在 UI 线程 join 静默 socket 线程。
+冷 attach 的 agent 回放仍是初始基线；relink 则沿用原视图的活动基线，不吞掉断线期间完成的状态变化。
+
+连接迁移后的原生验收必须使用专用配置与会话，以下步骤是验收流程，不代表已经执行：
+
+1. 为 GUI、CLI 和 daemon 指定同一个全新的 `--config-dir <isolated-dir>`，为测试远端另建隔离 daemon 配置；不要连接已安装实例或真实工作会话。
+2. 在隔离 GUI 新建 pane，记录 CLI `pane ls --json` 的 pane ID、工作区归属和 shell PID；通过 GUI 输入 `echo before-link`，用同一隔离 CLI 的 `capture <pane> --plain` 确认输出。
+3. 对专用远程工作区仅中断其测试 transport，保留远端 daemon 和 shell。断开期间调整分屏尺寸，确认其他 pane 仍能输入、窗口仍可交互；恢复同一 transport 后等待原 pane 重连，而不是重启服务器或新建 shell。
+4. 再次记录 pane ID、归属和 shell PID，必须与断开前一致；通过 GUI 输入 `echo after-link`，确认原 pane 和 CLI capture 都出现新输出，且当前尺寸生效、输入没有落到相邻 pane。
+5. 在同一专用会话中往返切换可见／隐藏 pane，并单独退出、重开 GUI 验证冷 attach。记录重连期间及冷 attach 后的 agent 未读／完成提示；Windows 的静默旧 peer、旧 reader 不能覆盖 successor 网格／decoder 的回归另由真实 socket 消费者覆盖。Windows 与 macOS 的原生结果分别记录，不能互相替代。
+
 
 <Warning>
   重启服务器会结束该机器上所有窗格中的所有进程，包括 shell、智能体和 SSH 会话。布局会保留，并在恢复时启动新的 shell。未经询问，切勿代他人执行此操作。
