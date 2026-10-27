@@ -11559,7 +11559,7 @@ mod ssh_rebuild_gpui_tests {
         });
 
         let (desired, _active, held) = app.update_in(&mut vcx, |app, _, cx| {
-            crate::ui::tree_sync::desired_tabs(app, cx)
+            crate::ui::tree_sync::projection::desired_tabs(&app.tabs, app.active, app.workspace, cx)
         });
         assert_eq!(
             desired.len(),
@@ -13247,13 +13247,15 @@ mod hibernate_gpui_tests {
             );
             assert!(!after.live);
 
-            let (desired, _, held) = crate::ui::tree_sync::desired_tabs(app, cx);
+            let (desired, _, held) = crate::ui::tree_sync::projection::desired_tabs(
+                &app.tabs, app.active, app.workspace, cx,
+            );
             assert!(held.is_empty(), "a sleeping tab is not a tab gone missing");
             assert_eq!(desired.len(), 2);
             assert!(!desired[0].hibernated);
             assert!(desired[1].hibernated);
             match &desired[1].root {
-                crate::ui::tree_sync::DesiredNode::Leaf { pane, .. } => assert_eq!(*pane, pane_id),
+                crate::ui::tree_sync::desired::DesiredNode::Leaf { pane, .. } => assert_eq!(*pane, pane_id),
                 other => panic!("expected the one leaf, got {other:?}"),
             }
         });
