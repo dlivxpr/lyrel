@@ -124,7 +124,6 @@ fn pane_from_existing(
     }
 }
 
-
 pub(crate) fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, cx: &App) -> bool {
     if logical_node(&tab.pane, cx).as_ref() != Some(&logical.root) {
         let mut slots = tab
@@ -141,7 +140,6 @@ pub(crate) fn install_presentation(tab: &mut Tab, logical: TreeTab<ScopedPane>, 
     tab.adopt_scoped_presentation(logical.presentation);
     true
 }
-
 
 pub(crate) fn retain_client_local(tab: &mut Tab, cx: &App) -> bool {
     let Some(local) = snapshot(tab, cx)
@@ -580,9 +578,8 @@ fn adopt(
         .flat_map(|tab| tab.pane.leaves())
         .find(|slot| slot.contains_focused(window, cx))
         .map(|slot| slot.entity_id());
-    app.tabs.retain(|tab| {
-        tab.scoped_presentation().is_none() || authoritative.contains(&tab.id())
-    });
+    app.tabs
+        .retain(|tab| tab.scoped_presentation().is_none() || authoritative.contains(&tab.id()));
     for source in foreign.tabs() {
         let pruned;
         let source = if closed_local.is_empty() {

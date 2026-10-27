@@ -1,5 +1,5 @@
-use super::*;
 use super::completion_consumer_fixture::*;
+use super::*;
 
 #[gpui_kit::test]
 fn generator_results_merge_filter_select_and_accept_the_live_word(cx: &mut TestAppContext) {
@@ -81,7 +81,7 @@ fn remote_listing_failure_is_not_successful_empty_and_dismisses_on_a_key(cx: &mu
         view.input.editor_mut().set("zzqqx /work/");
         let request = remote_request(view);
         assert_eq!(view.remote_completion_notice_text().as_deref(), Some("listing remote…"));
-        view.remote_path_results(request, Err(std::io::Error::other("boom")), cx);
+        view.remote_path_results(request, Err("boom".into()), cx);
         assert!(view.remote_completion_notice_text().unwrap().contains("boom"));
         let event = KeyDownEvent { keystroke: key("left"), is_held: false, prefer_character_input: false };
         view.on_key_down(&event, window, cx);
@@ -103,7 +103,9 @@ fn remote_listing_failure_is_not_successful_empty_and_dismisses_on_a_key(cx: &mu
 }
 
 #[gpui_kit::test]
-fn earlier_input_cancellation_and_host_results_cannot_replace_current_suggestions(cx: &mut TestAppContext) {
+fn earlier_input_cancellation_and_host_results_cannot_replace_current_suggestions(
+    cx: &mut TestAppContext,
+) {
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, window, cx| {
@@ -116,7 +118,7 @@ fn earlier_input_cancellation_and_host_results_cannot_replace_current_suggestion
                 _ => view.host_id = crate::ui::host_ops::HostId::from_connection_key("ssh-direct:other-completion-box:22"),
             }
             let current = remote_request(view);
-            view.remote_path_results(stale, Err(std::io::Error::other("stale failure")), cx);
+            view.remote_path_results(stale, Err("stale failure".into()), cx);
             assert_eq!(view.remote_completion_notice_text().as_deref(), Some("listing remote…"));
             view.remote_path_results(current, Ok(entries(&["one", "two"], false)), cx);
             assert_eq!(shown(view), ["/work/one", "/work/two"]);
@@ -155,7 +157,14 @@ fn a_directory_change_rejects_the_previous_listing(cx: &mut TestAppContext) {
     DaemonMsg::Cwd(std::path::PathBuf::from("/different-completion-directory")).encode(&mut daemon).unwrap();
     for _ in 0..200 {
         cx.run_until_parked();
-        if window.update(cx, |view, _, _| view.cwd() == Some(std::path::PathBuf::from("/different-completion-directory"))).unwrap() { break }
+        if window
+            .update(cx, |view, _, _| {
+                view.cwd() == Some(std::path::PathBuf::from("/different-completion-directory"))
+            })
+            .unwrap()
+        {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     window.update(cx, |view, _, cx| {

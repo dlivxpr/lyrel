@@ -16,66 +16,60 @@ fn delayed_sidecar_snapshots_replay_promote_and_restore_without_replacing_views(
     );
     let view = WindowView::on_remote(route.clone());
     let window_id = view.id;
-    let (remote, native, _native_stream, sidecar) =
-        app.update_in(&mut vcx, |app, window, cx| {
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![view],
-                    active: None,
-                },
-            );
-            app.workspace = window_id;
-            let remote = app.tabs[0].pane.first_leaf().unwrap();
-            remote.terminal().unwrap().update(cx, |terminal, _| {
-                terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
-                    workspace: route.workspace,
-                    target: route.target.clone(),
-                    spec: None,
-                    label: None,
-                    resize_echo: false,
-                }))
-            });
-            let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
-            app.tabs[0].pane.split_leaf(
-                remote.entity_id(),
-                Axis::Horizontal,
-                false,
-                PaneSlot::Ready(native.clone()),
-            );
-            let mut saved = TreeTab::leaf(ScopedPane::workspace(1));
-            saved.id = app.tabs[0].id();
-            saved.root.split_leaf(
-                ScopedPane::workspace(1),
-                ScopedPane::client_local(1),
-                lyrel_core::core::machine::Axis::Horizontal,
-                0.5,
-                false,
-            );
-            saved.set_pip(
-                Some(ScopedPane::client_local(1)),
-                Some(ScopedPane::workspace(1)),
-            );
-            let mut foreign = ForeignWorkspace::new(route.clone());
-            foreign.apply(&[SidecarUpdate::new(None, saved)]).unwrap();
-            let sidecar = Workspace {
-                foreign_view: Some(foreign),
-                ..Workspace::default()
-            };
-            window.focus(&remote.focus_handle(cx), cx);
-            (remote, native, stream, sidecar)
+    let (remote, native, _native_stream, sidecar) = app.update_in(&mut vcx, |app, window, cx| {
+        WorkspaceStore::install_for_test(
+            cx,
+            WindowViews {
+                views: vec![view],
+                active: None,
+            },
+        );
+        app.workspace = window_id;
+        let remote = app.tabs[0].pane.first_leaf().unwrap();
+        remote.terminal().unwrap().update(cx, |terminal, _| {
+            terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
+                workspace: route.workspace,
+                target: route.target.clone(),
+                spec: None,
+                label: None,
+                resize_echo: false,
+            }))
         });
+        let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
+        app.tabs[0].pane.split_leaf(
+            remote.entity_id(),
+            Axis::Horizontal,
+            false,
+            PaneSlot::Ready(native.clone()),
+        );
+        let mut saved = TreeTab::leaf(ScopedPane::workspace(1));
+        saved.id = app.tabs[0].id();
+        saved.root.split_leaf(
+            ScopedPane::workspace(1),
+            ScopedPane::client_local(1),
+            lyrel_core::core::machine::Axis::Horizontal,
+            0.5,
+            false,
+        );
+        saved.set_pip(
+            Some(ScopedPane::client_local(1)),
+            Some(ScopedPane::workspace(1)),
+        );
+        let mut foreign = ForeignWorkspace::new(route.clone());
+        foreign.apply(&[SidecarUpdate::new(None, saved)]).unwrap();
+        let sidecar = Workspace {
+            foreign_view: Some(foreign),
+            ..Workspace::default()
+        };
+        window.focus(&remote.focus_handle(cx), cx);
+        (remote, native, stream, sidecar)
+    });
     let weak = app.downgrade();
     vcx.update(|window, cx| {
         if !cx.has_global::<crate::ui::windows::WindowRegistry>() {
             crate::ui::windows::WindowRegistry::init(cx);
         }
-        crate::ui::windows::WindowRegistry::register(
-            cx,
-            window_id,
-            window.window_handle(),
-            weak,
-        );
+        crate::ui::windows::WindowRegistry::register(cx, window_id, window.window_handle(), weak);
     });
     vcx.dispatch_action(TogglePanePip);
     let stale = sidecar.clone();
@@ -191,12 +185,7 @@ fn native_sidecar_window(
         if !cx.has_global::<crate::ui::windows::WindowRegistry>() {
             crate::ui::windows::WindowRegistry::init(cx);
         }
-        crate::ui::windows::WindowRegistry::register(
-            cx,
-            window_id,
-            window.window_handle(),
-            weak,
-        );
+        crate::ui::windows::WindowRegistry::register(cx, window_id, window.window_handle(), weak);
         window.focus(&native.focus_handle(cx), cx);
         (
             native,
@@ -236,12 +225,9 @@ fn sidecar_closed_native_leaf_preserves_other_views_input_and_presentation(
             .unwrap();
         let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
         let surviving = PaneSlot::Ready(native);
-        app.tabs[0].pane.split_leaf(
-            closed.entity_id(),
-            Axis::Vertical,
-            false,
-            surviving.clone(),
-        );
+        app.tabs[0]
+            .pane
+            .split_leaf(closed.entity_id(), Axis::Vertical, false, surviving.clone());
         let foreign = sidecar.foreign_view.as_mut().unwrap();
         let before = foreign.tabs()[0].clone();
         let mut after = crate::ui::pane_sidecar::snapshot(&app.tabs[0], cx).unwrap();
@@ -512,9 +498,7 @@ fn sidecar_another_client_closing_a_tab_rejects_pending_and_stale_composition(
 }
 
 #[gpui_kit::test]
-fn an_explicit_primary_tab_close_does_not_reappear_from_a_stale_sidecar(
-    cx: &mut TestAppContext,
-) {
+fn an_explicit_primary_tab_close_does_not_reappear_from_a_stale_sidecar(cx: &mut TestAppContext) {
     let (app, mut vcx, _native, _streams, sidecar) = native_sidecar_window(cx, false);
     app.update_in(&mut vcx, |app, window, cx| {
         let tab = app.tabs[0].id();
@@ -550,9 +534,7 @@ fn an_emptied_primary_tab_preserves_its_native_shell_and_rejects_stale_remote_le
             cx
         ));
         assert!(
-            app.tabs
-                .iter()
-                .any(|candidate| candidate.id() == tab),
+            app.tabs.iter().any(|candidate| candidate.id() == tab),
             "emptying the remote projection must not close its client-local leaves"
         );
     });
@@ -609,9 +591,7 @@ fn a_native_only_remote_tab_keeps_its_empty_state_and_new_pane_action_when_parke
 }
 
 #[gpui_kit::test]
-fn another_client_parking_native_ssh_moves_focus_to_a_visible_terminal(
-    cx: &mut TestAppContext,
-) {
+fn another_client_parking_native_ssh_moves_focus_to_a_visible_terminal(cx: &mut TestAppContext) {
     let (app, mut vcx, native, _streams, mut sidecar) = native_sidecar_window(cx, false);
     park_native_in_sidecar(&mut sidecar);
     deliver_sidecar(&mut vcx, sidecar);

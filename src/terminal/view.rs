@@ -18,8 +18,10 @@ use super::prompt_input::layout::{before_input, input_cells, input_char_position
     input_overflow_shift, input_overlay_rows, input_start, wrapped_click_index};
 use super::prompt_input::bytes::paste_bytes;
 use super::TermSize;
+use super::completion::state::{
+    CompletionContext, CompletionWork, RemoteRequest, TerminalCompletion,
+};
 use super::completion::{self, CandidateKind};
-use super::completion::state::{CompletionContext, CompletionWork, RemoteRequest, TerminalCompletion};
 use super::element::{GridSnapshot, RenderCell, TerminalElement};
 use super::highlight::{self, TokenKind};
 use super::history_session::{PromptHistory, TerminalHistory, unix_now};
@@ -134,10 +136,20 @@ pub struct NativeSshParts {
 }
 
 impl NativeSshParts {
-    pub(crate) fn new(terminal: RemoteTerminal, pane_id: u64, persist: Box<crate::daemon::protocol::NativeSshSpec>) -> Self {
-        Self { terminal, pane_id, persist }
+    pub(crate) fn new(
+        terminal: RemoteTerminal,
+        pane_id: u64,
+        persist: Box<crate::daemon::protocol::NativeSshSpec>,
+    ) -> Self {
+        Self {
+            terminal,
+            pane_id,
+            persist,
+        }
     }
-    pub(crate) fn pane_id(&self) -> u64 { self.pane_id }
+    pub(crate) fn pane_id(&self) -> u64 {
+        self.pane_id
+    }
 }
 
 /// What a pane is called when nothing running in it has said otherwise.
@@ -172,15 +184,23 @@ pub struct ShellParts {
 
 impl ShellParts {
     pub(crate) fn new(
-        terminal: RemoteTerminal, pane_id: u64, shell_spec: Option<ShellSpec>,
-        workspace: Option<crate::terminal::PaneWorkspace>, restored: bool,
+        terminal: RemoteTerminal,
+        pane_id: u64,
+        shell_spec: Option<ShellSpec>,
+        workspace: Option<crate::terminal::PaneWorkspace>,
+        restored: bool,
         owner: Option<crate::core::session::WorkspaceId>,
     ) -> Self {
-        Self { terminal, pane_id, shell_spec, workspace, restored, owner }
+        Self {
+            terminal,
+            pane_id,
+            shell_spec,
+            workspace,
+            restored,
+            owner,
+        }
     }
 }
-
-
 
 fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
     match pane_runs_remotely {
@@ -831,7 +851,6 @@ fn apply_fallback_chain(
 }
 
 impl TerminalView {
-
     pub fn from_shell_parts(
         mut parts: ShellParts,
         window: &mut Window,
@@ -853,7 +872,6 @@ impl TerminalView {
     pub fn owner_workspace(&self) -> Option<crate::core::session::WorkspaceId> {
         self.owner_workspace
     }
-
 
     pub fn from_native_ssh_parts(
         parts: NativeSshParts,
@@ -2612,7 +2630,9 @@ impl TerminalView {
     fn poll_foreground(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.completion.has_work() {
             let context = self.completion_context();
-            if self.completion.observe_context(context) { cx.notify(); }
+            if self.completion.observe_context(context) {
+                cx.notify();
+            }
         }
         let notify_allowed = cx
             .global::<Config>()
@@ -3170,8 +3190,7 @@ impl TerminalView {
     }
 
     fn accept_line(&mut self, cx: &mut Context<Self>) {
-        if self.completion.has_selection()
-        {
+        if self.completion.has_selection() {
             self.completion_accept(cx);
             return;
         }
@@ -3282,44 +3301,65 @@ impl TerminalView {
     }
 
     fn complete_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if self.history.search().is_some() { return; }
-        let cwd = self.paths_are_local()
-            .then(|| self.local_cwd().or_else(|| std::env::current_dir().ok())).flatten();
+        if self.history.search().is_some() {
+            return;
+        }
+        let cwd = self
+            .paths_are_local()
+            .then(|| self.local_cwd().or_else(|| std::env::current_dir().ok()))
+            .flatten();
         let share = cwd.is_none().then(|| self.wsl_share_cwd()).flatten();
         let remote = self.remote_ssh_cwd();
         let shell = self.shell_program();
         let context = self.completion_context();
         let work = self.completion.tab(
-            self.input.editor_mut(), context, cwd.as_deref(), share.as_deref(),
-            remote.as_deref(), shell.as_deref(), cx.global::<Config>().tab_completion, forward,
+            self.input.editor_mut(),
+            context,
+            cwd.as_deref(),
+            share.as_deref(),
+            remote.as_deref(),
+            shell.as_deref(),
+            cx.global::<Config>().tab_completion,
+            forward,
         );
         match work {
             CompletionWork::Handoff => self.handoff_tab_to_shell(!forward, cx),
-            CompletionWork::Updated => {},
-            CompletionWork::Generators { generation, scripts, cwd } => {
+            CompletionWork::Updated => {}
+            CompletionWork::Generators {
+                generation,
+                scripts,
+                cwd,
+            } => {
                 for pending in scripts {
                     let cwd = cwd.clone();
                     cx.spawn(async move |this, cx| {
-                        let results = cx.background_executor().spawn(async move {
-                            super::generator::run(&pending.script, &cwd)
-                        }).await;
+                        let results = cx
+                            .background_executor()
+                            .spawn(async move { super::generator::run(&pending.script, &cwd) })
+                            .await;
                         let _ = this.update(cx, |view, cx| {
                             let context = view.completion_context();
-                            if view.completion.merge(generation, context, view.input.editor(), results) {
+                            if view
+                                .completion
+                                .merge(generation, context, view.input.editor(), results)
+                            {
                                 cx.notify();
                             }
                         });
-                    }).detach();
+                    })
+                    .detach();
                 }
-            },
+            }
             CompletionWork::Remote(request) => {
                 let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
                 let dir = request.directory().to_string();
                 cx.spawn(async move |this, cx| {
                     let listed = cx.background_spawn(async move { route.list(&dir) }).await;
-                    let _ = this.update(cx, |view, cx| view.remote_path_results(request, listed, cx));
-                }).detach();
-            },
+                    let _ =
+                        this.update(cx, |view, cx| view.remote_path_results(request, listed, cx));
+                })
+                .detach();
+            }
         }
         self.lifecycle.show_cursor();
         cx.notify();
@@ -3358,13 +3398,21 @@ impl TerminalView {
     fn remote_path_results(
         &mut self,
         request: RemoteRequest,
-        listed: std::io::Result<Vec<crate::daemon::protocol::SftpEntry>>,
+        listed: Result<Vec<crate::daemon::protocol::SftpEntry>, String>,
         cx: &mut Context<Self>,
     ) {
         let context = self.completion_context();
-        let active = self.link_inactive_reason(cx).is_none() && self.input_inactive_reason().is_none();
+        let active =
+            self.link_inactive_reason(cx).is_none() && self.input_inactive_reason().is_none();
         let shell = self.shell_program();
-        if let Some(shift) = self.completion.remote_results(request, context, self.input.editor_mut(), active, listed, shell.as_deref()) {
+        if let Some(shift) = self.completion.remote_results(
+            request,
+            context,
+            self.input.editor_mut(),
+            active,
+            listed,
+            shell.as_deref(),
+        ) {
             self.handoff_tab_to_shell(shift, cx);
         }
         cx.notify();
@@ -5064,7 +5112,6 @@ fn mac_only(key: &'static str) -> Option<&'static str> {
 fn mac_only(_key: &'static str) -> Option<&'static str> {
     None
 }
-
 
 /// A history entry drawn on a one-line row, with its line breaks folded to a
 /// visible stand-in.
@@ -8614,7 +8661,6 @@ mod gpui_tests {
 
 
 
-
     fn key(spec: &str) -> gpui_kit::Keystroke {
         gpui_kit::Keystroke::parse(spec).expect("valid keystroke spec")
     }
@@ -8828,7 +8874,6 @@ mod gpui_tests {
             "not one byte reached the wire"
         );
     }
-
 
     #[gpui_kit::test]
     fn a_tab_on_a_detached_remote_pane_never_asks_for_a_listing(cx: &mut TestAppContext) {
@@ -10274,7 +10319,6 @@ mod gpui_tests {
             })
             .unwrap();
     }
-
 
     #[gpui_kit::test]
     fn a_remote_workspace_pane_reports_its_cwd_as_remote(cx: &mut TestAppContext) {

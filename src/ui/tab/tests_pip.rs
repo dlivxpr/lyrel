@@ -47,9 +47,7 @@ fn single_pane_pip_keeps_one_terminal_and_restores_keyboard_focus(cx: &mut TestA
 }
 
 #[gpui_kit::test]
-fn replacing_pip_restores_the_previous_terminal_and_switches_with_its_tab(
-    cx: &mut TestAppContext,
-) {
+fn replacing_pip_restores_the_previous_terminal_and_switches_with_its_tab(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 3);
     let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
         let left = app.tabs[0].pane.first_leaf().unwrap();

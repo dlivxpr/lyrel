@@ -358,7 +358,12 @@ impl TerminalHistory {
     /// None means no directory was reported; otherwise borrow its run affinity.
     pub(super) fn directory_affinity(&self, entry: &str) -> Option<bool> {
         let cwd = self.ranked_cwd.as_deref().and_then(Path::to_str)?;
-        Some(self.data.cwds.get(entry).is_some_and(|dirs| dirs.contains(cwd)))
+        Some(
+            self.data
+                .cwds
+                .get(entry)
+                .is_some_and(|dirs| dirs.contains(cwd)),
+        )
     }
 
     pub(super) fn search(&self) -> Option<&ReverseSearch> {

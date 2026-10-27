@@ -24,9 +24,9 @@ use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
 use crate::core::config::{Config, ProfileUsage, unix_now};
 use crate::core::session::WorkspaceStore;
 use crate::ui::app::{LyrelApp, SpawnWhere, join_shell_args};
-use crate::ui::tab::presentation::SpawnAs;
 use crate::ui::i18n::{L10nKey, t_fmt};
 use crate::ui::pane::PaneSlot;
+use crate::ui::tab::presentation::SpawnAs;
 
 /// How the keymap spells "launch this agent": `LaunchAgent:omp`.
 const LAUNCH_ACTION_PREFIX: &str = "LaunchAgent:";
@@ -343,8 +343,11 @@ impl LyrelApp {
             // not the source fork operation.
             pending.update(cx, |pending, _| {
                 pending.resume_agent(
-                    Some(prepared.agent), prepared.target_id.clone(),
-                    Some(prepared.launch_argv.clone()), Some(prepared.scope.clone()), false,
+                    Some(prepared.agent),
+                    prepared.target_id.clone(),
+                    Some(prepared.launch_argv.clone()),
+                    Some(prepared.scope.clone()),
+                    false,
                 );
             });
         }

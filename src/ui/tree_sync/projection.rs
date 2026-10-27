@@ -219,13 +219,25 @@ fn desired_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<DesiredNod
         Pane::Leaf(PaneSlot::Connecting(pending)) => {
             pending.read(cx).restore_pane()?;
             let crate::core::session::SessionPane::Leaf {
-                pane_id, cwd, ssh_spec, agent, agent_session_id, agent_launch_argv,
-                agent_session_scope, shell,
-            } = pending.read(cx).session() else { return None; };
+                pane_id,
+                cwd,
+                ssh_spec,
+                agent,
+                agent_session_id,
+                agent_launch_argv,
+                agent_session_scope,
+                shell,
+            } = pending.read(cx).session()
+            else {
+                return None;
+            };
             let pane = pane_id?;
             let agent = agent.map(|agent| AgentFacts {
-                agent, session_id: agent_session_id, launch_argv: agent_launch_argv,
-                session_scope: agent_session_scope, status: None,
+                agent,
+                session_id: agent_session_id,
+                launch_argv: agent_launch_argv,
+                session_scope: agent_session_scope,
+                status: None,
             });
             Some(DesiredNode::Leaf {
                 pane,

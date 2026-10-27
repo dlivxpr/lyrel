@@ -32,9 +32,9 @@ mod gutter;
 mod nav;
 pub(crate) mod outline;
 mod problems;
+pub(crate) mod saving;
 mod split;
 mod strip;
-pub(crate) mod saving;
 use saving::{AfterUnsaved, BarKind, EditorBar, EditorBridge, EditorEvent, SaveWaiter};
 #[cfg(test)]
 mod test_host;
@@ -265,7 +265,6 @@ impl TabCode {
         true
     }
 }
-
 
 pub(crate) struct EditorPanelState {
     buffers: buffers::EditorBuffers,
@@ -655,8 +654,6 @@ fn selected_lines(
     };
     Some((start.row + 1, last + 1))
 }
-
-
 
 impl LyrelApp {
     pub(crate) fn tab_code(&self) -> Option<&TabCode> {
@@ -1450,31 +1447,49 @@ impl LyrelApp {
     }
 
     fn editor_save_root(&self) -> PathBuf {
-        self.tab_code().and_then(|code| code.roots.first().cloned()).unwrap_or_default()
+        self.tab_code()
+            .and_then(|code| code.roots.first().cloned())
+            .unwrap_or_default()
     }
 
-    fn editor_save_file(&mut self, id: BufferId, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn editor_save_file(
+        &mut self,
+        id: BufferId,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let root = self.editor_save_root();
-        self.editor.save(id, force, &root, window, cx, Self::editor_bridge());
+        self.editor
+            .save(id, force, &root, window, cx, Self::editor_bridge());
     }
 
     fn editor_save_as(&mut self, id: BufferId, window: &mut Window, cx: &mut Context<Self>) {
         let root = self.editor_save_root();
-        self.editor.save_as(id, &root, window, cx, Self::editor_bridge());
+        self.editor
+            .save_as(id, &root, window, cx, Self::editor_bridge());
     }
 
     fn editor_event(&mut self, event: EditorEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            EditorEvent::Saved { id, host, directory } => {
+            EditorEvent::Saved {
+                id,
+                host,
+                directory,
+            } => {
                 self.editor_buffer_changed(id, cx);
                 self.lsp_buffer_saved(id, cx);
                 self.editor_gutter_refetch(id);
-                if let Some(directory) = directory { self.scm_invalidate_cwd(host, &directory, cx); }
+                if let Some(directory) = directory {
+                    self.scm_invalidate_cwd(host, &directory, cx);
+                }
             }
             EditorEvent::IdentityChanged => self.editor_rebuild_watcher(cx),
             EditorEvent::Continue(intent) => self.editor_continue(intent, window, cx),
             EditorEvent::Discard(ids) => {
-                for id in ids { self.editor_drop_buffer(id, cx); }
+                for id in ids {
+                    self.editor_drop_buffer(id, cx);
+                }
             }
             EditorEvent::Focus => self.focus_editor(window, cx),
             EditorEvent::GoToLine { id, line, column } => {
@@ -1482,7 +1497,16 @@ impl LyrelApp {
                 if let Some(file) = self.editor.buffers.get(id) {
                     let input = file.input.clone();
                     let lines = input.read(cx).text().lines_len().max(1) as u32;
-                    place_cursor(input, Position { line: line.min(lines) - 1, character: column - 1 }, CURSOR_SCROLL_ATTEMPTS, window, cx);
+                    place_cursor(
+                        input,
+                        Position {
+                            line: line.min(lines) - 1,
+                            character: column - 1,
+                        },
+                        CURSOR_SCROLL_ATTEMPTS,
+                        window,
+                        cx,
+                    );
                 }
             }
             EditorEvent::Rename { id, offset, name } => {
@@ -1493,8 +1517,15 @@ impl LyrelApp {
         cx.notify();
     }
 
-    fn editor_open_bar(&mut self, kind: BarKind, initial: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor.open_bar(kind, initial, window, cx, Self::editor_bridge());
+    fn editor_open_bar(
+        &mut self,
+        kind: BarKind,
+        initial: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .open_bar(kind, initial, window, cx, Self::editor_bridge());
     }
 
     pub(crate) fn editor_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1517,7 +1548,6 @@ impl LyrelApp {
         cx.notify();
     }
 
-
     /// Closes the file at `pos` in the active tab's strip. Asks first only
     /// when this is the last tab showing a buffer with unsaved changes.
     pub(crate) fn editor_close_file(
@@ -1539,7 +1569,16 @@ impl LyrelApp {
         }
         let tab = self.tabs.get(tab_ix).unwrap().id();
         let left = self.tab_code().unwrap().focus_is_left();
-        self.editor_guard_unsaved(vec![id], AfterUnsaved::CloseFiles { tab, ids: vec![id], left }, window, cx);
+        self.editor_guard_unsaved(
+            vec![id],
+            AfterUnsaved::CloseFiles {
+                tab,
+                ids: vec![id],
+                left,
+            },
+            window,
+            cx,
+        );
     }
 
     /// Closes the file with this buffer in the front tab's strip, wherever
@@ -1575,7 +1614,11 @@ impl LyrelApp {
             .collect();
         if self.editor_guard_unsaved(
             unsaved,
-            AfterUnsaved::CloseFiles { tab, ids: ids.clone(), left: self.tab_code().unwrap().focus_is_left() },
+            AfterUnsaved::CloseFiles {
+                tab,
+                ids: ids.clone(),
+                left: self.tab_code().unwrap().focus_is_left(),
+            },
             window,
             cx,
         ) {
@@ -1870,7 +1913,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if ids.is_empty() { return false; }
+        if ids.is_empty() {
+            return false;
+        }
         // Showing it is part of the question: the file being asked about may
         // be behind the terminal, in a tab that is not the one in front.
         if let Some(tab_ix) = ids.first().and_then(|id| {
@@ -1890,7 +1935,8 @@ impl LyrelApp {
             code.visible = true;
         }
         let root = self.editor_save_root();
-        self.editor.guard_unsaved(ids, then, root, window, cx, Self::editor_bridge())
+        self.editor
+            .guard_unsaved(ids, then, root, window, cx, Self::editor_bridge())
     }
 
     fn editor_continue(&mut self, then: AfterUnsaved, window: &mut Window, cx: &mut Context<Self>) {
@@ -1903,10 +1949,16 @@ impl LyrelApp {
             AfterUnsaved::CloseFiles { tab, ids, left } => {
                 if let Some(ix) = self.tab_index_of(tab) {
                     for id in ids {
-                        if let Some(code) = self.tabs.get_mut(ix).and_then(|tab| tab.code.as_deref_mut()) {
+                        if let Some(code) = self
+                            .tabs
+                            .get_mut(ix)
+                            .and_then(|tab| tab.code.as_deref_mut())
+                        {
                             code.close_in_side(id, left);
                         }
-                        if self.buffer_refs(id) == 0 { self.editor_drop_buffer(id, cx); }
+                        if self.buffer_refs(id) == 0 {
+                            self.editor_drop_buffer(id, cx);
+                        }
                     }
                 }
             }
@@ -3248,7 +3300,6 @@ mod close_gpui_tests {
             settle(&mut vcx);
         }
     }
-
 
     #[gpui_kit::test]
     fn docked_status_follows_terminal_focus_and_recovers_document_actions(cx: &mut TestAppContext) {

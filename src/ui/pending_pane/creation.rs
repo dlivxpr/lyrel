@@ -26,19 +26,25 @@ pub(super) struct Creation {
 
 impl Creation {
     pub(super) fn ssh_spec(&self) -> Option<Box<NativeSshSpec>> {
-        self.native.as_ref().map(|spec| Box::new(spec.without_secrets()))
+        self.native
+            .as_ref()
+            .map(|spec| Box::new(spec.without_secrets()))
     }
 }
 
 impl Drop for Creation {
     fn drop(&mut self) {
-        if let Some(cancellation) = &self.cancellation { cancellation.cancel(); }
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
+        }
     }
 }
 
 struct CancelOnDrop(SpawnCancellation);
 impl Drop for CancelOnDrop {
-    fn drop(&mut self) { self.0.cancel(); }
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 pub(crate) struct SpawnFinished;
@@ -79,7 +85,9 @@ struct OwnedTerminal {
 
 impl Drop for OwnedTerminal {
     fn drop(&mut self) {
-        let Some(parts) = self.parts.take() else { return; };
+        let Some(parts) = self.parts.take() else {
+            return;
+        };
         // Claimable local shells are reclaimed by EOF. Existing attachments
         // only detach. Remote and native fresh children require an explicit kill.
         let kill = match &parts {
@@ -90,30 +98,51 @@ impl Drop for OwnedTerminal {
             CreatedTerminal::Native(parts) => Some((PaneRoute::Local, parts.pane_id())),
             _ => None,
         };
-        self.executor.spawn(async move {
-            if let Some((route, pane)) = kill {
-                crate::terminal::RemoteTerminal::kill_pane_on(&route, pane);
-            }
-            drop(parts);
-        }).detach();
+        self.executor
+            .spawn(async move {
+                if let Some((route, pane)) = kill {
+                    crate::terminal::RemoteTerminal::kill_pane_on(&route, pane);
+                }
+                drop(parts);
+            })
+            .detach();
     }
 }
 
 impl PendingSpawn {
-    fn create(self, route: &PaneRoute, attach_only: bool, native: Option<Box<NativeSshSpec>>, cancellation: &SpawnCancellation) -> anyhow::Result<CreatedTerminal> {
-        if cancellation.cancelled() { anyhow::bail!("pane creation cancelled"); }
+    fn create(
+        self,
+        route: &PaneRoute,
+        attach_only: bool,
+        native: Option<Box<NativeSshSpec>>,
+        cancellation: &SpawnCancellation,
+    ) -> anyhow::Result<CreatedTerminal> {
+        if cancellation.cancelled() {
+            anyhow::bail!("pane creation cancelled");
+        }
         if let Some(spec) = native {
             let persist = Box::new(spec.without_secrets());
             let (terminal, pane_id) = PaneHandshake::spawn_native_ssh(
-                TermSize::new(80, 24), 8, 17, self.working_directory, spec,
+                TermSize::new(80, 24),
+                8,
+                17,
+                self.working_directory,
+                spec,
             )?;
-            return Ok(CreatedTerminal::Native(NativeSshParts::new(terminal, pane_id, persist)));
+            return Ok(CreatedTerminal::Native(NativeSshParts::new(
+                terminal, pane_id, persist,
+            )));
         }
         let attached = match self.restore_pane {
-            Some(pane) => match PaneHandshake::attach_on(route, TermSize::new(80, 24), 8, 17, pane) {
+            Some(pane) => match PaneHandshake::attach_on(route, TermSize::new(80, 24), 8, 17, pane)
+            {
                 Ok(terminal) => Some((terminal, pane, None)),
                 Err(error) if !attach_only && attach_refused(&error) => None,
-                Err(error) => return Err(error.context(format!("could not reach pane {pane}, which may still be running"))),
+                Err(error) => {
+                    return Err(error.context(format!(
+                        "could not reach pane {pane}, which may still be running"
+                    )));
+                }
             },
             None if attach_only => anyhow::bail!("an attach-only sidecar has no owning pane"),
             None => None,
@@ -122,22 +151,43 @@ impl PendingSpawn {
         let (terminal, pane_id, shell_spec) = match attached {
             Some(parts) => parts,
             None => {
-                if cancellation.cancelled() { anyhow::bail!("pane creation cancelled"); }
+                if cancellation.cancelled() {
+                    anyhow::bail!("pane creation cancelled");
+                }
                 // Launch preparation and replay remain daemon-owned. This is
                 // only the existing restore request, not another replay path.
-                let restore = self.restore_pane.map(|pane_id| crate::daemon::protocol::RestoreFrom {
-                    pane_id,
-                    banner: Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::PaneRestoredScreenBanner).to_string()),
-                });
+                let restore =
+                    self.restore_pane
+                        .map(|pane_id| crate::daemon::protocol::RestoreFrom {
+                            pane_id,
+                            banner: Some(
+                                crate::ui::i18n::t(
+                                    crate::ui::i18n::L10nKey::PaneRestoredScreenBanner,
+                                )
+                                .to_string(),
+                            ),
+                        });
                 let (terminal, pane) = PaneHandshake::spawn_on(
-                    &route, TermSize::new(80, 24), 8, 17, self.working_directory,
-                    self.shell.clone(), self.owner.map(|owner| owner.to_string()), restore, Some(cancellation),
+                    &route,
+                    TermSize::new(80, 24),
+                    8,
+                    17,
+                    self.working_directory,
+                    self.shell.clone(),
+                    self.owner.map(|owner| owner.to_string()),
+                    restore,
+                    Some(cancellation),
                 )?;
                 (terminal, pane, self.shell)
             }
         };
         Ok(CreatedTerminal::Shell(ShellParts::new(
-            terminal, pane_id, shell_spec, self.workspace, restored, self.owner,
+            terminal,
+            pane_id,
+            shell_spec,
+            self.workspace,
+            restored,
+            self.owner,
         )))
     }
 }
@@ -149,7 +199,9 @@ impl PendingPane {
     }
 
     pub(crate) fn start(&mut self, lease: SlotLease, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(cancellation) = self.creation.cancellation.take() { cancellation.cancel(); }
+        if let Some(cancellation) = self.creation.cancellation.take() {
+            cancellation.cancel();
+        }
         self.creation.task.take();
         self.creation.ready.take();
         self.creation.generation += 1;
@@ -159,7 +211,11 @@ impl PendingPane {
         let slot = cx.entity_id();
         let spawn = self.spawn.clone();
         let owner = spawn.owner;
-        let route = self.creation.route.get_or_insert_with(|| PaneRoute::for_workspace(spawn.workspace.as_ref())).clone();
+        let route = self
+            .creation
+            .route
+            .get_or_insert_with(|| PaneRoute::for_workspace(spawn.workspace.as_ref()))
+            .clone();
         let native = self.creation.native.clone();
         let attach_only = self.attach_only;
         let cancellation = SpawnCancellation::default();
@@ -167,32 +223,52 @@ impl PendingPane {
         let cancel_on_exit = CancelOnDrop(cancellation.clone());
         let executor = cx.background_executor().clone();
         let (sender, receiver) = smol::channel::bounded(1);
-        cx.background_executor().spawn(async move {
-            let result = spawn.create(&route, attach_only, native, &cancellation)
-                .map(|parts| OwnedTerminal { parts: Some(parts), executor })
-                .map_err(|error| format!("{error:#}"));
-            let _ = sender.send(result).await;
-        }).detach();
+        cx.background_executor()
+            .spawn(async move {
+                let result = spawn
+                    .create(&route, attach_only, native, &cancellation)
+                    .map(|parts| OwnedTerminal {
+                        parts: Some(parts),
+                        executor,
+                    })
+                    .map_err(|error| format!("{error:#}"));
+                let _ = sender.send(result).await;
+            })
+            .detach();
         self.creation.task = Some(cx.spawn_in(window, async move |this, cx| {
             let _cancel_on_exit = cancel_on_exit;
             loop {
                 let live = this.update_in(cx, |_, _, cx| lease(slot, owner, cx));
-                if !matches!(live, Ok(true)) { return; }
+                if !matches!(live, Ok(true)) {
+                    return;
+                }
                 match receiver.try_recv() {
                     Ok(result) => {
-                        let _ = this.update_in(cx, |pending, window, cx| pending.receive(generation, result, window, cx));
+                        let _ = this.update_in(cx, |pending, window, cx| {
+                            pending.receive(generation, result, window, cx)
+                        });
                         return;
                     }
                     Err(smol::channel::TryRecvError::Closed) => return,
                     Err(smol::channel::TryRecvError::Empty) => {}
                 }
-                cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(50))
+                    .await;
             }
         }));
     }
 
-    fn receive(&mut self, generation: u64, result: Result<OwnedTerminal, String>, window: &mut Window, cx: &mut Context<Self>) {
-        if generation != self.creation.generation { return; }
+    fn receive(
+        &mut self,
+        generation: u64,
+        result: Result<OwnedTerminal, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.creation.generation {
+            return;
+        }
         match result {
             Ok(parts) => {
                 self.creation.ready = Some(parts);
@@ -201,17 +277,25 @@ impl PendingPane {
             Err(reason) => {
                 self.fail(reason, cx);
                 if let Some(delay) = self.next_auto_retry() {
-                    let lease = self.creation.lease.clone().expect("a running request has a slot lease");
+                    let lease = self
+                        .creation
+                        .lease
+                        .clone()
+                        .expect("a running request has a slot lease");
                     let slot = cx.entity_id();
                     let owner = self.spawn.owner;
                     cx.spawn_in(window, async move |this, cx| {
                         cx.background_executor().timer(delay).await;
                         let _ = this.update_in(cx, |pending, window, cx| {
-                            if pending.creation.generation == generation && pending.is_failed() && lease(slot, owner, cx) {
+                            if pending.creation.generation == generation
+                                && pending.is_failed()
+                                && lease(slot, owner, cx)
+                            {
                                 pending.start(lease.clone(), window, cx);
                             }
                         });
-                    }).detach();
+                    })
+                    .detach();
                 }
             }
         }
@@ -219,9 +303,17 @@ impl PendingPane {
 
     /// Validate the retained slot and original workspace before claiming a child.
     /// No current-focus fallback is permitted, including on a failed attempt.
-    pub(crate) fn take_installation(&mut self, tabs: &TabSet, workspace: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) -> Option<PaneInstallation> {
+    pub(crate) fn take_installation(
+        &mut self,
+        tabs: &TabSet,
+        workspace: WorkspaceId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneInstallation> {
         let mut ready = self.creation.ready.take()?;
-        if self.spawn.owner.is_some_and(|owner| owner != workspace) || !tabs.contains_slot(cx.entity_id()) {
+        if self.spawn.owner.is_some_and(|owner| owner != workspace)
+            || !tabs.contains_slot(cx.entity_id())
+        {
             return None;
         }
         let focused = self.focus_handle.contains_focused(window, cx);
@@ -232,19 +324,33 @@ impl PendingPane {
         let view = cx.new(|cx| {
             let mut view = match parts {
                 CreatedTerminal::Shell(parts) => TerminalView::from_shell_parts(parts, window, cx),
-                CreatedTerminal::Native(parts) => TerminalView::from_native_ssh_parts(parts, window, cx),
+                CreatedTerminal::Native(parts) => {
+                    TerminalView::from_native_ssh_parts(parts, window, cx)
+                }
             };
             view.font_size = px(font_size);
-            if self.attach_only { view.set_restored_ssh_spec(attach_spec); }
+            if self.attach_only {
+                view.set_restored_ssh_spec(attach_spec);
+            }
             view
         });
-        let launch = if restored { PendingLaunch::None }
-            else if let Some(command) = self.spawn.run_on_land.clone() { PendingLaunch::Command(command) }
-            else { PendingLaunch::Resume {
-                agent: self.spawn.agent, session: self.spawn.agent_session_id.clone(),
-                argv: self.spawn.agent_launch_argv.clone(), scope: self.spawn.agent_session_scope.clone(),
-            }};
-        Some(PaneInstallation { view, focused, launch })
+        let launch = if restored {
+            PendingLaunch::None
+        } else if let Some(command) = self.spawn.run_on_land.clone() {
+            PendingLaunch::Command(command)
+        } else {
+            PendingLaunch::Resume {
+                agent: self.spawn.agent,
+                session: self.spawn.agent_session_id.clone(),
+                argv: self.spawn.agent_launch_argv.clone(),
+                scope: self.spawn.agent_session_scope.clone(),
+            }
+        };
+        Some(PaneInstallation {
+            view,
+            focused,
+            launch,
+        })
     }
 }
 

@@ -1,5 +1,5 @@
-use super::*;
 use super::super::super::test_host::FileHost;
+use super::*;
 use std::sync::atomic::Ordering;
 
 #[gpui_kit::test]
@@ -10,9 +10,16 @@ fn in_flight_save_closes_only_its_original_tab_after_focus_changes(cx: &mut Test
     let host = FileHost::new(HostId(700));
     let release = host.pause_next_write();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some()));
-    vcx.update(|window, cx| { window.press("secondary-a", cx); window.input("saved original", cx); });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+    });
+    vcx.update(|window, cx| {
+        window.press("secondary-a", cx);
+        window.input("saved original", cx);
+    });
     settle(&mut vcx);
     let original = app.read_with(&vcx, |app, _| app.tabs[0].id());
     let survivor = app.read_with(&vcx, |app, _| app.tabs[1].id());
@@ -24,7 +31,11 @@ fn in_flight_save_closes_only_its_original_tab_after_focus_changes(cx: &mut Test
     let replacement = new_edited_file(&app, &mut vcx);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "before");
     release.send(()).unwrap();
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.tabs.iter().all(|tab| tab.id() != original)));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.tabs.iter().all(|tab| tab.id() != original)
+        })
+    });
     app.read_with(&vcx, |app, _| {
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.tabs[0].id(), survivor);
@@ -42,12 +53,26 @@ fn remote_save_as_bar_keeps_its_host_and_local_shared_path_independent(cx: &mut 
     std::fs::write(&path, "unchanged local").unwrap();
     let host = FileHost::new(HostId(701));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some()));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_buffer().is_some())
+    });
     let local = app.read_with(&vcx, |app, _| app.tab_code().unwrap().active_id().unwrap());
-    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host, &path, window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.editor_active_location().is_some_and(|(host, _)| host == HostId(701))));
-    vcx.update(|window, cx| { window.press("secondary-a", cx); window.input("remote edits", cx); });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host, &path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.editor_active_location()
+                .is_some_and(|(host, _)| host == HostId(701))
+        })
+    });
+    vcx.update(|window, cx| {
+        window.press("secondary-a", cx);
+        window.input("remote edits", cx);
+    });
     settle(&mut vcx);
     vcx.dispatch_action(EditorSaveAs);
     settle(&mut vcx);
@@ -56,10 +81,25 @@ fn remote_save_as_bar_keeps_its_host_and_local_shared_path_independent(cx: &mut 
         window.input(&target.display().to_string(), cx);
         window.press("enter", cx);
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().is_some_and(|file| file.path == target && !file.dirty && !file.saving)));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| file.path == target && !file.dirty && !file.saving)
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.active_buffer().unwrap().host.id(), HostId(701));
-        assert_eq!(app.editor.buffers.get(local).unwrap().input.read(cx).text().to_string(), "unchanged local");
+        assert_eq!(
+            app.editor
+                .buffers
+                .get(local)
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            "unchanged local"
+        );
     });
     assert_eq!(std::fs::read_to_string(path).unwrap(), "unchanged local");
     assert_eq!(std::fs::read_to_string(target).unwrap(), "remote edits");

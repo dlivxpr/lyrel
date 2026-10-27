@@ -1,13 +1,12 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
 #[cfg(test)]
 use std::sync::mpsc;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::Duration;
-
 
 use crate::core::clipboard::ClipboardSniffer;
 use crate::core::kitty_graphics::{GraphicsEffect, GraphicsSniffer, GraphicsState};
@@ -26,10 +25,6 @@ mod launch;
 mod lifecycle;
 use lifecycle::{DeathReporter, PaneBackend, PtyLaunch, PtyParts, join_bounded};
 mod replay;
-use facts::probes::{
-    foreground_agent, foreground_command_running, foreground_cwd, foreground_remote_context,
-    pty_foreground_pgid,
-};
 use facts::{FactReader, ForegroundProbes, PaneFacts};
 pub mod subscriptions;
 #[cfg(test)]
@@ -40,7 +35,6 @@ use launch::build_spawn_config;
 use replay::RING_CAP;
 use replay::ReplayRing;
 use subscriptions::{GraphicsReplayAdmission, OutputGate, ReplayState, Subscriptions};
-
 
 struct PaneState {
     id: u64,
@@ -130,8 +124,6 @@ fn fan_out_output(st: &mut PaneState, bytes: &[u8], frames: Vec<GraphicsFrame>, 
         .output(bytes, frames, gate, &mut st.graphics);
 }
 
-
-
 pub struct DaemonPane {
     pub id: u64,
     owner: Option<String>,
@@ -149,8 +141,6 @@ pub struct DaemonPane {
     reader: Mutex<Option<JoinHandle<()>>>,
     broker: Option<Arc<crate::daemon::ssh::PromptBroker>>,
 }
-
-
 
 /// Out-of-band frames remain interleaved with plain output so placements
 /// reach the consumer at the same cursor position as in the PTY stream.
@@ -229,7 +219,6 @@ pub struct Carried {
     /// and kitty keyboard flags for good.
     pub head_modes: Option<Vec<u8>>,
 }
-
 
 /// The screen a restored pane opens with.
 ///
@@ -985,7 +974,6 @@ impl DaemonPane {
         });
     }
 
-
     pub fn detach(&self, epoch: u64) -> bool {
         let mut st = self.state.lock().unwrap();
         let PaneState {
@@ -1072,7 +1060,9 @@ impl DaemonPane {
     /// environment, and a detached `tmux` server or the like carries that
     /// into processes this pane does not own.
     pub fn report_agent_event(&self, pid: u32, body: &str) -> Result<(), String> {
-        let shell = self.backend.local_shell_pid()
+        let shell = self
+            .backend
+            .local_shell_pid()
             .ok_or_else(|| format!("pane {} runs no local process", self.id))?;
         let event = crate::core::cli_agent::parse_agent_event_body(body.as_bytes())
             .ok_or_else(|| "not an agent event".to_string())?;
@@ -1131,7 +1121,6 @@ impl DaemonPane {
         )
     }
 
-
     /// Resize the shared pane state before applying the new PTY geometry.
     pub fn resize(&self, size: WinSize) {
         resize_state(&mut self.state.lock().unwrap(), size, &self.gate);
@@ -1153,7 +1142,6 @@ impl DaemonPane {
         record_output(&mut st, &pass);
         fan_out_output(&mut st, &pass, frames, &self.gate);
     }
-
 
     pub fn alive(&self) -> bool {
         self.state.lock().unwrap().alive
@@ -1231,10 +1219,6 @@ impl DaemonPane {
         }
         self.backend.hangup();
     }
-
-
-
-
 }
 
 impl Drop for DaemonPane {
@@ -1256,7 +1240,6 @@ impl Drop for DaemonPane {
         crate::daemon::history::retire(self.id);
     }
 }
-
 
 /// Everything the pane remembers about a chunk of output: the bytes
 /// themselves, and the modes they switched on. One function so the two can
@@ -1445,7 +1428,6 @@ mod tests {
     use super::test_support::{drain, null_writer, test_state, ws};
     use super::*;
 
-
     /// Issue #857: the two sniffers that rewrite the stream before the ring
     /// and the client see it must hand every byte that is not theirs on
     /// unchanged, wherever a read splits it — a Pi frame (synchronized update,
@@ -1503,7 +1485,6 @@ mod tests {
         let bytewise: Vec<&[u8]> = frame.chunks(1).collect();
         assert_eq!(run(&bytewise), (frame.to_vec(), frame.to_vec()));
     }
-
 
     #[test]
     fn the_restore_preamble_hands_the_new_shell_a_terminal_it_can_use() {
@@ -1704,24 +1685,6 @@ mod tests {
         );
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /// Claude Code ends its OSC 11 theme query with DA1 and waits for both.
     /// Started in a pane no window shows (an agent woken at launch), it got
     /// neither and never checked the theme again.
@@ -1756,19 +1719,6 @@ mod tests {
             "the client answers"
         );
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     /// A window that reopens onto a native ssh pane it outlived attaches by
     /// pane id: it never sees the profile that dialled the host, so it sends
@@ -1944,8 +1894,6 @@ mod tests {
             crate::core::clipboard::response(Some("nope"), "EPERM")
         );
     }
-
-
 
     #[cfg(unix)]
     #[test]
@@ -2165,5 +2113,4 @@ mod tests {
             Some(ws(80, 2))
         );
     }
-
 }

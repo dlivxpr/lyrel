@@ -3,7 +3,8 @@ use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    App, Bounds, Focusable as _, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Window, canvas, div,
+    App, Bounds, Focusable as _, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Window, canvas,
+    div,
 };
 use gpui_kit::{Axis, Entity, InteractiveElement as _, prelude::*, px};
 

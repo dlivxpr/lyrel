@@ -8,7 +8,7 @@ mod test_layout;
 
 use desired::seeded_records;
 use lifecycle::{ProjectionResult, WindowSync};
-use projection::{desired_tabs, logical_node, slot_pane_id};
+use projection::{desired_tabs, logical_node};
 use reconcile::WsMirror;
 
 use crate::ui::notification_history::NotificationWindowExt as _;
@@ -29,7 +29,6 @@ use crate::core::session::{Session, SessionPane, SessionTab, WorkspaceId, Worksp
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneSlot};
-
 
 pub(crate) fn control_for(cx: &mut App, host: HostId) -> Option<Arc<ControlClient>> {
     if host.is_local() {
