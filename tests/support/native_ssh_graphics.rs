@@ -250,6 +250,11 @@ impl NativeSshFixture {
         }
     }
 
+    /// Configuration of this disposable local router, never the installed daemon.
+    pub fn local_config_dir(&self) -> PathBuf {
+        self.root.path().join("config")
+    }
+
     pub fn spec(&self) -> NativeSshSpec {
         self.spec.clone()
     }
