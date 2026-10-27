@@ -4283,7 +4283,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert_eq!(app.switcher.as_ref().expect("still up").right_sel, 2);
-            assert_eq!(app.tabs.active_index(), 0, "nothing is committed while the key is held");
+            assert_eq!(
+                app.tabs.active_index(),
+                0,
+                "nothing is committed while the key is held"
+            );
         });
     }
 
@@ -4297,7 +4301,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none(), "the panel comes down on release");
-            assert_eq!(app.tabs.active_index(), 1, "the highlighted tab is now the active one");
+            assert_eq!(
+                app.tabs.active_index(),
+                1,
+                "the highlighted tab is now the active one"
+            );
         });
     }
 
@@ -4317,7 +4325,8 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert_eq!(
-                app.tabs.active_index(), 0,
+                app.tabs.active_index(),
+                0,
                 "most-recently-used ordering makes the gesture a toggle"
             );
         });
@@ -4372,7 +4381,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none());
-            assert_eq!(app.tabs.active_index(), 2, "the tab the pointer picked is now active");
+            assert_eq!(
+                app.tabs.active_index(),
+                2,
+                "the tab the pointer picked is now active"
+            );
         });
     }
 
@@ -4582,7 +4595,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none(), "the panel comes down on release");
-            assert_eq!(app.tabs.active_index(), 1, "the highlighted tab is now the active one");
+            assert_eq!(
+                app.tabs.active_index(),
+                1,
+                "the highlighted tab is now the active one"
+            );
         });
     }
 
@@ -4625,7 +4642,8 @@ mod gpui_tests {
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none(), "release commits and closes");
             assert_eq!(
-                app.tabs.active_index(), 0,
+                app.tabs.active_index(),
+                0,
                 "the first row of a most-recently-used column is this very tab"
             );
         });

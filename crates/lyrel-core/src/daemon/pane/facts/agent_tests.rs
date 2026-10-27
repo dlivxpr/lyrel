@@ -1,7 +1,7 @@
-use super::*;
+use super::super::test_support::{drain, null_writer, test_state, ws};
 use super::super::*;
-use super::super::test_support::{test_state, ws, null_writer, drain};
-use super::output_marks::{OscSniffer};
+use super::output_marks::OscSniffer;
+use super::*;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
@@ -52,15 +52,25 @@ fn resumed_output_marks_do_not_release_the_running_agent() {
 
     let mut sniffer = OscSniffer::new();
     let mut state = test_state(true);
-    (&mut state).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(b"\x1b]133;C;omp;aid=lyrel\x07"), emit));
+    (&mut state).with_facts(|facts, emit| {
+        apply_signals(facts, sniffer.feed(b"\x1b]133;C;omp;aid=lyrel\x07"), emit)
+    });
     assert_eq!(state.facts.agent, Some(CLIAgent::OhMyPi));
 
     // Minimized from a real omp /resume: replayed output contains its own
     // prompt/output block, but the enclosing shell command has not exited.
-    (&mut state).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07"), emit));
+    (&mut state).with_facts(|facts, emit| {
+        apply_signals(
+            facts,
+            sniffer.feed(b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07"),
+            emit,
+        )
+    });
     assert_eq!(state.facts.agent, Some(CLIAgent::OhMyPi));
     assert_eq!(state.facts.shell.command.as_deref(), Some("omp"));
-    (&mut state).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(b"\x1b]133;D;0;aid=lyrel\x07"), emit));
+    (&mut state).with_facts(|facts, emit| {
+        apply_signals(facts, sniffer.feed(b"\x1b]133;D;0;aid=lyrel\x07"), emit)
+    });
     assert!(
         state.facts.agent.is_none(),
         "the actual shell exit releases the agent"
@@ -120,7 +130,8 @@ fn kimi_late_hooks_cannot_reopen_a_completed_durable_main_turn() {
     state.facts.agent = Some(CLIAgent::Kimi);
     let start = parse_agent_event_body(br#"{"agent":"kimi","event":"session-start","session_id":"s","session_scope":{"session_file":"/isolated/s/state.json"}}"#).unwrap();
     let ended = parse_agent_event_body(br#"{"agent":"kimi","event":"stop","session_id":"s","source":"kimi-durable-wire","requests":[],"result":{"outcome":"succeeded"}}"#).unwrap();
-    (&mut state).with_facts(|facts, emit| apply_agent_signals(facts, vec![start, ended], None, emit));
+    (&mut state)
+        .with_facts(|facts, emit| apply_agent_signals(facts, vec![start, ended], None, emit));
     let snapshot = state.facts.agent_session.clone().unwrap();
     let late = parse_agent_event_body(br#"{"agent":"kimi","event":"permission-request","session_id":"s","request":{"id":"late-p","kind":"permission","resolved":false}}"#).unwrap();
     (&mut state).with_facts(|facts, emit| apply_agent_signals(facts, vec![late], None, emit));
@@ -304,7 +315,9 @@ fn a_late_shutdown_from_the_previous_session_does_not_clear_the_current_agent() 
     use crate::core::cli_agent::{CLIAgent, parse_agent_event_body};
 
     let mut state = test_state(true);
-    (&mut state).with_facts(|facts, emit| apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit));
+    (&mut state).with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
     let start = parse_agent_event_body(
         br#"{"agent":"omp","event":"session-start","session_id":"current-session"}"#,
     )
@@ -341,7 +354,11 @@ fn sentinel_events_drive_agent_session_state() {
     (&mut st).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(stream.as_bytes()), emit));
 
     assert_eq!(st.facts.agent, Some(CLIAgent::OhMyPi));
-    let sess = st.facts.agent_session.clone().expect("session state exists");
+    let sess = st
+        .facts
+        .agent_session
+        .clone()
+        .expect("session state exists");
     assert_eq!(sess.status, AgentStatus::Working);
     assert_eq!(sess.session_id.as_deref(), Some("sid-9"));
     assert!(sess.rich);
@@ -360,7 +377,8 @@ fn sentinel_events_drive_agent_session_state() {
         r#"{"agent":"omp","event":"permission-request","message":"OhMyPi needs your permission to use Bash","request":{"id":"tool-9","kind":"permission"}}"#,
         "\x07",
     );
-    (&mut st).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(waiting.as_bytes()), emit));
+    (&mut st)
+        .with_facts(|facts, emit| apply_signals(facts, sniffer.feed(waiting.as_bytes()), emit));
     assert_eq!(
         st.facts.agent_session.as_ref().unwrap().status,
         AgentStatus::Waiting
@@ -397,12 +415,19 @@ fn a_foreign_agent_hook_does_not_replace_the_foreground_session() {
     );
     (&mut st).with_facts(|facts, emit| apply_signals(facts, sniffer.feed(pi.as_bytes()), emit));
     assert_eq!(
-        st.facts.agent_session.as_ref().unwrap().session_id.as_deref(),
+        st.facts
+            .agent_session
+            .as_ref()
+            .unwrap()
+            .session_id
+            .as_deref(),
         Some("01a0d21f-2f79-72e0-bb16-d6d908aaa6e0"),
         "a Pi hook on an omp pane must not steal the session id"
     );
 
-    (&mut st).with_facts(|facts, emit| apply_agent(facts, Some((CLIAgent::Pi, vec!["pi".into()])), emit));
+    (&mut st).with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::Pi, vec!["pi".into()])), emit)
+    });
     assert!(
         st.facts.agent_session.is_none(),
         "switching the foreground agent drops the previous session"
@@ -447,53 +472,56 @@ fn agent_state_snapshot_reports_only_panes_with_a_session() {
         session_id: Some("sess-1".into()),
         ..Default::default()
     });
-    let snap = (&st).facts.agent_state((&st).id).expect("a session state is the fact");
+    let snap = (&st)
+        .facts
+        .agent_state((&st).id)
+        .expect("a session state is the fact");
     assert_eq!(snap.pane_id, 42);
     assert_eq!(snap.agent, Some(CLIAgent::OhMyPi));
     assert_eq!(snap.state.status, AgentStatus::Waiting);
     assert_eq!(snap.state.session_id.as_deref(), Some("sess-1"));
 }
-    #[test]
-    fn a_hook_report_counts_only_from_inside_the_pane() {
-        let (tx, rx) = mpsc::channel();
-        let pane = DaemonPane::spawn(
-            1,
-            Some(PathBuf::from("/")),
-            ws(80, 24),
-            Some(ShellSpec {
-                program: "sh".into(),
-                args: vec!["-c".into(), "exec cat".into()],
-                args_are_lyrel_defaults: false,
-            }),
-            None,
-            None,
-            None,
-            false,
-            || {},
-        )
-        .expect("spawn pane");
-        pane.attach(tx);
-        let shell = pane.pty().and_then(|p| p.shell_pid).expect("shell pid");
-        let body = r#"{"v":1,"agent":"omp","event":"prompt-submit","session_id":"s-1"}"#;
+#[test]
+fn a_hook_report_counts_only_from_inside_the_pane() {
+    let (tx, rx) = mpsc::channel();
+    let pane = DaemonPane::spawn(
+        1,
+        Some(PathBuf::from("/")),
+        ws(80, 24),
+        Some(ShellSpec {
+            program: "sh".into(),
+            args: vec!["-c".into(), "exec cat".into()],
+            args_are_lyrel_defaults: false,
+        }),
+        None,
+        None,
+        None,
+        false,
+        || {},
+    )
+    .expect("spawn pane");
+    pane.attach(tx);
+    let shell = pane.pty().and_then(|p| p.shell_pid).expect("shell pid");
+    let body = r#"{"v":1,"agent":"omp","event":"prompt-submit","session_id":"s-1"}"#;
 
-        let outsider = pane.report_agent_event(std::process::id(), body);
-        let garbled = pane.report_agent_event(shell, "{not json");
-        let applied = pane.report_agent_event(shell, body);
-        let mut status = None;
-        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
-            if let DaemonMsg::AgentStatus(s) = msg {
-                status = s;
-            }
+    let outsider = pane.report_agent_event(std::process::id(), body);
+    let garbled = pane.report_agent_event(shell, "{not json");
+    let applied = pane.report_agent_event(shell, body);
+    let mut status = None;
+    while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+        if let DaemonMsg::AgentStatus(s) = msg {
+            status = s;
         }
-        pane.kill();
-
-        assert!(
-            outsider.is_err(),
-            "the test runner does not run in the pane"
-        );
-        assert!(garbled.is_err());
-        assert_eq!(applied, Ok(()));
-        let status = status.expect("the report reached the pane's subscribers");
-        assert_eq!(status.status, crate::core::cli_agent::AgentStatus::Working);
-        assert_eq!(status.session_id.as_deref(), Some("s-1"));
     }
+    pane.kill();
+
+    assert!(
+        outsider.is_err(),
+        "the test runner does not run in the pane"
+    );
+    assert!(garbled.is_err());
+    assert_eq!(applied, Ok(()));
+    let status = status.expect("the report reached the pane's subscribers");
+    assert_eq!(status.status, crate::core::cli_agent::AgentStatus::Working);
+    assert_eq!(status.session_id.as_deref(), Some("s-1"));
+}

@@ -52,7 +52,10 @@ pub(super) struct WindowSync {
 impl Default for WindowSync {
     fn default() -> Self {
         Self {
-            sync: SyncPhase::Unprimed { dirty: false, priming: false },
+            sync: SyncPhase::Unprimed {
+                dirty: false,
+                priming: false,
+            },
             queue: VecDeque::new(),
             inflight: false,
             informed: false,
@@ -76,7 +79,11 @@ impl Default for WindowSync {
 pub(super) enum ProjectionResult {
     Prime,
     Waiting,
-    Queued { tabs: Vec<TreeTab>, active: Option<TabId>, remembered: Vec<TabId> },
+    Queued {
+        tabs: Vec<TreeTab>,
+        active: Option<TabId>,
+        remembered: Vec<TabId>,
+    },
 }
 
 /// An issued batch owns its retirements even if its window is forgotten or replaced.
@@ -126,8 +133,13 @@ impl WindowSync {
             }
             SyncPhase::Primed(mirror) => mirror,
         };
-        let scope = if self.informed { SyncScope::Full } else { SyncScope::Additive };
-        self.not_rebuilt.retain(|id| mirror.tabs.iter().any(|t| t.id == *id));
+        let scope = if self.informed {
+            SyncScope::Full
+        } else {
+            SyncScope::Additive
+        };
+        self.not_rebuilt
+            .retain(|id| mirror.tabs.iter().any(|t| t.id == *id));
         held.extend(self.not_rebuilt.iter().copied());
         let mut missing = unaccounted(mirror, desired, &mut self.closing);
         missing.retain(|id| !held.contains(id));
@@ -147,11 +159,16 @@ impl WindowSync {
             return ProjectionResult::Waiting;
         }
         self.queue.extend(ops);
-        ProjectionResult::Queued { tabs: mirror.tabs.clone(), active: mirror.active, remembered }
+        ProjectionResult::Queued {
+            tabs: mirror.tabs.clone(),
+            active: mirror.active,
+            remembered,
+        }
     }
 
     pub(super) fn remembers_close(&self, tab: TabId) -> bool {
-        self.informed && self.rehydrate.is_none()
+        self.informed
+            && self.rehydrate.is_none()
             && matches!(&self.sync, SyncPhase::Primed(mirror) if mirror.tabs.iter().any(|t| t.id == tab))
     }
 
@@ -189,7 +206,10 @@ impl WindowSync {
     }
 
     pub(super) fn preempt(&mut self) {
-        self.sync = SyncPhase::Unprimed { dirty: false, priming: false };
+        self.sync = SyncPhase::Unprimed {
+            dirty: false,
+            priming: false,
+        };
         self.informed = false;
         self.epoch = next_epoch();
         self.inflight = false;
@@ -197,7 +217,10 @@ impl WindowSync {
 
     /// Withdraw queued closes, but never an issued batch's independently owned closes.
     pub(super) fn discard_queue(&mut self) -> (Vec<ControlRequest>, Vec<Retiring>) {
-        (self.queue.drain(..).collect(), std::mem::take(&mut self.retired))
+        (
+            self.queue.drain(..).collect(),
+            std::mem::take(&mut self.retired),
+        )
     }
 
     pub(super) fn begin_batch(&mut self) -> Option<Batch> {
@@ -227,7 +250,10 @@ impl WindowSync {
 
     pub(super) fn reprime(&mut self) {
         self.inflight = false;
-        self.sync = SyncPhase::Unprimed { dirty: true, priming: true };
+        self.sync = SyncPhase::Unprimed {
+            dirty: true,
+            priming: true,
+        };
         self.epoch = next_epoch();
     }
 
@@ -241,11 +267,22 @@ impl WindowSync {
     }
 
     pub(super) fn chosen_name(&self, workspace: WorkspaceId) -> Option<String> {
-        self.chosen_name.as_ref().filter(|n| n.workspace == workspace).map(|n| n.name.clone())
+        self.chosen_name
+            .as_ref()
+            .filter(|n| n.workspace == workspace)
+            .map(|n| n.name.clone())
     }
 
-    pub(super) fn settle_name(&mut self, workspace: WorkspaceId, arrival: Arrival) -> Option<String> {
-        if self.chosen_name.as_ref().is_some_and(|n| n.workspace == workspace && arrival == Arrival::Created) {
+    pub(super) fn settle_name(
+        &mut self,
+        workspace: WorkspaceId,
+        arrival: Arrival,
+    ) -> Option<String> {
+        if self
+            .chosen_name
+            .as_ref()
+            .is_some_and(|n| n.workspace == workspace && arrival == Arrival::Created)
+        {
             self.chosen_name.take().map(|n| n.name)
         } else {
             None
@@ -274,7 +311,11 @@ impl WindowSync {
         let dirty = matches!(self.sync, SyncPhase::Unprimed { dirty: true, .. });
         self.informed |= mirror.tabs.is_empty();
         self.rehydrate_attempts = 0;
-        let result = PrimeResult { dirty, tabs: mirror.tabs.clone(), active: mirror.active };
+        let result = PrimeResult {
+            dirty,
+            tabs: mirror.tabs.clone(),
+            active: mirror.active,
+        };
         self.sync = SyncPhase::Primed(mirror);
         result
     }
@@ -282,9 +323,12 @@ impl WindowSync {
     pub(super) fn push_groups(&mut self, workspace: WorkspaceId, groups: WorkspaceGroups) -> bool {
         match &mut self.sync {
             SyncPhase::Primed(mirror) => {
-                if mirror.groups == groups { return false; }
+                if mirror.groups == groups {
+                    return false;
+                }
                 mirror.groups = groups.clone();
-                self.queue.push_back(ControlRequest::WorkspaceSetGroups { workspace, groups });
+                self.queue
+                    .push_back(ControlRequest::WorkspaceSetGroups { workspace, groups });
                 true
             }
             SyncPhase::Unprimed { .. } => {
@@ -312,12 +356,15 @@ impl WindowSync {
 
     pub(super) fn is_pending(&self) -> bool {
         matches!(self.sync, SyncPhase::Unprimed { priming: true, .. })
-            || self.rehydrate.is_some() || !self.then_open.is_empty()
+            || self.rehydrate.is_some()
+            || !self.then_open.is_empty()
     }
 
     pub(super) fn park_open(&mut self, open: ParkedOpen) {
         if let ParkedOpen::Command { cwd, .. } = &open
-            && let Some(folder) = self.then_open.iter_mut()
+            && let Some(folder) = self
+                .then_open
+                .iter_mut()
                 .find(|p| matches!(p, ParkedOpen::Folder(path) if path == cwd))
         {
             *folder = open;
@@ -331,7 +378,10 @@ impl WindowSync {
     }
 
     pub(super) fn begin_hydration(&mut self, adopt: Adopt, showing: Vec<TabId>) -> (u64, u32) {
-        self.sync = SyncPhase::Unprimed { dirty: false, priming: true };
+        self.sync = SyncPhase::Unprimed {
+            dirty: false,
+            priming: true,
+        };
         self.epoch = next_epoch();
         self.inflight = false;
         self.rehydrate = None;
@@ -358,7 +408,9 @@ impl WindowSync {
     }
 
     pub(super) fn owe_rehydration(&mut self, epoch: u64, adopt: Adopt) -> Option<u32> {
-        if self.epoch != epoch { return None; }
+        if self.epoch != epoch {
+            return None;
+        }
         self.prime_unavailable();
         self.rehydrate = Some(adopt);
         self.rehydrate_attempts = self.rehydrate_attempts.saturating_add(1);
@@ -389,15 +441,28 @@ impl WindowSync {
         self.rehydrate_attempts = 0;
         self.recovery_edited = false;
         self.said_why_empty = false;
-        HydrationResult { keep_window, publish_window: dirty || empty || overtaken, dirty }
+        HydrationResult {
+            keep_window,
+            publish_window: dirty || empty || overtaken,
+            dirty,
+        }
     }
 
     pub(super) fn explain_empty(&mut self) -> bool {
         !std::mem::replace(&mut self.said_why_empty, true)
     }
 
-    pub(super) fn settle_rebuild(&mut self, wanted: usize, wanted_ids: &[TabId], showing: &[TabId]) -> usize {
-        self.not_rebuilt = wanted_ids.iter().copied().filter(|id| !showing.contains(id)).collect();
+    pub(super) fn settle_rebuild(
+        &mut self,
+        wanted: usize,
+        wanted_ids: &[TabId],
+        showing: &[TabId],
+    ) -> usize {
+        self.not_rebuilt = wanted_ids
+            .iter()
+            .copied()
+            .filter(|id| !showing.contains(id))
+            .collect();
         if !showing.is_empty() || wanted == 0 {
             self.informed = true;
         }
@@ -413,7 +478,10 @@ impl WindowSync {
 
     #[cfg(test)]
     pub(super) fn prime_for_test(&mut self, tabs: Vec<TreeTab>) {
-        self.sync = SyncPhase::Primed(WsMirror { tabs, ..Default::default() });
+        self.sync = SyncPhase::Primed(WsMirror {
+            tabs,
+            ..Default::default()
+        });
         self.informed = true;
         self.inflight = true;
     }
@@ -542,9 +610,9 @@ fn apply_to_mirror(mirror: &mut WsMirror, delta: &LayoutDelta) -> bool {
 }
 
 #[cfg(test)]
-mod queue_tests;
-#[cfg(test)]
 mod application_tests;
+#[cfg(test)]
+mod queue_tests;
 
 #[cfg(test)]
 mod delta_tests;

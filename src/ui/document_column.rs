@@ -26,9 +26,9 @@ use crate::core::config::{
     Config, DOCUMENT_RATIO_MAX, DOCUMENT_RATIO_MIN, DOCUMENT_RATIO_STOPS, DocumentLayout,
 };
 use crate::ui::app::{DOCUMENT_MIN_W, LyrelApp, TERMINAL_MIN_W, document_column_px};
-use crate::ui::tab::OverlayTop;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
+use crate::ui::tab::OverlayTop;
 
 /// Which wrapper a document surface is being asked to paint itself in.
 ///
@@ -914,7 +914,9 @@ mod gpui_tests {
         crate::ui::i18n::set_locale("en");
         let row = |app: &Entity<LyrelApp>, vcx: &mut VisualTestContext| {
             app.update_in(vcx, |app, window, cx| {
-                app.search_input(window, cx).build(cx).actions
+                app.search_input(window, cx)
+                    .build(cx)
+                    .actions
                     .into_iter()
                     .find(|c| c.kind == CommandKind::ToggleDocumentFill)
                     .expect("the search offers the fill toggle")

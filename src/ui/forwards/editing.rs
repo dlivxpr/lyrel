@@ -100,7 +100,13 @@ impl Forwarding {
             PlaceOutcome::Placed => None,
             PlaceOutcome::Unreachable(msg) => Some(msg),
             PlaceOutcome::Rejected(msg) if !retry_free_port => Some(msg),
-            PlaceOutcome::Rejected(_) => match self.place(route, SshForwardRule { bind_port: 0, ..rule }) {
+            PlaceOutcome::Rejected(_) => match self.place(
+                route,
+                SshForwardRule {
+                    bind_port: 0,
+                    ..rule
+                },
+            ) {
                 PlaceOutcome::Placed => None,
                 PlaceOutcome::Rejected(msg) | PlaceOutcome::Unreachable(msg) => Some(msg),
             },
@@ -163,7 +169,10 @@ impl Forwarding {
             (&self.mf_bind_port, forward.bind_port.to_string()),
             (&self.mf_target_host, forward.target_host.clone()),
             (&self.mf_target_port, target_port),
-            (&self.mf_description, forward.description.clone().unwrap_or_default()),
+            (
+                &self.mf_description,
+                forward.description.clone().unwrap_or_default(),
+            ),
         ];
         for (input, value) in fields {
             input.update(cx, |input, cx| input.set_value(&value, window, cx));
@@ -172,7 +181,12 @@ impl Forwarding {
     }
 
     fn clear_values(&self, window: &mut Window, cx: &mut App) {
-        for input in [&self.mf_bind_port, &self.mf_target_host, &self.mf_target_port, &self.mf_description] {
+        for input in [
+            &self.mf_bind_port,
+            &self.mf_target_host,
+            &self.mf_target_port,
+            &self.mf_description,
+        ] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
     }
@@ -181,7 +195,8 @@ impl Forwarding {
         self.mf_editing = None;
         self.mf_error = None;
         self.clear_values(window, cx);
-        self.mf_bind_host.update(cx, |input, cx| input.set_value("127.0.0.1", window, cx));
+        self.mf_bind_host
+            .update(cx, |input, cx| input.set_value("127.0.0.1", window, cx));
     }
 
     pub(crate) fn remove(&mut self, route: &ForwardRoute, forward_id: u64) {
@@ -223,16 +238,26 @@ impl Forwarding {
         self.cancel_edit(window, cx);
         self.refresh(route);
         let inputs = [
-            self.mf_bind_host.clone(), self.mf_bind_port.clone(),
-            self.mf_target_host.clone(), self.mf_target_port.clone(), self.mf_description.clone(),
+            self.mf_bind_host.clone(),
+            self.mf_bind_port.clone(),
+            self.mf_target_host.clone(),
+            self.mf_target_port.clone(),
+            self.mf_description.clone(),
         ];
-        self.mf_subs = inputs.iter().map(|input| {
-            cx.subscribe_in(input, window, move |owner, _, ev: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = ev {
-                    on_submit(owner, pane_id, window, cx);
-                }
+        self.mf_subs = inputs
+            .iter()
+            .map(|input| {
+                cx.subscribe_in(
+                    input,
+                    window,
+                    move |owner, _, ev: &InputEvent, window, cx| {
+                        if let InputEvent::PressEnter { .. } = ev {
+                            on_submit(owner, pane_id, window, cx);
+                        }
+                    },
+                )
             })
-        }).collect();
+            .collect();
         inputs[0].update(cx, |input, cx| input.focus(window, cx));
     }
 

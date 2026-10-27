@@ -676,7 +676,9 @@ impl LyrelApp {
             let hunks = diff_hunks(&base, &text);
             self.editor_gutter_install(id, at, hunks, cx);
         }
-        self.editor.buffers.get(id)
+        self.editor
+            .buffers
+            .get(id)
             .map(|f| f.gutter.hunks.clone())
             .unwrap_or_default()
     }
@@ -1260,12 +1262,23 @@ mod tests {
                 .tab_code()
                 .and_then(TabCode::active_id)
                 .expect("a buffer");
-            let input = app.editor.buffers.get(id).expect("the buffer").input.clone();
+            let input = app
+                .editor
+                .buffers
+                .get(id)
+                .expect("the buffer")
+                .input
+                .clone();
             input.update(cx, |state, cx| {
                 state.set_value("one\nTWO\nthree\nfour\nfive\n", window, cx);
                 state.focus(window, cx);
             });
-            app.editor.buffers.get_mut(id).unwrap().gutter.set_base_for_test(base);
+            app.editor
+                .buffers
+                .get_mut(id)
+                .unwrap()
+                .gutter
+                .set_base_for_test(base);
             (id, input)
         });
         vcx.run_until_parked();

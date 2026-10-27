@@ -362,7 +362,8 @@ pub(super) fn consume<'a>(
                     }
                     Part::Clipboard(ClipboardEvent::Write(write)) => {
                         let mut state = state.lock().unwrap();
-                        if controller.is_some() && controller == state.subscriptions.controller_epoch()
+                        if controller.is_some()
+                            && controller == state.subscriptions.controller_epoch()
                         {
                             fan_out_output(
                                 &mut state,

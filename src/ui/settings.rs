@@ -26,11 +26,11 @@ use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
 };
 use crate::ui::app::{FONT_SIZE_STEP, LINE_HEIGHT_STEP, UI_FONT_SIZE_STEP};
-use crate::ui::window_chrome::TITLE_BAR_HEIGHT;
 use crate::ui::host_ops::HostId;
 use crate::ui::i18n::{L10nKey, t, t_fmt, t_plural};
 use crate::ui::presets;
 use crate::ui::settings_window::{SettingsEvent, SettingsWindow};
+use crate::ui::window_chrome::TITLE_BAR_HEIGHT;
 #[cfg(target_os = "windows")]
 pub(crate) use theme_edit::window_backdrop_label_key;
 pub(crate) use theme_edit::{ThemeEdit, theme_edit_label};

@@ -253,7 +253,10 @@ impl AgentActivity {
             Some(AgentStatus::Done)
                 if rich
                     && notify_allowed
-                    && matches!(prev, Some(AgentStatus::Working) | Some(AgentStatus::Waiting)) =>
+                    && matches!(
+                        prev,
+                        Some(AgentStatus::Working) | Some(AgentStatus::Waiting)
+                    ) =>
             {
                 let elapsed = self.turn_started.take().map(|start| start.elapsed());
                 let body = match session.and_then(|s| s.readout.result.as_ref()) {
@@ -262,7 +265,10 @@ impl AgentActivity {
                         match elapsed {
                             Some(elapsed) => t_fmt(
                                 L10nKey::AgentResultWithDuration,
-                                &[("result", &result), ("secs", &elapsed.as_secs().to_string())],
+                                &[
+                                    ("result", &result),
+                                    ("secs", &elapsed.as_secs().to_string()),
+                                ],
                             ),
                             None => result,
                         }

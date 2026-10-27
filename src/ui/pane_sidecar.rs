@@ -9,8 +9,8 @@ use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
 
 use crate::core::session::{RemoteRef, WorkspaceId, WorkspaceStore};
 use crate::ui::app::LyrelApp;
-use crate::ui::tab::Tab;
 use crate::ui::pane::{Pane, PaneSlot};
+use crate::ui::tab::Tab;
 
 #[derive(Default)]
 struct SidecarState {
@@ -625,9 +625,8 @@ fn adopt(
         .flat_map(|tab| tab.pane.leaves())
         .find(|slot| slot.contains_focused(window, cx))
         .map(|slot| slot.entity_id());
-    app.tabs.retain(|tab| {
-        tab.foreign_presentation.is_none() || authoritative.contains(&tab.id())
-    });
+    app.tabs
+        .retain(|tab| tab.foreign_presentation.is_none() || authoritative.contains(&tab.id()));
     for source in foreign.tabs() {
         let pruned;
         let source = if closed_local.is_empty() {
@@ -692,11 +691,7 @@ fn adopt(
             .filter_map(|slot| scoped_pane(&slot, cx))
             .collect::<HashSet<_>>();
         presentation.remap_panes(|key| existing.contains(&key).then_some(key));
-        if let Some(tab) = app
-            .tabs
-            .iter_mut()
-            .find(|tab| tab.id() == source.id)
-        {
+        if let Some(tab) = app.tabs.iter_mut().find(|tab| tab.id() == source.id) {
             // Preserve every existing view and focus owner; only composition is shared.
             tab.pane = pane;
             install_tab_presentation(tab, presentation);
@@ -707,9 +702,15 @@ fn adopt(
             app.tabs.push(tab);
         }
     }
-    app.tabs.select(active
-        .and_then(|active| app.tabs.iter().position(|tab| tab.id() == active))
-        .unwrap_or_else(|| app.tabs.active_index().min(app.tabs.len().saturating_sub(1))));
+    app.tabs.select(
+        active
+            .and_then(|active| app.tabs.iter().position(|tab| tab.id() == active))
+            .unwrap_or_else(|| {
+                app.tabs
+                    .active_index()
+                    .min(app.tabs.len().saturating_sub(1))
+            }),
+    );
     for tab in &mut app.tabs {
         tab.discard_detached_zoom();
     }
@@ -729,7 +730,11 @@ fn adopt(
             .flat_map(|tab| tab.pane.leaves())
             .any(|slot| slot.entity_id() == focused)
     }) {
-        app.tabs.select(app.tabs.active_index().min(app.tabs.len().saturating_sub(1)));
+        app.tabs.select(
+            app.tabs
+                .active_index()
+                .min(app.tabs.len().saturating_sub(1)),
+        );
         app.focus_active(window, cx);
     }
     app.refocus_parked_pane(window, cx);

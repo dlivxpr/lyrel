@@ -21,11 +21,11 @@ use crate::core::group_key::{
 };
 use crate::terminal::git_status::GitStatusCache;
 use crate::ui::app::LyrelApp;
-use crate::ui::tab::Tab;
 use crate::ui::hints::tab_badge_label;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::reorder::{self, Reorder, Surface};
 use crate::ui::right_panel::RESIZE_HANDLE_WIDTH;
+use crate::ui::tab::Tab;
 use crate::ui::tab_strip::{
     DragTab, REORDER_SLIDE_MS, abbreviate_home, elide_end_clusters, elide_label,
     elide_path_keep_tail, measure_text,
@@ -4001,7 +4001,9 @@ mod fold_tests {
             assert_eq!(app.group_rename.as_ref().map(|r| r.group), Some(id));
             assert!(app.tabs.iter().all(|t| t.group.get().is_none()));
             let kinds: Vec<_> = app
-                .search_input(window, cx).build(cx).actions
+                .search_input(window, cx)
+                .build(cx)
+                .actions
                 .into_iter()
                 .map(|c| c.kind)
                 .collect();
@@ -4086,7 +4088,10 @@ mod fold_tests {
                 "the probe wins"
             );
             let (desired, _, _) = crate::ui::tree_sync::projection::desired_tabs(
-                &app.tabs, app.tabs.active_index(), app.workspace, cx,
+                &app.tabs,
+                app.tabs.active_index(),
+                app.workspace,
+                cx,
             );
             assert_eq!(
                 desired[0].last_auto,

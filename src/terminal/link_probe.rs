@@ -193,7 +193,10 @@ mod tests {
         assert_eq!(cache.probe(Path::new("/pending.rs"), true), Probe::Unknown);
         assert_eq!(cache.take_wanted(), vec![PathBuf::from("/pending.rs")]);
         cache.cancel_pending();
-        assert_eq!(cache.probe(Path::new("/known.rs"), true), Probe::Hit { is_dir: false });
+        assert_eq!(
+            cache.probe(Path::new("/known.rs"), true),
+            Probe::Hit { is_dir: false }
+        );
         assert_eq!(cache.probe(Path::new("/pending.rs"), true), Probe::Unknown);
         assert_eq!(cache.take_wanted(), vec![PathBuf::from("/pending.rs")]);
     }

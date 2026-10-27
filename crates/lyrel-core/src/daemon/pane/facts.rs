@@ -6,8 +6,8 @@ use crate::daemon::protocol::{DaemonMsg, RemoteContext, ShellSpec};
 pub(crate) mod output_marks;
 pub(super) mod probes;
 mod reader;
-pub(super) use reader::{FactReader, ForegroundProbes};
 use output_marks::{ShellState, SniffSignals};
+pub(super) use reader::{FactReader, ForegroundProbes};
 
 /// Foreground observations and the transition rules which give them meaning.
 /// Kept under the existing PaneState mutex; never takes the PTY master lock.
@@ -32,74 +32,159 @@ pub(super) struct FactChange(Option<ObservedFacts>);
 
 impl FactChange {
     pub(super) fn publish(self, pane: u64, alive: bool, shutting_down: bool) {
-        if !shutting_down && let Some(after) = self.0 { publish_facts(pane, alive, after); }
+        if !shutting_down && let Some(after) = self.0 {
+            publish_facts(pane, alive, after);
+        }
     }
 }
 
 impl PaneFacts {
-    pub(super) fn new(cwd: Option<PathBuf>, osc_title: Option<String>, shell_spec: Option<ShellSpec>, remote: Option<RemoteContext>) -> Self {
-        Self { cwd, osc_title, shell_spec, remote, ..Self::default() }
+    pub(super) fn new(
+        cwd: Option<PathBuf>,
+        osc_title: Option<String>,
+        shell_spec: Option<ShellSpec>,
+        remote: Option<RemoteContext>,
+    ) -> Self {
+        Self {
+            cwd,
+            osc_title,
+            shell_spec,
+            remote,
+            ..Self::default()
+        }
     }
 
-    pub(super) fn cwd(&self) -> Option<&Path> { self.cwd.as_deref() }
-    pub(super) fn osc_title(&self) -> Option<&str> { self.osc_title.as_deref() }
-    pub(super) fn remote(&self) -> Option<&RemoteContext> { self.remote.as_ref() }
+    pub(super) fn cwd(&self) -> Option<&Path> {
+        self.cwd.as_deref()
+    }
+    pub(super) fn osc_title(&self) -> Option<&str> {
+        self.osc_title.as_deref()
+    }
+    pub(super) fn remote(&self) -> Option<&RemoteContext> {
+        self.remote.as_ref()
+    }
     pub(super) fn locality(&self) -> (bool, bool) {
-        (self.remote.as_ref().is_some_and(|remote| remote.kind != crate::daemon::protocol::RemoteKind::Ssh), self.remote.is_none())
+        (
+            self.remote
+                .as_ref()
+                .is_some_and(|remote| remote.kind != crate::daemon::protocol::RemoteKind::Ssh),
+            self.remote.is_none(),
+        )
     }
-    pub(super) fn agent_state(&self, pane: u64) -> Option<crate::daemon::control::PaneAgentState> { agent_state_snapshot(self, pane) }
+    pub(super) fn agent_state(&self, pane: u64) -> Option<crate::daemon::control::PaneAgentState> {
+        agent_state_snapshot(self, pane)
+    }
 
-    pub(super) fn context(&self, local_pty: bool, bracketed_paste: bool) -> crate::daemon::protocol::PaneContext {
-        crate::daemon::protocol::PaneContext { remote: self.remote.clone(), local_pty, at_prompt: self.shell.active.then_some(self.shell.mark_at_prompt), remote_prompt_seen: self.remote_prompt_seen, bracketed_paste: Some(bracketed_paste) }
+    pub(super) fn context(
+        &self,
+        local_pty: bool,
+        bracketed_paste: bool,
+    ) -> crate::daemon::protocol::PaneContext {
+        crate::daemon::protocol::PaneContext {
+            remote: self.remote.clone(),
+            local_pty,
+            at_prompt: self.shell.active.then_some(self.shell.mark_at_prompt),
+            remote_prompt_seen: self.remote_prompt_seen,
+            bracketed_paste: Some(bracketed_paste),
+        }
     }
 
     pub(super) fn prompt(&self, foreground_command: bool) -> Option<DaemonMsg> {
-        self.shell.active.then_some(DaemonMsg::Prompt { active: self.shell.active, at_prompt: self.shell.at_prompt && !foreground_command, last_exit: self.shell.last_exit_code })
+        self.shell.active.then_some(DaemonMsg::Prompt {
+            active: self.shell.active,
+            at_prompt: self.shell.at_prompt && !foreground_command,
+            last_exit: self.shell.last_exit_code,
+        })
     }
 
     pub(super) fn replay_context(&self, send: &mut impl FnMut(DaemonMsg)) {
-        if self.remote.is_some() { send(DaemonMsg::RemoteContext(self.remote.clone())); }
+        if self.remote.is_some() {
+            send(DaemonMsg::RemoteContext(self.remote.clone()));
+        }
         // The client clears cwd on RemoteContext. The far directory must follow.
-        if let Some(cwd) = &self.cwd { send(DaemonMsg::Cwd(cwd.clone())); }
+        if let Some(cwd) = &self.cwd {
+            send(DaemonMsg::Cwd(cwd.clone()));
+        }
     }
 
     pub(super) fn replay_agent(&self, send: &mut impl FnMut(DaemonMsg)) {
-        if self.agent.is_some() { send(DaemonMsg::Agent(self.agent)); }
-        if self.agent_session.is_some() { send(DaemonMsg::AgentStatus(self.agent_session.clone())); }
+        if self.agent.is_some() {
+            send(DaemonMsg::Agent(self.agent));
+        }
+        if self.agent_session.is_some() {
+            send(DaemonMsg::AgentStatus(self.agent_session.clone()));
+        }
     }
 
-    pub(super) fn apply_output(&mut self, observation: reader::OutputObservation, emit: &mut dyn FnMut(DaemonMsg)) -> FactChange {
+    pub(super) fn apply_output(
+        &mut self,
+        observation: reader::OutputObservation,
+        emit: &mut dyn FnMut(DaemonMsg),
+    ) -> FactChange {
         let before = observation.may_change_facts().then(|| observed_facts(self));
         observation.apply(self, emit);
         self.change_since(before)
     }
 
     fn change_since(&self, before: Option<ObservedFacts>) -> FactChange {
-        FactChange(before.and_then(|before| { let after = observed_facts(self); facts_changed(&before, &after).then_some(after) }))
+        FactChange(before.and_then(|before| {
+            let after = observed_facts(self);
+            facts_changed(&before, &after).then_some(after)
+        }))
     }
 
-    pub(super) fn apply_events(&mut self, events: Vec<AgentEvent>, notification: Option<String>, emit: &mut dyn FnMut(DaemonMsg)) -> FactChange {
+    pub(super) fn apply_events(
+        &mut self,
+        events: Vec<AgentEvent>,
+        notification: Option<String>,
+        emit: &mut dyn FnMut(DaemonMsg),
+    ) -> FactChange {
         let before = observed_facts(self);
         apply_agent_signals(self, events, notification, emit);
         self.change_since(Some(before))
     }
 
     pub(super) fn take_durable_observer(&mut self) -> Option<crate::daemon::kimi::Observer> {
-        if self.remote.is_none() && self.agent == Some(CLIAgent::Kimi) { self.kimi_observer.take() } else { None }
+        if self.remote.is_none() && self.agent == Some(CLIAgent::Kimi) {
+            self.kimi_observer.take()
+        } else {
+            None
+        }
     }
 
-    pub(super) fn accept_durable_observation(&mut self, observer: crate::daemon::kimi::Observer, events: Result<Vec<AgentEvent>, std::io::Error>, emit: &mut dyn FnMut(DaemonMsg)) -> FactChange {
+    pub(super) fn accept_durable_observation(
+        &mut self,
+        observer: crate::daemon::kimi::Observer,
+        events: Result<Vec<AgentEvent>, std::io::Error>,
+        emit: &mut dyn FnMut(DaemonMsg),
+    ) -> FactChange {
         let matches = self.agent == Some(CLIAgent::Kimi)
-            && self.agent_session.as_ref().and_then(|session| session.session_id.as_deref()) == Some(observer.session_id.as_str())
-            && self.agent_session.as_ref().and_then(|session| session.readout.session_scope.as_ref()).and_then(|scope| scope.session_file.as_ref()).and_then(|file| file.parent()).map(|dir| dir.join("agents/main/wire.jsonl")) == Some(observer.file.clone());
-        if !matches || self.kimi_observer.is_some() { return FactChange(None); }
+            && self
+                .agent_session
+                .as_ref()
+                .and_then(|session| session.session_id.as_deref())
+                == Some(observer.session_id.as_str())
+            && self
+                .agent_session
+                .as_ref()
+                .and_then(|session| session.readout.session_scope.as_ref())
+                .and_then(|scope| scope.session_file.as_ref())
+                .and_then(|file| file.parent())
+                .map(|dir| dir.join("agents/main/wire.jsonl"))
+                == Some(observer.file.clone());
+        if !matches || self.kimi_observer.is_some() {
+            return FactChange(None);
+        }
         let before = observed_facts(self);
         self.kimi_observer = Some(observer);
         match events {
             Ok(events) => apply_agent_signals(self, events, None, emit),
             Err(error) => {
-                let message = format!("Kimi durable state unavailable: {error}; completion is unknown");
-                if let Some(session) = &mut self.agent_session && session.message.as_deref() != Some(message.as_str()) {
+                let message =
+                    format!("Kimi durable state unavailable: {error}; completion is unknown");
+                if let Some(session) = &mut self.agent_session
+                    && session.message.as_deref() != Some(message.as_str())
+                {
                     session.message = Some(message);
                     emit(DaemonMsg::AgentStatus(self.agent_session.clone()));
                 }
@@ -111,23 +196,52 @@ impl PaneFacts {
     #[cfg(unix)]
     pub(super) fn from_carried(carried: &mut super::Carried) -> Self {
         let agent_session = carried.agent_session.take();
-        let kimi_observer = if carried.agent == Some(CLIAgent::Kimi) { agent_session.as_ref().and_then(kimi_observer) } else { None };
-        Self { cwd: carried.cwd.take(), osc_title: carried.osc_title.take(), shell_spec: carried.shell_spec.take(),
-            shell: ShellState { active: carried.shell_active, at_prompt: carried.at_prompt, last_exit_code: carried.last_exit, command: None, mark_at_prompt: false },
+        let kimi_observer = if carried.agent == Some(CLIAgent::Kimi) {
+            agent_session.as_ref().and_then(kimi_observer)
+        } else {
+            None
+        };
+        Self {
+            cwd: carried.cwd.take(),
+            osc_title: carried.osc_title.take(),
+            shell_spec: carried.shell_spec.take(),
+            shell: ShellState {
+                active: carried.shell_active,
+                at_prompt: carried.at_prompt,
+                last_exit_code: carried.last_exit,
+                command: None,
+                mark_at_prompt: false,
+            },
             // The handoff wire format does not carry proof of a far prompt.
-            remote_prompt_seen: false, remote: carried.remote.take(), agent: carried.agent, agent_argv: carried.agent_argv.take(), agent_session, kimi_observer }
+            remote_prompt_seen: false,
+            remote: carried.remote.take(),
+            agent: carried.agent,
+            agent_argv: carried.agent_argv.take(),
+            agent_session,
+            kimi_observer,
+        }
     }
 
     #[cfg(unix)]
     pub(super) fn write_carried(&self, mut carried: super::Carried) -> super::Carried {
-        carried.cwd = self.cwd.clone(); carried.osc_title = self.osc_title.clone(); carried.shell_spec = self.shell_spec.clone();
-        carried.shell_active = self.shell.active; carried.at_prompt = self.shell.at_prompt; carried.last_exit = self.shell.last_exit_code;
-        carried.remote = self.remote.clone(); carried.agent = self.agent; carried.agent_argv = self.agent_argv.clone(); carried.agent_session = self.agent_session.clone();
+        carried.cwd = self.cwd.clone();
+        carried.osc_title = self.osc_title.clone();
+        carried.shell_spec = self.shell_spec.clone();
+        carried.shell_active = self.shell.active;
+        carried.at_prompt = self.shell.at_prompt;
+        carried.last_exit = self.shell.last_exit_code;
+        carried.remote = self.remote.clone();
+        carried.agent = self.agent;
+        carried.agent_argv = self.agent_argv.clone();
+        carried.agent_session = self.agent_session.clone();
         carried
     }
 }
 
-fn agent_state_snapshot(st: &PaneFacts, pane: u64) -> Option<crate::daemon::control::PaneAgentState> {
+fn agent_state_snapshot(
+    st: &PaneFacts,
+    pane: u64,
+) -> Option<crate::daemon::control::PaneAgentState> {
     st.agent_session
         .clone()
         .map(|state| crate::daemon::control::PaneAgentState {
@@ -238,11 +352,10 @@ fn apply_signals(st: &mut PaneFacts, signals: SniffSignals, emit: &mut dyn FnMut
         }
         st.shell = shell.clone();
         emit(DaemonMsg::Prompt {
-                active: shell.active,
-                at_prompt: shell.at_prompt,
-                last_exit: shell.last_exit_code,
-            },
-        );
+            active: shell.active,
+            at_prompt: shell.at_prompt,
+            last_exit: shell.last_exit_code,
+        });
     }
     apply_agent_signals(st, signals.agent_events, signals.notification, emit);
 }
@@ -274,13 +387,19 @@ fn kimi_observer(
         .as_ref()?
         .parent()?
         .join("agents/main/wire.jsonl");
-    Some(crate::daemon::kimi::Observer::new(id, file, session.mid_turn()))
+    Some(crate::daemon::kimi::Observer::new(
+        id,
+        file,
+        session.mid_turn(),
+    ))
 }
 
 fn apply_agent_signals(
     st: &mut PaneFacts,
     events: Vec<crate::core::cli_agent::AgentEvent>,
-    notification: Option<String>, emit: &mut dyn FnMut(DaemonMsg)) {
+    notification: Option<String>,
+    emit: &mut dyn FnMut(DaemonMsg),
+) {
     use crate::core::cli_agent::{AgentEventKind, AgentSessionState, AgentStatus};
 
     if events.is_empty() && notification.is_none() {
@@ -430,7 +549,11 @@ fn suppress_relayed_prompt_marks(shell: &mut Vec<ShellState>) {
     });
 }
 
-fn apply_remote_context(st: &mut PaneFacts, remote: Option<RemoteContext>, emit: &mut dyn FnMut(DaemonMsg)) {
+fn apply_remote_context(
+    st: &mut PaneFacts,
+    remote: Option<RemoteContext>,
+    emit: &mut dyn FnMut(DaemonMsg),
+) {
     if st.remote == remote {
         return;
     }
@@ -458,7 +581,9 @@ fn latch_remote_prompt(st: &mut PaneFacts, saw_prompt_mark: bool) {
 
 fn apply_agent(
     st: &mut PaneFacts,
-    detected: Option<(crate::core::cli_agent::CLIAgent, Vec<String>)>, emit: &mut dyn FnMut(DaemonMsg)) {
+    detected: Option<(crate::core::cli_agent::CLIAgent, Vec<String>)>,
+    emit: &mut dyn FnMut(DaemonMsg),
+) {
     let (agent, argv) = match detected {
         Some((agent, argv)) => (Some(agent), Some(argv)),
         None => (None, None),
@@ -481,7 +606,11 @@ fn apply_agent(
     stamp_launch_argv(st, argv, emit);
 }
 
-fn stamp_launch_argv(st: &mut PaneFacts, argv: Option<Vec<String>>, emit: &mut dyn FnMut(DaemonMsg)) {
+fn stamp_launch_argv(
+    st: &mut PaneFacts,
+    argv: Option<Vec<String>>,
+    emit: &mut dyn FnMut(DaemonMsg),
+) {
     let Some(argv) = argv else { return };
     if argv.is_empty() {
         return;
@@ -499,10 +628,10 @@ fn stamp_launch_argv(st: &mut PaneFacts, argv: Option<Vec<String>>, emit: &mut d
 }
 
 #[cfg(test)]
-mod marks_tests;
-#[cfg(test)]
 mod agent_tests;
 #[cfg(test)]
-mod publication_tests;
+mod marks_tests;
 #[cfg(test)]
 mod probes_tests;
+#[cfg(test)]
+mod publication_tests;

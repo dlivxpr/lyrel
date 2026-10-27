@@ -21,11 +21,11 @@ use crate::daemon::protocol::{
 use crate::daemon::ssh::sftp::{remote_basename, remote_join, remote_parent, safe_local_name};
 use crate::terminal::RemoteTerminal;
 use crate::ui::app::LyrelApp;
-use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{
     HEADING, META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT, TEXT_INSET,
 };
+use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM};
 
 /// A remote directory row: the local file tree's 26px row, on the panel's
 /// `ROW_FILL_RADIUS`, so the Files tab keeps its rhythm whichever machine it

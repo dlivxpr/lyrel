@@ -9,11 +9,11 @@ use std::path::PathBuf;
 use crate::core::config::{Config, RightPanelTab};
 use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
 use crate::ui::app::LyrelApp;
+use crate::ui::i18n::{L10nKey, t, t_fmt};
+use crate::ui::scrollbar::with_vertical_scrollbar;
 use crate::ui::window_chrome::{
     CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, tile_trailing_inset,
 };
-use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::scrollbar::with_vertical_scrollbar;
 
 /// The tab a stored choice shows. Search was a tab of its own until the
 /// Files tab took over searching file contents; a config that still says
@@ -41,7 +41,8 @@ fn right_panel_tabs_floor(window: &Window, cx: &gpui_kit::App) -> f32 {
 /// The tab row's leading inset: the selected tab's pill starts on
 /// `CONTENT_INSET`, the edge every row fill below it starts on, and each tab's
 /// click target reaches `TAB_OUTER_PAD` past its pill.
-const TAB_ROW_LEAD: f32 = crate::ui::window_chrome::CONTENT_INSET - crate::ui::tab_strip::TAB_OUTER_PAD;
+const TAB_ROW_LEAD: f32 =
+    crate::ui::window_chrome::CONTENT_INSET - crate::ui::tab_strip::TAB_OUTER_PAD;
 
 /// How tall the tab row is where it sits below the title bar (Windows and
 /// Linux): the tab's 26px hover pill plus 2px either side. A full title-bar
@@ -272,8 +273,10 @@ pub(crate) struct RightPanelState {
     /// would otherwise re-announce every port the workspace had already
     /// forwarded, and switching back would re-offer what was just dismissed.
     /// A few `u16` per connection is not worth reclaiming.
-    pub(crate) auto_forwarded:
-        std::collections::HashMap<crate::ui::forwards::route::ForwardOwnerKey, std::collections::HashSet<u16>>,
+    pub(crate) auto_forwarded: std::collections::HashMap<
+        crate::ui::forwards::route::ForwardOwnerKey,
+        std::collections::HashSet<u16>,
+    >,
     pub(crate) scroll: gpui_kit::ScrollHandle,
     pub(crate) tree_scroll: gpui_kit::ScrollHandle,
     /// A path the tree should scroll onto, and how many more renders it may
@@ -1602,7 +1605,10 @@ impl LyrelApp {
         window: &Window,
         cx: &gpui_kit::App,
     ) -> Option<PaneForwardCtx> {
-        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         // A pane holds managed forwards once it has somewhere to hold them:
         // a live native-ssh connection, or the workspace's shared one.
@@ -1943,7 +1949,10 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<(u64, String)> {
         use crate::daemon::protocol::{RemoteKind, SshPhase};
-        let leaf = self.tabs.get(self.tabs.active_index())?.detail_pane(window, cx)?;
+        let leaf = self
+            .tabs
+            .get(self.tabs.active_index())?
+            .detail_pane(window, cx)?;
         let view = leaf.read(cx);
         let remote = view.remote_context()?;
         if remote.kind != RemoteKind::NativeSsh

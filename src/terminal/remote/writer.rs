@@ -40,7 +40,11 @@ pub(super) struct InputLoss {
 }
 
 impl InputLoss {
-    pub(super) fn new(reader_quit: Arc<AtomicBool>, exited: Arc<AtomicBool>, proxy: EventProxy) -> InputLoss {
+    pub(super) fn new(
+        reader_quit: Arc<AtomicBool>,
+        exited: Arc<AtomicBool>,
+        proxy: EventProxy,
+    ) -> InputLoss {
         InputLoss {
             said: Arc::new(AtomicBool::new(false)),
             reader_quit,

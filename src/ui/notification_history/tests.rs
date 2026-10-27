@@ -343,7 +343,10 @@ fn source_navigation_selects_the_other_window_without_touching_its_other_tabs(
     first.update(|window, cx| window.click(format!("notification-source-{id}"), cx));
     settle(&mut first);
     settle(&mut second);
-    assert_eq!(second_app.read_with(&second, |app, _| app.tabs.active_index()), 0);
+    assert_eq!(
+        second_app.read_with(&second, |app, _| app.tabs.active_index()),
+        0
+    );
     assert_eq!(second_app.read_with(&second, |app, _| app.tabs.len()), 2);
     assert_eq!(first_app.read_with(&first, |app, _| app.tabs.len()), 2);
     assert_eq!(messages(&second), ["other workspace first pane"]);

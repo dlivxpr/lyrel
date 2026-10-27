@@ -467,7 +467,9 @@ impl LyrelApp {
     /// A buffer changed: move saved locations by the actual text replacement,
     /// including undo, reload and LSP edits rather than depending on a widget log.
     pub(crate) fn editor_nav_note_edit(&mut self, id: BufferId, cx: &mut Context<Self>) {
-        let Some(f) = self.editor.buffers.get(id) else { return };
+        let Some(f) = self.editor.buffers.get(id) else {
+            return;
+        };
         let file = NavLocation {
             host: f.host.id(),
             path: f.path.clone(),
@@ -719,7 +721,9 @@ impl LyrelApp {
         let Some(buffer) = self.editor.nav.preview.as_ref().map(|p| p.buffer) else {
             return;
         };
-        let Some(f) = self.editor.buffers.get(buffer) else { return };
+        let Some(f) = self.editor.buffers.get(buffer) else {
+            return;
+        };
         f.input.update(cx, |state, cx| {
             let offset = state
                 .text()

@@ -38,7 +38,8 @@ impl LyrelApp {
     pub(crate) fn lsp_sync_buffers(&self, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
         let buffers = if Self::lsp_enabled(cx) {
-            self.editor.local_files()
+            self.editor
+                .local_files()
                 .into_iter()
                 .map(|f| LspBuffer {
                     input: f.input,
@@ -127,7 +128,9 @@ impl LyrelApp {
                 cx,
             );
         };
-        let open_buffer = self.editor.local_files()
+        let open_buffer = self
+            .editor
+            .local_files()
             .into_iter()
             .find(|f| f.path == path.as_path());
         if let Some(f) = open_buffer {

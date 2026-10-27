@@ -1,10 +1,16 @@
 use super::*;
+use crate::ui::app::test_window::harness_with_tabs;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext};
-use crate::ui::app::test_window::harness_with_tabs;
-use lyrel_core::host::{ContentLimits, ContentQuery, ContentResults, Entry, Host, Meta, Output, SearchHit};
+use lyrel_core::host::{
+    ContentLimits, ContentQuery, ContentResults, Entry, Host, Meta, Output, SearchHit,
+};
 use std::io;
-use std::sync::{Mutex, atomic::{AtomicBool, Ordering}, mpsc};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::time::{Duration, Instant};
 
 /// Real filesystem adapter with a distinct Host identity and one controllable
@@ -20,8 +26,10 @@ struct FileHost {
 impl FileHost {
     fn new(id: HostId) -> Arc<Self> {
         Arc::new(Self {
-            inner: lyrel_core::host::local::LocalHost::new(), id,
-            gate: Mutex::new(None), entered: Arc::new(AtomicBool::new(false)),
+            inner: lyrel_core::host::local::LocalHost::new(),
+            id,
+            gate: Mutex::new(None),
+            entered: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -34,42 +42,87 @@ impl FileHost {
 }
 
 impl Host for FileHost {
-    fn id(&self) -> HostId { self.id }
-    fn separator(&self) -> char { self.inner.separator() }
-    fn is_absolute(&self, p: &Path) -> bool { self.inner.is_absolute(p) }
-    fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> { self.inner.read_dir(p, root) }
-    fn stat(&self, p: &Path) -> io::Result<Meta> { self.inner.stat(p) }
+    fn id(&self) -> HostId {
+        self.id
+    }
+    fn separator(&self) -> char {
+        self.inner.separator()
+    }
+    fn is_absolute(&self, p: &Path) -> bool {
+        self.inner.is_absolute(p)
+    }
+    fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
+        self.inner.read_dir(p, root)
+    }
+    fn stat(&self, p: &Path) -> io::Result<Meta> {
+        self.inner.stat(p)
+    }
     fn read_file(&self, p: &Path, max: u64) -> io::Result<Vec<u8>> {
         let gate = self.gate.lock().unwrap().take();
         if let Some(gate) = gate {
             self.entered.store(true, Ordering::SeqCst);
-            gate.recv_timeout(Duration::from_secs(10)).map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
+            gate.recv_timeout(Duration::from_secs(10))
+                .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
         }
         self.inner.read_file(p, max)
     }
-    fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> { self.inner.canonicalize(p) }
-    fn search(&self, roots: &[PathBuf], query: &str, limit: usize, dirs: usize, hidden: bool) -> io::Result<Vec<SearchHit>> {
+    fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+        self.inner.canonicalize(p)
+    }
+    fn search(
+        &self,
+        roots: &[PathBuf],
+        query: &str,
+        limit: usize,
+        dirs: usize,
+        hidden: bool,
+    ) -> io::Result<Vec<SearchHit>> {
         self.inner.search(roots, query, limit, dirs, hidden)
     }
-    fn search_content(&self, roots: &[PathBuf], query: &ContentQuery, limits: &ContentLimits) -> io::Result<ContentResults> {
+    fn search_content(
+        &self,
+        roots: &[PathBuf],
+        query: &ContentQuery,
+        limits: &ContentLimits,
+    ) -> io::Result<ContentResults> {
         self.inner.search_content(roots, query, limits)
     }
-    fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> { self.inner.write_file(p, bytes) }
-    fn create_file_new(&self, p: &Path) -> io::Result<()> { self.inner.create_file_new(p) }
-    fn create_dir(&self, p: &Path, recursive: bool) -> io::Result<()> { self.inner.create_dir(p, recursive) }
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> { self.inner.rename(from, to) }
-    fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> { self.inner.remove(p, recursive) }
-    fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> { self.inner.repo_root(p) }
-    fn git(&self, p: &Path, args: &[&str]) -> io::Result<Output> { self.inner.git(p, args) }
-    fn shells(&self) -> io::Result<lyrel_core::core::shells::ShellInventory> { self.inner.shells() }
-    fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> { self.inner.watch(dirs) }
+    fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> {
+        self.inner.write_file(p, bytes)
+    }
+    fn create_file_new(&self, p: &Path) -> io::Result<()> {
+        self.inner.create_file_new(p)
+    }
+    fn create_dir(&self, p: &Path, recursive: bool) -> io::Result<()> {
+        self.inner.create_dir(p, recursive)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.inner.rename(from, to)
+    }
+    fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> {
+        self.inner.remove(p, recursive)
+    }
+    fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+        self.inner.repo_root(p)
+    }
+    fn git(&self, p: &Path, args: &[&str]) -> io::Result<Output> {
+        self.inner.git(p, args)
+    }
+    fn shells(&self) -> io::Result<lyrel_core::core::shells::ShellInventory> {
+        self.inner.shells()
+    }
+    fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub> {
+        self.inner.watch(dirs)
+    }
 }
 
 fn wait_until(vcx: &mut VisualTestContext, mut ready: impl FnMut(&mut VisualTestContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         vcx.run_until_parked();
-        if ready(vcx) { return; }
+        if ready(vcx) {
+            return;
+        }
         assert!(Instant::now() < deadline, "editor workflow did not settle");
         vcx.executor().advance_clock(Duration::from_millis(250));
         std::thread::sleep(Duration::from_millis(5));
@@ -81,20 +134,41 @@ fn active_id(app: &Entity<LyrelApp>, vcx: &VisualTestContext) -> Option<BufferId
 }
 
 #[gpui_kit::test]
-fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(cx: &mut TestAppContext) {
+fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("shared.txt");
     std::fs::write(&path, "first\nsecond\nthird\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor_at(&path, Some(2), Some(3), window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor_at(&path, Some(2), Some(3), window, cx)
+    });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     let first = active_id(&app, &vcx).unwrap();
     app.read_with(&vcx, |app, cx| {
-        assert_eq!(app.active_buffer().unwrap().input.read(cx).cursor_position(), Position::new(1, 2));
+        assert_eq!(
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .cursor_position(),
+            Position::new(1, 2)
+        );
     });
-    vcx.update(|window, cx| { window.render_frame(cx); window.input("edited", cx); });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("edited", cx);
+    });
     vcx.run_until_parked();
-    let edited = app.read_with(&vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string());
+    let edited = app.read_with(&vcx, |app, cx| {
+        app.active_buffer()
+            .unwrap()
+            .input
+            .read(cx)
+            .text()
+            .to_string()
+    });
     assert!(edited.contains("edited"));
     app.update_in(&mut vcx, |app, window, cx| {
         app.activate(1, window, cx);
@@ -108,25 +182,48 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(cx: 
     });
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.tab_code().unwrap().active_id(), Some(first));
-        assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), edited);
+        assert_eq!(
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .text()
+                .to_string(),
+            edited
+        );
         assert_eq!(app.editor_unsaved(), vec![first]);
     });
 }
 
 #[gpui_kit::test]
-fn equal_paths_on_distinct_hosts_do_not_share_buffers_or_local_lsp_documents(cx: &mut TestAppContext) {
+fn equal_paths_on_distinct_hosts_do_not_share_buffers_or_local_lsp_documents(
+    cx: &mut TestAppContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("identity.txt");
     std::fs::write(&path, "same path\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     let local = active_id(&app, &vcx).unwrap();
     let remote: SharedHost = FileHost::new(HostId(69));
-    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(remote, &path, window, cx));
-    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some_and(|id| id != local));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(remote, &path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        active_id(&app, vcx).is_some_and(|id| id != local)
+    });
     app.read_with(&vcx, |app, _| {
-        assert_eq!(app.editor.local_files().iter().map(|file| file.id).collect::<Vec<_>>(), vec![local]);
+        assert_eq!(
+            app.editor
+                .local_files()
+                .iter()
+                .map(|file| file.id)
+                .collect::<Vec<_>>(),
+            vec![local]
+        );
         let remote = app.active_buffer().unwrap();
         assert_eq!(app.editor_active_location().unwrap().0, HostId(69));
         assert_eq!(remote.path, app.editor.local_file(local).unwrap().path);
@@ -139,16 +236,39 @@ fn external_writes_reload_clean_text_but_preserve_unsaved_edits(cx: &mut TestApp
     let path = dir.path().join("watched.txt");
     std::fs::write(&path, "initial\n").unwrap();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
-    app.update_in(&mut vcx, |app, window, cx| app.open_file_in_editor(&path, window, cx));
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.editor.buffers.watch.is_some()));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.editor.buffers.watch.is_some())
+    });
     std::fs::write(&path, "external version\n").unwrap();
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, cx| app.active_buffer().is_some_and(|file| file.input.read(cx).text().to_string() == "external version\n")));
-    vcx.update(|window, cx| { window.render_frame(cx); window.input("unsaved", cx); });
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, cx| {
+            app.active_buffer()
+                .is_some_and(|file| file.input.read(cx).text().to_string() == "external version\n")
+        })
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.input("unsaved", cx);
+    });
     vcx.run_until_parked();
-    let text = app.read_with(&vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string());
+    let text = app.read_with(&vcx, |app, cx| {
+        app.active_buffer()
+            .unwrap()
+            .input
+            .read(cx)
+            .text()
+            .to_string()
+    });
     assert!(text.contains("unsaved"));
     std::fs::write(&path, "another external version\n").unwrap();
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().unwrap().conflict.is_some()));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer().unwrap().conflict.is_some()
+        })
+    });
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert!(matches!(file.conflict, Some(DiskConflict::Changed(_))));
@@ -165,11 +285,15 @@ fn an_open_finishing_after_its_tab_closed_does_not_land_in_the_next_tab(cx: &mut
     let host = FileHost::new(HostId(70));
     let release = host.pause_next_read();
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
-    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
     wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
     app.update_in(&mut vcx, |app, window, cx| app.close_tab(0, window, cx));
     release.send(()).unwrap();
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty()));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty())
+    });
     app.read_with(&vcx, |app, _| {
         assert_eq!(app.tabs.len(), 1);
         assert!(app.editor_active_location().is_none());
@@ -185,20 +309,47 @@ fn mt(secs: i64, nanos: u32) -> Option<MTime> {
 fn external_changes_are_told_apart_from_our_own_saves() {
     let ours = mt(100, 0);
     let seen = |m| Observed::Present(m);
-    assert_eq!(classify_external_change(false, false, ours, seen(ours)), ExternalChange::Ignore);
-    assert_eq!(classify_external_change(false, false, ours, seen(mt(101, 0))), ExternalChange::Reload);
-    assert_eq!(classify_external_change(false, true, ours, seen(mt(101, 0))), ExternalChange::Conflict);
-    assert_eq!(classify_external_change(false, false, mt(100, 0), seen(mt(100, 1))), ExternalChange::Reload);
-    assert_eq!(classify_external_change(true, false, ours, seen(mt(101, 0))), ExternalChange::Ignore);
-    assert_eq!(classify_external_change(false, false, None, seen(None)), ExternalChange::Reload);
+    assert_eq!(
+        classify_external_change(false, false, ours, seen(ours)),
+        ExternalChange::Ignore
+    );
+    assert_eq!(
+        classify_external_change(false, false, ours, seen(mt(101, 0))),
+        ExternalChange::Reload
+    );
+    assert_eq!(
+        classify_external_change(false, true, ours, seen(mt(101, 0))),
+        ExternalChange::Conflict
+    );
+    assert_eq!(
+        classify_external_change(false, false, mt(100, 0), seen(mt(100, 1))),
+        ExternalChange::Reload
+    );
+    assert_eq!(
+        classify_external_change(true, false, ours, seen(mt(101, 0))),
+        ExternalChange::Ignore
+    );
+    assert_eq!(
+        classify_external_change(false, false, None, seen(None)),
+        ExternalChange::Reload
+    );
 }
 
 #[test]
 fn a_file_that_vanished_is_reported_deleted_whether_or_not_it_was_edited() {
-    assert_eq!(classify_external_change(false, false, mt(1, 0), Observed::Missing), ExternalChange::Deleted);
-    assert_eq!(classify_external_change(false, true, mt(1, 0), Observed::Missing), ExternalChange::Deleted);
+    assert_eq!(
+        classify_external_change(false, false, mt(1, 0), Observed::Missing),
+        ExternalChange::Deleted
+    );
+    assert_eq!(
+        classify_external_change(false, true, mt(1, 0), Observed::Missing),
+        ExternalChange::Deleted
+    );
     // Our save replaces by rename; the watcher can catch the gap between.
-    assert_eq!(classify_external_change(true, false, mt(1, 0), Observed::Missing), ExternalChange::Ignore);
+    assert_eq!(
+        classify_external_change(true, false, mt(1, 0), Observed::Missing),
+        ExternalChange::Ignore
+    );
 }
 
 #[gpui_kit::test]
@@ -217,12 +368,30 @@ fn a_late_open_cannot_replace_a_newer_hosts_document_or_cursor(cx: &mut TestAppC
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_open_on_host_at(newer, &path, Some(Position::new(1, 3)), window, cx);
     });
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.editor_active_location().is_some_and(|(host, _)| host == HostId(71))));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.editor_active_location()
+                .is_some_and(|(host, _)| host == HostId(71))
+        })
+    });
     release.send(()).unwrap();
-    wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty()));
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.editor.buffers.pending.is_empty())
+    });
     app.read_with(&vcx, |app, cx| {
         assert_eq!(app.editor_active_location().unwrap().0, HostId(71));
-        assert_eq!(app.active_buffer().unwrap().input.read(cx).cursor_position(), Position::new(1, 3));
-        assert_eq!(app.tab_code().unwrap().files.len(), 2, "the older request may finish only in the background");
+        assert_eq!(
+            app.active_buffer()
+                .unwrap()
+                .input
+                .read(cx)
+                .cursor_position(),
+            Position::new(1, 3)
+        );
+        assert_eq!(
+            app.tab_code().unwrap().files.len(),
+            2,
+            "the older request may finish only in the background"
+        );
     });
 }
