@@ -14,7 +14,11 @@ pub(super) fn fetch_machine(backend: &mut dyn Backend) -> Result<Machine> {
     }
 }
 
-pub(super) fn resolve_ws(explicit: Option<&str>, ctx: &Context, machine: &Machine) -> Result<WorkspaceId> {
+pub(super) fn resolve_ws(
+    explicit: Option<&str>,
+    ctx: &Context,
+    machine: &Machine,
+) -> Result<WorkspaceId> {
     let addr = address::workspace_or_context(explicit, ctx)?;
     Ok(resolve::workspace(machine, &addr)?.id)
 }

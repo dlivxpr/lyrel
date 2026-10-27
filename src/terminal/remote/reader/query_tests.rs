@@ -111,9 +111,8 @@ fn sync_update_without_esu_flushes_after_the_deadline() {
             got.clear();
             for col in 0..3usize {
                 got.push(
-                    grid[rio_vt::crosswords::pos::Line(0)]
-                        [rio_vt::crosswords::pos::Column(col)]
-                    .c(),
+                    grid[rio_vt::crosswords::pos::Line(0)][rio_vt::crosswords::pos::Column(col)]
+                        .c(),
                 );
             }
         }
@@ -143,9 +142,8 @@ fn snapshot_replay_flushes_a_dangling_sync_frame_suppressed() {
             got.clear();
             for col in 0..2usize {
                 got.push(
-                    grid[rio_vt::crosswords::pos::Line(0)]
-                        [rio_vt::crosswords::pos::Column(col)]
-                    .c(),
+                    grid[rio_vt::crosswords::pos::Line(0)][rio_vt::crosswords::pos::Column(col)]
+                        .c(),
                 );
             }
         }

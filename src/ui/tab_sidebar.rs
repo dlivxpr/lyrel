@@ -4085,7 +4085,10 @@ mod fold_tests {
                 "the probe wins"
             );
             let (desired, _, _) = crate::ui::tree_sync::projection::desired_tabs(
-                &app.tabs, app.active, app.workspace, cx,
+                &app.tabs,
+                app.active,
+                app.workspace,
+                cx,
             );
             assert_eq!(
                 desired[0].last_auto,

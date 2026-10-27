@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,7 +23,7 @@ use crate::core::config::CursorStyle as ConfigCursorStyle;
 use crate::core::osc::{Note, NoteBudget};
 use crate::daemon::protocol::{
     AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, LoopbackForward, LoopbackForwardRequest,
-    ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RemoteKind, RestoreFrom, SftpEntry,
+    ManagedForward, NativeSshSpec, PaneProcs, RemoteContext, RestoreFrom, SftpEntry,
     SftpJobProgress, SftpOp, SftpOpResult, SftpTransferSpec, ShellSpec, SshForwardRule, SshPhase,
     WinSize, WorkspaceOp, WorkspaceRequest,
 };
@@ -3905,8 +3904,6 @@ mod tests {
         );
     }
 
-
-
     #[test]
     fn win_size_carries_grid_and_cell_dims() {
         let ws = win_size(TermSize::new(80, 24), 8, 17);
@@ -4150,7 +4147,6 @@ mod tests {
             other => panic!("expected Input (dup resize sends nothing), got {other:?}"),
         }
     }
-
 
     #[test]
     fn layout_resize_reasserts_geometry_after_a_late_size_frame() {

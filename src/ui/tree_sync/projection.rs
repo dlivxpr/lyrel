@@ -330,5 +330,4 @@ mod tests {
             Some(PaneNode::Leaf { pane: 3 })
         );
     }
-
 }

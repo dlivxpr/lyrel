@@ -1,12 +1,11 @@
-use clap::Parser;
 use crate::address::Context;
 use crate::backend::mock::MockBackend;
 use crate::cli::Cli;
 use crate::commands::Outcome;
 use crate::commands::execute;
 use crate::testbed::two_workspace_machine;
+use clap::Parser;
 use serde_json::Value;
-use serde_json::json;
 
 pub(super) fn cli(args: &[&str]) -> Cli {
     Cli::try_parse_from(args).expect("test invocations use the documented grammar")
@@ -48,7 +47,10 @@ pub(super) fn json_of(outcome: Outcome) -> Value {
     }
 }
 
-pub(super) fn pane_info(pane_id: u64, owner: Option<&str>) -> lyrel_core::daemon::protocol::PaneInfo {
+pub(super) fn pane_info(
+    pane_id: u64,
+    owner: Option<&str>,
+) -> lyrel_core::daemon::protocol::PaneInfo {
     lyrel_core::daemon::protocol::PaneInfo {
         pane_id,
         cwd: None,

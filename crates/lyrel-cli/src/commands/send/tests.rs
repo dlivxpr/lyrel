@@ -1,11 +1,10 @@
-use crate::address::Context;
 use crate::address;
+use crate::address::Context;
 use crate::commands::execute;
 use crate::commands::test_support::cli;
 use crate::commands::test_support::json_of;
 use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
-use serde_json::json;
 
 #[test]
 fn send_reaches_the_pane_socket_seam_not_the_control_socket() {
