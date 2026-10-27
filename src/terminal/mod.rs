@@ -14,6 +14,7 @@ pub(crate) mod git_diff;
 pub(crate) mod git_status;
 mod highlight;
 mod history;
+mod history_session;
 mod hold;
 pub(crate) mod images;
 pub mod input;

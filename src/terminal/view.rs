@@ -26,7 +26,8 @@ use super::paste::{
     write_clipboard_image,
 };
 use super::remote::RemoteTerminal;
-use super::reverse_search::{self, ReverseSearch};
+use super::history_session::{PromptHistory, TerminalHistory, unix_now};
+use super::reverse_search;
 use super::scrollbar::{GridScroll, TerminalScrollHandle};
 use super::search::{LinkTarget, SearchState};
 use super::typeahead::{RawInput, Typeahead};
@@ -481,26 +482,7 @@ pub struct TerminalView {
     pub(crate) prompt_editor: bool,
     typeahead: Typeahead,
     hold: GapHold,
-    history: Vec<String>,
-    history_counts: std::collections::HashMap<String, u32>,
-    history_cwds: std::collections::HashMap<String, std::collections::HashSet<String>>,
-    history_meta: std::collections::HashMap<String, super::history::EntryMeta>,
-    history_frecency: Vec<f64>,
-    history_scope: super::history::Scope,
-    /// What each scope this pane has already loaded held when it was left, so
-    /// stepping back into one (`exit` out of an `ssh` session, most of all)
-    /// has a list to recall from right away instead of an empty one that only
-    /// refills once a background read lands (#817).
-    history_cache: Vec<(super::history::Scope, super::history::History)>,
-    /// Whether the current scope's list is a finished load rather than the
-    /// empty placeholder one starts as. Only a finished one is worth stashing.
-    history_ready: bool,
-    ranked_cwd: Option<std::path::PathBuf>,
-    history_nav: Option<usize>,
-    history_stash: String,
-    history_prefix: String,
-    last_word_nav: Option<LastWordWalk>,
-    pending_history: Option<PendingHistory>,
+    history: TerminalHistory,
     completion: Option<CompletionSession>,
     remote_completion_inflight: bool,
     /// Why the last remote listing produced nothing, when it failed: "no
@@ -511,7 +493,6 @@ pub struct TerminalView {
     completion_generation: u64,
     editor_handoff: Option<u64>,
     editor_handoff_interrupt_seq: Option<u64>,
-    reverse_search: Option<ReverseSearch>,
     integration_notice: Option<String>,
     integration_notice_shown: bool,
     created_at: std::time::Instant,
@@ -650,25 +631,6 @@ pub(super) fn loopback_plan(
     }
 }
 
-struct PendingHistory {
-    line: String,
-    cwd: Option<std::path::PathBuf>,
-    ts: u64,
-    seq: u64,
-}
-
-struct LastWordWalk {
-    entry: usize,
-    at: usize,
-    word: String,
-}
-
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
 
 enum CmdKey {
     Consumed,
@@ -1507,9 +1469,6 @@ impl TerminalView {
 
         window.focus(&focus_handle, cx);
 
-        let history = super::history::load(&super::history::Scope::Local);
-        let history_frecency =
-            super::history::frecency_scores(&history.entries, &history.counts, &history.cwds, None);
 
         Self {
             terminal,
@@ -1603,27 +1562,13 @@ impl TerminalView {
             prompt_editor,
             typeahead: Typeahead::new(),
             hold: GapHold::new(),
-            history: history.entries,
-            history_counts: history.counts,
-            history_cwds: history.cwds,
-            history_meta: history.meta,
-            history_frecency,
-            history_scope: super::history::Scope::Local,
-            history_cache: Vec::new(),
-            history_ready: true,
-            ranked_cwd: None,
-            history_nav: None,
-            history_stash: String::new(),
-            history_prefix: String::new(),
-            last_word_nav: None,
-            pending_history: None,
+            history: TerminalHistory::new(),
             completion: None,
             completion_generation: 0,
             editor_handoff: None,
             editor_handoff_interrupt_seq: None,
             remote_completion_inflight: false,
             remote_completion_notice: None,
-            reverse_search: None,
             integration_notice: None,
             integration_notice_shown: false,
             created_at: std::time::Instant::now(),
@@ -2591,10 +2536,10 @@ impl TerminalView {
             self.editor_goal_col = None;
         }
         if !(m.alt && key == ".") {
-            self.last_word_nav = None;
+            self.history.reset_last_word();
         }
 
-        if self.reverse_search.is_some() {
+        if self.history.search().is_some() {
             self.handle_reverse_search_key(ks, cx);
             return;
         }
@@ -2671,7 +2616,7 @@ impl TerminalView {
                         if !self.cmd.delete_selection() {
                             self.cmd.delete_word_left();
                         }
-                        self.history_nav = None;
+                        self.history.reset_navigation();
                         cx.notify();
                         return;
                     }
@@ -2726,7 +2671,7 @@ impl TerminalView {
                     if !self.cmd.delete_selection() {
                         self.cmd.delete_word_right();
                     }
-                    self.history_nav = None;
+                    self.history.reset_navigation();
                     cx.notify();
                     return;
                 }
@@ -2753,7 +2698,7 @@ impl TerminalView {
                 } else {
                     self.cmd.backspace();
                 }
-                self.history_nav = None;
+                self.history.reset_navigation();
             }
             "delete" => {
                 if m.alt {
@@ -2877,7 +2822,7 @@ impl TerminalView {
             }
             "c" => {
                 self.cmd.clear();
-                self.history_nav = None;
+                self.history.reset_navigation();
                 let _ = self.typeahead.drain();
                 let _ = self.hold.engage();
                 self.terminal.write(vec![0x03]);
@@ -3105,7 +3050,7 @@ impl TerminalView {
         if self.input_active() {
             let trimmed = text.strip_suffix('\n').unwrap_or(&text);
             self.cmd.insert_pasted(trimmed);
-            self.history_nav = None;
+            self.history.reset_navigation();
             self.editor_goal_col = None;
             self.close_completion();
             self.cursor_visible = true;
@@ -3729,19 +3674,11 @@ impl TerminalView {
         }
         let at_prompt = self.terminal.at_prompt();
 
-        if self
-            .pending_history
-            .as_ref()
-            .is_some_and(|p| at_prompt && self.terminal.prompt_seq() > p.seq)
-        {
-            self.flush_pending_history();
+        if self.history.poll_prompt(self.history_prompt()) {
             cx.notify();
         }
-
-        if let Some(cwd) = self.cwd()
-            && self.ranked_cwd.as_ref() != Some(&cwd)
-        {
-            self.rerank_history(Some(&cwd));
+        if let Some(cwd) = self.cwd() {
+            self.history.rank_for_cwd(Some(&cwd));
         }
 
         if self.integration_notice.is_some() && self.terminal.shell_active() {
@@ -3866,73 +3803,22 @@ impl TerminalView {
         super::history::Scope::Local
     }
 
-    /// How many scopes' lists to keep around. A pane hops between a handful of
-    /// hosts at most; the cap is only here so a long-lived pane that reaches
-    /// many of them cannot grow without bound.
-    const HISTORY_CACHE_MAX: usize = 4;
-
-    /// Park the current scope's list so coming back to it is instant. A list
-    /// that never finished loading is not worth parking — the empty one it
-    /// would leave behind is exactly what the cache exists to avoid handing
-    /// back.
-    fn stash_history(&mut self) {
-        if !self.history_ready {
-            return;
-        }
-        let scope = self.history_scope.clone();
-        self.history_cache.retain(|(cached, _)| *cached != scope);
-        self.history_cache.push((
-            scope,
-            super::history::History {
-                entries: std::mem::take(&mut self.history),
-                counts: std::mem::take(&mut self.history_counts),
-                cwds: std::mem::take(&mut self.history_cwds),
-                meta: std::mem::take(&mut self.history_meta),
-            },
-        ));
-        if self.history_cache.len() > Self::HISTORY_CACHE_MAX {
-            self.history_cache.remove(0);
-        }
+    fn history_prompt(&self) -> PromptHistory {
+        PromptHistory::new(
+            self.terminal.prompt_seq(),
+            self.terminal.at_prompt(),
+            self.terminal.last_exit_code(),
+        )
     }
 
     fn follow_history_scope(&mut self, cx: &mut Context<Self>) {
         let scope = self.desired_history_scope();
-        if scope == self.history_scope {
+        let Some(load) = self.history.change_scope(scope, self.host_id, self.history_prompt()) else {
             return;
-        }
-        self.flush_pending_history();
-        self.stash_history();
-        self.history_scope = scope.clone();
-        match self
-            .history_cache
-            .iter()
-            .position(|(cached, _)| *cached == scope)
-        {
-            Some(i) => {
-                let (_, cached) = self.history_cache.remove(i);
-                self.history = cached.entries;
-                self.history_counts = cached.counts;
-                self.history_cwds = cached.cwds;
-                self.history_meta = cached.meta;
-                self.history_ready = true;
-            }
-            None => {
-                self.history.clear();
-                self.history_counts.clear();
-                self.history_cwds.clear();
-                self.history_meta.clear();
-                self.history_ready = false;
-            }
-        }
-        self.history_frecency.clear();
-        self.history_nav = None;
-        self.reverse_search = None;
-        let ranked_cwd = self.ranked_cwd.clone();
-        self.rerank_history(ranked_cwd.as_deref());
+        };
         cx.notify();
-
         let shell_files = self.remote_shell_history_sources(cx);
-        let loading = scope.clone();
+        let loading = load.scope().clone();
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_spawn(async move {
@@ -3949,17 +3835,9 @@ impl TerminalView {
                 })
                 .await;
             this.update(cx, |view, cx| {
-                if view.history_scope != scope {
-                    return;
+                if view.history.accept_load(load, view.host_id, loaded) {
+                    cx.notify();
                 }
-                view.history = loaded.entries;
-                view.history_counts = loaded.counts;
-                view.history_cwds = loaded.cwds;
-                view.history_meta = loaded.meta;
-                view.history_ready = true;
-                let cwd = view.ranked_cwd.clone();
-                view.rerank_history(cwd.as_deref());
-                cx.notify();
             })
             .ok();
         })
@@ -3970,7 +3848,7 @@ impl TerminalView {
         &self,
         cx: &mut Context<Self>,
     ) -> Vec<(crate::ui::host_ops::SharedHost, std::path::PathBuf)> {
-        if self.history_scope.is_local() || self.host_id.is_local() {
+        if self.history.scope().is_local() || self.host_id.is_local() {
             return Vec::new();
         }
         // The Host reaches the workspace machine's home directory and nothing
@@ -4285,7 +4163,7 @@ impl TerminalView {
         col: usize,
         cols: usize,
     ) -> Option<(usize, usize)> {
-        if !self.input_active() || self.reverse_search.is_some() {
+        if !self.input_active() || self.history.search().is_some() {
             return None;
         }
         match input_start(col, cols.max(1)) {
@@ -4295,7 +4173,7 @@ impl TerminalView {
     }
 
     pub(super) fn input_scroll_rows(&self) -> usize {
-        if !self.input_active() || self.reverse_search.is_some() {
+        if !self.input_active() || self.history.search().is_some() {
             return 0;
         }
         let Some((crow, ccol)) = self.cursor_cell() else {
@@ -4448,7 +4326,7 @@ impl TerminalView {
         }
         self.prompt_editor = on;
         self.close_completion();
-        self.reverse_search = None;
+        self.history.cancel_search();
         cx.notify();
     }
 
@@ -4684,7 +4562,7 @@ impl TerminalView {
     }
 
     fn insert_newline_action(&mut self, cx: &mut Context<Self>) {
-        if !self.input_active() || self.reverse_search.is_some() {
+        if !self.input_active() || self.history.search().is_some() {
             cx.propagate();
             return;
         }
@@ -4692,9 +4570,9 @@ impl TerminalView {
         self.close_completion();
         self.cursor_visible = true;
         self.cmd.insert_str("\n");
-        self.history_nav = None;
+        self.history.reset_navigation();
         self.editor_goal_col = None;
-        self.last_word_nav = None;
+        self.history.reset_last_word();
         cx.notify();
     }
 
@@ -4740,43 +4618,7 @@ impl TerminalView {
         // #433 reports.
         self.flush_typeahead();
         let line = self.cmd.text();
-        if !line.trim().is_empty() {
-            let cwd = self.cwd();
-            let now = unix_now();
-            *self.history_counts.entry(line.clone()).or_insert(0) += 1;
-            if let Some(dir) = cwd.as_ref().and_then(|p| p.to_str()) {
-                self.history_cwds
-                    .entry(line.clone())
-                    .or_default()
-                    .insert(dir.to_string());
-            }
-            self.history_meta.insert(
-                line.clone(),
-                super::history::EntryMeta {
-                    ts: Some(now),
-                    exit: None,
-                },
-            );
-            // One entry per command, at its latest run: the same global
-            // dedup `normalize` applies on load, so ↑ does not step onto a
-            // command twice and a restart does not reorder anything.
-            self.history.retain(|h| *h != line);
-            self.history.push(line.clone());
-            self.flush_pending_history();
-            self.pending_history = Some(PendingHistory {
-                line: line.clone(),
-                cwd: cwd.clone(),
-                ts: now,
-                seq: self.terminal.prompt_seq(),
-            });
-            self.rerank_history(cwd.as_deref());
-        }
-        // The dedup above can shift entries down, so nothing may keep an
-        // index into `history` across a submit.
-        self.history_nav = None;
-        self.last_word_nav = None;
-        self.history_stash.clear();
-        self.history_prefix.clear();
+        self.history.record(&line, self.cwd(), self.history_prompt());
         self.close_completion();
 
         let bracketed = self
@@ -4794,156 +4636,29 @@ impl TerminalView {
     }
 
     fn insert_last_word(&mut self, cx: &mut Context<Self>) {
-        let resumed = self.last_word_nav.take().filter(|walk| {
-            let len = walk.word.chars().count();
-            self.cmd.cursor() == walk.at + len
-                && self.cmd.selection().is_none()
-                && self
-                    .cmd
-                    .text()
-                    .chars()
-                    .skip(walk.at)
-                    .take(len)
-                    .eq(walk.word.chars())
-        });
-        let start = match &resumed {
-            Some(walk) => walk.entry.checked_sub(1),
-            None => self.history.len().checked_sub(1),
-        };
-        let Some(mut entry) = start else {
-            self.last_word_nav = resumed;
-            return;
-        };
-        let word = loop {
-            if let Some(w) = self.history[entry].split_whitespace().next_back() {
-                break w.to_string();
-            }
-            let Some(older) = entry.checked_sub(1) else {
-                self.last_word_nav = resumed;
-                return;
-            };
-            entry = older;
-        };
-
-        if let Some(walk) = resumed {
-            self.cmd.clear_selection();
-            self.cmd.set_cursor(walk.at);
-            self.cmd.extend_to(walk.at + walk.word.chars().count());
-            self.cmd.delete_selection();
+        if self.history.insert_last_word(&mut self.cmd) {
+            cx.notify();
         }
-        self.cmd.insert_str(&word);
-        let at = self.cmd.cursor() - word.chars().count();
-        self.last_word_nav = Some(LastWordWalk { entry, at, word });
-        self.history_nav = None;
-        cx.notify();
     }
 
-    /// Walk older history, matching the prefix captured when navigation
-    /// started — zsh's `up-line-or-beginning-search`, which macOS users get
-    /// from ↑ and Ctrl+P. The prefix is the text left of the cursor, so
-    /// Ctrl+A then ↑ walks every entry; the whole line is stashed separately
-    /// because ↓ past the newest match has to restore what was typed, cursor
-    /// tail included.
     fn history_prev(&mut self, cx: &mut Context<Self>) {
-        let from = match self.history_nav {
-            None => {
-                let line = self.cmd.text();
-                self.history_prefix = line[..self.cmd.cursor_byte()].to_string();
-                self.history_stash = line;
-                self.history.len()
-            }
-            Some(i) => i,
-        };
-        if let Some(next) = (0..from)
-            .rev()
-            .find(|&i| self.history[i].starts_with(&self.history_prefix))
-        {
-            self.history_nav = Some(next);
-            self.cmd.set(&self.history[next]);
+        if self.history.previous(&mut self.cmd) {
             cx.notify();
         }
     }
 
     fn history_next(&mut self, cx: &mut Context<Self>) {
-        let Some(i) = self.history_nav else {
-            return;
-        };
-        if let Some(next) =
-            (i + 1..self.history.len()).find(|&j| self.history[j].starts_with(&self.history_prefix))
-        {
-            self.history_nav = Some(next);
-            self.cmd.set(&self.history[next]);
-        } else {
-            self.history_nav = None;
-            self.history_prefix.clear();
-            let stash = std::mem::take(&mut self.history_stash);
-            self.cmd.set(&stash);
+        if self.history.next(&mut self.cmd) {
+            cx.notify();
         }
-        cx.notify();
-    }
-
-    fn rerank_history(&mut self, cwd: Option<&std::path::Path>) {
-        let cwd_str = cwd.and_then(|p| p.to_str());
-        self.history_frecency = super::history::frecency_scores(
-            &self.history,
-            &self.history_counts,
-            &self.history_cwds,
-            cwd_str,
-        );
-        self.ranked_cwd = cwd.map(std::path::Path::to_path_buf);
     }
 
     fn flush_pending_history(&mut self) {
-        let Some(p) = self.pending_history.take() else {
-            return;
-        };
-        let exit = (self.terminal.prompt_seq() > p.seq && self.terminal.at_prompt())
-            .then(|| self.terminal.last_exit_code())
-            .flatten();
-        if exit.is_some()
-            && let Some(m) = self.history_meta.get_mut(&p.line)
-        {
-            m.exit = exit;
-        }
-        super::history::append(&self.history_scope, &p.line, p.cwd.as_deref(), p.ts, exit);
+        self.history.flush_pending(self.history_prompt());
     }
 
-    /// The inline suggestion: the most recent entry that extends the line,
-    /// preferring one run in the current directory and falling back to the
-    /// most recent anywhere. Commands that last exited non-zero are never
-    /// offered. Pure recency, not frecency, so the ghost names what ↑ would
-    /// recall rather than an older command that merely ran more often; Ctrl+R
-    /// is where frecency ranks.
     fn ghost_suggestion(&self) -> Option<String> {
-        if self.cmd.is_empty() || self.cmd.cursor() != self.cmd.len() {
-            return None;
-        }
-        let line = self.cmd.text();
-        let cwd = self.ranked_cwd.as_deref().and_then(|p| p.to_str());
-        let mut elsewhere = None;
-        for h in self.history.iter().rev() {
-            if h.len() <= line.len() || !h.starts_with(&line) {
-                continue;
-            }
-            if self
-                .history_meta
-                .get(h)
-                .and_then(|m| m.exit)
-                .is_some_and(|code| code != 0)
-            {
-                continue;
-            }
-            let here = cwd.is_some_and(|dir| {
-                self.history_cwds
-                    .get(h)
-                    .is_some_and(|dirs| dirs.contains(dir))
-            });
-            if here || cwd.is_none() {
-                return Some(h.clone());
-            }
-            elsewhere.get_or_insert(h);
-        }
-        elsewhere.cloned()
+        self.history.ghost_suggestion(&self.cmd)
     }
 
     fn note_integration_gap(&mut self, cx: &mut Context<Self>) {
@@ -4991,38 +4706,18 @@ impl TerminalView {
     }
 
     fn start_reverse_search(&mut self) {
-        if self.reverse_search.is_none() {
-            self.reverse_search = Some(ReverseSearch::new(&self.history, &self.history_frecency));
-        }
+        self.history.start_search();
     }
 
     fn handle_reverse_search_key(&mut self, ks: &gpui_kit::Keystroke, cx: &mut Context<Self>) {
-        let m = &ks.modifiers;
-        if !m.control && !m.platform && !m.alt {
-            if let Some(ch) = ks.key_char.as_deref() {
-                if !ch.is_empty() && ch.chars().all(|c| c >= '\u{20}' && c != '\u{7f}') {
-                    if let Some(rs) = self.reverse_search.as_mut() {
-                        rs.push_query(ch, &self.history, &self.history_frecency);
-                    }
-                    cx.notify();
-                    return;
-                }
-            }
-        }
-        let Some(rs) = self.reverse_search.as_mut() else {
-            return;
-        };
-        match rs.handle_key(ks, &self.history, &self.history_frecency) {
-            reverse_search::Action::Redraw => {}
-            reverse_search::Action::Cancel => self.reverse_search = None,
+        match self.history.search_key(ks) {
+            reverse_search::Action::Redraw | reverse_search::Action::Cancel => {}
             reverse_search::Action::Accept(line) => {
-                self.reverse_search = None;
                 if let Some(line) = line {
                     self.cmd.set(&line);
                 }
             }
             reverse_search::Action::Run(line) => {
-                self.reverse_search = None;
                 self.cmd.set(&line);
                 self.submit_command(cx);
             }
@@ -5089,7 +4784,7 @@ impl TerminalView {
     }
 
     fn complete_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if self.reverse_search.is_some() {
+        if self.history.search().is_some() {
             return;
         }
         if !cx.global::<Config>().tab_completion {
@@ -5517,8 +5212,7 @@ impl TerminalView {
         // `handle_editor_key` has always jumped, so Left and Backspace came
         // back to the prompt and the letters between them did not.
         self.jump_to_prompt();
-        if let Some(rs) = self.reverse_search.as_mut() {
-            rs.push_query(text, &self.history, &self.history_frecency);
+        if self.history.push_search_query(text) {
             self.cursor_visible = true;
             cx.notify();
             return;
@@ -5526,9 +5220,9 @@ impl TerminalView {
         if self.input_active() {
             self.adopt_typeahead();
             self.cmd.insert_str(text);
-            self.history_nav = None;
+            self.history.reset_navigation();
             self.editor_goal_col = None;
-            self.last_word_nav = None;
+            self.history.reset_last_word();
             self.completion_refilter();
             self.cursor_visible = true;
             cx.notify();
@@ -6651,9 +6345,9 @@ impl TerminalView {
         let shift = self.input_scroll_rows();
         let cy_top = px(GRID_PAD_Y) + self.line_height * (crow as f32 - shift as f32);
 
-        if let Some(rs) = &self.reverse_search {
+        if let Some(rs) = self.history.search() {
             let label = format!("(reverse-i-search)`{}': ", rs.query());
-            let matched = one_line(rs.selected_line(&self.history).unwrap_or_default());
+            let matched = one_line(self.history.selected_line().unwrap_or_default());
             return div()
                 .absolute()
                 .left(cx_left)
@@ -7032,7 +6726,7 @@ impl TerminalView {
         &self,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        let rs = self.reverse_search.as_ref()?;
+        let rs = self.history.search()?;
         let matches = rs.matches();
         if matches.is_empty() {
             return None;
@@ -7054,7 +6748,7 @@ impl TerminalView {
         let now = unix_now();
         let row = |i: usize| {
             let m = &matches[i];
-            let line = self.history[m.index].as_str();
+            let line = self.history.entries()[m.index].as_str();
             let selected = rs.selected() == i;
             let base = if selected {
                 theme.foreground
@@ -7074,7 +6768,7 @@ impl TerminalView {
                 })
                 .collect();
 
-            let meta = self.history_meta.get(line);
+            let meta = self.history.metadata(line);
             let failed = meta.and_then(|em| em.exit).filter(|&e| e != 0);
             let ago = meta
                 .and_then(|em| em.ts)
@@ -10307,12 +10001,42 @@ pub(crate) fn quiet_test_ssh_pane_with(
 }
 
 #[cfg(test)]
+fn history_fixture(entries: Vec<String>) -> super::history::History {
+    super::history::History { entries, ..Default::default() }
+}
+
+#[cfg(test)]
+fn seed_history(view: &mut TerminalView, entries: Vec<String>) {
+    view.history = TerminalHistory::from_loaded(history_fixture(entries));
+}
+
+#[cfg(test)]
 mod gpui_tests {
     use super::*;
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
     use crate::daemon::transport::Stream;
     use crate::terminal::remote::PtySource;
     use gpui_kit::{Bounds, Entity, TestAppContext, point};
+
+    mod history_scope_consumer_tests {
+        include!("history_scope_consumer_tests.rs");
+    }
+
+    mod history_search_consumer_tests {
+        include!("history_search_consumer_tests.rs");
+    }
+
+    mod history_navigation_consumer_tests {
+        include!("history_navigation_consumer_tests.rs");
+    }
+
+    mod history_last_word_consumer_tests {
+        include!("history_last_word_consumer_tests.rs");
+    }
+
+    mod history_ghost_consumer_tests {
+        include!("history_ghost_consumer_tests.rs");
+    }
 
     fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
         let pty = if cfg!(windows) {
@@ -12220,106 +11944,6 @@ mod gpui_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Coming back from an `ssh` session left the pane with no history at all:
-    /// the scope switch cleared the list, and the reload that refills it is a
-    /// background task, so ↑ recalled nothing until that landed (#817).
-    #[gpui_kit::test]
-    fn a_pane_back_from_ssh_still_recalls_its_local_history(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                view.history = vec!["cargo build".to_string(), "ssh box".to_string()];
-            })
-            .unwrap();
-
-        let away = crate::daemon::protocol::RemoteContext {
-            kind: crate::daemon::protocol::RemoteKind::Ssh,
-            argv: vec!["ssh".into(), "box".into()],
-            target: "box".into(),
-        };
-        DaemonMsg::RemoteContext(Some(away))
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..200 {
-            if window
-                .update(cx, |view, _, _| view.remote_context().is_some())
-                .unwrap()
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        window
-            .update(cx, |view, _, cx| view.follow_history_scope(cx))
-            .unwrap();
-
-        DaemonMsg::RemoteContext(None).encode(&mut daemon).unwrap();
-        for _ in 0..200 {
-            if window
-                .update(cx, |view, _, _| view.remote_context().is_none())
-                .unwrap()
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                view.follow_history_scope(cx);
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "ssh box",
-                    "↑ right after the ssh session ended recalled nothing"
-                );
-            })
-            .unwrap();
-    }
-
-    /// The cache above must not hand a scope someone else's list: stepping into
-    /// an `ssh` session still starts from nothing until the far end's own
-    /// history is read.
-    #[gpui_kit::test]
-    fn a_pane_going_out_to_ssh_does_not_inherit_the_local_history(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                view.history = vec!["rm -rf ./build".to_string()];
-            })
-            .unwrap();
-
-        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
-            kind: crate::daemon::protocol::RemoteKind::Ssh,
-            argv: vec!["ssh".into(), "box".into()],
-            target: "box".into(),
-        }))
-        .encode(&mut daemon)
-        .unwrap();
-        for _ in 0..200 {
-            if window
-                .update(cx, |view, _, _| view.remote_context().is_some())
-                .unwrap()
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, cx| {
-                view.follow_history_scope(cx);
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "",
-                    "a local command was recalled onto a remote prompt"
-                );
-            })
-            .unwrap();
-    }
 
     /// Absolute paths in a pane that is `ssh`-ed somewhere used to be resolved
     /// against *this* machine's filesystem, so `/etc/hosts` on the far end
@@ -13252,8 +12876,8 @@ mod gpui_tests {
         prompt_ready(&window, cx, &mut daemon);
         window
             .update(cx, |view, window, cx| {
-                view.history = vec!["echo shell-history".into()];
-                view.history_frecency = vec![0.0];
+                seed_history(view, vec!["echo shell-history".into()]);
+                
                 for chord in ["up", "down"] {
                     view.on_key_down(
                         &KeyDownEvent {
@@ -13357,7 +12981,7 @@ mod gpui_tests {
                         "",
                         "{chord} in an agent question must not recall shell history"
                     );
-                    assert!(view.history_nav.is_none());
+                    assert!(!view.history.is_navigating());
                 }
             })
             .unwrap();
@@ -14427,72 +14051,6 @@ mod gpui_tests {
         }
     }
 
-    #[gpui_kit::test]
-    fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.history = ["git status", "cargo build", "git commit -m x"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.history_frecency = vec![0.0; view.history.len()];
-
-                view.handle_editor_key(&key("ctrl-r"), cx);
-                assert!(view.reverse_search.is_some(), "Ctrl+R opens the search");
-                view.commit_text("gst", cx);
-                assert_eq!(
-                    view.reverse_search
-                        .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
-                    Some("git status")
-                );
-                view.handle_editor_key(&key("enter"), cx);
-                assert!(view.reverse_search.is_none(), "Enter closes the search");
-                assert_eq!(view.cmd.text(), "git status");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn ctrl_r_steps_matches_and_cmd_enter_runs(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.history = ["git status", "cargo build", "git commit -m x"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.history_frecency = vec![0.0; view.history.len()];
-
-                view.handle_editor_key(&key("ctrl-r"), cx);
-                view.commit_text("git", cx);
-                assert_eq!(
-                    view.reverse_search
-                        .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
-                    Some("git commit -m x")
-                );
-                view.handle_editor_key(&key("ctrl-r"), cx);
-                assert_eq!(
-                    view.reverse_search
-                        .as_ref()
-                        .and_then(|rs| rs.selected_line(&view.history)),
-                    Some("git status")
-                );
-                view.handle_editor_key(&key("cmd-enter"), cx);
-                assert!(view.reverse_search.is_none());
-                assert!(view.cmd.is_empty(), "submit clears the editor");
-            })
-            .unwrap();
-        assert_eq!(
-            next_input_until_timeout(&mut daemon),
-            Some(b"git status\r".to_vec()),
-            "Cmd+Enter ships the selected line to the PTY"
-        );
-    }
 
     /// The second half of #834. Even once the encoder knew the F keys, the
     /// inline editor still ate them: `handle_editor_key` had no arm for a
@@ -14560,12 +14118,12 @@ mod gpui_tests {
         });
         window
             .update(cx, |view, _, cx| {
-                view.history = ["git status"].into_iter().map(String::from).collect();
-                view.history_frecency = vec![0.0; view.history.len()];
+                seed_history(view, ["git status"].into_iter().map(String::from).collect());
+                
                 view.cmd.set("gi");
                 view.handle_editor_key(&key("ctrl-r"), cx);
                 assert!(
-                    view.reverse_search.is_none(),
+                    view.history.search().is_none(),
                     "no lyrel menu while opted out"
                 );
                 assert_eq!(view.cmd.text(), "", "the line went to the shell");
@@ -14599,8 +14157,8 @@ mod gpui_tests {
 
         window
             .update(cx, |view, window, cx| {
-                view.history = ["quit"].into_iter().map(String::from).collect();
-                view.history_frecency = vec![0.0; view.history.len()];
+                seed_history(view, ["quit"].into_iter().map(String::from).collect());
+                
                 view.set_prompt_editor(false, cx);
                 assert!(
                     !view.input_active(),
@@ -14621,7 +14179,7 @@ mod gpui_tests {
 
                 assert_eq!(view.cmd.text(), "", "nothing was typed into lyrel's editor");
                 assert!(
-                    view.history_nav.is_none(),
+                    !view.history.is_navigating(),
                     "Up never touched lyrel's own history"
                 );
             })
@@ -14674,7 +14232,7 @@ mod gpui_tests {
                 };
                 view.on_key_down(&ctrl_r, window, cx);
                 assert!(view.completion.is_none(), "no lyrel completion menu");
-                assert!(view.reverse_search.is_none(), "no lyrel history menu");
+                assert!(view.history.search().is_none(), "no lyrel history menu");
                 assert!(
                     view.integration_notice.is_none(),
                     "the shell owning ^R is what was asked for, not a gap to report"
@@ -14716,136 +14274,7 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: None,
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        for _ in 0..200 {
-            if window
-                .update(cx, |view, _, _| view.terminal.at_prompt())
-                .unwrap()
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
 
-        window
-            .update(cx, |view, _, cx| {
-                assert!(view.input_active(), "prompt report engages the editor");
-                view.history = ["git status", "cargo build --release", "echo hello"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.history_frecency = vec![0.0; view.history.len()];
-                view.history_meta.insert(
-                    "cargo build --release".into(),
-                    super::super::history::EntryMeta {
-                        ts: Some(unix_now().saturating_sub(7200)),
-                        exit: Some(1),
-                    },
-                );
-                view.handle_editor_key(&key("ctrl-r"), cx);
-                view.commit_text("c", cx);
-                assert!(
-                    view.reverse_search
-                        .as_ref()
-                        .is_some_and(|rs| !rs.matches().is_empty()),
-                    "the query has matches for the menu to draw"
-                );
-                cx.notify();
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |view, _, _| {
-                assert!(view.reverse_search.is_some(), "search survives the frame");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn submitted_command_backfills_its_exit_code(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let dir = crate::core::config::config_dir_path().expect("a config dir resolves");
-
-        let (window, mut daemon) = harness(cx);
-        let wait = |cx: &mut TestAppContext, pred: &dyn Fn(&TerminalView) -> bool, what: &str| {
-            for _ in 0..200 {
-                if window.update(cx, |view, _, _| pred(view)).unwrap() {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            panic!("timed out waiting for {what}");
-        };
-
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: None,
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        wait(cx, &|v| v.terminal.at_prompt(), "the initial prompt report");
-
-        let marker = format!("lyrel_gpui_exit_marker_{}", std::process::id());
-        window
-            .update(cx, |view, _, cx| {
-                view.cmd.set(&marker);
-                view.submit_command(cx);
-                assert!(view.pending_history.is_some(), "record defers for the exit");
-            })
-            .unwrap();
-
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: false,
-            last_exit: None,
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: Some(3),
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        wait(
-            cx,
-            &|v| v.terminal.at_prompt() && v.terminal.last_exit_code() == Some(3),
-            "the post-command prompt report",
-        );
-
-        window
-            .update(cx, |view, window, cx| {
-                view.poll_foreground(window, cx);
-                assert!(view.pending_history.is_none(), "poll flushed the record");
-                assert_eq!(
-                    view.history_meta.get(&marker).and_then(|m| m.exit),
-                    Some(3),
-                    "in-memory metadata learned the exit code"
-                );
-            })
-            .unwrap();
-
-        let content = std::fs::read_to_string(dir.join("history")).expect("history file written");
-        let line = content
-            .lines()
-            .find(|l| l.contains(&marker))
-            .expect("the submitted command was recorded");
-        let mut fields = line.splitn(4, '\t');
-        let ts = fields.next().unwrap();
-        assert!(!ts.is_empty() && ts.bytes().all(|b| b.is_ascii_digit()));
-        assert_eq!(fields.next(), Some("3"), "exit code field");
-    }
 
     #[gpui_kit::test]
     fn meta_word_chords_edit_the_prompt_line(cx: &mut TestAppContext) {
@@ -15258,158 +14687,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-    #[gpui_kit::test]
-    fn history_recall_snaps_the_viewport_back_to_the_prompt(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.history = vec!["echo hello".to_string()];
-                scroll_into_history(view, 10);
-                view.scroll_frac = 0.5;
-
-                view.handle_editor_key(&key("up"), cx);
-
-                assert_eq!(view.cmd.text(), "echo hello", "↑ recalled the entry");
-                assert_eq!(display_offset(view), 0, "and the viewport followed it down");
-                assert_eq!(view.scroll_frac, 0., "the sub-line remainder reset too");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn ctrl_p_and_ctrl_n_walk_the_history(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.history = ["git status", "cargo build", "echo hello"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-
-                view.handle_editor_key(&key("ctrl-p"), cx);
-                assert_eq!(view.cmd.text(), "echo hello");
-                view.handle_editor_key(&key("ctrl-p"), cx);
-                assert_eq!(view.cmd.text(), "cargo build");
-                view.handle_editor_key(&key("ctrl-n"), cx);
-                assert_eq!(view.cmd.text(), "echo hello");
-                view.handle_editor_key(&key("ctrl-n"), cx);
-                assert_eq!(view.cmd.text(), "");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn up_and_ctrl_p_recall_the_last_command_matching_the_typed_prefix(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.history = ["git status", "echo hello", "git log", "ls"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.cmd.set("git");
-
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "git log",
-                    "↑ skips ls and echo hello, which do not start with git"
-                );
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(view.cmd.text(), "git status");
-                view.handle_editor_key(&key("down"), cx);
-                assert_eq!(view.cmd.text(), "git log");
-                view.handle_editor_key(&key("down"), cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "git",
-                    "↓ past the newest match restores the prefix"
-                );
-
-                view.cmd.set("echo");
-                view.handle_editor_key(&key("ctrl-p"), cx);
-                assert_eq!(view.cmd.text(), "echo hello");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn history_search_takes_its_prefix_from_the_text_left_of_the_cursor(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.history = ["git status", "echo hello", "git log", "ls"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-
-                // Ctrl+A parks the cursor at the start. Nothing sits left of
-                // it, so UP walks the whole list instead of filtering on a line
-                // the user is about to edit in front of.
-                view.cmd.set_with_cursor("git", 0);
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(view.cmd.text(), "ls", "an empty prefix filters nothing");
-
-                // A cursor parked mid-line searches on what is behind it, and
-                // DOWN past the newest match restores the whole line, the part
-                // right of the cursor included.
-                view.history_nav = None;
-                view.cmd.set_with_cursor("git hello", 4);
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "git log",
-                    "the prefix is `git `, not the whole `git hello`"
-                );
-                view.handle_editor_key(&key("down"), cx);
-                assert_eq!(view.cmd.text(), "git hello");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn ctrl_e_accepts_a_ghost_suggestion_at_the_end(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-
-        window
-            .update(cx, |view, _, cx| {
-                assert!(view.input_active(), "the local editor owns a fresh prompt");
-                view.history = vec!["git log --oneline".to_string()];
-                view.cmd.set("git l");
-
-                view.handle_editor_key(&key("ctrl-e"), cx);
-
-                assert_eq!(view.cmd.text(), "git log --oneline");
-                assert!(
-                    view.editor_handoff.is_none(),
-                    "accepting a local suggestion must not hand input to the shell"
-                );
-            })
-            .unwrap();
-        assert_eq!(
-            next_input_until_timeout(&mut daemon),
-            None,
-            "the local editor must consume Ctrl+E instead of forwarding 0x05"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn ctrl_e_only_moves_to_the_end_when_no_ghost_is_visible(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.history = vec!["git log --oneline".to_string()];
-                view.cmd.set_with_cursor("git l", 2);
-
-                view.handle_editor_key(&key("ctrl-e"), cx);
-
-                assert_eq!(view.cmd.text(), "git l");
-                assert_eq!(view.cmd.cursor(), view.cmd.len());
-            })
-            .unwrap();
-    }
 
     #[gpui_kit::test]
     fn an_unknown_ctrl_chord_goes_to_the_shell_with_the_line(cx: &mut TestAppContext) {
@@ -15475,145 +14752,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-    #[gpui_kit::test]
-    fn meta_dot_walks_back_through_the_last_words(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                let meta_dot = gpui_kit::Keystroke {
-                    modifiers: gpui_kit::Modifiers {
-                        alt: true,
-                        ..Default::default()
-                    },
-                    key: ".".to_string(),
-                    key_char: None,
-                };
-                view.history = ["git status", "cargo build --release", "echo hello world"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.cmd.set("ls ");
-
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(view.cmd.text(), "ls world", "newest entry's last word");
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(view.cmd.text(), "ls --release", "repeat steps one back");
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(view.cmd.text(), "ls status");
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(view.cmd.text(), "ls status");
-                assert_eq!(view.cmd.cursor(), "ls status".chars().count());
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn an_intervening_key_restarts_the_last_word_walk(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                let meta_dot = gpui_kit::Keystroke {
-                    modifiers: gpui_kit::Modifiers {
-                        alt: true,
-                        ..Default::default()
-                    },
-                    key: ".".to_string(),
-                    key_char: None,
-                };
-                view.history = ["cargo build --release", "echo hello world"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(view.cmd.text(), "world");
-                view.handle_editor_key(&key("left"), cx);
-                view.handle_editor_key(&key("end"), cx);
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "worldworld",
-                    "a fresh walk appends rather than replacing the earlier word"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn an_intervening_ime_commit_restarts_the_last_word_walk(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: None,
-        }
-        .encode(&mut daemon)
-        .unwrap();
-        wait_for_input_active(&window, cx);
-        window
-            .update(cx, |view, _, cx| {
-                let meta_dot = gpui_kit::Keystroke {
-                    modifiers: gpui_kit::Modifiers {
-                        alt: true,
-                        ..Default::default()
-                    },
-                    key: ".".to_string(),
-                    key_char: None,
-                };
-                view.history = ["cargo build --release", "echo hello world"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(view.cmd.text(), "world");
-                view.commit_text("x", cx);
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "worldxworld",
-                    "the typed char survives; the walk starts over after it"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn meta_dot_over_a_selection_records_where_the_word_landed(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                let meta_dot = gpui_kit::Keystroke {
-                    modifiers: gpui_kit::Modifiers {
-                        alt: true,
-                        ..Default::default()
-                    },
-                    key: ".".to_string(),
-                    key_char: None,
-                };
-                view.history = ["cargo build --release", "echo hello world"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.cmd.set("ls foo");
-                view.cmd.set_cursor(3);
-                view.cmd.extend_to(6);
-
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "ls world",
-                    "the word replaced the selection"
-                );
-                view.handle_editor_key(&meta_dot, cx);
-                assert_eq!(
-                    view.cmd.text(),
-                    "ls --release",
-                    "the repeat swapped the word, not some other span"
-                );
-            })
-            .unwrap();
-    }
 
     #[gpui_kit::test]
     fn a_shifted_meta_chord_hands_off_the_shifted_character(cx: &mut TestAppContext) {
@@ -17880,105 +17018,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-    /// #541: the history menu floats over live grid cells, and a `div` that
-    /// carries no handler of its own inserts no hitbox — so the press went
-    /// straight through to the grid behind the menu, which cleared the
-    /// selection, dragged out a new one, or (with the link modifier held)
-    /// opened whatever link the menu was covering.
-    ///
-    /// The second half is the other side of the pair `src/ui/app.rs` keeps for
-    /// the resize handle: with the menu gone the very same press must still
-    /// reach the grid, or this would pass on a pane that never sees a mouse.
-    #[gpui_kit::test]
-    fn a_press_on_the_history_menu_never_reaches_the_grid(cx: &mut TestAppContext) {
-        use gpui_kit::{MouseMoveEvent, PlatformInput};
-
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-        wait_for_input_active(&window, cx);
-
-        window
-            .update(cx, |view, window, cx| {
-                window.activate_window();
-                view.focus_handle.focus(window, cx);
-                view.history = vec!["echo one".to_string(), "echo two".to_string()];
-                view.history_frecency = vec![1.0, 1.0];
-                view.start_reverse_search();
-                cx.notify();
-            })
-            .unwrap();
-
-        let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-        vcx.update(|window, _| window.refresh());
-        vcx.run_until_parked();
-
-        // The menu is laid out one row under the cursor, plus the gap
-        // `render_reverse_search_menu` leaves; this lands in the middle of its
-        // first row, where a candidate is drawn.
-        let lh = window.update(cx, |view, _, _| view.line_height).unwrap();
-        let at = point(
-            px(GRID_PAD_X) + px(10.),
-            px(GRID_PAD_Y) + lh * 2.0 + px(10.),
-        );
-
-        let press = |vcx: &mut gpui_kit::VisualTestContext| {
-            vcx.update(|window, cx| {
-                window.dispatch_event(
-                    PlatformInput::MouseMove(MouseMoveEvent {
-                        position: at,
-                        pressed_button: None,
-                        modifiers: Modifiers::none(),
-                    }),
-                    cx,
-                );
-                window.dispatch_event(
-                    PlatformInput::MouseDown(MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: at,
-                        modifiers: Modifiers::none(),
-                        click_count: 1,
-                        first_mouse: false,
-                    }),
-                    cx,
-                );
-            });
-            vcx.run_until_parked();
-        };
-
-        press(&mut vcx);
-        window
-            .update(cx, |view, _, _| {
-                assert!(
-                    view.reverse_search.is_some(),
-                    "the press must not have closed the menu either"
-                );
-                assert!(
-                    !view.selecting,
-                    "the menu swallowed the press, so no selection started under it"
-                );
-            })
-            .unwrap();
-
-        window
-            .update(cx, |view, _, cx| {
-                view.reverse_search = None;
-                cx.notify();
-            })
-            .unwrap();
-        vcx.update(|window, _| window.refresh());
-        vcx.run_until_parked();
-
-        press(&mut vcx);
-        window
-            .update(cx, |view, _, _| {
-                assert!(
-                    view.selecting,
-                    "with no menu over it the same press is the grid's to take"
-                );
-            })
-            .unwrap();
-    }
 
     /// Quick launch counts an agent each time one starts. Reattaching to a pane
     /// whose agent was already running — every agent tab after an app restart
@@ -18137,181 +17176,6 @@ mod gpui_tests {
         assert_eq!(shape(cx), None, "a running command gets cursor_style back");
     }
 
-    /// Seeds a pane's history for the ghost tests: `(command, dirs, exit)`,
-    /// oldest first, with `cwd` as the directory the pane is in.
-    fn seed_ghost_history(
-        view: &mut TerminalView,
-        entries: &[(&str, &[&str], Option<i32>)],
-        cwd: Option<&str>,
-    ) {
-        view.history = entries.iter().map(|(cmd, _, _)| cmd.to_string()).collect();
-        view.history_cwds.clear();
-        view.history_meta.clear();
-        for (cmd, dirs, exit) in entries {
-            view.history_cwds.insert(
-                cmd.to_string(),
-                dirs.iter().map(|d| d.to_string()).collect(),
-            );
-            view.history_meta.insert(
-                cmd.to_string(),
-                crate::terminal::history::EntryMeta {
-                    ts: None,
-                    exit: *exit,
-                },
-            );
-        }
-        view.rerank_history(cwd.map(std::path::Path::new));
-    }
-
-    #[gpui_kit::test]
-    fn ghost_suggests_the_command_just_run_over_a_frequent_one(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                seed_ghost_history(
-                    view,
-                    &[
-                        ("git checkout main", &["/work/proj"], Some(0)),
-                        ("git commit -m x", &["/work/proj"], Some(0)),
-                    ],
-                    Some("/work/proj"),
-                );
-                view.history_counts
-                    .insert("git checkout main".to_string(), 20);
-                view.rerank_history(Some(std::path::Path::new("/work/proj")));
-                view.cmd.set("git c");
-                assert_eq!(
-                    view.ghost_suggestion().as_deref(),
-                    Some("git commit -m x"),
-                    "recency decides the ghost, however often the older one ran"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn ghost_prefers_this_directory_then_falls_back_to_anywhere(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                seed_ghost_history(
-                    view,
-                    &[
-                        ("cargo build", &["/work/proj"], None),
-                        ("cargo test --all", &["/elsewhere"], None),
-                        ("npm run dev", &["/elsewhere"], None),
-                    ],
-                    Some("/work/proj"),
-                );
-                view.cmd.set("cargo ");
-                assert_eq!(
-                    view.ghost_suggestion().as_deref(),
-                    Some("cargo build"),
-                    "an older match run here beats a newer one run elsewhere"
-                );
-                view.cmd.set("npm ");
-                assert_eq!(
-                    view.ghost_suggestion().as_deref(),
-                    Some("npm run dev"),
-                    "with nothing run here, the newest match anywhere is offered"
-                );
-                view.cmd.set("python ");
-                assert_eq!(view.ghost_suggestion(), None);
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn ghost_skips_commands_that_failed(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                seed_ghost_history(
-                    view,
-                    &[
-                        ("make test", &["/work/proj"], Some(0)),
-                        ("make tset", &["/work/proj"], Some(2)),
-                        ("make lint", &["/work/proj"], Some(1)),
-                    ],
-                    Some("/work/proj"),
-                );
-                view.cmd.set("make t");
-                assert_eq!(
-                    view.ghost_suggestion().as_deref(),
-                    Some("make test"),
-                    "the newer typo exited 2, so the older success is offered"
-                );
-                view.cmd.set("make l");
-                assert_eq!(
-                    view.ghost_suggestion(),
-                    None,
-                    "a command whose only run failed is never offered"
-                );
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn ghost_names_what_up_arrow_recalls(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                seed_ghost_history(
-                    view,
-                    &[
-                        ("git status", &[], None),
-                        ("git log --oneline", &[], None),
-                        ("ls", &[], None),
-                        ("git push", &[], None),
-                        ("echo hi", &[], None),
-                    ],
-                    None,
-                );
-                view.history_counts.insert("git status".to_string(), 50);
-                view.rerank_history(None);
-                for typed in ["git", "git l", "e", "l"] {
-                    view.history_nav = None;
-                    view.cmd.set(typed);
-                    let ghost = view.ghost_suggestion();
-                    view.handle_editor_key(&key("up"), cx);
-                    assert_eq!(
-                        ghost.as_deref(),
-                        Some(view.cmd.text().as_str()),
-                        "ghost and ↑ disagree on {typed:?}"
-                    );
-                }
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn submitting_a_command_again_moves_it_to_the_newest_entry(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-
-        window
-            .update(cx, |view, _, cx| {
-                view.history = ["git status", "ls", "make"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                view.cmd.set("git status");
-                view.submit_command(cx);
-                assert_eq!(
-                    view.history,
-                    ["ls", "make", "git status"],
-                    "one entry per command, at its latest run, as a reload leaves it"
-                );
-
-                view.cmd.set("");
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(view.cmd.text(), "git status");
-                view.handle_editor_key(&key("up"), cx);
-                assert_eq!(view.cmd.text(), "make", "↑ never lands on a command twice");
-            })
-            .unwrap();
-    }
 }
 
 /// The window between the shell reporting a prompt and its line editor
@@ -18676,7 +17540,7 @@ mod prompt_handover_tests {
         typed_into_the_gap_then_handed_back(cx, &window, &mut daemon, "echo");
         window
             .update(cx, |view, _, _| {
-                view.history.push("echo from history".to_string());
+                seed_history(view, vec!["echo from history".to_string()]);
             })
             .unwrap();
 
