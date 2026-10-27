@@ -43,8 +43,9 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 - **崩溃并不意味着一切丢失。** 窗格恢复时会显示之前的内容：每个窗格输出末尾的一段内容会按容量上限保存在磁盘上，并在具有相同 ID 的窗格重新打开时交给它。
 - **停止所有进程需要明确操作。** 托盘菜单中的*退出并停止服务器…*是结束所有进程的唯一常规方式，而且操作前会发出警告。
 
-实现中，`lyrel-core` 的 `daemon/pane.rs` 持有会话运行态、PTY 和连接；`daemon/pane/launch.rs`
-负责 shell、工作目录与环境准备，`daemon/pane/replay.rs` 负责有界输出缓冲及几何分段。
+实现中，`lyrel-core` 的 `daemon/pane.rs` 中 `DaemonPane` 持有会话身份与生命周期权威；
+`daemon/pane/lifecycle.rs` 私有持有 PTY master／child、集成临时目录及原生 SSH channel handle，负责平台资源接入、进程探测、resize 和关闭。
+`daemon/pane/launch.rs` 仍是 shell、工作目录与环境准备的唯一实现，`daemon/pane/replay.rs` 仍负责有界输出缓冲及几何分段。
 `daemon/pane/subscriptions.rs` 拥有控制器／观察者身份、epoch、顺序回放、广播、剪贴板权限和各输出流的背压；
 `daemon/pane/subscriptions/capacity.rs` 拥有随连接存活的图形容量租约。
 桌面的 `src/terminal/paste.rs` 独立处理剪贴板文件／图片路径、远端私有暂存目录及上传生命周期；
@@ -54,8 +55,14 @@ description: "工作区、标签页、窗格——以及管理它们的后台服
 观察者始终只读，其回放与实时输出共用独立预算：停止读取或已经断开的观察者会被移除，不能阻塞控制器输出。
 图形权威状态仍属于原 pane，回放准入不创建新的 shell，也不在容量不足时静默丢图。
 订阅转换与输出排序仍在原有 `PaneState` 锁内完成；图形授权等待在锁外进行，容量租约锁仍先于 pane 锁。
-PTY 退出与会话回收仍由 `DaemonPane` 负责：订阅模块只提供输出扣账／排空、图形释放和控制器存活判定，
-不另建退出监视线程或改变最终输出先于 `Exited` 的顺序。
+退出协调位于 `daemon/pane/lifecycle/exit.rs`：reader 在转发 EOF 前的输出后报告退出，Windows 监视器在后台释放 ConPTY master，释放时不持有 master slot 锁。
+监视器沿用既有 2 秒排空窗口；继承输出管道的后代进程阻止 EOF 时，仍按原策略有界报告，不把窗口误当作无限排空保证。
+reader 与监视器共享同一个单次报告者；退出码探测继续使用有界 `try_lock`，主动 teardown 不额外广播 `Exited` 或竞争回收。
+Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor／child，恢复 close-on-exec、查询内核尺寸，并保留原进程组信号规则；不重启 shell。
+原生 SSH 关闭 shell channel，不使用本地 PTY 的信号或 ConPTY 排空规则。所有 facts／subscriptions／graphics 的退出转换仍分借同一 `PaneState` 锁，未增加锁或 UI join。
+相关回归分别归入 `lifecycle/tests.rs`、`lifecycle/exit/tests.rs` 和 `lifecycle/inherited/tests.rs`；真实 daemon 消费者继续覆盖最终输出与退出码，
+显式 `native_ssh_lifecycle` 集成用例复用隔离 SSH fixture，验证真实原生 shell channel 的最终输出、单次退出和主动关闭静默语义。
+这些是验证入口，不是本轮已执行的通过声明；Windows、Unix 与真实 SSH 的运行证据需要分别记录。
 
 桌面的 `src/terminal/remote/reader.rs` 由 `ReaderTask` 管理单次 reader 生命周期，
 私有 `FrameReader` 同时拥有 parser、键盘／终端模式、回放位置和帧缓冲；连接编排只启动或退休 reader。

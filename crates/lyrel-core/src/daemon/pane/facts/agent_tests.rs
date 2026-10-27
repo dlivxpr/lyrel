@@ -2,6 +2,8 @@ use super::*;
 use super::super::*;
 use super::super::test_support::{test_state, ws, null_writer, drain};
 use super::output_marks::{OscSniffer};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use super::probes::foreground_agent;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
@@ -473,7 +475,8 @@ fn agent_state_snapshot_reports_only_panes_with_a_session() {
         )
         .expect("spawn pane");
         pane.attach(tx);
-        let shell = pane.pty().and_then(|p| p.shell_pid).expect("shell pid");
+        let shell = pane.procs().procs.into_iter().find(|process| process.depth == 0)
+            .expect("the pane publishes its shell process").pid;
         let body = r#"{"v":1,"agent":"omp","event":"prompt-submit","session_id":"s-1"}"#;
 
         let outsider = pane.report_agent_event(std::process::id(), body);

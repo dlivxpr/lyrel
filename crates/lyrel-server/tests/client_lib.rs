@@ -482,7 +482,7 @@ fn a_one_shot_pane_reports_its_real_exit_code() {
         .spawn(
             None,
             size(),
-            Some(one_shot_shell("exit 5")),
+            Some(one_shot_shell("echo lyrel_exit_tail && exit 5")),
             Some("client-lib-test".into()),
             None,
         )
@@ -490,12 +490,16 @@ fn a_one_shot_pane_reports_its_real_exit_code() {
     session
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
+    let mut output = Vec::new();
     loop {
         match session.recv() {
             Ok(DaemonMsg::Exited { code }) => {
                 assert_eq!(code, Some(5), "the child's code must ride the Exited frame");
+                assert!(windows_contain(&output, b"lyrel_exit_tail"),
+                    "the final child output must precede Exited; got {:?}", String::from_utf8_lossy(&output));
                 break;
             }
+            Ok(DaemonMsg::Output(bytes)) | Ok(DaemonMsg::Snapshot(bytes)) => output.extend(bytes),
             Ok(_) => {}
             Err(e) => panic!("pane stream ended before Exited: {e}"),
         }
