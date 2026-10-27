@@ -11,7 +11,7 @@ fn history_recall_snaps_the_viewport_back_to_the_prompt(cx: &mut TestAppContext)
 
             view.handle_editor_key(&key("up"), cx);
 
-            assert_eq!(view.cmd.text(), "echo hello", "↑ recalled the entry");
+            assert_eq!(view.input.editor().text(), "echo hello", "↑ recalled the entry");
             assert_eq!(display_offset(view), 0, "and the viewport followed it down");
             assert_eq!(view.selection_scroll.fraction(), 0., "the sub-line remainder reset too");
         })
@@ -29,13 +29,13 @@ fn ctrl_p_and_ctrl_n_walk_the_history(cx: &mut TestAppContext) {
                 .collect());
 
             view.handle_editor_key(&key("ctrl-p"), cx);
-            assert_eq!(view.cmd.text(), "echo hello");
+            assert_eq!(view.input.editor().text(), "echo hello");
             view.handle_editor_key(&key("ctrl-p"), cx);
-            assert_eq!(view.cmd.text(), "cargo build");
+            assert_eq!(view.input.editor().text(), "cargo build");
             view.handle_editor_key(&key("ctrl-n"), cx);
-            assert_eq!(view.cmd.text(), "echo hello");
+            assert_eq!(view.input.editor().text(), "echo hello");
             view.handle_editor_key(&key("ctrl-n"), cx);
-            assert_eq!(view.cmd.text(), "");
+            assert_eq!(view.input.editor().text(), "");
         })
         .unwrap();
 }
@@ -49,28 +49,28 @@ fn up_and_ctrl_p_recall_the_last_command_matching_the_typed_prefix(cx: &mut Test
                 .into_iter()
                 .map(String::from)
                 .collect());
-            view.cmd.set("git");
+            view.input.editor_mut().set("git");
 
             view.handle_editor_key(&key("up"), cx);
             assert_eq!(
-                view.cmd.text(),
+                view.input.editor().text(),
                 "git log",
                 "↑ skips ls and echo hello, which do not start with git"
             );
             view.handle_editor_key(&key("up"), cx);
-            assert_eq!(view.cmd.text(), "git status");
+            assert_eq!(view.input.editor().text(), "git status");
             view.handle_editor_key(&key("down"), cx);
-            assert_eq!(view.cmd.text(), "git log");
+            assert_eq!(view.input.editor().text(), "git log");
             view.handle_editor_key(&key("down"), cx);
             assert_eq!(
-                view.cmd.text(),
+                view.input.editor().text(),
                 "git",
                 "↓ past the newest match restores the prefix"
             );
 
-            view.cmd.set("echo");
+            view.input.editor_mut().set("echo");
             view.handle_editor_key(&key("ctrl-p"), cx);
-            assert_eq!(view.cmd.text(), "echo hello");
+            assert_eq!(view.input.editor().text(), "echo hello");
         })
         .unwrap();
 }
@@ -88,23 +88,23 @@ fn history_search_takes_its_prefix_from_the_text_left_of_the_cursor(cx: &mut Tes
             // Ctrl+A parks the cursor at the start. Nothing sits left of
             // it, so UP walks the whole list instead of filtering on a line
             // the user is about to edit in front of.
-            view.cmd.set_with_cursor("git", 0);
+            view.input.editor_mut().set_with_cursor("git", 0);
             view.handle_editor_key(&key("up"), cx);
-            assert_eq!(view.cmd.text(), "ls", "an empty prefix filters nothing");
+            assert_eq!(view.input.editor().text(), "ls", "an empty prefix filters nothing");
 
             // A cursor parked mid-line searches on what is behind it, and
             // DOWN past the newest match restores the whole line, the part
             // right of the cursor included.
             view.history.reset_navigation();
-            view.cmd.set_with_cursor("git hello", 4);
+            view.input.editor_mut().set_with_cursor("git hello", 4);
             view.handle_editor_key(&key("up"), cx);
             assert_eq!(
-                view.cmd.text(),
+                view.input.editor().text(),
                 "git log",
                 "the prefix is `git `, not the whole `git hello`"
             );
             view.handle_editor_key(&key("down"), cx);
-            assert_eq!(view.cmd.text(), "git hello");
+            assert_eq!(view.input.editor().text(), "git hello");
         })
         .unwrap();
 }
@@ -119,13 +119,13 @@ fn ctrl_e_accepts_a_ghost_suggestion_at_the_end(cx: &mut TestAppContext) {
         .update(cx, |view, _, cx| {
             assert!(view.input_active(), "the local editor owns a fresh prompt");
             seed_history(view, vec!["git log --oneline".to_string()]);
-            view.cmd.set("git l");
+            view.input.editor_mut().set("git l");
 
             view.handle_editor_key(&key("ctrl-e"), cx);
 
-            assert_eq!(view.cmd.text(), "git log --oneline");
+            assert_eq!(view.input.editor().text(), "git log --oneline");
             assert!(
-                view.editor_handoff.is_none(),
+                !view.input.has_handoff(),
                 "accepting a local suggestion must not hand input to the shell"
             );
         })
@@ -143,12 +143,12 @@ fn ctrl_e_only_moves_to_the_end_when_no_ghost_is_visible(cx: &mut TestAppContext
     window
         .update(cx, |view, _, cx| {
             seed_history(view, vec!["git log --oneline".to_string()]);
-            view.cmd.set_with_cursor("git l", 2);
+            view.input.editor_mut().set_with_cursor("git l", 2);
 
             view.handle_editor_key(&key("ctrl-e"), cx);
 
-            assert_eq!(view.cmd.text(), "git l");
-            assert_eq!(view.cmd.cursor(), view.cmd.len());
+            assert_eq!(view.input.editor().text(), "git l");
+            assert_eq!(view.input.editor().cursor(), view.input.editor().len());
         })
         .unwrap();
 }

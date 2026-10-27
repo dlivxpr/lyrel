@@ -2490,7 +2490,7 @@ impl Element for TerminalElement {
             super::input::TerminalInputHandler::new(self.view.clone(), cursor_bounds),
             cx,
         );
-        let marked = self.view.read(cx).marked_text.clone();
+        let marked = self.view.read(cx).input.marked().to_owned();
 
         // Kitty-graphics placements for this pane. Each image anchors to an
         // absolute scrollback row (recorded when its command arrived in-stream);

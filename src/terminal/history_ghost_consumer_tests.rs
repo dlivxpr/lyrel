@@ -43,7 +43,7 @@ fn ghost_suggests_the_command_just_run_over_a_frequent_one(cx: &mut TestAppConte
                 Some("/work/proj"),
                 Some(("git checkout main", 20)),
             );
-            view.cmd.set("git c");
+            view.input.editor_mut().set("git c");
             assert_eq!(
                 view.ghost_suggestion().as_deref(),
                 Some("git commit -m x"),
@@ -68,19 +68,19 @@ fn ghost_prefers_this_directory_then_falls_back_to_anywhere(cx: &mut TestAppCont
                 Some("/work/proj"),
                 None,
             );
-            view.cmd.set("cargo ");
+            view.input.editor_mut().set("cargo ");
             assert_eq!(
                 view.ghost_suggestion().as_deref(),
                 Some("cargo build"),
                 "an older match run here beats a newer one run elsewhere"
             );
-            view.cmd.set("npm ");
+            view.input.editor_mut().set("npm ");
             assert_eq!(
                 view.ghost_suggestion().as_deref(),
                 Some("npm run dev"),
                 "with nothing run here, the newest match anywhere is offered"
             );
-            view.cmd.set("python ");
+            view.input.editor_mut().set("python ");
             assert_eq!(view.ghost_suggestion(), None);
         })
         .unwrap();
@@ -101,13 +101,13 @@ fn ghost_skips_commands_that_failed(cx: &mut TestAppContext) {
                 Some("/work/proj"),
                 None,
             );
-            view.cmd.set("make t");
+            view.input.editor_mut().set("make t");
             assert_eq!(
                 view.ghost_suggestion().as_deref(),
                 Some("make test"),
                 "the newer typo exited 2, so the older success is offered"
             );
-            view.cmd.set("make l");
+            view.input.editor_mut().set("make l");
             assert_eq!(
                 view.ghost_suggestion(),
                 None,
@@ -136,12 +136,12 @@ fn ghost_names_what_up_arrow_recalls(cx: &mut TestAppContext) {
             );
             for typed in ["git", "git l", "e", "l"] {
                 view.history.reset_navigation();
-                view.cmd.set(typed);
+                view.input.editor_mut().set(typed);
                 let ghost = view.ghost_suggestion();
                 view.handle_editor_key(&key("up"), cx);
                 assert_eq!(
                     ghost.as_deref(),
-                    Some(view.cmd.text().as_str()),
+                    Some(view.input.editor().text().as_str()),
                     "ghost and ↑ disagree on {typed:?}"
                 );
             }
@@ -161,7 +161,7 @@ fn submitting_a_command_again_moves_it_to_the_newest_entry(cx: &mut TestAppConte
                 .into_iter()
                 .map(String::from)
                 .collect());
-            view.cmd.set("git status");
+            view.input.editor_mut().set("git status");
             view.submit_command(cx);
             assert_eq!(
                 view.history.entries(),
@@ -169,11 +169,11 @@ fn submitting_a_command_again_moves_it_to_the_newest_entry(cx: &mut TestAppConte
                 "one entry per command, at its latest run, as a reload leaves it"
             );
 
-            view.cmd.set("");
+            view.input.editor_mut().set("");
             view.handle_editor_key(&key("up"), cx);
-            assert_eq!(view.cmd.text(), "git status");
+            assert_eq!(view.input.editor().text(), "git status");
             view.handle_editor_key(&key("up"), cx);
-            assert_eq!(view.cmd.text(), "make", "↑ never lands on a command twice");
+            assert_eq!(view.input.editor().text(), "make", "↑ never lands on a command twice");
         })
         .unwrap();
 }
