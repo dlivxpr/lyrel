@@ -450,9 +450,7 @@ fn attach_client(
                         Ok(ClientMsg::Input(bytes)) if pane.controls(epoch) => {
                             pane.write_input(&bytes)
                         }
-                        Ok(ClientMsg::Resize(size)) if pane.controls(epoch) => {
-                            pane.resize(size)
-                        }
+                        Ok(ClientMsg::Resize(size)) if pane.controls(epoch) => pane.resize(size),
                         Ok(_) => {}
                         Err(_) => return,
                     }

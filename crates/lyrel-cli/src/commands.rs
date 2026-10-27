@@ -8,6 +8,8 @@ use crate::cli::{Cli, Command};
 mod agents;
 mod capture;
 mod diagnostics;
+#[cfg(test)]
+mod dispatch_tests;
 mod execution;
 mod launch;
 mod pane;
@@ -15,13 +17,11 @@ mod send;
 mod server;
 mod tab;
 mod target;
-mod wait;
-mod worktree;
-mod workspace;
-#[cfg(test)]
-mod dispatch_tests;
 #[cfg(test)]
 mod test_support;
+mod wait;
+mod workspace;
+mod worktree;
 
 #[derive(Debug)]
 pub struct Report {
@@ -60,9 +60,7 @@ pub fn execute(cli: Cli, ctx: &Context, backend: &mut dyn Backend) -> Result<Out
         Some(Command::Capture(args)) => capture::capture(args, ctx, backend),
         Some(Command::Procs { target }) => capture::procs(target.as_deref(), ctx, backend),
         Some(Command::Tab(cmd)) => tab::execute(cmd, ctx, backend),
-        Some(Command::Worktree(cmd)) => {
-            worktree::execute(cmd, machine.as_deref(), ctx, backend)
-        }
+        Some(Command::Worktree(cmd)) => worktree::execute(cmd, machine.as_deref(), ctx, backend),
         Some(Command::Events) => server::events(json_mode, backend),
         Some(Command::Agents) => agents::agents(backend),
         Some(Command::Wait(args)) => wait::wait(args, ctx, backend),

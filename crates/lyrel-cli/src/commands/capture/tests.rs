@@ -1,3 +1,4 @@
+use super::last_lines;
 use crate::address::Context;
 use crate::commands::test_support::human;
 use crate::commands::test_support::json_of;
@@ -5,7 +6,6 @@ use crate::commands::test_support::mock;
 use crate::commands::test_support::run_cli;
 use crate::commands::test_support::segment;
 use serde_json::json;
-use super::last_lines;
 
 #[test]
 fn capture_and_procs_are_wired_through_the_backend() {

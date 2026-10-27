@@ -296,7 +296,7 @@ mod tests {
         // move to. Landing the cap on a half instead buys 11px, which is
         // device-aligned at 2x and only misses the grid at 1x, where a cross
         // this small is already the least of it.
-        let tip = (v_top - stroke / 2.) * crate::ui::app::TILE_GLYPH / 24.;
+        let tip = (v_top - stroke / 2.) * crate::ui::window_chrome::TILE_GLYPH / 24.;
         let grid = tip * 2.;
         assert!(
             (grid - grid.round()).abs() < 0.01,

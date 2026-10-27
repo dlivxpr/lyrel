@@ -46,7 +46,6 @@ pub(super) fn ws_ls(backend: &mut dyn Backend) -> Result<Outcome> {
     )
 }
 
-
 fn ws_tree(explicit: Option<&str>, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcome> {
     let machine = fetch_machine(backend)?;
     let id = resolve_ws(explicit, ctx, &machine)?;
@@ -115,7 +114,11 @@ fn ws_detach(ws: &str, backend: &mut dyn Backend) -> Result<Outcome> {
     report("", json!({ "detached": id.to_string() }))
 }
 
-pub(super) fn new_workspace(path: Option<String>, open: bool, backend: &mut dyn Backend) -> Result<Outcome> {
+pub(super) fn new_workspace(
+    path: Option<String>,
+    open: bool,
+    backend: &mut dyn Backend,
+) -> Result<Outcome> {
     let ws = match backend.control(ControlRequest::WorkspaceCreate {
         name: None,
         workspace: None,

@@ -44,7 +44,8 @@ use lyrel_core::core::git::log::{Commit, CommitFile, RefKind};
 use lyrel_core::core::git::status::DecoStatus;
 
 use crate::terminal::git_diff::DiffSource;
-use crate::ui::app::{CONTENT_INSET, LyrelApp};
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::CONTENT_INSET;
 use crate::ui::i18n::{L10nKey, t, t_plural};
 use crate::ui::right_panel::{
     HEADING, META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, git_badge, info_chip,

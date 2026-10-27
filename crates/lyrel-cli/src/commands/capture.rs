@@ -7,7 +7,11 @@ use crate::backend::Backend;
 use crate::cli::CaptureArgs;
 use crate::{output, screen};
 
-pub(super) fn capture(args: CaptureArgs, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcome> {
+pub(super) fn capture(
+    args: CaptureArgs,
+    ctx: &Context,
+    backend: &mut dyn Backend,
+) -> Result<Outcome> {
     let pane = address::pane_or_context(args.target.as_deref(), ctx)?;
     let segments = backend.capture(pane, args.scrollback)?;
     // How much the replay actually carried, counted before anything renders or
@@ -68,7 +72,11 @@ fn last_lines(text: &str, keep: usize) -> String {
     format!("{}{trailer}", &body[start..])
 }
 
-pub(super) fn procs(target: Option<&str>, ctx: &Context, backend: &mut dyn Backend) -> Result<Outcome> {
+pub(super) fn procs(
+    target: Option<&str>,
+    ctx: &Context,
+    backend: &mut dyn Backend,
+) -> Result<Outcome> {
     let pane = address::pane_or_context(target, ctx)?;
     let procs = backend.procs(pane)?;
     report(output::procs_tables(&procs), serde_json::to_value(&procs)?)

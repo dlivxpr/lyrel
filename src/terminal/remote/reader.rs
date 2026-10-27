@@ -2,29 +2,30 @@
 //! 连接编排只启动或退休它，不能单独推进 replay、文字或图形状态。
 
 use super::{
-    EventProxy, GraphicsViewportReporter, LinkSender, PaneEvent, ReaderSignals, ShellState, TermSize,
+    EventProxy, GraphicsViewportReporter, LinkSender, PaneEvent, ReaderSignals, ShellState,
+    TermSize,
 };
 use std::collections::VecDeque;
 use std::io::Read as _;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 
 use crate::core::osc::Note;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg, RemoteKind};
 use crate::daemon::transport::Stream;
 use crate::terminal::bridge::ParseBridge;
+use lyrel_core::core::term_modes::KeyboardStacks;
 use parking_lot::FairMutex;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::crosswords::Mode;
 use rio_vt::crosswords::grid::Dimensions as _;
 use rio_vt::event::EventListener;
-use lyrel_core::core::term_modes::KeyboardStacks;
 
 #[cfg(test)]
 use super::{
-    NativeSshSpec, PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize, attach_reply_prefix,
-    test_term,
+    NativeSshSpec, PaneRoute, PtySource, RemoteContext, RemoteTerminal, WinSize,
+    attach_reply_prefix, test_term,
 };
 use crate::core::osc::{OscTokenizer, TitleEffect, TitleLifetime};
 use crate::terminal::command_cursor::{CommandCursorStyle, CommandMark};
@@ -95,7 +96,14 @@ impl ReaderTask {
             .spawn(move || {
                 crate::core::threads::promote_to_user_interactive();
                 FrameReader::new(buffered).consume(
-                    term, proxy, read_half, quit, signals, writer, viewport_reporter, image_decoder,
+                    term,
+                    proxy,
+                    read_half,
+                    quit,
+                    signals,
+                    writer,
+                    viewport_reporter,
+                    image_decoder,
                 );
             })
             .expect("spawn remote reader thread");
@@ -115,7 +123,9 @@ impl ReaderTask {
 
     #[cfg(all(test, windows))]
     fn take_thread(&mut self) -> JoinHandle<()> {
-        self.thread.take().expect("the reader thread is still owned")
+        self.thread
+            .take()
+            .expect("the reader thread is still owned")
     }
 }
 
@@ -261,9 +271,8 @@ impl FrameReader {
                         // sequence left behind, carry on.
                         let mut cuts: Vec<(usize, ReaderCut)> = Vec::new();
                         if local_conpty.load(Ordering::Relaxed) {
-                            cursor_scan.feed(&out_batch, |off, c| {
-                                cuts.push((off, ReaderCut::Parked(c)))
-                            });
+                            cursor_scan
+                                .feed(&out_batch, |off, c| cuts.push((off, ReaderCut::Parked(c))));
                         }
                         command_cuts(&mut command_tok, &out_batch, &mut cuts);
                         title_cuts(&mut title_tok, &mut title_life, &out_batch, &mut cuts);
@@ -291,15 +300,14 @@ impl FrameReader {
                                         ReaderCut::Parked(cut) => {
                                             let position = parked_cursor.apply(term, cut);
                                             if cursor_at_end && cuts_left == 0 {
-                                                *proxy.parse_state.paint_cursor.lock().unwrap() = position;
+                                                *proxy.parse_state.paint_cursor.lock().unwrap() =
+                                                    position;
                                             }
                                         }
                                         ReaderCut::Command(mark) => {
                                             command_cursor.apply(term, mark)
                                         }
-                                        ReaderCut::Prompt(mark) => {
-                                            prompt_break.apply(term, mark)
-                                        }
+                                        ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
                                         ReaderCut::RetireTitle => term.set_title(None),
                                     }
                                 },
@@ -319,10 +327,7 @@ impl FrameReader {
                         }
                         mode_tok.feed(&out_batch, |payload| {
                             if let Some(mode) = payload.strip_prefix(b"133;V;") {
-                                shell_vi_mode.store(
-                                    mode.first() == Some(&b'1'),
-                                    Ordering::Relaxed,
-                                );
+                                shell_vi_mode.store(mode.first() == Some(&b'1'), Ordering::Relaxed);
                             }
                         });
                         zle_tok.feed(&out_batch, |payload| {
@@ -458,19 +463,22 @@ impl FrameReader {
                         let mut cuts: Vec<(usize, ReaderCut)> = Vec::new();
                         command_cuts(&mut command_tok, &bytes, &mut cuts);
                         title_cuts(&mut title_tok, &mut title_life, &bytes, &mut cuts);
-                        let fed =
-                            feed_grid(&term, &mut processor, proxy.clone(), &mut keyboard, &bytes, cuts, Some(&proxy.parse_state.history_limit), &quit, |term, cut| {
-                                match cut {
-                                    ReaderCut::Command(mark) => {
-                                        command_cursor.apply(term, mark)
-                                    }
-                                    ReaderCut::Prompt(mark) => {
-                                        prompt_break.apply(term, mark)
-                                    }
-                                    ReaderCut::RetireTitle => term.set_title(None),
-                                    ReaderCut::Parked(_) => {}
-                                }
-                            });
+                        let fed = feed_grid(
+                            &term,
+                            &mut processor,
+                            proxy.clone(),
+                            &mut keyboard,
+                            &bytes,
+                            cuts,
+                            Some(&proxy.parse_state.history_limit),
+                            &quit,
+                            |term, cut| match cut {
+                                ReaderCut::Command(mark) => command_cursor.apply(term, mark),
+                                ReaderCut::Prompt(mark) => prompt_break.apply(term, mark),
+                                ReaderCut::RetireTitle => term.set_title(None),
+                                ReaderCut::Parked(_) => {}
+                            },
+                        );
                         if fed.is_none() {
                             return;
                         }
@@ -479,21 +487,27 @@ impl FrameReader {
                             if quit.load(Ordering::SeqCst) {
                                 return;
                             }
-                            processor.stop_sync(&mut ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, Some(proxy.parse_state.history_limit.load(Ordering::Relaxed))));
+                            processor.stop_sync(&mut ParseBridge::new(
+                                &mut term,
+                                proxy.clone(),
+                                &mut keyboard,
+                                Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)),
+                            ));
                         }
                         mode_tok.feed(&bytes, |payload| {
                             if let Some(mode) = payload.strip_prefix(b"133;V;") {
-                                shell_vi_mode.store(
-                                    mode.first() == Some(&b'1'),
-                                    Ordering::Relaxed,
-                                );
+                                shell_vi_mode.store(mode.first() == Some(&b'1'), Ordering::Relaxed);
                             }
                         });
                         proxy.parse_state.replaying.store(false, Ordering::Relaxed);
                         // A replayed `?996n` was answered long ago,
                         // but the theme may have flipped while the pane
                         // was detached, so say what it is now.
-                        crate::terminal::color_scheme::fold(&mut modes, &bytes, &color_scheme_updates);
+                        crate::terminal::color_scheme::fold(
+                            &mut modes,
+                            &bytes,
+                            &color_scheme_updates,
+                        );
                         modes.take_color_scheme_queries();
                         report_scheme = true;
                         proxy.send(PaneEvent::Wakeup);
@@ -510,10 +524,12 @@ impl FrameReader {
                         // time, and that report would be discounted.
                         awaiting_replay = false;
                         replaying_state = false;
-                        crate::terminal::color_scheme::fold(&mut modes, &bytes, &color_scheme_updates);
-                        if std::mem::take(&mut report_scheme)
-                            && modes.is_on(COLOR_SCHEME_UPDATES)
-                        {
+                        crate::terminal::color_scheme::fold(
+                            &mut modes,
+                            &bytes,
+                            &color_scheme_updates,
+                        );
+                        if std::mem::take(&mut report_scheme) && modes.is_on(COLOR_SCHEME_UPDATES) {
                             proxy.send(crate::terminal::color_scheme::query_reply());
                         }
                         for _ in 0..modes.take_color_scheme_queries() {
@@ -525,20 +541,34 @@ impl FrameReader {
                     DaemonMsg::Graphics(frame) => {
                         flush_batch!();
                         if let Some(update) =
-                            lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame_owned(frame.into_vec())
+                            lyrel_core::core::kitty_graphics::GraphicsUpdate::decode_frame_owned(
+                                frame.into_vec(),
+                            )
                         {
                             if !image_decoder.has_resource_grant(&update) {
-                                teardown(Some("graphics update arrived without its matching admission grant"));
+                                teardown(Some(
+                                    "graphics update arrived without its matching admission grant",
+                                ));
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
                                 return;
                             }
-                            let screen = matches!(&update, lyrel_core::core::kitty_graphics::GraphicsUpdate::Screen { .. });
+                            let screen = matches!(
+                                &update,
+                                lyrel_core::core::kitty_graphics::GraphicsUpdate::Screen { .. }
+                            );
                             if screen {
                                 let term = term.lock();
-                                if quit.load(Ordering::SeqCst) { return; }
+                                if quit.load(Ordering::SeqCst) {
+                                    return;
+                                }
                                 let changed = image_decoder.apply(update);
-                                image_decoder.sync_local_origin(term.grid.lines_evicted() as i64 + term.grid.history_size() as i64);
-                                if changed { proxy.send(PaneEvent::Wakeup); }
+                                image_decoder.sync_local_origin(
+                                    term.grid.lines_evicted() as i64
+                                        + term.grid.history_size() as i64,
+                                );
+                                if changed {
+                                    proxy.send(PaneEvent::Wakeup);
+                                }
                                 drop(term);
                                 // A hidden/startup report may have preceded the
                                 // first Screen that establishes its epoch. Retry
@@ -549,25 +579,36 @@ impl FrameReader {
                             }
                         }
                     }
-                    DaemonMsg::GraphicsOffer { token, key, width, height, encoded_bytes, metadata_bytes } => {
+                    DaemonMsg::GraphicsOffer {
+                        token,
+                        key,
+                        width,
+                        height,
+                        encoded_bytes,
+                        metadata_bytes,
+                    } => {
                         flush_batch!();
-                        let accepted = image_decoder.offer(token, key, width, height, encoded_bytes, metadata_bytes);
+                        let accepted = image_decoder.offer(
+                            token,
+                            key,
+                            width,
+                            height,
+                            encoded_bytes,
+                            metadata_bytes,
+                        );
                         writer.send(ClientMsg::GraphicsGrant { token, accepted });
                     }
                     DaemonMsg::GraphicsCancel { token } => image_decoder.cancel_offer(token),
-                    DaemonMsg::GraphicsPressureResult { key, .. } => image_decoder.complete_pressure(key),
+                    DaemonMsg::GraphicsPressureResult { key, .. } => {
+                        image_decoder.complete_pressure(key)
+                    }
                     DaemonMsg::ClipboardWrite(frame) => {
                         flush_batch!();
                         if let Some(write) =
                             lyrel_core::core::clipboard::ClipboardWrite::decode_frame(frame)
                         {
                             if clipboard_write_busy
-                                .compare_exchange(
-                                    false,
-                                    true,
-                                    Ordering::AcqRel,
-                                    Ordering::Acquire,
-                                )
+                                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                                 .is_ok()
                             {
                                 if let Ok(mut pending) = clipboard_writes.lock() {
@@ -582,8 +623,7 @@ impl FrameReader {
                                     "EBUSY",
                                 );
                                 proxy.send(PaneEvent::PtyWrite(
-                                    String::from_utf8(reply)
-                                        .expect("OSC 5522 replies are ASCII"),
+                                    String::from_utf8(reply).expect("OSC 5522 replies are ASCII"),
                                 ));
                             }
                         } else {
@@ -616,8 +656,7 @@ impl FrameReader {
                                 at_prompt,
                                 last_exit,
                                 seq: guard.seq + 1,
-                                cycle: guard.cycle
-                                    + u64::from(at_prompt && !guard.at_prompt),
+                                cycle: guard.cycle + u64::from(at_prompt && !guard.at_prompt),
                             };
                         }
                         if active && at_prompt {
@@ -627,7 +666,12 @@ impl FrameReader {
                             }
                             let resets = stale_mode_resets(term.mode());
                             if !resets.is_empty() {
-                                let mut bridge = ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)));
+                                let mut bridge = ParseBridge::new(
+                                    &mut term,
+                                    proxy.clone(),
+                                    &mut keyboard,
+                                    Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)),
+                                );
                                 processor.advance(&mut bridge, &resets);
                                 drop(bridge);
                                 drop(term);
@@ -711,14 +755,18 @@ impl FrameReader {
             const QUIT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
             let timeout = match processor.sync_timeout().sync_timeout() {
                 Some(deadline) => {
-                    let left =
-                        deadline.saturating_duration_since(std::time::Instant::now());
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
                     if left.is_zero() {
                         let mut term = term.lock();
                         if quit.load(Ordering::SeqCst) {
                             return;
                         }
-                        processor.stop_sync(&mut ParseBridge::new(&mut term, proxy.clone(), &mut keyboard, Some(proxy.parse_state.history_limit.load(Ordering::Relaxed))));
+                        processor.stop_sync(&mut ParseBridge::new(
+                            &mut term,
+                            proxy.clone(),
+                            &mut keyboard,
+                            Some(proxy.parse_state.history_limit.load(Ordering::Relaxed)),
+                        ));
                         drop(term);
                         proxy.send(PaneEvent::Wakeup);
                         continue;
@@ -733,7 +781,11 @@ impl FrameReader {
                     "[trace client] {:.1} MB/s | {} reads ({} B/read) {} frames | read wait {:?} lock wait {:?} advance {:?}",
                     tr_bytes as f64 / tr_last.elapsed().as_secs_f64() / 1e6,
                     tr_reads,
-                    if tr_reads > 0 { tr_bytes / tr_reads as u64 } else { 0 },
+                    if tr_reads > 0 {
+                        tr_bytes / tr_reads as u64
+                    } else {
+                        0
+                    },
                     tr_frames,
                     tr_read_t,
                     tr_lock_t,
@@ -995,18 +1047,18 @@ fn feed_grid<T: EventListener + Clone>(
 #[cfg(test)]
 mod chunking_tests;
 #[cfg(test)]
-mod replay_tests;
-#[cfg(all(test, windows))]
-mod windows_tests;
-#[cfg(test)]
-mod parked_cursor_tests;
-#[cfg(test)]
-mod replayed_mode_tests;
+mod live_history_config_tests;
 #[cfg(test)]
 mod osc_tests;
 #[cfg(test)]
-mod live_history_config_tests;
-#[cfg(all(test, unix))]
-mod stale_mode_tests;
+mod parked_cursor_tests;
 #[cfg(all(test, unix))]
 mod query_tests;
+#[cfg(test)]
+mod replay_tests;
+#[cfg(test)]
+mod replayed_mode_tests;
+#[cfg(all(test, unix))]
+mod stale_mode_tests;
+#[cfg(all(test, windows))]
+mod windows_tests;

@@ -6282,8 +6282,8 @@ impl TerminalView {
     /// How forward requests about this pane reach the daemon that owns them —
     /// through the workspace when there is one, and by pane id when there is
     /// not. The Ports list and the port watcher build the same thing.
-    pub(crate) fn forward_route(&self) -> crate::ui::app::ForwardRoute {
-        crate::ui::app::ForwardRoute::new(self.pane_id, self.workspace.clone())
+    pub(crate) fn forward_route(&self) -> crate::ui::forwards::route::ForwardRoute {
+        crate::ui::forwards::route::ForwardRoute::new(self.pane_id, self.workspace.clone())
     }
 
     fn loopback_plan(&self, cx: &gpui_kit::App) -> LoopbackPlan {

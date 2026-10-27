@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use crate::core::config::{Config, RightPanelTab};
 use crate::daemon::protocol::{ManagedForward, PaneProcs, PortProbe};
-use crate::ui::app::{
-    CONTENT_INSET, LyrelApp, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, tile_trailing_inset,
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::{
+    CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_SM, TILE_SIZE_XS, tile_trailing_inset,
 };
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::scrollbar::with_vertical_scrollbar;
@@ -40,7 +41,7 @@ fn right_panel_tabs_floor(window: &Window, cx: &gpui_kit::App) -> f32 {
 /// The tab row's leading inset: the selected tab's pill starts on
 /// `CONTENT_INSET`, the edge every row fill below it starts on, and each tab's
 /// click target reaches `TAB_OUTER_PAD` past its pill.
-const TAB_ROW_LEAD: f32 = crate::ui::app::CONTENT_INSET - crate::ui::tab_strip::TAB_OUTER_PAD;
+const TAB_ROW_LEAD: f32 = crate::ui::window_chrome::CONTENT_INSET - crate::ui::tab_strip::TAB_OUTER_PAD;
 
 /// How tall the tab row is where it sits below the title bar (Windows and
 /// Linux): the tab's 26px hover pill plus 2px either side. A full title-bar
@@ -104,7 +105,7 @@ const INFO_LABEL_GAP: f32 = 9.;
 /// The leading glyph on a panel row — the file tree's folder and file marks.
 ///
 /// Keep row glyphs on the same 16px grid as the toolbar.
-pub(crate) const ROW_GLYPH: f32 = crate::ui::app::TILE_GLYPH;
+pub(crate) const ROW_GLYPH: f32 = crate::ui::window_chrome::TILE_GLYPH;
 
 // The right panel's type ramp: four steps, a point apart, that the Info and
 // Source Control tabs both draw from so switching between them does not change
@@ -237,7 +238,7 @@ pub(crate) struct RightPanelState {
     pub(crate) cpu: crate::ui::proc_usage::CpuTracker,
     pub(crate) procs_loading: bool,
     pub(crate) procs_gen: u64,
-    pub(crate) procs_forwards: Option<crate::ui::app::ForwardRoute>,
+    pub(crate) procs_forwards: Option<crate::ui::forwards::route::ForwardRoute>,
     /// Who to ask about `procs_pane` — `None` means this machine's daemon.
     pub(crate) procs_host: Option<crate::ui::host_ops::SharedHost>,
     /// Whether the host that owns this pane cannot describe its processes at
@@ -272,7 +273,7 @@ pub(crate) struct RightPanelState {
     /// forwarded, and switching back would re-offer what was just dismissed.
     /// A few `u16` per connection is not worth reclaiming.
     pub(crate) auto_forwarded:
-        std::collections::HashMap<crate::ui::app::ForwardOwnerKey, std::collections::HashSet<u16>>,
+        std::collections::HashMap<crate::ui::forwards::route::ForwardOwnerKey, std::collections::HashSet<u16>>,
     pub(crate) scroll: gpui_kit::ScrollHandle,
     pub(crate) tree_scroll: gpui_kit::ScrollHandle,
     /// A path the tree should scroll onto, and how many more renders it may
@@ -309,7 +310,7 @@ const AUTO_FORWARD_BURST: usize = 4;
 pub(crate) struct PaneForwardCtx {
     pub(crate) pane_id: u64,
     /// `Some` when the pane has somewhere to hold managed forwards.
-    pub(crate) route: Option<crate::ui::app::ForwardRoute>,
+    pub(crate) route: Option<crate::ui::forwards::route::ForwardRoute>,
     pub(crate) port_route: crate::terminal::view::PortRoute,
     /// The host that owns this pane's processes, when that is not this
     /// machine. A remote workspace's panes live in the peer's registry, so the
@@ -1157,7 +1158,7 @@ impl LyrelApp {
         tooltip: &'static str,
         cx: &mut Context<Self>,
     ) -> Button {
-        crate::ui::tab_strip::chrome_tile_sized(
+        crate::ui::window_chrome::chrome_tile_sized(
             Button::new(id).icon(Icon::new(icon)),
             TILE_SIZE_XS,
             TILE_GLYPH_XS,
@@ -1292,12 +1293,12 @@ impl LyrelApp {
             .unwrap_or_default();
         let forwards: Vec<ManagedForward> = self
             .loopback_panel
-            .managed
+            .managed()
             .iter()
             .filter(|m| m.pane_id == pane_id)
             .cloned()
             .collect();
-        let form_open = self.loopback_panel.form_pane_id == Some(pane_id);
+        let form_open = self.loopback_panel.is_open_for(pane_id);
         // A pane that cannot hold a forward and is serving nothing has no
         // section: the heading alone would be an empty promise.
         //
@@ -1379,7 +1380,7 @@ impl LyrelApp {
                 // comes out as a row of its own with the switch to turn it
                 // back on.
                 actions = actions.child(
-                    crate::ui::tab_strip::chrome_tile_sized(
+                    crate::ui::window_chrome::chrome_tile_sized(
                         Button::new(("panel-port-switch-off", i))
                             .icon(Icon::empty().path("icons/power.svg")),
                         TILE_SIZE_XS,
@@ -1459,7 +1460,7 @@ impl LyrelApp {
         }
 
         let add = ctx.route.is_some().then(|| {
-            crate::ui::tab_strip::chrome_tile_sized(
+            crate::ui::window_chrome::chrome_tile_sized(
                 Button::new(("ssh-forward-add-toggle", pane_id))
                     .icon(Icon::empty().path("icons/plus.svg")),
                 HEADING_TILE,
@@ -1537,7 +1538,7 @@ impl LyrelApp {
             PortRoute::Forward => {
                 if let Some(f) = self
                     .loopback_panel
-                    .managed
+                    .managed()
                     .iter()
                     .find(|m| forwards_port(m, port))
                 {
@@ -1694,10 +1695,10 @@ impl LyrelApp {
             return;
         }
         let origin = match owner {
-            crate::ui::app::ForwardOwnerKey::Pane(pane) => {
+            crate::ui::forwards::route::ForwardOwnerKey::Pane(pane) => {
                 lyrel_core::core::pane_sidecar::ScopedPane::client_local(pane)
             }
-            crate::ui::app::ForwardOwnerKey::Workspace(_) => {
+            crate::ui::forwards::route::ForwardOwnerKey::Workspace(_) => {
                 let Some(pane) = self.right_panel.procs_pane else {
                     return;
                 };
@@ -1754,7 +1755,7 @@ impl LyrelApp {
     fn sync_procs(
         &mut self,
         pane_id: Option<u64>,
-        forwards: Option<crate::ui::app::ForwardRoute>,
+        forwards: Option<crate::ui::forwards::route::ForwardRoute>,
         host: Option<crate::ui::host_ops::SharedHost>,
         cx: &mut Context<Self>,
     ) {
@@ -1772,7 +1773,7 @@ impl LyrelApp {
         if self.right_panel.procs_pane != Some(pane_id) {
             self.right_panel.procs_pane = Some(pane_id);
             self.right_panel.procs = None;
-            self.loopback_panel.managed.clear();
+            self.loopback_panel.clear_panel();
             self.right_panel.procs_gen += 1;
             self.right_panel.procs_loading = false;
             self.right_panel.procs_unsupported = false;
@@ -1798,7 +1799,7 @@ impl LyrelApp {
         &mut self,
         pane_id: u64,
         generation: u64,
-        forwards: Option<crate::ui::app::ForwardRoute>,
+        forwards: Option<crate::ui::forwards::route::ForwardRoute>,
         host: Option<crate::ui::host_ops::SharedHost>,
         cx: &mut Context<Self>,
     ) {
@@ -1849,7 +1850,7 @@ impl LyrelApp {
                         app.right_panel.procs = Some(procs);
                     }
                     if forwards.is_some() {
-                        app.loopback_panel.managed = managed;
+                        app.loopback_panel.accept_list(Some(managed));
                     }
                     // Only when this round actually asked. A round that did not
                     // leaves the last answer in place, so reopening the panel

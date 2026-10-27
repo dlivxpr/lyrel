@@ -22,7 +22,8 @@ use crate::terminal::git_diff::{
 /// says the read failed rather than showing a silently cut-off file — and the
 /// line budget below cuts rendering long before this does anyway.
 const MAX_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
-use crate::ui::app::{LyrelApp, TitleStripRow as _};
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::TitleStripRow as _;
 use crate::ui::diff_list::{DiffRow, FileHead, RowAt};
 use crate::ui::diff_rows::{DiffSelection, Side, SplitCell, SplitRow, UnifiedRow};
 use crate::ui::document_column::{
@@ -675,12 +676,12 @@ impl LyrelApp {
         row.flex_shrink_0()
             // Keep document header geometry aligned with its own content.
             .title_strip_row(HAIRLINE_W, hairline(cx))
-            .pl(px(crate::ui::app::CONTENT_INSET))
+            .pl(px(crate::ui::window_chrome::CONTENT_INSET))
             // The close tile is a notch smaller than the title bar's own, and
             // is pulled in by half the difference so its glyph stays on the
             // column every other trailing tile in the window is centred on.
-            .pr(px(crate::ui::app::tile_trailing_inset()
-                + (crate::ui::app::TILE_SIZE - CLOSE_TILE) / 2.))
+            .pr(px(crate::ui::window_chrome::tile_trailing_inset()
+                + (crate::ui::window_chrome::TILE_SIZE - CLOSE_TILE) / 2.))
             .gap_2()
             .items_center()
             .children(self.render_document_terminal_button(chrome, window, cx))
@@ -882,7 +883,7 @@ impl LyrelApp {
             .child(self.document_layout_switch(chrome, cx))
             .child(
                 div().occlude().flex_shrink_0().child(
-                    crate::ui::tab_strip::chrome_tile_sized(
+                    crate::ui::window_chrome::chrome_tile_sized(
                         Button::new("diff-overlay-close").icon(Icon::new(IconName::Close)),
                         CLOSE_TILE,
                         crate::ui::tab_strip::RAIL_TILE_GLYPH,
@@ -1343,7 +1344,7 @@ fn spliced_range(old: &[DiffRow], new: &[DiffRow]) -> (std::ops::Range<usize>, u
 /// How far a row's pill sits in from the edge of the list: the window's
 /// `CONTENT_INSET`, the same 12px the rail and the right panel keep, and the
 /// same inset the header's subject starts at.
-const LIST_INSET: f32 = crate::ui::app::CONTENT_INSET;
+const LIST_INSET: f32 = crate::ui::window_chrome::CONTENT_INSET;
 
 /// The padding a row keeps inside its pill — the rail's 8px — so a hovered
 /// row's fill reaches past its text on both sides. The overlay is a second
@@ -1662,7 +1663,7 @@ fn diff_file_header(
                     } else {
                         IconName::ChevronRight
                     })
-                    .size(px(crate::ui::app::TILE_GLYPH_XS))
+                    .size(px(crate::ui::window_chrome::TILE_GLYPH_XS))
                     .text_color(cx.theme().muted_foreground),
                 )
         })

@@ -59,7 +59,8 @@ use lyrel_core::core::git::log::{
 };
 use lyrel_core::core::git::ops::{GitOp, ResetMode};
 
-use crate::ui::app::{CONTENT_INSET, LyrelApp};
+use crate::ui::app::LyrelApp;
+use crate::ui::window_chrome::CONTENT_INSET;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::presets::{ActiveLanes, LANE_SLOTS, Lanes};
 use crate::ui::right_panel::{META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, info_chip};
@@ -1369,7 +1370,7 @@ impl LyrelApp {
                     // that history is being filtered once the box is gone —
                     // and it cannot go stale, because closing the box is what
                     // throws the query away.
-                    crate::ui::tab_strip::chrome_tile_sized(
+                    crate::ui::window_chrome::chrome_tile_sized(
                         Button::new("scm-graph-filter").icon(Icon::new(IconName::Search)),
                         GRAPH_TILE,
                         GRAPH_TILE_GLYPH,
