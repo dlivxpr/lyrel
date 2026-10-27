@@ -2378,7 +2378,7 @@ impl Element for TerminalElement {
     ) {
         let fps_start = super::fps::enabled().then(std::time::Instant::now);
 
-        let frac = self.view.read(cx).scroll_frac.clamp(0., 1.);
+        let frac = self.view.read(cx).selection_scroll.fraction().clamp(0., 1.);
         let input_shift = self.view.read(cx).input_scroll_rows();
         let geom = CellGeom {
             origin: point(
