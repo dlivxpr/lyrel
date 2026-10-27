@@ -3,7 +3,7 @@ use gpui_kit::App;
 use lyrel_core::core::machine::{AgentFacts, Axis as TreeAxis, PaneNode, PaneSeed, TabId};
 
 use crate::core::session::{SessionPane, WorkspaceId, WorkspaceStore};
-use crate::ui::app::Tab;
+use crate::ui::tab::Tab;
 use crate::ui::pane::{Pane, PaneSlot};
 
 use super::desired::{DesiredNode, DesiredTab};
@@ -69,17 +69,17 @@ pub(crate) fn desired_tabs(
         };
         let Some(root) = root else {
             if !(remote && every_leaf_is_native_ssh(&tab.pane, cx)) {
-                held.push(tab.tree_id.get());
+                held.push(tab.id());
             }
             continue;
         };
-        let id = tab.tree_id.get();
+        let id = tab.id();
         if index == active_index {
             active = Some(id);
         }
         out.push(DesiredTab {
             id,
-            name: tab.name.clone(),
+            name: tab.name().clone(),
             // As the tab has it, even when this window does not know the
             // group: a window whose copy of the groups has not landed yet
             // would otherwise send every tab it holds back to auto grouping.
@@ -91,7 +91,7 @@ pub(crate) fn desired_tabs(
                 presentation.remap_panes(|pane| root.seed_of(pane).map(|_| pane));
                 presentation
             },
-            presentation_fallback: tab.last_focused.and_then(|focused| {
+            presentation_fallback: tab.remembered_pane().and_then(|focused| {
                 tab.pane
                     .leaves()
                     .into_iter()

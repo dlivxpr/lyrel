@@ -689,7 +689,7 @@ impl LyrelApp {
         }
         let focused_pane_id = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.pane.focused_or_first(window, cx))
             .map(|p| p.read(cx).pane_id);
         if self.ssh_prompt.pane_id.is_some() && focused_pane_id != self.ssh_prompt.pane_id {

@@ -145,13 +145,8 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let active = self.active;
-        let was_front = self.tabs.get(active).is_some_and(|t| {
-            t.overlay_top == crate::ui::app::OverlayTop::Diff || !self.code_panel_visible()
-        });
-        if let Some(tab) = self.tabs.get_mut(active) {
-            tab.overlay_top = crate::ui::app::OverlayTop::Diff;
-        }
+        let active = self.tabs.active_index();
+        let was_front = self.tabs.get_mut(active).is_some_and(|tab| tab.reveal_diff());
         // The source belongs in this filter: an open worktree overlay reused
         // for a staged file would only move the focus, and go on showing the
         // unstaged patch under the staged file's name.
@@ -229,9 +224,7 @@ impl LyrelApp {
         let (cwd, source) = (snapshot.root.clone(), snapshot.source.clone());
         debug_assert!(source.is_supplied());
         self.open_diff_overlay(host, cwd.clone(), source.clone(), focus, window, cx);
-        if let Some(overlay) = self
-            .tabs
-            .get_mut(self.active)
+        if let Some(overlay) = self.tabs.active_mut()
             .and_then(|t| t.diff_overlay.as_mut())
             .filter(|o| o.cwd == cwd && o.host_id == host && o.source == source)
             && !matches!(overlay.load, DiffLoad::Ready(_))
@@ -251,13 +244,13 @@ impl LyrelApp {
         cwd: &std::path::Path,
         source: &crate::terminal::git_diff::DiffSource,
     ) -> Option<&str> {
-        let overlay = self.tabs.get(self.active)?.diff_overlay.as_ref()?;
+        let overlay = self.tabs.get(self.tabs.active_index())?.diff_overlay.as_ref()?;
         (overlay.cwd == cwd && overlay.host_id == host && overlay.source == *source)
             .then_some(overlay.focus.as_deref())?
     }
 
     pub(crate) fn close_diff_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let active = self.active;
+        let active = self.tabs.active_index();
         let taken = self
             .tabs
             .get_mut(active)
@@ -277,7 +270,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let active = self.active;
+        let active = self.tabs.active_index();
         let Some(overlay) = self
             .tabs
             .get_mut(active)
@@ -314,7 +307,7 @@ impl LyrelApp {
         held: Option<MouseButton>,
         cx: &mut Context<Self>,
     ) {
-        let active = self.active;
+        let active = self.tabs.active_index();
         let Some(overlay) = self
             .tabs
             .get_mut(active)
@@ -341,7 +334,7 @@ impl LyrelApp {
     }
 
     fn end_diff_selection(&mut self, cx: &mut Context<Self>) {
-        let active = self.active;
+        let active = self.tabs.active_index();
         if let Some(overlay) = self
             .tabs
             .get_mut(active)
@@ -357,7 +350,7 @@ impl LyrelApp {
     fn copy_diff_selection(&self, cx: &mut Context<Self>) {
         let Some(overlay) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.diff_overlay.as_ref())
         else {
             return;
@@ -390,7 +383,7 @@ impl LyrelApp {
     }
 
     fn spawn_diff_probe(&mut self, cx: &mut Context<Self>) {
-        let active = self.active;
+        let active = self.tabs.active_index();
         let Some(overlay) = self.tabs.get(active).and_then(|t| t.diff_overlay.as_ref()) else {
             return;
         };
@@ -524,7 +517,7 @@ impl LyrelApp {
     pub(crate) fn maybe_refresh_diff_overlay(&mut self, cx: &mut Context<Self>) {
         let Some(overlay) = self
             .tabs
-            .get(self.active)
+            .get(self.tabs.active_index())
             .and_then(|t| t.diff_overlay.as_ref())
         else {
             return;
@@ -578,7 +571,7 @@ impl LyrelApp {
         self.spawn_untracked_preview_if_needed(cx);
         let rem_size = window.rem_size();
         let ui_font = &cx.theme().font_family;
-        let overlay = self.tabs.get_mut(self.active)?.diff_overlay.as_mut()?;
+        let overlay = self.tabs.active_mut()?.diff_overlay.as_mut()?;
         if overlay.measurement.as_ref().is_none_or(|held| {
             held.rem_size != rem_size
                 || held.code_font != self.font_family
@@ -597,7 +590,7 @@ impl LyrelApp {
             overlay.measurement = Some(measurement);
         }
         let body = self.sync_diff_rows(cx)?;
-        let overlay = self.tabs.get(self.active)?.diff_overlay.as_ref()?;
+        let overlay = self.tabs.get(self.tabs.active_index())?.diff_overlay.as_ref()?;
 
         let content = match body {
             DiffBody::Message(text) => self.diff_message(text, cx),
@@ -797,7 +790,7 @@ impl LyrelApp {
                             .cursor_pointer()
                             .hover(|s| s.bg(hover))
                             .on_click(cx.listener(|this, _, _window, cx| {
-                                let active = this.active;
+                                let active = this.tabs.active_index();
                                 if let Some(overlay) = this
                                     .tabs
                                     .get_mut(active)
@@ -959,7 +952,7 @@ impl LyrelApp {
         let want = {
             let overlay = self
                 .tabs
-                .get(self.active)
+                .get(self.tabs.active_index())
                 .and_then(|t| t.diff_overlay.as_ref());
             match overlay {
                 Some(o) => match &o.load {
@@ -981,7 +974,7 @@ impl LyrelApp {
         let Some(host) = crate::ui::host_registry::HostRegistry::lookup(cx, host_id) else {
             return;
         };
-        let active = self.active;
+        let active = self.tabs.active_index();
         if let Some(o) = self
             .tabs
             .get_mut(active)
@@ -1006,7 +999,7 @@ impl LyrelApp {
                     })
             },
             move |this, file, cx| {
-                let active = this.active;
+                let active = this.tabs.active_index();
                 let Some(o) = this
                     .tabs
                     .get_mut(active)
@@ -1044,7 +1037,7 @@ impl LyrelApp {
     /// line, and nothing about that changes between two frames of scrolling.
     fn sync_diff_rows(&mut self, cx: &mut Context<Self>) -> Option<DiffBody> {
         let mode = view_mode(cx);
-        let active = self.active;
+        let active = self.tabs.active_index();
         let overlay = self.tabs.get_mut(active)?.diff_overlay.as_mut()?;
 
         let snap = match &overlay.load {
@@ -1652,7 +1645,7 @@ fn diff_file_header(
                 .on_click(move |_, _window, cx| {
                     let path = path.clone();
                     app.update(cx, |this, cx| {
-                        let active = this.active;
+                        let active = this.tabs.active_index();
                         if let Some(overlay) = this
                             .tabs
                             .get_mut(active)
@@ -1751,7 +1744,7 @@ fn diff_untracked_row(
             app.update(cx, |this, cx| {
                 let Some((host, cwd, source)) = this
                     .tabs
-                    .get(this.active)
+                    .get(this.tabs.active_index())
                     .and_then(|t| t.diff_overlay.as_ref())
                     .map(|o| (o.host_id, o.cwd.clone(), o.source.clone()))
                 else {
@@ -2953,7 +2946,7 @@ mod overlay_gpui_tests {
         vcx: &mut VisualTestContext,
     ) -> (DiffSource, bool) {
         app.update_in(vcx, |app, _, _| {
-            let overlay = app.tabs[app.active]
+            let overlay = app.tabs[app.tabs.active_index()]
                 .diff_overlay
                 .as_ref()
                 .expect("an overlay is open");
@@ -2990,7 +2983,7 @@ mod overlay_gpui_tests {
 
         // Pretend the worktree probe landed, so a reused overlay would show it.
         app.update_in(&mut vcx, |app, _, _| {
-            let active = app.active;
+            let active = app.tabs.active_index();
             let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
             overlay.loading = false;
             overlay.load = DiffLoad::Ready(Arc::new(DiffSnapshot {
@@ -3065,7 +3058,7 @@ mod overlay_gpui_tests {
         let cwd = std::path::PathBuf::from("/no/such/lyrel/repo");
         app.update_in(vcx, |app, window, cx| {
             app.open_diff_overlay(HostId::LOCAL, cwd.clone(), source.clone(), None, window, cx);
-            let active = app.active;
+            let active = app.tabs.active_index();
             let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
             overlay.loading = false;
             overlay.load = DiffLoad::Ready(Arc::new(one_file_snapshot(source)));
@@ -3093,7 +3086,7 @@ mod overlay_gpui_tests {
         let snapshot = app.update_in(&mut vcx, |app, _, cx| {
             app.set_document_layout(DocumentLayout::Fill, cx);
             app.update_config(cx, |cfg| cfg.diff_view = DiffViewMode::Unified);
-            let overlay = app.tabs[app.active].diff_overlay.as_mut().unwrap();
+            let overlay = app.tabs.active_mut().expect("active tab exists").diff_overlay.as_mut().unwrap();
             overlay.focus = Some("a.rs".into());
             let DiffLoad::Ready(snapshot) = &overlay.load else {
                 panic!("the fixture has a ready patch");
@@ -3111,11 +3104,11 @@ mod overlay_gpui_tests {
         app.update_in(&mut vcx, |app, _, cx| {
             assert_eq!(app.document_layout(cx), DocumentLayout::Dock);
             assert_eq!(
-                app.tabs[1].document_layout, None,
+                app.tabs[1].document_layout(), None,
                 "other tabs keep their layout"
             );
             assert_eq!(cx.global::<Config>().diff_view, DiffViewMode::Unified);
-            let overlay = app.tabs[app.active].diff_overlay.as_ref().unwrap();
+            let overlay = app.tabs[app.tabs.active_index()].diff_overlay.as_ref().unwrap();
             assert_eq!(overlay.source, source);
             assert_eq!(overlay.focus.as_deref(), Some("a.rs"));
             assert_eq!(overlay.expanded.get("a.rs"), Some(&true));
@@ -3221,7 +3214,7 @@ mod overlay_gpui_tests {
                 window,
                 cx,
             );
-            let active = app.active;
+            let active = app.tabs.active_index();
             let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
             overlay.loading = false;
             overlay.load = DiffLoad::Ready(Arc::new(DiffSnapshot {
@@ -3234,7 +3227,7 @@ mod overlay_gpui_tests {
         });
 
         app.update_in(&mut vcx, |app, _, _| {
-            let overlay = app.tabs[app.active].diff_overlay.as_ref().unwrap();
+            let overlay = app.tabs[app.tabs.active_index()].diff_overlay.as_ref().unwrap();
             assert_eq!(
                 focused_name(overlay).as_deref(),
                 Some("scratch.txt"),
@@ -3262,7 +3255,7 @@ mod overlay_gpui_tests {
             });
         }
         app.update_in(&mut vcx, |app, _, _| {
-            assert!(app.tabs[app.active].diff_overlay.is_none());
+            assert!(app.tabs[app.tabs.active_index()].diff_overlay.is_none());
         });
     }
 }
@@ -3362,7 +3355,7 @@ mod render_idle_gpui_tests {
         loop {
             vcx.background_executor.run_until_parked();
             let ready = app.update_in(&mut vcx, |app, _, _| {
-                app.tabs[app.active]
+                app.tabs[app.tabs.active_index()]
                     .diff_overlay
                     .as_ref()
                     .is_some_and(|o| matches!(o.load, DiffLoad::Ready(_)) && !o.loading)
@@ -3380,7 +3373,7 @@ mod render_idle_gpui_tests {
         // card starts shut. Open it: a reader opening a large file is exactly
         // the frame this is about.
         app.update_in(&mut vcx, |app, _, cx| {
-            let active = app.active;
+            let active = app.tabs.active_index();
             app.tabs[active]
                 .diff_overlay
                 .as_mut()
@@ -3392,7 +3385,7 @@ mod render_idle_gpui_tests {
         vcx.background_executor.run_until_parked();
 
         let rows = app.update_in(&mut vcx, |app, _, _| {
-            app.tabs[app.active]
+            app.tabs[app.tabs.active_index()]
                 .diff_overlay
                 .as_ref()
                 .map(|o| o.rows.len())
@@ -3422,7 +3415,7 @@ mod render_idle_gpui_tests {
         // hint the bar reaches 248px into this patch — its thumb fills the
         // track, and dragging it to the bottom lands a screen down.
         let reach = app.update_in(&mut vcx, |app, _, _| {
-            app.tabs[app.active]
+            app.tabs[app.tabs.active_index()]
                 .diff_overlay
                 .as_ref()
                 .expect("the overlay is open")
@@ -3493,7 +3486,7 @@ mod render_idle_gpui_tests {
         loop {
             vcx.background_executor.run_until_parked();
             let ready = app.update_in(&mut vcx, |app, _, _| {
-                app.tabs[app.active]
+                app.tabs[app.tabs.active_index()]
                     .diff_overlay
                     .as_ref()
                     .is_some_and(|o| matches!(o.load, DiffLoad::Ready(_)) && !o.loading)
@@ -3610,10 +3603,10 @@ mod selection_gpui_tests {
                 )
             });
             app.tabs
-                .push(crate::ui::app::Tab::new(Pane::leaf(PaneSlot::Connecting(
+                .push(crate::ui::tab::Tab::new(Pane::leaf(PaneSlot::Connecting(
                     pending,
                 ))));
-            app.active = 0;
+            app.tabs.select(0);
             app.tabs[0].diff_overlay = Some(DiffOverlayState {
                 host_id: crate::ui::host_ops::HostId::LOCAL,
                 cwd: PathBuf::from("/repo"),
@@ -3825,7 +3818,7 @@ mod selection_gpui_tests {
         drag(&app, &mut vcx, DiffViewMode::Unified, None, 1, 3);
 
         app.update_in(&mut vcx, |this, _, cx| {
-            let active = this.active;
+            let active = this.tabs.active_index();
             {
                 let overlay = this.tabs[active].diff_overlay.as_mut().unwrap();
                 overlay.expanded.insert("src/above.rs".to_string(), false);

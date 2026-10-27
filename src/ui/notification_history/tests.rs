@@ -180,7 +180,7 @@ fn retained_source_navigates_but_removed_source_never_recreates_a_session(cx: &m
     app.update_in(&mut window, |app, window, cx| {
         let source = app.notification_source(window, cx);
         window.notify_app(Notification::info("from first tab").source(source), cx);
-        app.active = 1;
+        app.tabs.select(1);
         cx.notify();
     });
     settle(&mut window);
@@ -189,10 +189,10 @@ fn retained_source_navigates_but_removed_source_never_recreates_a_session(cx: &m
     let record = window.read(|cx| history(cx).read(cx).records().next().unwrap().clone());
     window.update(|window, cx| window.click(format!("notification-source-{}", record.id()), cx));
     settle(&mut window);
-    assert_eq!(app.read_with(&window, |app, _| app.active), 0);
+    assert_eq!(app.read_with(&window, |app, _| app.tabs.active_index()), 0);
     app.update_in(&mut window, |app, _, cx| {
         app.tabs.remove(0);
-        app.active = 0;
+        app.tabs.select(0);
         cx.notify();
     });
     settle(&mut window);
@@ -332,7 +332,7 @@ fn source_navigation_selects_the_other_window_without_touching_its_other_tabs(
             Notification::info("other workspace first pane").source(source),
             cx,
         );
-        app.active = 1;
+        app.tabs.select(1);
         cx.notify();
     });
     settle(&mut first);
@@ -343,7 +343,7 @@ fn source_navigation_selects_the_other_window_without_touching_its_other_tabs(
     first.update(|window, cx| window.click(format!("notification-source-{id}"), cx));
     settle(&mut first);
     settle(&mut second);
-    assert_eq!(second_app.read_with(&second, |app, _| app.active), 0);
+    assert_eq!(second_app.read_with(&second, |app, _| app.tabs.active_index()), 0);
     assert_eq!(second_app.read_with(&second, |app, _| app.tabs.len()), 2);
     assert_eq!(first_app.read_with(&first, |app, _| app.tabs.len()), 2);
     assert_eq!(messages(&second), ["other workspace first pane"]);
@@ -369,7 +369,7 @@ fn parked_source_opens_its_preview_without_restoring_or_focusing_the_hidden_shel
     window.dispatch_action(crate::core::actions::ParkPane);
     settle(&mut window);
     app.update_in(&mut window, |app, _, cx| {
-        app.active = 1;
+        app.tabs.select(1);
         cx.notify();
     });
     settle(&mut window);
@@ -379,7 +379,7 @@ fn parked_source_opens_its_preview_without_restoring_or_focusing_the_hidden_shel
     window.update(|window, cx| window.click(format!("notification-source-{id}"), cx));
     settle(&mut window);
     app.update_in(&mut window, |app, window, cx| {
-        assert_eq!(app.active, 0);
+        assert_eq!(app.tabs.active_index(), 0);
         assert!(app.tabs[0].is_parked_slot(&pane, cx));
         assert!(!pane.contains_focused(window, cx));
     });

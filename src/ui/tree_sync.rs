@@ -46,7 +46,7 @@ fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Op
 /// Toggles presentation through the shared domain mutation. Every leaf, including
 /// client-local native SSH, stays in the logical tree and keeps its existing view.
 pub(crate) fn toggle_pip_for_tab(
-    tab: &mut crate::ui::app::Tab,
+    tab: &mut crate::ui::tab::Tab,
     pane: gpui_kit::EntityId,
     fallback: Option<gpui_kit::EntityId>,
     workspace: WorkspaceId,
@@ -56,7 +56,7 @@ pub(crate) fn toggle_pip_for_tab(
 }
 
 pub(crate) fn set_parked_for_tab(
-    tab: &mut crate::ui::app::Tab,
+    tab: &mut crate::ui::tab::Tab,
     pane: gpui_kit::EntityId,
     fallback: Option<gpui_kit::EntityId>,
     parked: bool,
@@ -67,7 +67,7 @@ pub(crate) fn set_parked_for_tab(
 }
 
 fn change_presentation_for_tab(
-    tab: &mut crate::ui::app::Tab,
+    tab: &mut crate::ui::tab::Tab,
     pane: gpui_kit::EntityId,
     fallback: Option<gpui_kit::EntityId>,
     parked: Option<bool>,
@@ -124,7 +124,7 @@ fn change_presentation_for_tab(
     let mut logical = TreeTab {
         root,
         presentation: tab.presentation.clone(),
-        id: tab.tree_id.get(),
+        id: tab.id(),
         name: None,
         group: None,
         last_auto: None,
@@ -428,6 +428,7 @@ fn tree_workspace_id(cx: &App, client_ws: WorkspaceId) -> WorkspaceId {
         .unwrap_or(client_ws)
 }
 
+
 enum SyncPhase {
     Unprimed { dirty: bool, priming: bool },
     Primed(WsMirror),
@@ -604,7 +605,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
     if crate::ui::remote_workspace::workspace_is_preempted(cx, client_ws) {
         return;
     }
-    let showing: Vec<TabId> = app.tabs.iter().map(|t| t.tree_id.get()).collect();
+    let showing: Vec<TabId> = app.tabs.iter().map(|t| t.id()).collect();
     if let Some(adopt) = take_rehydrate(cx, client_ws, &showing) {
         // The app is mid-update here, so the tabs it knows it is showing come
         // from `app` itself, not from reading the entity back.
@@ -612,7 +613,7 @@ pub(crate) fn sync_window(app: &LyrelApp, cx: &mut App) {
         return;
     }
     adopt_tab_ids(app, cx);
-    let (desired, desired_active, mut held) = desired_tabs(&app.tabs, app.active, client_ws, cx);
+    let (desired, desired_active, mut held) = desired_tabs(&app.tabs, app.tabs.active_index(), client_ws, cx);
     let machine_ws = tree_workspace_id(cx, client_ws);
 
     let state = cx
@@ -770,30 +771,7 @@ fn adopt_tab_ids(app: &LyrelApp, cx: &App) {
     else {
         return;
     };
-    let known: Vec<TabId> = app.tabs.iter().map(|t| t.tree_id.get()).collect();
-    for tab in &app.tabs {
-        let id = tab.tree_id.get();
-        if mirror.tabs.iter().any(|m| m.id == id) {
-            continue;
-        }
-        let panes: Vec<u64> = tab
-            .pane
-            .terminals()
-            .iter()
-            .map(|v| v.read(cx).pane_id)
-            .collect();
-        if panes.is_empty() {
-            continue;
-        }
-        let Some(matched) = mirror
-            .tabs
-            .iter()
-            .find(|m| !known.contains(&m.id) && panes.iter().any(|p| m.root.contains(*p)))
-        else {
-            continue;
-        };
-        tab.tree_id.set(matched.id);
-    }
+    app.tabs.adopt_machine_ids(&mirror.tabs, cx);
 }
 
 pub(crate) fn on_preempted(cx: &mut App, client_ws: WorkspaceId) {
@@ -1612,7 +1590,7 @@ fn tabs_on_screen(cx: &mut App, client_ws: WorkspaceId) -> Vec<TabId> {
     }
     crate::ui::windows::WindowRegistry::app_for(cx, client_ws)
         .and_then(|app| app.upgrade())
-        .map(|app| app.read(cx).tabs.iter().map(|t| t.tree_id.get()).collect())
+        .map(|app| app.read(cx).tabs.iter().map(|t| t.id()).collect())
         .unwrap_or_default()
 }
 
@@ -2471,8 +2449,8 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) -> bool {
-        let index_of = |tabs: &[crate::ui::app::Tab], id: TabId| {
-            tabs.iter().position(|t| t.tree_id.get() == id)
+        let index_of = |tabs: &[crate::ui::tab::Tab], id: TabId| {
+            tabs.iter().position(|t| t.id() == id)
         };
         let applied = match delta {
             LayoutDelta::WorkspaceCreated { .. }
@@ -2509,7 +2487,7 @@ impl LyrelApp {
                     if *reason == lyrel_core::core::machine::TabCloseReason::Emptied
                         && crate::ui::pane_sidecar::retain_client_local(&mut self.tabs[index], cx)
                     {
-                        self.tabs[index].zoomed = None;
+                        self.tabs[index].clear_zoom();
                         self.maximized = None;
                         if removed_focus {
                             self.focus_active(window, cx);
@@ -2519,11 +2497,7 @@ impl LyrelApp {
                         cx.notify();
                         return true;
                     }
-                    let active_id = self.tabs.get(self.active).map(|t| t.tree_id.get());
                     self.tabs.remove(index);
-                    self.active = active_id
-                        .and_then(|id| index_of(&self.tabs, id))
-                        .unwrap_or_else(|| index.min(self.tabs.len().saturating_sub(1)));
                     self.maximized = None;
                     self.wake_active_if_asleep(window, cx);
                     self.focus_active(window, cx);
@@ -2532,7 +2506,7 @@ impl LyrelApp {
             }
             LayoutDelta::TabRenamed { tab, name } => {
                 if let Some(index) = index_of(&self.tabs, *tab) {
-                    self.tabs[index].name = name.clone();
+                    self.tabs[index].adopt_name(name.clone());
                 }
                 true
             }
@@ -2560,16 +2534,7 @@ impl LyrelApp {
                 true
             }
             LayoutDelta::TabMoved { tab, to } => {
-                if let Some(from) = index_of(&self.tabs, *tab) {
-                    let active_id = self.tabs.get(self.active).map(|t| t.tree_id.get());
-                    let moved = self.tabs.remove(from);
-                    self.tabs.insert((*to).min(self.tabs.len()), moved);
-                    if let Some(id) = active_id
-                        && let Some(index) = index_of(&self.tabs, id)
-                    {
-                        self.active = index;
-                    }
-                }
+                self.tabs.move_to(*tab, *to);
                 true
             }
             LayoutDelta::TabRestructured { tab, .. } => match index_of(&self.tabs, tab.id) {
@@ -2598,11 +2563,11 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) {
-        if self.active == index {
+        if self.tabs.active_index() == index {
             return;
         }
         self.maximized = None;
-        self.active = index;
+        self.tabs.select(index);
         self.wake_active_if_asleep(window, cx);
         self.focus_active(window, cx);
     }
@@ -2614,18 +2579,15 @@ impl LyrelApp {
         window: &mut gpui_kit::Window,
         cx: &mut gpui_kit::Context<Self>,
     ) -> bool {
-        if self.tabs.iter().any(|t| t.tree_id.get() == tab.id) {
+        if self.tabs.iter().any(|t| t.id() == tab.id) {
             return true;
         }
         let mut existing = HashMap::new();
         let Some(pane) = self.build_pane_from_tree(&tab.root, &mut existing, window, cx) else {
             return false;
         };
-        let gui = crate::ui::app::Tab::from_tree(tab, pane);
+        let gui = crate::ui::tab::Tab::from_tree(tab, pane);
         self.tabs.insert(at, gui);
-        if self.active >= at && self.tabs.len() > 1 {
-            self.active += 1;
-        }
         true
     }
 
@@ -2646,7 +2608,7 @@ impl LyrelApp {
         if logical_node(&self.tabs[index].pane, remote, cx).as_ref() == Some(&tab.root) {
             let gui = &mut self.tabs[index];
             gui.presentation = presentation;
-            gui.name = tab.name.clone();
+            gui.adopt_name(tab.name.clone());
             gui.group.set(tab.group);
             if gui.auto_group.borrow().is_none() {
                 *gui.auto_group.borrow_mut() = tab.last_auto.clone();
@@ -2677,7 +2639,7 @@ impl LyrelApp {
         let gui = &mut self.tabs[index];
         gui.pane = pane;
         gui.presentation = presentation;
-        gui.name = tab.name.clone();
+        gui.adopt_name(tab.name.clone());
         gui.group.set(tab.group);
         if gui.auto_group.borrow().is_none() {
             *gui.auto_group.borrow_mut() = tab.last_auto.clone();
@@ -4114,7 +4076,8 @@ mod tests {
                 },
             );
             app.workspace = ws;
-            app.tabs[0].tree_id.set(put_up);
+            let pane = std::mem::replace(&mut app.tabs[0].pane, crate::ui::pane::Pane::Empty);
+            app.tabs[0] = crate::ui::tab::Tab::from_foreign(put_up, None, pane);
             {
                 let state = cx
                     .default_global::<TreeSync>()

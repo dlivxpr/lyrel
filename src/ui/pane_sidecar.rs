@@ -8,7 +8,8 @@ use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate
 use lyrel_core::daemon::control::{ControlRequest, ReplyOk};
 
 use crate::core::session::{RemoteRef, WorkspaceId, WorkspaceStore};
-use crate::ui::app::{LyrelApp, Tab};
+use crate::ui::app::LyrelApp;
+use crate::ui::tab::Tab;
 use crate::ui::pane::{Pane, PaneSlot};
 
 #[derive(Default)]
@@ -80,8 +81,8 @@ pub(crate) fn snapshot(tab: &Tab, cx: &App) -> Option<TreeTab<ScopedPane>> {
     });
     presentation.remap_panes(|pane| root.contains(pane).then_some(pane));
     Some(TreeTab {
-        id: tab.tree_id.get(),
-        name: tab.name.clone(),
+        id: tab.id(),
+        name: tab.name().clone(),
         group: tab.group.get(),
         last_auto: tab.auto_group.borrow().clone(),
         root,
@@ -610,7 +611,7 @@ fn adopt(
     let Some(foreign) = &sidecar.foreign_view else {
         return;
     };
-    let active = app.tabs.get(app.active).map(|tab| tab.tree_id.get());
+    let active = app.tabs.get(app.tabs.active_index()).map(|tab| tab.id());
     let mut slots: HashMap<ScopedPane, PaneSlot> = app
         .tabs
         .iter()
@@ -625,7 +626,7 @@ fn adopt(
         .find(|slot| slot.contains_focused(window, cx))
         .map(|slot| slot.entity_id());
     app.tabs.retain(|tab| {
-        tab.foreign_presentation.is_none() || authoritative.contains(&tab.tree_id.get())
+        tab.foreign_presentation.is_none() || authoritative.contains(&tab.id())
     });
     for source in foreign.tabs() {
         let pruned;
@@ -635,7 +636,7 @@ fn adopt(
             let Some(source_pruned) =
                 source.map_panes(|pane| (!closed_local.contains(&pane)).then_some(pane))
             else {
-                app.tabs.retain(|tab| tab.tree_id.get() != source.id);
+                app.tabs.retain(|tab| tab.id() != source.id);
                 continue;
             };
             pruned = source_pruned;
@@ -694,35 +695,26 @@ fn adopt(
         if let Some(tab) = app
             .tabs
             .iter_mut()
-            .find(|tab| tab.tree_id.get() == source.id)
+            .find(|tab| tab.id() == source.id)
         {
             // Preserve every existing view and focus owner; only composition is shared.
             tab.pane = pane;
             install_tab_presentation(tab, presentation);
         } else {
-            let mut tab = Tab::new(pane);
-            tab.tree_id.set(source.id);
-            tab.name = source.name.clone();
+            let mut tab = Tab::from_foreign(source.id, source.name.clone(), pane);
             tab.group.set(source.group);
             install_tab_presentation(&mut tab, presentation);
             app.tabs.push(tab);
         }
     }
-    app.active = active
-        .and_then(|active| app.tabs.iter().position(|tab| tab.tree_id.get() == active))
-        .unwrap_or_else(|| app.active.min(app.tabs.len().saturating_sub(1)));
+    app.tabs.select(active
+        .and_then(|active| app.tabs.iter().position(|tab| tab.id() == active))
+        .unwrap_or_else(|| app.tabs.active_index().min(app.tabs.len().saturating_sub(1))));
     for tab in &mut app.tabs {
-        if tab.zoomed.as_ref().is_some_and(|view| {
-            !tab.pane
-                .leaves()
-                .iter()
-                .any(|slot| slot.entity_id() == view.entity_id())
-        }) {
-            tab.zoomed = None;
-        }
+        tab.discard_detached_zoom();
     }
     if app.maximized.as_ref().is_some_and(|view| {
-        !app.tabs.get(app.active).is_some_and(|tab| {
+        !app.tabs.get(app.tabs.active_index()).is_some_and(|tab| {
             tab.pane
                 .leaves()
                 .iter()
@@ -737,7 +729,7 @@ fn adopt(
             .flat_map(|tab| tab.pane.leaves())
             .any(|slot| slot.entity_id() == focused)
     }) {
-        app.active = app.active.min(app.tabs.len().saturating_sub(1));
+        app.tabs.select(app.tabs.active_index().min(app.tabs.len().saturating_sub(1)));
         app.focus_active(window, cx);
     }
     app.refocus_parked_pane(window, cx);

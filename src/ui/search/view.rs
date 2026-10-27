@@ -1531,9 +1531,13 @@ mod tests {
     #[gpui_kit::test]
     fn return_on_an_empty_search_goes_to_the_previous_tab(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 3);
-        app.update_in(&mut vcx, |app, _, _| {
-            app.tabs[1].last_used.set(5);
-            app.tabs[2].last_used.set(9);
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.activate(1, window, cx);
+            app.tabs.touch_active();
+            app.activate(2, window, cx);
+            app.tabs.touch_active();
+            app.activate(0, window, cx);
+            app.tabs.touch_active();
         });
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_search(SearchTab::All, "", window, cx)
@@ -1552,7 +1556,7 @@ mod tests {
         vcx.run_until_parked();
         app.read_with(&vcx, |app, _| {
             assert!(!app.search.is_open(), "picking a row closes the search");
-            assert_eq!(app.active, 2, "back to the tab used before this one");
+            assert_eq!(app.tabs.active_index(), 2, "back to the tab used before this one");
         });
     }
 
@@ -1737,14 +1741,14 @@ mod tests {
             let current = open(&app, &mut vcx);
             wait_for_history(&current, &mut vcx);
             old.read_with(&vcx, |view, _| assert_eq!(view.sessions_landed, 0));
-            let active = app.read_with(&vcx, |app, _| app.active);
+            let active = app.read_with(&vcx, |app, _| app.tabs.active_index());
             old.update(&mut vcx, |_, cx| {
                 cx.emit(SearchEvent::Confirm(CommandKind::NextTab));
                 cx.emit(SearchEvent::Dismiss);
             });
             vcx.run_until_parked();
             assert_eq!(open(&app, &mut vcx), current);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), active);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), active);
         }
     }
 

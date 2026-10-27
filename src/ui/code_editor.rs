@@ -866,15 +866,15 @@ fn write_checked(
 
 impl LyrelApp {
     pub(crate) fn tab_code(&self) -> Option<&TabCode> {
-        self.tabs.get(self.active)?.code.as_deref()
+        self.tabs.get(self.tabs.active_index())?.code.as_deref()
     }
 
     pub(crate) fn tab_code_mut(&mut self) -> Option<&mut TabCode> {
-        self.tabs.get_mut(self.active)?.code.as_deref_mut()
+        self.tabs.active_mut()?.code.as_deref_mut()
     }
 
     pub(crate) fn tab_code_mut_or_init(&mut self) -> Option<&mut TabCode> {
-        let tab = self.tabs.get_mut(self.active)?;
+        let tab = self.tabs.active_mut()?;
         Some(tab.code.get_or_insert_with(|| Box::new(TabCode::new())))
     }
 
@@ -913,7 +913,7 @@ impl LyrelApp {
     }
 
     fn tab_index_of(&self, tab: TabId) -> Option<usize> {
-        self.tabs.iter().position(|t| t.tree_id.get() == tab)
+        self.tabs.iter().position(|t| t.id() == tab)
     }
 
     /// How many places show this buffer: every tab showing it, twice for a
@@ -1177,7 +1177,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.get(self.active).map(|t| t.tree_id.get()) else {
+        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
             return;
         };
         self.raise_code_overlay();
@@ -1278,7 +1278,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab_ix) = self.tab_index_of(tab).or(Some(self.active)) else {
+        let Some(tab_ix) = self.tab_index_of(tab).or(Some(self.tabs.active_index())) else {
             return;
         };
         let Some(t) = self.tabs.get_mut(tab_ix) else {
@@ -1293,7 +1293,7 @@ impl LyrelApp {
         }
         code.show(id);
         code.visible = true;
-        if tab_ix == self.active {
+        if tab_ix == self.tabs.active_index() {
             self.editor.bar = None;
             self.focus_editor(window, cx);
         }
@@ -1478,7 +1478,7 @@ impl LyrelApp {
         let Some(host) = self.active_host(cx) else {
             return;
         };
-        let Some(tab) = self.tabs.get(self.active).map(|t| t.tree_id.get()) else {
+        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
             return;
         };
         self.raise_code_overlay();
@@ -1508,7 +1508,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.get(self.active).map(|t| t.tree_id.get()) else {
+        let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
             return;
         };
         let host: SharedHost = lyrel_core::host::local::LocalHost::new();
@@ -1537,19 +1537,16 @@ impl LyrelApp {
     }
 
     pub(crate) fn toggle_code_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
-        let buried = tab.overlay_top == crate::ui::app::OverlayTop::Diff
-            && tab.diff_overlay.is_some()
-            && tab.code.as_ref().is_some_and(|c| c.visible);
-        tab.overlay_top = crate::ui::app::OverlayTop::Code;
+        let buried = tab.reveal_code();
         if buried {
             self.focus_editor(window, cx);
             cx.notify();
             return;
         }
-        let Some(tab) = self.tabs.get_mut(self.active) else {
+        let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         let code = tab.code.get_or_insert_with(|| Box::new(TabCode::new()));
@@ -1581,8 +1578,8 @@ impl LyrelApp {
     }
 
     fn raise_code_overlay(&mut self) {
-        if let Some(tab) = self.tabs.get_mut(self.active) {
-            tab.overlay_top = crate::ui::app::OverlayTop::Code;
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.reveal_code();
         }
     }
 
@@ -1597,17 +1594,17 @@ impl LyrelApp {
     /// return path restores the foreground document or the last docked shell.
     pub(crate) fn focus_previous_content(&self, window: &mut Window, cx: &mut Context<Self>) {
         match self.status_document_context(window, cx) {
-            Some(crate::ui::app::OverlayTop::Code) => {
+            Some(crate::ui::tab::OverlayTop::Code) => {
                 if self.active_buffer().is_some_and(|file| !file.preview) {
                     self.focus_editor(window, cx);
                 } else {
                     self.editor.empty_focus.focus(window, cx);
                 }
             }
-            Some(crate::ui::app::OverlayTop::Diff) => {
+            Some(crate::ui::tab::OverlayTop::Diff) => {
                 if let Some(diff) = self
                     .tabs
-                    .get(self.active)
+                    .get(self.tabs.active_index())
                     .and_then(|tab| tab.diff_overlay.as_ref())
                 {
                     window.focus(&diff.focus_handle, cx);
@@ -2316,7 +2313,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tab_ix = self.active;
+        let tab_ix = self.tabs.active_index();
         let Some(id) = self.tab_code().and_then(|c| c.files.get(pos).copied()) else {
             return;
         };
@@ -2377,8 +2374,8 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tab_ix = self.active;
-        let Some(tab) = self.tabs.get(tab_ix).map(|t| t.tree_id.get()) else {
+        let tab_ix = self.tabs.active_index();
+        let Some(tab) = self.tabs.get(tab_ix).map(|t| t.id()) else {
             return;
         };
         let unsaved: Vec<BufferId> = ids
@@ -2737,7 +2734,7 @@ impl LyrelApp {
             self.tabs
                 .iter()
                 .position(|t| t.code.as_deref().is_some_and(|c| c.shows(*id)))
-        }) && tab_ix == self.active
+        }) && tab_ix == self.tabs.active_index()
             && let Some(code) = self.tab_code_mut()
             && let Some(pos) = {
                 if !code.files.contains(&ids[0]) {
@@ -3020,7 +3017,7 @@ impl LyrelApp {
         // A tab that left and came back under the same id — a server restart
         // rebuilds every tab that way — gets its files back like a relaunch.
         if self.editor.restored.len() > self.tabs.len() {
-            let live: HashSet<TabId> = self.tabs.iter().map(|t| t.tree_id.get()).collect();
+            let live: HashSet<TabId> = self.tabs.iter().map(|t| t.id()).collect();
             self.editor.restored.retain(|id| live.contains(id));
         }
         self.editor_adopt_orphans(window, cx);
@@ -3060,7 +3057,7 @@ impl LyrelApp {
             }
             // Nowhere to put it (every tab gone mid-restart): keep it, and it
             // is adopted on a later frame.
-            let Some(tab) = self.tabs.get(self.active).map(|t| t.tree_id.get()) else {
+            let Some(tab) = self.tabs.get(self.tabs.active_index()).map(|t| t.id()) else {
                 continue;
             };
             let name = self.buffer(id).map(OpenFile::label).unwrap_or_default();
@@ -3075,10 +3072,10 @@ impl LyrelApp {
     }
 
     fn editor_restore_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(self.active) else {
+        let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
             return;
         };
-        let tab_id = tab.tree_id.get();
+        let tab_id = tab.id();
         if !self.editor.restored.insert(tab_id) {
             return;
         }
@@ -3166,7 +3163,7 @@ impl LyrelApp {
                 code.visible |= visible;
                 // Only a restore nobody has touched takes the keyboard; one the
                 // reader has moved on from leaves it where they put it.
-                if untouched && tab_ix == app.active && visible {
+                if untouched && tab_ix == app.tabs.active_index() && visible {
                     app.focus_editor(window, cx);
                 }
                 cx.notify();
@@ -3181,7 +3178,7 @@ impl LyrelApp {
             let Some(code) = tab.code.as_deref() else {
                 continue;
             };
-            let tab_id = tab.tree_id.get();
+            let tab_id = tab.id();
             // A tab still waiting for its files to come back has nothing to
             // say about them yet.
             if !self.editor.restored.contains(&tab_id) {
@@ -3277,7 +3274,7 @@ impl LyrelApp {
         }
         // The last file closed with the focus in it: keep the focus in the
         // panel, or gpui reports it lost and it falls back to the terminal.
-        let tab = self.tabs.get(self.active).map(|t| t.tree_id.get());
+        let tab = self.tabs.get(self.tabs.active_index()).map(|t| t.id());
         if tab.is_some() && self.editor.had_focus == tab && self.active_buffer().is_none() {
             self.editor.empty_focus.focus(window, cx);
         }
@@ -3344,8 +3341,8 @@ impl LyrelApp {
                         if !this.editor_panel_has_focus(window, cx) {
                             this.editor.empty_focus.focus(window, cx);
                         }
-                        if let Some(tab) = this.tabs.get(this.active) {
-                            this.status_document_focus = Some((tab.tree_id.get(), true));
+                        if let Some(tab) = this.tabs.get(this.tabs.active_index()) {
+                            this.status_document_focus = Some((tab.id(), true));
                         }
                         cx.notify();
                     }),
@@ -4199,7 +4196,7 @@ mod close_gpui_tests {
 
     fn terminal_focused(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> bool {
         app.update_in(vcx, |app, window, cx| {
-            app.tabs[app.active]
+            app.tabs[app.tabs.active_index()]
                 .pane
                 .leaves()
                 .iter()
@@ -4232,14 +4229,14 @@ mod close_gpui_tests {
             "and the terminal has it back"
         );
 
-        let tab = app.read_with(&vcx, |app, _| app.tabs[0].tree_id.get());
+        let tab = app.read_with(&vcx, |app, _| app.tabs[0].id());
         vcx.dispatch_action(CloseActiveTab);
         settle(&mut vcx);
         assert!(
             app.read_with(&vcx, |app, _| app
                 .tabs
                 .iter()
-                .all(|t| t.tree_id.get() != tab)),
+                .all(|t| t.id() != tab)),
             "only now is ⌘W the terminal's"
         );
     }
@@ -4251,14 +4248,14 @@ mod close_gpui_tests {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 2);
         crate::ui::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, _, _| {
-            app.active = 1;
+            app.tabs.select(1);
             app.tab_code_mut_or_init().unwrap().visible = true;
-            app.active = 0;
+            app.tabs.select(0);
         });
         open_rs(&app, &mut vcx, "/close/a.rs");
         settle(&mut vcx);
         app.update_in(&mut vcx, |app, window, cx| {
-            app.active = 1;
+            app.tabs.select(1);
             app.focus_active(window, cx);
         });
         settle(&mut vcx);
@@ -4355,7 +4352,7 @@ mod close_gpui_tests {
             assert_eq!(app.read_with(&vcx, |app, _| app.tabs.len()), 2);
             vcx.dispatch_action(ActivateTab2);
             settle(&mut vcx);
-            assert_eq!(app.read_with(&vcx, |app, _| app.active), 1);
+            assert_eq!(app.read_with(&vcx, |app, _| app.tabs.active_index()), 1);
             vcx.dispatch_action(ActivateTab1);
             settle(&mut vcx);
         }
