@@ -567,7 +567,7 @@ fn settings_reports_vault_and_query_failures_without_losing_old_balance_or_key(
         true,
     )
     .unwrap();
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     vault.locked.store(true, Ordering::SeqCst);
     http.reply(200, BALANCE);
     click(&mut vcx, &format!("usage-replace-{id}"));
@@ -744,7 +744,7 @@ fn private_manual_session_verifies_then_saves_and_failed_replacement_preserves_p
         http.clone(),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-source");
     vcx.simulate_keystrokes("down enter");
@@ -828,7 +828,7 @@ fn replacing_credentials_commits_the_edited_name_with_the_verified_source(cx: &m
     let http = Arc::new(Http::default());
     let path = dir.path().join("usage.json");
     let id = install(&mut vcx, path.clone(), vault.clone(), http.clone(), true).unwrap();
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, &format!("usage-replace-{id}"));
     type_into(&mut vcx, "usage-name", "Replacement name");
     type_into(&mut vcx, "usage-key", "rejected-key");
@@ -869,7 +869,7 @@ fn account_overflow_keyboard_opens_a_named_form_and_restores_the_trigger(cx: &mu
         true,
     )
     .unwrap();
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     let more = format!("usage-more-{id}");
     reveal(&mut vcx, &more, "usage-content");
     vcx.update(|window, cx| {

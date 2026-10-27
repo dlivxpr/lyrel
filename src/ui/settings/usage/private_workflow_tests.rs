@@ -194,7 +194,7 @@ fn harness_grant_settings_workflow_uses_real_http_header_and_persists_only_valid
         Arc::new(LoopbackHttp(format!("http://{address}/controlled-summary"))),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-source");
     vcx.simulate_keystrokes("down enter");

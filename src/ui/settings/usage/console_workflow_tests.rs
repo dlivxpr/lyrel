@@ -15,7 +15,7 @@ fn mimo_manual_cookie_is_validated_before_save_and_failed_replace_preserves_old_
         http.clone(),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down down enter");
@@ -267,7 +267,7 @@ fn stepfun_manual_settings_workflow_sends_real_connect_requests_and_preserves_id
         Arc::new(StepFunLoopback(format!("http://{address}"))),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down enter");
@@ -550,7 +550,7 @@ fn mimo_manual_workflow_uses_real_get_cookie_and_expired_plan_keeps_known_balanc
         Arc::new(MiMoLoopback(format!("http://{address}"))),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down down down enter");

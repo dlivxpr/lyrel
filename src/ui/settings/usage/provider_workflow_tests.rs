@@ -30,7 +30,7 @@ fn kimi_api_settings_keeps_four_distinct_windows_and_failed_replacement_keeps_ol
         http.clone(),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down enter");
@@ -301,7 +301,7 @@ fn command_key_workflow_queries_only_three_subscription_quotas(cx: &mut TestAppC
         http.clone(),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down enter");
@@ -636,7 +636,7 @@ fn kimi_manual_settings_uses_real_post_body_and_bearer_without_cookie(cx: &mut T
         Arc::new(KimiLoopback(format!("http://{address}/controlled-kimi"))),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down enter");
@@ -677,7 +677,7 @@ fn command_manual_enhancement_mismatch_and_expiry_never_replace_primary_key(
         http.clone(),
         false,
     );
-    let app = open(&workspace, &mut vcx);
+    open(&workspace, &mut vcx);
     click(&mut vcx, "usage-add");
     click(&mut vcx, "usage-provider");
     vcx.simulate_keystrokes("down down enter");
