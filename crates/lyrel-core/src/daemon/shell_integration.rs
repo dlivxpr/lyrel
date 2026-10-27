@@ -2394,7 +2394,7 @@ mod tests {
             .find(|s| s.starts_with("7;file://"))
             .and_then(|s| s.split(['\u{7}', '\u{1b}']).next())
             .unwrap_or_else(|| panic!("expected OSC 7; got:\n{text}"));
-        crate::daemon::pane::parse_osc7(payload.as_bytes())
+        crate::daemon::pane::facts::output_marks::parse_osc7(payload.as_bytes())
             .unwrap_or_else(|| panic!("daemon could not parse OSC 7 payload {payload:?}"))
     }
 
@@ -2407,7 +2407,7 @@ mod tests {
             .last()
             .and_then(|s| s.split(['\u{7}', '\u{1b}']).next())
             .unwrap_or_else(|| panic!("expected OSC 7; got:\n{text}"));
-        crate::daemon::pane::parse_osc7(payload.as_bytes())
+        crate::daemon::pane::facts::output_marks::parse_osc7(payload.as_bytes())
             .unwrap_or_else(|| panic!("daemon could not parse OSC 7 payload {payload:?}"))
     }
 
@@ -3348,7 +3348,7 @@ builtin printf '\e]777;version;%s.%s\a' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1
     #[test]
     fn msys_payload_round_trips_through_parse_osc7() {
         let parse = |payload: &str| {
-            crate::daemon::pane::parse_osc7(payload.as_bytes())
+            crate::daemon::pane::facts::output_marks::parse_osc7(payload.as_bytes())
                 .unwrap_or_else(|| panic!("{payload} should parse"))
         };
         for (translated, want) in [
