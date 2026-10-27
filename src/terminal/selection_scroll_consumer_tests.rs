@@ -146,7 +146,7 @@ use super::*;
                     0,
                     "the character went in while the viewport stayed in the scrollback"
                 );
-                assert_eq!(view.cmd.text(), "l", "and it did reach the line");
+                assert_eq!(view.input.editor().text(), "l", "and it did reach the line");
             })
             .unwrap();
     }
@@ -163,7 +163,7 @@ use super::*;
                 view.paste("cargo test\n".to_string(), cx);
                 assert_eq!(display_offset(view), 0, "the paste landed off screen");
                 assert_eq!(
-                    view.cmd.text(),
+                    view.input.editor().text(),
                     "cargo test",
                     "and the trailing newline is still dropped"
                 );

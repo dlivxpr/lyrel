@@ -3,7 +3,7 @@ use crate::daemon::protocol::{SftpEntry, SftpEntryKind};
 
 pub(super) fn remote_request(view: &mut TerminalView) -> RemoteRequest {
     let context = view.completion_context();
-    match view.completion.tab(&mut view.cmd, context, None, None, Some("/work"), Some("bash"), true, true) {
+    match view.completion.tab(view.input.editor_mut(), context, None, None, Some("/work"), Some("bash"), true, true) {
         CompletionWork::Remote(request) => request,
         _ => panic!("the path needs a listing from the remote filesystem"),
     }
@@ -23,7 +23,7 @@ pub(super) fn shown(view: &TerminalView) -> Vec<String> {
 
 pub(super) fn generator_request(view: &mut TerminalView, cwd: &std::path::Path) -> (u64, usize) {
     let context = view.completion_context();
-    match view.completion.tab(&mut view.cmd, context, Some(cwd), None, None, Some("bash"), true, true) {
+    match view.completion.tab(view.input.editor_mut(), context, Some(cwd), None, None, Some("bash"), true, true) {
         CompletionWork::Generators { generation, scripts, .. } => (generation, scripts.len()),
         _ => panic!("git's signature must request its real branch generators"),
     }

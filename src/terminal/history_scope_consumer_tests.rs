@@ -50,7 +50,7 @@ fn a_pane_back_from_ssh_still_recalls_its_local_history(cx: &mut TestAppContext)
             view.follow_history_scope(cx);
             view.handle_editor_key(&key("up"), cx);
             assert_eq!(
-                view.cmd.text(),
+                view.input.editor().text(),
                 "ssh box",
                 "↑ right after the ssh session ended recalled nothing"
             );
@@ -93,7 +93,7 @@ fn a_pane_going_out_to_ssh_does_not_inherit_the_local_history(cx: &mut TestAppCo
             view.follow_history_scope(cx);
             view.handle_editor_key(&key("up"), cx);
             assert_eq!(
-                view.cmd.text(),
+                view.input.editor().text(),
                 "",
                 "a local command was recalled onto a remote prompt"
             );
@@ -129,7 +129,7 @@ fn submitted_command_backfills_its_exit_code(cx: &mut TestAppContext) {
     let marker = format!("lyrel_gpui_exit_marker_{}", std::process::id());
     window
         .update(cx, |view, _, cx| {
-            view.cmd.set(&marker);
+            view.input.editor_mut().set(&marker);
             view.submit_command(cx);
             assert!(view.history.has_pending(), "record defers for the exit");
         })
@@ -189,7 +189,7 @@ fn a_late_history_load_cannot_replace_a_restored_scope(cx: &mut TestAppContext) 
         view.history.change_scope(Scope::Local, view.host_id, prompt).unwrap();
         assert!(!view.history.accept_load(remote, view.host_id, history_fixture(vec!["echo wrong-host".into()])));
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.cmd.text(), "echo local");
+        assert_eq!(view.input.editor().text(), "echo local");
     }).unwrap();
 }
 
@@ -206,15 +206,15 @@ fn a_scope_round_trip_rejects_the_previous_load_and_never_caches_a_placeholder(c
         let current = view.history.change_scope(scope, view.host_id, prompt).unwrap();
         assert!(!view.history.accept_load(retired, view.host_id, history_fixture(vec!["echo retired".into()])));
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.cmd.text(), "", "the incomplete remote list did not inherit local commands");
+        assert_eq!(view.input.editor().text(), "", "the incomplete remote list did not inherit local commands");
         assert!(view.history.accept_load(current, view.host_id, history_fixture(vec!["echo current".into()])));
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.cmd.text(), "echo current");
+        assert_eq!(view.input.editor().text(), "echo current");
         view.history.change_scope(Scope::Local, view.host_id, prompt).unwrap();
         view.history.change_scope(Scope::remote("round-trip-history-box"), view.host_id, prompt).unwrap();
-        view.cmd.clear();
+        view.input.editor_mut().clear();
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.cmd.text(), "echo current", "a complete scope is recalled immediately");
+        assert_eq!(view.input.editor().text(), "echo current", "a complete scope is recalled immediately");
     }).unwrap();
 }
 
@@ -232,7 +232,7 @@ fn a_history_load_is_fenced_when_the_host_changes_before_the_next_poll(cx: &mut 
         let current = view.history.change_scope(scope, view.host_id, prompt).unwrap();
         assert!(view.history.accept_load(current, view.host_id, history_fixture(vec!["echo new-host".into()])));
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.cmd.text(), "echo new-host");
+        assert_eq!(view.input.editor().text(), "echo new-host");
     }).unwrap();
 }
 
@@ -250,11 +250,11 @@ fn equally_named_history_scopes_never_restore_another_hosts_commands(cx: &mut Te
         view.host_id = HostId::from_connection_key("ssh-direct:second-history-box:22");
         let second = view.history.change_scope(scope.clone(), view.host_id, prompt).unwrap();
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.cmd.text(), "", "scope labels alone cannot authorize a cached Host");
+        assert_eq!(view.input.editor().text(), "", "scope labels alone cannot authorize a cached Host");
         assert!(view.history.accept_load(second, view.host_id, history_fixture(vec!["echo second-host".into()])));
         view.host_id = first_host;
         view.history.change_scope(scope, first_host, prompt).unwrap();
         view.handle_editor_key(&key("up"), cx);
-        assert_eq!(view.cmd.text(), "echo first-host", "the original Host still has its own cached list");
+        assert_eq!(view.input.editor().text(), "echo first-host", "the original Host still has its own cached list");
     }).unwrap();
 }

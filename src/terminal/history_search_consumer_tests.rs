@@ -22,7 +22,7 @@ fn ctrl_r_fuzzy_search_accepts_into_the_editor(cx: &mut TestAppContext) {
             );
             view.handle_editor_key(&key("enter"), cx);
             assert!(view.history.search().is_none(), "Enter closes the search");
-            assert_eq!(view.cmd.text(), "git status");
+            assert_eq!(view.input.editor().text(), "git status");
         })
         .unwrap();
 }
@@ -57,7 +57,7 @@ fn ctrl_r_steps_matches_and_cmd_enter_runs(cx: &mut TestAppContext) {
             );
             view.handle_editor_key(&key("cmd-enter"), cx);
             assert!(view.history.search().is_none());
-            assert!(view.cmd.is_empty(), "submit clears the editor");
+            assert!(view.input.editor().is_empty(), "submit clears the editor");
         })
         .unwrap();
     assert_eq!(

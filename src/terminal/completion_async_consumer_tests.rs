@@ -7,24 +7,24 @@ fn generator_results_merge_filter_select_and_accept_the_live_word(cx: &mut TestA
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, window, cx| {
-        view.cmd.set("git checkout ma");
+        view.input.editor_mut().set("git checkout ma");
         let (generation, count) = generator_request(view, cwd.path());
         let context = view.completion_context();
-        view.completion.merge(generation, context, &view.cmd, parsed(&["main", "mainline", "feature"]));
+        view.completion.merge(generation, context, view.input.editor(), parsed(&["main", "mainline", "feature"]));
         for _ in 1..count {
             let context = view.completion_context();
-            view.completion.merge(generation, context, &view.cmd, Vec::new());
+            view.completion.merge(generation, context, view.input.editor(), Vec::new());
         }
         assert_eq!(shown(view), ["main", "mainline"]);
         assert!(view.render_completion_menu(cx).is_some());
         view.handle_editor_key(&key("down"), cx);
         view.handle_editor_key(&key("enter"), cx);
-        assert_eq!(view.cmd.text(), "git checkout mainline ");
+        assert_eq!(view.input.editor().text(), "git checkout mainline ");
         type_char(view, "x", window, cx);
-        assert_eq!(view.cmd.text(), "git checkout mainline x");
+        assert_eq!(view.input.editor().text(), "git checkout mainline x");
         let context = view.completion_context();
-        view.completion.merge(generation, context, &view.cmd, parsed(&["malicious-late"]));
-        assert_eq!(view.cmd.text(), "git checkout mainline x");
+        view.completion.merge(generation, context, view.input.editor(), parsed(&["malicious-late"]));
+        assert_eq!(view.input.editor().text(), "git checkout mainline x");
         assert!(view.render_completion_menu(cx).is_none());
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), None);
@@ -37,15 +37,15 @@ fn unmatched_generators_close_the_menu_only_after_all_answers(cx: &mut TestAppCo
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, _, cx| {
         for answers in [Vec::new(), parsed(&["main", "release"])] {
-            view.cmd.set("git checkout zzqqx-no-match");
+            view.input.editor_mut().set("git checkout zzqqx-no-match");
             let (generation, count) = generator_request(view, cwd.path());
             for answer in 0..count {
                 let context = view.completion_context();
-                view.completion.merge(generation, context, &view.cmd, answers.clone());
+                view.completion.merge(generation, context, view.input.editor(), answers.clone());
                 if answer + 1 < count { assert!(shown(view).is_empty()); }
             }
             assert!(view.render_completion_menu(cx).is_none());
-            assert_eq!(view.cmd.text(), "git checkout zzqqx-no-match");
+            assert_eq!(view.input.editor().text(), "git checkout zzqqx-no-match");
         }
     }).unwrap();
 }
@@ -56,20 +56,20 @@ fn canceled_generators_never_reopen_or_replace_a_new_menu(cx: &mut TestAppContex
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, _, cx| {
-        view.cmd.set("git checkout ");
+        view.input.editor_mut().set("git checkout ");
         let (stale, _) = generator_request(view, cwd.path());
         view.handle_editor_key(&key("escape"), cx);
         let context = view.completion_context();
-        view.completion.merge(stale, context, &view.cmd, parsed(&["old"]));
+        view.completion.merge(stale, context, view.input.editor(), parsed(&["old"]));
         assert!(view.render_completion_menu(cx).is_none());
-        view.cmd.set("zzqqx /work/");
+        view.input.editor_mut().set("zzqqx /work/");
         let current = remote_request(view);
         view.remote_path_results(current, Ok(entries(&["one", "two"], false)), cx);
         let context = view.completion_context();
-        view.completion.merge(stale, context, &view.cmd, parsed(&["old"]));
+        view.completion.merge(stale, context, view.input.editor(), parsed(&["old"]));
         assert_eq!(shown(view), ["/work/one", "/work/two"]);
         view.handle_editor_key(&key("enter"), cx);
-        assert_eq!(view.cmd.text(), "zzqqx /work/one ");
+        assert_eq!(view.input.editor().text(), "zzqqx /work/one ");
     }).unwrap();
 }
 
@@ -78,7 +78,7 @@ fn remote_listing_failure_is_not_successful_empty_and_dismisses_on_a_key(cx: &mu
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, window, cx| {
-        view.cmd.set("zzqqx /work/");
+        view.input.editor_mut().set("zzqqx /work/");
         let request = remote_request(view);
         assert_eq!(view.remote_completion_notice_text().as_deref(), Some("listing remote…"));
         view.remote_path_results(request, Err(std::io::Error::other("boom")), cx);
@@ -92,11 +92,11 @@ fn remote_listing_failure_is_not_successful_empty_and_dismisses_on_a_key(cx: &mu
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, _, cx| {
-        view.cmd.set("zzqqx /empty/");
+        view.input.editor_mut().set("zzqqx /empty/");
         let request = remote_request(view);
         view.remote_path_results(request, Ok(Vec::new()), cx);
         assert!(view.remote_completion_notice_text().is_none());
-        assert_eq!(view.cmd.text(), "");
+        assert_eq!(view.input.editor().text(), "");
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), Some(b"zzqqx /empty/".to_vec()));
     assert_eq!(next_input_until_timeout(&mut daemon), Some(b"\t".to_vec()));
@@ -108,7 +108,7 @@ fn earlier_input_cancellation_and_host_results_cannot_replace_current_suggestion
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, window, cx| {
         for change in 0..3 {
-            view.cmd.set("zzqqx /work/");
+            view.input.editor_mut().set("zzqqx /work/");
             let stale = remote_request(view);
             match change {
                 0 => { type_char(view, "x", window, cx); view.handle_editor_key(&key("backspace"), cx); },
@@ -121,7 +121,7 @@ fn earlier_input_cancellation_and_host_results_cannot_replace_current_suggestion
             view.remote_path_results(current, Ok(entries(&["one", "two"], false)), cx);
             assert_eq!(shown(view), ["/work/one", "/work/two"]);
             view.handle_editor_key(&key("enter"), cx);
-            assert_eq!(view.cmd.text(), "zzqqx /work/one ");
+            assert_eq!(view.input.editor().text(), "zzqqx /work/one ");
         }
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), None);
@@ -132,13 +132,15 @@ fn a_late_remote_listing_leaves_a_line_the_editor_no_longer_owns_alone(cx: &mut 
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, _, cx| {
-        view.cmd.set("zzqqx /work/");
+        view.input.editor_mut().set("zzqqx /work/");
         let stale = remote_request(view);
-        view.editor_handoff = Some(view.terminal.prompt_cycle());
+        view.handle_editor_key(&key("ctrl-t"), cx);
         view.remote_path_results(stale, Ok(Vec::new()), cx);
-        assert_eq!(view.cmd.text(), "zzqqx /work/");
+        assert_eq!(view.input.editor().text(), "");
         assert!(view.render_completion_menu(cx).is_none());
     }).unwrap();
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(b"zzqqx /work/".to_vec()));
+    assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x14]));
     assert_eq!(next_input_until_timeout(&mut daemon), None);
 }
 
@@ -147,7 +149,7 @@ fn a_directory_change_rejects_the_previous_listing(cx: &mut TestAppContext) {
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     let request = window.update(cx, |view, _, _| {
-        view.cmd.set("zzqqx /work/");
+        view.input.editor_mut().set("zzqqx /work/");
         remote_request(view)
     }).unwrap();
     DaemonMsg::Cwd(std::path::PathBuf::from("/different-completion-directory")).encode(&mut daemon).unwrap();
@@ -159,7 +161,7 @@ fn a_directory_change_rejects_the_previous_listing(cx: &mut TestAppContext) {
     window.update(cx, |view, _, cx| {
         assert_eq!(view.cwd(), Some(std::path::PathBuf::from("/different-completion-directory")));
         view.remote_path_results(request, Ok(entries(&["obsolete"], false)), cx);
-        assert_eq!(view.cmd.text(), "zzqqx /work/");
+        assert_eq!(view.input.editor().text(), "zzqqx /work/");
         assert!(view.render_completion_menu(cx).is_none());
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), None);

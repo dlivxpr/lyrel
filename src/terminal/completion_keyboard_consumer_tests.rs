@@ -9,24 +9,24 @@ fn accepting_a_candidate_quotes_it_for_the_shell(cx: &mut TestAppContext) {
         for (line, name, expected) in [
             ("cd My", "My Documents", "cd 'My Documents'/"),
         ] {
-            view.cmd.set(line);
+            view.input.editor_mut().set(line);
             let request = remote_request(view);
             view.remote_path_results(request, Ok(entries(&[name], true)), cx);
-            assert_eq!(view.cmd.text(), expected);
+            assert_eq!(view.input.editor().text(), expected);
             type_char(view, "x", window, cx);
-            assert_eq!(view.cmd.text(), format!("{expected}x"));
+            assert_eq!(view.input.editor().text(), format!("{expected}x"));
         }
-        view.cmd.set("cd ~/My");
+        view.input.editor_mut().set("cd ~/My");
         let candidate = completion::Candidate {
             text: "~/My Documents".into(), kind: CandidateKind::Dir,
             start: 3, end: 6, description: None, icon: None,
         };
         let shell = view.shell_program();
-        view.completion.offer(&mut view.cmd, 3, 6, vec![candidate], 0, shell.as_deref());
-        assert_eq!(view.cmd.text(), "cd ~/'My Documents'/");
-        view.cmd.set("git commit --mess");
+        view.completion.offer(view.input.editor_mut(), 3, 6, vec![candidate], 0, shell.as_deref());
+        assert_eq!(view.input.editor().text(), "cd ~/'My Documents'/");
+        view.input.editor_mut().set("git commit --mess");
         view.tab_pressed(true, cx);
-        assert_eq!(view.cmd.text(), "git commit --message ");
+        assert_eq!(view.input.editor().text(), "git commit --message ");
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), None, "accepting only edits the input");
 }
@@ -36,16 +36,16 @@ fn a_candidate_needing_escapes_is_never_half_applied(cx: &mut TestAppContext) {
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, window, cx| {
-        view.cmd.set("cd My");
+        view.input.editor_mut().set("cd My");
         let request = remote_request(view);
         view.remote_path_results(request, Ok(entries(&["My Documents", "My Music"], true)), cx);
-        assert_eq!(view.cmd.text(), "cd My", "the unsafe common prefix stays out of the input");
+        assert_eq!(view.input.editor().text(), "cd My", "the unsafe common prefix stays out of the input");
         assert_eq!(shown(view), ["My Music", "My Documents"]);
         assert!(view.render_completion_menu(cx).is_some());
         view.handle_editor_key(&key("enter"), cx);
-        assert_eq!(view.cmd.text(), "cd 'My Music'/");
+        assert_eq!(view.input.editor().text(), "cd 'My Music'/");
         type_char(view, "x", window, cx);
-        assert_eq!(view.cmd.text(), "cd 'My Music'/x");
+        assert_eq!(view.input.editor().text(), "cd 'My Music'/x");
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), None);
 }
@@ -55,21 +55,21 @@ fn insert_newline_action_closes_the_completion_menu_but_enter_still_accepts(cx: 
     let (window, mut daemon) = harness(cx);
     prompt_ready(&window, cx, &mut daemon);
     window.update(cx, |view, window, cx| {
-        view.cmd.set("zzqqx /work/");
+        view.input.editor_mut().set("zzqqx /work/");
         let request = remote_request(view);
         view.remote_path_results(request, Ok(entries(&["one", "two"], false)), cx);
         assert_eq!(shown(view), ["/work/one", "/work/two"]);
         view.insert_newline_action(cx);
         assert!(view.render_completion_menu(cx).is_none());
-        assert_eq!(view.cmd.text(), "zzqqx /work/\n");
-        view.cmd.set("zzqqx /work/");
+        assert_eq!(view.input.editor().text(), "zzqqx /work/\n");
+        view.input.editor_mut().set("zzqqx /work/");
         let request = remote_request(view);
         view.remote_path_results(request, Ok(entries(&["one", "two"], false)), cx);
         view.handle_editor_key(&key("down"), cx);
         view.handle_editor_key(&key("enter"), cx);
-        assert_eq!(view.cmd.text(), "zzqqx /work/two ");
+        assert_eq!(view.input.editor().text(), "zzqqx /work/two ");
         type_char(view, "x", window, cx);
-        assert_eq!(view.cmd.text(), "zzqqx /work/two x");
+        assert_eq!(view.input.editor().text(), "zzqqx /work/two x");
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), None);
     window.update(cx, |view, _, cx| view.handle_editor_key(&key("enter"), cx)).unwrap();
@@ -89,7 +89,7 @@ fn tab_completion_off_sends_every_tab_to_the_shell(cx: &mut TestAppContext) {
         for ch in ["c", "d", " "] { type_char(view, ch, window, cx); }
         view.tab_pressed(true, cx);
         assert!(view.render_completion_menu(cx).is_none());
-        assert_eq!(view.cmd.text(), "");
+        assert_eq!(view.input.editor().text(), "");
         view.tab_pressed(true, cx);
     }).unwrap();
     assert_eq!(next_input_until_timeout(&mut daemon), Some(b"cd ".to_vec()));
