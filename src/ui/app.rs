@@ -2282,32 +2282,7 @@ impl LyrelApp {
             .iter_mut()
             .find(|tab| tab.pane.leaves().iter().any(|slot| slot.entity_id() == old))
         {
-            if let Some(presentation) = &mut tab.foreign_presentation {
-                let old_key = tab
-                    .pane
-                    .leaves()
-                    .into_iter()
-                    .find(|slot| slot.entity_id() == old)
-                    .and_then(|slot| crate::ui::pane_sidecar::scoped_pane(&slot, cx));
-                if let Some(old_key) = old_key {
-                    let new_key = crate::ui::pane_sidecar::scoped_pane(&new, cx);
-                    presentation
-                        .remap_panes(|key| if key == old_key { new_key } else { Some(key) });
-                }
-            }
-            let old_id = tab
-                .pane
-                .leaves()
-                .into_iter()
-                .find(|slot| slot.entity_id() == old)
-                .and_then(|slot| match slot {
-                    PaneSlot::Ready(view) if remote && view.read(cx).pane_route().is_local() => {
-                        None
-                    }
-                    PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
-                    PaneSlot::Connecting(view) => view.read(cx).restore_pane(),
-                });
-            remap_presentation_slot(&mut tab.presentation, old_id, &new, cx);
+            tab.remap_slot(old, &new, remote, cx);
         }
         self.tabs.replace_leaf(old, new);
     }
@@ -2559,13 +2534,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some((tab, slot)) = self.tabs.iter().enumerate().find_map(|(ix, tab)| {
-            tab.pane
-                .leaves()
-                .into_iter()
-                .find(|slot| slot.entity_id() == pane)
-                .map(|slot| (ix, slot))
-        }) else {
+        let Some(slot) = self.tabs.select_pane(pane) else {
             return false;
         };
         if self
@@ -2575,9 +2544,7 @@ impl LyrelApp {
         {
             self.maximized = None;
         }
-        self.tabs.select(tab);
         self.focus_leaf(&slot, window, cx);
-        self.tabs.remember_leaf(pane);
         true
     }
 
@@ -2597,23 +2564,11 @@ impl LyrelApp {
         }) else {
             return menu;
         };
-        let terminal = tab
-            .pane
-            .terminals()
-            .into_iter()
-            .find(|view| view.entity_id() == pane);
-        let ready = terminal.is_some();
-        let live = terminal
-            .as_ref()
-            .is_some_and(|view| !view.read(cx).ssh_disconnected());
-        let multiple = tab.pane.leaves().len() > 1;
+        let (ready, live, multiple, pip) = tab.pane_command_state(pane, cx);
         let zoomed = self
             .maximized
             .as_ref()
             .is_some_and(|view| view.entity_id() == pane);
-        let pip = tab
-            .pip_slot(cx)
-            .is_some_and(|slot| slot.entity_id() == pane);
         let entries: [(L10nKey, Option<Box<dyn gpui_kit::Action>>, bool, bool); 15] = [
             (
                 L10nKey::AppMenuPaste,
@@ -2735,37 +2690,9 @@ impl LyrelApp {
     }
 
     fn toggle_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.active_mut() else {
+        let Some(target) = self.tabs.active_mut().and_then(|tab| tab.toggle_focused_pip(self.workspace, window, cx)) else {
             return;
         };
-        let Some(target) = tab
-            .pane
-            .focused_leaf(window, cx)
-            .or_else(|| tab.focus_target(cx))
-        else {
-            return;
-        };
-        let restoring = tab
-            .pip_slot(cx)
-            .is_some_and(|pip| pip.entity_id() == target.entity_id());
-        let fallback = if restoring {
-            tab.pane
-                .leaves()
-                .into_iter()
-                .find(|slot| slot.entity_id() != target.entity_id())
-                .map(|slot| slot.entity_id())
-        } else {
-            Some(target.entity_id())
-        };
-        if !crate::ui::tree_sync::toggle_pip_for_tab(
-            tab,
-            target.entity_id(),
-            fallback,
-            self.workspace,
-            cx,
-        ) {
-            return;
-        }
         self.maximized = None;
         self.pane_drag.borrow_mut().take();
         self.focus_leaf(&target, window, cx);
@@ -2774,32 +2701,9 @@ impl LyrelApp {
     }
 
     pub(crate) fn restore_pane_pip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.active_mut() else {
+        let Some(pip) = self.tabs.active_mut().and_then(|tab| tab.restore_pip(self.workspace, window, cx)) else {
             return;
         };
-        let Some(pip) = tab.pip_slot(cx) else {
-            return;
-        };
-        let fallback = tab
-            .pane
-            .focused_leaf(window, cx)
-            .filter(|slot| slot.entity_id() != pip.entity_id())
-            .or_else(|| {
-                tab.pane
-                    .leaves()
-                    .into_iter()
-                    .find(|slot| slot.entity_id() != pip.entity_id())
-            })
-            .map(|slot| slot.entity_id());
-        if !crate::ui::tree_sync::toggle_pip_for_tab(
-            tab,
-            pip.entity_id(),
-            fallback,
-            self.workspace,
-            cx,
-        ) {
-            return;
-        }
         self.maximized = None;
         self.pane_drag.borrow_mut().take();
         self.focus_leaf(&pip, window, cx);
@@ -2824,25 +2728,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.active_mut() else {
+        let Some(fallback) = self.tabs.active_mut().and_then(|tab| tab.park(target, self.workspace, cx)) else {
             return;
         };
-        let fallback = tab
-            .pane
-            .leaves()
-            .into_iter()
-            .find(|slot| slot.entity_id() != target && !tab.is_parked_slot(slot, cx));
-        if !crate::ui::tree_sync::set_parked_for_tab(
-            tab,
-            target,
-            fallback.as_ref().map(PaneSlot::entity_id),
-            true,
-            self.workspace,
-            cx,
-        ) {
-            return;
-        }
-        tab.remember_fallback(fallback.as_ref());
         self.maximized = None;
         self.pane_drag.borrow_mut().take();
         self.sync_parked_deck(window, cx);
@@ -2863,31 +2751,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.tabs.active_mut() else {
+        let Some(slot) = self.tabs.active_mut().and_then(|tab| tab.restore_parked(target, self.workspace, cx)) else {
             return;
         };
-        let Some(slot) = tab
-            .pane
-            .leaves()
-            .into_iter()
-            .find(|slot| slot.entity_id() == target)
-        else {
-            return;
-        };
-        if !tab.is_parked_slot(&slot, cx) {
-            return;
-        }
-        let fallback = tab.focus_target(cx).map(|slot| slot.entity_id());
-        if !crate::ui::tree_sync::set_parked_for_tab(
-            tab,
-            target,
-            fallback,
-            false,
-            self.workspace,
-            cx,
-        ) {
-            return;
-        }
         self.maximized = None;
         self.sync_parked_deck(window, cx);
         self.focus_leaf(&slot, window, cx);
@@ -3199,10 +3065,7 @@ impl LyrelApp {
             }
         };
         let tab = self.tabs.active_mut()?;
-        if !tab
-            .pane
-            .split_leaf(target.entity_id(), axis, false, new.clone())
-        {
+        if !tab.split_pane(target.entity_id(), axis, false, new.clone()) {
             return None;
         }
         self.maximized = None;
@@ -3340,46 +3203,18 @@ impl LyrelApp {
     }
 
     fn cycle_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let leaves = match self.tabs.get(self.tabs.active_index()) {
-            Some(tab) => tab.pane.leaves(),
-            None => return,
-        };
-        if leaves.len() < 2 {
+        let Some(leaf) = self.tabs.get(self.tabs.active_index()).and_then(|tab| tab.cycle_focus(forward, window, cx)) else {
             return;
-        }
-        self.maximized = None;
-        let current = leaves
-            .iter()
-            .position(|l| l.contains_focused(window, cx))
-            .unwrap_or(0);
-        let next = if forward {
-            (current + 1) % leaves.len()
-        } else {
-            (current + leaves.len() - 1) % leaves.len()
         };
-        let leaf = leaves[next].clone();
+        self.maximized = None;
         self.focus_leaf(&leaf, window, cx);
         cx.notify();
     }
 
     fn focus_pane_dir(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
+        let Some(target) = self.tabs.active_mut().and_then(|tab| tab.directional_focus(dir, window, cx)) else {
             return;
         };
-        let Some(from) = tab.pane.focused_leaf(window, cx) else {
-            return;
-        };
-        let back = tab.focus_origin(from.entity_id(), dir);
-        let Some(target) = tab.pane.neighbor_in_dir(dir, back, window, cx) else {
-            return;
-        };
-        let live: Vec<gpui_kit::EntityId> =
-            tab.pane.leaves().iter().map(|l| l.entity_id()).collect();
-        let (from, to) = (from.entity_id(), target.entity_id());
-        let active = self.tabs.active_index();
-        if let Some(tab) = self.tabs.get_mut(active) {
-            tab.remember_focus_origin(from, to, dir, &live);
-        }
         self.maximized = None;
         self.focus_leaf(&target, window, cx);
         cx.notify();
@@ -3389,7 +3224,7 @@ impl LyrelApp {
         let changed = self
             .tabs
             .get(self.tabs.active_index())
-            .is_some_and(|tab| tab.pane.resize_focused_pane(dir, RESIZE_STEP, window, cx));
+            .is_some_and(|tab| tab.resize_pane(dir, RESIZE_STEP, window, cx));
         if changed {
             self.save_session(cx);
             cx.notify();
@@ -3397,25 +3232,10 @@ impl LyrelApp {
     }
 
     fn swap_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (from, len) = match self.tabs.get(self.tabs.active_index()) {
-            Some(tab) => (tab.pane.focused_index(window, cx), tab.pane.leaves().len()),
-            None => return,
-        };
-        if len < 2 {
-            return;
-        }
-        let from = from.unwrap_or(0);
-        let to = if forward {
-            (from + 1) % len
-        } else {
-            (from + len - 1) % len
-        };
-        if let Some(tab) = self.tabs.active_mut() {
-            if tab.pane.swap_leaf_indices(from, to) {
-                self.maximized = None;
-                self.save_session(cx);
-                cx.notify();
-            }
+        if self.tabs.active_mut().is_some_and(|tab| tab.swap_pane(forward, window, cx)) {
+            self.maximized = None;
+            self.save_session(cx);
+            cx.notify();
         }
     }
 
@@ -3667,47 +3487,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(from) = self.tabs.iter().position(|t| t.id() == source) else {
+        let Some((merged_id, first)) = self.tabs.merge_panes(source, zone) else {
             return;
         };
-        let Some(host) = self.tabs.get(self.tabs.active_index()) else {
-            return;
-        };
-        if host.id() == source {
-            return;
-        }
-        let leaves = host.pane.leaves();
-        let Some(zone) = zone.map(|id| leaves.iter().find(|l| l.entity_id() == id).cloned()) else {
-            return;
-        };
-
-        let mut moved = self.tabs.remove(from);
-        // Lifted out rather than cloned: these are the live terminals, and a
-        // graft that finds nowhere to put them has to be able to hand them
-        // back intact.
-        let sub = std::mem::replace(&mut moved.pane, crate::ui::pane::Pane::Empty);
-        let first = sub.first_leaf();
-        let grafted = match self.tabs.active_mut() {
-            Some(host) => crate::ui::pane_drag::graft(&mut host.pane, sub, zone),
-            None => Err(sub),
-        };
-        if let Err(sub) = grafted {
-            moved.pane = sub;
-            self.tabs.insert(from, moved);
-            return;
-        }
-        let merged_id = moved.id();
-        let host = self.tabs.active_mut().expect("active tab exists");
-        match (host.code.as_deref_mut(), moved.code) {
-            (None, code) => host.code = code,
-            // Both had an editor: the files come along into this tab's strip
-            // rather than being dropped with the tab that brought them.
-            (Some(code), Some(theirs)) => code.adopt(&theirs.all_files()),
-            (Some(_), None) => {}
-        }
-        if host.diff_overlay.is_none() {
-            host.diff_overlay = moved.diff_overlay;
-        }
         self.editor_forget_tab(merged_id, cx);
         if self
             .renaming
@@ -3831,17 +3613,7 @@ impl LyrelApp {
         let Some(tab) = self.tabs.active_mut() else {
             return;
         };
-        let Some(slot) = tab
-            .pane
-            .leaves()
-            .into_iter()
-            .find(|l| l.entity_id() == pane)
-        else {
-            return;
-        };
-        // Refused for the last pane in a tab, which is what makes a drop that
-        // would change nothing do nothing.
-        let Some(slot) = tab.pane.take_leaf(&slot) else {
+        let Some(slot) = tab.detach_pane(pane) else {
             return;
         };
         let cwd = slot
@@ -3874,14 +3646,9 @@ impl LyrelApp {
         let Some(tab) = self.tabs.active_mut() else {
             return;
         };
-        let leaves = tab.pane.leaves();
-        let here = |id| leaves.iter().find(|l| l.entity_id() == id).cloned();
-        let (Some(moved), Some(zone)) = (here(from), zone.map(here)) else {
+        let Some(moved) = tab.drop_pane(from, zone) else {
             return;
         };
-        if !crate::ui::pane_drag::apply(&mut tab.pane, &moved, zone) {
-            return;
-        }
         self.maximized = None;
         self.focus_leaf(&moved, window, cx);
         self.save_session(cx);
@@ -4053,7 +3820,7 @@ impl LyrelApp {
         };
         let layout = redial_native_ssh(layout);
         let pane_ws = self.window_workspace(cx);
-        let mut presentation = self.tabs[index].presentation.clone();
+        let mut presentation = self.tabs[index].presentation().clone();
         // No listing: every pane in here was stopped on purpose, so the attach
         // each one tries first fails and falls through to the fresh spawn —
         // unless the stop never landed, in which case attaching to the pane
@@ -4122,29 +3889,12 @@ impl LyrelApp {
     /// the pane the tab remembers, the one switching back to it would focus,
     /// and not whichever leaf the layout happens to list first.
     fn toggle_maximize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(leaf) = self.maximized.take() {
-            self.tabs.remember_leaf(leaf.entity_id());
-            self.focus_active(window, cx);
-            cx.notify();
-            return;
-        }
-        let Some(tab) = self.tabs.get(self.tabs.active_index()) else {
+        let restoring = self.maximized.is_some();
+        let Some(target) = self.tabs.active_mut().and_then(|tab| tab.toggle_zoom(&mut self.maximized, window, cx)) else {
             return;
         };
-        if tab.pane.leaves().len() < 2 {
-            return;
-        }
-        let leaf = tab
-            .pane
-            .focused_leaf(window, cx)
-            .or_else(|| tab.focus_target(cx))
-            .and_then(|slot| slot.terminal().cloned());
-        if let Some(leaf) = leaf {
-            let handle = leaf.read(cx).focus_handle.clone();
-            self.maximized = Some(leaf);
-            window.focus(&handle, cx);
-            cx.notify();
-        }
+        if restoring { self.focus_active(window, cx); } else { self.focus_leaf(&target, window, cx); }
+        cx.notify();
     }
 
     pub(crate) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -4710,8 +4460,7 @@ impl LyrelApp {
             }
             ForkPlacement::Split { axis, before } => {
                 let placed = self.tabs.get_mut(index).is_some_and(|tab| {
-                    tab.pane
-                        .split_leaf(source.entity_id(), axis, before, new.clone())
+                    tab.split_pane(source.entity_id(), axis, before, new.clone())
                 });
                 if !placed {
                     self.notify_session_operation_error(
@@ -5989,8 +5738,8 @@ impl LyrelApp {
                         let panes = active_tab.render_panes(&chrome, window, cx);
                         let all_parked = active_tab.pip_slot(cx).is_none()
                             && active_tab.focus_target(cx).is_none()
-                            && active_tab.foreign_presentation.as_ref().map_or_else(
-                                || !active_tab.presentation.parked().is_empty(),
+                            && active_tab.scoped_presentation().map_or_else(
+                                || !active_tab.presentation().parked().is_empty(),
                                 |presentation| !presentation.parked().is_empty(),
                             );
                         div()
@@ -6819,7 +6568,7 @@ fn tab_to_session(tab: &Tab, cx: &App) -> SessionTab {
             Some(layout) => layout.clone(),
             None => pane_to_session(&tab.pane, cx),
         },
-        presentation: tab.presentation.clone(),
+        presentation: tab.presentation().clone(),
         group: tab.group.get(),
         last_auto: tab.auto_group.borrow().clone(),
         tree_id: None,
@@ -9872,1733 +9621,36 @@ mod hibernate_gpui_tests {
 
 
 #[cfg(test)]
-mod pane_menu_tests {
-    use super::*;
-    use gpui_kit::TestAppContext;
-    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
-
-    #[gpui_kit::test]
-    fn a_single_pane_handle_opens_by_keyboard_and_escape_returns_to_its_pane(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
-        let pane = app.update_in(&mut vcx, |app, _, _| app.tabs[0].pane.first_leaf().unwrap());
-        let id = ("pane-drag-handle", pane.entity_id().as_u64() as usize);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(!window.find(id).visible());
-            window.pointer_move(window.find(id).bounds().center(), None, cx);
-            assert!(window.find(id).visible());
-            window.click(id, cx);
-            assert!(
-                !pane.contains_focused(window, cx),
-                "click transfers focus to the menu"
-            );
-            window.pointer_move(point(px(10.), px(10.)), None, cx);
-            assert!(
-                window.find(id).visible(),
-                "an open menu keeps its trigger visible"
-            );
-            window.press("escape", cx);
-        });
-        app.update_in(&mut vcx, |_, window, cx| {
-            assert!(pane.contains_focused(window, cx));
-        });
-        // Start in window navigation: a focused terminal owns Tab for the shell.
-        vcx.update(|window, cx| {
-            window.blur(cx);
-            window.focus_next(cx);
-            window.render_frame(cx);
-            for _ in 0..32 {
-                window.press("tab", cx);
-                if window.find(id).focused() == Some(true) {
-                    break;
-                }
-            }
-            assert_eq!(window.find(id).focused(), Some(true));
-            assert!(
-                window.find(id).visible(),
-                "keyboard focus reveals the handle"
-            );
-            window.press("enter", cx);
-            assert!(
-                !pane.contains_focused(window, cx),
-                "Enter opens the menu without hover"
-            );
-            window.press("escape", cx);
-        });
-        app.update_in(&mut vcx, |_, window, cx| {
-            assert!(pane.contains_focused(window, cx))
-        });
-    }
-
-    #[gpui_kit::test]
-    fn move_to_tab_keeps_the_selected_remote_transport_and_the_other_pane(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
-        let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
-            let left = app.tabs[0].pane.first_leaf().unwrap();
-            let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-            right.terminal().unwrap().update(cx, |view, _| {
-                view.set_workspace(Some(crate::terminal::PaneWorkspace {
-                    workspace: WorkspaceId::new(),
-                    target: crate::core::session::RemoteTarget::direct("me", "remote-build", 22),
-                    spec: None,
-                    label: None,
-                    resize_echo: false,
-                }));
-            });
-            app.tabs[0]
-                .pane
-                .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
-            window.focus(&right.focus_handle(cx), cx);
-            cx.notify();
-            (left, right)
-        });
-        vcx.dispatch_action(MovePaneToTab);
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(app.tabs.len(), 2);
-            assert_eq!(
-                app.tabs[0].pane.first_leaf().unwrap().entity_id(),
-                left.entity_id()
-            );
-            assert_eq!(
-                app.tabs[1].pane.first_leaf().unwrap().entity_id(),
-                right.entity_id()
-            );
-            assert_eq!(app.tabs.active_index(), 1);
-            assert!(right.contains_focused(window, cx));
-            assert!(!right.terminal().unwrap().read(cx).pane_route().is_local());
-        });
-    }
-
-    #[gpui_kit::test]
-    fn menu_zoom_targets_the_clicked_pane_without_changing_fonts(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
-        let (left, right, font) = app.update_in(&mut vcx, |app, window, cx| {
-            let left = app.tabs[0].pane.first_leaf().unwrap();
-            let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-            app.tabs[0]
-                .pane
-                .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
-            window.focus(&left.focus_handle(cx), cx);
-            cx.notify();
-            (left, right, app.font_size)
-        });
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let id = ("pane-drag-handle", right.entity_id().as_u64() as usize);
-            window.pointer_move(window.find(id).bounds().center(), None, cx);
-            window.click(
-                ("pane-drag-handle", right.entity_id().as_u64() as usize),
-                cx,
-            );
-        });
-        vcx.update(|window, cx| {
-            let zoom = window
-                .find_by_label(t(L10nKey::CmdZoomPane))
-                .bounds()
-                .center();
-            window.pointer_down(zoom, gpui_kit::MouseButton::Left, cx);
-            window.pointer_up(zoom, gpui_kit::MouseButton::Left, cx);
-        });
-
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(
-                app.maximized.as_ref().unwrap().entity_id(),
-                right.entity_id()
-            );
-            assert!(right.contains_focused(window, cx));
-            assert_eq!(app.font_size, font);
-            assert_eq!(app.tabs[0].pane.leaves().len(), 2);
-            assert_ne!(left.entity_id(), right.entity_id());
-        });
-        vcx.dispatch_action(ToggleMaximizePane);
-        app.update_in(&mut vcx, |app, _, _| assert!(app.maximized.is_none()));
-    }
-
-    #[gpui_kit::test]
-    fn restarting_an_unreachable_remote_never_replaces_it_with_a_local_shell(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
-        let remote = app.update_in(&mut vcx, |app, window, cx| {
-            let remote = app.tabs[0].pane.terminals()[0].clone();
-            remote.update(cx, |view, _| {
-                view.set_workspace(Some(crate::terminal::PaneWorkspace {
-                    workspace: WorkspaceId::new(),
-                    target: crate::core::session::RemoteTarget::direct("me", "offline-build", 22),
-                    spec: None,
-                    label: None,
-                    resize_echo: false,
-                }))
-            });
-            let focus = remote.read(cx).focus_handle.clone();
-            window.focus(&focus, cx);
-            remote
-        });
-        vcx.dispatch_action(RestartPaneShell);
-        vcx.run_until_parked();
-        assert!(vcx.has_pending_prompt());
-        // Focus changes while a confirmation is up must not retarget it.
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.tabs.select(1);
-            app.focus_active(window, cx);
-        });
-        vcx.simulate_prompt_answer(t(L10nKey::AppRestart));
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, _, cx| {
-            assert_eq!(app.tabs.len(), 2);
-            assert_eq!(app.tabs[0].pane.terminals()[0], remote);
-            assert!(!remote.read(cx).pane_route().is_local());
-            assert_eq!(app.tabs.active_index(), 1);
-        });
-    }
-
-    #[gpui_kit::test]
-    fn dragging_the_handle_moves_the_same_pane_without_opening_its_menu(cx: &mut TestAppContext) {
-        use gpui_kit::{MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput};
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
-        let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
-            let left = app.tabs[0].pane.first_leaf().unwrap();
-            let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-            app.tabs[0]
-                .pane
-                .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
-            window.focus(&left.focus_handle(cx), cx);
-            cx.notify();
-            (left, right)
-        });
-        let start = vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window
-                .find(("pane-drag-handle", right.entity_id().as_u64() as usize))
-                .bounds()
-                .center()
-        });
-        let end = app.update_in(&mut vcx, |app, _, _| {
-            crate::ui::pane_drag::leaf_bounds(&app.tabs[0].pane, app.pane_area.get().unwrap())[0]
-                .center()
-        });
-        vcx.update(|window, cx| {
-            window.dispatch_event(
-                PlatformInput::MouseMove(MouseMoveEvent {
-                    position: start,
-                    pressed_button: None,
-                    modifiers: gpui_kit::Modifiers::none(),
-                }),
-                cx,
-            );
-            window.dispatch_event(
-                PlatformInput::MouseDown(MouseDownEvent {
-                    button: MouseButton::Left,
-                    position: start,
-                    modifiers: gpui_kit::Modifiers::none(),
-                    click_count: 1,
-                    first_mouse: false,
-                }),
-                cx,
-            );
-            window.dispatch_event(
-                PlatformInput::MouseMove(MouseMoveEvent {
-                    position: end,
-                    pressed_button: Some(MouseButton::Left),
-                    modifiers: gpui_kit::Modifiers::none(),
-                }),
-                cx,
-            );
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            assert!(cx.has_active_drag());
-            window.render_frame(cx);
-            window.dispatch_event(
-                PlatformInput::MouseUp(MouseUpEvent {
-                    button: MouseButton::Left,
-                    position: end,
-                    modifiers: gpui_kit::Modifiers::none(),
-                    click_count: 1,
-                }),
-                cx,
-            );
-        });
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves[0].entity_id(), right.entity_id());
-            assert_eq!(leaves[1].entity_id(), left.entity_id());
-            assert!(
-                right.contains_focused(window, cx),
-                "drag release must not open a menu"
-            );
-        });
-    }
-}
+#[path = "tab/tests_menu.rs"]
+mod pane_menu_tests;
 
 #[cfg(test)]
-mod pane_menu_guard_tests {
-    use super::*;
-    use gpui_kit::TestAppContext;
-    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
-
-    #[gpui_kit::test]
-    fn close_confirmation_keeps_its_original_pane_when_focus_changes(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
-        let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
-            cx.global_mut::<Config>().confirm_close = crate::core::config::ConfirmClose::Always;
-            let left = app.tabs[0].pane.first_leaf().unwrap();
-            let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-            app.tabs[0]
-                .pane
-                .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
-            window.focus(&right.focus_handle(cx), cx);
-            cx.notify();
-            (left, right)
-        });
-        vcx.dispatch_action(CloseActiveTab);
-        vcx.run_until_parked();
-        assert!(vcx.has_pending_prompt());
-        app.update_in(&mut vcx, |_, window, cx| {
-            window.focus(&left.focus_handle(cx), cx)
-        });
-        vcx.simulate_prompt_answer(t(L10nKey::Close));
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, _, _| {
-            assert_eq!(app.tabs.len(), 1);
-            assert_eq!(app.tabs[0].pane.leaves().len(), 1);
-            assert_eq!(
-                app.tabs[0].pane.first_leaf().unwrap().entity_id(),
-                left.entity_id()
-            );
-            assert_ne!(left.entity_id(), right.entity_id());
-        });
-    }
-
-    #[gpui_kit::test]
-    fn pane_handle_remains_usable_after_interface_zoom(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
-        let pane = app.update_in(&mut vcx, |app, _, _| app.tabs[0].pane.first_leaf().unwrap());
-        for size in [14., 20.] {
-            app.update_in(&mut vcx, |_, _, cx| {
-                cx.global_mut::<Config>().ui_font_size = size;
-                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(size));
-                cx.notify();
-            });
-            vcx.update(|window, cx| {
-                window.render_frame(cx);
-                let id = ("pane-drag-handle", pane.entity_id().as_u64() as usize);
-                window.pointer_move(window.find(id).bounds().center(), None, cx);
-                assert!(window.find(id).visible());
-                window.click(("pane-drag-handle", pane.entity_id().as_u64() as usize), cx);
-                window.press("escape", cx);
-                assert!(pane.contains_focused(window, cx));
-            });
-        }
-    }
-}
+#[path = "tab/tests_menu_guard.rs"]
+mod pane_menu_guard_tests;
 
 #[cfg(test)]
-mod pip_gpui_tests {
-    use super::*;
-    use gpui_kit::TestAppContext;
-    use gpui_kit::test::TestWindowExt as _;
-
-    #[gpui_kit::test]
-    fn single_pane_pip_keeps_one_terminal_and_restores_keyboard_focus(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
-        let pane = app.update_in(&mut vcx, |app, window, cx| {
-            let pane = app.tabs[0].pane.first_leaf().unwrap();
-            window.focus(&pane.focus_handle(cx), cx);
-            pane
-        });
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        let id = ("pane-pip", pane.entity_id().as_u64() as usize);
-        let handle = ("pane-drag-handle", pane.entity_id().as_u64() as usize);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let pip = window.find(id).bounds();
-            let content = window.find("pane-presentations").bounds();
-            assert!(pip.size.width > px(0.) && pip.size.height > px(0.));
-            assert!(pip.left() >= content.left() && pip.right() <= content.right());
-            assert!(pip.top() >= content.top() && pip.bottom() <= content.bottom());
-            assert_eq!(
-                window.find_all(handle).len(),
-                1,
-                "the live terminal is mounted only once"
-            );
-            assert!(pane.contains_focused(window, cx));
-        });
-        app.update_in(&mut vcx, |app, _, _| {
-            assert_eq!(app.tabs.len(), 1);
-            assert_eq!(
-                app.tabs[0].pane.leaves().len(),
-                1,
-                "empty tiled space creates no shell"
-            );
-        });
-        vcx.dispatch_action(RestorePanePip);
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.try_find(id).is_none());
-            assert_eq!(window.find_all(handle).len(), 1);
-            assert!(pane.contains_focused(window, cx));
-        });
-    }
-
-    #[gpui_kit::test]
-    fn replacing_pip_restores_the_previous_terminal_and_switches_with_its_tab(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 3);
-        let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
-            let left = app.tabs[0].pane.first_leaf().unwrap();
-            let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-            app.tabs[0]
-                .pane
-                .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
-            window.focus(&left.focus_handle(cx), cx);
-            cx.notify();
-            (left, right)
-        });
-        vcx.dispatch_action(TogglePanePip);
-        app.update_in(&mut vcx, |_, window, cx| {
-            window.focus(&right.focus_handle(cx), cx)
-        });
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        let right_id = ("pane-pip", right.entity_id().as_u64() as usize);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(
-                window
-                    .try_find(("pane-pip", left.entity_id().as_u64() as usize))
-                    .is_none()
-            );
-            assert!(window.find(right_id).visible());
-            for pane in [&left, &right] {
-                assert_eq!(
-                    window
-                        .find_all(("pane-drag-handle", pane.entity_id().as_u64() as usize))
-                        .len(),
-                    1
-                );
-            }
-        });
-        app.update_in(&mut vcx, |app, window, cx| app.activate(1, window, cx));
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(
-                window.try_find(right_id).is_none(),
-                "another tab owns another presentation"
-            );
-        });
-        app.update_in(&mut vcx, |app, window, cx| app.activate(0, window, cx));
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.find(right_id).visible());
-        });
-        vcx.dispatch_action(RestorePanePip);
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(app.tabs[0].pane.leaves().len(), 2);
-            assert!(right.contains_focused(window, cx));
-        });
-    }
-}
+#[path = "tab/tests_pip.rs"]
+mod pip_gpui_tests;
 
 #[cfg(test)]
-mod pip_menu_gpui_tests {
-    use super::*;
-    use gpui_kit::TestAppContext;
-    use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt as _};
-
-    #[gpui_kit::test]
-    fn pip_menu_acts_on_its_captured_terminal_not_the_previously_focused_one(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
-        let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
-            let left = app.tabs[0].pane.first_leaf().unwrap();
-            let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-            app.tabs[0]
-                .pane
-                .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
-            window.focus(&left.focus_handle(cx), cx);
-            cx.notify();
-            (left, right)
-        });
-        let right_id = ("pane-pip", right.entity_id().as_u64() as usize);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let handle = ("pane-drag-handle", right.entity_id().as_u64() as usize);
-            window.pointer_move(window.find(handle).bounds().center(), None, cx);
-            window.click(handle, cx);
-        });
-        vcx.update(|window, cx| {
-            let command = window
-                .find_by_label(t(L10nKey::PaneEnterPip))
-                .bounds()
-                .center();
-            window.pointer_down(command, gpui_kit::MouseButton::Left, cx);
-            window.pointer_up(command, gpui_kit::MouseButton::Left, cx);
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.find(right_id).visible());
-            assert!(
-                window
-                    .try_find(("pane-pip", left.entity_id().as_u64() as usize))
-                    .is_none()
-            );
-            assert!(right.contains_focused(window, cx));
-        });
-        app.update_in(&mut vcx, |_, window, cx| {
-            window.focus(&left.focus_handle(cx), cx)
-        });
-        vcx.dispatch_action(RestorePanePip);
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.try_find(right_id).is_none());
-            assert!(
-                right.contains_focused(window, cx),
-                "restore focuses the recovered terminal"
-            );
-        });
-    }
-}
+#[path = "tab/tests_pip_menu.rs"]
+mod pip_menu_gpui_tests;
 
 #[cfg(test)]
-mod pip_remote_identity_gpui_tests {
-    use super::*;
-    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
-    use gpui_kit::TestAppContext;
-    use gpui_kit::test::TestWindowExt as _;
-
-    #[gpui_kit::test]
-    fn a_native_ssh_pane_with_the_same_daemon_id_does_not_block_remote_pip(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _remote_stream) = test_window::harness_with_pane(cx);
-        let remote = WindowView::on_remote(RemoteRef::new(
-            RemoteTarget::Alias {
-                alias: "pip-remote".into(),
-            },
-            WorkspaceId::new(),
-        ));
-        let remote_id = remote.id;
-        let (target, ssh, _ssh_stream) = app.update_in(&mut vcx, |app, window, cx| {
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![remote],
-                    active: None,
-                },
-            );
-            app.workspace = remote_id;
-            let target = app.tabs[0].pane.first_leaf().unwrap();
-            target.terminal().unwrap().update(cx, |view, _| {
-                view.set_workspace(Some(crate::terminal::PaneWorkspace {
-                    workspace: WorkspaceId::new(),
-                    target: RemoteTarget::direct("me", "pip-remote", 22),
-                    spec: None,
-                    label: None,
-                    resize_echo: false,
-                }));
-            });
-            let (ssh, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
-            app.tabs[0].pane.split_leaf(
-                target.entity_id(),
-                Axis::Horizontal,
-                false,
-                PaneSlot::Ready(ssh.clone()),
-            );
-            window.focus(&target.focus_handle(cx), cx);
-            cx.notify();
-            (target, ssh, stream)
-        });
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(
-                window
-                    .find(("pane-pip", target.entity_id().as_u64() as usize))
-                    .visible()
-            );
-            assert!(
-                window
-                    .try_find(("pane-pip", ssh.entity_id().as_u64() as usize))
-                    .is_none()
-            );
-        });
-        vcx.dispatch_action(RestorePanePip);
-        app.update_in(&mut vcx, |app, _, _| {
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves.len(), 2);
-            assert!(
-                leaves
-                    .iter()
-                    .any(|slot| slot.entity_id() == ssh.entity_id())
-            );
-            assert!(
-                leaves
-                    .iter()
-                    .any(|slot| slot.entity_id() == target.entity_id())
-            );
-        });
-        app.update_in(&mut vcx, |_, window, cx| {
-            let focus = ssh.read(cx).focus_handle.clone();
-            window.focus(&focus, cx);
-        });
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(
-                window
-                    .try_find(("pane-pip", target.entity_id().as_u64() as usize))
-                    .is_none()
-            );
-            assert!(
-                window
-                    .find(("pane-pip", ssh.entity_id().as_u64() as usize))
-                    .visible()
-            );
-        });
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(
-                app.tabs[0].pane.leaves().len(),
-                2,
-                "a foreign-owned command must never target a colliding remote ID"
-            );
-            assert!(ssh.read(cx).focus_handle.contains_focused(window, cx));
-        });
-        vcx.dispatch_action(RestorePanePip);
-        app.update_in(&mut vcx, |app, _, cx| {
-            assert_eq!(app.tabs[0].pane.leaves().len(), 2);
-            assert!(app.tabs[0].pip_slot(cx).is_none());
-        });
-    }
-}
+#[path = "tab/tests_pip_remote.rs"]
+mod pip_remote_identity_gpui_tests;
 
 #[cfg(test)]
-mod pip_native_owned_gpui_tests {
-    use super::*;
-    use gpui_kit::TestAppContext;
-    use gpui_kit::test::TestWindowExt as _;
-
-    #[gpui_kit::test]
-    fn native_ssh_on_the_local_workspace_uses_the_same_live_view(cx: &mut TestAppContext) {
-        let (app, mut vcx) = test_window::harness(cx);
-        let (pane, _stream) = app.update_in(&mut vcx, |app, window, cx| {
-            let (pane, stream) = crate::terminal::view::quiet_test_ssh_pane(41, window, cx);
-            app.tabs
-                .push(Tab::new(Pane::Leaf(PaneSlot::Ready(pane.clone()))));
-            app.tabs.select(0);
-            let focus = pane.read(cx).focus_handle.clone();
-            window.focus(&focus, cx);
-            cx.notify();
-            (pane, stream)
-        });
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(
-                window
-                    .find(("pane-pip", pane.entity_id().as_u64() as usize))
-                    .visible()
-            );
-        });
-        vcx.dispatch_action(RestorePanePip);
-        app.update_in(&mut vcx, |app, _, _| {
-            assert_eq!(
-                app.tabs[0].pane.first_leaf().unwrap().entity_id(),
-                pane.entity_id()
-            );
-        });
-    }
-}
+#[path = "tab/tests_pip_native.rs"]
+mod pip_native_owned_gpui_tests;
 
 #[cfg(test)]
-mod sidecar_snapshot_gpui_tests {
-    use super::*;
-    use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews};
-    use gpui_kit::TestAppContext;
-    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
-    use lyrel_core::core::machine::{LayoutDelta, Tab as TreeTab, Workspace};
-    use lyrel_core::core::pane_sidecar::{ForeignWorkspace, ScopedPane, SidecarUpdate};
-
-    #[gpui_kit::test]
-    fn delayed_sidecar_snapshots_replay_promote_and_restore_without_replacing_views(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _remote_stream) = test_window::harness_with_pane(cx);
-        let route = RemoteRef::new(
-            RemoteTarget::direct("me", "sidecar-snapshot", 22),
-            WorkspaceId::new(),
-        );
-        let view = WindowView::on_remote(route.clone());
-        let window_id = view.id;
-        let (remote, native, _native_stream, sidecar) =
-            app.update_in(&mut vcx, |app, window, cx| {
-                WorkspaceStore::install_for_test(
-                    cx,
-                    WindowViews {
-                        views: vec![view],
-                        active: None,
-                    },
-                );
-                app.workspace = window_id;
-                let remote = app.tabs[0].pane.first_leaf().unwrap();
-                remote.terminal().unwrap().update(cx, |terminal, _| {
-                    terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
-                        workspace: route.workspace,
-                        target: route.target.clone(),
-                        spec: None,
-                        label: None,
-                        resize_echo: false,
-                    }))
-                });
-                let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
-                app.tabs[0].pane.split_leaf(
-                    remote.entity_id(),
-                    Axis::Horizontal,
-                    false,
-                    PaneSlot::Ready(native.clone()),
-                );
-                let mut saved = TreeTab::leaf(ScopedPane::workspace(1));
-                saved.id = app.tabs[0].id();
-                saved.root.split_leaf(
-                    ScopedPane::workspace(1),
-                    ScopedPane::client_local(1),
-                    lyrel_core::core::machine::Axis::Horizontal,
-                    0.5,
-                    false,
-                );
-                saved.set_pip(
-                    Some(ScopedPane::client_local(1)),
-                    Some(ScopedPane::workspace(1)),
-                );
-                let mut foreign = ForeignWorkspace::new(route.clone());
-                foreign.apply(&[SidecarUpdate::new(None, saved)]).unwrap();
-                let sidecar = Workspace {
-                    foreign_view: Some(foreign),
-                    ..Workspace::default()
-                };
-                window.focus(&remote.focus_handle(cx), cx);
-                (remote, native, stream, sidecar)
-            });
-        let weak = app.downgrade();
-        vcx.update(|window, cx| {
-            if !cx.has_global::<crate::ui::windows::WindowRegistry>() {
-                crate::ui::windows::WindowRegistry::init(cx);
-            }
-            crate::ui::windows::WindowRegistry::register(
-                cx,
-                window_id,
-                window.window_handle(),
-                weak,
-            );
-        });
-        vcx.dispatch_action(TogglePanePip);
-        let stale = sidecar.clone();
-        vcx.update(|_, cx| {
-            cx.defer(move |cx| {
-                crate::ui::tree_sync::on_layout_delta(
-                    cx,
-                    HostId::LOCAL,
-                    &stale.id.to_string(),
-                    LayoutDelta::WorkspaceCreated {
-                        workspace: stale.clone(),
-                    },
-                )
-            })
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(
-                window
-                    .find(("pane-pip", remote.entity_id().as_u64() as usize))
-                    .visible()
-            );
-            assert!(
-                window
-                    .try_find(("pane-pip", native.entity_id().as_u64() as usize))
-                    .is_none()
-            );
-        });
-        vcx.dispatch_action(RestorePanePip);
-        vcx.update(|_, cx| {
-            cx.defer(move |cx| {
-                crate::ui::tree_sync::on_layout_delta(
-                    cx,
-                    HostId::LOCAL,
-                    &sidecar.id.to_string(),
-                    LayoutDelta::WorkspaceCreated {
-                        workspace: sidecar.clone(),
-                    },
-                )
-            })
-        });
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, _, cx| {
-            assert!(app.tabs[0].pip_slot(cx).is_none());
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves.len(), 2);
-            assert!(
-                leaves
-                    .iter()
-                    .any(|slot| slot.entity_id() == remote.entity_id())
-            );
-            assert!(
-                leaves
-                    .iter()
-                    .any(|slot| slot.entity_id() == native.entity_id())
-            );
-        });
-    }
-
-    fn native_sidecar_window(
-        cx: &mut TestAppContext,
-        native_only: bool,
-    ) -> (
-        Entity<LyrelApp>,
-        gpui_kit::VisualTestContext,
-        PaneSlot,
-        Vec<crate::daemon::transport::Stream>,
-        Workspace,
-    ) {
-        let (app, mut vcx, remote_stream) = test_window::harness_with_pane(cx);
-        let route = RemoteRef::new(
-            RemoteTarget::direct("me", "sidecar-presentation", 22),
-            WorkspaceId::new(),
-        );
-        let view = WindowView::on_remote(route.clone());
-        let window_id = view.id;
-        let weak = app.downgrade();
-        let (native, native_stream, sidecar) = app.update_in(&mut vcx, |app, window, cx| {
-            WorkspaceStore::install_for_test(
-                cx,
-                WindowViews {
-                    views: vec![view],
-                    active: None,
-                },
-            );
-            app.workspace = window_id;
-            let remote = app.tabs[0].pane.first_leaf().unwrap();
-            remote.terminal().unwrap().update(cx, |terminal, _| {
-                terminal.set_workspace(Some(crate::terminal::PaneWorkspace {
-                    workspace: route.workspace,
-                    target: route.target.clone(),
-                    spec: None,
-                    label: None,
-                    resize_echo: false,
-                }));
-            });
-            let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(1, window, cx);
-            let native = PaneSlot::Ready(native);
-            if native_only {
-                app.tabs[0].pane = Pane::Leaf(native.clone());
-            } else {
-                app.tabs[0].pane.split_leaf(
-                    remote.entity_id(),
-                    Axis::Horizontal,
-                    false,
-                    native.clone(),
-                );
-            }
-            let saved = crate::ui::pane_sidecar::snapshot(&app.tabs[0], cx).unwrap();
-            let mut foreign = ForeignWorkspace::new(route);
-            foreign.apply(&[SidecarUpdate::new(None, saved)]).unwrap();
-            if !cx.has_global::<crate::ui::windows::WindowRegistry>() {
-                crate::ui::windows::WindowRegistry::init(cx);
-            }
-            crate::ui::windows::WindowRegistry::register(
-                cx,
-                window_id,
-                window.window_handle(),
-                weak,
-            );
-            window.focus(&native.focus_handle(cx), cx);
-            (
-                native,
-                stream,
-                Workspace {
-                    foreign_view: Some(foreign),
-                    ..Workspace::default()
-                },
-            )
-        });
-        deliver_sidecar(&mut vcx, sidecar.clone());
-        (
-            app,
-            vcx,
-            native,
-            vec![remote_stream, native_stream],
-            sidecar,
-        )
-    }
-
-    #[gpui_kit::test]
-    fn sidecar_closed_native_leaf_preserves_other_views_input_and_presentation(
-        cx: &mut TestAppContext,
-    ) {
-        use crate::daemon::protocol::ClientMsg;
-        use lyrel_core::core::machine::PaneRecord;
-
-        let (app, mut vcx, closed, _streams, mut sidecar) = native_sidecar_window(cx, false);
-        let (remote, surviving, mut stream) = app.update_in(&mut vcx, |app, window, cx| {
-            let remote = app.tabs[0]
-                .pane
-                .leaves()
-                .into_iter()
-                .find(|slot| {
-                    crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(ScopedPane::workspace(1))
-                })
-                .unwrap();
-            let (native, stream) = crate::terminal::view::quiet_test_ssh_pane(2, window, cx);
-            let surviving = PaneSlot::Ready(native);
-            app.tabs[0].pane.split_leaf(
-                closed.entity_id(),
-                Axis::Vertical,
-                false,
-                surviving.clone(),
-            );
-            let foreign = sidecar.foreign_view.as_mut().unwrap();
-            let before = foreign.tabs()[0].clone();
-            let mut after = crate::ui::pane_sidecar::snapshot(&app.tabs[0], cx).unwrap();
-            assert!(after.park(ScopedPane::client_local(1)));
-            foreign
-                .apply(&[SidecarUpdate::new(Some(before), after)])
-                .unwrap();
-            window.focus(&closed.focus_handle(cx), cx);
-            (remote, surviving, stream)
-        });
-        // A local daemon snapshot is authoritative even if its composition still
-        // references the pane another client has already closed.
-        deliver_sidecar_records(&mut vcx, sidecar, vec![PaneRecord::new(2)]);
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(app.tabs.len(), 1);
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves.len(), 2);
-            assert!(
-                leaves
-                    .iter()
-                    .any(|slot| slot.entity_id() == remote.entity_id())
-            );
-            assert!(
-                leaves
-                    .iter()
-                    .any(|slot| slot.entity_id() == surviving.entity_id())
-            );
-            assert!(
-                app.tabs[0]
-                    .foreign_presentation
-                    .as_ref()
-                    .unwrap()
-                    .parked()
-                    .is_empty()
-            );
-            assert!(
-                app.tabs[0]
-                    .focus_target(cx)
-                    .unwrap()
-                    .contains_focused(window, cx)
-            );
-            window.focus(&surviving.focus_handle(cx), cx);
-        });
-        vcx.dispatch_action(ParkPane);
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.tabs[0].is_parked_slot(&surviving, cx));
-            app.restore_parked(surviving.entity_id(), window, cx);
-            assert!(surviving.contains_focused(window, cx));
-        });
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            for slot in [&surviving, &remote] {
-                let handle = ("pane-drag-handle", slot.entity_id().as_u64() as usize);
-                window.pointer_move(window.find(handle).bounds().center(), None, cx);
-                window.render_frame(cx);
-                assert!(window.find(handle).visible());
-            }
-            assert!(
-                window
-                    .try_find(("pane-drag-handle", closed.entity_id().as_u64() as usize))
-                    .is_none()
-            );
-        });
-        vcx.simulate_keystrokes("x");
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_millis(100)))
-            .unwrap();
-        let mut input = Vec::new();
-        while let Ok(message) = ClientMsg::read(&mut stream) {
-            if let ClientMsg::Input(bytes) = message {
-                input.extend(bytes);
-            }
-        }
-        assert_eq!(
-            input, b"x",
-            "the surviving native terminal keeps its original attachment"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn sidecar_exited_native_record_is_not_a_closed_session(cx: &mut TestAppContext) {
-        let (app, mut vcx, native, _streams, sidecar) = native_sidecar_window(cx, false);
-        native.terminal().unwrap().update(&mut vcx, |view, _| {
-            view.terminal.exited = true;
-        });
-        let record = lyrel_core::core::machine::PaneRecord::new(1);
-        assert!(!record.live);
-        deliver_sidecar_records(&mut vcx, sidecar, vec![record]);
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(app.tabs[0].pane.leaves().len(), 2);
-            assert!(
-                app.tabs[0]
-                    .pane
-                    .leaves()
-                    .iter()
-                    .any(|slot| slot.entity_id() == native.entity_id())
-            );
-            assert!(native.contains_focused(window, cx));
-        });
-    }
-
-    #[gpui_kit::test]
-    fn sidecar_closing_the_last_native_record_removes_its_tab(cx: &mut TestAppContext) {
-        let (app, mut vcx, _native, _streams, sidecar) = native_sidecar_window(cx, true);
-        deliver_sidecar_records(&mut vcx, sidecar, Vec::new());
-        app.read_with(&vcx, |app, _| assert!(app.tabs.is_empty()));
-    }
-
-    fn deliver_sidecar_records(
-        vcx: &mut gpui_kit::VisualTestContext,
-        sidecar: Workspace,
-        records: Vec<lyrel_core::core::machine::PaneRecord>,
-    ) {
-        vcx.update(|_, cx| {
-            cx.defer(move |cx| {
-                crate::ui::pane_sidecar::on_sidecar_snapshot(
-                    cx,
-                    lyrel_core::core::pane_sidecar::SidecarSnapshot::new(sidecar, records),
-                )
-            });
-        });
-        vcx.run_until_parked();
-    }
-
-    #[gpui_kit::test]
-    fn sidecar_closed_native_leaf_keeps_a_connecting_remote_view(cx: &mut TestAppContext) {
-        use crate::ui::pending_pane::{PendingPane, PendingSpawn};
-
-        let (app, mut vcx, closed, _streams, sidecar) = native_sidecar_window(cx, false);
-        let pending = app.update_in(&mut vcx, |app, window, cx| {
-            let remote = app.tabs[0]
-                .pane
-                .leaves()
-                .into_iter()
-                .find(|slot| {
-                    crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(ScopedPane::workspace(1))
-                })
-                .unwrap();
-            let workspace = remote.terminal().unwrap().read(cx).workspace().cloned();
-            let pending = cx.new(|cx| {
-                PendingPane::new(
-                    "reconnecting",
-                    PendingSpawn {
-                        workspace,
-                        working_directory: None,
-                        restore_pane: Some(1),
-                        shell: None,
-                        agent: None,
-                        agent_session_id: None,
-                        agent_launch_argv: None,
-                        agent_session_scope: None,
-                        run_on_land: None,
-                        owner: None,
-                        font_size: app.font_size,
-                    },
-                    cx,
-                )
-            });
-            app.tabs[0].pane = Pane::split_node(
-                Axis::Horizontal,
-                0.5,
-                Pane::Leaf(PaneSlot::Connecting(pending.clone())),
-                Pane::Leaf(closed.clone()),
-            );
-            window.focus(&closed.focus_handle(cx), cx);
-            pending
-        });
-        deliver_sidecar_records(&mut vcx, sidecar, Vec::new());
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(app.tabs.len(), 1);
-            let surviving = app.tabs[0].pane.first_leaf().unwrap();
-            assert_eq!(app.tabs[0].pane.leaves().len(), 1);
-            assert_eq!(surviving.entity_id(), pending.entity_id());
-            assert!(surviving.contains_focused(window, cx));
-        });
-    }
-
-    #[gpui_kit::test]
-    fn sidecar_missing_remote_view_keeps_only_authoritatively_live_native_session(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, native, _streams, sidecar) = native_sidecar_window(cx, false);
-        app.update_in(&mut vcx, |app, _, _| {
-            app.tabs[0].pane = Pane::Leaf(native.clone());
-        });
-        deliver_sidecar_records(
-            &mut vcx,
-            sidecar.clone(),
-            vec![lyrel_core::core::machine::PaneRecord::new(1)],
-        );
-        let remote_entity = app.read_with(&vcx, |app, cx| {
-            assert_eq!(app.tabs.len(), 1);
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves.len(), 2);
-            assert!(
-                leaves
-                    .iter()
-                    .any(|slot| slot.entity_id() == native.entity_id())
-            );
-            let remote = leaves
-                .iter()
-                .find(|slot| {
-                    crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(ScopedPane::workspace(1))
-                })
-                .unwrap();
-            let PaneSlot::Connecting(pending) = remote else {
-                panic!("the unreachable remote pane must retain its retryable placeholder");
-            };
-            let pending = pending.read(cx);
-            assert!(
-                pending.is_attach_only(),
-                "reconstruction must never spawn a substitute shell"
-            );
-            assert_eq!(pending.restore_pane(), Some(1));
-            assert!(
-                pending.workspace().is_some(),
-                "remote ownership must not fall back to Local"
-            );
-            remote.entity_id()
-        });
-        deliver_sidecar_records(&mut vcx, sidecar, Vec::new());
-        app.read_with(&vcx, |app, cx| {
-            assert_eq!(app.tabs.len(), 1, "the unresolved remote tab still exists");
-            let leaves = app.tabs[0].pane.leaves();
-            assert_eq!(leaves.len(), 1);
-            assert_eq!(
-                crate::ui::pane_sidecar::scoped_pane(&leaves[0], cx),
-                Some(ScopedPane::workspace(1)),
-            );
-            assert_eq!(
-                leaves[0].entity_id(),
-                remote_entity,
-                "reuse the existing remote placeholder"
-            );
-            assert_eq!(
-                crate::ui::pane_sidecar::snapshot(&app.tabs[0], cx)
-                    .unwrap()
-                    .root
-                    .pane_ids(),
-                vec![ScopedPane::workspace(1)],
-                "saving the reconstructed view must retain the authoritative remote leaf",
-            );
-            assert_ne!(
-                leaves[0].entity_id(),
-                native.entity_id(),
-                "a missing remote view cannot keep a closed native session mounted"
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn sidecar_another_client_closing_a_tab_rejects_pending_and_stale_composition(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _native, _streams, mut sidecar) = native_sidecar_window(cx, false);
-        let stale = sidecar.clone();
-        // Keep a semantic edit queued in this GUI while another client closes
-        // the authoritative composition, as on a temporarily disconnected link.
-        vcx.dispatch_action(ParkPane);
-        vcx.run_until_parked();
-        let foreign = sidecar.foreign_view.as_mut().unwrap();
-        let tab = foreign.tabs()[0].id;
-        foreign.apply(&[SidecarUpdate::close_tab(tab)]).unwrap();
-        deliver_sidecar_records(&mut vcx, sidecar, Vec::new());
-        app.read_with(&vcx, |app, _| assert!(app.tabs.is_empty()));
-        deliver_sidecar(&mut vcx, stale);
-        app.read_with(&vcx, |app, _| assert!(app.tabs.is_empty()));
-    }
-
-    #[gpui_kit::test]
-    fn an_explicit_primary_tab_close_does_not_reappear_from_a_stale_sidecar(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, _native, _streams, sidecar) = native_sidecar_window(cx, false);
-        app.update_in(&mut vcx, |app, window, cx| {
-            let tab = app.tabs[0].id();
-            assert!(app.apply_layout_delta(
-                &LayoutDelta::TabClosed {
-                    tab,
-                    reason: lyrel_core::core::machine::TabCloseReason::Explicit,
-                },
-                window,
-                cx
-            ));
-            assert!(app.tabs.is_empty());
-        });
-        deliver_sidecar(&mut vcx, sidecar);
-        app.read_with(&vcx, |app, _| assert!(app.tabs.is_empty()));
-    }
-
-    #[gpui_kit::test]
-    fn an_emptied_primary_tab_preserves_its_native_shell_and_rejects_stale_remote_leaves(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, native, _streams, sidecar) = native_sidecar_window(cx, false);
-        vcx.dispatch_action(ParkPane);
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
-            let tab = app.tabs[0].id();
-            assert!(app.apply_layout_delta(
-                &LayoutDelta::TabClosed {
-                    tab,
-                    reason: lyrel_core::core::machine::TabCloseReason::Emptied
-                },
-                window,
-                cx
-            ));
-            assert!(
-                app.tabs
-                    .iter()
-                    .any(|candidate| candidate.id() == tab),
-                "emptying the remote projection must not close its client-local leaves"
-            );
-        });
-        deliver_sidecar(&mut vcx, sidecar);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.find("parked-empty").visible());
-        });
-        app.update_in(&mut vcx, |app, window, cx| {
-            let restored = crate::ui::pane_sidecar::snapshot(&app.tabs[0], cx).unwrap();
-            assert_eq!(restored.root.pane_ids(), vec![ScopedPane::client_local(1)]);
-            assert!(app.tabs[0].is_parked_slot(&native, cx));
-            app.restore_parked(native.entity_id(), window, cx);
-            assert!(native.contains_focused(window, cx));
-        });
-    }
-
-    fn deliver_sidecar(vcx: &mut gpui_kit::VisualTestContext, sidecar: Workspace) {
-        vcx.update(|_, cx| {
-            cx.defer(move |cx| crate::ui::pane_sidecar::on_sidecar_delta(cx, &sidecar));
-        });
-        vcx.run_until_parked();
-    }
-
-    fn park_native_in_sidecar(sidecar: &mut Workspace) {
-        let foreign = sidecar.foreign_view.as_mut().unwrap();
-        let before = foreign.tabs()[0].clone();
-        let mut after = before.clone();
-        assert!(after.park(ScopedPane::client_local(1)));
-        foreign
-            .apply(&[SidecarUpdate::new(Some(before), after)])
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn a_native_only_remote_tab_keeps_its_empty_state_and_new_pane_action_when_parked(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, native, _streams, _) = native_sidecar_window(cx, true);
-        vcx.dispatch_action(ParkPane);
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.find("parked-empty").visible());
-            assert!(window.find("parked-new-pane").visible());
-            assert!(!native.contains_focused(window, cx));
-        });
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.tabs[0].is_parked_slot(&native, cx));
-            app.restore_parked(native.entity_id(), window, cx);
-            assert!(!app.tabs[0].is_parked_slot(&native, cx));
-            assert!(native.contains_focused(window, cx));
-        });
-    }
-
-    #[gpui_kit::test]
-    fn another_client_parking_native_ssh_moves_focus_to_a_visible_terminal(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, native, _streams, mut sidecar) = native_sidecar_window(cx, false);
-        park_native_in_sidecar(&mut sidecar);
-        deliver_sidecar(&mut vcx, sidecar);
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.tabs[0].is_parked_slot(&native, cx));
-            assert!(!native.contains_focused(window, cx));
-            assert!(
-                app.tabs[0]
-                    .focus_target(cx)
-                    .unwrap()
-                    .contains_focused(window, cx)
-            );
-        });
-    }
-
-    #[gpui_kit::test]
-    fn another_client_parking_a_zoomed_native_pane_unmounts_it_even_with_toolbar_focus(
-        cx: &mut TestAppContext,
-    ) {
-        let (app, mut vcx, native, _streams, mut sidecar) = native_sidecar_window(cx, false);
-        app.update_in(&mut vcx, |app, window, cx| {
-            app.maximized = native.terminal().cloned();
-            app.tabs[0].park_zoom(native.terminal().cloned());
-            window.focus(&app.file_tree.focus_handle, cx);
-            cx.notify();
-        });
-        park_native_in_sidecar(&mut sidecar);
-        deliver_sidecar(&mut vcx, sidecar);
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(
-                window
-                    .try_find(("pane-drag-handle", native.entity_id().as_u64() as usize))
-                    .is_none()
-            );
-        });
-        app.update_in(&mut vcx, |app, _, _| {
-            assert!(app.maximized.is_none());
-            assert!(app.tabs[0].zoomed().is_none());
-        });
-    }
-
-    #[gpui_kit::test]
-    fn native_pip_geometry_survives_primary_updates_without_changing_remote_geometry(
-        cx: &mut TestAppContext,
-    ) {
-        use gpui_kit::test::TestEventExt as _;
-        use lyrel_core::core::machine::PipGeometry;
-        let (app, mut vcx, native, _streams, _) = native_sidecar_window(cx, false);
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        let key = native.entity_id().as_u64() as usize;
-        let primary_before = app.read_with(&vcx, |app, _| app.tabs[0].presentation.pip_geometry());
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let start = window.find(("pip-move", key)).bounds().center();
-            window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
-            window.pointer_move(
-                start - gpui_kit::point(px(70.), px(55.)),
-                Some(gpui_kit::MouseButton::Left),
-                cx,
-            );
-            window.pointer_up(
-                start - gpui_kit::point(px(70.), px(55.)),
-                gpui_kit::MouseButton::Left,
-                cx,
-            );
-        });
-        vcx.run_until_parked();
-        let moved = vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.find(("pane-pip", key)).bounds()
-        });
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert_eq!(app.tabs[0].presentation.pip_geometry(), primary_before);
-            let mut primary = TreeTab::leaf(1);
-            primary.id = app.tabs[0].id();
-            primary
-                .presentation
-                .set_pip_geometry(PipGeometry::new(1., 1., 0.5, 0.5));
-            assert!(app.apply_layout_delta(
-                &LayoutDelta::TabRestructured {
-                    tab: primary,
-                    pane: None
-                },
-                window,
-                cx
-            ));
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert_eq!(window.find(("pane-pip", key)).bounds(), moved);
-        });
-        app.update_in(&mut vcx, |app, _, cx| {
-            assert_eq!(
-                app.tabs[0].pip_slot(cx).unwrap().entity_id(),
-                native.entity_id()
-            );
-        });
-    }
-}
+#[path = "tab/tests_sidecar.rs"]
+mod sidecar_snapshot_gpui_tests;
 #[cfg(test)]
-mod pip_geometry_gpui_tests {
-    use super::*;
-    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
-    use gpui_kit::{MouseButton, TestAppContext, point};
-
-    #[gpui_kit::test]
-    fn pip_header_commands_target_the_displayed_pane_not_the_old_focus(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
-        let (left, right) = app.update_in(&mut vcx, |app, window, cx| {
-            let left = app.tabs[0].pane.first_leaf().unwrap();
-            let right = app.tabs.remove(1).pane.first_leaf().unwrap();
-            right.terminal().unwrap().update(cx, |view, _| {
-                view.title = "PiP scoped terminal".to_owned();
-            });
-            app.tabs[0]
-                .pane
-                .split_leaf(left.entity_id(), Axis::Horizontal, false, right.clone());
-            window.focus(&right.focus_handle(cx), cx);
-            cx.notify();
-            (left, right)
-        });
-        let key = right.entity_id().as_u64() as usize;
-        vcx.dispatch_action(TogglePanePip);
-        app.update_in(&mut vcx, |_, window, cx| {
-            window.focus(&left.focus_handle(cx), cx);
-        });
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let header = window.find(("pip-header", key)).bounds();
-            assert!((header.size.height - window.rem_size() * (26. / 16.)).abs() <= px(1.));
-            assert_eq!(
-                window.find(("pip-title", key)).label(),
-                Some("PiP scoped terminal")
-            );
-            assert_eq!(
-                window.find(("pip-park", key)).role(),
-                Some(gpui_kit::Role::Button)
-            );
-            assert_eq!(
-                window.find(("pip-dock", key)).label(),
-                Some(t(L10nKey::PaneRestorePip))
-            );
-            assert_eq!(window.find_all(("pane-drag-handle", key)).len(), 1);
-            window.click(("pip-dock", key), cx);
-        });
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.tabs[0].pip_slot(cx).is_none());
-            assert!(right.contains_focused(window, cx));
-            assert!(app.tabs[0].pane.leaves().contains(&right));
-        });
-        vcx.dispatch_action(TogglePanePip);
-        app.update_in(&mut vcx, |_, window, cx| {
-            window.focus(&left.focus_handle(cx), cx);
-        });
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.click(("pip-park", key), cx);
-        });
-        vcx.run_until_parked();
-        app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.tabs[0].pip_slot(cx).is_none());
-            assert!(app.tabs[0].is_parked_slot(&right, cx));
-            assert!(!app.tabs[0].is_parked_slot(&left, cx));
-            assert!(left.contains_focused(window, cx));
-            assert!(app.tabs[0].pane.leaves().contains(&right));
-        });
-    }
-
-    #[gpui_kit::test]
-    fn pip_geometry_controls_are_named_buttons_and_keep_arrow_keys_out_of_the_pty(
-        cx: &mut TestAppContext,
-    ) {
-        use crate::daemon::protocol::ClientMsg;
-        use std::time::Duration;
-        let (app, mut vcx, mut stream) = test_window::harness_with_pane(cx);
-        let pane = app.update_in(&mut vcx, |app, window, cx| {
-            let pane = app.tabs[0].pane.first_leaf().unwrap();
-            window.focus(&pane.focus_handle(cx), cx);
-            pane
-        });
-        vcx.dispatch_action(TogglePanePip);
-        let key = pane.entity_id().as_u64() as usize;
-        for (handle, name, arrow) in [
-            ("pip-move", L10nKey::PanePipMove, "left"),
-            ("pip-resize", L10nKey::PanePipResize, "right"),
-        ] {
-            vcx.update(|window, cx| {
-                window.render_frame(cx);
-                assert_eq!(
-                    window.find((handle, key)).role(),
-                    Some(gpui_kit::Role::Button)
-                );
-                assert_eq!(window.find((handle, key)).label(), Some(t(name)));
-                window.click((handle, key), cx);
-                assert_eq!(window.find((handle, key)).focused(), Some(true));
-                let before = window.find(("pane-pip", key)).bounds();
-                window.press(arrow, cx);
-                let after = window.find(("pane-pip", key)).bounds();
-                if handle == "pip-move" {
-                    assert!(after.left() < before.left());
-                } else {
-                    assert!(after.size.width > before.size.width);
-                }
-                window.press("escape", cx);
-                assert!(pane.contains_focused(window, cx));
-            });
-        }
-        vcx.simulate_keystrokes("x");
-        stream
-            .set_read_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
-        let mut input = Vec::new();
-        while let Ok(message) = ClientMsg::read(&mut stream) {
-            if let ClientMsg::Input(bytes) = message {
-                input.extend(bytes);
-            }
-        }
-        assert_eq!(
-            input, b"x",
-            "geometry commands must not be sent to the live PTY"
-        );
-    }
-
-    #[gpui_kit::test]
-    fn pip_move_resize_and_zoom_preserve_the_live_terminal_and_focus(cx: &mut TestAppContext) {
-        let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
-        let pane = app.update_in(&mut vcx, |app, window, cx| {
-            let pane = app.tabs[0].pane.first_leaf().unwrap();
-            window.focus(&pane.focus_handle(cx), cx);
-            pane
-        });
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        let key = pane.entity_id().as_u64() as usize;
-        let before = vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let bounds = window.find(("pane-pip", key)).bounds();
-            let start = window.find(("pip-move", key)).bounds().center();
-            window.pointer_down(start, MouseButton::Left, cx);
-            window.pointer_move(start - point(px(70.), px(55.)), Some(MouseButton::Left), cx);
-            window.pointer_up(start - point(px(70.), px(55.)), MouseButton::Left, cx);
-            bounds
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let moved = window.find(("pane-pip", key)).bounds();
-            assert!(moved.left() < before.left() && moved.top() < before.top());
-            assert!(
-                pane.contains_focused(window, cx),
-                "pointer geometry does not steal terminal focus"
-            );
-            let start = window.find(("pip-resize", key)).bounds().center();
-            window.pointer_down(start, MouseButton::Left, cx);
-            window.pointer_move(start + point(px(65.), px(35.)), Some(MouseButton::Left), cx);
-            window.pointer_up(start + point(px(65.), px(35.)), MouseButton::Left, cx);
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert!(window.find(("pane-pip", key)).bounds().size.width > before.size.width);
-            assert!(pane.contains_focused(window, cx));
-            assert_eq!(window.find_all(("pane-drag-handle", key)).len(), 1);
-        });
-        for size in [20., 14.] {
-            app.update_in(&mut vcx, |_, _, cx| {
-                cx.global_mut::<Config>().ui_font_size = size;
-                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(size));
-                cx.notify();
-            });
-            vcx.run_until_parked();
-            vcx.update(|window, cx| {
-                window.render_frame(cx);
-                let pip = window.find(("pane-pip", key)).bounds();
-                let content = window.find("pane-presentations").bounds();
-                assert!(pip.left() >= content.left() && pip.right() <= content.right());
-                assert!(pip.top() >= content.top() && pip.bottom() <= content.bottom());
-            });
-        }
-        for width in [620., 1280.] {
-            vcx.simulate_resize(size(px(width), px(720.)));
-            for left in [true, false] {
-                if left {
-                    vcx.dispatch_action(ToggleLeftPanel);
-                } else {
-                    vcx.dispatch_action(ToggleRightPanel);
-                }
-                vcx.run_until_parked();
-                vcx.update(|window, cx| {
-                    window.render_frame(cx);
-                    let pip = window.find(("pane-pip", key)).bounds();
-                    let content = window.find("pane-presentations").bounds();
-                    let margin = px((window.rem_size().as_f32() * 2.)
-                        .min(content.size.width.as_f32() / 4.)
-                        .min(content.size.height.as_f32() / 4.));
-                    assert!(pip.left() >= content.left() + margin);
-                    assert!(pip.right() <= content.right() - margin);
-                    assert!(pip.bottom() < window.find("workbench-status").bounds().top());
-                });
-            }
-        }
-        app.update_in(&mut vcx, |app, _, _| {
-            assert_eq!(
-                app.tabs[0].pane.first_leaf().unwrap().entity_id(),
-                pane.entity_id()
-            )
-        });
-    }
-
-    #[gpui_kit::test]
-    fn pip_geometry_keeps_output_selection_scrolling_and_input_on_one_attachment(
-        cx: &mut TestAppContext,
-    ) {
-        use crate::daemon::protocol::{ClientMsg, DaemonMsg};
-        use std::time::{Duration, Instant};
-        let (app, mut vcx, mut stream) = test_window::harness_with_pane(cx);
-        let pane = app.update_in(&mut vcx, |app, window, cx| {
-            let pane = app.tabs[0].pane.first_leaf().unwrap();
-            window.focus(&pane.focus_handle(cx), cx);
-            pane
-        });
-        DaemonMsg::Output(
-            (0..100)
-                .map(|n| format!("pip_output_{n:03} abcdefghijklmnopqrstuvwxyz\r\n"))
-                .collect::<String>()
-                .into_bytes(),
-        )
-        .encode(&mut stream)
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            vcx.run_until_parked();
-            if pane.terminal().unwrap().read_with(&vcx, |view, _| {
-                view.scrollback_text().contains("pip_output_099")
-            }) {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "live output reached the original terminal"
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        let key = pane.entity_id().as_u64() as usize;
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let start = window.find(("pip-resize", key)).bounds().center();
-            window.pointer_down(start, MouseButton::Left, cx);
-            window.pointer_move(start + point(px(40.), px(30.)), Some(MouseButton::Left), cx);
-            window.pointer_up(start + point(px(40.), px(30.)), MouseButton::Left, cx);
-        });
-        vcx.run_until_parked();
-        pane.terminal().unwrap().update_in(&mut vcx, |view, _, cx| {
-            view.scroll(20, None, &gpui_kit::Modifiers::none(), cx)
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let bounds = window.find(("pane-pip", key)).bounds();
-            let start = bounds.origin + point(px(12.), window.rem_size() * 4.);
-            window.pointer_down(start, MouseButton::Left, cx);
-            window.pointer_move(start + point(px(70.), px(0.)), Some(MouseButton::Left), cx);
-            window.pointer_up(start + point(px(70.), px(0.)), MouseButton::Left, cx);
-        });
-        assert!(pane.terminal().unwrap().read_with(&vcx, |view, _| {
-            view.selection_text().is_some_and(|text| !text.is_empty())
-        }));
-        vcx.simulate_keystrokes("x");
-        stream
-            .set_read_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
-        let mut sizes = Vec::new();
-        let mut input = Vec::new();
-        while let Ok(message) = ClientMsg::read(&mut stream) {
-            match message {
-                ClientMsg::Resize(size) => sizes.push((size.cols, size.rows)),
-                ClientMsg::Input(bytes) => input.extend(bytes),
-                _ => {}
-            }
-        }
-        assert!(
-            sizes.len() >= 2 && sizes.first() != sizes.last(),
-            "the original attachment receives the changed terminal dimensions"
-        );
-        assert!(
-            input.contains(&b'x'),
-            "keyboard input still reaches the same daemon stream"
-        );
-        assert!(pane.terminal().unwrap().read_with(&vcx, |view, _| {
-            view.scrollback_text().contains("pip_output_099")
-        }));
-    }
-
-    #[gpui_kit::test]
-    fn an_incoming_geometry_update_does_not_take_over_a_local_gesture_or_focus(
-        cx: &mut TestAppContext,
-    ) {
-        use lyrel_core::core::machine::{LayoutDelta, PipGeometry, Tab as TreeTab};
-        let (app, mut vcx, _stream) = test_window::harness_with_pane(cx);
-        let pane = app.update_in(&mut vcx, |app, window, cx| {
-            let pane = app.tabs[0].pane.first_leaf().unwrap();
-            window.focus(&pane.focus_handle(cx), cx);
-            pane
-        });
-        vcx.dispatch_action(TogglePanePip);
-        vcx.run_until_parked();
-        let key = pane.entity_id().as_u64() as usize;
-        let end = vcx.update(|window, cx| {
-            window.render_frame(cx);
-            let start = window.find(("pip-move", key)).bounds().center();
-            let end = start - point(px(60.), px(40.));
-            window.pointer_down(start, MouseButton::Left, cx);
-            window.pointer_move(end, Some(MouseButton::Left), cx);
-            end
-        });
-        vcx.run_until_parked();
-        let local = vcx.update(|window, cx| {
-            window.render_frame(cx);
-            window.find(("pane-pip", key)).bounds()
-        });
-        app.update_in(&mut vcx, |app, window, cx| {
-            let mut remote = TreeTab::leaf(1);
-            remote.id = app.tabs[0].id();
-            remote.set_pip(Some(1), None);
-            remote
-                .presentation
-                .set_pip_geometry(PipGeometry::new(0., 0., 0.7, 0.7));
-            assert!(app.apply_layout_delta(
-                &LayoutDelta::TabRestructured {
-                    tab: remote,
-                    pane: None
-                },
-                window,
-                cx
-            ));
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert_eq!(window.find(("pane-pip", key)).bounds(), local);
-            assert!(pane.contains_focused(window, cx));
-            window.pointer_up(end, MouseButton::Left, cx);
-        });
-        vcx.run_until_parked();
-        vcx.update(|window, cx| {
-            window.render_frame(cx);
-            assert_eq!(window.find(("pane-pip", key)).bounds(), local);
-            assert!(pane.contains_focused(window, cx));
-        });
-    }
-}
+#[path = "tab/tests_pip_geometry.rs"]
+mod pip_geometry_gpui_tests;
 
 #[cfg(test)]
-#[path = "parking_tests.rs"]
+#[path = "tab/tests_parking.rs"]
 mod parking_gpui_tests;

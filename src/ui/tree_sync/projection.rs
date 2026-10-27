@@ -7,14 +7,14 @@ use crate::ui::tab::Tab;
 use crate::ui::pane::{Pane, PaneSlot};
 
 use super::desired::{DesiredNode, DesiredTab};
-pub(super) fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {
+pub(crate) fn slot_pane_id(slot: &PaneSlot, cx: &App) -> Option<u64> {
     match slot {
         PaneSlot::Ready(view) => Some(view.read(cx).pane_id),
         PaneSlot::Connecting(pending) => pending.read(cx).restore_pane(),
     }
 }
 
-pub(super) fn logical_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<PaneNode> {
+pub(crate) fn logical_node(pane: &Pane, remote_window: bool, cx: &App) -> Option<PaneNode> {
     match pane {
         Pane::Leaf(slot) => {
             if remote_window
@@ -87,7 +87,7 @@ pub(crate) fn desired_tabs(
             group: tab.group.get(),
             last_auto: tab.auto_group.borrow().clone(),
             presentation: {
-                let mut presentation = tab.presentation.clone();
+                let mut presentation = tab.presentation().clone();
                 presentation.remap_panes(|pane| root.seed_of(pane).map(|_| pane));
                 presentation
             },

@@ -1,3 +1,5 @@
+mod presentation;
+
 use std::rc::Rc;
 use gpui_kit::{App, Entity, IntoElement, Window, div, prelude::*, TestSupportExt as _};
 use crate::core::session::{SessionPane, SessionTab};
@@ -7,8 +9,8 @@ use crate::ui::pane::{Dir, Pane, PaneSlot};
 pub(crate) struct Tab {
     pub(crate) pane: Pane,
     /// Durable presentation belongs to the machine; focus and geometry remain local.
-    pub(crate) presentation: lyrel_core::core::machine::TabPresentation,
-    pub(crate) foreign_presentation: Option<
+    presentation: lyrel_core::core::machine::TabPresentation,
+    foreign_presentation: Option<
         lyrel_core::core::machine::TabPresentation<lyrel_core::core::pane_sidecar::ScopedPane>,
     >,
     name: Option<String>,

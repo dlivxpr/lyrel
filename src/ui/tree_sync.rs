@@ -30,131 +30,6 @@ use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::pane::{Pane, PaneSlot};
 
-fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
-    match node {
-        PaneNode::Leaf { pane } => slots.remove(pane).map(Pane::Leaf),
-        PaneNode::Split { axis, ratio, a, b } => Some(Pane::split_node(
-            match axis {
-                TreeAxis::Horizontal => gpui_kit::Axis::Horizontal,
-                TreeAxis::Vertical => gpui_kit::Axis::Vertical,
-            },
-            *ratio,
-            pane_from_existing(a, slots)?,
-            pane_from_existing(b, slots)?,
-        )),
-    }
-}
-
-/// Toggles presentation through the shared domain mutation. Every leaf, including
-/// client-local native SSH, stays in the logical tree and keeps its existing view.
-pub(crate) fn toggle_pip_for_tab(
-    tab: &mut crate::ui::tab::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    change_presentation_for_tab(tab, pane, fallback, None, workspace, cx)
-}
-
-pub(crate) fn set_parked_for_tab(
-    tab: &mut crate::ui::tab::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    parked: bool,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    change_presentation_for_tab(tab, pane, fallback, Some(parked), workspace, cx)
-}
-
-fn change_presentation_for_tab(
-    tab: &mut crate::ui::tab::Tab,
-    pane: gpui_kit::EntityId,
-    fallback: Option<gpui_kit::EntityId>,
-    parked: Option<bool>,
-    workspace: WorkspaceId,
-    cx: &App,
-) -> bool {
-    let leaves = tab.pane.leaves();
-    let remote = WorkspaceStore::all(cx)
-        .get(workspace)
-        .is_some_and(|w| w.is_remote());
-    if remote
-        && let Some(changed) =
-            crate::ui::pane_sidecar::change_for_tab(tab, pane, fallback, parked, cx)
-    {
-        return changed;
-    }
-    let Some(target_slot) = leaves.iter().find(|slot| slot.entity_id() == pane) else {
-        return false;
-    };
-    if remote
-        && matches!(target_slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-    {
-        return false;
-    }
-    let Some(target) = slot_pane_id(target_slot, cx) else {
-        return false;
-    };
-    let Some(root) = logical_node(&tab.pane, remote, cx) else {
-        return false;
-    };
-    // An unassigned connecting leaf must not disappear when a restore reshapes.
-    let mut slots = HashMap::with_capacity(leaves.len());
-    let mut client_local = Vec::new();
-    for slot in &leaves {
-        if remote && matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-        {
-            client_local.push(slot.clone());
-            continue;
-        }
-        let Some(id) = slot_pane_id(slot, cx) else {
-            return false;
-        };
-        if slots.insert(id, slot.clone()).is_some() {
-            return false;
-        }
-    }
-    let fallback = fallback
-        .and_then(|id| leaves.iter().find(|slot| slot.entity_id() == id))
-        .filter(|slot| {
-            !remote
-                || !matches!(slot, PaneSlot::Ready(view) if view.read(cx).pane_route().is_local())
-        })
-        .and_then(|slot| slot_pane_id(slot, cx));
-    let mut logical = TreeTab {
-        root,
-        presentation: tab.presentation.clone(),
-        id: tab.id(),
-        name: None,
-        group: None,
-        last_auto: None,
-        hibernated: false,
-    };
-    let changed = match parked {
-        Some(true) => logical.park(target),
-        Some(false) => logical.restore_parked(target, fallback),
-        None => {
-            let promote = (logical.presentation.pip().map(|pip| pip.pane()) != Some(target))
-                .then_some(target);
-            logical.set_pip(promote, fallback)
-        }
-    };
-    if !changed {
-        return false;
-    }
-    if logical_node(&tab.pane, remote, cx).as_ref() != Some(&logical.root) {
-        let Some(pane) = pane_from_existing(&logical.root, &mut slots) else {
-            return false;
-        };
-        tab.pane = client_local.into_iter().fold(pane, |tree, slot| {
-            Pane::split_node(gpui_kit::Axis::Horizontal, 0.5, tree, Pane::Leaf(slot))
-        });
-    }
-    tab.presentation = logical.presentation;
-    true
-}
 
 pub(crate) fn control_for(cx: &mut App, host: HostId) -> Option<Arc<ControlClient>> {
     if host.is_local() {
@@ -2168,7 +2043,7 @@ impl LyrelApp {
         let presentation = tab.presentation.clone();
         if logical_node(&self.tabs[index].pane, remote, cx).as_ref() == Some(&tab.root) {
             let gui = &mut self.tabs[index];
-            gui.presentation = presentation;
+            gui.adopt_presentation(presentation);
             gui.adopt_name(tab.name.clone());
             gui.group.set(tab.group);
             if gui.auto_group.borrow().is_none() {
@@ -2199,7 +2074,7 @@ impl LyrelApp {
         });
         let gui = &mut self.tabs[index];
         gui.pane = pane;
-        gui.presentation = presentation;
+        gui.adopt_presentation(presentation);
         gui.adopt_name(tab.name.clone());
         gui.group.set(tab.group);
         if gui.auto_group.borrow().is_none() {
