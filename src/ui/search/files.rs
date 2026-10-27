@@ -403,7 +403,7 @@ impl LyrelApp {
     /// Search Everywhere on its Files tab — or closed, when that is what it
     /// is already showing, so the chord that opens it also puts it away.
     pub(crate) fn quick_open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(view) = self.search.clone() {
+        if let Some(view) = self.search.view() {
             if view.read(cx).tab() == SearchTab::Files {
                 self.close_search(window, cx);
             } else {
@@ -524,7 +524,7 @@ impl LyrelApp {
                     return;
                 }
                 let list = app.file_list_now(cx);
-                if let Some(view) = app.search.clone() {
+                if let Some(view) = app.search.view() {
                     view.update(cx, |view, cx| view.set_files(list, window, cx));
                 }
             },

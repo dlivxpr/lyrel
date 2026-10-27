@@ -86,7 +86,7 @@ fn intercept(ev: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         app.update(cx, |app, cx| app.toggle_search(window, cx));
         return;
     }
-    let Some(search) = app.read(cx).search.clone() else {
+    let Some(search) = app.read(cx).search.view() else {
         return;
     };
     // Focus got out from under the palette: the key would land behind it.
@@ -138,7 +138,7 @@ fn from_settings(settings: &Entity<SettingsWindow>, ks: &Keystroke, cx: &mut App
                 && let Ok(app) = root.read(cx).view().clone().downcast::<LyrelApp>()
             {
                 app.update(cx, |app, cx| {
-                    if app.search.is_none() {
+                    if !app.search.is_open() {
                         app.toggle_search(window, cx);
                     }
                 });
@@ -167,7 +167,7 @@ mod tests {
     }
 
     fn showing(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Option<SearchTab> {
-        app.read_with(vcx, |app, cx| app.search.as_ref().map(|s| s.read(cx).tab()))
+        app.read_with(vcx, |app, cx| app.search.view().map(|s| s.read(cx).tab()))
     }
 
     /// The first thing the pane sent its daemon, if it sent anything.

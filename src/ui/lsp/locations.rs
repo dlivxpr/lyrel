@@ -140,7 +140,7 @@ impl LyrelApp {
                     let items = many.iter().map(|f| item(f, &root)).collect();
                     app.open_search(SearchTab::Locations, "", window, cx);
                     app.editor_begin_preview(cx);
-                    if let Some(view) = app.search.clone() {
+                    if let Some(view) = app.search.view() {
                         view.update(cx, |view, cx| {
                             view.set_locations(Some(t(heading)), items, window, cx)
                         });
@@ -254,7 +254,7 @@ impl LyrelApp {
         static LATEST: AtomicU64 = AtomicU64::new(0);
         let seq = LATEST.fetch_add(1, Ordering::Relaxed) + 1;
         if query.trim().is_empty() {
-            if let Some(view) = self.search.clone() {
+            if let Some(view) = self.search.view() {
                 view.update(cx, |view, cx| {
                     view.set_project_symbols(Vec::new(), window, cx)
                 });
@@ -314,7 +314,7 @@ impl LyrelApp {
                 return;
             }
             let _ = app.update_in(cx, |app, window, cx| {
-                if let Some(view) = app.search.clone()
+                if let Some(view) = app.search.view()
                     && view.read(cx).tab() == SearchTab::Symbols
                 {
                     view.update(cx, |view, cx| view.set_project_symbols(items, window, cx));

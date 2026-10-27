@@ -665,7 +665,7 @@ impl LyrelApp {
     /// Go to Symbol in the file in front: the search, on its Symbols tab.
     /// The same chord puts it away again.
     pub(crate) fn editor_go_to_symbol(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(view) = self.search.clone() {
+        if let Some(view) = self.search.view() {
             if view.read(cx).tab() == SearchTab::Symbols {
                 self.close_search(window, cx);
                 return;
@@ -699,7 +699,7 @@ impl LyrelApp {
             scroll,
         });
         let live = self.lsp_project_symbol_query(window, cx);
-        if let Some(view) = self.search.clone() {
+        if let Some(view) = self.search.view() {
             view.update(cx, |view, cx| {
                 view.set_symbols(rows, here, window, cx);
                 if let Some(live) = live {
@@ -1483,7 +1483,7 @@ pub(super) mod gpui_tests {
         });
         vcx.run_until_parked();
         let symbols = app.read_with(&vcx, |app, cx| {
-            let view = app.search.clone().expect("the search is open");
+            let view = app.search.view().expect("the search is open");
             assert_eq!(view.read(cx).tab(), SearchTab::Symbols);
             view.read(cx).symbol_count()
         });
@@ -1501,7 +1501,7 @@ pub(super) mod gpui_tests {
 
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+        assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
         assert_eq!(caret(&app, &mut vcx), Position::new(5, 4), "and put back");
         draw(&app, &mut vcx);
         app.read_with(&vcx, |app, _| {
@@ -1528,7 +1528,7 @@ pub(super) mod gpui_tests {
         vcx.run_until_parked();
         vcx.simulate_keystrokes("enter");
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_none()));
+        assert!(app.read_with(&vcx, |app, _| !app.search.is_open()));
         assert_eq!(caret(&app, &mut vcx), Position::new(50, 3));
         draw(&app, &mut vcx);
 
@@ -1720,11 +1720,11 @@ pub(super) mod gpui_tests {
             app.editor_go_to_symbol(window, cx)
         });
         vcx.run_until_parked();
-        assert!(app.read_with(&vcx, |app, _| app.search.is_some()));
+        assert!(app.read_with(&vcx, |app, _| app.search.is_open()));
         vcx.simulate_keystrokes("secondary-shift-o");
         vcx.run_until_parked();
         assert!(
-            app.read_with(&vcx, |app, _| app.search.is_none()),
+            app.read_with(&vcx, |app, _| !app.search.is_open()),
             "the chord that opened it closes it"
         );
         assert_eq!(caret(&app, &mut vcx), Position::new(5, 4));
@@ -1749,7 +1749,7 @@ pub(super) mod gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| app.quick_open_file(window, cx));
         vcx.run_until_parked();
         let tab = |app: &Entity<LyrelApp>, vcx: &mut gpui_kit::VisualTestContext| {
-            app.read_with(vcx, |app, cx| app.search.as_ref().map(|v| v.read(cx).tab()))
+            app.read_with(vcx, |app, cx| app.search.view().map(|v| v.read(cx).tab()))
         };
         assert_eq!(tab(&app, &mut vcx), Some(SearchTab::Files));
         vcx.simulate_keystrokes("tab");

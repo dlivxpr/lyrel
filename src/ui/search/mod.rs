@@ -8,16 +8,22 @@
 //! - [`score`]: the one fuzzy scorer every tab shares.
 //! - [`view`]: the modal — the tab row, the list, the theme picker.
 
+mod catalog;
 mod command;
+mod history;
+mod lifecycle;
 pub(crate) mod files;
 mod score;
 mod sources;
 mod view;
 
+pub(crate) use catalog::{ActionCatalog, SearchCatalog, TerminalCatalog};
 pub(crate) use command::{Avatar, ChromeState, CommandGroup, CommandKind, Item};
 pub(crate) use files::{FileIndexStore, FileList};
+pub(crate) use history::SessionHistory;
+pub(crate) use lifecycle::SearchState;
 pub(crate) use score::fuzzy_score;
-pub(crate) use sources::{Catalog, LiveQuery, host_items};
+pub(crate) use sources::{Catalog, LiveQuery};
 pub(crate) use view::{KEY_CONTEXT, SearchEvent, SearchView};
 
 use crate::ui::i18n::{L10nKey, t};
