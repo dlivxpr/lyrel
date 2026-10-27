@@ -3,7 +3,8 @@ use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    App, Bounds, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Window, canvas, div,
+    App, Bounds, Focusable as _, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Window, canvas,
+    div,
 };
 use gpui_kit::{Axis, Entity, InteractiveElement as _, prelude::*, px};
 
@@ -56,14 +57,14 @@ impl PaneSlot {
     pub fn contains_focused(&self, window: &Window, cx: &App) -> bool {
         match self {
             PaneSlot::Ready(v) => v.read(cx).focus_handle.contains_focused(window, cx),
-            PaneSlot::Connecting(v) => v.read(cx).focus_handle.contains_focused(window, cx),
+            PaneSlot::Connecting(v) => v.read(cx).focus_handle(cx).contains_focused(window, cx),
         }
     }
 
     pub fn focus_handle(&self, cx: &App) -> gpui_kit::FocusHandle {
         match self {
             PaneSlot::Ready(v) => v.read(cx).focus_handle.clone(),
-            PaneSlot::Connecting(v) => v.read(cx).focus_handle.clone(),
+            PaneSlot::Connecting(v) => v.read(cx).focus_handle(cx),
         }
     }
 }

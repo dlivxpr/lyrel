@@ -138,3 +138,40 @@ lyrel -m devbox run -- cargo test
 <Card title="完整命令参考" icon="book" href="/cli/reference">
   所有子命令、标志和 JSON 结构。
 </Card>
+
+## 实现职责与回归验证
+
+CLI 的参数与别名由 `crates/lyrel-cli/src/cli.rs` 定义；
+`commands::execute` 保留为唯一执行入口，通过显式 `match` 将命令交给对应能力。
+各能力只接收所需参数、地址上下文和既有 `Backend`，返回原有 `Outcome`；
+`main.rs` 仍统一处理 JSON、人类可读输出、错误链和子进程退出码。
+
+| 所有者（`crates/lyrel-cli/src/commands/`） | 职责 |
+| --- | --- |
+| `workspace.rs`、`tab.rs` | 工作区创建／附着／移除，以及标签页查询、命名、排序和孤立窗格恢复 |
+| `pane.rs` | 窗格拆分、树与注册表查询、批量关闭；工作区／标签页移除后的挂断复用同一实现 |
+| `execution.rs` | `run` 的流式执行与保留，以及 `exec` 的 shell-integration 结果和退出码解释 |
+| `send.rs`、`capture.rs` | 输入目标消歧、按键／粘贴投递，以及原始／网格回放、尾行和进程查询 |
+| `wait.rs`、`agents.rs` | 等待状态、远端 freeness 判断，以及代理状态和缺失 hooks 的诊断 |
+| `server.rs`、`diagnostics.rs` | 服务器／机器查询、事件流、本机生命周期操作约束，以及 `doctor` |
+| `worktree.rs`、`launch.rs` | 本机 Git worktree 工作流，以及本机 GUI 路径解析和投递 |
+| `target.rs` | 共用的机器快照读取与工作区目标解析，不保存第二份机器状态 |
+
+每个能力的执行契约测试位于相邻的 `<能力>/tests.rs`，仍通过真实参数解析和
+`commands::execute`／`Backend` 替换点验证；共享 fixture 只维护执行上下文和已知机器／窗格数据。
+真实 CLI E2E 按能力放在 `tests/cli_e2e/`，原有自定义 runner 负责每个场景的隔离 daemon、
+端点就绪、子进程清理与 Windows Job Object，不连接用户正在使用的 daemon。
+
+在仓库根目录运行：
+
+```bash
+cargo test --locked -p lyrel-cli --bin lyrel
+cargo test --locked -p lyrel-cli --test cli_e2e
+```
+
+E2E 覆盖创建工作区／窗格、send/capture、run 流式输出与退出码、exec 输出与退出码、
+服务器与配置路由、事件流和 worktree。runner 不是 libtest，不支持按测试名筛选。
+其中 exec、stdin／粘贴和 POSIX worktree 场景保留现有 Windows 提前返回约束；
+Windows 的 runner 成功不能证明这些场景已执行，需另在具备 shell integration 与 Git 的 Unix 环境运行。
+合并后还应使用独立配置启动编译后的 CLI／daemon，记录 create/send/capture 的实际输出，
+以及 run／exec 的 stdout、stderr 和退出状态；上述命令和场景说明不代表已通过验证。

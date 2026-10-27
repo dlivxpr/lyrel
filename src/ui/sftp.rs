@@ -20,11 +20,12 @@ use crate::daemon::protocol::{
 };
 use crate::daemon::ssh::sftp::{remote_basename, remote_join, remote_parent, safe_local_name};
 use crate::terminal::RemoteTerminal;
-use crate::ui::app::{CONTENT_INSET, LyrelApp, TILE_GLYPH_SM, TILE_SIZE_SM};
+use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::right_panel::{
     HEADING, META, ROW_FILL_RADIUS, ROW_GLYPH, ROW_INSET, TEXT, TEXT_INSET,
 };
+use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_SM, TILE_SIZE_SM};
 
 /// A remote directory row: the local file tree's 26px row, on the panel's
 /// `ROW_FILL_RADIUS`, so the Files tab keeps its rhythm whichever machine it
@@ -444,7 +445,7 @@ impl LyrelApp {
     ) -> Option<crate::terminal::PaneWorkspace> {
         let leaf = self
             .tabs
-            .get(self.active)?
+            .get(self.tabs.active_index())?
             .pane
             .focused_or_first(window, cx)?;
         let leaf = leaf.read(cx);
@@ -500,7 +501,7 @@ impl LyrelApp {
     fn pane_shell_cwd(&self, pane_id: u64, window: &Window, cx: &App) -> Option<String> {
         let leaf = self
             .tabs
-            .get(self.active)?
+            .get(self.tabs.active_index())?
             .pane
             .focused_or_first(window, cx)?;
         let leaf = leaf.read(cx);
@@ -1248,7 +1249,7 @@ impl LyrelApp {
         // size the code claimed. `chrome_tile_sized` derives it from the tile
         // instead, which is what every other 24px tile in the panel does.
         let tile = |button: Button, selected: bool, cx: &mut Context<Self>| {
-            crate::ui::tab_strip::chrome_tile_sized(
+            crate::ui::window_chrome::chrome_tile_sized(
                 button,
                 TILE_SIZE_SM,
                 TILE_GLYPH_SM,
@@ -1837,7 +1838,7 @@ impl LyrelApp {
                         cx.stop_propagation()
                     })
                     .child(
-                        crate::ui::tab_strip::chrome_tile(
+                        crate::ui::window_chrome::chrome_tile(
                             Button::new("sftp-tray-close")
                                 .icon(IconName::Close)
                                 .xsmall(),

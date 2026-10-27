@@ -88,6 +88,14 @@ function parse(file) {
                 ix = last+1;
             }
             const item = ix;
+            if (tokens[ix]?.value === 'include' && tokens[ix+1]?.value === '!'
+                && tokens[ix+2]?.value === '(' && tokens[ix+3]?.value.startsWith('"')
+                && tokens[ix+4]?.value === ')') {
+                const child = path.join(path.dirname(file), JSON.parse(tokens[ix+3].value));
+                if (files.has(child)) edges.get(file).push([child, testOnly || attrs.some(testOnlyCfg)]);
+                ix += 5;
+                continue;
+            }
             if (tokens[ix]?.value === 'pub') {
                 ix++;
                 if (tokens[ix]?.value === '(') ix = close(ix, '(', ')')+1;

@@ -205,7 +205,7 @@ impl LyrelApp {
         // In the order ⌘⇧T takes them: the machine's list first, where it
         // keeps one, then whatever this window kept itself.
         let next_closed = crate::ui::tree_sync::newest_remembered_close(cx, self.workspace)
-            .or_else(|| self.closed.last().cloned());
+            .or_else(|| self.session.newest_closed().cloned());
         let closed_hint = next_closed.as_ref().and_then(closed_tab_label);
         let nothing_to_reopen = next_closed.is_none();
         // Rows on the sidebar's shape: no fill at rest, the window's hover

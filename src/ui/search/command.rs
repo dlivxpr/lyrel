@@ -644,8 +644,8 @@ impl Item {
         self
     }
 
-    /// The actions every window offers, in group order. The window adds the
-    /// ones only it can judge (`LyrelApp::search_catalog`).
+    /// The actions every window offers, in group order. The search catalog adds
+    /// the context-sensitive rows from the workbench's bounded facts.
     pub fn actions(chrome: ChromeState) -> Vec<Item> {
         use CommandKind::*;
         let sidebar_hidden = chrome.rail_collapsed;

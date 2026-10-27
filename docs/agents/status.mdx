@@ -200,6 +200,20 @@ lyrel 不写 `plugins.enabled`、shell-hook allowlist，不添加 `--accept-hook
 发送自己的通知。lyrel 按照相同的策略显示这些通知，仅在你正在查看该窗格时
 暂不显示；点击通知即可显示对应窗格。该通用终端能力不受内置智能体名单限制；如果窗格中的受支持智能体已通过 lyrel 的 hooks 报告状态，则会跳过重复通知。
 
+首次重新附加到 daemon 保留的窗格时，应用把既有完成状态作为基线，不会将历史结果
+重新标为未读。当前应用已经看过的窗格则使用按 Host 与 daemon pane 身份保存的
+read mark：切换工作区或重建视图不等于读过结果，断线期间完成的新轮次仍会标为未读。
+是否读到新结果取决于窗口中的实际焦点，而不是视图缓存的聚焦标志。
+
+完成通知保持既有的 1.5 秒稳定等待；智能体在此期间恢复工作时取消该通知，等待输入
+通知仍立即发送，不增加新的通知策略。实现由 `src/terminal/agent_activity.rs` 的
+`AgentActivity` 持有检测、会话转换、read mark、未读及取消状态；`TerminalView`
+只适配 GPUI 事件、计时任务和保留的实体身份。`src/terminal/desktop_notification.rs`
+独立负责平台投递、文本清理、通知标识和点击路由，不依赖终端连接或 reader。
+点击路由使用 GPUI entity 身份而非 daemon pane 编号；macOS 的进程标识继续阻止旧进程
+通知误定位到新进程中的窗格。Windows 与 macOS 的原生投递和点击激活须分别实跑，
+确定性回归不能代替平台验收。
+
 <a id="the-tray-icon"></a>
 ## 托盘图标
 

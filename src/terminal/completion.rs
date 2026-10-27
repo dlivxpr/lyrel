@@ -1,3 +1,5 @@
+pub(super) mod state;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -641,13 +643,13 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-pub(super) struct CompletionSession {
-    pub(super) word_start: usize,
-    pub(super) open_word: String,
-    pub(super) all: Vec<Candidate>,
-    pub(super) filtered: Vec<usize>,
-    pub(super) index: Option<usize>,
-    pub(super) pending_generators: usize,
+struct CompletionSession {
+    word_start: usize,
+    open_word: String,
+    all: Vec<Candidate>,
+    filtered: Vec<usize>,
+    index: Option<usize>,
+    pending_generators: usize,
 }
 
 pub(super) struct Replacement {

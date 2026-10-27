@@ -100,6 +100,112 @@ fn size() -> WinSize {
 }
 
 #[test]
+fn controller_takeover_preserves_observer_and_read_only_replay() {
+    let daemon = Daemon::start();
+    let panes = daemon.panes();
+    let mut original = panes
+        .spawn(None, size(), Some(interactive_shell()), None, None)
+        .expect("spawn the original controller");
+    original.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let pane = original.pane_id();
+    original
+        .input(b"echo LYREL_SUBSCRIPTION_BASELINE\r")
+        .unwrap();
+    let (_, exited) = collect_until(&mut original, b"LYREL_SUBSCRIPTION_BASELINE");
+    assert!(exited.is_none());
+
+    let mut observer = panes
+        .observe(pane, size())
+        .expect("observe the same live pane");
+    observer.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    let (replay, exited) = collect_until(&mut observer, b"LYREL_SUBSCRIPTION_BASELINE");
+    assert!(exited.is_none());
+    assert!(windows_contain(&replay, b"LYREL_SUBSCRIPTION_BASELINE"));
+    observer.input(b"echo OBSERVER_MUST_NOT_CONTROL\r").unwrap();
+    loop {
+        match observer
+            .recv()
+            .expect("read-only refusal must reach the observer")
+        {
+            DaemonMsg::Error(message) => {
+                assert!(message.contains("read-only observer"), "{message}");
+                break;
+            }
+            DaemonMsg::Exited { code } => panic!("observing ended the shell: {code:?}"),
+            _ => {}
+        }
+    }
+    original
+        .input(b"echo LYREL_ORIGINAL_STILL_CONTROLS\r")
+        .unwrap();
+    let (_, exited) = collect_until(&mut original, b"LYREL_ORIGINAL_STILL_CONTROLS");
+    assert!(
+        exited.is_none(),
+        "an observer must not take controller ownership"
+    );
+    let (_, exited) = collect_until(&mut observer, b"LYREL_ORIGINAL_STILL_CONTROLS");
+    assert!(exited.is_none());
+
+    let mut replacement = panes
+        .attach(pane, size())
+        .expect("replace only the controller");
+    replacement.set_recv_timeout(Some(STREAM_WITHIN)).unwrap();
+    assert_eq!(replacement.pane_id(), pane);
+    let (_, exited) = collect_until(&mut replacement, b"LYREL_ORIGINAL_STILL_CONTROLS");
+    assert!(exited.is_none());
+    replacement
+        .input(b"echo LYREL_REPLACEMENT_LIVE_OUTPUT\r")
+        .unwrap();
+    let (_, exited) = collect_until(&mut replacement, b"LYREL_REPLACEMENT_LIVE_OUTPUT");
+    assert!(exited.is_none());
+    let (_, exited) = collect_until(&mut observer, b"LYREL_REPLACEMENT_LIVE_OUTPUT");
+    assert!(
+        exited.is_none(),
+        "controller replacement must preserve existing observers"
+    );
+
+    let deadline = Instant::now() + STREAM_WITHIN;
+    let mut retired_output = Vec::new();
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the retired controller remained attached"
+        );
+        match original.recv() {
+            Ok(DaemonMsg::Output(bytes)) | Ok(DaemonMsg::Snapshot(bytes)) => {
+                retired_output.extend(bytes);
+                assert!(!windows_contain(
+                    &retired_output,
+                    b"LYREL_REPLACEMENT_LIVE_OUTPUT"
+                ));
+            }
+            Ok(DaemonMsg::Exited { code }) => panic!("takeover ended the shell: {code:?}"),
+            Ok(DaemonMsg::Error(message)) => {
+                panic!("takeover failed instead of disconnecting: {message}")
+            }
+            Ok(_) => {}
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::NotConnected
+                    ),
+                    "retired controller must close, not time out: {error}"
+                );
+                break;
+            }
+        }
+    }
+    replacement.input(b"exit\r").unwrap();
+    drain_until_exit(&mut replacement);
+    drain_until_exit(&mut observer);
+}
+
+#[test]
 fn incompatible_pane_peers_are_refused_before_session_side_effects() {
     use lyrel_core::daemon::protocol::ClientMsg;
     use lyrel_core::daemon::transport;
@@ -407,7 +513,7 @@ fn a_one_shot_pane_reports_its_real_exit_code() {
         .spawn(
             None,
             size(),
-            Some(one_shot_shell("exit 5")),
+            Some(one_shot_shell("echo lyrel_exit_tail && exit 5")),
             Some("client-lib-test".into()),
             None,
         )
@@ -415,12 +521,19 @@ fn a_one_shot_pane_reports_its_real_exit_code() {
     session
         .set_recv_timeout(Some(STREAM_WITHIN))
         .expect("bound the stream reads");
+    let mut output = Vec::new();
     loop {
         match session.recv() {
             Ok(DaemonMsg::Exited { code }) => {
                 assert_eq!(code, Some(5), "the child's code must ride the Exited frame");
+                assert!(
+                    windows_contain(&output, b"lyrel_exit_tail"),
+                    "the final child output must precede Exited; got {:?}",
+                    String::from_utf8_lossy(&output)
+                );
                 break;
             }
+            Ok(DaemonMsg::Output(bytes)) | Ok(DaemonMsg::Snapshot(bytes)) => output.extend(bytes),
             Ok(_) => {}
             Err(e) => panic!("pane stream ended before Exited: {e}"),
         }

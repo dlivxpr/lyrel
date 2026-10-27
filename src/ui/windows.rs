@@ -843,7 +843,7 @@ fn window_options(cx: &mut App, workspace: Option<WorkspaceId>) -> WindowOptions
         window_bounds: Some(window_bounds),
         app_id: Some("io.github.dlivxpr.lyrel".to_owned()),
         titlebar: Some(TitlebarOptions {
-            traffic_light_position: Some(crate::ui::theme::traffic_light_position()),
+            traffic_light_position: Some(crate::ui::window_chrome::traffic_light_position()),
             ..TitleBar::title_bar_options()
         }),
         window_background: crate::ui::theme::background_appearance(cx),

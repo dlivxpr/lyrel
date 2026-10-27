@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use super::kit::{self, BtnKind, Tk, fs};
 use super::*;
-use crate::ui::app::{TITLE_BAR_BORDER, TitleStripRow as _};
+use crate::ui::window_chrome::{TITLE_BAR_BORDER, TitleStripRow as _};
 use gpui_kit::TestSupportExt as _;
 
 /// What a menu row does when picked.
@@ -964,7 +964,7 @@ impl SettingsWindow {
             .child(nav)
             .child(main)
             .child(
-                crate::ui::app::window_move_gesture(
+                crate::ui::window_chrome::window_move_gesture(
                     div()
                         .id("settings-titlebar-drag")
                         .absolute()
@@ -985,7 +985,7 @@ impl SettingsWindow {
                     // On the chrome line rather than in the middle of the band:
                     // the band spends a point of its height below its contents,
                     // so `TITLE_BAR_HEIGHT / 2` is not where the rest sits.
-                    .top(crate::ui::app::title_strip_centre() - px(CLOSE_TILE / 2.))
+                    .top(crate::ui::window_chrome::title_strip_centre() - px(CLOSE_TILE / 2.))
                     .right(px(12.))
                     .size(px(CLOSE_TILE))
                     .rounded(px(6.))

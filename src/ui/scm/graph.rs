@@ -59,13 +59,14 @@ use lyrel_core::core::git::log::{
 };
 use lyrel_core::core::git::ops::{GitOp, ResetMode};
 
-use crate::ui::app::{CONTENT_INSET, LyrelApp};
+use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t};
 use crate::ui::presets::{ActiveLanes, LANE_SLOTS, Lanes};
 use crate::ui::right_panel::{META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, info_chip};
 use crate::ui::scm::panel::GROUP_CHEVRON;
 use crate::ui::scm::path::{elide_middle, relative_time};
 use crate::ui::scm::state::RepoKey;
+use crate::ui::window_chrome::CONTENT_INSET;
 
 /// One commit per row. 24px rather than the file list's 26: a graph row has no
 /// icon column, and the vertical pitch wants to stay close to the lane pitch or
@@ -1369,7 +1370,7 @@ impl LyrelApp {
                     // that history is being filtered once the box is gone —
                     // and it cannot go stale, because closing the box is what
                     // throws the query away.
-                    crate::ui::tab_strip::chrome_tile_sized(
+                    crate::ui::window_chrome::chrome_tile_sized(
                         Button::new("scm-graph-filter").icon(Icon::new(IconName::Search)),
                         GRAPH_TILE,
                         GRAPH_TILE_GLYPH,
@@ -1691,7 +1692,7 @@ impl LyrelApp {
         let handle = input.read(cx).focus_handle(cx);
         self.scm.graph.naming = Some((input, rev));
         self.scm.repo_override = Some(repo);
-        self.scm.override_tab = Some(self.active);
+        self.scm.override_tab = Some(self.tabs.active_index());
         window.focus(&handle, cx);
         cx.notify();
     }

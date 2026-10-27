@@ -50,7 +50,7 @@ fn park_last_pane_keeps_tab_session_and_keyboard_recovery(cx: &mut TestAppContex
     vcx.update(|window, cx| window.press("enter", cx));
     vcx.run_until_parked();
     app.update_in(&mut vcx, |app, window, cx| {
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         assert_eq!(
             app.tabs[0].pane.first_leaf().unwrap().entity_id(),
             pane.entity_id()
@@ -76,14 +76,14 @@ fn parking_pip_restores_only_selected_pane_and_preserves_other_tabs(cx: &mut Tes
     vcx.dispatch_action(TogglePanePip);
     vcx.dispatch_action(ParkPane);
     app.update_in(&mut vcx, |app, window, cx| {
-        assert!(app.tabs[0].presentation.pip().is_none());
+        assert!(app.tabs[0].presentation().pip().is_none());
         window.focus(&right.focus_handle(cx), cx);
     });
     vcx.dispatch_action(ParkPane);
     app.update_in(&mut vcx, |app, window, cx| {
-        assert_eq!(app.tabs[0].presentation.parked().len(), 2);
+        assert_eq!(app.tabs[0].presentation().parked().len(), 2);
         app.activate(1, window, cx);
-        assert!(app.tabs[1].presentation.parked().is_empty());
+        assert!(app.tabs[1].presentation().parked().is_empty());
         app.activate(0, window, cx);
     });
     vcx.dispatch_action(RestoreParkedPane);
@@ -93,7 +93,7 @@ fn parking_pip_restores_only_selected_pane_and_preserves_other_tabs(cx: &mut Tes
     app.update_in(&mut vcx, |app, window, cx| {
         assert!(!app.tabs[0].is_parked_slot(&left, cx));
         assert!(app.tabs[0].is_parked_slot(&right, cx));
-        assert!(app.tabs[0].presentation.pip().is_none());
+        assert!(app.tabs[0].presentation().pip().is_none());
         assert!(left.contains_focused(window, cx));
         assert_eq!(app.tabs[0].pane.leaves().len(), 2);
     });
@@ -140,7 +140,7 @@ fn another_clients_parking_delta_preserves_view_and_removes_hidden_input_focus(
         let pane = app.tabs[0].pane.first_leaf().unwrap();
         window.focus(&pane.focus_handle(cx), cx);
         let mut shared = LogicalTab::leaf(pane.terminal().unwrap().read(cx).pane_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         shared.park(shared.root.pane_ids()[0]);
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
@@ -162,7 +162,7 @@ fn another_clients_parking_delta_preserves_view_and_removes_hidden_input_focus(
     vcx.update(|window, cx| window.press("enter", cx));
     vcx.run_until_parked();
     app.update_in(&mut vcx, |app, window, cx| {
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         assert_eq!(
             app.tabs[0].pane.first_leaf().unwrap().entity_id(),
             pane.entity_id()
@@ -185,7 +185,7 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
     vcx.run_until_parked();
     test_window::quiesce(&mut vcx, None);
     let displayed = app.update_in(&mut vcx, |_, _, cx| {
-        crate::terminal::view::displayed_for_test(cx, pane.entity_id())
+        crate::terminal::lifecycle::displayed_for_test(cx, pane.entity_id())
     });
     assert_eq!(displayed, Some(false));
     render_probe::arm(200);
@@ -208,9 +208,9 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
     vcx.run_until_parked();
     vcx.update(|window, cx| window.render_frame(cx));
     app.update_in(&mut vcx, |app, _, cx| {
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         assert_eq!(
-            crate::terminal::view::displayed_for_test(cx, pane.entity_id()),
+            crate::terminal::lifecycle::displayed_for_test(cx, pane.entity_id()),
             Some(true)
         );
     });
@@ -269,7 +269,7 @@ fn restore_of_an_exited_card_keeps_the_same_exited_terminal(cx: &mut TestAppCont
     vcx.update(|window, cx| window.press("enter", cx));
     vcx.run_until_parked();
     app.update_in(&mut vcx, |app, _, cx| {
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         assert_eq!(
             app.tabs[0].pane.first_leaf().unwrap().entity_id(),
             pane.entity_id()
@@ -310,11 +310,11 @@ fn restore_after_an_intervening_split_and_sibling_close_keeps_the_new_terminal(
         let current_id = current.terminal().unwrap().read(cx).pane_id;
         let parked_id = parked.terminal().unwrap().read(cx).pane_id;
         let mut shared = LogicalTab::leaf(current_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         shared
             .root
             .split_leaf(current_id, parked_id, LogicalAxis::Vertical, 0.7, false);
-        shared.presentation = app.tabs[0].presentation.clone();
+        shared.presentation = app.tabs[0].presentation().clone();
         // Another client closes the original sibling after the new split.
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
@@ -360,7 +360,7 @@ fn restore_after_an_intervening_split_and_sibling_close_keeps_the_new_terminal(
             "missing original relationship restores beside the current pane using its saved axis"
         );
         assert!(parked.contains_focused(window, cx));
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
     });
 }
 
@@ -410,7 +410,7 @@ fn handle_drop_parks_the_last_live_pane_and_keyboard_restores_its_identity(
             app.tabs[0].pane.first_leaf().unwrap().entity_id(),
             pane.entity_id()
         );
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         assert!(pane.contains_focused(window, cx));
     });
 }
@@ -447,7 +447,7 @@ fn escape_cancels_a_valid_parking_drag_without_a_late_drop_or_menu(cx: &mut Test
             app.tabs[0].pane.first_leaf().unwrap().entity_id(),
             pane.entity_id()
         );
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         assert!(pane.contains_focused(window, cx));
         assert!(app.pane_drag.borrow().is_none());
     });
@@ -533,7 +533,7 @@ fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(
                     right.entity_id(),
                     "late split after {cancellation}"
                 );
-                assert!(app.tabs[0].presentation.parked().is_empty());
+                assert!(app.tabs[0].presentation().parked().is_empty());
                 assert!(app.pane_drag.borrow().is_none());
                 assert!(app.parked_deck.read(cx).cards().next().is_none());
             });
@@ -573,7 +573,7 @@ fn leaving_the_target_and_releasing_over_status_does_not_park_or_detach(cx: &mut
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert_eq!(app.tabs.len(), 1);
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         let leaves = app.tabs[0].pane.leaves();
         assert_eq!(leaves[0].entity_id(), left.entity_id());
         assert_eq!(leaves[1].entity_id(), right.entity_id());
@@ -612,7 +612,7 @@ fn dropping_a_nonfocused_handle_parks_only_that_pane_in_its_tab(cx: &mut TestApp
         assert_eq!(app.tabs[0].pane.leaves().len(), 2);
         assert!(left.contains_focused(window, cx));
         app.activate(1, window, cx);
-        assert!(app.tabs[1].presentation.parked().is_empty());
+        assert!(app.tabs[1].presentation().parked().is_empty());
         app.activate(0, window, cx);
         assert!(app.tabs[0].is_parked_slot(&right, cx));
     });
@@ -631,7 +631,7 @@ fn pip_move_drag_cancels_then_parks_without_committing_geometry_or_replacing_the
     });
     vcx.dispatch_action(TogglePanePip);
     let original = app.update_in(&mut vcx, |app, _, _| {
-        app.tabs[0].presentation.pip_geometry()
+        app.tabs[0].presentation().pip_geometry()
     });
     let key = pane.entity_id().as_u64() as usize;
     for cancel in [true, false] {
@@ -655,10 +655,10 @@ fn pip_move_drag_cancels_then_parks_without_committing_geometry_or_replacing_the
                 pane.entity_id()
             );
             assert_eq!(app.tabs[0].is_parked_slot(&pane, cx), !cancel);
-            assert_eq!(app.tabs[0].presentation.pip().is_some(), cancel);
+            assert_eq!(app.tabs[0].presentation().pip().is_some(), cancel);
             assert!(!app.tabs[0].pip_interaction.has_gesture());
             if cancel {
-                assert_eq!(app.tabs[0].presentation.pip_geometry(), original);
+                assert_eq!(app.tabs[0].presentation().pip_geometry(), original);
                 assert!(pane.contains_focused(window, cx));
             }
         });
@@ -666,8 +666,8 @@ fn pip_move_drag_cancels_then_parks_without_committing_geometry_or_replacing_the
     vcx.dispatch_action(RestoreParkedPane);
     vcx.update(|window, cx| window.press("enter", cx));
     app.update_in(&mut vcx, |app, window, cx| {
-        assert!(app.tabs[0].presentation.pip().is_none());
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().pip().is_none());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         assert_eq!(
             app.tabs[0].pane.first_leaf().unwrap().entity_id(),
             pane.entity_id()
@@ -700,7 +700,7 @@ fn pip_pane_menu_handle_also_drags_to_the_shared_parking_target(cx: &mut TestApp
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].is_parked_slot(&pane, cx));
-        assert!(app.tabs[0].presentation.pip().is_none());
+        assert!(app.tabs[0].presentation().pip().is_none());
         assert_eq!(app.tabs[0].pane.leaves().len(), 1);
     });
 }
@@ -758,7 +758,7 @@ fn parking_target_matches_painted_ellipse_and_stays_above_status_after_zoom_resi
             window.pointer_up(corner, gpui_kit::MouseButton::Left, cx);
         });
         app.update_in(&mut vcx, |app, _, _| {
-            assert!(app.tabs[0].presentation.parked().is_empty())
+            assert!(app.tabs[0].presentation().parked().is_empty())
         });
         vcx.update(|window, cx| {
             let start = window
@@ -782,7 +782,7 @@ fn parking_target_matches_painted_ellipse_and_stays_above_status_after_zoom_resi
         vcx.dispatch_action(RestoreParkedPane);
         vcx.update(|window, cx| window.press("enter", cx));
         app.update_in(&mut vcx, |app, window, cx| {
-            assert!(app.tabs[0].presentation.parked().is_empty());
+            assert!(app.tabs[0].presentation().parked().is_empty());
             assert!(pane.contains_focused(window, cx));
         });
     }
@@ -958,14 +958,14 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
             replacement.clone(),
         );
         let mut shared = LogicalTab::leaf(replacement_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         for pane in &parked {
             let id = pane.terminal().unwrap().read(cx).pane_id;
             shared
                 .root
                 .split_leaf(replacement_id, id, LogicalAxis::Vertical, 0.7, false);
         }
-        shared.presentation = app.tabs[0].presentation.clone();
+        shared.presentation = app.tabs[0].presentation().clone();
         assert!(app.apply_layout_delta(
             &LayoutDelta::TabRestructured {
                 tab: shared,
@@ -985,7 +985,7 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
     vcx.run_until_parked();
     app.update_in(&mut vcx, |app, window, cx| {
         assert_eq!(app.tabs[0].pane.leaves().len(), 21);
-        assert_eq!(app.tabs[0].presentation.parked().len(), 19);
+        assert_eq!(app.tabs[0].presentation().parked().len(), 19);
         assert!(!app.tabs[0].is_parked_slot(last, cx));
         assert!(
             parked[..19]
@@ -1049,7 +1049,7 @@ fn tab_switch_and_lost_pressed_button_cancel_pending_parking(cx: &mut TestAppCon
             assert!(
                 app.tabs
                     .iter()
-                    .all(|tab| tab.presentation.parked().is_empty())
+                    .all(|tab| tab.presentation().parked().is_empty())
             );
             assert_eq!(
                 app.tabs[0].pane.first_leaf().unwrap().entity_id(),
@@ -1092,7 +1092,7 @@ fn a_parking_target_empty_corner_cannot_become_an_unintended_split_drop(cx: &mut
     });
     app.update_in(&mut vcx, |app, _, _| {
         assert_eq!(app.tabs.len(), 1);
-        assert!(app.tabs[0].presentation.parked().is_empty());
+        assert!(app.tabs[0].presentation().parked().is_empty());
         let leaves = app.tabs[0].pane.leaves();
         assert_eq!(leaves[0].entity_id(), left.entity_id());
         assert_eq!(leaves[1].entity_id(), right.entity_id());
@@ -1194,7 +1194,7 @@ fn overflow_uses_content_width_and_zoom_without_shrinking_targets_or_losing_entr
         assert!(window.try_find("parked-more").is_none());
     });
     app.update_in(&mut vcx, |app, window, cx| {
-        assert_eq!(app.tabs[0].presentation.parked().len(), 3);
+        assert_eq!(app.tabs[0].presentation().parked().len(), 3);
         assert!(
             parked
                 .iter()
@@ -1259,7 +1259,7 @@ fn overflow_tabbed_rows_activate_their_own_pane_before_restore(cx: &mut TestAppC
                 Some(pane.entity_id().as_u64()),
                 "Enter and Space must preview the focused row, not the old active pane"
             );
-            assert_eq!(app.tabs[0].presentation.parked().len(), 3);
+            assert_eq!(app.tabs[0].presentation().parked().len(), 3);
         });
         vcx.update(|window, cx| {
             window.render_frame(cx);
@@ -1324,7 +1324,7 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
     let mut shared = app.update_in(&mut vcx, |app, window, cx| {
         let current_id = current.terminal().unwrap().read(cx).pane_id;
         let mut shared = LogicalTab::leaf(current_id);
-        shared.id = app.tabs[0].tree_id.get();
+        shared.id = app.tabs[0].id();
         for pane in &parked {
             shared.root.split_leaf(
                 current_id,
@@ -1334,7 +1334,7 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
                 false,
             );
         }
-        shared.presentation = app.tabs[0].presentation.clone();
+        shared.presentation = app.tabs[0].presentation().clone();
         assert!(
             shared.park(current_id),
             "a second client adds another parked pane"
@@ -1374,7 +1374,7 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
             4,
             "a stale request cannot recreate the closed session"
         );
-        assert_eq!(app.tabs[0].presentation.parked().len(), 4);
+        assert_eq!(app.tabs[0].presentation().parked().len(), 4);
     });
     vcx.run_until_parked();
     app.update_in(&mut vcx, |app, _, cx| {

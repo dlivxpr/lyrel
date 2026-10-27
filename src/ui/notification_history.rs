@@ -554,7 +554,7 @@ impl LyrelApp {
                     .iter()
                     .any(|slot| crate::ui::pane_sidecar::scoped_pane(slot, cx) == Some(pane))
             }),
-            None => self.tabs.get(self.active),
+            None => self.tabs.get(self.tabs.active_index()),
         };
         let pane = origin.or_else(|| {
             tab.and_then(|tab| tab.pane.focused_or_first(window, cx))
@@ -571,7 +571,7 @@ impl LyrelApp {
         if let Some(pane) = pane {
             source.label.push_str(&format!(" · #{}", pane.pane()));
         }
-        source.tab = tab.map(|tab| tab.tree_id.get());
+        source.tab = tab.map(|tab| tab.id());
         source.pane = pane.map(ScopedPane::pane);
         source.pane_owner = pane.map(ScopedPane::owner);
         source
@@ -604,7 +604,7 @@ impl LyrelApp {
                 .tabs
                 .iter()
                 .enumerate()
-                .filter(|(_, tab)| source.tab.is_none_or(|want| tab.tree_id.get() == want))
+                .filter(|(_, tab)| source.tab.is_none_or(|want| tab.id() == want))
                 .flat_map(|(index, tab)| {
                     tab.pane.leaves().into_iter().map(move |pane| (index, pane))
                 })
@@ -621,10 +621,10 @@ impl LyrelApp {
         } else if let Some(want) = source.tab {
             self.tabs
                 .iter()
-                .position(|tab| tab.tree_id.get() == want)
+                .position(|tab| tab.id() == want)
                 .map(|index| (index, None))
         } else {
-            Some((self.active, None))
+            Some((self.tabs.active_index(), None))
         }
     }
 
@@ -637,7 +637,7 @@ impl LyrelApp {
             return;
         };
         if let Some((index, pane)) = self.notification_target(&source, cx) {
-            self.active = index;
+            self.tabs.select(index);
             if let Some(pane) = pane {
                 if self.tabs[index].is_parked_slot(&pane, cx) {
                     self.preview_parked_target(pane.entity_id(), window, cx);

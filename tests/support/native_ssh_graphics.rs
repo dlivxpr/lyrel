@@ -225,7 +225,7 @@ impl NativeSshFixture {
     }
 
     fn endpoint(&self, name: &str) -> PathBuf {
-        self.root.path().join("config").join(format!(
+        self.local_config_dir().join(format!(
             "{name}.{}",
             if cfg!(windows) { "port" } else { "sock" }
         ))
@@ -248,6 +248,11 @@ impl NativeSshFixture {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Configuration of this disposable local router, never the installed daemon.
+    pub fn local_config_dir(&self) -> PathBuf {
+        self.root.path().join("config")
     }
 
     pub fn spec(&self) -> NativeSshSpec {

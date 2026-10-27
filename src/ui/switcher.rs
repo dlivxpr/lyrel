@@ -1012,7 +1012,7 @@ impl LyrelApp {
     pub(crate) fn tab_rows_for(&self, id: WorkspaceId, mru: bool, cx: &App) -> Vec<TabRow> {
         if id == self.workspace {
             let order = match mru {
-                true => self.tabs_by_mru(),
+                true => self.tabs.by_mru(),
                 false => (0..self.tabs.len()).collect(),
             };
             return order
@@ -1020,10 +1020,10 @@ impl LyrelApp {
                 .map(|i| {
                     let tab = &self.tabs[i];
                     TabRow {
-                        id: tab.tree_id.get(),
+                        id: tab.id(),
                         index: i,
                         label: self.tab_label(tab, i, None, cx),
-                        named: tab.name.as_deref().is_some_and(|n| !n.trim().is_empty())
+                        named: tab.name().as_deref().is_some_and(|n| !n.trim().is_empty())
                             || tab.agent(cx).is_some(),
                         path: tab
                             .pane
@@ -1039,7 +1039,7 @@ impl LyrelApp {
                         status: tab.agent_status(cx),
                         unread: tab.agent_unread_count(cx),
                         ssh: self.tab_ssh_dot(tab, cx),
-                        active: i == self.active,
+                        active: i == self.tabs.active_index(),
                         git: tab.git_status(None, cx),
                     }
                 })
@@ -4283,7 +4283,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert_eq!(app.switcher.as_ref().expect("still up").right_sel, 2);
-            assert_eq!(app.active, 0, "nothing is committed while the key is held");
+            assert_eq!(
+                app.tabs.active_index(),
+                0,
+                "nothing is committed while the key is held"
+            );
         });
     }
 
@@ -4297,7 +4301,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none(), "the panel comes down on release");
-            assert_eq!(app.active, 1, "the highlighted tab is now the active one");
+            assert_eq!(
+                app.tabs.active_index(),
+                1,
+                "the highlighted tab is now the active one"
+            );
         });
     }
 
@@ -4309,7 +4317,7 @@ mod gpui_tests {
         app.update_in(&mut vcx, |app, window, cx| app.tab_switch(true, window, cx));
         vcx.simulate_modifiers_change(Modifiers::none());
         vcx.run_until_parked();
-        app.update(cx, |app, _| assert_eq!(app.active, 1));
+        app.update(cx, |app, _| assert_eq!(app.tabs.active_index(), 1));
 
         vcx.simulate_modifiers_change(Modifiers::control());
         app.update_in(&mut vcx, |app, window, cx| app.tab_switch(true, window, cx));
@@ -4317,7 +4325,8 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert_eq!(
-                app.active, 0,
+                app.tabs.active_index(),
+                0,
                 "most-recently-used ordering makes the gesture a toggle"
             );
         });
@@ -4372,7 +4381,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none());
-            assert_eq!(app.active, 2, "the tab the pointer picked is now active");
+            assert_eq!(
+                app.tabs.active_index(),
+                2,
+                "the tab the pointer picked is now active"
+            );
         });
     }
 
@@ -4563,7 +4576,7 @@ mod gpui_tests {
                 .as_ref()
                 .expect("the panel stays up for the mouse to finish in");
             assert!(sw.hold.is_none(), "the hold is spent, not re-armed");
-            assert_eq!(app.active, 0, "the release picked nothing");
+            assert_eq!(app.tabs.active_index(), 0, "the release picked nothing");
         });
     }
 
@@ -4582,7 +4595,11 @@ mod gpui_tests {
 
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none(), "the panel comes down on release");
-            assert_eq!(app.active, 1, "the highlighted tab is now the active one");
+            assert_eq!(
+                app.tabs.active_index(),
+                1,
+                "the highlighted tab is now the active one"
+            );
         });
     }
 
@@ -4625,7 +4642,8 @@ mod gpui_tests {
         app.update(cx, |app, _| {
             assert!(app.switcher.is_none(), "release commits and closes");
             assert_eq!(
-                app.active, 0,
+                app.tabs.active_index(),
+                0,
                 "the first row of a most-recently-used column is this very tab"
             );
         });

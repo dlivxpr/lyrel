@@ -479,7 +479,7 @@ impl InputHandler for TerminalInputHandler {
         _window: &mut Window,
         cx: &mut App,
     ) -> Option<std::ops::Range<usize>> {
-        let marked = &self.view.read(cx).marked_text;
+        let marked = self.view.read(cx).input.marked();
         if marked.is_empty() {
             None
         } else {

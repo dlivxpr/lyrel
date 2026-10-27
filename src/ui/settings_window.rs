@@ -49,7 +49,7 @@ pub(crate) fn window_options(cx: &mut App) -> WindowOptions {
         app_id: Some("io.github.dlivxpr.lyrel".to_owned()),
         titlebar: Some(TitlebarOptions {
             title: Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::SettingsWindowTitle).into()),
-            traffic_light_position: Some(crate::ui::theme::traffic_light_position()),
+            traffic_light_position: Some(crate::ui::window_chrome::traffic_light_position()),
             ..TitleBar::title_bar_options()
         }),
         window_decorations: Some(WindowDecorations::Client),

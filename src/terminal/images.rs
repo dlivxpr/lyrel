@@ -1166,6 +1166,31 @@ impl ImageStore {
         self.release_retired(window, cx);
     }
 
+    /// A closed window cannot run release_all, but its derived images and
+    /// reservations must not wait for the retained view's last owner to drop.
+    pub(super) fn release_after_window_close(
+        &self,
+        window: gpui_kit::WindowId,
+        cx: &mut gpui_kit::App,
+    ) {
+        self.clear();
+        WINDOW_IMAGES.with(|windows| {
+            let images = windows.borrow_mut().remove(&window);
+            for entry in images.into_iter().flatten() {
+                if let Some(image) = entry.residency.upgrade() {
+                    image.registered.store(false, Ordering::Release);
+                    cx.drop_image(image.data.clone(), None);
+                    image.gpu.lock().unwrap().take();
+                }
+            }
+        });
+        for retired in self.take_retired() {
+            cx.drop_image(retired.data.clone(), None);
+            retired.gpu.lock().unwrap().take();
+        }
+        self.0.ready.notify_all();
+    }
+
     /// Reset a detached/relinked pane's nonpersistent derived state. Clearing
     /// the resource map also invalidates any in-flight decode completion.
     pub fn clear(&self) {
