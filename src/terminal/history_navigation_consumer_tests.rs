@@ -7,13 +7,13 @@ fn history_recall_snaps_the_viewport_back_to_the_prompt(cx: &mut TestAppContext)
         .update(cx, |view, _, cx| {
             seed_history(view, vec!["echo hello".to_string()]);
             scroll_into_history(view, 10);
-            view.scroll_frac = 0.5;
+            view.smooth_scroll(0.5, cx);
 
             view.handle_editor_key(&key("up"), cx);
 
             assert_eq!(view.cmd.text(), "echo hello", "↑ recalled the entry");
             assert_eq!(display_offset(view), 0, "and the viewport followed it down");
-            assert_eq!(view.scroll_frac, 0., "the sub-line remainder reset too");
+            assert_eq!(view.selection_scroll.fraction(), 0., "the sub-line remainder reset too");
         })
         .unwrap();
 }

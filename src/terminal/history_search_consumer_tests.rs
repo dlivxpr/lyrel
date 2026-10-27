@@ -195,7 +195,7 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
                     "the press must not have closed the menu either"
                 );
                 assert!(
-                    !view.selecting,
+                    !view.selection_scroll.is_selecting(),
                     "the menu swallowed the press, so no selection started under it"
                 );
             })
@@ -214,7 +214,7 @@ fn reverse_search_menu_survives_a_real_render_pass(cx: &mut TestAppContext) {
         window
             .update(cx, |view, _, _| {
                 assert!(
-                    view.selecting,
+                    view.selection_scroll.is_selecting(),
                     "with no menu over it the same press is the grid's to take"
                 );
             })

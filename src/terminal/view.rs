@@ -7,13 +7,12 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
     App, ClipboardEntry, ClipboardItem, Context, EntityId, ExternalPaths, FocusHandle, Focusable,
-    Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollDelta,
+    Font, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels,
     ScrollWheelEvent, Task, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use rio_vt::crosswords::grid::{Dimensions, Scroll};
 use rio_vt::crosswords::pos::{Column, Direction, Line, Pos, Side};
-use rio_vt::crosswords::Mode;
-use rio_vt::selection::{Selection, SelectionType};
+use rio_vt::crosswords::{Crosswords, Mode};
 
 use super::TermSize;
 use super::cmd_editor::CmdEditor;
@@ -38,7 +37,7 @@ use crate::core::actions::{
     OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer, SaveAgentLaunchArgs,
     SendBackTab, SendTab, SplitDown, SplitRight, ToggleMaximizePane,
 };
-use crate::core::config::{BellMode, Config, LinkFileOpen, MouseZoomModifier};
+use crate::core::config::{BellMode, Config, LinkFileOpen};
 use crate::core::shell_quote::quote_for_shell;
 use crate::daemon::protocol::{RemoteContext, ShellSpec};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -210,45 +209,7 @@ pub struct ShellParts {
 }
 
 
-#[derive(Clone, Copy)]
-struct DragScroll {
-    overshoot: f32,
-    col: usize,
-    side: Side,
-}
 
-/// In-flight wheel animation. `remaining` is what is left to scroll, in lines,
-/// relative to wherever the view happens to be — deliberately not an absolute
-/// target, so output arriving mid-animation shifts the grid under us without
-/// dragging the animation somewhere else.
-#[derive(Clone, Copy)]
-struct ScrollAnim {
-    remaining: f32,
-    last: std::time::Instant,
-}
-
-/// Fraction of the remaining distance consumed per [`SCROLL_ANIM_FRAME`].
-const SCROLL_ANIM_SMOOTH: f32 = 0.4;
-/// The frame `SCROLL_ANIM_SMOOTH` is calibrated against: one nominal 60 Hz
-/// frame. Decay is scaled by real elapsed time, so the same feel holds at any
-/// refresh rate.
-const SCROLL_ANIM_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
-/// Below this much left to travel, land instead of asymptoting toward it. A
-/// twentieth of a line is around a pixel — the tail of an exponential decay is
-/// invisible long before it ends, and every frame of it costs a full repaint.
-const SCROLL_ANIM_MIN: f32 = 0.05;
-/// A jump smaller than this reads as continuous already; spreading it would
-/// only put lag between the hand and the grid. Inching a wheel one detent at a
-/// time lands here, and so does every event a trackpad sends.
-const SCROLL_ANIM_MIN_JUMP: f32 = 1.0;
-/// How long a trackpad gesture stays "live" after its last event. Long enough
-/// to bridge the gaps in a momentum tail, short enough that reaching for the
-/// wheel right after a swipe is not mistaken for more of the swipe.
-const SCROLL_GESTURE_IDLE: std::time::Duration = std::time::Duration::from_millis(150);
-/// How far a trackpad has to travel, in lines, to earn one font-size step while
-/// the platform modifier is held. A wheel detent is one step on its own, so
-/// this only ever applies to the continuous stream a gesture produces.
-const ZOOM_SCROLL_LINES: f32 = 3.0;
 
 fn cwd_is_on_host(pane_runs_remotely: bool, host_is_local: bool) -> bool {
     match pane_runs_remotely {
@@ -301,17 +262,7 @@ pub struct TerminalView {
     /// full-screen program owns the screen) still asks the terminal itself.
     frame_alt_screen: bool,
     frame_has_selection: bool,
-    selecting: bool,
-    grid_word_selection: Option<super::smart_select::GridWordSelection>,
-    drag_scroll: Option<DragScroll>,
-    drag_scroll_epoch: u64,
-    scroll_anim: Option<ScrollAnim>,
-    scroll_anim_epoch: u64,
-    gesture_until: Option<std::time::Instant>,
-    /// Whether the trackpad gesture in flight is zooming, latched at its first
-    /// event. `None` between gestures, and never set for a wheel, which has no
-    /// gesture to belong to and decides notch by notch.
-    gesture_zoom: Option<bool>,
+    pub(super) selection_scroll: super::selection_scroll::SelectionScroll,
     pub title: String,
     /// A title the pane has been told about but has not adopted yet — see
     /// `set_title_when_settled`. `None` means the tab is showing the newest
@@ -345,13 +296,6 @@ pub struct TerminalView {
     /// candidate window at, while it had focus.
     ime_anchor: Option<gpui_kit::Bounds<Pixels>>,
     pub(super) links: LinkInteraction,
-    scroll_debt: f32,
-    /// Lines travelled under the zoom modifier that have not yet added up to a
-    /// font-size step. Kept apart from [`scroll_debt`](Self::scroll_debt) so
-    /// letting go of the modifier mid-gesture cannot hand the leftovers of one
-    /// to the other.
-    zoom_debt: f32,
-    pub(super) scroll_frac: f32,
     /// The scrollback bar's end of the grid: where it thinks the viewport is,
     /// and where it has asked for it to go. See [`super::scrollbar`].
     pub(super) scroll_handle: TerminalScrollHandle,
@@ -1361,14 +1305,7 @@ impl TerminalView {
             grid_snap: None,
             frame_alt_screen: false,
             frame_has_selection: false,
-            selecting: false,
-            grid_word_selection: None,
-            drag_scroll: None,
-            drag_scroll_epoch: 0,
-            scroll_anim: None,
-            scroll_anim_epoch: 0,
-            gesture_until: None,
-            gesture_zoom: None,
+            selection_scroll: super::selection_scroll::SelectionScroll::default(),
             title: DEFAULT_TITLE.to_string(),
             pending_title: None,
             default_title: DEFAULT_TITLE.to_string(),
@@ -1380,9 +1317,6 @@ impl TerminalView {
             ime_anchor: None,
             report_mouse,
             links: LinkInteraction::default(),
-            scroll_debt: 0.,
-            zoom_debt: 0.,
-            scroll_frac: 0.,
             scroll_handle: TerminalScrollHandle::default(),
             search: None,
             cursor_visible: true,
@@ -2810,13 +2744,10 @@ impl TerminalView {
     }
 
     fn jump_to_prompt(&mut self) {
-        self.cancel_scroll_anim();
         let mut term = self.terminal.term.lock();
-        term.selection = None;
-        term.scroll_display(Scroll::Bottom);
+        self.selection_scroll.jump_to_prompt(&mut term);
         drop(term);
         self.terminal.viewport_reporter().report();
-        self.scroll_frac = 0.;
     }
 
     pub(super) fn send_to_pty(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
@@ -2831,14 +2762,8 @@ impl TerminalView {
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let mut term = self.terminal.term.lock();
-        let grid = &term.grid;
-        let start = Pos::new(grid.topmost_line(), Column(0));
-        let end = Pos::new(grid.bottommost_line(), grid.last_column());
-        let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
-        sel.update(end, Side::Right);
-        term.selection = Some(sel);
+        self.selection_scroll.select_all(&mut term);
         drop(term);
-        self.grid_word_selection = None;
         cx.notify();
     }
 
@@ -3019,7 +2944,7 @@ impl TerminalView {
         if lines == 0 {
             return;
         }
-        self.cancel_scroll_anim();
+        self.selection_scroll.cancel_animation();
         let mut mode = self.terminal.term.lock().mode();
         if !self.report_mouse {
             mode.remove(Mode::MOUSE_MODE);
@@ -3039,11 +2964,7 @@ impl TerminalView {
                 self.terminal.write(out);
             }
             WheelRoute::Scrollback => {
-                self.scroll_frac = 0.;
-                self.terminal
-                    .term
-                    .lock()
-                    .scroll_display(Scroll::Delta(lines));
+                self.selection_scroll.scroll_lines(&mut self.terminal.term.lock(), lines);
                 self.terminal.viewport_reporter().report();
                 cx.notify();
             }
@@ -3397,7 +3318,7 @@ impl TerminalView {
     /// Clear presentation without discarding retained history or restarting
     /// the process. Only a live pane receives Ctrl+L through its own transport.
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
-        self.cancel_scroll_anim();
+        self.selection_scroll.cancel_animation();
         if self.terminal.clear_presentation(false) {
             self.terminal.write(vec![0x0c_u8]);
         }
@@ -3405,11 +3326,10 @@ impl TerminalView {
     }
 
     pub fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
-        self.cancel_scroll_anim();
+        self.selection_scroll.clear_scrollback();
         if self.terminal.clear_presentation(true) {
             self.terminal.write(vec![0x0c_u8]);
         }
-        self.scroll_frac = 0.;
         cx.notify();
     }
 
@@ -4919,56 +4839,16 @@ impl TerminalView {
         shift: bool,
         cx: &mut Context<Self>,
     ) {
-        let cfg = cx.global::<Config>();
         let mut term = self.terminal.term.lock();
-        let display_offset = term.grid.display_offset() as i32;
-        let point = Pos::new(Line(row as i32 - display_offset), Column(col));
-        let side = if left { Side::Left } else { Side::Right };
-        if shift && clicks == 1 && term.selection.is_some() {
-            if let Some(word) = self.grid_word_selection.as_mut() {
-                word.update(&mut term, point, &cfg.word_separators);
-            } else if let Some(sel) = term.selection.as_mut() {
-                sel.update(point, side);
-            }
-            drop(term);
-            self.selecting = true;
-            cx.notify();
-            return;
-        }
-        self.grid_word_selection = None;
-        if clicks == 2 {
-            self.grid_word_selection = Some(super::smart_select::GridWordSelection::start(
-                &mut term,
-                point,
-                &cfg.word_separators,
-                cfg.smart_select,
-            ));
-        } else {
-            let ty = if clicks >= 3 {
-                SelectionType::Lines
-            } else {
-                SelectionType::Simple
-            };
-            term.selection = Some(Selection::new(ty, point, side));
-        }
+        self.selection_scroll.start(&mut term, col, row, left, clicks, shift, cx.global::<Config>());
         drop(term);
-        self.selecting = true;
         cx.notify();
     }
 
     pub fn on_select_update(&mut self, col: usize, row: usize, left: bool, cx: &mut Context<Self>) {
-        if !self.selecting {
-            return;
-        }
+        if !self.selection_scroll.is_selecting() { return; }
         let mut term = self.terminal.term.lock();
-        let display_offset = term.grid.display_offset() as i32;
-        let point = Pos::new(Line(row as i32 - display_offset), Column(col));
-        let side = if left { Side::Left } else { Side::Right };
-        if let Some(word) = self.grid_word_selection.as_mut() {
-            word.update(&mut term, point, &cx.global::<Config>().word_separators);
-        } else if let Some(sel) = term.selection.as_mut() {
-            sel.update(point, side);
-        }
+        self.selection_scroll.update(&mut term, col, row, left, &cx.global::<Config>().word_separators);
         drop(term);
         cx.notify();
     }
@@ -4980,22 +4860,7 @@ impl TerminalView {
         left: bool,
         cx: &mut Context<Self>,
     ) {
-        if !self.selecting || overshoot == 0. {
-            self.drag_scroll = None;
-            return;
-        }
-        let side = if left { Side::Left } else { Side::Right };
-        let was_idle = self.drag_scroll.is_none();
-        self.drag_scroll = Some(DragScroll {
-            overshoot,
-            col,
-            side,
-        });
-        if !was_idle {
-            return;
-        }
-        self.drag_scroll_epoch += 1;
-        let epoch = self.drag_scroll_epoch;
+        let Some(epoch) = self.selection_scroll.autoscroll(overshoot, col, left) else { return; };
         self.drag_scroll_tick(epoch, cx);
         cx.spawn(async move |this, cx| {
             loop {
@@ -5005,60 +4870,29 @@ impl TerminalView {
                 if !matches!(
                     this.update(cx, |view, cx| view.drag_scroll_tick(epoch, cx)),
                     Ok(true)
-                ) {
-                    break;
-                }
+                ) { break; }
             }
-        })
-        .detach();
+        }).detach();
     }
 
     fn drag_scroll_tick(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
-        if epoch != self.drag_scroll_epoch {
-            return false;
-        }
-        if !self.selecting {
-            self.drag_scroll = None;
-        }
-        let Some(ds) = self.drag_scroll else {
-            return false;
-        };
-        self.cancel_scroll_anim();
-        let mut term = self.terminal.term.lock();
-        let before = term.grid.display_offset();
-        term.scroll_display(Scroll::Delta(drag_scroll_step(ds.overshoot)));
-        let offset = term.grid.display_offset();
-        let row = if ds.overshoot > 0. {
-            0
-        } else {
-            term.screen_lines().saturating_sub(1)
-        };
-        let point = Pos::new(Line(row as i32 - offset as i32), Column(ds.col));
-        if let Some(word) = self.grid_word_selection.as_mut() {
-            word.update(&mut term, point, &cx.global::<Config>().word_separators);
-        } else if let Some(sel) = term.selection.as_mut() {
-            sel.update(point, ds.side);
-        }
-        drop(term);
+        let moved = self.selection_scroll.drag_tick(
+            epoch,
+            || self.terminal.term.lock(),
+            &cx.global::<Config>().word_separators,
+        );
+        let Some(moved) = moved else { return false; };
         self.terminal.viewport_reporter().report();
-        if offset != before {
-            self.scroll_frac = 0.;
-            cx.notify();
-        }
+        if moved { cx.notify(); }
         true
     }
 
     pub fn on_select_end(&mut self, cx: &mut Context<Self>) {
-        let copy = select_end_copy(
-            cx.global::<Config>().copy_on_select,
-            self.selecting,
-            self.editor_select_gesture,
-        );
-        self.selecting = false;
+        use super::selection_scroll::SelectEndCopy;
+        let copy = self.selection_scroll.end(cx.global::<Config>().copy_on_select, self.editor_select_gesture);
         self.editor_selecting = false;
         self.editor_select_gesture = false;
         self.editor_drag_word = None;
-        self.drag_scroll = None;
         match copy {
             SelectEndCopy::None => {}
             SelectEndCopy::Grid => self.copy_selection(cx),
@@ -5071,221 +4905,57 @@ impl TerminalView {
     }
 
     fn on_scroll(&mut self, ev: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let gesturing = self.track_scroll_gesture(ev.touch_phase);
-        // One modifier turns the wheel into a zoom, the way it does in a
-        // browser. Which one is the user's to say, because the default is the
-        // platform modifier and on macOS that is a key half the world is
-        // already holding for something else (#668).
-        let wants_zoom = zoom_wheel(cx.global::<Config>().mouse_zoom_modifier, &ev.modifiers);
-        // A trackpad gesture answers "scroll or zoom?" once, on its first
-        // event, and keeps that answer until the stream dies — momentum tail
-        // included. The tail is why: those events are the system's, not the
-        // hand's, yet each one is stamped with whatever modifiers happen to be
-        // down as it is delivered. Reaching for ⌘ during a flick's coast —
-        // ⌘-Tab, ⌘-C, anything — would otherwise turn hundreds of coasting
-        // lines into zoom steps and leave the font at its minimum, from a
-        // gesture that was never a zoom (#912).
-        // The answer is latched per gesture, not per stream: fingers going
-        // back down ask it again. Carrying it over would be the same bug
-        // wearing the other coat — one ⌘-zoom, and every later flick zooms
-        // with nothing held at all, because `Started` keeps the gesture live
-        // and would find the old answer still sitting there.
-        if !gesturing || matches!(ev.touch_phase, gpui_kit::TouchPhase::Started) {
-            self.gesture_zoom = None;
-            // Leftover travel belongs to the gesture that earned it; a new one
-            // must not start already part-way to a step.
-            self.zoom_debt = 0.;
-        }
-        let zoom = if gesturing {
-            *self.gesture_zoom.get_or_insert(wants_zoom)
-        } else {
-            wants_zoom
-        };
-        if zoom {
-            self.zoom_scroll(ev, gesturing, window, cx);
-            return;
-        }
-        let mult = cx.global::<Config>().mouse_scroll_multiplier;
-        let raw = match ev.delta {
-            ScrollDelta::Lines(p) => p.y,
-            ScrollDelta::Pixels(p) => p.y.as_f32() / self.line_height.as_f32(),
-        };
-        let delta = raw * mult;
-
-        let quantized = !ev.modifiers.shift && {
+        use super::selection_scroll::WheelMotion;
+        let quantized = || !ev.modifiers.shift && {
             let mode = self.terminal.term.lock().mode();
             mode.intersects(Mode::MOUSE_MODE)
                 || mode.contains(Mode::ALT_SCREEN | Mode::ALTERNATE_SCROLL)
         };
-        if quantized {
-            // Whole lines are what the application gets told about, so this path
-            // cannot be spread over frames.
-            self.cancel_scroll_anim();
-            let total = self.scroll_debt + delta;
-            let lines = total.trunc() as i32;
-            self.scroll_debt = total - lines as f32;
-            if lines != 0 {
-                let at = self
-                    .cell_geom
-                    .map(|geom| geom.pos_to_cell(ev.position))
-                    .map(|(col, row, _)| (col, row));
-                self.scroll(lines, at, &ev.modifiers, cx);
+        match self.selection_scroll.wheel(ev, self.line_height.as_f32(), cx.global::<Config>(), quantized) {
+            WheelMotion::Zoom(steps) => {
+                // Share clamping and persistence with keyboard and menu zoom.
+                for _ in 0..steps.unsigned_abs() {
+                    if steps > 0 {
+                        window.dispatch_action(Box::new(IncreaseFontSize), cx);
+                    } else {
+                        window.dispatch_action(Box::new(DecreaseFontSize), cx);
+                    }
+                }
             }
-            return;
-        }
-
-        if self.should_animate_scroll(delta, gesturing, cx) {
-            self.queue_scroll_anim(delta, window, cx);
-        } else {
-            self.cancel_scroll_anim();
-            self.smooth_scroll(delta, cx);
-        }
-    }
-
-    /// Resize the terminal font by whole steps under the platform modifier.
-    ///
-    /// The event never reaches the buffer, and never reaches the program
-    /// running in it either: zooming is chrome, and showing a pane to someone
-    /// standing behind you has to work the same whether or not what is running
-    /// asked for the wheel. Steps go out as the same actions the keyboard and
-    /// the View menu send, so the min/max clamp and the saved setting live in
-    /// one place — [`LyrelApp::change_font_size`](crate::ui::app::LyrelApp).
-    fn zoom_scroll(
-        &mut self,
-        ev: &ScrollWheelEvent,
-        gesturing: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Whatever the scrollback still had in flight is dropped: it was
-        // travelling in lines of a font that is about to change size.
-        self.cancel_scroll_anim();
-        let lines = match ev.delta {
-            ScrollDelta::Lines(p) => p.y,
-            ScrollDelta::Pixels(p) => p.y.as_f32() / self.line_height.as_f32(),
-        };
-        let (steps, debt) = zoom_scroll_steps(lines, self.zoom_debt, gesturing);
-        self.zoom_debt = debt;
-        for _ in 0..steps.unsigned_abs() {
-            if steps > 0 {
-                window.dispatch_action(Box::new(IncreaseFontSize), cx);
-            } else {
-                window.dispatch_action(Box::new(DecreaseFontSize), cx);
+            WheelMotion::Quantized(lines) => {
+                if lines != 0 {
+                    let at = self.cell_geom
+                        .map(|geom| geom.pos_to_cell(ev.position))
+                        .map(|(col, row, _)| (col, row));
+                    self.scroll(lines, at, &ev.modifiers, cx);
+                }
             }
+            WheelMotion::Animate(delta) => {
+                if let Some(epoch) = self.selection_scroll.queue_animation(delta) {
+                    schedule_scroll_anim_frame(cx.weak_entity(), epoch, window);
+                    cx.notify();
+                }
+            }
+            WheelMotion::Direct(delta) => { self.smooth_scroll(delta, cx); }
         }
     }
 
-    /// Track whether the pointing device is mid-gesture, which is what tells a
-    /// trackpad apart from a wheel.
-    ///
-    /// Not the delta *type*: macOS reports a wheel mouse as pixels too — one
-    /// notch arrives as a single ~100px event — so `Pixels` says nothing about
-    /// the device. Phase does: only devices that can gesture ever report
-    /// `Started`/`Ended`, and a wheel is `Moved` forever, on every platform.
-    ///
-    /// The gesture is held open on a timer rather than closed on `Ended`,
-    /// because lifting the fingers is not the end of the stream — the momentum
-    /// tail keeps delivering `Moved` events, larger than the gesture itself,
-    /// and animating those would put a second layer of smoothing on scrolling
-    /// the system is already smoothing.
-    fn track_scroll_gesture(&mut self, phase: gpui_kit::TouchPhase) -> bool {
-        let now = std::time::Instant::now();
-        let live = matches!(phase, gpui_kit::TouchPhase::Started)
-            || self.gesture_until.is_some_and(|until| now < until);
-        self.gesture_until = live.then(|| now + SCROLL_GESTURE_IDLE);
-        live
-    }
-
-    fn should_animate_scroll(&self, delta: f32, gesturing: bool, cx: &App) -> bool {
-        if gesturing || !cx.global::<Config>().smooth_scroll {
-            return false;
-        }
-        // Anything already in flight keeps accumulating, or a slow notch
-        // arriving mid-animation would fight the frames still to come.
-        self.scroll_anim.is_some() || delta.abs() >= SCROLL_ANIM_MIN_JUMP
-    }
-
-    /// Add `delta` to the in-flight animation, starting the frame loop if it is
-    /// idle. Successive notches accumulate rather than restart, so spinning the
-    /// wheel fast still lands exactly where the notches asked for.
-    fn queue_scroll_anim(&mut self, delta: f32, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(anim) = self.scroll_anim.as_mut() {
-            anim.remaining += delta;
-            return;
-        }
-        self.scroll_anim = Some(ScrollAnim {
-            remaining: delta,
-            last: std::time::Instant::now(),
-        });
-        self.scroll_anim_epoch += 1;
-        let epoch = self.scroll_anim_epoch;
-        schedule_scroll_anim_frame(cx.weak_entity(), epoch, window);
-        // Ask for a frame right away: the callback chain's first step then
-        // fires on the next display refresh even on a backend that only draws
-        // when the window is dirty, and the callback keeps it dirty from then
-        // on. Without this, a wheel notch queued on an idle, unfocused pane
-        // could sit dormant instead of spreading over frames.
-        cx.notify();
-    }
-
-    /// Drop whatever is left to travel. Every other way the display offset moves
-    /// — jumping to a prompt, dragging a selection past the edge, the keyboard
-    /// and mouse-reporting paths — has to come through here first, or the
-    /// animation would keep walking away from wherever it put us.
-    fn cancel_scroll_anim(&mut self) {
-        if self.scroll_anim.take().is_some() {
-            self.scroll_anim_epoch += 1;
-        }
-    }
-
-    /// Advance the in-flight animation by the ground it covered since the
-    /// previous frame. Runs at frame time — right before the next frame is
-    /// drawn — so every presented frame shows exactly one decay step and no
-    /// step is ever skipped or doubled against the monitor's cadence. Returns
-    /// whether the animation is still going.
-    fn scroll_anim_frame(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
-        if epoch != self.scroll_anim_epoch {
-            return false;
-        }
-        let Some(anim) = self.scroll_anim.as_mut() else {
-            return false;
-        };
-        let now = std::time::Instant::now();
-        let dt = now.duration_since(anim.last);
-        anim.last = now;
-        let (step, last) = scroll_anim_step(anim.remaining, dt);
-        anim.remaining -= step;
-        if last {
-            self.scroll_anim = None;
-        }
-        // Hitting the top or the bottom of the scrollback consumes nothing; the
-        // remaining distance has nowhere to go, so stop instead of decaying it
-        // against the clamp for another 100ms.
-        let moved = self.smooth_scroll(step, cx);
-        if !moved {
-            self.cancel_scroll_anim();
-            return false;
-        }
-        !last
-    }
-
-    /// Apply `delta` lines right now. Returns whether anything actually moved.
+    /// Apply a direct viewport movement and report only an actual visual change.
     fn smooth_scroll(&mut self, delta: f32, cx: &mut Context<Self>) -> bool {
         let mut term = self.terminal.term.lock();
-        let offset = term.grid.display_offset();
-        let max = term.grid.history_size();
-        let (jump, frac) = smooth_scroll_step(offset, self.scroll_frac, delta, max);
-        if jump != 0 {
-            term.scroll_display(Scroll::Delta(jump));
-        }
+        let moved = self.selection_scroll.smooth_scroll(&mut term, delta);
         drop(term);
         self.terminal.viewport_reporter().report();
-        if jump != 0 || frac != self.scroll_frac {
-            self.scroll_frac = frac;
-            cx.notify();
-            return true;
-        }
-        false
+        if moved { cx.notify(); }
+        moved
+    }
+
+    fn scroll_anim_frame(&mut self, epoch: u64, cx: &mut Context<Self>) -> bool {
+        let frame = self.selection_scroll.animation_frame(epoch, || self.terminal.term.lock());
+        let Some((moved, running)) = frame else { return false; };
+        self.terminal.viewport_reporter().report();
+        if moved { cx.notify(); }
+        running
     }
 
     /// Settle up with the scrollback bar for this frame: move the viewport
@@ -5296,17 +4966,8 @@ impl TerminalView {
     /// into the terminal behind the pane's back.
     fn sync_scrollbar(&mut self) {
         if let Some(target) = self.scroll_handle.take_pending() {
-            // Whatever the wheel had in flight was heading somewhere else.
-            self.cancel_scroll_anim();
             let mut term = self.terminal.term.lock();
-            let delta = target as i32 - term.grid.display_offset() as i32;
-            if delta != 0 {
-                term.scroll_display(Scroll::Delta(delta));
-            }
-            drop(term);
-            // A sub-line remainder left over from a smooth wheel scroll would
-            // paint the grid shifted off the row the thumb just picked.
-            self.scroll_frac = 0.;
+            self.selection_scroll.scroll_to(&mut term, target);
         }
         // Not worth a wait: the scrollbar is a picture of where the grid is,
         // and a frame that cannot have the lock keeps the picture it drew last
@@ -6849,21 +6510,7 @@ fn wheel_route(mode: Mode, shift: bool, up: bool) -> WheelRoute {
     WheelRoute::Scrollback
 }
 
-#[derive(Debug, PartialEq)]
-enum SelectEndCopy {
-    None,
-    Grid,
-    Editor,
-}
 
-fn select_end_copy(enabled: bool, grid: bool, editor: bool) -> SelectEndCopy {
-    match (enabled, grid, editor) {
-        (false, ..) => SelectEndCopy::None,
-        (true, true, _) => SelectEndCopy::Grid,
-        (true, false, true) => SelectEndCopy::Editor,
-        (true, false, false) => SelectEndCopy::None,
-    }
-}
 
 /// Whether a file link's menu offers "Open with Default App" beside "Open".
 ///
@@ -7327,60 +6974,10 @@ fn wrapped_click_index(
     }
 }
 
-/// Whether this wheel event is a zoom rather than a scroll.
-///
-/// Exactly one modifier, and it has to be the configured one: anything
-/// alongside it is somebody else's gesture — shift in particular is the escape
-/// hatch that scrolls the scrollback out from under a mouse-reporting program.
-///
-/// Off macOS the platform modifier *is* Ctrl, so `Platform` and `Ctrl` describe
-/// the same key there; the setting still round-trips, so a config file shared
-/// with a Mac keeps meaning what it meant.
-fn zoom_wheel(modifier: MouseZoomModifier, mods: &Modifiers) -> bool {
-    if mods.number_of_modifiers() != 1 {
-        return false;
-    }
-    match modifier {
-        MouseZoomModifier::Platform => mods.secondary(),
-        MouseZoomModifier::Ctrl => mods.control,
-        MouseZoomModifier::Alt => mods.alt,
-        MouseZoomModifier::None => false,
-    }
-}
-
-/// How many font-size steps a zoom event is worth, and what is left over for
-/// the next one.
-///
-/// A wheel detent is a discrete click of intent, so it is one step whatever the
-/// platform says it covers — macOS calls a single notch five lines, and five
-/// points of font per notch would be unusable. A trackpad has no detents and
-/// spends a flick over dozens of events, so those accumulate and only pay out
-/// once the fingers have travelled [`ZOOM_SCROLL_LINES`].
-fn zoom_scroll_steps(lines: f32, debt: f32, gesturing: bool) -> (i32, f32) {
-    if !gesturing {
-        let step = if lines > 0. {
-            1
-        } else if lines < 0. {
-            -1
-        } else {
-            0
-        };
-        return (step, 0.);
-    }
-    let total = debt + lines;
-    let steps = (total / ZOOM_SCROLL_LINES).trunc();
-    (steps as i32, total - steps * ZOOM_SCROLL_LINES)
-}
-
-fn smooth_scroll_step(offset: usize, frac: f32, delta: f32, max: usize) -> (i32, f32) {
-    let pos = (offset as f32 + frac + delta).clamp(0., max as f32);
-    let new_offset = pos.floor();
-    (new_offset as i32 - offset as i32, pos - new_offset)
-}
 
 /// Advance the in-flight scroll animation once per presented frame.
 ///
-/// Registered from [`TerminalView::queue_scroll_anim`]: gpui runs the callback
+/// Registered by the wheel adapter: gpui runs the callback
 /// immediately before the next frame is drawn, and it re-registers itself as
 /// long as the animation lives. Stepping at frame time instead of on a
 /// free-running timer keeps the decay steps locked to the monitor's vblank
@@ -7400,27 +6997,6 @@ fn schedule_scroll_anim_frame(view: WeakEntity<TerminalView>, epoch: u64, window
     });
 }
 
-/// How much of `remaining` to consume this frame, and whether this is the last
-/// one. Decay is scaled by the real elapsed time so a dropped frame covers the
-/// ground it missed instead of stretching the animation out.
-fn scroll_anim_step(remaining: f32, dt: std::time::Duration) -> (f32, bool) {
-    if remaining.abs() <= SCROLL_ANIM_MIN {
-        return (remaining, true);
-    }
-    let frames = (dt.as_secs_f32() / SCROLL_ANIM_FRAME.as_secs_f32()).clamp(0.1, 8.);
-    let consumed = 1. - (1. - SCROLL_ANIM_SMOOTH).powf(frames);
-    let step = remaining * consumed;
-    if (remaining - step).abs() <= SCROLL_ANIM_MIN {
-        (remaining, true)
-    } else {
-        (step, false)
-    }
-}
-
-fn drag_scroll_step(overshoot: f32) -> i32 {
-    let lines = overshoot.abs().ceil().clamp(1., 8.) as i32;
-    if overshoot < 0. { -lines } else { lines }
-}
 
 #[cfg(test)]
 mod tests {
@@ -7511,18 +7087,17 @@ mod tests {
         assert!(!out.contains(" …"), "{out:?}");
     }
     use super::{
-        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, RawInput, SelectEndCopy, Typeahead,
+        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, RawInput, Typeahead,
         WheelRoute, compose_notification_title, cwd_is_on_host, loopback_plan,
         observe_typeahead_for_owner, typeahead_boundary,
     };
-    use super::{SCROLL_ANIM_FRAME, scroll_anim_step};
     use super::{TitleSettle, files_cwd, settle_title, wsl_share_distro, wsl_share_path};
     use super::{
-        before_input, description_budget, drag_scroll_step, elide, encode_mouse,
+        before_input, description_budget, elide, encode_mouse,
         expand_file_command_template, fallback_chain, fig_icon_emoji, fig_icon_glyph,
         focus_report_bytes, highlight_runs, input_cells, input_char_positions,
         input_overflow_shift, input_overlay_rows, input_start, menu_layout, paste_bytes,
-        select_end_copy, smooth_scroll_step, submit_bytes,
+        submit_bytes,
         trim_trailing_spaces, wheel_route, wrapped_click_index,
     };
     use gpui_kit::Modifiers;
@@ -8213,18 +7788,6 @@ mod tests {
         assert_eq!(wheel_route(everything, true, false), WheelRoute::Scrollback);
     }
 
-    #[test]
-    fn copy_on_select_copies_the_buffer_the_gesture_touched() {
-        assert_eq!(select_end_copy(false, true, false), SelectEndCopy::None);
-        assert_eq!(select_end_copy(false, false, true), SelectEndCopy::None);
-
-        assert_eq!(select_end_copy(true, true, false), SelectEndCopy::Grid);
-        assert_eq!(select_end_copy(true, false, true), SelectEndCopy::Editor);
-
-        assert_eq!(select_end_copy(true, false, false), SelectEndCopy::None);
-
-        assert_eq!(select_end_copy(true, true, true), SelectEndCopy::Grid);
-    }
 
     #[test]
     fn sgr_mouse_reports_one_based_decimal_with_modifier_bits() {
@@ -8334,82 +7897,6 @@ mod tests {
         assert_eq!(focus_report_bytes(mode, true), Some(b"\x1b[I".as_slice()));
         assert_eq!(focus_report_bytes(mode, false), Some(b"\x1b[O".as_slice()));
         assert_eq!(focus_report_bytes(Mode::MOUSE_MOTION, true), None);
-    }
-
-    #[test]
-    fn smooth_scroll_step_accumulates_and_clamps() {
-        assert_eq!(smooth_scroll_step(0, 0.0, 0.4, 100), (0, 0.4));
-        let (jump, frac) = smooth_scroll_step(0, 0.4, 0.8, 100);
-        assert_eq!(jump, 1);
-        assert!((frac - 0.2).abs() < 1e-4);
-        let (jump, frac) = smooth_scroll_step(5, 0.2, -0.5, 100);
-        assert_eq!(jump, -1);
-        assert!((frac - 0.7).abs() < 1e-4);
-        assert_eq!(smooth_scroll_step(3, 0.5, -10.0, 100), (-3, 0.0));
-        assert_eq!(smooth_scroll_step(98, 0.0, 7.3, 100), (2, 0.0));
-        assert_eq!(smooth_scroll_step(0, 0.0, 2.5, 0), (0, 0.0));
-    }
-
-    #[test]
-    fn scroll_anim_step_converges_and_lands() {
-        let frame = SCROLL_ANIM_FRAME;
-        // A notch is spread over frames instead of being applied whole.
-        let (step, last) = scroll_anim_step(3.0, frame);
-        assert!(!last);
-        assert!(
-            step > 0. && step < 3.0,
-            "took {step} of 3 lines in one frame"
-        );
-
-        // And it converges: no notch is left hanging.
-        let mut remaining = 3.0_f32;
-        let mut frames = 0u32;
-        loop {
-            let (step, last) = scroll_anim_step(remaining, frame);
-            remaining -= step;
-            frames += 1;
-            if last {
-                break;
-            }
-            assert!(frames < 200, "still {remaining} lines short after {frames}");
-        }
-        assert!(remaining.abs() < 1e-4, "landed {remaining} lines off");
-        // Slow enough to read as motion, fast enough not to feel like lag.
-        let ms = frames * SCROLL_ANIM_FRAME.as_millis() as u32;
-        assert!((60..=200).contains(&ms), "a 3-line notch took {ms}ms");
-    }
-
-    #[test]
-    fn scroll_anim_step_covers_dropped_frames() {
-        // A late tick has to make up the ground it missed, or a busy pane would
-        // scroll slower than an idle one.
-        let (one, _) = scroll_anim_step(10.0, SCROLL_ANIM_FRAME);
-        let (four, _) = scroll_anim_step(10.0, SCROLL_ANIM_FRAME * 4);
-        assert!(four > one * 2., "{four} should far outpace {one}");
-        // But the catch-up is capped, so a tick after a long stall never
-        // overshoots what was actually asked for.
-        let (stalled, _) = scroll_anim_step(10.0, std::time::Duration::from_secs(5));
-        assert!(
-            stalled > four && stalled <= 10.0,
-            "stalled tick took {stalled}"
-        );
-    }
-
-    #[test]
-    fn scroll_anim_step_lands_on_a_negligible_remainder() {
-        let (step, last) = scroll_anim_step(-0.005, SCROLL_ANIM_FRAME);
-        assert!(last);
-        assert_eq!(step, -0.005);
-    }
-
-    #[test]
-    fn drag_scroll_step_scales_with_overshoot_and_caps() {
-        assert_eq!(drag_scroll_step(0.2), 1);
-        assert_eq!(drag_scroll_step(-0.2), -1);
-        assert_eq!(drag_scroll_step(3.5), 4);
-        assert_eq!(drag_scroll_step(-3.5), -4);
-        assert_eq!(drag_scroll_step(50.0), 8);
-        assert_eq!(drag_scroll_step(-50.0), -8);
     }
 
     #[test]
@@ -9327,6 +8814,12 @@ mod agent_activity_tests;
 #[cfg(test)]
 mod gpui_tests {
     use super::*;
+    use crate::core::config::MouseZoomModifier;
+    use rio_vt::selection::{Selection, SelectionType};
+
+    mod selection_scroll_consumer_tests {
+        include!("selection_scroll_consumer_tests.rs");
+    }
     use crate::daemon::protocol::{ClientMsg, DaemonMsg};
     use crate::daemon::transport::Stream;
     use crate::terminal::remote::PtySource;
@@ -10549,78 +10042,6 @@ mod gpui_tests {
                     "purged history cannot retain its selection"
                 );
                 assert_eq!(view.terminal.term.lock().grid.history_size(), 0);
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn the_scrollbar_moves_the_viewport_and_follows_it_back(cx: &mut TestAppContext) {
-        use gpui_kit::component::scroll::ScrollbarHandle as _;
-
-        let (window, mut daemon) = harness(cx);
-
-        // Overflow the 24-row viewport so there is a scrollback to scroll.
-        let mut out = Vec::new();
-        for i in 0..60 {
-            out.extend_from_slice(format!("line {i}\r\n").as_bytes());
-        }
-        DaemonMsg::Output(out).encode(&mut daemon).unwrap();
-        // Wait for the reader to go quiet, not just to start: a scrollback
-        // still filling underneath would move every row this test names.
-        let mut settled = 0;
-        for _ in 0..200 {
-            let now = window
-                .update(cx, |view, _, _| {
-                    view.terminal.term.lock().grid.history_size()
-                })
-                .unwrap();
-            if now > 0 && now == settled {
-                break;
-            }
-            settled = now;
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        window
-            .update(cx, |view, _, _| {
-                view.sync_scrollbar();
-                let history = view.terminal.term.lock().grid.history_size();
-                assert!(history > 0, "the test needs a scrollback to scroll");
-                let row = view.line_height.as_f32();
-                assert_eq!(
-                    view.scroll_handle.offset().y,
-                    px(-(history as f32) * row),
-                    "at the live edge the whole scrollback sits above the viewport"
-                );
-
-                // Drag the thumb a third of the way up its track. The bar only
-                // records the row; the pane applies it on its next render.
-                view.scroll_frac = 0.5;
-                view.scroll_handle
-                    .set_offset(point(px(0.), px(-(history as f32) * row / 3.)));
-                assert_eq!(
-                    view.terminal.term.lock().grid.display_offset(),
-                    0,
-                    "the bar does not reach into the terminal itself"
-                );
-
-                view.sync_scrollbar();
-                let offset = view.terminal.term.lock().grid.display_offset();
-                assert_eq!(
-                    offset,
-                    history - (history as f32 / 3.).round() as usize,
-                    "the viewport lands on the row the thumb was dropped on"
-                );
-                assert_eq!(
-                    view.scroll_frac, 0.,
-                    "a sub-line remainder left over from the wheel would paint \
-                     the grid off the row the thumb picked"
-                );
-                assert_eq!(
-                    view.scroll_handle.offset().y,
-                    px(-((history - offset) as f32) * row),
-                    "and the thumb reports the row the grid actually reached"
-                );
             })
             .unwrap();
     }
@@ -12721,353 +12142,6 @@ mod gpui_tests {
         wheel(view, lines, gpui_kit::TouchPhase::Moved)
     }
 
-    /// The whole point of the animation: a detent must not land in one go.
-    #[gpui_kit::test]
-    fn a_wheel_notch_is_spread_over_frames(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -4.9);
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(
-                    display_offset(view),
-                    10,
-                    "the detent was applied whole, before a single frame ran"
-                );
-                assert_eq!(view.scroll_frac, 0., "and not even a sliver of it");
-                assert!(view.scroll_anim.is_some(), "nothing was left to animate");
-            })
-            .unwrap();
-    }
-
-    /// Zooming has to take the wheel away from the buffer entirely, or the
-    /// grid would slide under the pointer while the font changed size.
-    #[gpui_kit::test]
-    fn the_zoom_modifier_takes_the_wheel_off_the_scrollback(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::Platform);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut ev = notch(view, -4.9);
-                ev.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(display_offset(view), 10, "the wheel reached the grid");
-                assert!(view.scroll_anim.is_none(), "and queued more of it");
-            })
-            .unwrap();
-    }
-
-    /// #668: the platform modifier is the wrong key to hardwire a zoom to —
-    /// on a Mac it is ⌘, which people are already holding for something
-    /// else — so which key zooms is a setting, all the way down to none.
-    #[test]
-    fn the_zoom_modifier_is_configurable_and_can_be_turned_off() {
-        let secondary = Modifiers::secondary_key();
-        let alt = Modifiers::alt();
-        assert!(zoom_wheel(MouseZoomModifier::Platform, &secondary));
-        assert!(
-            !zoom_wheel(MouseZoomModifier::None, &secondary),
-            "off is off"
-        );
-        assert!(!zoom_wheel(MouseZoomModifier::Alt, &secondary));
-        assert!(zoom_wheel(MouseZoomModifier::Alt, &alt));
-        assert!(!zoom_wheel(MouseZoomModifier::Platform, &alt));
-        assert!(zoom_wheel(MouseZoomModifier::Ctrl, &Modifiers::control()));
-        assert_eq!(
-            zoom_wheel(MouseZoomModifier::Platform, &Modifiers::control()),
-            !cfg!(target_os = "macos"),
-            "off macOS the platform modifier is Ctrl itself"
-        );
-        // A second modifier is somebody else's gesture, whichever key is bound.
-        let both = Modifiers { shift: true, ..alt };
-        assert!(!zoom_wheel(MouseZoomModifier::Alt, &both));
-        assert!(!zoom_wheel(MouseZoomModifier::Platform, &Modifiers::none()));
-    }
-
-    /// The point of turning it off: the modifier goes back to being an
-    /// ordinary scroll, rather than eating the wheel.
-    #[gpui_kit::test]
-    fn zooming_off_hands_the_wheel_back_to_the_scrollback(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| {
-            cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::None;
-        });
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut ev = notch(view, -4.9);
-                ev.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&ev, w, cx);
-                assert!(
-                    view.scroll_anim.is_some(),
-                    "the wheel never reached the scrollback"
-                );
-            })
-            .unwrap();
-    }
-
-    /// The bug this guards: a two-finger flick coasts long after the fingers
-    /// are gone, and every coasting event carries whatever modifiers are down
-    /// when it lands. Grabbing ⌘ for something else mid-coast used to read as
-    /// a zoom and run the font down to its minimum in a blink (#912).
-    #[gpui_kit::test]
-    fn a_modifier_pressed_mid_flick_does_not_hijack_it_into_a_zoom(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                view.on_scroll(&wheel(view, -0.5, gpui_kit::TouchPhase::Started), w, cx);
-                let before = display_offset(view);
-                // The tail, now stamped with ⌘ the hand reached for.
-                let mut tail = wheel(view, -3., gpui_kit::TouchPhase::Moved);
-                tail.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&tail, w, cx);
-                assert!(
-                    display_offset(view) != before || view.scroll_anim.is_some(),
-                    "the tail stayed a scroll, the way the gesture started"
-                );
-                assert_eq!(view.zoom_debt, 0., "and never paid into the zoom");
-            })
-            .unwrap();
-    }
-
-    /// The same latch the other way round: a zoom gesture that outlives the
-    /// modifier keeps zooming rather than dumping its tail into the buffer.
-    #[gpui_kit::test]
-    fn a_zoom_gesture_keeps_zooming_after_the_modifier_is_released(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::Platform);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut start = wheel(view, -0.5, gpui_kit::TouchPhase::Started);
-                start.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&start, w, cx);
-                view.on_scroll(&wheel(view, -0.5, gpui_kit::TouchPhase::Moved), w, cx);
-                assert_eq!(display_offset(view), 10, "the grid never moved");
-                assert!(view.scroll_anim.is_none(), "and nothing was queued for it");
-            })
-            .unwrap();
-    }
-
-    /// The latch is per gesture, not per stream: fingers going down again
-    /// start a fresh question. Carrying the last answer over would mean one
-    /// ⌘-zoom left every later flick zooming with no modifier held at all.
-    #[gpui_kit::test]
-    fn a_new_gesture_is_not_bound_by_what_the_last_one_answered(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().mouse_zoom_modifier = MouseZoomModifier::Platform);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let mut zoom = wheel(view, -0.5, gpui_kit::TouchPhase::Started);
-                zoom.modifiers = Modifiers::secondary_key();
-                view.on_scroll(&zoom, w, cx);
-                assert_eq!(display_offset(view), 10, "that one was a zoom");
-                // Fingers down again, nothing held: a plain scroll.
-                view.on_scroll(&wheel(view, -3., gpui_kit::TouchPhase::Started), w, cx);
-                assert_ne!(
-                    display_offset(view),
-                    10,
-                    "the new gesture asked the question again"
-                );
-            })
-            .unwrap();
-    }
-
-    /// A detent is one step however many lines the platform bills it as —
-    /// macOS calls a single notch five.
-    #[test]
-    fn a_wheel_detent_zooms_by_exactly_one_step() {
-        assert_eq!(zoom_scroll_steps(4.9, 0., false), (1, 0.));
-        assert_eq!(zoom_scroll_steps(-4.9, 0., false), (-1, 0.));
-        assert_eq!(zoom_scroll_steps(0., 0., false), (0, 0.));
-    }
-
-    /// A trackpad has no detents, so a flick arrives as a stream of slivers.
-    /// Paying out a step per sliver would run the font from end to end.
-    #[test]
-    fn a_trackpad_flick_adds_up_to_whole_steps() {
-        let (mut debt, mut steps) = (0., 0);
-        for _ in 0..20 {
-            let (s, d) = zoom_scroll_steps(1. / 3., debt, true);
-            steps += s;
-            debt = d;
-        }
-        assert_eq!(steps, 2, "twenty thirds of a line is two steps, not twenty");
-        assert!(debt > 0., "and the remainder was dropped instead of kept");
-    }
-
-    /// The one thing typing at a prompt must never do is land where the
-    /// person typing cannot see it.
-    #[gpui_kit::test]
-    fn typing_brings_the_view_back_to_the_prompt(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-        window
-            .update(cx, |view, _w, cx| {
-                assert!(
-                    view.input_active(),
-                    "this is the branch that was leaving the view parked"
-                );
-                scroll_into_history(view, 10);
-                view.commit_text("l", cx);
-                assert_eq!(
-                    display_offset(view),
-                    0,
-                    "the character went in while the viewport stayed in the scrollback"
-                );
-                assert_eq!(view.cmd.text(), "l", "and it did reach the line");
-            })
-            .unwrap();
-    }
-
-    /// A paste is a larger change than a keystroke to make out of sight, and
-    /// it went the same way.
-    #[gpui_kit::test]
-    fn pasting_brings_the_view_back_to_the_prompt(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        prompt_ready(&window, cx, &mut daemon);
-        window
-            .update(cx, |view, _w, cx| {
-                scroll_into_history(view, 10);
-                view.paste("cargo test\n".to_string(), cx);
-                assert_eq!(display_offset(view), 0, "the paste landed off screen");
-                assert_eq!(
-                    view.cmd.text(),
-                    "cargo test",
-                    "and the trailing newline is still dropped"
-                );
-            })
-            .unwrap();
-    }
-
-    /// A trackpad is already a continuous stream — animating it would only put
-    /// lag between the fingers and the grid. It is told apart by its phase, not
-    /// by its delta type or size: a flick moves further in one event than a
-    /// slowly inched wheel does.
-    #[gpui_kit::test]
-    fn a_trackpad_gesture_scrolls_the_instant_it_is_touched(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = wheel(view, -3., gpui_kit::TouchPhase::Started);
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(display_offset(view), 7, "the gesture was held back");
-                assert!(
-                    view.scroll_anim.is_none(),
-                    "a trackpad started an animation"
-                );
-            })
-            .unwrap();
-    }
-
-    /// Lifting the fingers does not end the stream: macOS keeps sending Moved
-    /// events for the momentum tail, and they are *larger* than the gesture
-    /// that spawned them. Treating those as a wheel would smooth what the
-    /// system is already smoothing.
-    #[gpui_kit::test]
-    fn a_momentum_tail_is_not_mistaken_for_a_wheel(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                for (lines, phase) in [
-                    (-0.5, gpui_kit::TouchPhase::Started),
-                    (-1.2, gpui_kit::TouchPhase::Moved),
-                    (0., gpui_kit::TouchPhase::Ended),
-                    (-2.9, gpui_kit::TouchPhase::Moved),
-                    (-2.4, gpui_kit::TouchPhase::Moved),
-                ] {
-                    let ev = wheel(view, lines, phase);
-                    view.on_scroll(&ev, w, cx);
-                    assert!(
-                        view.scroll_anim.is_none(),
-                        "the momentum tail was animated at {lines} lines"
-                    );
-                }
-                assert_eq!(display_offset(view), 3, "the tail did not all land");
-            })
-            .unwrap();
-    }
-
-    /// Inching the wheel one detent at a time reads as continuous already.
-    #[gpui_kit::test]
-    fn a_scroll_too_small_to_see_jump_stays_direct(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -0.57);
-                view.on_scroll(&ev, w, cx);
-                assert!(view.scroll_anim.is_none(), "half a line was animated");
-                assert!(view.scroll_frac > 0., "and it did not move either");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn turning_smooth_scrolling_off_restores_the_direct_path(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        cx.update(|cx| cx.global_mut::<Config>().smooth_scroll = false);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -3.);
-                view.on_scroll(&ev, w, cx);
-                assert_eq!(display_offset(view), 7);
-                assert!(view.scroll_anim.is_none());
-            })
-            .unwrap();
-    }
-
-    /// An animation that kept walking after the view was moved out from under
-    /// it would drag the user back off the prompt they just jumped to.
-    #[gpui_kit::test]
-    fn moving_the_viewport_cancels_an_animation_in_flight(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -4.9);
-                view.on_scroll(&ev, w, cx);
-                assert!(view.scroll_anim.is_some());
-
-                view.jump_to_prompt();
-                assert!(
-                    view.scroll_anim.is_none(),
-                    "the animation outlived the jump"
-                );
-                assert_eq!(display_offset(view), 0);
-            })
-            .unwrap();
-    }
-
-    /// A frame callback that was already queued when the animation was
-    /// cancelled must not walk the viewport on its stale epoch.
-    #[gpui_kit::test]
-    fn a_stale_frame_after_cancellation_does_not_walk(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, w, cx| {
-                scroll_into_history(view, 10);
-                let ev = notch(view, -4.9);
-                view.on_scroll(&ev, w, cx);
-                let epoch = view.scroll_anim_epoch;
-                view.cancel_scroll_anim();
-
-                assert!(
-                    !view.scroll_anim_frame(epoch, cx),
-                    "a stale frame callback kept the animation alive"
-                );
-                assert_eq!(display_offset(view), 10, "the stale frame moved");
-            })
-            .unwrap();
-    }
-
 
     #[gpui_kit::test]
     fn an_unknown_ctrl_chord_goes_to_the_shell_with_the_line(cx: &mut TestAppContext) {
@@ -14495,164 +13569,6 @@ mod gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn configured_word_selection_preserves_default_drag_reversal_and_shift(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                {
-                    let mut term = view.terminal.term.lock();
-                    rio_vt::performer::handler::Processor::default()
-                        .advance(&mut *term, b"zero.foo.bar.baz tail");
-                }
-                let selected =
-                    |view: &TerminalView| view.terminal.term.lock().selection_to_string();
-                cx.update_global::<Config, _>(|cfg, _| cfg.smart_select = false);
-                view.on_select_start(6, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("zero.foo.bar.baz"));
-
-                cx.update_global::<Config, _>(|cfg, _| cfg.word_separators.push('.'));
-                view.on_select_start(6, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo"));
-                view.on_select_update(14, 0, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo.bar.baz"));
-                view.on_select_update(1, 0, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("zero.foo"));
-                view.on_select_update(6, 0, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo"));
-                view.on_select_end(cx);
-
-                view.on_select_start(14, 0, false, 1, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo.bar.baz"));
-                view.on_select_update(1, 0, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("zero.foo"));
-                view.on_select_end(cx);
-
-                view.select_all(cx);
-                view.on_select_start(2, 0, false, 1, true, cx);
-                assert_eq!(selected(view).as_deref(), Some("zer"));
-                view.on_select_start(1, 0, true, 1, false, cx);
-                view.on_select_update(2, 0, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("er"));
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn configured_word_selection_keeps_smart_exact_nonexact_and_fallback_ranges(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                {
-                    let mut term = view.terminal.term.lock();
-                    rio_vt::performer::handler::Processor::default()
-                        .advance(&mut *term, "left💙(foo)💙right x(foo)y foo.bar".as_bytes());
-                }
-                let selected =
-                    |view: &TerminalView| view.terminal.term.lock().selection_to_string();
-                cx.update_global::<Config, _>(|cfg, _| cfg.word_separators.push('💙'));
-                view.on_select_start(6, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("(foo)"));
-                view.on_select_start(20, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("(foo)"));
-                view.on_select_start(1, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("left"));
-
-                cx.update_global::<Config, _>(|cfg, _| cfg.word_separators.push('.'));
-                view.on_select_start(28, 0, true, 2, false, cx);
-                assert_eq!(selected(view).as_deref(), Some("foo.bar"));
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn configured_word_selection_autoscroll_extends_by_whole_words(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                {
-                    let mut term = view.terminal.term.lock();
-                    let output = b"zero.foo.bar.baz\r\n".repeat(term.screen_lines() + 2);
-                    rio_vt::performer::handler::Processor::default().advance(&mut *term, &output);
-                }
-                cx.update_global::<Config, _>(|cfg, _| {
-                    cfg.smart_select = false;
-                    cfg.word_separators.push('.');
-                });
-                view.on_select_start(6, 0, true, 2, false, cx);
-                view.drag_scroll = Some(DragScroll {
-                    overshoot: 1.,
-                    col: 6,
-                    side: Side::Left,
-                });
-                assert!(view.drag_scroll_tick(view.drag_scroll_epoch, cx));
-                let term = view.terminal.term.lock();
-                assert!(term.grid.display_offset() > 0);
-                let selected = term.selection_to_string().expect("word drag selection");
-                assert!(selected.starts_with("foo.bar.baz"), "{selected:?}");
-                assert!(selected.ends_with("zero.foo"), "{selected:?}");
-            })
-            .unwrap();
-    }
-
-    #[gpui_kit::test]
-    fn copy_on_select_writes_the_clipboard_at_mouse_up(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-
-        DaemonMsg::Output(b"hello world".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        for _ in 0..400 {
-            cx.run_until_parked();
-            let row: String = window
-                .update(cx, |view, _, _| {
-                    let term = view.terminal.term.clone();
-                    let term = term.lock();
-                    (0..11).map(|c| term.grid[Line(0)][Column(c)].c()).collect()
-                })
-                .unwrap();
-            if row == "hello world" {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        let drag_hello = |cx: &mut TestAppContext| {
-            window
-                .update(cx, |view, _, cx| {
-                    view.on_select_start(0, 0, true, 1, false, cx);
-                    view.on_select_update(4, 0, false, cx);
-                    view.on_select_end(cx);
-                })
-                .unwrap();
-        };
-        drag_hello(cx);
-        assert_eq!(
-            cx.update(|cx| cx.read_from_clipboard()),
-            None,
-            "default-off must never write the clipboard"
-        );
-
-        cx.update(|cx| cx.update_global::<Config, _>(|cfg, _| cfg.copy_on_select = true));
-        drag_hello(cx);
-        let text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
-        assert_eq!(text.as_deref(), Some("hello"));
-
-        let selected = window
-            .update(cx, |view, _, _| {
-                view.terminal.term.lock().selection.is_some()
-            })
-            .unwrap();
-        assert!(
-            selected,
-            "copy-on-select must keep the selection highlighted"
-        );
-    }
-
-    #[gpui_kit::test]
     fn ctrl_c_copy_consumes_the_selection_so_the_next_press_is_sigint(cx: &mut TestAppContext) {
         let (window, mut daemon) = harness(cx);
 
@@ -15398,6 +14314,7 @@ mod gpui_tests {
             })
             .unwrap();
     }
+
 
 
 

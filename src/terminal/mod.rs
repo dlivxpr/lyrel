@@ -32,6 +32,7 @@ mod remote;
 mod reverse_search;
 pub(crate) mod scrollbar;
 pub mod search;
+mod selection_scroll;
 mod signature;
 mod size;
 mod smart_select;
