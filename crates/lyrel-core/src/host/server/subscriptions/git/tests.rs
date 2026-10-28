@@ -1,5 +1,5 @@
-use super::*;
 use super::super::super::test_support::*;
+use super::*;
 use crate::daemon::control::{ControlClientMsg, ControlReply, ControlRequest, ReplyOk};
 use std::io::Write;
 

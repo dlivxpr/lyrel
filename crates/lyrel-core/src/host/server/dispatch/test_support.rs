@@ -1,12 +1,12 @@
 //! One slow Host fixture shared by request consumers on TCP and Unix sockets.
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use crate::host::{Entry, Host, HostId, Meta, Output, SearchHit, SharedHost, WatchSub};
 use crate::host::local::LocalHost;
+use crate::host::{Entry, Host, HostId, Meta, Output, SearchHit, SharedHost, WatchSub};
 
 pub(super) struct SlowGit {
     inner: SharedHost,
@@ -78,7 +78,11 @@ impl Host for SlowGit {
         self.running.store(true, Ordering::SeqCst);
         if let Some(gate) = &self.gate {
             gate.started.send(()).map_err(io::Error::other)?;
-            gate.release.lock().unwrap().recv_timeout(Duration::from_secs(5)).map_err(io::Error::other)?;
+            gate.release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(io::Error::other)?;
             gate.finished.send(()).map_err(io::Error::other)?;
         } else {
             std::thread::sleep(self.delay);
@@ -106,10 +110,20 @@ struct Gate {
 impl SlowGit {
     #[cfg(unix)]
     pub(super) fn delayed(delay: Duration, running: Arc<AtomicBool>) -> SharedHost {
-        Arc::new(Self { inner: LocalHost::new(), delay, running, gate: None })
+        Arc::new(Self {
+            inner: LocalHost::new(),
+            delay,
+            running,
+            gate: None,
+        })
     }
 
-    pub(super) fn gated() -> (SharedHost, mpsc::Receiver<()>, mpsc::Sender<()>, mpsc::Receiver<()>) {
+    pub(super) fn gated() -> (
+        SharedHost,
+        mpsc::Receiver<()>,
+        mpsc::Sender<()>,
+        mpsc::Receiver<()>,
+    ) {
         let (started_tx, started) = mpsc::channel();
         let (release, release_rx) = mpsc::channel();
         let (finished_tx, finished) = mpsc::channel();
@@ -117,7 +131,11 @@ impl SlowGit {
             inner: LocalHost::new(),
             delay: Duration::ZERO,
             running: Arc::new(AtomicBool::new(false)),
-            gate: Some(Gate { started: started_tx, release: Mutex::new(release_rx), finished: finished_tx }),
+            gate: Some(Gate {
+                started: started_tx,
+                release: Mutex::new(release_rx),
+                finished: finished_tx,
+            }),
         });
         (host, started, release, finished)
     }

@@ -2,6 +2,8 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
 
+use crate::daemon::control::CONTROL_VERSION;
+
 use super::super::test_support::*;
 use super::super::*;
 use super::*;

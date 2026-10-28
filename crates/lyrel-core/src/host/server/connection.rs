@@ -8,8 +8,8 @@ use crate::daemon::duplex::{Duplex, Halves};
 use crate::host::SharedHost;
 
 use super::attachments::ConnectionIdentity;
-use super::output::Sink;
 use super::dispatch::read_loop;
+use super::output::Sink;
 use super::subscriptions::subscribe_machine;
 use super::{Conn, GitStreams, Pool, Requests, Services, Watches, negotiation};
 

@@ -5,10 +5,13 @@ use std::sync::atomic::Ordering;
 use crate::core::machine;
 use crate::daemon::control::{ControlEvent, ControlServerMsg};
 
-use super::super::{LAYOUT_EVENT_QUEUE, Services};
 use super::super::output::Sink;
+use super::super::{LAYOUT_EVENT_QUEUE, Services};
 
-pub(in super::super) fn subscribe_machine(services: &Services, sink: &Arc<Sink>) -> Option<machine::Subscription> {
+pub(in super::super) fn subscribe_machine(
+    services: &Services,
+    sink: &Arc<Sink>,
+) -> Option<machine::Subscription> {
     let store = services.machine.as_ref()?;
     let (tx, rx) = smol::channel::bounded::<(String, machine::LayoutDelta)>(LAYOUT_EVENT_QUEUE);
     let lagged = Arc::new(std::sync::atomic::AtomicBool::new(false));

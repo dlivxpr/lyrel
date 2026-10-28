@@ -13,11 +13,16 @@ pub(super) struct Requests {
 
 impl Requests {
     pub(super) fn new() -> Self {
-        Self { inflight: Mutex::new(HashMap::new()) }
+        Self {
+            inflight: Mutex::new(HashMap::new()),
+        }
     }
 
     pub(super) fn register(&self, req_id: u64) {
-        self.inflight.lock().unwrap_or_else(|e| e.into_inner()).insert(req_id, false);
+        self.inflight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(req_id, false);
     }
 
     pub(super) fn is_cancelled(&self, req_id: u64) -> bool {

@@ -26,7 +26,12 @@ impl Watches {
     }
 
     // Park the receiver under the request ID: no forwarder may race the WatchId reply.
-    pub(in super::super) fn open(&self, host: &SharedHost, req_id: u64, dirs: &[PathBuf]) -> io::Result<u64> {
+    pub(in super::super) fn open(
+        &self,
+        host: &SharedHost,
+        req_id: u64,
+        dirs: &[PathBuf],
+    ) -> io::Result<u64> {
         let sub = host.watch(dirs)?;
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let rx = sub.events().clone();
@@ -80,7 +85,10 @@ impl Watches {
     }
 
     pub(in super::super) fn clear(&self) {
-        self.watches.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.watches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 

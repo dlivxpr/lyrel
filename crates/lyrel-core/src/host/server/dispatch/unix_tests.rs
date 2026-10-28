@@ -1,6 +1,6 @@
-use super::*;
 use super::super::test_support::*;
 use super::test_support::SlowGit;
+use super::*;
 use crate::daemon::control::{ControlServerMsg, MTime};
 use std::io::Write;
 use std::path::Path;

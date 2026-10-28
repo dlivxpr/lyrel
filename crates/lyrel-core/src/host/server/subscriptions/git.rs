@@ -17,7 +17,9 @@ pub(in super::super) struct GitStreams {
 
 impl GitStreams {
     pub(in super::super) fn new() -> Self {
-        Self { active: Arc::new(AtomicUsize::new(0)) }
+        Self {
+            active: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     pub(in super::super) fn start(
@@ -34,10 +36,10 @@ impl GitStreams {
         if slot.0.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_GIT_STREAMS {
             drop(slot);
             let _ = sink.send(&ControlServerMsg::Event(ControlEvent::GitEnd {
-                    id,
-                    code: None,
-                    failed: true,
-                }));
+                id,
+                code: None,
+                failed: true,
+            }));
             return;
         }
         let spawned = std::thread::Builder::new()

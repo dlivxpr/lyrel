@@ -219,7 +219,8 @@ fn run_request(
             (ReplyOk::Output(h.git(&p(&cwd), &borrowed)?), Vec::new())
         }
         ControlRequest::GitStream { id, cwd, args } => {
-            conn.git_streams.start(&conn.host, &conn.sink, id, p(&cwd), args);
+            conn.git_streams
+                .start(&conn.host, &conn.sink, id, p(&cwd), args);
             (ReplyOk::Unit, Vec::new())
         }
 

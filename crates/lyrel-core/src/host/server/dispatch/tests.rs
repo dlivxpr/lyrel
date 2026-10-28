@@ -1,6 +1,6 @@
+use super::super::serve;
 use super::test_support::SlowGit;
 use super::*;
-use super::super::serve;
 use crate::daemon::control::{ControlHello, ControlServerMsg};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -21,11 +21,17 @@ fn cancelling_an_inflight_request_drops_its_reply_but_keeps_the_link_usable() {
         .encode(&mut peer)
         .unwrap();
     peer.flush().unwrap();
-    assert!(matches!(ControlServerMsg::read(&mut peer).unwrap(), ControlServerMsg::HelloOk(_)));
+    assert!(matches!(
+        ControlServerMsg::read(&mut peer).unwrap(),
+        ControlServerMsg::HelloOk(_)
+    ));
 
     ControlClientMsg::Request {
         req_id: 41,
-        req: ControlRequest::Git { cwd: ".".into(), args: vec!["status".into()] },
+        req: ControlRequest::Git {
+            cwd: ".".into(),
+            args: vec!["status".into()],
+        },
     }
     .encode(&mut peer)
     .unwrap();
@@ -34,14 +40,22 @@ fn cancelling_an_inflight_request_drops_its_reply_but_keeps_the_link_usable() {
 
     // Cancel only after the Host has entered Git, and leave that work blocked
     // until a different correlated request has answered on this same link.
-    ControlClientMsg::Cancel { req_id: 41 }.encode(&mut peer).unwrap();
-    ControlClientMsg::Request { req_id: 42, req: ControlRequest::Ping }
+    ControlClientMsg::Cancel { req_id: 41 }
         .encode(&mut peer)
         .unwrap();
+    ControlClientMsg::Request {
+        req_id: 42,
+        req: ControlRequest::Ping,
+    }
+    .encode(&mut peer)
+    .unwrap();
     peer.flush().unwrap();
     assert_eq!(
         ControlServerMsg::read(&mut peer).unwrap(),
-        ControlServerMsg::Response { req_id: 42, reply: ControlReply::Ok(ReplyOk::Pong) }
+        ControlServerMsg::Response {
+            req_id: 42,
+            reply: ControlReply::Ok(ReplyOk::Pong)
+        }
     );
 
     release.send(()).unwrap();
@@ -50,16 +64,28 @@ fn cancelling_an_inflight_request_drops_its_reply_but_keeps_the_link_usable() {
     // retired correlation must remain silent, not just lose a race to Ping.
     peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
     let silence = ControlServerMsg::read(&mut peer).unwrap_err();
-    assert!(matches!(silence.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut), "{silence}");
+    assert!(
+        matches!(
+            silence.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ),
+        "{silence}"
+    );
 
     peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    ControlClientMsg::Request { req_id: 43, req: ControlRequest::Ping }
-        .encode(&mut peer)
-        .unwrap();
+    ControlClientMsg::Request {
+        req_id: 43,
+        req: ControlRequest::Ping,
+    }
+    .encode(&mut peer)
+    .unwrap();
     peer.flush().unwrap();
     assert_eq!(
         ControlServerMsg::read(&mut peer).unwrap(),
-        ControlServerMsg::Response { req_id: 43, reply: ControlReply::Ok(ReplyOk::Pong) }
+        ControlServerMsg::Response {
+            req_id: 43,
+            reply: ControlReply::Ok(ReplyOk::Pong)
+        }
     );
     drop(peer);
     served.join().unwrap();

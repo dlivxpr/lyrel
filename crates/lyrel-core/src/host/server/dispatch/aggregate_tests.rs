@@ -1,10 +1,10 @@
-use super::*;
 use super::super::{AttachRegistry, MachineStore, PaneDirectory, Services, serve_with};
-use crate::daemon::control::PaneAgentState;
-use crate::daemon::protocol::PaneInfo;
+use super::*;
 use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use crate::daemon::control::ControlClient;
+use crate::daemon::control::PaneAgentState;
 use crate::daemon::control::{ControlHello, feature};
+use crate::daemon::protocol::PaneInfo;
 use crate::host::local::LocalHost;
 use std::net::{TcpListener, TcpStream};
 

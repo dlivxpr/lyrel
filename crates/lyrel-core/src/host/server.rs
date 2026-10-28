@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::machine::{self, MachineStore};
-use crate::daemon::control::{PaneAgentState, server_started};
 #[cfg(all(test, unix))]
 use crate::daemon::control::{
     ControlClientMsg, ControlEvent, ControlReply, ControlRequest, ControlServerMsg, ReplyOk,
 };
+use crate::daemon::control::{PaneAgentState, server_started};
 use crate::daemon::protocol::PaneInfo;
 use crate::host::SharedHost;
 
@@ -133,4 +133,3 @@ pub use windows::{
     CONTROL_PORT_FILE, connect_control, control_endpoint_answers, control_endpoint_path,
     remove_control_endpoint, spawn_control_listener, spawn_control_listener_with,
 };
-

@@ -1,6 +1,8 @@
-use super::*;
 use super::super::super::{serve, test_support::*};
-use crate::daemon::control::{ControlClientMsg, ControlHello, ControlReply, ControlRequest, ReplyOk};
+use super::*;
+use crate::daemon::control::{
+    ControlClientMsg, ControlHello, ControlReply, ControlRequest, ReplyOk,
+};
 use crate::host::{Host, local::LocalHost, remote::RemoteHost};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
