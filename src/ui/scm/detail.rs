@@ -48,7 +48,7 @@ use crate::ui::right_panel::{
     HEADING, META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, git_badge, info_chip,
 };
 use crate::ui::scm::path::{relative_time, split_display_path};
-use crate::ui::scm::state::{CommitDetailView, RepoKey};
+use crate::ui::scm::state::CommitDetailView;
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::window_chrome::CONTENT_INSET;
 
@@ -129,7 +129,6 @@ const NAME_FLOOR: f32 = 40.;
 // a pair of numbers that happened to match.
 
 impl LyrelApp {
-
     /// The commit detail body, shown in place of the file groups.
     pub(crate) fn render_commit_detail(
         &mut self,
@@ -137,7 +136,6 @@ impl LyrelApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-
         let mono = cx.theme().mono_font_family.clone();
         let muted = cx.theme().muted_foreground;
         // No surface, no margin: this is the panel's body while a commit is
@@ -182,7 +180,6 @@ impl LyrelApp {
         }
         body.into_any_element()
     }
-
 
     /// The way back, and the object id.
     ///
@@ -916,6 +913,7 @@ mod detail_gpui_tests {
     use crate::daemon::protocol::DaemonMsg;
     use crate::ui::app::{render_probe, test_window};
     use crate::ui::host_ops::HostId;
+    use crate::ui::scm::state::RepoKey;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab;
     use std::path::{Path, PathBuf};
@@ -932,7 +930,10 @@ mod detail_gpui_tests {
             .args(args)
             .current_dir(root)
             // A developer's `tag.gpgsign` makes a bare `git tag` ask for a message.
-            .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .expect("git runs");
@@ -1024,7 +1025,8 @@ mod detail_gpui_tests {
 
     fn paths(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Vec<String> {
         app.update_in(vcx, |app, _, _| {
-            app.scm.detail()
+            app.scm
+                .detail()
                 .and_then(|d| d.files.clone())
                 .map(|files| files.iter().map(|f| f.path.clone()).collect())
                 .unwrap_or_default()
@@ -1192,7 +1194,8 @@ mod detail_gpui_tests {
         .expect("the scratch repo answers");
         seed.summary = "what the graph already knew".into();
         app.update_in(&mut vcx, |app, _, cx| {
-            app.scm.open_detail(repo.clone(), head.clone(), Some(seed), cx)
+            app.scm
+                .open_detail(repo.clone(), head.clone(), Some(seed), cx)
         });
         settle(&app, &mut vcx, |app, _| {
             app.scm.detail().is_some_and(|d| d.loaded)
@@ -1333,7 +1336,8 @@ mod detail_gpui_tests {
                 host: HostId::LOCAL,
                 root: PathBuf::from("/no/such/lyrel/repo"),
             };
-            app.scm.open_detail(stranger.clone(), head.clone(), None, cx);
+            app.scm
+                .open_detail(stranger.clone(), head.clone(), None, cx);
             app.scm.refresh_detail(cx);
             assert!(app.scm.detail().is_none(), "and it does not come back");
         });
@@ -1341,15 +1345,24 @@ mod detail_gpui_tests {
     }
 
     #[gpui_kit::test]
-    fn an_unresolvable_commit_finishes_loading_and_draws_the_missing_state(cx: &mut TestAppContext) {
+    fn an_unresolvable_commit_finishes_loading_and_draws_the_missing_state(
+        cx: &mut TestAppContext,
+    ) {
         crate::core::config::pin_test_config_dir();
         let root = two_commit_repo("missing");
         let (app, mut vcx, _pane) = panel_on(cx, &root);
         let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
         app.update_in(&mut vcx, |app, _, cx| {
-            app.scm.open_detail(repo, "0000000000000000000000000000000000000000".into(), None, cx);
+            app.scm.open_detail(
+                repo,
+                "0000000000000000000000000000000000000000".into(),
+                None,
+                cx,
+            );
         });
-        settle(&app, &mut vcx, |app, _| app.scm.detail().is_some_and(|detail| detail.loaded));
+        settle(&app, &mut vcx, |app, _| {
+            app.scm.detail().is_some_and(|detail| detail.loaded)
+        });
         render_probe::arm(10_000);
         app.update_in(&mut vcx, |_, _, cx| cx.notify());
         vcx.run_until_parked();
