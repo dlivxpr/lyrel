@@ -82,16 +82,6 @@ impl SettingsWindow {
 
         let shortcuts = shortcuts::ShortcutEditor::new(window, cx);
 
-        let ssh_filter = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::FilterHosts))
-        });
-        subs.push(
-            cx.subscribe_in(&ssh_filter, window, |_this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
 
         let navigation = navigation::SettingsNavigation::new(settings_search, self.last_settings_location);
         let usage = cx.new(|cx| crate::ui::settings::usage::UsagePage::new(window, cx));
@@ -121,13 +111,7 @@ impl SettingsWindow {
             menu_hi: 0,
             menu_scroll: gpui_kit::ScrollHandle::new(),
             focused: std::cell::RefCell::new(None),
-            ssh_form: None,
-            ssh_open: None,
-            ssh_show_all: false,
-            ssh_confirm_remove: false,
-            ssh_copied: None,
-            ssh_filter,
-            ssh_collapsed_groups: std::collections::HashSet::new(),
+            ssh: ssh::SshSettings::new(window, cx),
             agent_hooks_host: crate::ui::host_ops::HostId::LOCAL,
             agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
             agent_hooks_seq: 0,
