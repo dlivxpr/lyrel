@@ -572,57 +572,8 @@ impl LyrelApp {
         cx.notify();
     }
 
-    // Creation intents remain here until their dedicated ownership cutover.
-    // Only an accepted connection outcome reaches these focused hooks.
-    fn connection_ready_for_create(
-        &mut self,
-        target: &RemoteTarget,
-        home: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(pending) = self.take_create_waiting_on(target) {
-            self.close_switcher(window, cx);
-            self.create_remote_workspace(pending.target, home, window, cx);
-            self.name_fresh_workspace(pending.name, window, cx);
-        }
-    }
-
-    fn connection_failed_for_create(&mut self, target: &RemoteTarget, error: &str) {
-        if self
-            .pending_create
-            .as_ref()
-            .is_some_and(|p| &p.target == target)
-        {
-            if crate::daemon::control::is_dialect_refusal(error) {
-                self.parked_create = self.pending_create.take();
-            } else {
-                self.pending_create = None;
-            }
-        }
-    }
-
-    /// The create waiting on this machine's link, wherever it waits: parked on
-    /// the app by the form (`pending_create`), or set aside by a dialect
-    /// refusal until the server over there was updated (`parked_create`).
-    /// Either way it is spent by the connect that finally lands.
-    fn take_create_waiting_on(
-        &mut self,
-        target: &RemoteTarget,
-    ) -> Option<crate::ui::switcher::PendingCreate> {
-        for slot in [&mut self.pending_create, &mut self.parked_create] {
-            if slot.as_ref().is_some_and(|p| &p.target == target) {
-                return slot.take();
-            }
-        }
-        None
-    }
-
-    /// The far end was just cycled into a server this build speaks to — the
-    /// answer a create refused for the dialect has been waiting on. Reconnects
-    /// whatever the restart cut, and connects at the machine again if a create
-    /// is still parked on it, so the workspace the user asked for finally
-    /// exists; `finish_connect` finds the create via `take_create_waiting_on`.
+    /// Machine recovery stays with RemoteLinks; the window owner supplies a
+    /// follow-up attempt only for a create parked on this replacement target.
     fn server_replaced(
         &mut self,
         target: &RemoteTarget,
@@ -631,19 +582,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         reconnect_after_restart(origin, cx);
-        if self
-            .parked_create
-            .as_ref()
-            .is_some_and(|p| &p.target == target)
-        {
-            self.connect_to_host(
-                HostChoice {
-                    target: target.clone(),
-                    label: label.to_string(),
-                    detail: String::new(),
-                },
-                cx,
-            );
+        if let Some(choice) = self.connect.server_replaced(target, label) {
+            self.connect_to_host(choice, cx);
         }
     }
 
@@ -2711,6 +2651,17 @@ mod tests {
     fn a_create_refused_for_dialect_runs_once_the_machine_connects(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        create_waits_for_its_connection(cx, true);
+    }
+
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn a_delayed_create_runs_once_on_its_intended_machine(cx: &mut gpui_kit::TestAppContext) {
+        create_waits_for_its_connection(cx, false);
+    }
+
+    #[cfg(unix)]
+    fn create_waits_for_its_connection(cx: &mut gpui_kit::TestAppContext, refused: bool) {
         use gpui_kit::VisualContext as _;
 
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
@@ -2736,17 +2687,41 @@ mod tests {
         };
 
         app.update_in(&mut vcx, |app, window, cx| {
-            app.pending_create = Some(crate::ui::switcher::PendingCreate {
-                target: target.clone(),
-                name: Some("deploy".into()),
-            });
+            app.connect
+                .queue_create(target.clone(), Some("deploy".into()));
             let attempt = app.connect.begin(choice.clone());
-            app.finish_connect(attempt, Err(a_dialect_refusal()), window, cx);
+            if refused {
+                app.finish_connect(attempt, Err(a_dialect_refusal()), window, cx);
+            }
         });
 
-        // The server over there was updated and the machine finally connected —
-        // whether over `server_replaced`'s kick or the band's own retry, it
-        // ends in the same place.
+        // Another machine can connect while this create is waiting. Its success
+        // must not spend the original machine's name or navigate this window.
+        app.update_in(&mut vcx, |app, window, cx| {
+            let before = app.workspace;
+            let other = HostChoice {
+                target: RemoteTarget::Alias {
+                    alias: "lyrel-test-other-box".into(),
+                },
+                label: "other-box".into(),
+                detail: String::new(),
+            };
+            let attempt = app.connect.begin(other);
+            app.finish_connect(
+                attempt,
+                Ok(fake_connected("lyrel-test-other-box")),
+                window,
+                cx,
+            );
+            assert_eq!(app.workspace, before);
+            assert_eq!(
+                app.connect.server_replaced(&target, "refused-box").is_some(),
+                refused,
+            );
+        });
+
+        // The intended machine finally connects, either directly or after its
+        // server was replaced. Both paths finish the same creation handoff.
         app.update_in(&mut vcx, |app, window, cx| {
             let attempt = app.connect.begin(choice.clone());
             app.finish_connect(
@@ -2755,11 +2730,29 @@ mod tests {
                 window,
                 cx,
             );
+            let created = app.workspace;
+            // Neither a duplicate result nor a later legitimate connect may
+            // execute the same intent a second time.
+            app.finish_connect(
+                attempt,
+                Ok(fake_connected("lyrel-test-refused-box")),
+                window,
+                cx,
+            );
+            assert_eq!(app.workspace, created);
+            let later = app.connect.begin(choice.clone());
+            app.finish_connect(
+                later,
+                Ok(fake_connected("lyrel-test-refused-box")),
+                window,
+                cx,
+            );
+            assert_eq!(app.workspace, created);
         });
 
         app.update(cx, |app, cx| {
             let own = WorkspaceStore::remote_ref(cx, app.workspace)
-                .expect("the parked create ran and this window entered its workspace");
+                .expect("the waiting create ran and this window entered its workspace");
             assert_eq!(own.target, target);
             assert_eq!(
                 crate::ui::tree_sync::chosen_name_for(cx, app.workspace).as_deref(),
@@ -2785,10 +2778,7 @@ mod tests {
         };
 
         app.update_in(&mut vcx, |app, window, cx| {
-            app.pending_create = Some(crate::ui::switcher::PendingCreate {
-                target: target.clone(),
-                name: None,
-            });
+            app.connect.queue_create(target.clone(), None);
             let attempt = app.connect.begin(choice.clone());
             app.finish_connect(attempt, Err(a_dialect_refusal()), window, cx);
         });
@@ -2810,7 +2800,7 @@ mod tests {
                 None => panic!("the replacement kicks a connect at the machine"),
             }
             assert!(
-                app.parked_create.is_some(),
+                app.connect.server_replaced(&target, "refused-box").is_some(),
                 "the create keeps waiting for that connect to land"
             );
         });
