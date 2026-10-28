@@ -348,16 +348,6 @@ pub struct LyrelApp {
     /// Parked switcher groups (#485) whose notice the user dismissed by key —
     /// the entries stay, only the "will not reconnect" block is hidden.
     pub(crate) parked_dismissed: std::collections::HashSet<String>,
-    /// A create asked of a machine that was not connected yet; the connect
-    /// finishing is what completes it (see `LyrelApp::finish_connect`).
-    pub(crate) pending_create: Option<crate::ui::switcher::PendingCreate>,
-    /// A create whose connect was refused for the control dialect — the state
-    /// the "update server" button answers. Set aside rather than dropped, so
-    /// the update the user runs next still ends in the workspace they asked
-    /// for. Held apart from `pending_create` on purpose: only a connect to the
-    /// same machine may spend it, and giving the machine up (dismissing the
-    /// refusal, disconnecting) discards it.
-    pub(crate) parked_create: Option<crate::ui::switcher::PendingCreate>,
     /// Why the window opened with no terminal in it. Shown on the home screen,
     /// which is otherwise indistinguishable from having closed everything.
     pub(crate) startup_error: Option<gpui_kit::SharedString>,
@@ -929,8 +919,6 @@ impl LyrelApp {
             host_snapshots: std::collections::HashMap::new(),
             remote_host_errors: std::collections::HashMap::new(),
             parked_dismissed: std::collections::HashSet::new(),
-            pending_create: None,
-            parked_create: None,
             startup_error,
         };
         if !cfg!(test) && crate::ui::windows::WindowRegistry::count(cx) == 0 {
