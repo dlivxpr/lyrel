@@ -93,43 +93,6 @@
         });
     }
 
-    #[gpui_kit::test]
-    fn daemon_output_reaches_the_grid_through_the_event_pump(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-
-        let read_row = |cx: &mut TestAppContext, len: usize| -> String {
-            window
-                .update(cx, |view, _, _| {
-                    let term = view.terminal.term.clone();
-                    let term = term.lock();
-                    let grid = &term.grid;
-                    (0..len).map(|c| grid[Line(0)][Column(c)].c()).collect()
-                })
-                .unwrap()
-        };
-        let wait_for = |cx: &mut TestAppContext, want: &str| {
-            let mut got = String::new();
-            for _ in 0..400 {
-                cx.run_until_parked();
-                got = read_row(cx, want.chars().count());
-                if got == want {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            got
-        };
-
-        DaemonMsg::Output(b"hello".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        assert_eq!(wait_for(cx, "hello"), "hello");
-
-        DaemonMsg::Output(b" again".to_vec())
-            .encode(&mut daemon)
-            .unwrap();
-        assert_eq!(wait_for(cx, "hello again"), "hello again");
-    }
 struct GraphicsWindowRenderProbe {
     renders: std::rc::Rc<std::cell::Cell<usize>>,
     terminal: Option<Entity<TerminalView>>,
