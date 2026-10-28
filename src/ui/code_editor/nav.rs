@@ -889,7 +889,10 @@ impl LyrelApp {
             let roots = self.tab_code().map(|c| c.roots.as_slice()).unwrap_or(&[]);
             let local = f.host.id() == self.spawn_host(cx);
             match local {
-                true => path_segments(&self.file_tree.project_spelling(f.host.id(), roots, &f.path), roots),
+                true => path_segments(
+                    &self.file_tree.project_spelling(f.host.id(), roots, &f.path),
+                    roots,
+                ),
                 false => path_segments(&f.path, &[]),
             }
         };

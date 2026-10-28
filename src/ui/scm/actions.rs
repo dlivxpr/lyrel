@@ -238,7 +238,6 @@ impl LyrelApp {
         self.scm_op_then(repo, op, then, window, cx);
     }
 
-
     /// Park everything, including the files git does not track yet.
     ///
     /// `-u`, because a stash that silently leaves new files behind is a stash
@@ -410,7 +409,6 @@ impl LyrelApp {
             }
         }
     }
-
 }
 
 /// What "discard all" actually runs, in order. Pure so a test can hold it up

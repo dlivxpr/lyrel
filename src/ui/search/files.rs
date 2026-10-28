@@ -434,6 +434,8 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     fn index(paths: &[&str]) -> FileIndex {

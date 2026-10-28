@@ -1021,7 +1021,9 @@ mod tests {
         assert_eq!(spec.host, "box");
         assert_eq!(spec.user, "release");
         assert_eq!(spec.port, 2222);
-        let jump = spec.jump.expect("the typed jump reaches connection assembly");
+        let jump = spec
+            .jump
+            .expect("the typed jump reaches connection assembly");
         assert_eq!(jump.host, "bastion.example");
         assert_eq!(jump.user, "jump");
         assert_eq!(jump.port, 2200);

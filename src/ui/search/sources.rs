@@ -702,7 +702,13 @@ mod tests {
         let rows = typed_address_rows(input);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, CommandKind::OpenSshConnect(input.into()));
-        for invalid in ["ssh -p 0 host", "ssh -p", "ssh 'host", "ssh host uptime", "ssh -- host"] {
+        for invalid in [
+            "ssh -p 0 host",
+            "ssh -p",
+            "ssh 'host",
+            "ssh host uptime",
+            "ssh -- host",
+        ] {
             assert!(typed_address_rows(invalid).is_empty(), "{invalid:?}");
         }
     }
