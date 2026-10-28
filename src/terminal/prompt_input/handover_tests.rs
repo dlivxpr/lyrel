@@ -2,6 +2,8 @@ use super::*;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg};
 use crate::daemon::transport::Stream;
 use gpui_kit::TestAppContext;
+use crate::terminal::view::test_support::seed_history;
+use crate::terminal::view::input::HOLD_WINDOW;
 
 fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
     crate::core::config::pin_test_config_dir();
