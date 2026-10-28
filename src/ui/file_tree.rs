@@ -328,9 +328,10 @@ impl FileTreeState {
                 move |h| h.watch(&want).map(Arc::new)
             },
             move |app, result: std::io::Result<Arc<WatchSub>>, cx| {
-                let Some((events, retry)) = app.file_tree.finish_watch_open(
-                    result, opened_host, &opened_with,
-                ) else {
+                let Some((events, retry)) =
+                    app.file_tree
+                        .finish_watch_open(result, opened_host, &opened_with)
+                else {
                     return;
                 };
                 cx.spawn(async move |app, cx| {
@@ -422,7 +423,11 @@ impl FileTreeState {
             move |app, (readable, entries), cx| {
                 let host = app.active_host(cx);
                 let landed = app.file_tree.finish_listing(
-                    &key, dir.clone(), readable, entries, host.as_ref().map(|host| host.id()),
+                    &key,
+                    dir.clone(),
+                    readable,
+                    entries,
+                    host.as_ref().map(|host| host.id()),
                 );
                 if landed.changed {
                     cx.notify();
@@ -823,7 +828,6 @@ impl LyrelApp {
         }
     }
 
-
     pub(crate) fn file_tree_on_screen(&self, cx: &App) -> bool {
         self.right_panel_open(cx)
             && self.right_panel_tab == RightPanelTab::Files
@@ -871,7 +875,11 @@ impl LyrelApp {
         }
 
         let refresh = self.file_tree.apply_fs_events(
-            host, paths, on_screen, listings_on_screen, self.spawn_host(cx),
+            host,
+            paths,
+            on_screen,
+            listings_on_screen,
+            self.spawn_host(cx),
         );
         if refresh.notify {
             cx.notify();
@@ -963,7 +971,9 @@ impl LyrelApp {
 
     pub(crate) fn file_tree_reveal_path(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
         let roots = self.tab_code().map(|c| c.roots.clone()).unwrap_or_default();
-        let path = &self.file_tree.project_spelling(self.spawn_host(cx), &roots, path);
+        let path = &self
+            .file_tree
+            .project_spelling(self.spawn_host(cx), &roots, path);
         if !roots.is_empty() && !roots.iter().any(|root| path.starts_with(root)) {
             return false;
         }

@@ -14,8 +14,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
-use gpui_kit::{App, AppContext as _, Entity, Window};
 use gpui_kit::component::input::{InputState, TextareaState};
+use gpui_kit::{App, AppContext as _, Entity, Window};
 use lyrel_core::core::git::log::{Commit, CommitFile, CommitPage, GraphScope};
 use lyrel_core::core::git::status::{HeadState, WorkingTreeStatus};
 

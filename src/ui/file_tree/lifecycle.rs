@@ -56,16 +56,17 @@ pub(super) fn browsable_roots(mut roots: Vec<PathBuf>, home: Option<PathBuf>) ->
 pub(crate) fn searchable_roots(resolved: Vec<PathBuf>, home: Option<&Path>) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     for root in resolved {
-        if home.is_some_and(|home| root == home)
-            || root.parent().is_none()
-            || roots.contains(&root)
+        if home.is_some_and(|home| root == home) || root.parent().is_none() || roots.contains(&root)
         {
             continue;
         }
         roots.push(root);
     }
     let all = roots.clone();
-    roots.retain(|root| !all.iter().any(|other| other != root && root.starts_with(other)));
+    roots.retain(|root| {
+        !all.iter()
+            .any(|other| other != root && root.starts_with(other))
+    });
     roots
 }
 
@@ -94,12 +95,7 @@ impl FileTreeState {
         resolved.then_some(roots)
     }
 
-    fn request_repo_root(
-        &mut self,
-        host: &SharedHost,
-        cwd: PathBuf,
-        cx: &mut Context<LyrelApp>,
-    ) {
+    fn request_repo_root(&mut self, host: &SharedHost, cwd: PathBuf, cx: &mut Context<LyrelApp>) {
         let key = (host.id(), cwd.clone());
         if !self.repo_root_loads.begin(key.clone()) {
             return;
@@ -126,7 +122,12 @@ impl FileTreeState {
         self.search.generation == generation
     }
 
-    pub(super) fn finish_search(&mut self, generation: u64, ok: bool, hits: Vec<TreeEntry>) -> bool {
+    pub(super) fn finish_search(
+        &mut self,
+        generation: u64,
+        ok: bool,
+        hits: Vec<TreeEntry>,
+    ) -> bool {
         self.search.accept(generation, ok, hits)
     }
 
@@ -196,13 +197,21 @@ impl FileTreeState {
     ) -> Refresh {
         let roots_moved = paths.iter().any(|path| {
             path.file_name().is_some_and(|name| name == ".git")
-                || path.parent().and_then(Path::file_name).is_some_and(|name| name == ".git")
+                || path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|name| name == ".git")
         }) && self.invalidate_repo_roots();
-        if paths.iter().any(|path| path.file_name().is_some_and(|name| name == ".gitignore"))
+        if paths
+            .iter()
+            .any(|path| path.file_name().is_some_and(|name| name == ".gitignore"))
             && self.gitignore_reaches_tree(host, paths)
         {
             self.invalidate_all();
-            return Refresh { notify: on_screen, reload: false };
+            return Refresh {
+                notify: on_screen,
+                reload: false,
+            };
         }
         let mut touched = false;
         for dir in dirs_to_relist(paths, self.show_hidden) {
@@ -233,10 +242,13 @@ impl FileTreeState {
         if roots.iter().any(|root| path.starts_with(root)) {
             return path.to_path_buf();
         }
-        roots.iter().find_map(|root| {
-            let real = self.root_aliases.get(host, root)?;
-            Some(root.join(path.strip_prefix(real).ok()?))
-        }).unwrap_or_else(|| path.to_path_buf())
+        roots
+            .iter()
+            .find_map(|root| {
+                let real = self.root_aliases.get(host, root)?;
+                Some(root.join(path.strip_prefix(real).ok()?))
+            })
+            .unwrap_or_else(|| path.to_path_buf())
     }
 
     /// A failed optimistic operation evicts the guess, never restores an old
@@ -279,10 +291,14 @@ impl FileTreeState {
     pub(crate) fn begin_file_index(&mut self, key: &IndexKey) -> Option<u64> {
         let store = &mut self.quick_open;
         if key.cwds.is_empty()
-            || store.walking.as_ref().is_some_and(|(_, walking)| walking == key)
-            || store.last.as_ref().is_some_and(|last| {
-                last.key == *key && last.at.elapsed() < REVALIDATE_AFTER
-            })
+            || store
+                .walking
+                .as_ref()
+                .is_some_and(|(_, walking)| walking == key)
+            || store
+                .last
+                .as_ref()
+                .is_some_and(|last| last.key == *key && last.at.elapsed() < REVALIDATE_AFTER)
         {
             return None;
         }
@@ -291,18 +307,28 @@ impl FileTreeState {
         Some(store.generation)
     }
 
-    pub(crate) fn finish_file_index(&mut self, generation: u64, key: IndexKey, list: FileList) -> bool {
+    pub(crate) fn finish_file_index(
+        &mut self,
+        generation: u64,
+        key: IndexKey,
+        list: FileList,
+    ) -> bool {
         let store = &mut self.quick_open;
         if store.walking.as_ref().map(|(generation, _)| *generation) != Some(generation) {
             return false;
         }
         store.walking = None;
         let keep_old = matches!(list, FileList::Failed)
-            && store.last.as_ref().is_some_and(|last| {
-                last.key == key && matches!(last.list, FileList::Ready(_))
-            });
+            && store
+                .last
+                .as_ref()
+                .is_some_and(|last| last.key == key && matches!(last.list, FileList::Ready(_)));
         if !keep_old {
-            store.last = Some(Walked { key, list, at: Instant::now() });
+            store.last = Some(Walked {
+                key,
+                list,
+                at: Instant::now(),
+            });
         }
         true
     }
@@ -334,17 +360,38 @@ mod tests {
             tree.loads.begin(local.clone());
             tree.loads.begin(remote.clone());
             let paths = HashSet::from([dir.join("changed.rs")]);
-            assert!(tree.apply_fs_events(local.0, &paths, true, true, local.0).reload);
-            let landed = tree.finish_listing(&local, dir.clone(), true, vec![entry("old.rs")], Some(local.0));
+            assert!(
+                tree.apply_fs_events(local.0, &paths, true, true, local.0)
+                    .reload
+            );
+            let landed = tree.finish_listing(
+                &local,
+                dir.clone(),
+                true,
+                vec![entry("old.rs")],
+                Some(local.0),
+            );
             assert!(landed.superseded);
             assert!(tree.loads.is_pending(&local));
             let rows = tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
             assert_eq!(rows[1].entry.name, "old.rs");
             tree.invalidate_dir(remote.0, &dir);
-            let landed = tree.finish_listing(&remote, dir.clone(), true, vec![entry("remote.rs")], Some(local.0));
+            let landed = tree.finish_listing(
+                &remote,
+                dir.clone(),
+                true,
+                vec![entry("remote.rs")],
+                Some(local.0),
+            );
             assert!(!landed.superseded);
             assert!(!tree.loads.is_pending(&remote));
-            tree.finish_listing(&local, dir.clone(), true, vec![entry("new.rs")], Some(local.0));
+            tree.finish_listing(
+                &local,
+                dir.clone(),
+                true,
+                vec![entry("new.rs")],
+                Some(local.0),
+            );
             let rows = tree.visible_rows(local.0, std::slice::from_ref(&dir), &HashSet::new());
             assert_eq!(rows[1].entry.name, "new.rs");
             let rows = tree.visible_rows(remote.0, &[dir], &HashSet::new());
@@ -359,14 +406,20 @@ mod tests {
             let tree = &mut app.file_tree;
             let dir = PathBuf::from("/project");
             let key = (HostId::LOCAL, dir.clone());
-            tree.children.insert(key.0, dir.clone(), vec![entry("old.rs")]);
+            tree.children
+                .insert(key.0, dir.clone(), vec![entry("old.rs")]);
             let before = tree.optimistic(key.0, &dir, &TreeWrite::NewFile, &entry("new.rs"));
-            tree.children.insert(key.0, dir.clone(), vec![entry("external.rs")]);
+            tree.children
+                .insert(key.0, dir.clone(), vec![entry("external.rs")]);
             let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-            assert!(tree.finish_write::<()>(key.0, &dir, Err(denied), before).is_err());
+            assert!(
+                tree.finish_write::<()>(key.0, &dir, Err(denied), before)
+                    .is_err()
+            );
             let rows = tree.visible_rows(key.0, std::slice::from_ref(&dir), &HashSet::new());
             assert_eq!(rows[1].note, Some(TreeNote::Loading));
-            tree.children.insert(key.0, dir.clone(), vec![entry("external.rs")]);
+            tree.children
+                .insert(key.0, dir.clone(), vec![entry("external.rs")]);
             let before = tree.optimistic(key.0, &dir, &TreeWrite::NewFolder, &entry("created"));
             tree.finish_write(key.0, &dir, Ok(()), before).unwrap();
             assert!(tree.stale.contains(&key));
@@ -387,14 +440,22 @@ mod tests {
             let current = tree.begin_file_index(&remote).unwrap();
             assert!(!tree.finish_file_index(old, local.clone(), FileList::Failed));
             let index = Arc::new(crate::ui::search::files::build_index(
-                &[PathBuf::from("/project")], vec![PathBuf::from("/project/main.rs")], false,
+                &[PathBuf::from("/project")],
+                vec![PathBuf::from("/project/main.rs")],
+                false,
             ));
-            assert!(tree.finish_file_index(current, remote.clone(), FileList::Ready(index.clone())));
+            assert!(tree.finish_file_index(
+                current,
+                remote.clone(),
+                FileList::Ready(index.clone())
+            ));
             assert!(matches!(tree.file_list(&local), FileList::Indexing));
             tree.quick_open.last.as_mut().unwrap().at = Instant::now() - Duration::from_secs(6);
             let refresh = tree.begin_file_index(&remote).unwrap();
             assert!(tree.finish_file_index(refresh, remote.clone(), FileList::Failed));
-            let FileList::Ready(kept) = tree.file_list(&remote) else { panic!("lost usable files") };
+            let FileList::Ready(kept) = tree.file_list(&remote) else {
+                panic!("lost usable files")
+            };
             assert!(Arc::ptr_eq(&index, &kept));
         });
     }
@@ -402,7 +463,10 @@ mod tests {
     #[test]
     fn browsing_home_is_not_a_search_fallback() {
         let home = PathBuf::from("/home/me");
-        assert_eq!(browsable_roots(Vec::new(), Some(home.clone())), vec![home.clone()]);
+        assert_eq!(
+            browsable_roots(Vec::new(), Some(home.clone())),
+            vec![home.clone()]
+        );
         assert!(searchable_roots(Vec::new(), Some(&home)).is_empty());
         assert!(searchable_roots(vec![home.clone()], Some(&home)).is_empty());
     }

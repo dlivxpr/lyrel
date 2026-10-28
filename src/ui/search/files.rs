@@ -34,7 +34,6 @@ pub(crate) const INDEX_LIMIT: usize = 50_000;
 /// much as it bounds the list: each directory is a round trip on a remote host.
 pub(crate) const INDEX_MAX_DIRS: usize = 20_000;
 
-
 /// Rows the Files tab shows before anything is typed. A sample, shallowest
 /// first, so the tab is visibly populated; the query is what finds things.
 const BROWSE_ROWS: usize = 100;
@@ -135,7 +134,6 @@ pub(crate) fn parse_query(query: &str) -> FileQuery<'_> {
         column: nonzero(numbers.get(1)),
     }
 }
-
 
 /// The index for `files` found under `roots`.
 pub(crate) fn build_index(roots: &[PathBuf], files: Vec<PathBuf>, capped: bool) -> FileIndex {
@@ -313,7 +311,6 @@ impl Source for Files<'_> {
     }
 }
 
-
 /// Walks the project the panes in `cwds` are in, on the host that has it.
 /// Runs off the UI thread.
 pub(crate) fn walk(h: &dyn Host, cwds: &[PathBuf], home: Option<&Path>) -> FileList {
@@ -405,7 +402,9 @@ impl LyrelApp {
         };
         // Only this computer's home is known here, and it is the common case:
         // a fresh local tab starts there.
-        let home = host.id().is_local()
+        let home = host
+            .id()
+            .is_local()
             .then(|| std::env::var_os("HOME").map(PathBuf::from))
             .flatten();
         let cwds = key.cwds().to_vec();
@@ -415,7 +414,10 @@ impl LyrelApp {
             cx,
             move |h| walk(h, &cwds, home.as_deref()),
             move |app, list, window, cx| {
-                if !app.file_tree.finish_file_index(generation, key.clone(), list) {
+                if !app
+                    .file_tree
+                    .finish_file_index(generation, key.clone(), list)
+                {
                     return;
                 }
                 if app.file_index_key(cx) != key {

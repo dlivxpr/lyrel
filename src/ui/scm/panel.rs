@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
+use gpui_kit::component::input::{Input, InputState, Textarea};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
@@ -645,7 +645,8 @@ impl LyrelApp {
                         let other = other.clone();
                         move |_, _window, cx| {
                             let _ = app.update(cx, |this, cx| {
-                                this.scm.select_repository(other.clone(), this.tabs.active_index());
+                                this.scm
+                                    .select_repository(other.clone(), this.tabs.active_index());
                                 cx.notify();
                             });
                         }
@@ -655,7 +656,6 @@ impl LyrelApp {
             menu
         }
     }
-
 
     pub(crate) fn scm_begin_create_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input =
@@ -812,7 +812,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let input = self.scm.commit_input(repo, status, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+        let input = self
+            .scm
+            .commit_input(repo, status, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
         div()
@@ -2928,10 +2930,14 @@ mod tests {
         let status_b = status_of_repo("/b", Vec::new());
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm.commit_input(&a, &status_a, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            let input = app
+                .scm
+                .commit_input(&a, &status_a, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             input.update(cx, |state, cx| state.set_value("wip: a", window, cx));
 
-            let input = app.scm.commit_input(&b, &status_b, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            let input = app
+                .scm
+                .commit_input(&b, &status_b, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(
                 input.read(cx).value(),
                 "",
@@ -2939,7 +2945,9 @@ mod tests {
             );
             input.update(cx, |state, cx| state.set_value("wip: b", window, cx));
 
-            let input = app.scm.commit_input(&a, &status_a, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            let input = app
+                .scm
+                .commit_input(&a, &status_a, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(
                 input.read(cx).value(),
                 "wip: a",
@@ -2958,7 +2966,9 @@ mod tests {
         status.prefilled_message = Some("Merge branch 'topic'".into());
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm.commit_input(&key, &status, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            let input = app
+                .scm
+                .commit_input(&key, &status, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(input.read(cx).value(), "Merge branch 'topic'");
         });
     }
@@ -2971,11 +2981,19 @@ mod tests {
         let before = status_of_repo("/a", Vec::new());
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm.commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            let input = app
+                .scm
+                .commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             input.update(cx, |state, cx| state.set_value("wip", window, cx));
-            app.scm.commit_dispatched(key.clone(), before.head.clone(), "wip".into());
-            app.scm.commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
-            assert_eq!(input.read(cx).value(), "wip", "dispatch alone is not success");
+            app.scm
+                .commit_dispatched(key.clone(), before.head.clone(), "wip".into());
+            app.scm
+                .commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert_eq!(
+                input.read(cx).value(),
+                "wip",
+                "dispatch alone is not success"
+            );
             app.scm.commit_failed(key.host, &key.root);
 
             let mut after = before.clone();
@@ -2983,8 +3001,13 @@ mod tests {
                 name: "main".into(),
                 oid: "2222222".into(),
             };
-            app.scm.commit_input(&key, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
-            assert_eq!(input.read(cx).value(), "wip", "a later HEAD move cannot clear a failed draft");
+            app.scm
+                .commit_input(&key, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert_eq!(
+                input.read(cx).value(),
+                "wip",
+                "a later HEAD move cannot clear a failed draft"
+            );
             assert_eq!(app.scm.draft(&key), "wip");
         });
     }
@@ -3005,24 +3028,34 @@ mod tests {
         other_moved.head = after.head.clone();
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm.commit_input(&a, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            let input = app
+                .scm
+                .commit_input(&a, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             input.update(cx, |state, cx| state.set_value("sent", window, cx));
-            app.scm.commit_dispatched(a.clone(), before.head.clone(), "sent".into());
-            let input = app.scm.commit_input(&b, &other, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            app.scm
+                .commit_dispatched(a.clone(), before.head.clone(), "sent".into());
+            let input = app
+                .scm
+                .commit_input(&b, &other, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             input.update(cx, |state, cx| state.set_value("other draft", window, cx));
-            app.scm.commit_input(&b, &other_moved, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            app.scm
+                .commit_input(&b, &other_moved, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(input.read(cx).value(), "other draft");
-            app.scm.commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            app.scm
+                .commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             // Switching restores first; cleanup follows on the next status
             // reconciliation, exactly as it does in the live panel.
-            app.scm.commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            app.scm
+                .commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(input.read(cx).value(), "");
             assert_eq!(app.scm.draft(&b), "other draft");
 
             input.update(cx, |state, cx| state.set_value("sent again", window, cx));
-            app.scm.commit_dispatched(a.clone(), before.head.clone(), "sent again".into());
+            app.scm
+                .commit_dispatched(a.clone(), before.head.clone(), "sent again".into());
             input.update(cx, |state, cx| state.set_value("new edits", window, cx));
-            app.scm.commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            app.scm
+                .commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(input.read(cx).value(), "new edits");
             assert_eq!(app.scm.draft(&a), "new edits");
         });
@@ -3035,7 +3068,9 @@ mod tests {
         let key = repo("/a");
         let before = status_of_repo("/a", Vec::new());
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm.commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            let input = app
+                .scm
+                .commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             input.update(cx, |state, cx| state.set_value("amend draft", window, cx));
             app.scm.toggle_amend();
             assert!(app.scm.prepare_commit(&key, &before, true, cx).is_ok());
@@ -3045,7 +3080,8 @@ mod tests {
                 name: "main".into(),
                 oid: "2222222".into(),
             };
-            app.scm.commit_input(&key, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            app.scm
+                .commit_input(&key, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert!(app.scm.amend());
             assert_eq!(input.read(cx).value(), "amend draft");
             input.update(cx, |state, cx| state.set_value("", window, cx));
@@ -3394,7 +3430,8 @@ mod render_idle_gpui_tests {
         }
         let want = root.clone();
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, move |app, _| {
-            app.scm.roots.contains_key(&(HostId::LOCAL, want.clone())) || app.scm.pane_repo().is_some()
+            app.scm.roots.contains_key(&(HostId::LOCAL, want.clone()))
+                || app.scm.pane_repo().is_some()
         });
         if cloned {
             let source = parent.join("source");
@@ -3465,7 +3502,8 @@ mod render_idle_gpui_tests {
             std::fs::canonicalize(temp.path()).unwrap(),
         );
         git(&root, &["init", "--quiet"]);
-        let (app, mut vcx, mut pane) = scm_panel_on(cx, &root, |app, _| app.scm.pane_repo().is_some());
+        let (app, mut vcx, mut pane) =
+            scm_panel_on(cx, &root, |app, _| app.scm.pane_repo().is_some());
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             vcx.run_until_parked();

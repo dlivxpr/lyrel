@@ -284,10 +284,17 @@ mod tests {
     fn shell_field_enter_preserves_argv_and_invalid_drafts(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();
         let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
-        let args: Vec<String> = ["-c", "echo hi", "", "it's \"quoted\"", r"C:\Program Files\lyrel", "#1"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let args: Vec<String> = [
+            "-c",
+            "echo hi",
+            "",
+            "it's \"quoted\"",
+            r"C:\Program Files\lyrel",
+            "#1",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         vcx.update(|_, cx| {
             cx.global_mut::<Config>().shell = Some(ShellConfig {
                 program: "lyrel-parser-shell".into(),
@@ -314,7 +321,9 @@ mod tests {
             program.update(cx, |program, cx| {
                 program.set_value("lyrel-parser-replacement", window, cx)
             });
-            input.update(cx, |input, cx| input.set_value("-c 'unfinished", window, cx));
+            input.update(cx, |input, cx| {
+                input.set_value("-c 'unfinished", window, cx)
+            });
             window.focus(&input.read(cx).focus_handle(cx), cx);
         });
         vcx.run_until_parked();
@@ -325,7 +334,13 @@ mod tests {
             assert_eq!(shell.program, "lyrel-parser-replacement");
             assert_eq!(shell.args, args, "invalid arguments retain the saved argv");
             assert_eq!(
-                settings.active_settings().unwrap().shell_args_input.read(cx).value().as_str(),
+                settings
+                    .active_settings()
+                    .unwrap()
+                    .shell_args_input
+                    .read(cx)
+                    .value()
+                    .as_str(),
                 "-c 'unfinished",
                 "the invalid draft stays editable"
             );

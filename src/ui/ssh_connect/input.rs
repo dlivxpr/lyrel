@@ -245,13 +245,32 @@ mod tests {
         use crate::ui::i18n::{L10nKey, t, t_fmt};
 
         for (input, expected) in [
-            ("ssh 'host", t(L10nKey::AppSshParseUnbalancedQuotes).to_string()),
-            ("ssh -p", t_fmt(L10nKey::AppSshParseFlagNeedsValue, &[("flag", "p")])),
-            ("ssh host -p 0", t_fmt(L10nKey::AppSshParseInvalidPort, &[("value", "0")])),
-            ("ssh -- host", t(L10nKey::AppSshParseNoRemoteCommands).to_string()),
-            ("ssh host uptime", "Remote commands aren't supported here".to_string()),
+            (
+                "ssh 'host",
+                t(L10nKey::AppSshParseUnbalancedQuotes).to_string(),
+            ),
+            (
+                "ssh -p",
+                t_fmt(L10nKey::AppSshParseFlagNeedsValue, &[("flag", "p")]),
+            ),
+            (
+                "ssh host -p 0",
+                t_fmt(L10nKey::AppSshParseInvalidPort, &[("value", "0")]),
+            ),
+            (
+                "ssh -- host",
+                t(L10nKey::AppSshParseNoRemoteCommands).to_string(),
+            ),
+            (
+                "ssh host uptime",
+                "Remote commands aren't supported here".to_string(),
+            ),
         ] {
-            assert_eq!(parse_ssh_connect_input(input).err(), Some(expected), "{input:?}");
+            assert_eq!(
+                parse_ssh_connect_input(input).err(),
+                Some(expected),
+                "{input:?}"
+            );
         }
     }
 }
