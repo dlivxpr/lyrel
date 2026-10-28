@@ -783,7 +783,7 @@ impl SettingsWindow {
         // line is the explanation (#551). The input commits on Enter/blur, so
         // a half-typed quote is never marked wrong mid-keystroke.
         let args_value = args_input.read(cx).value();
-        let args_error = crate::ui::app::split_shell_args(&args_value)
+        let args_error = super::arguments::split_shell_args(&args_value)
             .is_err()
             .then(|| t(L10nKey::SettingsArgumentsInvalid).to_string());
         let args_control = self.settings_checked_input(&args_input, FIELD_W, args_error, cx);
