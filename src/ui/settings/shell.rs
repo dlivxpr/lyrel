@@ -452,21 +452,21 @@ impl SettingsWindow {
         let modified = entry.is_some_and(|entry| entry.modified(cx.global::<Config>()));
         let capture = self
             .active_settings()
-            .is_some_and(|s| s.search_rows.borrow().is_some());
+            .is_some_and(|s| s.navigation.is_capturing_rows());
         // Descriptions can carry live status, so they must not take part in
         // the identity that preserves GPUI's hover state.
         let element_id = settings_row_id(&label, &desc);
         let (hit, miss) = match self
             .active_settings()
-            .filter(|s| !s.search_active && !capture)
+            .filter(|s| !s.navigation.is_searching() && !capture)
         {
             Some(s) => {
-                let query = s.search.read(cx).value().trim().to_lowercase();
-                let focused = s.focused_setting.is_some_and(|k| t(k) == label);
-                match query.is_empty() || section_match_count(s.section, &query) == 0 {
+                let query = s.navigation.search().read(cx).value().trim().to_lowercase();
+                let focused = s.navigation.focused_setting().is_some_and(|k| t(k) == label);
+                match query.is_empty() || section_match_count(s.navigation.section(), &query) == 0 {
                     true => (focused, false),
                     false => {
-                        let hit = row_matches_query(s.section, &label, &query);
+                        let hit = row_matches_query(s.navigation.section(), &label, &query);
                         (hit, !hit)
                     }
                 }
@@ -559,13 +559,7 @@ impl SettingsWindow {
             );
         if capture {
             if let Some(entry) = entry {
-                self.active_settings()
-                    .unwrap()
-                    .search_rows
-                    .borrow_mut()
-                    .as_mut()
-                    .unwrap()
-                    .push((entry.title, row.into_any_element()));
+                self.active_settings().unwrap().navigation.capture_row(entry.title, row.into_any_element());
                 return div().id("captured-setting");
             }
         }
@@ -728,14 +722,14 @@ impl SettingsWindow {
         let background_layers = crate::ui::app::overlay_surface_layers(cx);
 
         let (focus_handle, section, search) = match self.active_settings() {
-            Some(s) => (s.focus_handle.clone(), s.section, s.search.clone()),
+            Some(s) => (s.focus_handle.clone(), s.navigation.section(), s.navigation.search().clone()),
             None => return div(),
         };
         if let Some(s) = self.active_settings() {
             s.focused.replace(window.focused(cx));
         }
         let query = search.read(cx).value().trim().to_lowercase();
-        let searching = self.active_settings().is_some_and(|s| s.search_active);
+        let searching = self.active_settings().is_some_and(|s| s.navigation.is_searching());
         let menu_open = self.active_settings().is_some_and(|s| s.menu.is_some());
 
         let viewport_w = window.viewport_size().width.as_f32();
@@ -743,27 +737,10 @@ impl SettingsWindow {
         self.settings_viewport_w.set(viewport_w);
         self.settings_row_width
             .set(settings_row_width(viewport_w, scale));
-        self.settings_hit_anchored.set(false);
+        if let Some(s) = self.active_settings() { s.navigation.begin_frame(); }
 
-        // A query that matched here has to be reachable, not just counted: the
-        // anchor lands on the first matching row, and `scroll_to` reads where
-        // it ended up on the frame after this one.
-        if searching
-            && let Some(s) = self.active_settings()
-            && s.reveal_first_hit.replace(false)
-        {
-            s.search_anchor.scroll_to(window, cx);
-        }
-        if let Some(s) = self.active_settings()
-            && !searching
-            && s.reveal_first_hit.get()
-        {
-            s.reveal_first_hit.set(false);
-            let matched_here =
-                section_match_count(section, &query) > 0 || s.focused_setting.is_some();
-            if s.focused_setting.is_some() || (!query.is_empty() && matched_here) {
-                s.search_anchor.scroll_to(window, cx);
-            }
+        if let Some(anchor) = self.active_settings().and_then(|s| s.navigation.reveal_target(&query)) {
+            anchor.scroll_to(window, cx);
         }
 
         let prof = crate::ui::perf::enabled()
@@ -853,7 +830,7 @@ impl SettingsWindow {
                 .size_full()
                 .overflow_y_scroll()
                 .when_some(self.active_settings(), |pane, s| {
-                    pane.track_scroll(&s.content_scroll)
+                    pane.track_scroll(s.navigation.scroll())
                 })
                 .child(
                     // A block, not a flex box: as a flex item it would negotiate a
@@ -893,7 +870,7 @@ impl SettingsWindow {
                     pane.child(crate::ui::scrollbar::with_inset_vertical_scrollbar(
                         "settings-content-scrollbar",
                         body,
-                        &s.content_scroll,
+                        s.navigation.scroll(),
                         px(SCROLLBAR_WINDOW_INSET),
                     ))
                 }
@@ -931,10 +908,10 @@ impl SettingsWindow {
                 }
                 if searching {
                     if let Some(s) = this.active_settings_mut() {
-                        s.modified_only = false;
+                        s.navigation.set_modified_only(false);
                     }
                     if let Some(s) = this.active_settings() {
-                        s.search
+                        s.navigation.search()
                             .clone()
                             .update(cx, |s, cx| s.set_value("", window, cx));
                     }
@@ -1140,9 +1117,9 @@ impl SettingsWindow {
         let Some(s) = self.active_settings() else {
             return div().into_any_element();
         };
-        let section = s.section.navigation_section();
-        let search = s.search.clone();
-        let modified_only = s.modified_only;
+        let section = s.navigation.section().navigation_section();
+        let search = s.navigation.search().clone();
+        let modified_only = s.navigation.modified_only();
         let cfg = cx.global::<Config>();
         let modified_in = |target: SettingsSection| {
             settings_search_entries()
@@ -1299,7 +1276,7 @@ impl SettingsWindow {
                         )
                         .on_click(cx.listener(|this, _, _window, cx| {
                             if let Some(s) = this.active_settings_mut() {
-                                s.modified_only = !s.modified_only;
+                                s.navigation.toggle_modified_only();
                             }
                             this.autoselect_settings_search(cx);
                         })),
@@ -1324,7 +1301,7 @@ impl SettingsWindow {
                 return;
             }
             if let Some(s) = self.active_settings() {
-                let handle = s.search.read(cx).focus_handle(cx);
+                let handle = s.navigation.search().read(cx).focus_handle(cx);
                 window.focus(&handle, cx);
                 if let Some(s) = self.active_settings_mut() {
                     s.menu = None;
@@ -1337,40 +1314,16 @@ impl SettingsWindow {
         if !searching
             || !self
                 .active_settings()
-                .is_some_and(|s| s.search.read(cx).focus_handle(cx).is_focused(window))
+                .is_some_and(|s| s.navigation.search().read(cx).focus_handle(cx).is_focused(window))
             || !matches!(key, "up" | "down" | "enter")
         {
             return;
         }
-        let Some(s) = self.active_settings() else {
-            return;
-        };
-        let query = s.search.read(cx).value().trim().to_lowercase();
-        let entries = search_result_order(&query, s.modified_only, cx.global::<Config>());
-        let actions = search_result_actions(&query, s.modified_only);
-        let count = entries.len() + actions.len();
-        if count > 0 {
-            let index = s.search_selection.min(count - 1);
-            if key == "enter" && index >= entries.len() {
-                let action = actions[index - entries.len()].clone();
-                self.open_shortcut_search(action, window, cx);
-            } else if key == "enter" {
-                let entry = entries[index];
-                let target = if entry.title == L10nKey::SettingsSearchKeybindingsTitle {
-                    SettingsSection::Keybindings
-                } else {
-                    entry.section
-                };
-                self.navigate_settings(target, Some(entry.title), window, cx);
-            } else if let Some(s) = self.active_settings_mut() {
-                s.search_selection = if key == "down" {
-                    (index + 1).min(count - 1)
-                } else {
-                    index.saturating_sub(1)
-                };
-                s.reveal_first_hit.set(true);
-                cx.notify();
-            }
+        let activation = self.active_settings_mut().and_then(|s| s.navigation.search_key(key, cx));
+        match activation {
+            Some(navigation::SearchActivation::Shortcut(action)) => self.open_shortcut_search(action, window, cx),
+            Some(navigation::SearchActivation::Setting(target, title)) => self.navigate_settings(target, Some(title), window, cx),
+            None => cx.notify(),
         }
         cx.stop_propagation();
     }
@@ -1402,10 +1355,10 @@ impl SettingsWindow {
         let Some(state) = self.active_settings() else {
             return (String::new(), None, div().into_any_element());
         };
-        let query = state.search.read(cx).value().trim().to_lowercase();
-        let modified_only = state.modified_only;
-        let selection = state.search_selection;
-        *state.search_rows.borrow_mut() = Some(Vec::new());
+        let query = state.navigation.search().read(cx).value().trim().to_lowercase();
+        let modified_only = state.navigation.modified_only();
+        let selection = state.navigation.selection();
+        state.navigation.begin_rows();
         // Build each page that has a match once, and keep only the matching
         // rows. Discarded page chrome never enters the element tree, so the
         // controls keep their usual ids.
@@ -1462,13 +1415,7 @@ impl SettingsWindow {
                 SettingsSection::Skills => {}
             }
         }
-        let mut controls = self
-            .active_settings()
-            .unwrap()
-            .search_rows
-            .borrow_mut()
-            .take()
-            .unwrap_or_default();
+        let mut controls = self.active_settings().unwrap().navigation.finish_rows();
         let matches = search_result_order(&query, modified_only, cx.global::<Config>());
         let actions = search_result_actions(&query, modified_only);
 
@@ -1519,7 +1466,7 @@ impl SettingsWindow {
                         .when_some(
                             self.active_settings()
                                 .filter(|_| selected)
-                                .map(|s| s.search_anchor.clone()),
+                                .map(|s| s.navigation.anchor()),
                             |d, anchor| d.anchor_scroll(Some(anchor)),
                         )
                         .child(row)
@@ -1580,7 +1527,7 @@ impl SettingsWindow {
                         .when_some(
                             self.active_settings()
                                 .filter(|_| selected)
-                                .map(|s| s.search_anchor.clone()),
+                                .map(|s| s.navigation.anchor()),
                             |d, anchor| d.anchor_scroll(Some(anchor)),
                         )
                         .child(div().flex_1().min_w_0().truncate().child(label))
@@ -1659,37 +1606,3 @@ impl SettingsWindow {
     }
 }
 
-/// The search results in the order the page draws them: grouped by page in
-/// nav order, best match first within each.
-pub(crate) fn search_result_order<'a>(
-    query: &str,
-    modified_only: bool,
-    cfg: &Config,
-) -> Vec<&'a SearchEntry> {
-    let mut matches: Vec<&SearchEntry> = settings_search_entries()
-        .iter()
-        .filter(|entry| entry_matches(entry, query) && (!modified_only || entry.modified(cfg)))
-        .collect();
-    matches.sort_by_key(|entry| {
-        (
-            SettingsSection::ALL
-                .iter()
-                .position(|&s| s == entry.section)
-                .unwrap_or(0),
-            entry.rank(query),
-        )
-    });
-    matches
-}
-
-/// The shortcut actions a query names, after the settings it matched.
-pub(crate) fn search_result_actions(query: &str, modified_only: bool) -> Vec<String> {
-    if query.is_empty() || modified_only {
-        return Vec::new();
-    }
-    crate::ui::keymap::default_bindings()
-        .into_iter()
-        .filter(|(action, _)| keybinding_matches_query(action, query))
-        .map(|(action, _)| action.to_string())
-        .collect()
-}

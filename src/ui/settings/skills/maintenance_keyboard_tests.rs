@@ -92,7 +92,7 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
         vcx.update(|window, cx| window.press("escape", cx));
         app.update_in(&mut vcx, |app, _, _| {
             assert!(app.active_settings().is_some_and(
-                |s| s.section == SettingsSection::Skills && s.skills.selected.is_some()
+                |s| s.navigation.section() == SettingsSection::Skills && s.skills.selected.is_some()
             ))
         });
         vcx.update(|window, cx| {
