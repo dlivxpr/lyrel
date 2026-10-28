@@ -1,8 +1,13 @@
+mod events;
+pub(crate) mod menus;
+mod notices;
+mod presentation;
+
+#[cfg(test)]
+mod test_support;
+
 use super::remote::PaneEvent;
 use crate::ui::notification_history::NotificationWindowExt as _;
-use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
@@ -423,9 +428,6 @@ enum CmdKey {
 
 const HOLD_WINDOW: std::time::Duration = std::time::Duration::from_millis(150);
 
-const INTEGRATION_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
-
-const INTEGRATION_NOTICE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 const OPPORTUNISTIC_GIT_GAP: std::time::Duration = std::time::Duration::from_millis(1500);
 
@@ -434,40 +436,6 @@ const OPPORTUNISTIC_GIT_GAP: std::time::Duration = std::time::Duration::from_mil
 /// retry without issuing a request on every poll tick.
 const GIT_RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// How long a title the program set has to stand before the tab adopts it.
-///
-/// Long enough that a command which is over almost as soon as it started never
-/// reaches the label, short enough that one still running is named while the
-/// wait for it is still what the reader is doing.
-const TITLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
-
-/// What a pane does with a title the program just set — see
-/// `TerminalView::set_title_when_settled`.
-#[derive(Debug, PartialEq, Eq)]
-enum TitleSettle {
-    /// The tab already reads this, so whatever was waiting to replace it never
-    /// has to happen. This is the case a short command lands in, and the one an
-    /// agent's spinner lands in: a frame that only changes the status mark in
-    /// front of the title reads the same on the tab, so it asks for no repaint.
-    Revert,
-    /// Hold it: a wait is already running and adopts the newest title when it
-    /// elapses. Restarting the wait instead would let a program that rewrites
-    /// its title faster than the wait — a download reporting progress — put
-    /// off the tab's next update forever.
-    Queue,
-    /// Hold it and start the wait.
-    QueueAndWait,
-}
-
-fn settle_title(showing: &str, waiting: bool, incoming: &str) -> TitleSettle {
-    if lyrel_core::core::tab_view::same_title_ignoring_status_mark(incoming, showing) {
-        return TitleSettle::Revert;
-    }
-    match waiting {
-        true => TitleSettle::Queue,
-        false => TitleSettle::QueueAndWait,
-    }
-}
 
 const MAX_HISTORY_BYTES: u64 = 4 << 20;
 
@@ -480,34 +448,6 @@ enum GitRefresh {
     Retry,
 }
 
-fn known_pty_shim(fg: &str) -> Option<&'static str> {
-    ["kiro-cli-term", "figterm", "qterm", "cwterm"]
-        .into_iter()
-        .find(|shim| fg.contains(shim))
-}
-
-fn integration_notice_message(wrapper: Option<&str>) -> String {
-    match wrapper {
-        Some(w) => t_fmt(L10nKey::IntegrationNoticeBlocked, &[("wrapper", w)]),
-        None => t(L10nKey::IntegrationNoticeNotEngaged).to_string(),
-    }
-}
-
-/// Join whatever context a pane has into a notification title, most specific
-/// part first: an agent name if one is running, otherwise the machine the pane
-/// lives on, then the workspace it belongs to. Kept to two segments — Windows
-/// toast titles are a single line and ellipsize anything longer.
-fn compose_notification_title(
-    lead: Option<String>,
-    host: Option<String>,
-    workspace: Option<String>,
-) -> String {
-    match (lead.or(host), workspace) {
-        (Some(lead), Some(workspace)) => format!("{lead} · {workspace}"),
-        (Some(only), None) | (None, Some(only)) => only,
-        (None, None) => "lyrel".to_string(),
-    }
-}
 
 /// The longest command line to put in a confirmation. The shell sends up to
 /// 512 bytes; a dialog asking whether to end your work should still read as a
@@ -550,136 +490,6 @@ fn clamp_command(cmd: &str) -> String {
     }
 }
 
-impl TerminalView {
-    fn notify_command_finished(
-        &self,
-        label: &str,
-        elapsed: std::time::Duration,
-        cx: &mut Context<Self>,
-    ) {
-        let secs = elapsed.as_secs().to_string();
-        let command = label.trim();
-        let body = if command.is_empty() {
-            t_fmt(L10nKey::NotifyCommandFinished, &[("secs", &secs)])
-        } else {
-            t_fmt(
-                L10nKey::NotifyCommandFinishedWithCommand,
-                &[("command", command), ("secs", &secs)],
-            )
-        };
-        self.notify_pane(None, &body, cx);
-    }
-
-    fn notify_agent_finished(
-        &self,
-        agent: crate::core::cli_agent::CLIAgent,
-        elapsed: std::time::Duration,
-        cx: &mut Context<Self>,
-    ) {
-        let secs = elapsed.as_secs().to_string();
-        let body = t_fmt(L10nKey::NotifyAgentFinished, &[("secs", &secs)]);
-        self.notify_pane(Some(agent.display_name()), &body, cx);
-    }
-
-    /// Notify about this pane, with a title describing where it lives and a
-    /// click that reveals it. The id has to be the pane's *gpui entity id*:
-    /// that is what `TrayAction::RevealPane` matches leaves on, and it is a
-    /// different number from `pane_id`, which the daemon assigns.
-    fn notify_pane(&self, lead: Option<&str>, body: &str, cx: &mut Context<Self>) {
-        let title = self.notification_title(lead, cx);
-        super::desktop_notification::notify_desktop_for_pane(
-            Some(&title),
-            body,
-            Some(cx.entity_id()),
-        );
-    }
-
-    /// Desktop notifications the program wrote (OSC 9, 99, 777), such as
-    /// Claude Code's with its Notifications setting on `ghostty`, `kitty` or
-    /// `iterm2`. The agent's Waiting mark on the tab is the daemon's doing.
-    ///
-    /// `Unfocused` holds a note back only while the reader is looking at this
-    /// very pane. A pane whose agent reports through lyrel's hooks already gets
-    /// its Waiting and Done notices from `poll_agent_status` whenever
-    /// `hooks_notify`, so the program's own copy would be a duplicate there.
-    ///
-    /// At most a few per pane every few seconds reach the desktop (pane output
-    /// is untrusted), with one note saying the rest were not shown.
-    fn show_program_notes(&self, hooks_notify: bool, window: &Window, cx: &mut Context<Self>) {
-        let notes = self.terminal.take_osc_notes();
-        let watched = window.is_window_active() && self.focus_handle.is_focused(window);
-        let hooked = self.terminal.agent_session().is_some_and(|s| s.rich);
-        let show = cx
-            .global::<Config>()
-            .notify_on_command_finish
-            .allows(watched)
-            && !(hooked && hooks_notify);
-        if !notes.is_empty() {
-            log::debug!(
-                "{} program notification(s) {}",
-                notes.len(),
-                if show { "shown" } else { "held back" }
-            );
-        }
-        // Asked on every poll, so the rest are said once a flood stops too,
-        // and while notes are held back, so a stale count never surfaces
-        // minutes later.
-        let (notes, dropped) = self.terminal.pace_osc_notes(
-            if show { notes } else { Vec::new() },
-            std::time::Instant::now(),
-        );
-        if !show {
-            return;
-        }
-        let agent = self.terminal.foreground_agent().map(|a| a.display_name());
-        if dropped {
-            self.notify_pane(agent, t(L10nKey::ProgramNotesDropped), cx);
-        }
-        for (title, body) in notes {
-            match title {
-                Some(title) => super::desktop_notification::notify_desktop_for_pane(
-                    Some(&title),
-                    &body,
-                    Some(cx.entity_id()),
-                ),
-                None => self.notify_pane(agent, &body, cx),
-            }
-        }
-    }
-
-    fn notification_title(&self, lead: Option<&str>, cx: &App) -> String {
-        let host = self
-            .workspace
-            .as_ref()
-            .map(|w| crate::ui::remote_connect::target_label(cx, &w.target));
-        let workspace = self
-            .owner_workspace
-            .and_then(|id| crate::ui::machine_mirror::display_name_for(cx, id));
-        compose_notification_title(lead.map(str::to_string), host, workspace)
-    }
-}
-
-/// Ring the platform's alert sound, reporting whether one was actually made —
-/// `Audible` falls back to a flash when it wasn't, so a silent `false` is the
-/// difference between "you heard the bell" and "you saw it instead".
-fn ring_system_bell() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        objc2_app_kit::NSBeep();
-        true
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // MB_OK is the "Default Beep" scheme entry, so this follows whatever
-        // the user picked in Sound Settings — including "None", which is a
-        // deliberate silence and still reports success. Deliberately not
-        // `Beep()`, which synthesizes a fixed tone straight at the speaker and
-        // ignores the scheme. Returns immediately; the sound plays async.
-        use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
-        use windows_sys::Win32::UI::WindowsAndMessaging::MB_OK;
-        unsafe { MessageBeep(MB_OK) != 0 }
-    }
-}
 
 fn trim_trailing_spaces(text: &str) -> String {
     text.split('\n')
@@ -1100,15 +910,6 @@ impl TerminalView {
         stated_title(&self.title)
     }
 
-    /// `name` with the suffix that says how this pane ended.
-    fn ended_title(&self, name: &str) -> String {
-        let key = if self.workspace().is_some() && !self.terminal.child_exited() {
-            L10nKey::PaneTitleDisconnected
-        } else {
-            L10nKey::PaneTitleProcessExited
-        };
-        t_fmt(key, &[("title", name)])
-    }
 
     /// Sets how opaque the pane wants this terminal painted; the pane leaf
     /// calls this every frame while rendering, and the terminal element
@@ -1515,42 +1316,6 @@ impl TerminalView {
         self.relink_inflight = false;
     }
 
-    /// Takes a title the program set, and gives it to the tab only once it has
-    /// stood for `TITLE_SETTLE`.
-    ///
-    /// Nearly every prompt framework titles the tab with the command it is
-    /// about to run and puts the old title back at the next prompt — that is
-    /// where a tab's process name comes from. For a command that finishes in a
-    /// blink both edges land within a few frames of each other, so the label
-    /// flashed the command and snapped back, which reads as a rendering glitch
-    /// rather than as information. Holding the change means a command has to
-    /// actually still be running to name the tab.
-    ///
-    /// A title that reverts before it lands never happens at all: the revert
-    /// matches what the tab already shows and just drops the pending one. A
-    /// program that keeps rewriting its title — a download writing progress
-    /// there — still updates, because the wait already in flight adopts
-    /// whatever the newest title is when it elapses rather than starting over.
-    fn set_title_when_settled(&mut self, title: String, cx: &mut Context<Self>) {
-        match settle_title(&self.title, self.pending_title.is_some(), &title) {
-            TitleSettle::Revert => self.pending_title = None,
-            TitleSettle::Queue => self.pending_title = Some(title),
-            TitleSettle::QueueAndWait => {
-                self.pending_title = Some(title);
-                cx.spawn(async move |view, cx| {
-                    cx.background_executor().timer(TITLE_SETTLE).await;
-                    view.update(cx, |view, cx| {
-                        if let Some(title) = view.pending_title.take() {
-                            view.title = title;
-                            cx.notify();
-                        }
-                    })
-                    .ok();
-                })
-                .detach();
-            }
-        }
-    }
 
     fn poll_remote_clipboard_write(&mut self, cx: &mut Context<Self>) {
         if self.remote_clipboard_write_in_flight.is_some() {
@@ -1604,78 +1369,6 @@ impl TerminalView {
         .detach();
     }
 
-    fn handle_event(&mut self, ev: PaneEvent, cx: &mut Context<Self>) {
-        self.terminal.poll_exited();
-        self.sync_typeahead_owner();
-        self.poll_remote_clipboard_write(cx);
-        if self.terminal.has_pending_auth() {
-            cx.emit(AuthPromptReady);
-        }
-        match ev {
-            PaneEvent::Wakeup => {
-                // The grid moved under whatever the search bar last measured.
-                self.note_output_under_search(cx);
-                self.lifecycle.notify_output(cx);
-            }
-            PaneEvent::Title(title) => self.set_title_when_settled(title, cx),
-            PaneEvent::ResetTitle => self.set_title_when_settled(self.default_title.clone(), cx),
-            PaneEvent::PtyWrite(text) => self.terminal.write(text.into_bytes()),
-            PaneEvent::Exit => {
-                self.terminal.exited = true;
-                // Nothing is left to settle, and a title still waiting its turn
-                // would land on top of the state below a moment from now.
-                self.pending_title = None;
-                // The pane keeps answering to its own name (an SSH pane's
-                // host, #438) — only the state suffix is localized (#602).
-                self.title = self.ended_title(&self.default_title);
-                if self.terminal.child_exited() {
-                    cx.emit(ChildExited);
-                }
-                cx.notify();
-            }
-            PaneEvent::ClipboardStore(_, text) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-            }
-            PaneEvent::ClipboardLoad(_, fmt) => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                    self.terminal.write(fmt(&text).into_bytes());
-                }
-            }
-            PaneEvent::ColorRequest(idx, fmt) => {
-                let theme = cx.theme();
-                let rgb = match idx {
-                    256 => super::palette::hsla_to_rgb(theme.foreground),
-                    257 => super::palette::hsla_to_rgb(theme.background),
-                    258 => super::palette::hsla_to_rgb(theme.caret),
-                    i => self.terminal.palette[i.min(255)],
-                };
-                self.terminal.write(fmt(rgb).into_bytes());
-            }
-            PaneEvent::Bell => match cx.global::<Config>().bell {
-                BellMode::None => {}
-                BellMode::Visual => self.flash_bell(cx),
-                BellMode::Audible => {
-                    if !ring_system_bell() {
-                        self.flash_bell(cx);
-                    }
-                }
-                BellMode::Both => {
-                    ring_system_bell();
-                    self.flash_bell(cx);
-                }
-            },
-            PaneEvent::TextAreaSizeRequest(fmt) => {
-                let size = self.terminal.size();
-                let reply = fmt(rio_vt::event::WindowSize {
-                    cols: size.cols as u16,
-                    rows: size.rows as u16,
-                    width: (size.cols as f32 * self.cell_width.as_f32()).round() as u16,
-                    height: (size.rows as f32 * self.line_height.as_f32()).round() as u16,
-                });
-                self.terminal.write(reply.into_bytes());
-            }
-        }
-    }
 
     fn report_focus_change(&self, focused: bool) {
         let mode = self.terminal.term.lock().mode();
@@ -2069,28 +1762,6 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn flash_bell(&mut self, cx: &mut Context<Self>) {
-        self.bell_epoch += 1;
-        let epoch = self.bell_epoch;
-        self.bell_flash = true;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(150))
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                // A bell rung since this one owns the flash now. Holding
-                // Backspace on an empty bash prompt rings at key-repeat rate,
-                // and clearing here would blank it every few frames (#874).
-                if view.bell_epoch != epoch {
-                    return;
-                }
-                view.bell_flash = false;
-                cx.notify();
-            });
-        })
-        .detach();
-    }
 
     /// Record where this frame anchors the IME, and say whether the platform
     /// has to be told. macOS asks for the rectangle itself whenever it needs
@@ -2655,110 +2326,6 @@ impl TerminalView {
         })
     }
 
-    fn poll_foreground(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.completion.has_work() {
-            let context = self.completion_context();
-            if self.completion.observe_context(context) {
-                cx.notify();
-            }
-        }
-        let notify_allowed = cx
-            .global::<Config>()
-            .notify_on_command_finish
-            .allows(window.is_window_active());
-        // Ahead of the exit check: what a program said just before its shell
-        // exited is still shown.
-        self.show_program_notes(notify_allowed, window, cx);
-        if self.terminal.exited {
-            return;
-        }
-        let at_prompt = self.terminal.at_prompt();
-
-        if self.history.poll_prompt(self.history_prompt()) {
-            cx.notify();
-        }
-        if let Some(cwd) = self.cwd() {
-            self.history.rank_for_cwd(Some(&cwd));
-        }
-
-        if self.integration_notice.is_some() && self.terminal.shell_active() {
-            self.integration_notice = None;
-            cx.notify();
-        }
-
-        if at_prompt != self.last_at_prompt {
-            self.last_at_prompt = at_prompt;
-            cx.notify();
-        }
-
-        let running = !at_prompt;
-        if running && self.running_agent.is_none() {
-            self.running_agent = self.terminal.foreground_agent();
-        }
-        let cmd_finished = self.running_since.is_some() && !running;
-        match (self.running_since, running) {
-            (None, true) => {
-                self.running_since = Some(std::time::Instant::now());
-                self.running_title = self.title.clone();
-                self.running_agent = self.terminal.foreground_agent();
-            }
-            (Some(start), false) => {
-                let elapsed = start.elapsed();
-                let title = std::mem::take(&mut self.running_title);
-                let agent = self.running_agent.take();
-                self.running_since = None;
-                if notify_allowed {
-                    match agent {
-                        Some(_) if self.agent_activity.was_rich() => {}
-                        Some(agent) => self.notify_agent_finished(agent, elapsed, cx),
-                        None => {
-                            let threshold = std::time::Duration::from_secs(
-                                cx.global::<Config>().notify_threshold_secs,
-                            );
-                            if elapsed >= threshold {
-                                self.notify_command_finished(&title, elapsed, cx);
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        self.poll_agent_detection(at_prompt, cx);
-
-        let turn_finished = self.poll_agent_status(notify_allowed, window, cx);
-
-        let session = self.terminal.agent_session();
-        let tool_activity = self.agent_activity.tool_activity_changed(session.as_ref());
-        let cwd_now = self
-            .cwd_is_on_host()
-            .then(|| {
-                session
-                    .as_ref()
-                    .and_then(|s| s.cwd.clone())
-                    .or_else(|| self.cwd())
-            })
-            .flatten();
-        let prompt_cycle = self.terminal.prompt_cycle();
-        let command_finished = std::mem::replace(&mut self.git_prompt_cycle, prompt_cycle)
-            != prompt_cycle
-            || cmd_finished;
-        if cwd_now.as_ref() != self.git_status_cwd.as_ref() || command_finished || turn_finished {
-            if command_finished || turn_finished {
-                self.mark_repo_changed(cwd_now.as_deref(), cx);
-            }
-            self.refresh_git_status(cwd_now, GitRefresh::Edge, cx);
-        } else if tool_activity {
-            self.refresh_git_status(cwd_now, GitRefresh::Opportunistic, cx);
-        } else if self.git_retry_due(cx) {
-            self.refresh_git_status(cwd_now, GitRefresh::Retry, cx);
-        } else {
-            self.recheck_git_root(cx);
-        }
-
-        self.follow_history_scope(cx);
-    }
 
     /// Tell the source control cache that a command just ran here.
     ///
@@ -2939,57 +2506,6 @@ impl TerminalView {
         );
     }
 
-    fn poll_agent_detection(&mut self, at_prompt: bool, cx: &mut Context<Self>) {
-        if let Some(agent) = self
-            .agent_activity
-            .detect(self.terminal.foreground_agent(), at_prompt)
-        {
-            cx.emit(AgentDetected(agent));
-        }
-    }
-
-    fn poll_agent_status(
-        &mut self,
-        notify_allowed: bool,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let replayed = self.terminal.take_replayed_agent_status();
-        let session = self.terminal.agent_session();
-        let update = self.agent_activity.observe(
-            (self.host_id, self.pane_id),
-            self.terminal.foreground_agent(),
-            session.as_ref(),
-            replayed,
-            self.focus_handle.is_focused(window),
-            notify_allowed,
-            cx,
-        );
-        if update.session_changed {
-            cx.emit(AgentSessionChanged);
-        }
-        if let Some(notice) = update.notice {
-            if notice.delayed {
-                let task = cx.spawn(async move |this, cx| {
-                    cx.background_executor()
-                        .timer(super::agent_activity::DONE_SETTLE)
-                        .await;
-                    this.update(cx, |view, cx| {
-                        view.agent_activity.notice_delivered();
-                        view.notify_pane(Some(notice.agent), &notice.body, cx);
-                    })
-                    .ok();
-                });
-                self.agent_activity.await_notice(task);
-            } else {
-                self.notify_pane(Some(notice.agent), &notice.body, cx);
-            }
-        }
-        if update.changed {
-            cx.notify();
-        }
-        update.turn_finished
-    }
 
     #[cfg(test)]
     fn at_shell_prompt(&self) -> bool {
@@ -3251,49 +2767,6 @@ impl TerminalView {
             .ghost_suggestion(self.input.editor(), &self.history)
     }
 
-    fn note_integration_gap(&mut self, cx: &mut Context<Self>) {
-        if self.integration_notice_shown
-            || self.terminal.shell_active()
-            || self.on_alt_screen()
-            || self.created_at.elapsed() < INTEGRATION_GRACE
-        {
-            return;
-        }
-        self.integration_notice_shown = true;
-        self.integration_notice = Some(integration_notice_message(None));
-        cx.notify();
-
-        let pane_id = self.pane_id;
-        let route = self.pane_route();
-        cx.spawn(async move |this, cx| {
-            let fg = cx
-                .background_executor()
-                .spawn(async move {
-                    RemoteTerminal::list_panes_on(&route)
-                        .into_iter()
-                        .find(|p| p.pane_id == pane_id)
-                        .map(|p| p.title)
-                })
-                .await;
-            if let Some(shim) = fg.as_deref().and_then(known_pty_shim) {
-                let _ = this.update(cx, |view, cx| {
-                    if view.integration_notice.is_some() {
-                        view.integration_notice = Some(integration_notice_message(Some(shim)));
-                        cx.notify();
-                    }
-                });
-            }
-            cx.background_executor()
-                .timer(INTEGRATION_NOTICE_TIMEOUT)
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                if view.integration_notice.take().is_some() {
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
 
     fn handoff_line_to_shell(&mut self, chord: &[u8], cx: &mut Context<Self>) {
         if !self.accepts_input(cx) {
@@ -4714,32 +4187,6 @@ impl TerminalView {
         )
     }
 
-    fn render_integration_notice(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        let text = self.integration_notice.clone()?;
-        Some(Self::notice_pill(text, cx))
-    }
-
-    /// The one-row pill that floats over the pane's bottom-right corner.
-    fn notice_pill(text: String, cx: &App) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        div()
-            .absolute()
-            .bottom(px(GRID_PAD_Y))
-            .right(px(GRID_PAD_X))
-            .max_w(px(560.))
-            .px_3()
-            .py_1()
-            .bg(theme.popover)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(6.))
-            .text_size(px(12.))
-            .text_color(theme.muted_foreground)
-            .child(text)
-    }
 
     /// What the remote-completion pill should say right now, if anything:
     /// the listing's failure once it has one, "listing…" while it runs, and
@@ -4789,327 +4236,6 @@ impl Drop for TerminalView {
     }
 }
 
-impl Render for TerminalView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_frame_facts();
-        self.sync_typeahead_owner();
-        self.sync_scrollbar();
-        self.sync_composer(window, cx);
-        if self.shell_owns_prompt() {
-            self.input.settle_shell_owner(&self.terminal);
-        } else if self.input_active() {
-            self.input.engage_hold_into_editor();
-            if self.terminal.zle_reading() {
-                self.input.flush_typeahead(&self.terminal);
-            }
-        }
-        let entity = cx.entity();
-        let search_bar = self
-            .search
-            .as_ref()
-            .map(|s| self.render_search_bar(s, window, cx));
-
-        let focused = self.focus_handle.is_focused(window);
-        let input_bar = self
-            .input_active()
-            .then(|| self.render_input_bar(focused, cx));
-        let completion_menu = self
-            .input_active()
-            .then(|| self.render_completion_menu(cx))
-            .flatten();
-        let reverse_search_menu = self
-            .input_active()
-            .then(|| self.render_reverse_search_menu(cx))
-            .flatten();
-        let (composer_docked, composer_over) = match self.render_composer(window, cx) {
-            Some((el, true)) => (Some(el), None),
-            Some((el, false)) => (None, Some(el)),
-            None => (None, None),
-        };
-        let integration_notice = self.render_integration_notice(cx);
-        let remote_completion_notice = self.render_remote_completion_notice(cx);
-
-        let menu_focus = self.focus_handle.clone();
-        let has_selection = self.any_selection();
-        let menu_view = cx.entity();
-
-        div()
-            .id("terminal-surface")
-            .test_support()
-            // The surface, not the grid inside it, is what carries the role:
-            // a11y focus is only ever reported for a `div` that tracks a focus
-            // handle *and* has a node of its own, so a terminal with no role
-            // here is a window whose focused element is the window.
-            .role(gpui_kit::Role::MultilineTextInput)
-            .track_focus(&self.focus_handle)
-            .key_context(self.key_context(cx))
-            .size_full()
-            .relative()
-            // A column so the composer docks under the grid and takes its rows
-            // from it: the grid's laid-out height is what sizes the pty.
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .px(px(GRID_PAD_X))
-            .py(px(GRID_PAD_Y))
-            .text_color(cx.theme().foreground)
-            .on_key_down(cx.listener(Self::on_key_down))
-            .on_scroll(cx.listener(Self::on_scroll))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _ev: &MouseDownEvent, window, cx| {
-                    if window.default_prevented() {
-                        return;
-                    }
-                    window.focus(&this.focus_handle, cx);
-                }),
-            )
-            // Latch the context-menu verdict for this click. gpui-component's
-            // `ContextMenu` element owns the right mouse-down that opens the
-            // popup and hands the builder no event to inspect, so the modifiers
-            // have to be recorded here. That element wraps this one, so its
-            // listener actually fires *before* this one — harmless, because it
-            // only builds the menu from a `window.defer` callback that runs
-            // once the whole mouse dispatch has unwound.
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, ev: &MouseDownEvent, _window, _cx| {
-                    this.links
-                        .record_menu_permission(this.mouse_mode(), ev.modifiers.shift);
-                }),
-            )
-            .drag_over::<ExternalPaths>(|s, _, _, cx| s.bg(cx.theme().drag_border.opacity(0.12)))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                window.focus(&this.focus_handle, cx);
-                this.drop_files(paths, cx);
-            }))
-            .drag_over::<crate::ui::file_tree::RemotePathDrag>(|s, _, _, cx| {
-                s.bg(cx.theme().drag_border.opacity(0.12))
-            })
-            .on_drop(cx.listener(
-                |this, drag: &crate::ui::file_tree::RemotePathDrag, window, cx| {
-                    window.focus(&this.focus_handle, cx);
-                    this.drop_remote_path(drag, cx);
-                },
-            ))
-            .on_action(cx.listener(|this, _: &CopyText, _w, cx| {
-                this.copy_contextual(false, cx);
-            }))
-            .on_action(cx.listener(|this, _: &CutText, _w, cx| {
-                this.cut_contextual(cx);
-            }))
-            .on_action(cx.listener(|this, _: &PasteText, _w, cx| this.paste_from_clipboard(cx)))
-            .on_action(cx.listener(|this, _: &AlternatePaste, _w, cx| this.alternate_paste(cx)))
-            .on_action(cx.listener(|this, _: &SelectAll, _w, cx| this.select_all_contextual(cx)))
-            .on_action(cx.listener(|this, _: &UndoEdit, _w, cx| this.undo_edit(false, cx)))
-            .on_action(cx.listener(|this, _: &RedoEdit, _w, cx| this.undo_edit(true, cx)))
-            .on_action(
-                cx.listener(|this, _: &FindInTerminal, window, cx| this.open_search(window, cx)),
-            )
-            // Off macOS these two live on F3 and Shift+F3, which is also where
-            // PSReadLine keeps CharacterSearch and readline users put their
-            // own widgets. With no find bar open there is no next match to
-            // step to, so the keystroke is given back the way `EditorSave`
-            // gives back Ctrl+S — otherwise the action swallows the key and
-            // the shell never sees it (#834).
-            .on_action(cx.listener(|this, _: &FindNext, _w, cx| {
-                if this.search.is_none() {
-                    cx.propagate();
-                    return;
-                }
-                this.step_match(Direction::Right, cx);
-            }))
-            .on_action(cx.listener(|this, _: &FindPrevious, _w, cx| {
-                if this.search.is_none() {
-                    cx.propagate();
-                    return;
-                }
-                this.step_match(Direction::Left, cx);
-            }))
-            .on_action(cx.listener(|this, _: &ClearScrollback, _w, cx| this.clear_scrollback(cx)))
-            .on_action(cx.listener(|this, _: &OpenLinkUnderPointer, window, cx| {
-                this.open_menu_link(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &OpenLinkWithDefaultApp, window, cx| {
-                this.open_menu_link_with_default_app(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &RevealLinkUnderPointer, window, cx| {
-                this.reveal_menu_link(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &CopyLinkPathUnderPointer, _w, cx| {
-                this.copy_menu_link_path(cx);
-            }))
-            .on_action(cx.listener(|this, _: &InsertNewline, _w, cx| {
-                this.insert_newline_action(cx);
-            }))
-            .on_action(cx.listener(|this, _: &InsertNewlineFallback, _w, cx| {
-                this.insert_newline_fallback_action(cx);
-            }))
-            .on_action(cx.listener(|this, _: &ToggleComposer, window, cx| {
-                this.toggle_composer(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &SendTab, _w, cx| {
-                this.tab_pressed(true, cx);
-            }))
-            .on_action(cx.listener(|this, _: &SendBackTab, _w, cx| {
-                this.tab_pressed(false, cx);
-            }))
-            .child(TerminalElement::new(entity))
-            .children(composer_docked)
-            .child(self.render_scrollbar())
-            .children(search_bar)
-            .children(input_bar)
-            .children(completion_menu)
-            .children(reverse_search_menu)
-            .children(integration_notice)
-            .children(remote_completion_notice)
-            .children(composer_over)
-            .context_menu(move |menu, window, cx| {
-                // Suppressing the popup means handing back an item-less menu:
-                // gpui-component's `ContextMenu` element skips rendering the
-                // anchored overlay entirely when the built menu `is_empty()`,
-                // and its right mouse-down listener is registered after ours
-                // (it wraps this element), so we cannot out-order it or veto it
-                // any earlier. See `should_show_context_menu` for the rule.
-                if !menu_view.read(cx).links.menu_allowed() {
-                    return menu;
-                }
-                let view = menu_view.read(cx);
-                // A path is the most specific thing the pointer can be on, so
-                // what it can do goes above what the pane can do.
-                let menu = match view.menu_link_path() {
-                    Some(path) => {
-                        let local = view.links.menu().is_some_and(|link| link.host().is_local());
-                        let reveal = match cfg!(target_os = "macos") {
-                            true => L10nKey::AppMenuRevealInFinder,
-                            false => L10nKey::AppMenuRevealInFolder,
-                        };
-                        let label = link_menu_label(path);
-                        let default_app =
-                            offers_default_app_open(local, cx.global::<Config>().file_open_mode());
-                        menu.min_w(px(220.))
-                            .action_context(menu_focus.clone())
-                            .label(label)
-                            .menu(t(L10nKey::AppMenuOpenLink), Box::new(OpenLinkUnderPointer))
-                            .when(default_app, |menu| {
-                                menu.menu(
-                                    t(L10nKey::AppMenuOpenLinkWithDefaultApp),
-                                    Box::new(OpenLinkWithDefaultApp),
-                                )
-                            })
-                            // A file on another machine has no folder here to
-                            // show it in, and naming this one's would show
-                            // whatever it happens to keep at that path.
-                            .menu_element_with_disabled(
-                                Box::new(RevealLinkUnderPointer),
-                                !local,
-                                menu_row_with_hint(t(reveal), None),
-                            )
-                            .menu(
-                                t(L10nKey::AppMenuCopyLinkPath),
-                                Box::new(CopyLinkPathUnderPointer),
-                            )
-                            .separator()
-                    }
-                    None => menu,
-                };
-                let menu = menu
-                    .min_w(px(240.))
-                    .action_context(menu_focus.clone())
-                    .menu_element_with_disabled(
-                        Box::new(CopyText),
-                        !has_selection,
-                        menu_row_with_hint(t(L10nKey::AppMenuCopy), mac_only("secondary-c")),
-                    )
-                    .menu_element_with_disabled(
-                        Box::new(CutText),
-                        !has_selection,
-                        menu_row_with_hint(t(L10nKey::AppMenuCut), mac_only("secondary-x")),
-                    )
-                    .menu_element(
-                        Box::new(PasteText),
-                        menu_row_with_hint(t(L10nKey::AppMenuPaste), mac_only("secondary-v")),
-                    )
-                    .menu_element(
-                        Box::new(SelectAll),
-                        menu_row_with_hint(t(L10nKey::AppMenuSelectAll), mac_only("secondary-a")),
-                    )
-                    .separator()
-                    .menu(t(L10nKey::AppMenuFind), Box::new(FindInTerminal))
-                    // Inside the terminal, what gets cleared goes without
-                    // saying; the menu bar keeps the full "Clear Scrollback".
-                    .menu(t(L10nKey::TerminalContextClear), Box::new(ClearScrollback));
-
-                // `fork_label` is lyrel-core's capability probe, and core has no
-                // locale table — take the answer, not its English wording.
-                let can_fork = view.agent().and_then(|a| a.fork_label()).is_some();
-                let fork_ready = can_fork
-                    && view.remote_context().is_none()
-                    && view.agent_session().is_some_and(|s| s.session_id.is_some());
-                // `None` over a pane with no agent; otherwise whether it knows
-                // the command line it was started with.
-                let launch_argv_known = view.agent().map(|_| {
-                    view.agent_session()
-                        .is_some_and(|s| s.launch_argv.is_some())
-                });
-
-                let menu = match (can_fork, fork_ready) {
-                    (true, true) => {
-                        let focus = menu_focus.clone();
-                        menu.separator().submenu(
-                            t(L10nKey::AppMenuForkSession),
-                            window,
-                            cx,
-                            move |submenu, _window, _cx| {
-                                submenu
-                                    .action_context(focus.clone())
-                                    .menu(
-                                        t(L10nKey::AppMenuSplitRight),
-                                        Box::new(ForkAgentSessionRight),
-                                    )
-                                    .menu(
-                                        t(L10nKey::AppMenuSplitLeft),
-                                        Box::new(ForkAgentSessionLeft),
-                                    )
-                                    .menu(
-                                        t(L10nKey::AppMenuSplitDown),
-                                        Box::new(ForkAgentSessionDown),
-                                    )
-                                    .menu(t(L10nKey::AppMenuSplitUp), Box::new(ForkAgentSessionUp))
-                            },
-                        )
-                    }
-                    (true, false) => menu
-                        .separator()
-                        .item(PopupMenuItem::new(t(L10nKey::AppMenuForkSession)).disabled(true)),
-                    (false, _) => menu,
-                };
-
-                // Only over a running agent, and only live when the pane knows
-                // the command line it was started with — there is nothing to
-                // save otherwise. Beside Fork when both are there.
-                let menu = match launch_argv_known {
-                    Some(known) => {
-                        let menu = if can_fork { menu } else { menu.separator() };
-                        menu.menu_with_disabled(
-                            t(L10nKey::AppMenuSaveAgentLaunchArgs),
-                            Box::new(SaveAgentLaunchArgs),
-                            !known,
-                        )
-                    }
-                    None => menu,
-                };
-
-                menu.separator()
-                    .menu(t(L10nKey::AppMenuSplitRight), Box::new(SplitRight))
-                    .menu(t(L10nKey::AppMenuSplitDown), Box::new(SplitDown))
-                    .menu(t(L10nKey::AppMenuZoomPane), Box::new(ToggleMaximizePane))
-                    .separator()
-                    .menu(t(L10nKey::AppMenuNewTab), Box::new(NewTab))
-                    .menu(t(L10nKey::AppMenuClosePaneTab), Box::new(CloseActiveTab))
-            })
-    }
-}
 
 /// The header the link section of the context menu wears: the file's own
 /// name, so a menu opened over a long path says which one it is about without
@@ -5120,40 +4246,6 @@ fn link_menu_label(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-pub(crate) fn menu_row_with_hint(
-    label: &'static str,
-    key: Option<&'static str>,
-) -> impl Fn(&mut Window, &mut App) -> gpui_kit::AnyElement {
-    move |_window, cx| {
-        let hint = key.map(|k| {
-            Kbd::new(
-                gpui_kit::Keystroke::parse_with_os(k, cx.platform_info().os)
-                    .expect("valid static keystroke"),
-            )
-            .p_0()
-            .flex_nowrap()
-            .border_0()
-            .bg(gpui_kit::transparent_white())
-        });
-        h_flex()
-            .w_full()
-            .gap_3()
-            .items_center()
-            .justify_between()
-            .child(label)
-            .children(hint)
-            .into_any_element()
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn mac_only(key: &'static str) -> Option<&'static str> {
-    Some(key)
-}
-#[cfg(not(target_os = "macos"))]
-fn mac_only(_key: &'static str) -> Option<&'static str> {
-    None
-}
 
 /// A history entry drawn on a one-line row, with its line breaks folded to a
 /// visible stand-in.
@@ -5564,30 +4656,6 @@ fn schedule_scroll_anim_frame(view: WeakEntity<TerminalView>, epoch: u64, window
 #[cfg(test)]
 mod tests {
 
-    /// What the label ladder asks a pane: are you showing a name of your own,
-    /// or still standing under the app's? (#740)
-    #[test]
-    fn a_pane_states_a_title_whenever_it_is_not_the_placeholder() {
-        use super::stated_title;
-
-        // Nothing has spoken — this is the pane a directory stands in for.
-        assert_eq!(stated_title("lyrel"), None);
-        assert_eq!(stated_title("  lyrel  "), None);
-        assert_eq!(stated_title("   "), None);
-
-        // A title from the program running in it.
-        assert_eq!(stated_title("vim — main.rs"), Some("vim — main.rs"));
-        assert_eq!(stated_title(" user@host:~/repo "), Some("user@host:~/repo"));
-        // A default lyrel chose for the pane itself is a name, not the absence
-        // of one: an SSH pane answers to its host (#438) and a workspace pane
-        // to its workspace, and neither gives way to a directory.
-        assert_eq!(stated_title("prod-web"), Some("prod-web"));
-        // So does the state a finished pane is left showing.
-        assert_eq!(
-            stated_title("lyrel — process exited"),
-            Some("lyrel — process exited")
-        );
-    }
 
     #[test]
     fn an_unfocused_input_caret_is_always_a_steady_outline() {
@@ -5650,10 +4718,10 @@ mod tests {
         assert!(!out.contains(" …"), "{out:?}");
     }
     use super::{
-        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, WheelRoute, compose_notification_title,
+        COMPLETION_MENU_MAX_W, LoopbackPlan, PortRoute, WheelRoute,
         cwd_is_on_host, loopback_plan,
     };
-    use super::{TitleSettle, files_cwd, settle_title, wsl_share_distro, wsl_share_path};
+    use super::{files_cwd, wsl_share_distro, wsl_share_path};
     use super::{
         before_input, description_budget, elide, encode_mouse, expand_file_command_template,
         fallback_chain, fig_icon_emoji, fig_icon_glyph, focus_report_bytes, highlight_runs,
@@ -5669,83 +4737,6 @@ mod tests {
     use crate::daemon::protocol::RemoteKind;
     use crate::terminal::PaneWorkspace;
 
-    #[test]
-    fn a_title_the_tab_already_shows_drops_the_one_that_was_waiting() {
-        // The revert is what cancels a flash: the pane is told the title it is
-        // already displaying, and the queued command name goes away with it.
-        assert_eq!(
-            settle_title("~/dev", true, "~/dev"),
-            TitleSettle::Revert,
-            "a revert cancels the pending title rather than queueing behind it"
-        );
-        assert_eq!(
-            settle_title("~/dev", false, "~/dev"),
-            TitleSettle::Revert,
-            "and asks for no wait when there was nothing pending either"
-        );
-        // A second title while one is already waiting rides the wait in
-        // flight; restarting it is what would let a title that keeps changing
-        // put the tab's next update off forever.
-        assert_eq!(settle_title("~/dev", true, "wget 40%"), TitleSettle::Queue);
-        assert_eq!(
-            settle_title("~/dev", false, "wget 1%"),
-            TitleSettle::QueueAndWait
-        );
-    }
-
-    #[test]
-    fn a_spinner_frame_that_only_changes_the_status_mark_asks_for_no_repaint() {
-        // An agent rewrites its title every few hundred milliseconds while it
-        // works, and the tab never draws the mark, so none of these may wait
-        // and repaint the whole window for the same label.
-        assert_eq!(
-            settle_title(
-                "\u{25D0} fixing the switcher",
-                false,
-                "\u{25D1} fixing the switcher"
-            ),
-            TitleSettle::Revert
-        );
-        assert_eq!(
-            settle_title(
-                "\u{25D0} fixing the switcher",
-                true,
-                "\u{2733} fixing the switcher"
-            ),
-            TitleSettle::Revert,
-            "and a frame that lands while another title waits drops it, as a revert does"
-        );
-        assert_eq!(
-            settle_title(
-                "\u{25D0} fixing the switcher",
-                false,
-                "\u{25D1} fixing the parser"
-            ),
-            TitleSettle::QueueAndWait,
-            "a different title still lands"
-        );
-    }
-
-    #[test]
-    fn a_notification_title_keeps_at_most_two_segments() {
-        let ws = || Some("lyrel".to_string());
-        assert_eq!(
-            compose_notification_title(None, Some("build-box".into()), ws()),
-            "build-box · lyrel"
-        );
-        // An agent takes the machine's place rather than adding a third part.
-        assert_eq!(
-            compose_notification_title(Some("Claude".into()), Some("build-box".into()), ws()),
-            "Claude · lyrel"
-        );
-        // A local pane has no machine label; a nameless workspace has no name.
-        assert_eq!(compose_notification_title(None, None, ws()), "lyrel");
-        assert_eq!(
-            compose_notification_title(Some("Claude".into()), None, None),
-            "Claude"
-        );
-        assert_eq!(compose_notification_title(None, None, None), "lyrel");
-    }
 
     fn ws(target: RemoteTarget, with_spec: bool) -> PaneWorkspace {
         PaneWorkspace {
@@ -7066,18 +6057,6 @@ pub(crate) fn quiet_test_ssh_pane_with(
 }
 
 #[cfg(test)]
-fn history_fixture(entries: Vec<String>) -> super::history::History {
-    super::history::History {
-        entries,
-        ..Default::default()
-    }
-}
-
-#[cfg(test)]
-fn seed_history(view: &mut TerminalView, entries: Vec<String>) {
-    view.history = TerminalHistory::from_loaded(history_fixture(entries));
-}
-#[cfg(test)]
 #[path = "agent_activity_tests.rs"]
 mod agent_activity_tests;
 
@@ -7096,6 +6075,7 @@ mod gpui_tests {
         include!("prompt_input/paste_consumer_tests.rs");
     }
     use super::*;
+    use super::test_support::*;
     use crate::core::config::MouseZoomModifier;
     use rio_vt::selection::{Selection, SelectionType};
 
@@ -7144,127 +6124,6 @@ mod gpui_tests {
         include!("link/consumer_tests.rs");
     }
 
-    pub(super) fn harness(
-        cx: &mut TestAppContext,
-    ) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
-        let pty = if cfg!(windows) {
-            PtySource::LocalConpty
-        } else {
-            PtySource::Raw
-        };
-        harness_on(cx, pty)
-    }
-
-    fn harness_on(
-        cx: &mut TestAppContext,
-        pty: PtySource,
-    ) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
-        // Building a view reads the config. Whether that hit the real user
-        // directory used to come down to which test happened to pin the
-        // scratch dir first.
-        crate::core::config::pin_test_config_dir();
-        cx.executor().allow_parking();
-        let (client_side, daemon_side) = super::test_stream_pair();
-        cx.update(|cx| {
-            gpui_kit::component::init(cx);
-            cx.set_global(Config::default());
-        });
-        let window = cx.add_window(|window, cx| {
-            let terminal = RemoteTerminal::from_stream_with(
-                client_side,
-                TermSize::new(80, 24),
-                Vec::new(),
-                pty,
-            )
-            .expect("socketpair-backed terminal");
-            TerminalView::with_terminal(terminal, 1, window, cx)
-        });
-        (window, daemon_side)
-    }
-
-    /// The same pane, but hung under a `gpui_component::Root` the way the real
-    /// window hangs it.
-    ///
-    /// `harness` makes the view its own root, which is enough for anything
-    /// that never paints — but gpui-component's text input reaches for `Root`
-    /// while painting, so any test that lets a frame draw with the search bar
-    /// (or any other input) on screen needs this one instead.
-    fn rooted_harness(
-        cx: &mut TestAppContext,
-    ) -> (
-        gpui_kit::WindowHandle<gpui_kit::component::Root>,
-        Entity<TerminalView>,
-        Stream,
-    ) {
-        crate::core::config::pin_test_config_dir();
-        cx.executor().allow_parking();
-        let (client_side, daemon_side) = super::test_stream_pair();
-        cx.update(|cx| {
-            gpui_kit::component::init(cx);
-            cx.set_global(Config::default());
-        });
-        let built: std::rc::Rc<std::cell::RefCell<Option<Entity<TerminalView>>>> =
-            std::rc::Rc::new(std::cell::RefCell::new(None));
-        let out = built.clone();
-        let window = cx.add_window(move |window, cx| {
-            let terminal = RemoteTerminal::from_stream(client_side, TermSize::new(80, 24))
-                .expect("socketpair-backed terminal");
-            let view = cx.new(|cx| TerminalView::with_terminal(terminal, 1, window, cx));
-            *out.borrow_mut() = Some(view.clone());
-            gpui_kit::component::Root::new(view, window, cx)
-        });
-        window
-            .update(cx, |_, window, _| window.activate_window())
-            .unwrap();
-        cx.background_executor.run_until_parked();
-        let view = built.borrow_mut().take().expect("the pane was built");
-        (window, view, daemon_side)
-    }
-
-    fn prompt_ready(
-        window: &gpui_kit::WindowHandle<TerminalView>,
-        cx: &mut TestAppContext,
-        daemon: &mut Stream,
-    ) {
-        DaemonMsg::Prompt {
-            active: true,
-            at_prompt: true,
-            last_exit: None,
-        }
-        .encode(daemon)
-        .unwrap();
-        for _ in 0..200 {
-            if window
-                .update(cx, |view, _, _| view.terminal.at_prompt())
-                .unwrap()
-            {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("the prompt report never reached the view");
-    }
-
-    fn alt_screen_ready(
-        window: &gpui_kit::WindowHandle<TerminalView>,
-        cx: &mut TestAppContext,
-        daemon: &mut Stream,
-    ) {
-        DaemonMsg::Output(b"\x1b[?1049h".to_vec())
-            .encode(daemon)
-            .unwrap();
-        for _ in 0..400 {
-            cx.run_until_parked();
-            if window
-                .update(cx, |view, _, _| view.on_alt_screen())
-                .unwrap()
-            {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("the alternate-screen switch never reached the grid");
-    }
 
     #[gpui_kit::test]
     fn an_agent_that_has_finished_its_turn_is_not_busy(cx: &mut TestAppContext) {
@@ -8212,174 +7071,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-    /// Runs out the wait a new title is held for.
-    fn settle(cx: &mut TestAppContext) {
-        cx.executor().advance_clock(super::TITLE_SETTLE * 2);
-        cx.run_until_parked();
-    }
-
-    #[gpui_kit::test]
-    fn title_events_drive_the_tab_title(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                assert_eq!(view.title, "lyrel");
-                view.handle_event(PaneEvent::Title("vim — main.rs".into()), cx);
-            })
-            .unwrap();
-        settle(cx);
-        window
-            .update(cx, |view, _, cx| {
-                assert_eq!(view.title, "vim — main.rs");
-                view.handle_event(PaneEvent::ResetTitle, cx);
-            })
-            .unwrap();
-        settle(cx);
-        window
-            .update(cx, |view, _, _| assert_eq!(view.title, "lyrel"))
-            .unwrap();
-    }
-
-    /// The flash this wait exists to stop: a prompt framework names the command
-    /// it is about to run and puts the directory back at the next prompt, and
-    /// for anything that finishes in a blink both edges arrive within a few
-    /// frames. The tab used to show the command and snap back, which reads as a
-    /// glitch rather than as information.
-    #[gpui_kit::test]
-    fn a_command_over_before_the_wait_never_reaches_the_tab(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.default_title = "~/dev".into();
-                view.title = "~/dev".into();
-                view.handle_event(PaneEvent::Title("ls".into()), cx);
-                view.handle_event(PaneEvent::Title("~/dev".into()), cx);
-                assert_eq!(view.title, "~/dev", "and never flashed on the way");
-            })
-            .unwrap();
-        settle(cx);
-        window
-            .update(cx, |view, _, _| {
-                assert_eq!(
-                    view.title, "~/dev",
-                    "the command was over before the tab could adopt its name"
-                );
-            })
-            .unwrap();
-    }
-
-    /// A program that rewrites its own title faster than the wait — a download
-    /// reporting progress — still updates the tab. The wait already running
-    /// adopts the newest title rather than starting over, which is what would
-    /// leave the tab frozen on the directory for as long as the download ran.
-    #[gpui_kit::test]
-    fn a_title_rewritten_faster_than_the_wait_still_lands(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.handle_event(PaneEvent::Title("wget 1%".into()), cx);
-                view.handle_event(PaneEvent::Title("wget 40%".into()), cx);
-                view.handle_event(PaneEvent::Title("wget 99%".into()), cx);
-            })
-            .unwrap();
-        settle(cx);
-        window
-            .update(cx, |view, _, _| assert_eq!(view.title, "wget 99%"))
-            .unwrap();
-    }
-
-    /// An SSH pane answers to the host it dialled, and keeps answering to it
-    /// after the remote program hands the title back (#438). Before this every
-    /// SSH tab in the window read "lyrel" until — and only if — the far shell
-    /// had integration enough to title itself.
-    #[gpui_kit::test]
-    fn an_ssh_pane_is_named_after_its_host(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.default_title = "prod-web".into();
-                view.title = "prod-web".into();
-                view.handle_event(PaneEvent::Title("vim — main.rs".into()), cx);
-            })
-            .unwrap();
-        settle(cx);
-        window
-            .update(cx, |view, _, cx| {
-                assert_eq!(view.title, "vim — main.rs");
-                view.handle_event(PaneEvent::ResetTitle, cx);
-            })
-            .unwrap();
-        settle(cx);
-        window
-            .update(cx, |view, _, _| {
-                assert_eq!(
-                    view.title, "prod-web",
-                    "a reset goes back to the host, not to the app's own name"
-                );
-            })
-            .unwrap();
-    }
-
-    fn next_input(daemon: &mut Stream) -> Vec<u8> {
-        loop {
-            match ClientMsg::read(daemon).expect("client socket stays open") {
-                ClientMsg::Input(bytes) => return bytes,
-                _ => continue,
-            }
-        }
-    }
-
-    fn type_char(
-        view: &mut TerminalView,
-        ch: &str,
-        window: &mut Window,
-        cx: &mut Context<TerminalView>,
-    ) {
-        if cfg!(target_os = "macos") {
-            let _ = window;
-            view.commit_text(ch, cx);
-        } else {
-            let ev = KeyDownEvent {
-                keystroke: gpui_kit::Keystroke {
-                    modifiers: gpui_kit::Modifiers::default(),
-                    key: ch.to_string(),
-                    key_char: Some(ch.to_string()),
-                },
-                is_held: false,
-                prefer_character_input: false,
-            };
-            view.on_key_down(&ev, window, cx);
-        }
-    }
-
-    fn next_input_until_timeout(daemon: &mut Stream) -> Option<Vec<u8>> {
-        use std::io::ErrorKind;
-
-        daemon
-            .set_read_timeout(Some(std::time::Duration::from_millis(250)))
-            .unwrap();
-        loop {
-            match ClientMsg::read(daemon) {
-                Ok(ClientMsg::Input(bytes)) => return Some(bytes),
-                Ok(_) => continue,
-                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                    return None;
-                }
-                Err(e) => panic!("client socket failed before Input: {e}"),
-            }
-        }
-    }
-
-    /// `next_input_until_timeout` with the executor run between reads: a reply
-    /// crosses the reader thread and the view before it is written.
-    fn pumped_input(cx: &mut TestAppContext, daemon: &mut Stream, tries: usize) -> Option<String> {
-        (0..tries)
-            .find_map(|_| {
-                cx.run_until_parked();
-                next_input_until_timeout(daemon)
-            })
-            .map(|bytes| String::from_utf8(bytes).unwrap())
-    }
 
     #[gpui_kit::test]
     fn a_theme_change_reaches_only_the_panes_that_asked(cx: &mut TestAppContext) {
@@ -8675,107 +7366,6 @@ mod gpui_tests {
         );
     }
 
-    fn wait_for_input_active(
-        window: &gpui_kit::WindowHandle<TerminalView>,
-        cx: &mut TestAppContext,
-    ) {
-        for _ in 0..200 {
-            cx.run_until_parked();
-            let active = window.update(cx, |view, _, _| view.input_active()).unwrap();
-            if active {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("the local editor never engaged at the prompt");
-    }
-
-    fn key(spec: &'static str) -> gpui_kit::Keystroke {
-        gpui_kit::Keystroke::parse(spec).expect("valid keystroke spec")
-    }
-
-    #[test]
-    fn shim_detection_names_known_wrappers_only() {
-        assert_eq!(known_pty_shim("zsh (kiro-cli-term)"), Some("kiro-cli-term"));
-        assert_eq!(known_pty_shim("figterm"), Some("figterm"));
-        assert_eq!(known_pty_shim("qterm"), Some("qterm"));
-        assert_eq!(known_pty_shim("ssh"), None);
-        assert_eq!(known_pty_shim("wezterm"), None);
-        assert_eq!(known_pty_shim(""), None);
-        assert!(integration_notice_message(Some("kiro-cli-term")).contains("kiro-cli-term"));
-        assert!(!integration_notice_message(None).contains("intercepting"));
-    }
-
-    #[gpui_kit::test]
-    fn ctrl_r_without_integration_raises_the_notice_once(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, window, cx| {
-                let ctrl_r = KeyDownEvent {
-                    keystroke: key("ctrl-r"),
-                    is_held: false,
-                    prefer_character_input: false,
-                };
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_none(),
-                    "the grace window stays silent"
-                );
-
-                view.created_at = std::time::Instant::now() - INTEGRATION_GRACE * 2;
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_some(),
-                    "Ctrl+R raises the notice"
-                );
-                cx.notify();
-            })
-            .unwrap();
-
-        cx.run_until_parked();
-        window
-            .update(cx, |view, window, cx| {
-                assert!(
-                    view.integration_notice.is_some(),
-                    "the notice survives a real render pass"
-                );
-
-                let ctrl_r = KeyDownEvent {
-                    keystroke: key("ctrl-r"),
-                    is_held: false,
-                    prefer_character_input: false,
-                };
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_none(),
-                    "a keystroke dismisses the notice"
-                );
-                view.on_key_down(&ctrl_r, window, cx);
-                assert!(
-                    view.integration_notice.is_none(),
-                    "the notice is one-shot per pane"
-                );
-            })
-            .unwrap();
-    }
-
-    fn scroll_into_history(view: &TerminalView, offset: usize) {
-        let mut parser = rio_vt::performer::handler::Processor::default();
-        let mut term = view.terminal.term.lock();
-        parser.advance(&mut *term, &b"line\r\n".repeat(60));
-        term.scroll_display(Scroll::Delta(offset as i32));
-        assert_eq!(
-            term.grid.display_offset(),
-            offset,
-            "the viewport starts parked in the scrollback"
-        );
-    }
-
-    fn display_offset(view: &TerminalView) -> usize {
-        view.terminal.term.lock().grid.display_offset()
-    }
 
     /// Shaped after what macOS actually delivers, measured on a wheel mouse and
     /// a trackpad: both arrive as pixels, and only the trackpad ever reports a
@@ -8797,52 +7387,6 @@ mod gpui_tests {
         wheel(view, lines, gpui_kit::TouchPhase::Moved)
     }
 
-    #[gpui_kit::test]
-    fn pty_write_events_reach_the_daemon_as_input(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.handle_event(PaneEvent::PtyWrite("ping".into()), cx);
-            })
-            .unwrap();
-        assert_eq!(next_input(&mut daemon), b"ping".to_vec());
-    }
-
-    fn bind_to_a_disconnected_remote_workspace(
-        view: &mut TerminalView,
-        cx: &mut Context<TerminalView>,
-    ) -> crate::core::session::WorkspaceId {
-        use crate::core::session::{
-            RemoteRef, RemoteTarget, WindowViews, WorkspaceId, WorkspaceStore,
-        };
-        use crate::terminal::PaneWorkspace;
-        let host = RemoteRef::new(
-            RemoteTarget::direct("me", "build-box", 22),
-            WorkspaceId::new(),
-        );
-        let entry = crate::core::session::WindowView::on_remote(host.clone());
-        let id = entry.id;
-        WorkspaceStore::install_for_test(
-            cx,
-            WindowViews {
-                views: vec![entry],
-                active: None,
-            },
-        );
-        view.set_workspace(Some(PaneWorkspace {
-            workspace: id,
-            target: host.target,
-            spec: Some(Box::new(
-                serde_json::from_str(
-                    r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-                )
-                .unwrap(),
-            )),
-            label: None,
-            resize_echo: false,
-        }));
-        id
-    }
 
     #[gpui_kit::test]
     fn a_disconnected_remote_pane_keeps_the_line_instead_of_handing_it_to_nowhere(
@@ -9038,45 +7582,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn a_dropped_link_does_not_claim_the_process_exited(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                bind_to_a_disconnected_remote_workspace(view, cx);
-                view.handle_event(PaneEvent::Exit, cx);
-                assert_eq!(view.title, "lyrel — disconnected");
-
-                view.set_workspace(None);
-                view.handle_event(PaneEvent::Exit, cx);
-                assert_eq!(view.title, "lyrel — process exited");
-            })
-            .unwrap();
-    }
-
-    /// A workspace pane answers to its workspace's name: untitled tabs show
-    /// it, and a dead link's suffix hangs off it — not off the bare app name,
-    /// which read "lyrel — disconnected" no matter whose link died.
-    #[gpui_kit::test]
-    fn a_workspace_pane_answers_to_its_workspaces_name(cx: &mut TestAppContext) {
-        use crate::core::session::{RemoteTarget, WorkspaceId};
-        use crate::terminal::PaneWorkspace;
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.set_workspace(Some(PaneWorkspace {
-                    workspace: WorkspaceId::new(),
-                    target: RemoteTarget::direct("me", "build-box", 22),
-                    spec: None,
-                    label: Some("hummingbot".into()),
-                    resize_echo: false,
-                }));
-                assert_eq!(view.title, "hummingbot", "an untitled tab shows the name");
-                view.handle_event(PaneEvent::Exit, cx);
-                assert_eq!(view.title, "hummingbot — disconnected");
-            })
-            .unwrap();
-    }
 
     /// What the link supervisor's relink sweep keys off: a workspace pane
     /// whose link died asks to come back, until its machine refuses.
@@ -9992,71 +8497,6 @@ mod gpui_tests {
         });
     }
 
-    #[gpui_kit::test]
-    fn child_exit_marks_the_view_exited(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        window
-            .update(cx, |view, _, cx| {
-                view.handle_event(PaneEvent::Exit, cx);
-                assert!(view.terminal.exited);
-                assert_eq!(view.title, "lyrel — process exited");
-            })
-            .unwrap();
-    }
-
-    /// Holding Backspace on an empty bash prompt (or Tab with nothing to
-    /// complete) rings the bell at key-repeat rate. Every flash used to arm its
-    /// own clear timer, so the first bell's timer blanked a flash the fifth bell
-    /// had just re-lit, and the pane strobed for as long as the key was held
-    /// (#874).
-    #[gpui_kit::test]
-    fn a_bell_rung_at_key_repeat_rate_holds_one_steady_flash(cx: &mut TestAppContext) {
-        let (window, _daemon) = harness(cx);
-        let lit =
-            |cx: &mut TestAppContext| window.update(cx, |view, _, _| view.bell_flash).unwrap();
-
-        let repeat = std::time::Duration::from_millis(33);
-        let mut dark = Vec::new();
-        for i in 0..30 {
-            window
-                .update(cx, |view, _, cx| view.handle_event(PaneEvent::Bell, cx))
-                .unwrap();
-            cx.executor().advance_clock(repeat);
-            cx.run_until_parked();
-            if !lit(cx) {
-                dark.push(i);
-            }
-        }
-        assert!(
-            dark.is_empty(),
-            "the flash went dark between bells after repeats {dark:?}"
-        );
-
-        cx.executor()
-            .advance_clock(std::time::Duration::from_millis(300));
-        cx.run_until_parked();
-        assert!(!lit(cx), "the flash outlived the last bell");
-    }
-
-    #[gpui_kit::test]
-    fn text_area_size_request_replies_with_the_current_geometry(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        let want = window
-            .update(cx, |view, _, cx| {
-                let size = view.terminal.size();
-                let fmt = std::sync::Arc::new(|ws: rio_vt::event::WindowSize| {
-                    format!("{}x{}", ws.width, ws.height)
-                });
-                view.handle_event(PaneEvent::TextAreaSizeRequest(fmt), cx);
-                format!(
-                    "{}x{}",
-                    (size.cols as f32 * view.cell_width.as_f32()).round() as u16,
-                    (size.rows as f32 * view.line_height.as_f32()).round() as u16
-                )
-            })
-            .unwrap();
-        assert_eq!(next_input(&mut daemon), want.into_bytes());
-    }
 
     #[gpui_kit::test]
     fn hidden_cursor_at_prompt_anchors_the_editor_at_the_real_cell_not_top_left(
@@ -10230,52 +8670,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn child_exit_emits_the_close_event_but_disconnect_does_not(cx: &mut TestAppContext) {
-        use std::cell::Cell;
-        use std::rc::Rc;
-
-        let subscribe = |window: &gpui_kit::WindowHandle<TerminalView>, cx: &mut TestAppContext| {
-            let got = Rc::new(Cell::new(false));
-            let seen = got.clone();
-            window
-                .update(cx, |_, _, cx| {
-                    let this = cx.entity();
-                    cx.subscribe(&this, move |_, _, _: &ChildExited, _| seen.set(true))
-                        .detach();
-                })
-                .unwrap();
-            got
-        };
-        let wait_exited = |window: &gpui_kit::WindowHandle<TerminalView>,
-                           cx: &mut TestAppContext| {
-            for _ in 0..400 {
-                cx.run_until_parked();
-                let exited = window
-                    .update(cx, |view, _, _| view.terminal.exited)
-                    .unwrap();
-                if exited {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            panic!("the view never noticed the exit");
-        };
-
-        let (window, mut daemon) = harness(cx);
-        let got = subscribe(&window, cx);
-        DaemonMsg::Exited { code: Some(0) }
-            .encode(&mut daemon)
-            .unwrap();
-        wait_exited(&window, cx);
-        assert!(got.get(), "a genuine child exit must emit ChildExited");
-
-        let (window, daemon) = harness(cx);
-        let got = subscribe(&window, cx);
-        drop(daemon);
-        wait_exited(&window, cx);
-        assert!(!got.get(), "a daemon disconnect must not emit ChildExited");
-    }
 
     #[gpui_kit::test]
     fn ssh_drop_mid_tui_recovers_at_the_next_prompt(cx: &mut TestAppContext) {

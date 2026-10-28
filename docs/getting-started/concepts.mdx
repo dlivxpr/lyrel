@@ -81,6 +81,26 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 写入只入队，关闭最多等待既有短暂排空宽限，不在 UI 线程 join 静默 socket 线程。
 冷 attach 的 agent 回放仍是初始基线；relink 则沿用原视图的活动基线，不吞掉断线期间完成的状态变化。
 
+桌面终端的事件适配集中在 `src/terminal/view/events.rs`：`TerminalLifecycle` 仍唯一持有
+事件 receiver、批量唤醒、显示状态登记、时钟与释放任务，按同一顺序调用 `TerminalView::handle_event`。
+适配先处理退出事实、输入所有者、远端剪贴板队列和认证提示，再分派事件；不为各能力启动竞争消费者。
+普通输出通过 `TerminalLifecycle::notify_output` 只通知正在显示的 pane；隐藏 pane 仍消费输出、
+推进必要状态、解码图片并归还退役图形资源，不等待下一次可见绘制。transport 中断不能冒充进程退出，
+只有真实 child exit 才发出 `ChildExited`。
+
+`view/notices.rs` 负责标题稳定等待、铃声和通知的 GPUI 适配；`AgentActivity` 仍唯一维护 agent
+活动、Host／pane 读取标记和延迟 Done 通知的取消句柄，新状态会取消尚未投递的旧通知。
+退出时丢弃待采用的标题，避免定时器覆盖退出状态；程序通知仍在退出检查之前排空。
+`view/presentation.rs` 保留原 `TerminalView` 的 `Render`、焦点入口与覆盖层次序，
+`view/menus.rs` 组合通用命令，链接菜单仍由 Host-aware 链接适配提供；两者不接管 `TerminalElement` 的逐帧绘制。
+
+事件消费者回归位于 `view/events/consumer_tests.rs`，标题／铃声／提示回归位于
+`view/notices/tests.rs`；隐藏图片与窗口释放继续复用 `lifecycle_consumer_tests.rs`。
+跨能力的 socket-backed GPUI fixture 集中在私有 `view/test_support.rs`，专属图形 fixture 不混入其中。
+原生验收需使用隔离配置，对照可见／隐藏输出后的网格、通知计数与窗口重绘，再检查标题往返、
+连续铃声、agent 未读及延迟通知取消、断线与真实退出、菜单的禁用项与焦点交接。
+这些是待执行的验证入口，不是本轮通过声明；本机结果与 macOS、真实 SSH 等未验证前提分开记录。
+
 连接迁移后的原生验收必须使用专用配置与会话，以下步骤是验收流程，不代表已经执行：
 
 1. 为 GUI、CLI 和 daemon 指定同一个全新的 `--config-dir <isolated-dir>`，为测试远端另建隔离 daemon 配置；不要连接已安装实例或真实工作会话。

@@ -2585,7 +2585,7 @@ impl LyrelApp {
                 && crate::ui::keymap::effective_key("PasteText", cx).is_none()
             {
                 // macOS handles Cmd+V in the terminal's raw command-key path.
-                PopupMenuItem::element(crate::terminal::view::menu_row_with_hint(
+                PopupMenuItem::element(crate::terminal::view::menus::menu_row_with_hint(
                     t(label),
                     Some("secondary-v"),
                 ))
