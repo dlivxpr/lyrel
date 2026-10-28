@@ -125,7 +125,11 @@ impl LyrelApp {
         self.settings_events = Some(cx.subscribe_in(
             &view,
             window,
-            |this, _, event, window, cx| match event {
+            |this, source, event, window, cx| {
+                if !this.settings.as_ref().is_some_and(|view| view.entity_id() == source.entity_id()) {
+                    return;
+                }
+                match event {
                 SettingsEvent::Closed(location) => {
                     this.last_settings_location = *location;
                     this.settings = None;
@@ -134,9 +138,12 @@ impl LyrelApp {
                         cx.defer(move |cx| {
                             let _ = settings.update(cx, |_, window, _| window.remove_window());
                             let _ = owner.update(cx, |_, window, cx| {
-                                window.activate_window();
-                                let _ = app
-                                    .update(cx, |this, cx| this.focus_previous_content(window, cx));
+                                let _ = app.update(cx, |this, cx| {
+                                    if this.settings.is_none() {
+                                        window.activate_window();
+                                        this.focus_previous_content(window, cx);
+                                    }
+                                });
                             });
                         });
                     } else {
@@ -173,6 +180,7 @@ impl LyrelApp {
                 SettingsEvent::LocaleChanged => {
                     this.refresh_locale_state(window, cx);
                     crate::ui::windows::WindowRegistry::refresh_locale(cx, Some(this.workspace));
+                }
                 }
             },
         ));
@@ -268,11 +276,16 @@ impl LyrelApp {
         then: impl FnOnce(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
     ) {
         if let Some(view) = self.settings.clone() {
+            let session = view.read(cx).active_settings().map(|s| s.navigation.session());
             let handle = view.read(cx).window;
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, cx| {
-                    window.activate_window();
-                    view.update(cx, |view, cx| then(view, window, cx));
+                    view.update(cx, |view, cx| {
+                        if session.is_some_and(|session| view.active_settings().is_some_and(|s| s.navigation.accepts(session))) {
+                            window.activate_window();
+                            then(view, window, cx);
+                        }
+                    });
                 });
             });
             return;

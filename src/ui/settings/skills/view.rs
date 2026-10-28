@@ -529,14 +529,14 @@ impl SettingsWindow {
 
     pub(in crate::ui::settings) fn skills_modal_open(&self) -> bool {
         self.active_settings().is_some_and(|s| {
-            s.section == SettingsSection::Skills
+            s.navigation.section() == SettingsSection::Skills
                 && (s.skills.install.open || s.skills.maintenance.is_open())
         })
     }
 
     pub(crate) fn render_skills_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let s = self.active_settings()?;
-        if s.section != SettingsSection::Skills || s.search_active {
+        if s.navigation.section() != SettingsSection::Skills || s.navigation.is_searching() {
             return None;
         }
         if s.skills.install.open {

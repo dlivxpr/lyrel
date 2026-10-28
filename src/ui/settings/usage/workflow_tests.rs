@@ -223,7 +223,7 @@ fn account_modal_blocks_navigation_until_cancelled(cx: &mut TestAppContext) {
         window.click(navigation.clone(), cx);
     });
     assert!(
-        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().section)
+        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().navigation.section())
             == SettingsSection::Usage
     );
     assert_eq!(http.calls.load(Ordering::SeqCst), 0);
@@ -235,7 +235,7 @@ fn account_modal_blocks_navigation_until_cancelled(cx: &mut TestAppContext) {
         window.click(navigation, cx);
     });
     assert!(
-        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().section)
+        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().navigation.section())
             == SettingsSection::General
     );
 }
@@ -411,7 +411,7 @@ fn visible_page_polling_stops_on_search_navigation_and_close_even_after_late_res
     );
     let app = open(&workspace, &mut vcx);
     app.update_in(&mut vcx, |a, w, cx| {
-        let search = a.active_settings().unwrap().search.clone();
+        let search = a.active_settings().unwrap().navigation.search().clone();
         search.update(cx, |s, cx| s.set_value("DeepSeek", w, cx));
         a.autoselect_settings_search(cx);
     });
