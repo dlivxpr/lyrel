@@ -840,7 +840,7 @@ impl SettingsWindow {
             // the same predicate, so the red line and the not-saved config
             // always agree (#601).
             let value = wd_path_input.read(cx).value();
-            let error = (!crate::ui::app::wd_path_saveable(&value))
+            let error = (!super::inputs::wd_path_saveable(&value))
                 .then(|| t(L10nKey::SettingsWdPathInvalid).to_string());
             let control = self.settings_checked_input(&wd_path_input, PATH_FIELD_W, error, cx);
             rows.push(

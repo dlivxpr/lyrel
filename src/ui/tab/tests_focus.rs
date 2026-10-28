@@ -210,7 +210,7 @@ fn a_landing_pane_inherits_what_its_pending_slot_was_told(cx: &mut TestAppContex
 /// cannot see (#843).
 #[gpui_kit::test]
 fn a_tab_switch_returns_to_the_pane_focus_arrived_in(cx: &mut TestAppContext) {
-    use super::{test_window::harness, watch_pane_focus};
+    use super::{LyrelApp, test_window::harness};
     use crate::terminal::view::quiet_test_pane;
 
     let (app, mut vcx) = harness(cx);
@@ -230,7 +230,7 @@ fn a_tab_switch_returns_to_the_pane_focus_arrived_in(cx: &mut TestAppContext) {
         // built.
         for view in [&left, &right] {
             let handle = view.read(cx).focus_handle.clone();
-            watch_pane_focus(&handle, view.entity_id(), window, cx);
+            LyrelApp::watch_pane_focus(&handle, view.entity_id(), window, cx);
         }
         cx.notify();
         (
@@ -284,7 +284,7 @@ fn watched_split(
     gpui_kit::FocusHandle,
     impl Sized,
 ) {
-    use super::{test_window::harness, watch_pane_focus};
+    use super::{LyrelApp, test_window::harness};
     use crate::terminal::view::quiet_test_pane;
 
     let (app, mut vcx) = harness(cx);
@@ -300,7 +300,7 @@ fn watched_split(
         app.tabs.select(0);
         for view in [&left, &right] {
             let handle = view.read(cx).focus_handle.clone();
-            watch_pane_focus(&handle, view.entity_id(), window, cx);
+            LyrelApp::watch_pane_focus(&handle, view.entity_id(), window, cx);
         }
         cx.notify();
         (left, right, cx.focus_handle(), (left_stream, right_stream))
@@ -380,7 +380,7 @@ fn zooming_from_off_the_panes_zooms_the_remembered_pane(cx: &mut TestAppContext)
 
 #[gpui_kit::test]
 fn reordering_two_split_tabs_keeps_identity_mru_and_each_panes_focus(cx: &mut TestAppContext) {
-    use super::watch_pane_focus;
+    use super::LyrelApp;
     use crate::core::actions::{MoveTabRight, SelectNextTab};
     use crate::terminal::view::quiet_test_pane;
 
@@ -390,7 +390,7 @@ fn reordering_two_split_tabs_keeps_identity_mru_and_each_panes_focus(cx: &mut Te
         let (right, right_stream) = quiet_test_pane(4, window, cx);
         for view in [&left, &right] {
             let handle = view.read(cx).focus_handle.clone();
-            watch_pane_focus(&handle, view.entity_id(), window, cx);
+            LyrelApp::watch_pane_focus(&handle, view.entity_id(), window, cx);
         }
         app.tabs.push(Tab::new(Pane::split_node(
             Axis::Horizontal,

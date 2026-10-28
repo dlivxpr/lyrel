@@ -116,6 +116,9 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 | 能力 | 状态与行为所有者 | 协调器保留的工作 |
 |---|---|---|
 | 工作台 | `ui/tab` 的 `Tab`／`TabSet`、`session_lifecycle`、`pending_pane`、`window_chrome`、搜索与转发表单模块 | `LyrelApp` 组合窗口、执行跨能力导航并交接焦点 |
+| 文件树与文件索引 | `FileTreeState` 管理列表、在途读取、监视失效、写入结果和 Host-aware 根目录／索引 | 工作台提供 Host 与标签上下文，执行文档导航、错误通知和最终焦点；搜索不直接修改缓存 |
+| SCM | `ScmPanelState` 管理仓库、草稿、提交、分支、graph 与 detail 的转换 | 工作台适配 `ScmIntent`、提供当前仓库上下文，保留破坏性确认、Host 调度和文档／diff 导航 |
+| 窗口连接与创建 | `WindowConnection` 管理尝试身份和单 pending／parked 创建意图；`RemoteLinks` 独占机器监督、重连与 pane relink | 切换器保留筛选和表单，工作台执行已接受结果的跨能力导航，不复制目标身份或连接状态 |
 | 终端交互 | `PromptInput`、`TerminalHistory`、`TerminalCompletion`、`SelectionScroll`、`AgentActivity`、`LinkInteraction`、`TerminalLifecycle` | `TerminalView` 保留 GPUI 实体身份、绘制、事件适配与任务调度 |
 | 文档编辑 | `EditorBuffers` 管理 Host-aware 缓冲区与加载／监视；`EditorPanelState` 管理保存与未保存提示 | 工作台执行保存成功后捕获的关闭意图；退休分组不能转而关闭新的呈现 |
 | 布局同步 | `tree_sync/projection`、`reconcile`、`lifecycle::WindowSync` 分别拥有投影、操作排序、队列与恢复转换 | 原同步入口执行 I/O 与 GPUI 结果应用；`MachineMirrors` 仍独立 |
@@ -124,7 +127,30 @@ resize 去重与回显等待、viewport 重新发布和关闭次序；`remote/wr
 
 接口传递目标身份、Host、借用数据或语义结果，不向能力模块开放整个可变工作台。
 本次迁移没有改变协议版本、持久化格式、第三方依赖或平台范围；既有 settings、paste、launch 与 replay 实现仍是唯一入口。
-协调器并非零方法：视图组合、跨能力操作与单流排序仍需集中；搜索文件索引、SCM、SFTP 等未纳入独立所有权重写的功能不因主文件缩短就被视为已解耦。
+协调器并非零方法：视图组合、跨能力操作与单流排序仍需集中；SFTP 等未纳入独立所有权重写的功能不因主文件缩短就被视为已解耦。
+
+### 工作台组合与延迟窗格
+
+`LyrelApp` 保留同一个窗口 Entity。私有 `app/initialization.rs` 组合已有能力所有者、恢复入口、订阅和窗口释放钩子，
+不会将构造期的上下文保存在另一个管理器中；`app/composition.rs` 是窗口与工作区视图的组合适配，
+继续只挂载一次 `WindowChrome`、终端、文档、右侧面板、状态栏和窗口浮层。
+`app/actions.rs` 按工作区、窗格、导航、文档、会话与应用命令绑定 Action，调用既有语义入口，
+不另设命令总线，也不拥有文件树、SCM 或连接策略。设置仍通过原 `settings_bridge` 应用。
+
+`app/pane_binding.rs` 把 shell、新建原生 SSH 和 attach-only 请求绑定到已有 `PendingPane`：
+同步返回的是已放置的 connecting slot，不是 shell 创建成功；真实失败、重试、取消、创建代次与资源释放仍由
+`pending_pane/creation.rs` 拥有。没有可执行的同步失败或同步 Ready 恢复分支，也不保留旧工厂的转发别名。
+`SessionRestore` 与树同步、sidecar 消费者使用同一个绑定入口，attach-only 失败不能生成替代 shell。
+
+创建请求捕获工作区与 slot Entity 身份。`PendingPane::take_installation` 在领取结果前同时核对原工作区和仍存在的 slot，
+关闭、替换或切换工作区后不能把晚到结果投递到邻近窗格。分屏仍由 `Tab::prepare_split` 捕获 tab／pane 目标；
+`TabSet` 与 `Tab` 继续拥有放置、呈现映射与焦点记忆，`SessionLifecycle` 继续拥有会话记录与离开规则。
+根只在合法安装之后绑定终端事件、执行该窗格的启动请求、保存会话，并在原 slot 仍持有焦点时交接给新终端；
+后台 landing 不能选中自己的标签页或夺走搜索、设置及其他内容的焦点。
+
+上述 interface 和测试入口不是运行通过声明。验收需在隔离原生窗口执行打开、分屏、切换、关闭重开与延迟创建，
+记录真实 pane／shell 身份、附着状态、焦点与晚到结果去向；自动化、Windows、macOS 和真实 SSH 的证据分别记录。
+
 
 
 <Warning>

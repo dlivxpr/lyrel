@@ -77,6 +77,14 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
 明确断开目标机器会一并清除该机器的 pending／parked，明确关闭拒绝提示则放弃该机器的 parked。
 迟到或重复结果不能重新消费意图；机器恢复、共享重连和 pane 重新附着仍完全由 `RemoteLinks` 负责。
 
+窗格创建与等待中的工作区创建是两条不同的生命周期：`WindowConnection` 只接受机器连接与创建意图，
+不代替 `PendingPane` 的 spawn／attach owner。窗口的 `app/pane_binding.rs` 接收已经确定的工作区路由、
+owner 和目标 slot，通过弱窗口租约启动原 pending 流程；结果领取仍由 `take_installation` 核验工作区与 slot Entity。
+切换标签页不会重定向正在创建的窗格，关闭或替换 slot、离开其工作区后不允许晚到结果落在新位置。
+合法后台 landing 只替换自己的 slot；只有该 pending slot 仍持有焦点时，根才把焦点交给新终端。
+失败继续显示原恢复控件，attach-only 只附着既有 pane；共享重连、会话身份与恢复策略没有移入窗口适配。
+
+
 
 <a id="what-gets-installed"></a>
 ## 安装内容
