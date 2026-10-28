@@ -1,4 +1,3 @@
-// 本文件源自 l0ng-ai/tty7，lyrel 已修改（含本声明）；原有版权与许可保留。
 use std::io;
 use std::process::ExitCode;
 
