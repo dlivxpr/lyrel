@@ -69,7 +69,10 @@ impl LyrelApp {
         if let Some(spec) = view.shell_spec() {
             return Some(spec.program);
         }
-        if view.workspace().is_some() || view.ssh_spec().is_some() || view.remote_context().is_some() {
+        if view.workspace().is_some()
+            || view.ssh_spec().is_some()
+            || view.remote_context().is_some()
+        {
             return None;
         }
         Some(match &cx.global::<Config>().shell {
@@ -202,7 +205,11 @@ impl LyrelApp {
         pending.update(cx, |pending, cx| pending.start(lease, window, cx));
     }
 
-    pub(super) fn watch_terminal(view: &Entity<TerminalView>, window: &mut Window, cx: &mut Context<LyrelApp>) {
+    pub(super) fn watch_terminal(
+        view: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<LyrelApp>,
+    ) {
         cx.subscribe_in(&view, window, |app, view, _: &ChildExited, window, cx| {
             app.on_child_exited(view.clone(), window, cx);
         })
@@ -236,7 +243,11 @@ impl LyrelApp {
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }
 
-    pub(super) fn kill_pane_off_thread(route: crate::terminal::PaneRoute, pane_id: u64, cx: &mut App) {
+    pub(super) fn kill_pane_off_thread(
+        route: crate::terminal::PaneRoute,
+        pane_id: u64,
+        cx: &mut App,
+    ) {
         cx.background_executor()
             .spawn(async move { crate::terminal::RemoteTerminal::kill_pane_on(&route, pane_id) })
             .detach();

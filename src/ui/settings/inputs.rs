@@ -311,7 +311,6 @@ mod tests {
         let _ = std::fs::remove_file(&file);
     }
 
-
     #[gpui_kit::test]
     fn shell_field_enter_preserves_argv_and_invalid_drafts(cx: &mut TestAppContext) {
         crate::core::config::pin_test_config_dir();

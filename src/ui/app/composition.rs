@@ -356,7 +356,11 @@ impl LyrelApp {
 }
 
 impl LyrelApp {
-    pub(super) fn render_window(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_window(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         #[cfg(test)]
         render_probe::record();
         let prof = crate::ui::perf::enabled().then(std::time::Instant::now);
@@ -455,42 +459,41 @@ impl LyrelApp {
                     .child(self.settings.as_ref().unwrap().clone())
             });
 
-        let root =
-            div()
-                .id("lyrel-root")
-                .size_full()
-                .flex()
-                .flex_col()
-                .bg(window_bg)
-                .text_color(cx.theme().foreground)
-                .on_modifiers_changed(cx.listener(Self::on_modifiers_changed));
+        let root = div()
+            .id("lyrel-root")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(window_bg)
+            .text_color(cx.theme().foreground)
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed));
         let root = Self::bind_window_actions(root, cx);
         let root = root
-                .children(bg_image)
-                .child(
-                    div()
-                        .id("workbench-content")
-                        .test_support()
-                        .flex()
-                        .flex_col()
-                        .relative()
-                        .flex_1()
-                        .min_h_0()
-                        .w_full()
-                        .overflow_hidden()
-                        .child(main_layout)
-                        .when_some(detach_caret, |this, caret| this.child(caret))
-                        .when_some(settings_overlay, |this, overlay| this.child(overlay))
-                        .when_some(self.render_worktree_prompt_overlay(cx), |this, el| {
-                            this.child(el)
-                        })
-                        .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
-                            this.child(el)
-                        })
-                        .children(self.render_switcher(window, cx))
-                        .when_some(self.search.view(), |this, search| this.child(search)),
-                )
-                .child(self.render_status_bar(window, cx));
+            .children(bg_image)
+            .child(
+                div()
+                    .id("workbench-content")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(main_layout)
+                    .when_some(detach_caret, |this, caret| this.child(caret))
+                    .when_some(settings_overlay, |this, overlay| this.child(overlay))
+                    .when_some(self.render_worktree_prompt_overlay(cx), |this, el| {
+                        this.child(el)
+                    })
+                    .when_some(self.render_ssh_prompt_overlay(window, cx), |this, el| {
+                        this.child(el)
+                    })
+                    .children(self.render_switcher(window, cx))
+                    .when_some(self.search.view(), |this, search| this.child(search)),
+            )
+            .child(self.render_status_bar(window, cx));
         let root = Self::with_editor_text_commands(root, cx);
 
         if let Some(start) = prof {

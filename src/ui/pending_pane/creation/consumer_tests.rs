@@ -255,7 +255,10 @@ fn a_focused_split_hands_focus_to_its_landed_terminal(cx: &mut TestAppContext) {
         let leaves = app.tabs[0].pane.terminals();
         assert_eq!(leaves.len(), 2);
         assert!(leaves.iter().any(|leaf| leaf.entity_id() == original));
-        let landed = leaves.iter().find(|leaf| leaf.read(cx).pane_id == 96).unwrap();
+        let landed = leaves
+            .iter()
+            .find(|leaf| leaf.read(cx).pane_id == 96)
+            .unwrap();
         assert!(landed.read(cx).focus_handle.contains_focused(window, cx));
         assert_eq!(
             app.tabs[0].focus_target(cx).unwrap().entity_id(),
@@ -286,5 +289,13 @@ fn a_late_spawn_keeps_the_open_searchs_focus(cx: &mut TestAppContext) {
         assert!(app.search.is_open());
         assert_eq!(app.tabs[1].pane.terminals()[0].read(cx).pane_id, 97);
         assert_eq!(window.focused(cx), Some(search_focus));
+    });
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        let app = app.read(cx);
+        assert!(!app.search.is_open());
+        let landed = app.tabs[1].pane.terminals()[0].read(cx);
+        assert!(landed.focus_handle.contains_focused(window, cx));
     });
 }

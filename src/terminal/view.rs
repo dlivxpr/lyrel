@@ -196,7 +196,6 @@ pub struct TerminalView {
     pub pane_id: u64,
     shell_spec: Option<ShellSpec>,
     owner_workspace: Option<crate::core::session::WorkspaceId>,
-    restored: bool,
     ssh_spec: Option<Box<crate::daemon::protocol::NativeSshSpec>>,
     remote_paste: super::paste::RemotePaste,
     remote_clipboard_write_in_flight: Option<u64>,
@@ -592,13 +591,8 @@ impl TerminalView {
         let mut view = Self::with_terminal(parts.terminal, parts.pane_id, window, cx);
         view.shell_spec = parts.shell_spec;
         view.owner_workspace = parts.owner;
-        view.restored = parts.restored;
         view.set_workspace(parts.workspace);
         view
-    }
-
-    pub(crate) fn restored(&self) -> bool {
-        self.restored
     }
 
     pub fn owner_workspace(&self) -> Option<crate::core::session::WorkspaceId> {
@@ -696,7 +690,6 @@ impl TerminalView {
             pane_id,
             shell_spec: None,
             owner_workspace: None,
-            restored: false,
             ssh_spec: None,
             remote_paste: super::paste::RemotePaste::default(),
             remote_clipboard_write_in_flight: None,

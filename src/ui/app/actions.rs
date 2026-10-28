@@ -19,88 +19,88 @@ impl LyrelApp {
         root: gpui_kit::Stateful<gpui_kit::Div>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        root
-        .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
-        .on_action(cx.listener(|this, _: &SelectWorkspace1, window, cx| {
-            this.select_workspace_slot(0, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace2, window, cx| {
-            this.select_workspace_slot(1, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace3, window, cx| {
-            this.select_workspace_slot(2, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace4, window, cx| {
-            this.select_workspace_slot(3, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace5, window, cx| {
-            this.select_workspace_slot(4, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace6, window, cx| {
-            this.select_workspace_slot(5, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace7, window, cx| {
-            this.select_workspace_slot(6, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace8, window, cx| {
-            this.select_workspace_slot(7, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectWorkspace9, window, cx| {
-            this.select_workspace_slot(8, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
-            this.start_workspace_rename(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ToggleSwitcher, window, cx| {
-            this.toggle_switcher(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &StopWorkspace, window, cx| {
-            let id = this.workspace;
-            this.stop_workspace(id, window, cx);
-        }))
-        .on_action(cx.listener(|this, _: &DeleteWorkspace, window, cx| {
-            let id = this.workspace;
-            this.delete_workspace(id, window, cx);
-        }))
-        .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
-            this.open_workspace_form(window, cx);
-        }))
-        .on_action(cx.listener(|this, _: &NewWindow, _window, cx| {
-            this.new_window(cx);
-        }))
-        .on_action(
-            cx.listener(|this, _: &CloseWindow, window, cx| this.close_window(window, cx)),
-        )
+        root.on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
+            .on_action(cx.listener(|this, _: &SelectWorkspace1, window, cx| {
+                this.select_workspace_slot(0, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace2, window, cx| {
+                this.select_workspace_slot(1, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace3, window, cx| {
+                this.select_workspace_slot(2, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace4, window, cx| {
+                this.select_workspace_slot(3, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace5, window, cx| {
+                this.select_workspace_slot(4, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace6, window, cx| {
+                this.select_workspace_slot(5, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace7, window, cx| {
+                this.select_workspace_slot(6, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace8, window, cx| {
+                this.select_workspace_slot(7, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectWorkspace9, window, cx| {
+                this.select_workspace_slot(8, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RenameWorkspace, window, cx| {
+                this.start_workspace_rename(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ToggleSwitcher, window, cx| {
+                    this.toggle_switcher(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &StopWorkspace, window, cx| {
+                let id = this.workspace;
+                this.stop_workspace(id, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DeleteWorkspace, window, cx| {
+                let id = this.workspace;
+                this.delete_workspace(id, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NewWorkspace, window, cx| {
+                this.open_workspace_form(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NewWindow, _window, cx| {
+                this.new_window(cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &CloseWindow, window, cx| this.close_window(window, cx)),
+            )
     }
 
     fn bind_panes_actions(
         root: gpui_kit::Stateful<gpui_kit::Div>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        root
-        .on_action(cx.listener(|this, _: &CloseActiveTab, window, cx| {
+        root.on_action(cx.listener(|this, _: &CloseActiveTab, window, cx| {
             if !this.editor_close_active_if_focused(window, cx) {
                 this.close_pane(window, cx)
             }
         }))
-        .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
-            this.split(Axis::Horizontal, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
-            this.split(Axis::Vertical, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &MovePaneToTab, window, cx| {
-            this.move_pane_to_tab(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &TogglePanePip, window, cx| {
-            this.toggle_pane_pip(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &RestorePanePip, window, cx| {
-            this.restore_pane_pip(window, cx)
-        }))
         .on_action(
-            cx.listener(|this, _: &ParkPane, window, cx| this.park_active_pane(window, cx)),
+            cx.listener(|this, _: &SplitRight, window, cx| {
+                this.split(Axis::Horizontal, window, cx)
+            }),
         )
+        .on_action(
+            cx.listener(|this, _: &SplitDown, window, cx| this.split(Axis::Vertical, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &MovePaneToTab, window, cx| this.move_pane_to_tab(window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &TogglePanePip, window, cx| this.toggle_pane_pip(window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &RestorePanePip, window, cx| this.restore_pane_pip(window, cx)),
+        )
+        .on_action(cx.listener(|this, _: &ParkPane, window, cx| this.park_active_pane(window, cx)))
         .on_action(cx.listener(|this, _: &RestoreParkedPane, window, cx| {
             this.preview_parked_pane(window, cx)
         }))
@@ -112,24 +112,28 @@ impl LyrelApp {
                 view.update(cx, |view, cx| view.clear_screen(cx));
             }
         }))
-        .on_action(cx.listener(|this, _: &RestartPaneShell, window, cx| {
-            this.restart_pane_shell(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &FocusNextPane, window, cx| {
-            this.cycle_pane(true, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &FocusPrevPane, window, cx| {
-            this.cycle_pane(false, window, cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &RestartPaneShell, window, cx| {
+                this.restart_pane_shell(window, cx)
+            }),
+        )
+        .on_action(
+            cx.listener(|this, _: &FocusNextPane, window, cx| this.cycle_pane(true, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &FocusPrevPane, window, cx| this.cycle_pane(false, window, cx)),
+        )
         .on_action(cx.listener(|this, _: &FocusPaneLeft, window, cx| {
             this.focus_pane_dir(Dir::Left, window, cx)
         }))
         .on_action(cx.listener(|this, _: &FocusPaneRight, window, cx| {
             this.focus_pane_dir(Dir::Right, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &FocusPaneUp, window, cx| {
-            this.focus_pane_dir(Dir::Up, window, cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &FocusPaneUp, window, cx| {
+                this.focus_pane_dir(Dir::Up, window, cx)
+            }),
+        )
         .on_action(cx.listener(|this, _: &FocusPaneDown, window, cx| {
             this.focus_pane_dir(Dir::Down, window, cx)
         }))
@@ -139,104 +143,91 @@ impl LyrelApp {
         .on_action(cx.listener(|this, _: &ResizePaneRight, window, cx| {
             this.resize_pane(Dir::Right, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &ResizePaneUp, window, cx| {
-            this.resize_pane(Dir::Up, window, cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &ResizePaneUp, window, cx| this.resize_pane(Dir::Up, window, cx)),
+        )
         .on_action(cx.listener(|this, _: &ResizePaneDown, window, cx| {
             this.resize_pane(Dir::Down, window, cx)
         }))
-        .on_action(cx.listener(|this, _: &SwapPaneNext, window, cx| {
-            this.swap_pane(true, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SwapPanePrev, window, cx| {
-            this.swap_pane(false, window, cx)
-        }))
         .on_action(
-            cx.listener(|this, _: &NextTab, window, cx| this.tab_switch(true, window, cx)),
+            cx.listener(|this, _: &SwapPaneNext, window, cx| this.swap_pane(true, window, cx)),
         )
         .on_action(
-            cx.listener(|this, _: &PrevTab, window, cx| this.tab_switch(false, window, cx)),
+            cx.listener(|this, _: &SwapPanePrev, window, cx| this.swap_pane(false, window, cx)),
         )
-        .on_action(cx.listener(|this, _: &SelectNextTab, window, cx| {
-            this.cycle_tab(true, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectPrevTab, window, cx| {
-            this.cycle_tab(false, window, cx)
-        }))
+        .on_action(cx.listener(|this, _: &NextTab, window, cx| this.tab_switch(true, window, cx)))
+        .on_action(cx.listener(|this, _: &PrevTab, window, cx| this.tab_switch(false, window, cx)))
         .on_action(
-            cx.listener(|this, _: &MoveTabLeft, _window, cx| this.move_tab(false, cx)),
+            cx.listener(|this, _: &SelectNextTab, window, cx| this.cycle_tab(true, window, cx)),
         )
         .on_action(
-            cx.listener(|this, _: &MoveTabRight, _window, cx| this.move_tab(true, cx)),
+            cx.listener(|this, _: &SelectPrevTab, window, cx| this.cycle_tab(false, window, cx)),
         )
-        .on_action(cx.listener(|this, _: &ActivateTab1, window, cx| {
-            this.activate_visual(0, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab2, window, cx| {
-            this.activate_visual(1, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab3, window, cx| {
-            this.activate_visual(2, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab4, window, cx| {
-            this.activate_visual(3, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab5, window, cx| {
-            this.activate_visual(4, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab6, window, cx| {
-            this.activate_visual(5, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab7, window, cx| {
-            this.activate_visual(6, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab8, window, cx| {
-            this.activate_visual(7, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ActivateTab9, window, cx| {
-            this.activate_visual(8, window, cx)
-        }))
+        .on_action(cx.listener(|this, _: &MoveTabLeft, _window, cx| this.move_tab(false, cx)))
+        .on_action(cx.listener(|this, _: &MoveTabRight, _window, cx| this.move_tab(true, cx)))
+        .on_action(
+            cx.listener(|this, _: &ActivateTab1, window, cx| this.activate_visual(0, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab2, window, cx| this.activate_visual(1, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab3, window, cx| this.activate_visual(2, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab4, window, cx| this.activate_visual(3, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab5, window, cx| this.activate_visual(4, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab6, window, cx| this.activate_visual(5, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab7, window, cx| this.activate_visual(6, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab8, window, cx| this.activate_visual(7, window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ActivateTab9, window, cx| this.activate_visual(8, window, cx)),
+        )
     }
 
     fn bind_navigation_actions(
         root: gpui_kit::Stateful<gpui_kit::Div>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        root
-        .on_action(cx.listener(|this, _: &IncreaseFontSize, _window, cx| {
+        root.on_action(cx.listener(|this, _: &IncreaseFontSize, _window, cx| {
             this.change_font_size(FONT_SIZE_STEP, cx)
         }))
         .on_action(cx.listener(|this, _: &DecreaseFontSize, _window, cx| {
             this.change_font_size(-FONT_SIZE_STEP, cx)
         }))
+        .on_action(cx.listener(|this, _: &ResetFontSize, _window, cx| this.reset_font_size(cx)))
         .on_action(
-            cx.listener(|this, _: &ResetFontSize, _window, cx| this.reset_font_size(cx)),
+            cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_search(window, cx)),
         )
         .on_action(
-            cx.listener(|this, _: &TogglePalette, window, cx| {
-                this.toggle_search(window, cx)
+            cx.listener(|this, _: &QuickOpenFile, window, cx| this.quick_open_file(window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ReopenClosedTab, window, cx| this.reopen_closed_tab(window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ToggleMaximizePane, window, cx| {
+                this.toggle_maximize(window, cx)
             }),
         )
-        .on_action(cx.listener(|this, _: &QuickOpenFile, window, cx| {
-            this.quick_open_file(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ReopenClosedTab, window, cx| {
-            this.reopen_closed_tab(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ToggleMaximizePane, window, cx| {
-            this.toggle_maximize(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
-            this.toggle_fullscreen(window, cx)
-        }))
         .on_action(
-            cx.listener(|this, _: &ToggleLeftPanel, _window, cx| {
-                this.toggle_left_panel(cx)
+            cx.listener(|this, _: &ToggleFullscreen, window, cx| {
+                this.toggle_fullscreen(window, cx)
             }),
         )
-        .on_action(cx.listener(|this, _: &ToggleRightPanel, _window, cx| {
-            this.toggle_right_panel(cx)
-        }))
+        .on_action(cx.listener(|this, _: &ToggleLeftPanel, _window, cx| this.toggle_left_panel(cx)))
+        .on_action(
+            cx.listener(|this, _: &ToggleRightPanel, _window, cx| this.toggle_right_panel(cx)),
+        )
         .on_action(cx.listener(|this, _: &ShowRightPanelInfo, _window, cx| {
             this.set_right_panel_tab(crate::core::config::RightPanelTab::Info, cx)
         }))
@@ -252,15 +243,13 @@ impl LyrelApp {
         .on_action(cx.listener(|this, _: &ShowRightPanelGitHub, _window, cx| {
             this.set_right_panel_tab(crate::core::config::RightPanelTab::GitHub, cx)
         }))
+        .on_action(cx.listener(|this, _: &ScmToggleGraph, _window, cx| this.scm_toggle_graph(cx)))
         .on_action(
-            cx.listener(|this, _: &ScmToggleGraph, _window, cx| this.scm_toggle_graph(cx)),
+            cx.listener(|this, _: &ToggleDiffViewMode, _window, cx| this.toggle_diff_view_mode(cx)),
         )
-        .on_action(cx.listener(|this, _: &ToggleDiffViewMode, _window, cx| {
-            this.toggle_diff_view_mode(cx)
-        }))
-        .on_action(cx.listener(|this, _: &ToggleDocumentFill, _window, cx| {
-            this.toggle_document_fill(cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &ToggleDocumentFill, _window, cx| this.toggle_document_fill(cx)),
+        )
         .on_action(cx.listener(|this, _: &DocumentWidthThird, _window, cx| {
             this.set_document_ratio(crate::core::config::DOCUMENT_RATIO_THIRD, cx)
         }))
@@ -320,22 +309,21 @@ impl LyrelApp {
         root: gpui_kit::Stateful<gpui_kit::Div>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        root
-        .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
-            this.toggle_settings(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &RestartDaemon, window, cx| {
-            this.restart_window_daemon(window, cx)
-        }))
-        .on_action(
-            cx.listener(|this, _: &ToggleSftp, window, cx| this.toggle_sftp(window, cx)),
+        root.on_action(
+            cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings(window, cx)),
         )
-        .on_action(cx.listener(|this, _: &ShowSshForwards, window, cx| {
-            this.show_ssh_forwards(window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &ToggleCodePanel, window, cx| {
-            this.toggle_code_panel(window, cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &RestartDaemon, window, cx| {
+                this.restart_window_daemon(window, cx)
+            }),
+        )
+        .on_action(cx.listener(|this, _: &ToggleSftp, window, cx| this.toggle_sftp(window, cx)))
+        .on_action(
+            cx.listener(|this, _: &ShowSshForwards, window, cx| this.show_ssh_forwards(window, cx)),
+        )
+        .on_action(
+            cx.listener(|this, _: &ToggleCodePanel, window, cx| this.toggle_code_panel(window, cx)),
+        )
         .on_action(cx.listener(|this, _: &EditorSave, window, cx| {
             if !this.editor_panel_has_focus(window, cx) {
                 cx.propagate();
@@ -398,9 +386,9 @@ impl LyrelApp {
             }
             this.lsp_find_references(window, cx)
         }))
-        .on_action(cx.listener(|this, _: &EditorNewFile, window, cx| {
-            this.editor_new_file(window, cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &EditorNewFile, window, cx| this.editor_new_file(window, cx)),
+        )
         // The gutter's change markers. Each one lets the chord through
         // when the editor is not focused or has nothing to do.
         .on_action(cx.listener(|this, _: &EditorNextChange, window, cx| {
@@ -418,9 +406,9 @@ impl LyrelApp {
                 cx.propagate();
             }
         }))
-        .on_action(cx.listener(|this, _: &ToggleEditorGitGutter, _, cx| {
-            this.toggle_editor_git_gutter(cx)
-        }))
+        .on_action(
+            cx.listener(|this, _: &ToggleEditorGitGutter, _, cx| this.toggle_editor_git_gutter(cx)),
+        )
         .on_action(cx.listener(|this, _: &EditorPeekChange, window, cx| {
             if !this.editor_gutter_peek_at_cursor(window, cx) {
                 cx.propagate();
@@ -439,8 +427,7 @@ impl LyrelApp {
         root: gpui_kit::Stateful<gpui_kit::Div>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        root
-        .on_action(
+        root.on_action(
             cx.listener(|this, _: &Quit, window, cx| this.quit_stop_sessions(window, cx)),
         )
         .on_action(cx.listener(|this, _: &OpenSshProfiles, window, cx| {
@@ -488,9 +475,7 @@ impl LyrelApp {
         .on_action(cx.listener(|this, _: &CopyAgentSessionId, window, cx| {
             this.copy_agent_session_id(this.tabs.active_index(), window, cx)
         }))
-        .on_action(
-            cx.listener(|this, _: &NewAgentTab, window, cx| this.new_agent_tab(window, cx)),
-        )
+        .on_action(cx.listener(|this, _: &NewAgentTab, window, cx| this.new_agent_tab(window, cx)))
         .on_action(cx.listener(|this, action: &LaunchAgent, window, cx| {
             this.launch_agent(action.agent, SpawnWhere::NewTab, window, cx)
         }))
@@ -503,8 +488,7 @@ impl LyrelApp {
         root: gpui_kit::Stateful<gpui_kit::Div>,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        root
-        .on_action(cx.listener(|this, _: &ShowKeyboardShortcuts, window, cx| {
+        root.on_action(cx.listener(|this, _: &ShowKeyboardShortcuts, window, cx| {
             this.open_settings_section(SettingsSection::Keybindings, window, cx)
         }))
         .on_action(cx.listener(|this, _: &About, window, cx| {
@@ -516,13 +500,9 @@ impl LyrelApp {
         .on_action(cx.listener(|_, _: &HideApp, _window, cx| cx.hide()))
         .on_action(cx.listener(|_, _: &HideOthers, _window, cx| cx.hide_other_apps()))
         .on_action(cx.listener(|_, _: &ShowAll, _window, cx| cx.unhide_other_apps()))
-        .on_action(
-            cx.listener(|_, _: &MinimizeWindow, window, _cx| window.minimize_window()),
-        )
+        .on_action(cx.listener(|_, _: &MinimizeWindow, window, _cx| window.minimize_window()))
         .on_action(cx.listener(|_, _: &ZoomWindow, window, _cx| window.zoom_window()))
-        .on_action(
-            cx.listener(|_, _: &OpenDocumentation, _window, cx| cx.open_url(DOCS_URL)),
-        )
+        .on_action(cx.listener(|_, _: &OpenDocumentation, _window, cx| cx.open_url(DOCS_URL)))
         .on_action(cx.listener(|_, _: &OpenProject, _window, cx| cx.open_url(PROJECT_URL)))
         .on_action(cx.listener(|_, _: &ReportIssue, _window, cx| cx.open_url(ISSUES_URL)))
     }

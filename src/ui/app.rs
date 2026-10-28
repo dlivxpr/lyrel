@@ -35,11 +35,11 @@ use crate::ui::session_lifecycle::{
 use crate::ui::settings::SettingsSection;
 use crate::ui::settings_window::SettingsWindow;
 use crate::ui::tab::presentation::{OpenedFrom, SpawnAs, inherited_start_dir};
-mod settings_bridge;
 mod actions;
 mod composition;
 mod initialization;
 mod pane_binding;
+mod settings_bridge;
 use crate::ui::theme::{apply_theme, set_menus};
 
 use crate::ui::window_chrome::{ChromeCommand, WindowChrome, window_controls_drawn};
@@ -508,7 +508,6 @@ pub(crate) fn window_background_image_layer(cx: &App) -> Option<gpui_kit::Div> {
 struct FullscreenHint;
 
 impl LyrelApp {
-
     pub(crate) fn save_session(&self, cx: &mut App) {
         session_lifecycle::record_window(
             self.workspace,
@@ -2450,7 +2449,11 @@ impl LyrelApp {
             }
             CloseOutcome::Collapsed => {
                 if let Some(leaf) = &focused {
-                    Self::kill_pane_off_thread(leaf.read(cx).pane_route(), leaf.read(cx).pane_id, cx);
+                    Self::kill_pane_off_thread(
+                        leaf.read(cx).pane_route(),
+                        leaf.read(cx).pane_id,
+                        cx,
+                    );
                 }
                 self.focus_active(window, cx);
                 self.save_session(cx);
@@ -4892,7 +4895,6 @@ impl Render for LyrelApp {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::close_reason;
@@ -4993,7 +4995,6 @@ mod tests {
         // widths used to leave it.
         assert!(narrow - SIDEBAR_MIN - PANEL_MIN >= 300.);
     }
-
 
     #[test]
     fn the_close_question_names_what_it_is_about_to_end() {
@@ -5759,13 +5760,11 @@ mod shell_menu_gpui_tests {
 #[path = "tab/tests_rename.rs"]
 mod rename_gpui_tests;
 
-
 // Zoom is a tab's view state: it rides with the tab across a switch, while a
 // layout change (drag, split, close) still clears it.
 #[cfg(test)]
 #[path = "tab/tests_zoom.rs"]
 mod zoom_gpui_tests;
-
 
 #[cfg(test)]
 #[path = "session_lifecycle/tests_window.rs"]
