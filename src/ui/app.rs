@@ -16,7 +16,6 @@ use crate::core::config::{
 };
 use crate::core::session::{Session, SessionTab, WorkspaceId, WorkspaceStore};
 use crate::core::shells::ShellInventory;
-use crate::core::ssh_config;
 use crate::core::window_state::{WindowGeometry as _, WindowState};
 use crate::daemon::protocol::{RemoteKind, ShellSpec};
 use crate::daemon::spawn::DaemonMismatch;
@@ -337,7 +336,7 @@ pub struct LyrelApp {
     pub(crate) status_metrics: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
     pub(crate) status_document_focus: Option<(TabId, bool)>,
-    pub(crate) connect: Option<crate::ui::remote_workspace::ConnectFlow>,
+    pub(crate) connect: crate::ui::remote_workspace::connection::WindowConnection,
     pub(crate) switcher: Option<crate::ui::switcher::Switcher>,
     pub(crate) host_snapshots: std::collections::HashMap<
         crate::ui::host_registry::HostId,
@@ -925,7 +924,7 @@ impl LyrelApp {
             status_metrics: None,
             notification_bell: cx.new(crate::ui::notification_history::NotificationBell::new),
             status_document_focus: None,
-            connect: None,
+            connect: Default::default(),
             switcher: None,
             host_snapshots: std::collections::HashMap::new(),
             remote_host_errors: std::collections::HashMap::new(),
@@ -1956,40 +1955,6 @@ impl LyrelApp {
             self.focus_active(window, cx);
         }
         cx.notify();
-    }
-
-    fn open_typed_ssh_connect(&mut self, input: &str, window: &mut Window, cx: &mut Context<Self>) {
-        match crate::ui::ssh_connect::input::parse_ssh_connect_input(input) {
-            Ok(parsed) => {
-                let (profile, proxy_jump) =
-                    match ssh_config::resolve_alias_to_profile(&parsed.profile.host) {
-                        Some(resolved) => {
-                            let mut p = resolved.profile;
-                            if !parsed.profile.user.is_empty() {
-                                p.user = parsed.profile.user;
-                            }
-                            if parsed.profile.port != 22 {
-                                p.port = parsed.profile.port;
-                            }
-                            if !parsed.profile.identity_files.is_empty() {
-                                p.identity_files = parsed.profile.identity_files;
-                            }
-                            (p, parsed.proxy_jump.or(resolved.proxy_jump))
-                        }
-                        None => (parsed.profile, parsed.proxy_jump),
-                    };
-                let verify = cx.global::<Config>().verify_host_keys;
-                let spec = crate::ui::ssh_connect::native_spec_from_transient_profile(
-                    &profile,
-                    proxy_jump,
-                    &crate::core::keychain::OsCredentialStore,
-                    verify,
-                    &crate::ui::ssh_connect::config_alias_resolver,
-                );
-                self.open_native_ssh_tab(Box::new(spec), None, window, cx);
-            }
-            Err(reason) => self.push_ssh_connect_error(reason, cx),
-        }
     }
 
     pub(crate) fn toggle_left_panel(&mut self, cx: &mut Context<Self>) {
