@@ -60,6 +60,7 @@ Windows 下此 Bash 检查需 LF 工作树：CRLF 脚本会报 `$'\r': command n
 
 - `AGENTS.md` 使用简体中文。
 - GitHub issue 的标题、正文与评论使用英文。
+- GitHub PR 的标题与正文使用英文。
 - Git 提交信息使用英文。
 - GitHub Release 标题仅使用版本标签（如 `v0.1.2`），不使用 Git 提交信息；变更说明写入正文。
 - `docs/` 下的文档使用简体中文；代码、命令、路径与 API 名保留原文。
