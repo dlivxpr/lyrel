@@ -19,7 +19,8 @@ use crate::terminal::pane_liveness::Liveness;
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::remote_connect::{self, HostChoice, RemoteWorkspaceRow};
-use crate::ui::remote_workspace::{ConnectFlow, MachineStatus, RemoteLinks};
+use crate::ui::remote_workspace::connection::ConnectionState;
+use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
 
 const CARD_W: f32 = 760.0;
 
@@ -106,16 +107,16 @@ fn link_is_engaged(link: Link) -> bool {
 /// now from one nobody has ever connected to: the pump drops the entry the
 /// moment the link dies, and the group then collapses as if it were empty.
 fn link_from(
-    connect: Option<&ConnectFlow>,
+    connect: Option<&ConnectionState>,
     target: &RemoteTarget,
     supervised: Option<&MachineStatus>,
     has_link: bool,
 ) -> Link {
     match connect {
-        Some(ConnectFlow::Connecting { choice }) if &choice.target == target => {
+        Some(ConnectionState::Connecting { choice }) if &choice.target == target => {
             return Link::Connecting;
         }
-        Some(ConnectFlow::Failed { choice, .. }) if &choice.target == target => {
+        Some(ConnectionState::Failed { choice, .. }) if &choice.target == target => {
             return Link::Failed;
         }
         _ => {}
@@ -702,9 +703,7 @@ impl LyrelApp {
 
     pub(crate) fn close_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.switcher.take().is_some() {
-            if matches!(self.connect, Some(ConnectFlow::Failed { .. })) {
-                self.connect = None;
-            }
+            self.connect.dismiss_failure(None);
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -951,7 +950,7 @@ impl LyrelApp {
             // regardless of what happened to the profile that made them.
             group.parked =
                 group.link != Link::Connected && !remote_connect::route_resolvable(cx, &target);
-            if let Some(ConnectFlow::Failed { choice, error }) = &self.connect
+            if let Some(ConnectionState::Failed { choice, error }) = self.connect.state()
                 && choice.target == target
             {
                 group.error = Some(error.clone());
@@ -1111,7 +1110,7 @@ impl LyrelApp {
             .values()
             .map(|s| s.target.clone())
             .collect();
-        if let Some(choice) = self.connect.as_ref().and_then(ConnectFlow::choice) {
+        if let Some(choice) = self.connect.choice() {
             out.push(choice.target.clone());
         }
         out
@@ -1124,7 +1123,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Link {
         let has_link = remote_connect::HostLinks::get(cx, target.host_id()).is_some();
-        link_from(self.connect.as_ref(), target, supervised, has_link)
+        link_from(self.connect.state(), target, supervised, has_link)
     }
 
     fn switcher_open(
@@ -1186,14 +1185,7 @@ impl LyrelApp {
         // the platform callback, so the whole process aborts.
         let host = target.host_id();
         cx.defer(move |cx| crate::ui::remote_workspace::RemoteLinks::disconnect(cx, host));
-        if self
-            .connect
-            .as_ref()
-            .and_then(ConnectFlow::choice)
-            .is_some_and(|c| &c.target == target)
-        {
-            self.connect = None;
-        }
+        self.connect.retire_target(target);
         // A create still waiting on this machine's link dies with the link:
         // calling the connect off is calling the create off, or the next
         // successful connect would grow a workspace nobody asked it for.
@@ -2115,8 +2107,8 @@ impl LyrelApp {
                                 move |this, _, _window, cx| {
                                     let ours = this.remote_host_errors.remove(&retry_key).is_some()
                                         || matches!(
-                                            &this.connect,
-                                            Some(ConnectFlow::Failed { choice, .. })
+                                            this.connect.state(),
+                                            Some(ConnectionState::Failed { choice, .. })
                                                 if Some(&choice.target) == retry.target.as_ref()
                                         );
                                     if let Some(target) = retry.target.clone() {
@@ -2206,10 +2198,8 @@ impl LyrelApp {
                                 // failed connect. Retire that too, but only when
                                 // it is this host's failure — a connect to
                                 // anywhere else is still in flight.
-                                if let Some(ConnectFlow::Failed { choice, .. }) = &this.connect
-                                    && Some(&choice.target) == dismiss_target.as_ref()
-                                {
-                                    this.connect = None;
+                                if let Some(target) = dismiss_target.as_ref() {
+                                    this.connect.dismiss_failure(Some(target));
                                 }
                                 // Dismissing the refusal is giving up on the
                                 // machine, and the create parked on it goes
@@ -2386,10 +2376,8 @@ impl LyrelApp {
                                 // failure that predated the parking — retire it
                                 // too, or it pops right back as the error block.
                                 this.remote_host_errors.remove(&dismiss_key);
-                                if let Some(ConnectFlow::Failed { choice, .. }) = &this.connect
-                                    && Some(&choice.target) == dismiss_target.as_ref()
-                                {
-                                    this.connect = None;
+                                if let Some(target) = dismiss_target.as_ref() {
+                                    this.connect.dismiss_failure(Some(target));
                                 }
                                 cx.notify();
                             },
@@ -3771,7 +3759,7 @@ mod tests {
     fn this_windows_own_attempt_is_only_ever_about_its_own_machine() {
         let build = RemoteTarget::direct("me", "build-box", 22);
         let gpu = RemoteTarget::direct("me", "gpu-lab", 22);
-        let flow = ConnectFlow::Connecting {
+        let flow = ConnectionState::Connecting {
             choice: HostChoice {
                 target: gpu,
                 label: "gpu-lab".into(),
