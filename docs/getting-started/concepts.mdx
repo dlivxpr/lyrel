@@ -386,6 +386,16 @@ lyrel -m devbox ls
 远程窗格运行在远程机器上——文件、仓库、git 数据和进程树都在那里。
 [远程工作区 →](/remote/workspaces)
 
+### 机器树的事务与恢复
+
+daemon 是机器树的持久化权威，`lyrel-core::core::machine` 是 GUI、CLI 和 server 共用的 canonical interface。内部 `model` 与 `layout` 保存机器／工作区／标签页／窗格的领域定义和纯布局操作，`operations` 负责无副作用的校验与记录整理；`store` 中的 `MachineStore` 仍是唯一事务 interface，工作区、标签页、窗格、sidecar 与事实观察都不能绕过它另建 feature store。
+
+结构变更沿用 `notify_order` → `state` 的加锁顺序：在状态锁内完成修改和同步持久化，失败先回滚，再返回错误；只有成功接受后才释放状态锁并按原顺序通知订阅者，通知期间仍持有顺序锁。订阅列表只在复制回调时加锁，回调运行时不持有状态锁或订阅锁，发起操作的订阅者仍不接收自己的 delta。窗格事实和工作区活跃时间保留原有延迟写盘策略，由同一个 store 的弱引用定时线程刷新；它们不被改成异步发布，也不承诺每次通知前已经落盘。连接 attachment 仍只存在于内存，不随机器树写盘。
+
+`persistence` 负责现有 `machine.json` 格式、原子私有写入、三代间隔备份、损坏文件隔离与恢复；store 负责决定何时写入以及失败后的回滚／重试标记。有效主文件优先，损坏或不可读取时沿用现有备份恢复规则，不重建已有工作区／标签页／窗格 ID；启动读回的窗格等待原有复活流程。`paths` 负责 `LYREL_DATA_DIR` 优先于实例配置目录的解析及 daemon 启动时的既有旧目录接管规则，路径查询本身不移动数据。`appearance` 单独保存 GUI 最后应用的明暗提示，保持缺失／损坏时采用浅色默认值和未变化时不写盘的语义，不取得机器树写入权。
+
+窗口侧 `MachineMirrors` 仍独立维护客户端镜像：拉取期间的本地操作按原规则重放到返回的快照之上，避免旧快照撤销新操作。它不与 daemon store 合并，也不接管事务、持久化或恢复。
+
 <a id="the-three-environment-variables"></a>
 ## 三个环境变量
 
