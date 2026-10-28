@@ -166,7 +166,7 @@ impl SettingsWindow {
             use crate::ui::i18n::{L10nKey, t};
             for (input, key) in [
                 (&s.search, L10nKey::SearchSettings),
-                (&s.ssh_filter, L10nKey::FilterHosts),
+                (s.ssh.filter(), L10nKey::FilterHosts),
                 (&s.shortcut_search, L10nKey::SettingsSearchShortcuts),
                 (&s.agent_query, L10nKey::SettingsSearchAgents),
                 (&s.shell_args_input, L10nKey::AppPlaceholderNone),
