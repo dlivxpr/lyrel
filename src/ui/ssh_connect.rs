@@ -1,8 +1,8 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, HashSet};
 
-use gpui_kit::{Context, Window};
 use crate::core::ssh_config;
+use gpui_kit::{Context, Window};
 use uuid::Uuid;
 
 use crate::core::config::Config;

@@ -93,9 +93,7 @@ impl WindowConnection {
             return None;
         };
         match result {
-            Ok(connected) => {
-                Some(ConnectionOutcome::Connected { choice, connected })
-            }
+            Ok(connected) => Some(ConnectionOutcome::Connected { choice, connected }),
             Err(error) => {
                 self.state = Some(ConnectionState::Failed {
                     choice: choice.clone(),
@@ -170,9 +168,7 @@ impl LyrelApp {
             let mut painted: Option<crate::daemon::install::InstallPhase> = None;
             loop {
                 let connecting = this
-                    .update(cx, |this, _| {
-                        this.connect.is_connecting(attempt)
-                    })
+                    .update(cx, |this, _| this.connect.is_connecting(attempt))
                     .unwrap_or(false);
                 if !connecting {
                     return;
@@ -288,7 +284,10 @@ mod tests {
             outcome,
             Some(ConnectionOutcome::Failed { error, .. }) if error == "new failure"
         ));
-        assert!(flow.complete(replacement, Err("duplicate".into())).is_none());
+        assert!(
+            flow.complete(replacement, Err("duplicate".into()))
+                .is_none()
+        );
         assert!(!flow.dismiss_failure(Some(&choice("other").target)));
         assert!(flow.dismiss_failure(Some(&choice("build").target)));
         assert!(flow.choice().is_none());
@@ -318,8 +317,10 @@ mod tests {
             assert!(app.host_snapshots.is_empty());
             app.finish_connect(new, Err("new failure".into()), window, cx);
             assert!(app.pending_create.is_none());
-            assert!(matches!(app.connect.state(), Some(ConnectionState::Failed { choice, error })
-                if choice.target == self::choice("new-machine").target && error == "new failure"));
+            assert!(
+                matches!(app.connect.state(), Some(ConnectionState::Failed { choice, error })
+                if choice.target == self::choice("new-machine").target && error == "new failure")
+            );
         });
     }
 }

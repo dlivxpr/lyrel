@@ -589,7 +589,11 @@ impl LyrelApp {
     }
 
     fn connection_failed_for_create(&mut self, target: &RemoteTarget, error: &str) {
-        if self.pending_create.as_ref().is_some_and(|p| &p.target == target) {
+        if self
+            .pending_create
+            .as_ref()
+            .is_some_and(|p| &p.target == target)
+        {
             if crate::daemon::control::is_dialect_refusal(error) {
                 self.parked_create = self.pending_create.take();
             } else {
@@ -597,7 +601,6 @@ impl LyrelApp {
             }
         }
     }
-
 
     /// The create waiting on this machine's link, wherever it waits: parked on
     /// the app by the form (`pending_create`), or set aside by a dialect
@@ -2680,7 +2683,9 @@ mod tests {
 
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
         let choice = HostChoice {
-            target: RemoteTarget::Alias { alias: "late-box".into() },
+            target: RemoteTarget::Alias {
+                alias: "late-box".into(),
+            },
             label: "late-box".into(),
             detail: String::new(),
         };
@@ -2744,7 +2749,12 @@ mod tests {
         // ends in the same place.
         app.update_in(&mut vcx, |app, window, cx| {
             let attempt = app.connect.begin(choice.clone());
-            app.finish_connect(attempt, Ok(fake_connected("lyrel-test-refused-box")), window, cx);
+            app.finish_connect(
+                attempt,
+                Ok(fake_connected("lyrel-test-refused-box")),
+                window,
+                cx,
+            );
         });
 
         app.update(cx, |app, cx| {
@@ -2872,7 +2882,6 @@ mod tests {
         assert!(!RemoteStatus::Connecting.accepts_input());
         assert!(!RemoteStatus::Failed("x".into()).accepts_input());
     }
-
 
     /// What the comparison itself answers is pinned where it now lives, in
     /// `tree_sync`. What is this module's own is the slot it reads: one per
