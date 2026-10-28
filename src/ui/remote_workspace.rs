@@ -13,7 +13,7 @@ use crate::daemon::control::{ControlEvent, ControlRequest, ReplyOk};
 use crate::daemon::install::InstallDecision;
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::remote_connect::{self, HostChoice, RemoteWorkspaceRow};
+use crate::ui::remote_connect::{self, RemoteWorkspaceRow};
 
 pub(crate) mod connection;
 
@@ -2382,6 +2382,7 @@ pub(crate) fn workspace_is_preempted(cx: &gpui_kit::App, workspace: WorkspaceId)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::remote_connect::HostChoice;
 
     /// The per-workspace relink clock: a miss puts the workspace on the next
     /// backoff step, panes all found their way back retires the entry — so a
@@ -2715,7 +2716,9 @@ mod tests {
             );
             assert_eq!(app.workspace, before);
             assert_eq!(
-                app.connect.server_replaced(&target, "refused-box").is_some(),
+                app.connect
+                    .server_replaced(&target, "refused-box")
+                    .is_some(),
                 refused,
             );
         });
@@ -2800,7 +2803,9 @@ mod tests {
                 None => panic!("the replacement kicks a connect at the machine"),
             }
             assert!(
-                app.connect.server_replaced(&target, "refused-box").is_some(),
+                app.connect
+                    .server_replaced(&target, "refused-box")
+                    .is_some(),
                 "the create keeps waiting for that connect to land"
             );
         });

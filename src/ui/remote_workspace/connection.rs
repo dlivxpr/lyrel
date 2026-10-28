@@ -481,7 +481,10 @@ mod tests {
 
         flow.queue_create(build.target.clone(), Some("failed".into()));
         let dial = flow.begin(build.clone());
-        assert!(flow.complete(dial, Err("connection refused".into())).is_some());
+        assert!(
+            flow.complete(dial, Err("connection refused".into()))
+                .is_some()
+        );
         let retry = flow.begin(build.clone());
         assert!(flow.complete(retry, Err(dialect_refusal())).is_some());
         assert!(flow.server_replaced(&build.target, "build").is_none());
@@ -509,8 +512,6 @@ mod tests {
     fn a_late_window_result_cannot_redirect_a_replacement_or_its_create(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use gpui_kit::VisualContext as _;
-
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
         app.update_in(&mut vcx, |app, window, cx| {
             let old = app.connect.begin(choice("old-machine"));

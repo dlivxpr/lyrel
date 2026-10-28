@@ -3546,8 +3546,6 @@ mod tests {
     fn a_waiting_create_survives_panel_close_but_not_machine_disconnect(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use gpui_kit::VisualContext as _;
-
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
         // An absent profile fails route preparation without touching SSH or
         // credentials. The retry below supplies a real protocol refusal input.
