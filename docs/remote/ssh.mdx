@@ -254,6 +254,12 @@ if status != "DONE":
 密码、密钥口令和双重验证提示会在窗格内以浮层形式显示，并在适用时提供
 **记住（钥匙串）**选项。
 
+手动 SSH 文本由 `ssh_connect::input` 解析，`ssh_connect` 的窗口适配负责别名覆盖、凭据交接与原生 pane 打开；
+解析器不拨号、不保存配置，也不成为工作台根模块的一部分。已有远程机器的整工作区连接则由
+`remote_workspace::connection::WindowConnection` 持有窗口级尝试身份，和单个原生 SSH pane 的会话生命周期分开。
+两条入口继续复用现有 `SshPrompt`，共享机器连接仍由 `RemoteLinks` 监督；取消认证不会创建第二套连接或终端。
+
+
 GSSAPI 仅在启用 `gssapi` feature 的 Unix 构建中可用，使用系统 Kerberos 凭据，
 不会把票据存入 lyrel 配置或钥匙串。Linux 源码构建需要 Kerberos 开发库
 （Ubuntu 的 `libkrb5-dev`），可用 `LIBGSSAPI_IMPL=mit` 明确选择 MIT 实现。

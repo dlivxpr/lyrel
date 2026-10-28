@@ -347,7 +347,6 @@ mod strip_layout_tests {
     use crate::core::session::{RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceStore};
     use crate::daemon::install::{InstallPhase, InstallProgress as _};
     use crate::ui::remote_connect::HostChoice;
-    use crate::ui::remote_workspace::ConnectFlow;
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
 
     fn box_at(port: u16) -> RemoteTarget {
@@ -390,14 +389,12 @@ mod strip_layout_tests {
         }
         if let Some(error) = failure {
             app.update_in(&mut vcx, |app, _, _| {
-                app.connect = Some(ConnectFlow::Failed {
-                    choice: HostChoice {
-                        target: target.clone(),
-                        label: "build-box".into(),
-                        detail: String::new(),
-                    },
-                    error: error.to_string(),
+                let attempt = app.connect.begin(HostChoice {
+                    target: target.clone(),
+                    label: "build-box".into(),
+                    detail: String::new(),
                 });
+                app.connect.complete(attempt, Err(error.to_string()));
             });
         }
         vcx.simulate_resize(size(px(width), px(900.)));
