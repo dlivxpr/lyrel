@@ -1,5 +1,5 @@
 use super::*;
-use crate::terminal::input::TerminalInputHandler;
+use crate::terminal::view::input::TerminalInputHandler;
 use gpui_kit::InputHandler;
 
 #[gpui_kit::test]
