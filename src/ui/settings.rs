@@ -331,7 +331,7 @@ pub(crate) struct SettingsState {
     pub(crate) navigation: navigation::SettingsNavigation,
     pub(crate) usage: Entity<usage::UsagePage>,
     pub(crate) skills: skills::SkillsState,
-    pub(crate) shortcut_search: Entity<InputState>,
+    pub(crate) shortcuts: shortcuts::ShortcutEditor,
     pub(crate) save_error: Option<String>,
     pub(crate) saved_config: Config,
     /// The families the font menus list, read once when the page opens.
@@ -353,11 +353,6 @@ pub(crate) struct SettingsState {
     /// Whatever held keyboard focus when the page was last drawn, so a text
     /// field can draw its focus ring from a builder that has no `Window`.
     pub(crate) focused: RefCell<Option<gpui_kit::FocusHandle>>,
-    /// A recorded shortcut that another action already answers to, held until
-    /// the user says whether to take it over.
-    pub(crate) kb_conflict: Option<KeyConflict>,
-    pub(crate) recording: Option<Recording>,
-    pub(crate) rebinding_note: Option<String>,
     pub(crate) ssh_form: Option<SshProfileForm>,
     /// The host whose row is expanded to show its details.
     pub(crate) ssh_open: Option<Uuid>,
@@ -387,12 +382,6 @@ pub(crate) struct SettingsState {
     pub(crate) _subs: Vec<Subscription>,
 }
 
-/// A recorded chord and the action it would be taken from.
-pub(crate) struct KeyConflict {
-    pub(crate) action: String,
-    pub(crate) spec: String,
-    pub(crate) other: String,
-}
 
 #[derive(Clone)]
 pub(crate) enum AgentHooksView {
@@ -630,11 +619,6 @@ impl ForwardRuleForm {
     }
 }
 
-pub(crate) struct Recording {
-    pub(crate) action: String,
-    pub(crate) chords: Vec<String>,
-    pub(crate) _intercept: Subscription,
-}
 
 pub(crate) fn font_default_label() -> &'static str {
     t(L10nKey::SettingsFontDefault)

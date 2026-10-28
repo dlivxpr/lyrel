@@ -65,7 +65,6 @@ pub(crate) struct SettingsWindow {
     pub(crate) settings_row_width: Cell<f32>,
     pub(crate) settings_viewport_w: Cell<f32>,
     pub(crate) last_settings_location: SettingsLocation,
-    pub(crate) record_gen: u64,
     title: &'static str,
     pub(crate) window: gpui_kit::AnyWindowHandle,
     pub(crate) subscriptions: Vec<Subscription>,
@@ -108,7 +107,6 @@ impl SettingsWindow {
             settings_row_width: Cell::new(f32::MAX),
             settings_viewport_w: Cell::new(f32::MAX),
             last_settings_location: location,
-            record_gen: 0,
             title,
             window: window.window_handle(),
             subscriptions: vec![config_watch, activation_watch, bounds_watch],
@@ -127,15 +125,15 @@ impl SettingsWindow {
     pub(crate) fn recording_shortcut(&self) -> bool {
         self.settings
             .as_ref()
-            .is_some_and(|s| s.recording.is_some())
+            .is_some_and(|s| s.shortcuts.is_recording())
     }
     pub(crate) fn close_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(state) = self.settings.take() {
+        if let Some(mut state) = self.settings.take() {
+            state.shortcuts.retire();
             state
                 .usage
                 .update(cx, |page, cx| page.set_visible(false, cx));
             self.last_settings_location = state.navigation.location();
-            self.record_gen = self.record_gen.wrapping_add(1);
             cx.emit(SettingsEvent::Closed(self.last_settings_location));
             cx.notify();
         }
@@ -158,7 +156,7 @@ impl SettingsWindow {
             for (input, key) in [
                 (s.navigation.search(), L10nKey::SearchSettings),
                 (&s.ssh_filter, L10nKey::FilterHosts),
-                (&s.shortcut_search, L10nKey::SettingsSearchShortcuts),
+                (s.shortcuts.search(), L10nKey::SettingsSearchShortcuts),
                 (&s.agent_query, L10nKey::SettingsSearchAgents),
                 (&s.shell_args_input, L10nKey::AppPlaceholderNone),
                 (

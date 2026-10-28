@@ -19,7 +19,7 @@ fn enter_on_a_shortcut_search_result_opens_its_local_filter(cx: &mut TestAppCont
         assert!(state.navigation.section() == SettingsSection::Keybindings);
         assert!(!state.navigation.is_searching());
         assert_eq!(
-            state.shortcut_search.read(cx).value().as_str(),
+            state.shortcuts.search().read(cx).value().as_str(),
             "SplitRight"
         );
     });

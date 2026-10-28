@@ -80,15 +80,7 @@ impl SettingsWindow {
             }),
         );
 
-        let shortcut_search = cx
-            .new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSearchShortcuts)));
-        subs.push(
-            cx.subscribe_in(&shortcut_search, window, |_, _, ev, _, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
+        let shortcuts = shortcuts::ShortcutEditor::new(window, cx);
 
         let ssh_filter = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::FilterHosts))
@@ -114,7 +106,7 @@ impl SettingsWindow {
             navigation,
             usage,
             skills,
-            shortcut_search,
+            shortcuts,
             font_names,
             shell_program_input,
             shell_args_input,
@@ -129,9 +121,6 @@ impl SettingsWindow {
             menu_hi: 0,
             menu_scroll: gpui_kit::ScrollHandle::new(),
             focused: std::cell::RefCell::new(None),
-            kb_conflict: None,
-            recording: None,
-            rebinding_note: None,
             ssh_form: None,
             ssh_open: None,
             ssh_show_all: false,
@@ -171,7 +160,7 @@ impl SettingsWindow {
     ) {
         if let Some(s) = self.settings.as_mut() {
             let moved = s.navigation.select_section(target);
-            s.recording = None;
+            s.shortcuts.cancel_recording();
             if moved {
                 s.theme.leave_page();
             }

@@ -900,7 +900,7 @@ impl SettingsWindow {
                     return;
                 }
                 if let Some(s) = this.active_settings_mut()
-                    && s.kb_conflict.take().is_some()
+                    && s.shortcuts.cancel_conflict()
                 {
                     cx.notify();
                     cx.stop_propagation();
@@ -1338,7 +1338,7 @@ impl SettingsWindow {
         self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
             this.navigate_settings(SettingsSection::Keybindings, None, window, cx);
             if let Some(s) = this.active_settings() {
-                s.shortcut_search
+                s.shortcuts.search()
                     .clone()
                     .update(cx, |s, cx| s.set_value(action, window, cx));
             }
