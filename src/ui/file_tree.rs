@@ -24,6 +24,10 @@ use gpui_kit::{
     PromptLevel, SharedString, Subscription, Window, div, px,
 };
 
+mod lifecycle;
+
+pub(crate) use lifecycle::{IndexKey, searchable_roots};
+
 // The tree is laid out the way every other list in this panel is: the column
 // sits `CONTENT_INSET` in and each row pads itself a further `ROW_INSET`, so a
 // depth-0 chevron lands on the panel's 20px text column — the search glyph's —
@@ -208,16 +212,16 @@ pub(crate) struct FileTreeState {
     /// A project root's real path, where it differs from the root as spelled
     /// (`/tmp/x` → `/private/tmp/x`, a symlinked checkout). The editor opens
     /// files by their real path, so this is how a file finds the root it is
-    /// under — see [`LyrelApp::project_spelling`].
+    /// under — see [`FileTreeState::project_spelling`].
     root_aliases: ByHost<PathBuf, PathBuf>,
     repo_root_loads: InFlight<DirKey>,
     search: SearchState,
     /// Every file under the project, for the search's Files tab
     /// (`ui::search::files`). Kept here, beside the tree it is a flat copy of,
     /// so it outlives the search it was walked for.
-    pub(crate) quick_open: crate::ui::search::FileIndexStore,
+    quick_open: lifecycle::FileIndexStore,
     pub(crate) show_hidden: bool,
-    pub(crate) editing: Option<TreeEdit>,
+    editing: Option<TreeEdit>,
     editing_subs: Vec<Subscription>,
     watch: Option<Arc<WatchSub>>,
     watch_host: Option<SharedHost>,
@@ -298,11 +302,7 @@ impl FileTreeState {
                 cx,
                 move |_| sub.set_dirs(&want),
                 |app: &mut LyrelApp, result: std::io::Result<()>, cx| {
-                    app.file_tree.watch_busy = false;
-                    if let Err(e) = result {
-                        log::warn!("file tree: could not update the watched set: {e}");
-                    }
-                    if std::mem::take(&mut app.file_tree.watch_dirty) {
+                    if app.file_tree.finish_watch_update(result) {
                         let want = app.file_tree.watched.clone();
                         let Some(host) = app.active_host(cx) else {
                             return;
@@ -328,17 +328,11 @@ impl FileTreeState {
                 move |h| h.watch(&want).map(Arc::new)
             },
             move |app, result: std::io::Result<Arc<WatchSub>>, cx| {
-                app.file_tree.watch_opening = false;
-                let sub = match result {
-                    Ok(sub) => sub,
-                    Err(e) => {
-                        log::warn!("file tree: watcher unavailable: {e}");
-                        return;
-                    }
+                let Some((events, retry)) = app.file_tree.finish_watch_open(
+                    result, opened_host, &opened_with,
+                ) else {
+                    return;
                 };
-                let events = sub.events().clone();
-                app.file_tree.watch = Some(sub);
-                app.file_tree.watch_host = Some(opened_host);
                 cx.spawn(async move |app, cx| {
                     while let Ok(batch) = events.recv().await {
                         let ok = app.update(cx, |app, _cx| {
@@ -350,7 +344,7 @@ impl FileTreeState {
                     }
                 })
                 .detach();
-                if app.file_tree.watched != opened_with {
+                if retry {
                     let want = app.file_tree.watched.clone();
                     let Some(host) = app.active_host(cx) else {
                         return;
@@ -426,26 +420,19 @@ impl FileTreeState {
                 }
             },
             move |app, (readable, entries), cx| {
-                if readable {
-                    app.file_tree.unreadable.remove(&key);
-                } else {
-                    app.file_tree.unreadable.insert(key.clone());
-                }
-                let landed = app.file_tree.land_load(&key, id, dir.clone(), entries);
+                let host = app.active_host(cx);
+                let landed = app.file_tree.finish_listing(
+                    &key, dir.clone(), readable, entries, host.as_ref().map(|host| host.id()),
+                );
                 if landed.changed {
                     cx.notify();
                 }
                 if !landed.superseded {
                     return;
                 }
-                let Some(host) = app.active_host(cx) else {
-                    return;
-                };
-                if host.id() != id {
-                    return;
+                if let Some(host) = host {
+                    app.file_tree.spawn_load(&host, dir, root, cx);
                 }
-                app.file_tree.loads.begin(key);
-                app.file_tree.spawn_load(&host, dir, root, cx);
             },
         );
     }
@@ -482,7 +469,7 @@ impl FileTreeState {
         cx.spawn(async move |app, cx| {
             cx.background_executor().timer(SEARCH_DEBOUNCE).await;
             let _ = app.update(cx, |app, cx| {
-                if app.file_tree.search.generation != generation {
+                if !app.file_tree.search_is_current(generation) {
                     return;
                 }
                 let Some(host) = app.active_host(cx) else {
@@ -512,7 +499,7 @@ impl FileTreeState {
                         (ok, hits)
                     },
                     move |app, (ok, hits), cx| {
-                        if app.file_tree.search.accept(generation, ok, hits) {
+                        if app.file_tree.finish_search(generation, ok, hits) {
                             cx.notify();
                         }
                     },
@@ -770,12 +757,10 @@ impl LyrelApp {
         let Some((host, mut roots)) = self.project_roots(cx) else {
             return;
         };
-        if roots.is_empty()
-            && id.is_local()
-            && let Some(home) = std::env::var_os("HOME")
-        {
-            roots.push(PathBuf::from(home));
-        }
+        let home = (roots.is_empty() && id.is_local())
+            .then(|| std::env::var_os("HOME").map(PathBuf::from))
+            .flatten();
+        roots = lifecycle::browsable_roots(roots, home);
         let _ = window;
         let Some(code) = self.tab_code_mut_or_init() else {
             return;
@@ -801,8 +786,14 @@ impl LyrelApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<(SharedHost, Vec<PathBuf>)> {
-        let id = self.spawn_host(cx);
         let host = self.active_host(cx)?;
+        let cwds = self.file_project_cwds(cx);
+        let roots = self.file_tree.resolve_project_roots(&host, &cwds, cx)?;
+        Some((host, roots))
+    }
+
+    pub(crate) fn file_project_cwds(&self, cx: &App) -> Vec<PathBuf> {
+        let id = self.spawn_host(cx);
         let leaves = match self.tabs.get(self.tabs.active_index()) {
             Some(tab) => tab.pane.terminals(),
             None => Vec::new(),
@@ -813,27 +804,11 @@ impl LyrelApp {
         // in the wrong one *visibly*, since the cwd row directly above this
         // tree already follows the agent. It is also what spells a WSL pane's
         // POSIX cwd through the distro's share, which `host` can read (#896).
-        let cwds: Vec<PathBuf> = leaves
+        leaves
             .iter()
             .filter(|leaf| leaf.read(cx).host_id() == id)
             .filter_map(|leaf| leaf.read(cx).files_cwd())
-            .collect();
-        let mut roots: Vec<PathBuf> = Vec::new();
-        let mut resolved = true;
-        for cwd in &cwds {
-            match self.file_tree.repo_roots.get(id, cwd) {
-                Some(root) => {
-                    if !roots.contains(root) {
-                        roots.push(root.clone());
-                    }
-                }
-                None => {
-                    resolved = false;
-                    self.file_tree_request_repo_root(&host, cwd.clone(), cx);
-                }
-            }
-        }
-        resolved.then_some((host, roots))
+            .collect()
     }
 
     fn file_tree_sync_watch(&mut self, host: SharedHost, cx: &mut Context<Self>) {
@@ -848,39 +823,6 @@ impl LyrelApp {
         }
     }
 
-    fn file_tree_request_repo_root(
-        &mut self,
-        host: &SharedHost,
-        cwd: PathBuf,
-        cx: &mut Context<Self>,
-    ) {
-        let id = host.id();
-        let key: DirKey = (id, cwd.clone());
-        if !self.file_tree.repo_root_loads.begin(key.clone()) {
-            return;
-        }
-        HostOps::run(
-            host.clone(),
-            cx,
-            {
-                let cwd = cwd.clone();
-                move |h| {
-                    let root = h.repo_root(&cwd).ok().flatten().unwrap_or(cwd);
-                    let real = h.canonicalize(&root).ok().filter(|real| *real != root);
-                    (root, real)
-                }
-            },
-            move |app, (root, real), cx| {
-                if app.file_tree.repo_root_loads.finish(&key) {
-                    if let Some(real) = real {
-                        app.file_tree.root_aliases.insert(id, root.clone(), real);
-                    }
-                    app.file_tree.repo_roots.insert(id, cwd, root);
-                }
-                cx.notify();
-            },
-        );
-    }
 
     pub(crate) fn file_tree_on_screen(&self, cx: &App) -> bool {
         self.right_panel_open(cx)
@@ -913,15 +855,6 @@ impl LyrelApp {
         );
         let on_screen = self.file_tree_on_screen(cx);
         let listings_on_screen = self.file_tree_listings_on_screen(cx);
-        let mut roots_moved = false;
-        if paths.iter().any(|p| {
-            p.file_name().is_some_and(|n| n == ".git")
-                || p.parent()
-                    .and_then(Path::file_name)
-                    .is_some_and(|n| n == ".git")
-        }) {
-            roots_moved = self.file_tree.invalidate_repo_roots();
-        }
         // Working-tree edits the source control cache has no other way to hear
         // about. Anything under `.git` is skipped: the repository has its own
         // watch, and routing it through here would only double the events that
@@ -937,35 +870,16 @@ impl LyrelApp {
             }
         }
 
-        let gitignore_touched = paths
-            .iter()
-            .any(|p| p.file_name().is_some_and(|n| n == ".gitignore"));
-        if gitignore_touched && self.file_tree.gitignore_reaches_tree(host, paths) {
-            self.file_tree.invalidate_all();
-            if on_screen {
-                cx.notify();
-            }
-        } else {
-            let mut touched = false;
-            for dir in dirs_to_relist(paths, self.file_tree.show_hidden) {
-                touched |= self.file_tree.invalidate_dir(host, dir);
-            }
-            if roots_moved && on_screen {
-                cx.notify();
-            }
-            if !touched {
-                return;
-            }
-
-            if !listings_on_screen {
-                return;
-            }
+        let refresh = self.file_tree.apply_fs_events(
+            host, paths, on_screen, listings_on_screen, self.spawn_host(cx),
+        );
+        if refresh.notify {
+            cx.notify();
+        }
+        if refresh.reload {
             let Some(shared) = self.active_host(cx) else {
                 return;
             };
-            if shared.id() != host {
-                return;
-            }
             let (roots, expanded) = match self.tab_code() {
                 Some(code) => (code.roots.clone(), code.expanded.clone()),
                 None => return,
@@ -1046,29 +960,10 @@ impl LyrelApp {
     /// no row to scroll to. An empty root list is not that: it means the panel
     /// has never drawn and does not know its roots yet, and the request
     /// outlives the render that fills them in.
-    /// `path` as the tree spells it: under the project root as the tab names
-    /// it, when `path` is that root's real path spelled out. The editor keeps
-    /// files by their real path (`load_file` canonicalizes), the tree by the
-    /// pane's — on macOS every project under `/tmp` differs that way, as does
-    /// any checkout reached through a symlink. Anything else comes back as is.
-    pub(crate) fn project_spelling(&self, path: &Path, cx: &App) -> PathBuf {
-        let host = self.spawn_host(cx);
-        let roots = self.tab_code().map(|c| c.roots.as_slice()).unwrap_or(&[]);
-        if roots.iter().any(|root| path.starts_with(root)) {
-            return path.to_path_buf();
-        }
-        roots
-            .iter()
-            .find_map(|root| {
-                let real = self.file_tree.root_aliases.get(host, root)?;
-                Some(root.join(path.strip_prefix(real).ok()?))
-            })
-            .unwrap_or_else(|| path.to_path_buf())
-    }
 
     pub(crate) fn file_tree_reveal_path(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
-        let path = &self.project_spelling(path, cx);
         let roots = self.tab_code().map(|c| c.roots.clone()).unwrap_or_default();
+        let path = &self.file_tree.project_spelling(self.spawn_host(cx), &roots, path);
         if !roots.is_empty() && !roots.iter().any(|root| path.starts_with(root)) {
             return false;
         }
@@ -1284,8 +1179,7 @@ impl LyrelApp {
     }
 
     fn file_tree_cancel_edit(&mut self, cx: &mut Context<Self>) {
-        self.file_tree.editing = None;
-        self.file_tree.editing_subs.clear();
+        self.file_tree.cancel_edit();
         cx.notify();
     }
 
@@ -1368,18 +1262,16 @@ impl LyrelApp {
                 TreeWrite::Delete => h.remove(&target, is_dir).map(|()| None),
             },
             move |app, result: std::io::Result<Option<(PathBuf, PathBuf)>>, window, cx| {
-                match result {
+                match app.file_tree.finish_write(id, &dir, result, rollback) {
                     Ok(moved) => {
                         if let Some((from, to)) = moved {
                             app.editor_path_moved(id, &from, &to, cx);
                         }
-                        app.file_tree.invalidate_dir(id, &dir);
                         if matches!(edit, TreeEdit::NewFile { .. }) {
                             app.open_file_in_editor(&new_path, window, cx);
                         }
                     }
                     Err(e) => {
-                        app.file_tree.rollback(id, &dir, rollback);
                         if let Some(code) = app.tab_code_mut()
                             && code.selected.as_deref() == Some(&*new_path)
                         {
@@ -1506,13 +1398,11 @@ impl LyrelApp {
                         h.remove(&target, is_dir).map(|()| canon)
                     },
                     move |app, result: std::io::Result<PathBuf>, window, cx| {
-                        match result {
+                        match app.file_tree.finish_write(id, &parent, result, rollback) {
                             Ok(removed) => {
                                 app.editor_path_removed(id, &removed, cx);
-                                app.file_tree.invalidate_dir(id, &parent);
                             }
                             Err(e) => {
-                                app.file_tree.rollback(id, &parent, rollback);
                                 HostOps::notify_err(
                                     window,
                                     cx,
@@ -1572,9 +1462,7 @@ impl LyrelApp {
             cx,
             move |h| file_copy::copy_into_dir(h, &sources, &target, overwrite),
             move |app, report: file_copy::DropReport, window, cx| {
-                if !report.copied.is_empty() {
-                    app.file_tree.invalidate_dir(id, &dir);
-                }
+                app.file_tree.copied_into(id, &dir, &report);
                 if !report.conflicts.is_empty() {
                     app.file_tree_confirm_replace(asked_for, dir, report.conflicts, window, cx);
                 } else if let Some((name, e)) = report.errors.first() {
