@@ -6,8 +6,8 @@ use crate::core::session::WorkspaceId;
 
 use super::{MachineStore, SubscriberId};
 use crate::core::machine::operations::{
-    clamp_ratio, collect_orphan_panes, find_tab, find_workspace, heal_active_tab, not_found, refuse,
-    register_pane,
+    clamp_ratio, collect_orphan_panes, find_tab, find_workspace, heal_active_tab, not_found,
+    refuse, register_pane,
 };
 use crate::core::machine::{
     Axis, LayoutDelta, PaneNode, PaneSeed, PipGeometry, PipPane, Side, TabCloseReason, TabId,

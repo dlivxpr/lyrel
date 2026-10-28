@@ -36,7 +36,8 @@ fn the_mark_is_only_written_while_it_is_set() {
 /// older build reads this build's tree unchanged.
 #[test]
 fn a_tree_without_the_list_loads_and_an_empty_list_is_not_written() {
-    let old = r#"{"workspaces":[{"id":"6f1c0c0e-3b1a-4a8e-9d57-3c2b7c1f0a11","tabs":[]}],"panes":[]}"#;
+    let old =
+        r#"{"workspaces":[{"id":"6f1c0c0e-3b1a-4a8e-9d57-3c2b7c1f0a11","tabs":[]}],"panes":[]}"#;
     let m = serde_json::from_str::<Machine>(old).unwrap();
     assert!(m.workspaces[0].closed.is_empty());
 

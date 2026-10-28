@@ -12,15 +12,11 @@ use std::net::TcpListener;
 pub const CONTROL_PORT_FILE: &str = "control.port";
 
 pub fn control_endpoint_path() -> io::Result<PathBuf> {
-    transport::port_path_named(CONTROL_PORT_FILE).ok_or_else(|| {
-        io::Error::other("no config directory to record the control endpoint in")
-    })
+    transport::port_path_named(CONTROL_PORT_FILE)
+        .ok_or_else(|| io::Error::other("no config directory to record the control endpoint in"))
 }
 
-pub fn spawn_control_listener_with(
-    host: SharedHost,
-    services: Services,
-) -> io::Result<PathBuf> {
+pub fn spawn_control_listener_with(host: SharedHost, services: Services) -> io::Result<PathBuf> {
     // See the unix arm: uptime is anchored where the listener opens, so a
     // GUI-hosted control server does not report itself as freshly started.
     super::server_started();

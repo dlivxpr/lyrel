@@ -101,7 +101,9 @@ where
     }
 
     if let Some(workspace) = hello.workspace.as_deref()
-        && let Err(e) = conn.identity.attach(conn.machine.as_deref(), workspace, true)
+        && let Err(e) = conn
+            .identity
+            .attach(conn.machine.as_deref(), workspace, true)
     {
         log::warn!("control peer ({label}) could not attach to workspace {workspace}: {e}");
     }

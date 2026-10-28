@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::core::machine::{self, Attachment, MachineStore};
-use crate::daemon::control::{ControlEvent, ControlHello, ControlServerMsg, LinkShutdown, WorkspaceId};
+use crate::daemon::control::{
+    ControlEvent, ControlHello, ControlServerMsg, LinkShutdown, WorkspaceId,
+};
 
 use super::output::Sink;
 
@@ -200,7 +202,8 @@ impl ConnectionIdentity {
     }
 
     pub(super) fn register_gui(&self) {
-        self.registry.register_gui(self.id, Arc::clone(&self.holder.sink));
+        self.registry
+            .register_gui(self.id, Arc::clone(&self.holder.sink));
     }
 
     pub(super) fn unregister_gui(&self) {
@@ -225,7 +228,8 @@ impl ConnectionIdentity {
         let tree_id: Option<crate::core::session::WorkspaceId> = workspace.parse().ok();
         let (displaced, evicted) = {
             let _handover = self.registry.handover();
-            let attachment = Attachment::new(self.holder.token.clone(), self.holder.hostname.clone());
+            let attachment =
+                Attachment::new(self.holder.token.clone(), self.holder.hostname.clone());
             let displaced = match (machine, tree_id) {
                 (Some(machine), Some(id)) => machine.attach(id, attachment),
                 _ => None,

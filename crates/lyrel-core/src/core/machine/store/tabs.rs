@@ -11,8 +11,7 @@ use crate::core::machine::operations::{
     references, refuse, register_pane,
 };
 use crate::core::machine::{
-    CLOSED_TAB_TTL, ClosedTab, LayoutDelta, MAX_CLOSED_TABS, PaneSeed, Remembered, ReopenedTab, Tab,
-    TabCloseReason, TabId,
+    ClosedTab, LayoutDelta, PaneSeed, Remembered, ReopenedTab, Tab, TabCloseReason, TabId,
 };
 
 impl MachineStore {

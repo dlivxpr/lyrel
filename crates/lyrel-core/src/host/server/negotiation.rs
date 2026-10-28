@@ -2,7 +2,9 @@
 use std::io::{self, Read};
 use std::path::PathBuf;
 
-use crate::daemon::control::{CONTROL_VERSION, ControlClientMsg, ControlHello, ControlHelloOk, ControlServerMsg, feature};
+use crate::daemon::control::{
+    CONTROL_VERSION, ControlClientMsg, ControlHello, ControlHelloOk, ControlServerMsg, feature,
+};
 use crate::host::Host;
 
 use super::Services;

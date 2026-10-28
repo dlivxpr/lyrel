@@ -1,10 +1,10 @@
-use super::*;
-use super::super::*;
 use super::super::test_support::*;
+use super::super::*;
+use super::*;
 use crate::host::local::LocalHost;
 use crate::host::remote::RemoteHost;
-use std::os::unix::net::UnixStream;
 use std::io::Write;
+use std::os::unix::net::UnixStream;
 
 #[test]
 fn the_handshake_describes_this_server() {

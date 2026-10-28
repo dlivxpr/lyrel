@@ -1,8 +1,8 @@
 use super::*;
 use crate::core::machine::{self, MachineStore};
 use crate::daemon::control::{
-    CONTROL_VERSION, ControlClientMsg, ControlHello, ControlReply, ControlRequest, ControlServerMsg,
-    ReplyOk,
+    CONTROL_VERSION, ControlClientMsg, ControlHello, ControlReply, ControlRequest,
+    ControlServerMsg, ReplyOk,
 };
 use crate::host::local::LocalHost;
 use std::net::{TcpListener, TcpStream};
@@ -30,7 +30,9 @@ fn hello(peer: &mut TcpStream, hello: ControlHello) {
 }
 
 fn call(peer: &mut TcpStream, req_id: u64, req: ControlRequest) -> ControlReply {
-    ControlClientMsg::Request { req_id, req }.encode(peer).unwrap();
+    ControlClientMsg::Request { req_id, req }
+        .encode(peer)
+        .unwrap();
     peer.flush().unwrap();
     loop {
         match ControlServerMsg::read(peer).unwrap() {
@@ -55,10 +57,20 @@ fn a_tcp_protocol_error_releases_attachment_and_unregisters_the_gui() {
             ..ControlHello::gui("gui-token", "desktop")
         },
     );
-    assert_eq!(call(&mut gui, 1, ControlRequest::Ping), ControlReply::Ok(ReplyOk::Pong));
+    assert_eq!(
+        call(&mut gui, 1, ControlRequest::Ping),
+        ControlReply::Ok(ReplyOk::Pong)
+    );
     assert_eq!(store.attachment(workspace).unwrap().token, "gui-token");
     assert_eq!(
-        call(&mut gui, 2, ControlRequest::GuiOpen { path: None, workspace: None }),
+        call(
+            &mut gui,
+            2,
+            ControlRequest::GuiOpen {
+                path: None,
+                workspace: None
+            }
+        ),
         ControlReply::Ok(ReplyOk::Bool(true)),
     );
 
@@ -82,7 +94,14 @@ fn a_tcp_protocol_error_releases_attachment_and_unregisters_the_gui() {
     let (mut probe, probe_served) = tcp_peer(services);
     hello(&mut probe, ControlHello::host_rpc("probe", "probe"));
     assert_eq!(
-        call(&mut probe, 1, ControlRequest::GuiOpen { path: None, workspace: None }),
+        call(
+            &mut probe,
+            1,
+            ControlRequest::GuiOpen {
+                path: None,
+                workspace: None
+            }
+        ),
         ControlReply::Ok(ReplyOk::Bool(false)),
     );
     drop(probe);

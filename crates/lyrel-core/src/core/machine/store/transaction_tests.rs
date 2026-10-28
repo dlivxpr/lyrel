@@ -112,7 +112,8 @@ fn a_failed_structural_write_rolls_back_before_publication() {
         "a directory cannot accept the atomic document rename"
     );
     assert_eq!(
-        store.machine(), before,
+        store.machine(),
+        before,
         "the failed seed and tab must both roll back"
     );
     assert!(

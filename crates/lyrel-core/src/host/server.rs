@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use crate::core::machine::{self, MachineStore};
 use crate::daemon::control::{
-    CONTROL_VERSION, ControlClientMsg, ControlEvent, ControlReply, ControlRequest, ControlServerMsg,
-    GIT_STREAM_CHUNK, GIT_STREAM_CHUNK_MAX, MAX_CONCURRENT_GIT_STREAMS, PaneAgentState, ReplyOk,
-    ServerStatus, WATCH_BURST_CAP, WireError, WireErrorKind, server_started,
+    CONTROL_VERSION, ControlClientMsg, ControlEvent, ControlReply, ControlRequest,
+    ControlServerMsg, GIT_STREAM_CHUNK, GIT_STREAM_CHUNK_MAX, MAX_CONCURRENT_GIT_STREAMS,
+    PaneAgentState, ReplyOk, ServerStatus, WATCH_BURST_CAP, WireError, WireErrorKind,
+    server_started,
 };
 use crate::daemon::protocol::PaneInfo;
 use crate::host::{Host, SearchHit, SharedHost, WatchSub};
@@ -20,12 +21,12 @@ mod attachments;
 mod connection;
 mod negotiation;
 mod output;
+#[cfg(all(test, unix))]
+mod test_support;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 mod windows;
-#[cfg(all(test, unix))]
-mod test_support;
 
 pub use attachments::AttachRegistry;
 use attachments::ConnectionIdentity;
@@ -85,7 +86,6 @@ impl Services {
         }
     }
 }
-
 
 fn read_loop<R: Read>(r: &mut R, conn: &Arc<Conn>) -> io::Result<()> {
     loop {
@@ -671,7 +671,6 @@ fn run_request(
     })
 }
 
-
 #[cfg(not(any(unix, windows)))]
 fn control_endpoint_display() -> String {
     String::new()
@@ -708,7 +707,6 @@ impl Conn {
             .as_ref()
             .ok_or_else(|| io::Error::other("this server does not serve the machine tree"))
     }
-
 
     fn is_cancelled(&self, req_id: u64) -> bool {
         self.inflight
@@ -1011,7 +1009,6 @@ enum StreamStop {
     Unencodable,
 }
 
-
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 struct Pool {
@@ -1128,7 +1125,6 @@ fn worker(inner: Arc<PoolInner>) {
 
 pub const CONTROL_SOCK_ENV: &str = "LYREL_CONTROL_SOCK";
 
-
 #[cfg(all(unix, test))]
 pub(crate) use unix::socket_path_in;
 #[cfg(unix)]
@@ -1136,7 +1132,6 @@ pub use unix::{
     bind_control_socket, control_endpoint_answers, control_socket_path, serve_listener,
     serve_listener_with, spawn_control_listener, spawn_control_listener_with,
 };
-
 
 #[cfg(windows)]
 pub use windows::{
@@ -1766,20 +1761,18 @@ mod pool_tests {
     }
 }
 
-
 #[cfg(all(test, unix))]
 mod tests {
-    use super::*;
     use super::test_support::*;
-    use std::io::Write;
+    use super::*;
     use crate::daemon::control::{ControlHello, MTime};
     use crate::host::local::LocalHost;
     use crate::host::remote::RemoteHost;
     use crate::host::{Entry, HostId, Meta, Output};
+    use std::io::Write;
     use std::os::unix::net::UnixStream;
     use std::sync::atomic::AtomicBool;
     use std::time::Instant;
-
 
     struct SlowGit {
         inner: SharedHost,
@@ -2003,7 +1996,6 @@ mod tests {
         slow.join().unwrap();
     }
 
-
     #[test]
     fn an_oversized_read_ships_no_bytes() {
         let (mut client, _) = raw();
@@ -2140,7 +2132,6 @@ mod tests {
             "stderr crosses the wire, not dropped"
         );
     }
-
 
     #[test]
     fn a_cancelled_request_is_answered_with_silence() {
@@ -2351,7 +2342,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn a_filename_that_is_not_utf8_costs_only_its_own_hit() {
         use std::ffi::OsStr;
@@ -2380,7 +2370,6 @@ mod tests {
             "the representable hits must survive their neighbour"
         );
     }
-
 
     #[test]
     fn a_stream_slot_comes_back_however_it_leaves() {
@@ -2483,7 +2472,6 @@ mod tests {
         assert!(!got.is_empty(), "this repo has commits");
     }
 
-
     #[test]
     fn concurrent_connections_can_all_write_the_tree() {
         let (services, _dir) = workspace_services();
@@ -2554,5 +2542,4 @@ mod tests {
             other => panic!("expected the post-resync delta, got {other:?}"),
         }
     }
-
 }

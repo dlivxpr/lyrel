@@ -2,9 +2,9 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
 
-use super::*;
-use super::super::*;
 use super::super::test_support::*;
+use super::super::*;
+use super::*;
 
 #[test]
 fn a_second_client_takes_the_workspace_and_the_first_is_told() {
@@ -57,11 +57,9 @@ fn a_second_client_takes_the_workspace_and_the_first_is_told() {
 fn a_dedicated_connection_is_closed_when_its_workspace_is_taken() {
     let (services, _dir) = workspace_services();
     let w = tree_workspace(&services);
-    let ((mut laptop, _), _l) =
-        raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
+    let ((mut laptop, _), _l) = raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
     await_holder(&services.attachments, &w, "laptop");
-    let ((_desktop, _), _d) =
-        raw_hello(services.clone(), hello_for(&w, "tok-desktop", "desktop"));
+    let ((_desktop, _), _d) = raw_hello(services.clone(), hello_for(&w, "tok-desktop", "desktop"));
 
     assert!(await_preempted(&mut laptop).is_some());
     let mut sink = Vec::new();
@@ -80,8 +78,7 @@ fn removing_a_workspace_clears_both_attachment_tables() {
     let w = tree_workspace(&services);
     let id: crate::core::session::WorkspaceId = w.parse().unwrap();
 
-    let ((mut laptop, _), _l) =
-        raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
+    let ((mut laptop, _), _l) = raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
     await_holder(&registry, &w, "laptop");
     assert!(machine.attachment(id).is_some());
 
@@ -162,8 +159,7 @@ fn a_shared_connection_survives_losing_one_of_its_workspaces() {
     }
     assert_eq!(registry.len(), 2);
 
-    let ((_desktop, _), _d) =
-        raw_hello(services.clone(), hello_for(&w1, "tok-desktop", "desktop"));
+    let ((_desktop, _), _d) = raw_hello(services.clone(), hello_for(&w1, "tok-desktop", "desktop"));
     assert_eq!(
         await_preempted(&mut laptop),
         Some(ControlEvent::Preempted {
@@ -195,8 +191,7 @@ fn the_machines_own_gui_and_a_remote_client_take_a_workspace_from_each_other() {
     let w = tree_workspace(&services);
     let id: crate::core::session::WorkspaceId = w.parse().unwrap();
 
-    let ((mut gui, _), _g) =
-        raw_hello(services.clone(), ControlHello::gui("tok-gui", "studio"));
+    let ((mut gui, _), _g) = raw_hello(services.clone(), ControlHello::gui("tok-gui", "studio"));
     let (reply, _) = round_trip(
         &mut gui,
         1,
@@ -293,8 +288,7 @@ fn a_displaced_session_tidying_up_does_not_evict_the_new_owner() {
             ControlRequest::WorkspaceAttach { id: (*id).clone() },
         );
     }
-    let ((_desktop, _), _d) =
-        raw_hello(services.clone(), hello_for(&w, "tok-desktop", "desktop"));
+    let ((_desktop, _), _d) = raw_hello(services.clone(), hello_for(&w, "tok-desktop", "desktop"));
     assert!(await_preempted(&mut laptop).is_some());
 
     let (reply, _) = round_trip(

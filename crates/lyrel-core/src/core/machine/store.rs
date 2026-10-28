@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use crate::core::session::WorkspaceId;
 
+#[cfg(test)]
+use super::MACHINE_FILE;
 use super::operations::not_found;
 use super::persistence::{self, load_machine};
 use super::{Attachment, LayoutDelta, Machine, PaneRecord, Workspace, default_machine_path};
-#[cfg(test)]
-use super::MACHINE_FILE;
 
 mod facts;
 mod panes;
@@ -20,9 +20,9 @@ mod sidecar;
 mod tabs;
 mod workspaces;
 
-pub use facts::{observe_pane, observed_store, publish_observations};
 #[cfg(test)]
 pub(crate) use facts::{OBSERVE_SLOT, withdraw_observations};
+pub use facts::{observe_pane, observed_store, publish_observations};
 
 #[cfg(not(test))]
 pub const FACT_FLUSH_INTERVAL: Duration = Duration::from_secs(2);

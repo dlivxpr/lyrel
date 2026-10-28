@@ -1,7 +1,9 @@
 use super::super::test_support::*;
 use super::*;
 use crate::core::group_key::GroupId;
-use crate::core::machine::{Axis, CLOSED_TAB_TTL, MAX_CLOSED_TABS, PaneSeed, TabCloseReason, TabId};
+use crate::core::machine::{
+    Axis, CLOSED_TAB_TTL, MAX_CLOSED_TABS, PaneSeed, TabCloseReason, TabId,
+};
 
 #[test]
 fn a_client_minted_tab_id_is_kept_and_a_duplicate_is_refused_anywhere() {

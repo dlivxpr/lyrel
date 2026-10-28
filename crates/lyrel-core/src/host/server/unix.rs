@@ -28,9 +28,8 @@ pub fn control_socket_path() -> io::Result<PathBuf> {
         return Ok(PathBuf::from(explicit));
     }
 
-    let dir = crate::core::config::config_dir_path().ok_or_else(|| {
-        io::Error::other("no config directory to place the control socket in")
-    })?;
+    let dir = crate::core::config::config_dir_path()
+        .ok_or_else(|| io::Error::other("no config directory to place the control socket in"))?;
 
     let fallbacks: Vec<PathBuf> = [runtime_dir(), Some(std::env::temp_dir())]
         .into_iter()
@@ -164,10 +163,7 @@ pub fn spawn_control_listener(host: SharedHost) -> io::Result<PathBuf> {
     spawn_control_listener_with(host, Services::none())
 }
 
-pub fn spawn_control_listener_with(
-    host: SharedHost,
-    services: Services,
-) -> io::Result<PathBuf> {
+pub fn spawn_control_listener_with(host: SharedHost, services: Services) -> io::Result<PathBuf> {
     // Anchor uptime here, not at the first Status request. The GUI can host
     // the control listener too, and there `run_with` never runs — so
     // without this the OnceLock is first set by whoever asks, and every

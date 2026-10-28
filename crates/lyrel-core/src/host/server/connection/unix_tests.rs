@@ -1,6 +1,6 @@
-use super::*;
-use super::super::*;
 use super::super::test_support::*;
+use super::super::*;
+use super::*;
 use crate::daemon::control::ControlHello;
 use crate::host::local::LocalHost;
 use std::os::unix::net::UnixStream;
@@ -45,4 +45,3 @@ fn an_unknown_frame_kind_ends_the_connection() {
         "the server should hang up"
     );
 }
-

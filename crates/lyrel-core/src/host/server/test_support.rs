@@ -1,9 +1,9 @@
 //! Narrow Unix consumer fixtures shared by negotiation, lifecycle, and request tests.
 use super::*;
 use crate::daemon::control::{ControlHello, ControlHelloOk};
-use std::io::Write;
 use crate::host::local::LocalHost;
 use crate::host::remote::RemoteHost;
+use std::io::Write;
 use std::os::unix::net::UnixStream;
 
 pub(super) struct Pair {
@@ -49,13 +49,11 @@ pub(super) fn raw_hello(
     ((client, ok), served)
 }
 
-
 pub(super) fn workspace_services() -> (Services, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let store = MachineStore::open(dir.path().join(machine::MACHINE_FILE));
     (Services::with_machine(store), dir)
 }
-
 
 pub(super) fn ask(client: &mut UnixStream, req_id: u64, req: ControlRequest) -> ControlReply {
     ControlClientMsg::Request { req_id, req }
