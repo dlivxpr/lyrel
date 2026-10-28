@@ -783,7 +783,7 @@ impl SettingsWindow {
         // line is the explanation (#551). The input commits on Enter/blur, so
         // a half-typed quote is never marked wrong mid-keystroke.
         let args_value = args_input.read(cx).value();
-        let args_error = crate::ui::app::split_shell_args(&args_value)
+        let args_error = super::arguments::split_shell_args(&args_value)
             .is_err()
             .then(|| t(L10nKey::SettingsArgumentsInvalid).to_string());
         let args_control = self.settings_checked_input(&args_input, FIELD_W, args_error, cx);
@@ -840,7 +840,7 @@ impl SettingsWindow {
             // the same predicate, so the red line and the not-saved config
             // always agree (#601).
             let value = wd_path_input.read(cx).value();
-            let error = (!crate::ui::app::wd_path_saveable(&value))
+            let error = (!super::inputs::wd_path_saveable(&value))
                 .then(|| t(L10nKey::SettingsWdPathInvalid).to_string());
             let control = self.settings_checked_input(&wd_path_input, PATH_FIELD_W, error, cx);
             rows.push(

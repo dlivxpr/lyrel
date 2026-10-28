@@ -317,6 +317,7 @@ impl PendingPane {
             return None;
         }
         let focused = self.focus_handle.contains_focused(window, cx);
+        let previous_focus = if focused { None } else { window.focused(cx) };
         let parts = ready.parts.take()?;
         let restored = matches!(&parts, CreatedTerminal::Shell(parts) if parts.restored);
         let attach_spec = self.attach_spec.clone();
@@ -334,6 +335,14 @@ impl PendingPane {
             }
             view
         });
+        // Terminal construction focuses its new handle. Only the pending slot
+        // that already held focus may hand it over to this terminal.
+        if !focused {
+            match previous_focus {
+                Some(handle) => window.focus(&handle, cx),
+                None => window.blur(cx),
+            }
+        }
         let launch = if restored {
             PendingLaunch::None
         } else if let Some(command) = self.spawn.run_on_land.clone() {

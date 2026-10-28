@@ -224,7 +224,7 @@ impl SettingsWindow {
         let refresh = kind == StatisticsRequest::Refresh;
         if !self
             .active_settings()
-            .is_some_and(|settings| settings.section == SettingsSection::Statistics)
+            .is_some_and(|settings| settings.navigation.section() == SettingsSection::Statistics)
         {
             return;
         }
@@ -240,7 +240,7 @@ impl SettingsWindow {
         let Some(settings) = self.active_settings() else {
             return;
         };
-        if settings.section != SettingsSection::Statistics {
+        if settings.navigation.section() != SettingsSection::Statistics {
             return;
         }
         let state = &settings.statistics;
@@ -344,7 +344,7 @@ impl SettingsWindow {
                 let active = this
                     .update(cx, |this, cx| {
                         if !this.active_settings().is_some_and(|settings| {
-                            settings.section == SettingsSection::Statistics
+                            settings.navigation.section() == SettingsSection::Statistics
                                 && settings.statistics.scan_generation == Some(generation)
                         }) {
                             return false;
@@ -375,7 +375,7 @@ impl SettingsWindow {
             // still the active request, so a closed/replaced page cannot start work.
             let _ = this.update(cx, |this, cx| {
                 if this.active_settings().is_some_and(|settings| {
-                    settings.section == SettingsSection::Statistics
+                    settings.navigation.section() == SettingsSection::Statistics
                         && settings.statistics.scan_generation == Some(generation)
                 }) {
                     this.load_statistics(cx);
@@ -433,7 +433,7 @@ impl SettingsWindow {
                     return;
                 };
                 let state = &mut settings.statistics;
-                if settings.section != SettingsSection::Statistics
+                if settings.navigation.section() != SettingsSection::Statistics
                     || state.generation != generation
                     || state.host != host
                     || state.agent != agent
@@ -510,7 +510,7 @@ impl SettingsWindow {
             return false;
         };
         let state = &mut settings.statistics;
-        if settings.section != SettingsSection::Statistics
+        if settings.navigation.section() != SettingsSection::Statistics
             || state.host != host
             || state.agent != agent
             || state.scan_generation != Some(generation)
@@ -883,7 +883,7 @@ mod tests {
         let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
         app.update_in(&mut vcx, |app, window, cx| {
             app.open_settings_section(SettingsSection::General, window, cx);
-            let search = app.active_settings().unwrap().search.clone();
+            let search = app.active_settings().unwrap().navigation.search().clone();
             search.update(cx, |s, cx| {
                 s.set_value(t(L10nKey::StatisticsTitle), window, cx)
             });
@@ -1127,7 +1127,7 @@ mod tests {
         crate::ui::i18n::set_locale("en");
         app.update_in(&mut vcx, |app, _window, cx| {
             let state = app.active_settings().unwrap();
-            assert!(state.section == SettingsSection::Statistics);
+            assert!(state.navigation.section() == SettingsSection::Statistics);
             let totals = &state
                 .statistics
                 .results

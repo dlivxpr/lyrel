@@ -19,7 +19,8 @@ use crate::terminal::pane_liveness::Liveness;
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::remote_connect::{self, HostChoice, RemoteWorkspaceRow};
-use crate::ui::remote_workspace::{ConnectFlow, MachineStatus, RemoteLinks};
+use crate::ui::remote_workspace::connection::ConnectionState;
+use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
 
 const CARD_W: f32 = 760.0;
 
@@ -106,16 +107,16 @@ fn link_is_engaged(link: Link) -> bool {
 /// now from one nobody has ever connected to: the pump drops the entry the
 /// moment the link dies, and the group then collapses as if it were empty.
 fn link_from(
-    connect: Option<&ConnectFlow>,
+    connect: Option<&ConnectionState>,
     target: &RemoteTarget,
     supervised: Option<&MachineStatus>,
     has_link: bool,
 ) -> Link {
     match connect {
-        Some(ConnectFlow::Connecting { choice }) if &choice.target == target => {
+        Some(ConnectionState::Connecting { choice }) if &choice.target == target => {
             return Link::Connecting;
         }
-        Some(ConnectFlow::Failed { choice, .. }) if &choice.target == target => {
+        Some(ConnectionState::Failed { choice, .. }) if &choice.target == target => {
             return Link::Failed;
         }
         _ => {}
@@ -316,14 +317,6 @@ impl CreateForm {
         let name = self.name.read(cx).value().trim().to_string();
         (!name.is_empty()).then_some(name)
     }
-}
-
-/// A create the user asked for on a machine that was not connected yet: the
-/// connect has to land first, because only a live link knows the home
-/// directory a fresh workspace is rooted at. `finish_connect` consumes it.
-pub(crate) struct PendingCreate {
-    pub target: RemoteTarget,
-    pub name: Option<String>,
 }
 
 pub(crate) struct Switcher {
@@ -702,9 +695,7 @@ impl LyrelApp {
 
     pub(crate) fn close_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.switcher.take().is_some() {
-            if matches!(self.connect, Some(ConnectFlow::Failed { .. })) {
-                self.connect = None;
-            }
+            self.connect.dismiss_failure(None);
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -951,7 +942,7 @@ impl LyrelApp {
             // regardless of what happened to the profile that made them.
             group.parked =
                 group.link != Link::Connected && !remote_connect::route_resolvable(cx, &target);
-            if let Some(ConnectFlow::Failed { choice, error }) = &self.connect
+            if let Some(ConnectionState::Failed { choice, error }) = self.connect.state()
                 && choice.target == target
             {
                 group.error = Some(error.clone());
@@ -1111,7 +1102,7 @@ impl LyrelApp {
             .values()
             .map(|s| s.target.clone())
             .collect();
-        if let Some(choice) = self.connect.as_ref().and_then(ConnectFlow::choice) {
+        if let Some(choice) = self.connect.choice() {
             out.push(choice.target.clone());
         }
         out
@@ -1124,7 +1115,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Link {
         let has_link = remote_connect::HostLinks::get(cx, target.host_id()).is_some();
-        link_from(self.connect.as_ref(), target, supervised, has_link)
+        link_from(self.connect.state(), target, supervised, has_link)
     }
 
     fn switcher_open(
@@ -1186,33 +1177,7 @@ impl LyrelApp {
         // the platform callback, so the whole process aborts.
         let host = target.host_id();
         cx.defer(move |cx| crate::ui::remote_workspace::RemoteLinks::disconnect(cx, host));
-        if self
-            .connect
-            .as_ref()
-            .and_then(ConnectFlow::choice)
-            .is_some_and(|c| &c.target == target)
-        {
-            self.connect = None;
-        }
-        // A create still waiting on this machine's link dies with the link:
-        // calling the connect off is calling the create off, or the next
-        // successful connect would grow a workspace nobody asked it for.
-        // One parked on a dialect refusal is waiting all the same, so it
-        // dies here too.
-        if self
-            .pending_create
-            .as_ref()
-            .is_some_and(|p| &p.target == target)
-        {
-            self.pending_create = None;
-        }
-        if self
-            .parked_create
-            .as_ref()
-            .is_some_and(|p| &p.target == target)
-        {
-            self.parked_create = None;
-        }
+        self.connect.retire_target(target);
         cx.notify();
     }
 
@@ -1366,9 +1331,8 @@ impl LyrelApp {
 
     /// Enter or Create on the form. Nothing happens until the name box says
     /// something. Local and already-connected machines create on the spot; a
-    /// machine with no live link has to connect first — the create is parked
-    /// on the app and `finish_connect` completes it, because only a live link
-    /// knows the home directory a fresh workspace is rooted at.
+    /// machine with no live link has to connect first — WindowConnection owns
+    /// the create until a live link supplies its home directory.
     fn switcher_form_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (name, chosen) = {
             let Some(sw) = self.switcher.as_ref() else {
@@ -1395,10 +1359,7 @@ impl LyrelApp {
                     self.name_fresh_workspace(name, window, cx);
                 }
                 None => {
-                    self.pending_create = Some(PendingCreate {
-                        target: choice.target.clone(),
-                        name,
-                    });
+                    self.connect.queue_create(choice.target.clone(), name);
                     // Back to the list, where the connect has somewhere to be
                     // seen while it works.
                     self.switcher_back_to_list(window, cx);
@@ -2115,8 +2076,8 @@ impl LyrelApp {
                                 move |this, _, _window, cx| {
                                     let ours = this.remote_host_errors.remove(&retry_key).is_some()
                                         || matches!(
-                                            &this.connect,
-                                            Some(ConnectFlow::Failed { choice, .. })
+                                            this.connect.state(),
+                                            Some(ConnectionState::Failed { choice, .. })
                                                 if Some(&choice.target) == retry.target.as_ref()
                                         );
                                     if let Some(target) = retry.target.clone() {
@@ -2206,22 +2167,8 @@ impl LyrelApp {
                                 // failed connect. Retire that too, but only when
                                 // it is this host's failure — a connect to
                                 // anywhere else is still in flight.
-                                if let Some(ConnectFlow::Failed { choice, .. }) = &this.connect
-                                    && Some(&choice.target) == dismiss_target.as_ref()
-                                {
-                                    this.connect = None;
-                                }
-                                // Dismissing the refusal is giving up on the
-                                // machine, and the create parked on it goes
-                                // with it — an update run weeks later must
-                                // not revive a workspace nobody remembers
-                                // asking for.
-                                if this
-                                    .parked_create
-                                    .as_ref()
-                                    .is_some_and(|p| Some(&p.target) == dismiss_target.as_ref())
-                                {
-                                    this.parked_create = None;
+                                if let Some(target) = dismiss_target.as_ref() {
+                                    this.connect.dismiss_refusal(target);
                                 }
                                 cx.notify();
                             },
@@ -2386,10 +2333,8 @@ impl LyrelApp {
                                 // failure that predated the parking — retire it
                                 // too, or it pops right back as the error block.
                                 this.remote_host_errors.remove(&dismiss_key);
-                                if let Some(ConnectFlow::Failed { choice, .. }) = &this.connect
-                                    && Some(&choice.target) == dismiss_target.as_ref()
-                                {
-                                    this.connect = None;
+                                if let Some(target) = dismiss_target.as_ref() {
+                                    this.connect.dismiss_failure(Some(target));
                                 }
                                 cx.notify();
                             },
@@ -3597,6 +3542,65 @@ mod tests {
         );
     }
 
+    #[gpui_kit::test]
+    fn a_waiting_create_survives_panel_close_but_not_machine_disconnect(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        // An absent profile fails route preparation without touching SSH or
+        // credentials. The retry below supplies a real protocol refusal input.
+        let choice = HostChoice {
+            target: RemoteTarget::Profile {
+                id: uuid::Uuid::new_v4(),
+            },
+            label: "create-target".into(),
+            detail: String::new(),
+        };
+        app.update_in(&mut vcx, |app, window, cx| {
+            let before = app.workspace;
+            app.open_workspace_form(window, cx);
+            app.switcher_form_choose(Some(choice.clone()), window, cx);
+            let Page::Create(form) = &app.switcher.as_ref().unwrap().page else {
+                panic!("the create form is open");
+            };
+            form.name
+                .clone()
+                .update(cx, |name, cx| name.set_value("deploy", window, cx));
+            app.switcher_form_create(window, cx);
+            assert!(matches!(
+                app.connect.state(),
+                Some(ConnectionState::Failed { .. })
+            ));
+            assert!(matches!(app.switcher.as_ref().unwrap().page, Page::List));
+
+            let retry = app.connect.begin(choice.clone());
+            app.close_switcher(window, cx);
+            assert!(app.switcher.is_none());
+            assert!(app.connect.is_connecting(retry));
+            let refusal = "build-box answered, but not as a lyrel server: control peer (build 26.7.7-nightly) \
+                           speaks control v4, this build speaks v5".into();
+            assert!(app.connect.complete(retry, Err(refusal)).is_some());
+            app.open_switcher(window, cx);
+            app.close_switcher(window, cx);
+            assert!(app.switcher.is_none());
+            assert!(app.connect.state().is_none());
+            assert!(
+                app.connect
+                    .server_replaced(&choice.target, &choice.label)
+                    .is_some()
+            );
+            assert_eq!(app.workspace, before);
+
+            app.switcher_disconnect(&choice.target, cx);
+            assert!(
+                app.connect
+                    .server_replaced(&choice.target, &choice.label)
+                    .is_none()
+            );
+            assert_eq!(app.workspace, before);
+        });
+    }
+
     /// The workspace row's shape: a `flex_1` column, and in it a truncating
     /// name sized by its own text beside the slot number. gpui measures that
     /// name once against the column's zero basis, and used to answer the
@@ -3771,7 +3775,7 @@ mod tests {
     fn this_windows_own_attempt_is_only_ever_about_its_own_machine() {
         let build = RemoteTarget::direct("me", "build-box", 22);
         let gpu = RemoteTarget::direct("me", "gpu-lab", 22);
-        let flow = ConnectFlow::Connecting {
+        let flow = ConnectionState::Connecting {
             choice: HostChoice {
                 target: gpu,
                 label: "gpu-lab".into(),

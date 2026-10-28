@@ -114,7 +114,13 @@ impl LyrelApp {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.display().to_string());
-        let spelled = self.project_spelling(path, cx);
+        let roots = self
+            .tab_code()
+            .map(|code| code.roots.as_slice())
+            .unwrap_or(&[]);
+        let spelled = self
+            .file_tree
+            .project_spelling(self.spawn_host(cx), roots, path);
         let dir = spelled.parent().map(|parent| {
             self.tab_code()
                 .and_then(|c| {

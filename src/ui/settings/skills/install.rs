@@ -208,7 +208,9 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(s) = self.active_settings_mut().filter(|s| {
-            s.section == SettingsSection::Skills && s.menu.is_none() && s.skills.install.open
+            s.navigation.section() == SettingsSection::Skills
+                && s.menu.is_none()
+                && s.skills.install.open
         }) else {
             return false;
         };

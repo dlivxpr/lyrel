@@ -581,7 +581,7 @@ pub(crate) fn typed_address_rows(query: &str) -> Vec<Item> {
     // Whitespace first: an address has none, and the address parser would read
     // `ssh -p 2222 deploy@box` as the user `ssh -p 2222 deploy` on `box`.
     if query.contains(char::is_whitespace) {
-        return match crate::ui::app::parse_ssh_connect_input(query) {
+        return match crate::ui::ssh_connect::input::parse_ssh_connect_input(query) {
             Ok(_) => vec![Item::new(
                 t_fmt(L10nKey::CmdSshConnectWithInput, &[("input", query)]),
                 CommandKind::OpenSshConnect(query.to_string()),
@@ -694,6 +694,23 @@ mod tests {
             row.kind,
             CommandKind::OpenSshConnect("ssh -p 2222 deploy@box".into())
         );
+    }
+
+    #[test]
+    fn typed_ssh_search_preserves_quoted_input_and_rejects_invalid_commands() {
+        let input = r#"ssh -i "C:\\Program Files\\keys\\id" -J jump@bastion:2200 deploy@box"#;
+        let rows = typed_address_rows(input);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, CommandKind::OpenSshConnect(input.into()));
+        for invalid in [
+            "ssh -p 0 host",
+            "ssh -p",
+            "ssh 'host",
+            "ssh host uptime",
+            "ssh -- host",
+        ] {
+            assert!(typed_address_rows(invalid).is_empty(), "{invalid:?}");
+        }
     }
 
     fn with_config(cx: &mut TestAppContext) {

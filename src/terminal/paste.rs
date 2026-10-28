@@ -5,7 +5,20 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{AppContext as _, AsyncApp, ClipboardEntry, ClipboardItem, Task};
 
+use crate::core::shell_quote::quote_for_shell;
 use crate::ui::sftp::SftpRoute;
+
+/// Paths as one line of shell words, trailing space included so whatever is
+/// typed next starts a word of its own.
+pub(super) fn pasted_paths_text(paths: &[String], shell: Option<&str>) -> String {
+    let words: Vec<String> = paths.iter().map(|p| quote_for_shell(p, shell)).collect();
+    format!("{} ", words.join(" "))
+}
+
+/// Whether the clipboard carries files rather than (only) text.
+pub(super) fn clipboard_has_paths(item: &ClipboardItem) -> bool {
+    !clipboard_paths(item).is_empty()
+}
 
 /// 每个 pane 的远端粘贴状态；只缓存已经验证为私有目录的成功准备结果。
 #[derive(Default)]
@@ -488,6 +501,16 @@ fn transcode_to_png(bytes: &[u8], format: gpui_kit::ImageFormat) -> Option<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pasted_paths_are_shell_quoted_and_space_joined() {
+        assert_eq!(
+            super::pasted_paths_text(
+                &["/Users/me/My File.txt".into(), "/tmp/b.log".into()],
+                Some("zsh"),
+            ),
+            "'/Users/me/My File.txt' /tmp/b.log "
+        );
+    }
     use crate::core::session::{RemoteTarget, WorkspaceId};
     use crate::terminal::PaneWorkspace;
     use gpui_kit::ExternalPaths;

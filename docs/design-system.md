@@ -163,6 +163,32 @@ Git 的新增/修改标记种子为绿 `#2F8A52` / `#4CC27A`、琥珀 `#B7791F` 
   合成会话重放；三行矩阵括号接缝的空白像素行从 6 降为 0。几何回归覆盖多行高与
   1×／1.25×／1.5×／2× 比例，不替代其他 OS DPI、字体和 macOS 的原生像素验收。
 
+### 终端帧绘制所有权
+
+`TerminalElement` 保留唯一的 `request_layout` → `prepaint` → `paint` 管线与命中几何，
+`TerminalView` 继续持有每个 pane 的 `grid_buf`、`grid_snap`、字体、焦点与终端连接；
+私有绘制模块不创建第二个 Entity、帧缓存或锁，也不接管终端生命周期。
+
+- `element/snapshot.rs` 在同一次 grid snapshot 中解析 cell、选择、搜索与链接标记；
+  稳态继续使用 `try_lock`，无法取得 grid 时不修改旧 buffer，由管线重画上一有效帧。
+  只有首帧或 resize 后旧 buffer 尺寸不匹配时保留原有阻塞获取例外。
+- `element/colors.rs` 负责 ANSI／truecolor、主题颜色与 pane dim 的解析；
+  cell 样式复用只属于当前 snapshot，不跨调色板或主题变化保留解析结果。
+- `element/text.rs` 与其私有 `segment`、`powerline` 模块负责字体、Unicode cluster、
+  宽字符、组合字符、fallback ink fitting 与原生分隔符；单元格列位置与裁切预算不变。
+- `element/decorations.rs` 绘制背景、选择／搜索填充、特殊下划线、cursor 与 IME preedit；
+  所有阶段借用同一 buffer，不能为了模块交接增加每帧 clone、allocation 或 lock。
+
+图片继续由既有 image store 拥有资源。管线保留图片低层、cell 背景与选择／搜索、
+负 z 图片、文字与下划线、非负 z 图片、cursor／IME、bell 的绘制顺序；
+图片的 claim、register、atlas 释放时机及 pane clipping 不移入独立状态所有者。
+绘制回归按颜色、snapshot、文字与装饰分组，小型 fixture 位于 `element/test_support.rs`；
+真实终端与 graphics consumer 继续从既有窗口 seam 验证。
+
+职责迁移后的验收须分别记录自动化结果与隔离原生窗口中的 Unicode、选择／cursor、
+图片、resize、持续输出及 grid 竞争 fallback 证据；本节不把此前的视觉记录当成本次结果。
+
+
 ### 框架滚动约束
 
 `gpui-kit 0.8.0` 的 `List`、`Editor`、`Textarea` 等框架组件采用官方滚动语义：macOS 的精确滚动默认回弹，普通行滚轮不回弹。已有自绘侧栏、文件树和 Git 面板不为统一回弹而改写。

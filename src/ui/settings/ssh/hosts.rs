@@ -2,8 +2,8 @@
 //! one grouped by where it came from, or whatever a search finds — each of
 //! which opens in place to show its details or to be edited.
 
-use super::kit::{self, BtnKind, Tk, fs};
 use super::*;
+use crate::ui::settings::kit::{self, BtnKind, Tk, fs};
 
 /// How many hosts the page shows before "Show all".
 const RECENT_HOSTS: usize = 5;
@@ -63,11 +63,11 @@ impl SettingsWindow {
         let Some(s) = self.active_settings() else {
             return div().into_any_element();
         };
-        let filter = s.ssh_filter.clone();
+        let filter = s.ssh.filter.clone();
         let query = filter.read(cx).value().trim().to_lowercase();
-        let show_all = s.ssh_show_all;
-        let collapsed = s.ssh_collapsed_groups.clone();
-        let editing = s.ssh_form.as_ref().map(|f| f.editing);
+        let show_all = s.ssh.show_all;
+        let collapsed = s.ssh.collapsed_groups.clone();
+        let editing = s.ssh.form.as_ref().map(|f| f.editing);
         let cfg = cx.global::<Config>();
         let profiles = cfg.ssh_profiles.clone();
         let adding = editing.filter(|id| !profiles.iter().any(|p| p.id == *id));
@@ -148,7 +148,7 @@ impl SettingsWindow {
                         let key = ev.keystroke.key.as_str();
                         match key {
                             "down" | "up" if !visible.is_empty() => {
-                                let current = this.active_settings().and_then(|s| s.ssh_open);
+                                let current = this.active_settings().and_then(|s| s.ssh.open);
                                 let at =
                                     current.and_then(|id| visible.iter().position(|v| *v == id));
                                 let next = match (at, key) {
@@ -156,16 +156,14 @@ impl SettingsWindow {
                                     (Some(i), "down") => (i + 1).min(visible.len() - 1),
                                     (Some(i), _) => i.saturating_sub(1),
                                 };
-                                if this.active_settings().is_some_and(|s| s.ssh_form.is_none()) {
-                                    if let Some(s) = this.active_settings_mut() {
-                                        s.ssh_open = Some(visible[next]);
-                                    }
+                                if let Some(s) = this.active_settings_mut() {
+                                    s.ssh.select_row(visible[next]);
                                 }
                                 cx.stop_propagation();
                                 cx.notify();
                             }
                             "escape" => {
-                                let filter = this.active_settings().map(|s| s.ssh_filter.clone());
+                                let filter = this.active_settings().map(|s| s.ssh.filter.clone());
                                 if let Some(filter) = filter
                                     && !filter.read(cx).value().is_empty()
                                 {
@@ -200,7 +198,7 @@ impl SettingsWindow {
                 .on_click(cx.listener(|this, _, window, cx| {
                     if this
                         .active_settings()
-                        .and_then(|s| s.ssh_form.as_ref())
+                        .and_then(|s| s.ssh.form.as_ref())
                         .is_some_and(|f| {
                             !cx.global::<Config>()
                                 .ssh_profiles
@@ -210,7 +208,7 @@ impl SettingsWindow {
                     {
                         return;
                     }
-                    let filter = this.active_settings().map(|s| s.ssh_filter.clone());
+                    let filter = this.active_settings().map(|s| s.ssh.filter.clone());
                     if let Some(filter) = filter {
                         filter.update(cx, |f, cx| f.set_value("", window, cx));
                     }
@@ -289,7 +287,7 @@ impl SettingsWindow {
                         )
                         .on_click(cx.listener(|this, _, _w, cx| {
                             if let Some(s) = this.active_settings_mut() {
-                                s.ssh_show_all = !s.ssh_show_all;
+                                s.ssh.toggle_show_all();
                             }
                             cx.notify();
                         })),
@@ -373,15 +371,15 @@ impl SettingsWindow {
         let Some(s) = self.active_settings() else {
             return div().into_any_element();
         };
-        let editing = s.ssh_form.as_ref().is_some_and(|f| f.editing == id);
-        let open = editing || s.ssh_open == Some(id);
+        let editing = s.ssh.form.as_ref().is_some_and(|f| f.editing == id);
+        let open = editing || s.ssh.open == Some(id);
         let live = self.live_ssh_profiles(cx).contains(&id);
         let dirty = editing && self.ssh_form_dirty(cx);
 
         // While editing, the row shows what the form would save.
         let (title, address) = match (editing, p) {
             (true, _) => {
-                let form = s.ssh_form.as_ref().unwrap();
+                let form = s.ssh.form.as_ref().unwrap();
                 let name = form.name.read(cx).value().trim().to_string();
                 let host = form.host.read(cx).value().trim().to_string();
                 let user = form.user.read(cx).value().trim().to_string();
@@ -507,19 +505,8 @@ impl SettingsWindow {
                 ),
             )
             .on_click(cx.listener(move |this, _, _w, cx| {
-                if this
-                    .active_settings()
-                    .and_then(|s| s.ssh_form.as_ref())
-                    .is_some_and(|f| f.editing == id)
-                {
-                    return;
-                }
                 if let Some(s) = this.active_settings_mut() {
-                    s.ssh_open = if s.ssh_open == Some(id) {
-                        None
-                    } else {
-                        Some(id)
-                    };
+                    s.ssh.toggle_row(id);
                 }
                 cx.notify();
             }));
@@ -572,7 +559,7 @@ impl SettingsWindow {
         .into_iter()
         .filter_map(|(k, v)| v.filter(|v| !v.is_empty()).map(|v| (k, v)))
         .collect();
-        let copied = self.active_settings().and_then(|s| s.ssh_copied) == Some(id);
+        let copied = self.active_settings().and_then(|s| s.ssh.copied) == Some(id);
         let command = ssh_command(p);
         let mono = Tk::mono(cx);
         v_flex()
@@ -659,16 +646,16 @@ impl SettingsWindow {
                                 command.clone(),
                             ));
                             if let Some(s) = this.active_settings_mut() {
-                                s.ssh_copied = Some(id);
+                                s.ssh.copied = Some(id);
                             }
                             cx.notify();
                             cx.spawn(async move |this, cx| {
                                 smol::Timer::after(std::time::Duration::from_millis(1500)).await;
                                 let _ = this.update(cx, |this, cx| {
                                     if let Some(s) = this.active_settings_mut()
-                                        && s.ssh_copied == Some(id)
+                                        && s.ssh.copied == Some(id)
                                     {
-                                        s.ssh_copied = None;
+                                        s.ssh.copied = None;
                                         cx.notify();
                                     }
                                 });
@@ -682,11 +669,11 @@ impl SettingsWindow {
 
     fn render_host_editor(&self, saved: bool, cx: &mut Context<Self>) -> AnyElement {
         let tk = Tk::of(cx);
-        let Some(form) = self.active_settings().and_then(|s| s.ssh_form.as_ref()) else {
+        let Some(form) = self.active_settings().and_then(|s| s.ssh.form.as_ref()) else {
             return div().into_any_element();
         };
         let id = form.editing;
-        let confirm_remove = self.active_settings().is_some_and(|s| s.ssh_confirm_remove);
+        let confirm_remove = self.active_settings().is_some_and(|s| s.ssh.confirm_remove);
         let (_, errors) = self.ssh_form_collect(cx).unzip();
         let errors = errors.unwrap_or_default();
         let dirty = self.ssh_form_dirty(cx);
@@ -724,7 +711,7 @@ impl SettingsWindow {
         };
         // The secrets are not ssh_config keywords, so they are the only two
         // labels here that are translated. Neither reaches the config file:
-        // `save_ssh_form_secrets` files them in the system keychain.
+        // `SshSettings::save_secrets` files them in the system keychain.
         let secret = |label: &'static str, input: &Entity<InputState>| {
             let focused = self.settings_input_focused(input, cx);
             h_flex()
@@ -831,12 +818,11 @@ impl SettingsWindow {
                             .on_click(cx.listener(
                                 move |this, _, _w, cx| {
                                     let confirmed = this
-                                        .active_settings()
-                                        .is_some_and(|s| s.ssh_confirm_remove);
+                                        .active_settings_mut()
+                                        .is_some_and(|s| s.ssh.request_remove());
                                     if confirmed {
                                         this.delete_profile_confirmed(id, cx);
-                                    } else if let Some(s) = this.active_settings_mut() {
-                                        s.ssh_confirm_remove = true;
+                                    } else {
                                         cx.notify();
                                     }
                                 },
@@ -850,9 +836,7 @@ impl SettingsWindow {
     fn save_host_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.save_editing_profile(window, cx) {
             if let Some(s) = self.active_settings_mut() {
-                s.ssh_form = None;
-                s.ssh_open = Some(id);
-                s.ssh_confirm_remove = false;
+                s.ssh.saved(id);
             }
             cx.notify();
         } else {

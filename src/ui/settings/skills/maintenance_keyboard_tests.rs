@@ -91,9 +91,11 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
         });
         vcx.update(|window, cx| window.press("escape", cx));
         app.update_in(&mut vcx, |app, _, _| {
-            assert!(app.active_settings().is_some_and(
-                |s| s.section == SettingsSection::Skills && s.skills.selected.is_some()
-            ))
+            assert!(
+                app.active_settings()
+                    .is_some_and(|s| s.navigation.section() == SettingsSection::Skills
+                        && s.skills.selected.is_some())
+            )
         });
         vcx.update(|window, cx| {
             window.render_frame(cx);
@@ -117,7 +119,8 @@ fn unknown_source_and_remove_review_remain_keyboard_reachable_in_both_locales(
                 !app.read(cx)
                     .active_settings()
                     .unwrap()
-                    .search
+                    .navigation
+                    .search()
                     .read(cx)
                     .focus_handle(cx)
                     .is_focused(window)

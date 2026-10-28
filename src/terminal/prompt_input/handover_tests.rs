@@ -1,6 +1,9 @@
 use super::*;
 use crate::daemon::protocol::{ClientMsg, DaemonMsg};
 use crate::daemon::transport::Stream;
+use crate::terminal::view::input::HOLD_WINDOW;
+use crate::terminal::view::notices::TITLE_SETTLE;
+use crate::terminal::view::test_support::seed_history;
 use gpui_kit::TestAppContext;
 
 fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {

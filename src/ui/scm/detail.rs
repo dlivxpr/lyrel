@@ -34,8 +34,6 @@
 //! defending is unchanged and still the point: **this view is never a step
 //! above the rows in `panel.rs`.** It is on the ramp with them.
 
-use std::sync::Arc;
-
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, px, rems};
 
@@ -50,7 +48,7 @@ use crate::ui::right_panel::{
     HEADING, META, META_MONO, ROW_INSET, TEXT, TEXT_INSET, git_badge, info_chip,
 };
 use crate::ui::scm::path::{relative_time, split_display_path};
-use crate::ui::scm::state::{CommitDetailView, RepoKey};
+use crate::ui::scm::state::CommitDetailView;
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::window_chrome::CONTENT_INSET;
 
@@ -131,47 +129,13 @@ const NAME_FLOOR: f32 = 40.;
 // a pair of numbers that happened to match.
 
 impl LyrelApp {
-    /// Show one commit, replacing the working tree in the panel body.
-    ///
-    /// `seed` is the commit the caller already has. The graph's page carries
-    /// every field this view renders, so a click on a row hands its own
-    /// [`Commit`] over and no `git show` is run at all; a parent link, or
-    /// anything else reaching a commit outside that window, passes `None` and
-    /// pays for the read.
-    pub(crate) fn open_commit_detail(
-        &mut self,
-        repo: RepoKey,
-        oid: String,
-        seed: Option<Commit>,
-        cx: &mut Context<Self>,
-    ) {
-        self.scm.detail = Some(CommitDetailView::new(repo, oid, seed));
-        cx.notify();
-    }
-
-    pub(crate) fn close_commit_detail(&mut self, cx: &mut Context<Self>) {
-        if self.scm.detail.take().is_some() {
-            cx.notify();
-        }
-    }
-
     /// The commit detail body, shown in place of the file groups.
     pub(crate) fn render_commit_detail(
         &mut self,
         detail: &CommitDetailView,
         _window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        // The detail names its own repository, and the panel may since have
-        // followed the active pane somewhere else. A commit from a repository
-        // nobody is looking at any more is not a second-level view of
-        // anything, so it goes rather than sitting on top of the wrong tree.
-        if self.scm.active_repo() != Some(&detail.repo) {
-            self.scm.detail = None;
-            return None;
-        }
-        self.load_commit_detail(detail, cx);
-
+    ) -> AnyElement {
         let mono = cx.theme().mono_font_family.clone();
         let muted = cx.theme().muted_foreground;
         // No surface, no margin: this is the panel's body while a commit is
@@ -214,69 +178,7 @@ impl LyrelApp {
                 );
             }
         }
-        Some(body.into_any_element())
-    }
-
-    /// Read the commit and its file list, once.
-    ///
-    /// Runs from `render`, so it has to be idempotent in the strongest sense:
-    /// the panel is redrawn on every status change and a second dispatch would
-    /// mean a `git show` per frame. `loading` covers the window while a read
-    /// is out and `loaded` covers every frame after it lands, including the
-    /// ones where it landed with nothing.
-    fn load_commit_detail(&mut self, detail: &CommitDetailView, cx: &mut Context<Self>) {
-        if detail.loading || detail.loaded {
-            return;
-        }
-        let Some(host) = crate::ui::host_registry::HostRegistry::get(cx, detail.repo.host) else {
-            return;
-        };
-        if let Some(open) = self.scm.detail.as_mut() {
-            open.loading = true;
-        }
-        let root = detail.repo.root.clone();
-        let oid = detail.oid.clone();
-        // A seeded view already has its metadata and only wants the files, so
-        // the `show` is skipped rather than run for an answer we hold.
-        let seeded = detail.commit.is_some();
-        let key = (detail.repo.clone(), detail.oid.clone());
-        crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
-            move |h| {
-                use lyrel_core::core::git::log;
-                let commit = (!seeded)
-                    .then(|| log::load_commit(h, &root, &oid))
-                    .flatten();
-                (commit, log::commit_files(h, &root, &oid))
-            },
-            move |this, (commit, files), cx| {
-                // The user may have gone back, or moved on to another commit,
-                // while the read was out. Landing it anywhere but on the view
-                // that asked would show one commit's files under another's
-                // message.
-                let Some(open) = this
-                    .scm
-                    .detail
-                    .as_mut()
-                    .filter(|d| (d.repo.clone(), d.oid.clone()) == key)
-                else {
-                    return;
-                };
-                open.loading = false;
-                open.loaded = true;
-                if let Some(commit) = commit {
-                    open.commit = Some(Arc::new(commit));
-                }
-                match files {
-                    Some(files) => open.files = Some(Arc::new(files)),
-                    // A failed read is not an empty commit — see
-                    // `CommitDetailView::files_failed`.
-                    None => open.files_failed = true,
-                }
-                cx.notify();
-            },
-        );
+        body.into_any_element()
     }
 
     /// The way back, and the object id.
@@ -324,7 +226,7 @@ impl LyrelApp {
                     .rounded(PILL_RADIUS)
                     .cursor_pointer()
                     .hover(|s| s.bg(hover_bg))
-                    .on_click(cx.listener(|this, _, _window, cx| this.close_commit_detail(cx)))
+                    .on_click(cx.listener(|this, _, _window, cx| this.scm.close_detail(cx)))
                     // `small()`, which is 14px of glyph beside a 12px label —
                     // an icon needs a little more box than the text it labels
                     // to read as the same size, and it is the width of
@@ -452,10 +354,7 @@ impl LyrelApp {
                             .text_color(cx.theme().muted_foreground)
                             .hover(move |s| s.text_color(fg))
                             .on_click(cx.listener(|this, _, _window, cx| {
-                                if let Some(open) = this.scm.detail.as_mut() {
-                                    open.body_expanded = !open.body_expanded;
-                                    cx.notify();
-                                }
+                                this.scm.toggle_detail_body(cx);
                             }))
                             .child(t(if folded {
                                 L10nKey::ScmShowMore
@@ -581,7 +480,7 @@ impl LyrelApp {
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         // No seed: a parent is by definition one step past
                         // whatever the caller had in hand.
-                        this.open_commit_detail(repo.clone(), oid.clone(), None, cx);
+                        this.scm.open_detail(repo.clone(), oid.clone(), None, cx);
                     }))
                     .child(short_oid(parent).to_string()),
             );
@@ -1006,26 +905,15 @@ mod tests {
 /// here — a missing global, a theme token, a slice through the middle of a
 /// character — goes wrong during layout and paint, so these arm the render
 /// probe and insist something was actually drawn.
-///
-/// Still unix-only, and for a reason worth naming rather than a harness one:
-/// on Windows the root the panel settles on is not the root this module hands
-/// it, so the panel never settles on the directory it is already showing.
-///
-/// The forward slashes `git rev-parse --show-toplevel` prints are not what
-/// breaks it — `Path` compares by component, so `C:/x` and `C:\x` are equal.
-/// The prefix is, and since #796 it is this module's own: the product keys a
-/// repository by one spelling now, while `scratch` below still hands the pane
-/// `std::fs::canonicalize`'s `\\?\C:\Users\—`, a `VerbatimDisk` prefix where
-/// every root it is compared against is `Disk`. Taking the gate off needs
-/// that helper to spell its answer the way
-/// `lyrel_core::core::path_spelling` does, in a change that can show these
-/// green rather than a drive-by.
-#[cfg(all(test, unix))]
+/// The fixture uses the same local path spelling as the product, including
+/// Windows' plain drive prefix rather than canonicalize's verbatim prefix.
+#[cfg(test)]
 mod detail_gpui_tests {
     use super::*;
     use crate::daemon::protocol::DaemonMsg;
     use crate::ui::app::{render_probe, test_window};
     use crate::ui::host_ops::HostId;
+    use crate::ui::scm::state::RepoKey;
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
     use lyrel_core::core::config::RightPanelTab;
     use std::path::{Path, PathBuf};
@@ -1034,7 +922,7 @@ mod detail_gpui_tests {
         let dir = std::env::temp_dir().join(format!("lyrel-detail-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::canonicalize(&dir).unwrap()
+        lyrel_core::core::path_spelling::local_spelling_buf(std::fs::canonicalize(&dir).unwrap())
     }
 
     fn git(root: &Path, args: &[&str]) -> String {
@@ -1042,7 +930,10 @@ mod detail_gpui_tests {
             .args(args)
             .current_dir(root)
             // A developer's `tag.gpgsign` makes a bare `git tag` ask for a message.
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .expect("git runs");
@@ -1105,7 +996,7 @@ mod detail_gpui_tests {
         });
         let want = root.to_path_buf();
         settle(&app, &mut vcx, move |app, _| {
-            app.scm.repo.as_ref().is_some_and(|r| r.root == want)
+            app.scm.pane_repo().is_some_and(|r| r.root == want)
         });
         (app, vcx, pane)
     }
@@ -1135,8 +1026,7 @@ mod detail_gpui_tests {
     fn paths(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Vec<String> {
         app.update_in(vcx, |app, _, _| {
             app.scm
-                .detail
-                .as_ref()
+                .detail()
                 .and_then(|d| d.files.clone())
                 .map(|files| files.iter().map(|f| f.path.clone()).collect())
                 .unwrap_or_default()
@@ -1150,17 +1040,17 @@ mod detail_gpui_tests {
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
 
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
         app.update_in(&mut vcx, |app, _, cx| {
-            app.open_commit_detail(repo.clone(), head.clone(), None, cx)
+            app.scm.open_detail(repo.clone(), head.clone(), None, cx)
         });
         settle(&app, &mut vcx, |app, _| {
-            app.scm.detail.as_ref().is_some_and(|d| d.loaded)
+            app.scm.detail().is_some_and(|d| d.loaded)
         });
 
         // Nothing was seeded, so the metadata came from `git show`.
         app.update_in(&mut vcx, |app, _, _| {
-            let detail = app.scm.detail.as_ref().expect("the detail is open");
+            let detail = app.scm.detail().expect("the detail is open");
             let commit = detail.commit.as_ref().expect("git resolved the commit");
             assert_eq!(commit.oid, head);
             assert!(commit.summary.starts_with("feat(detail):"));
@@ -1194,7 +1084,7 @@ mod detail_gpui_tests {
         // arithmetic: two files of one line each were added, so there is a
         // number to print and it is not zero.
         app.update_in(&mut vcx, |app, _, _| {
-            let files = app.scm.detail.as_ref().unwrap().files.clone().unwrap();
+            let files = app.scm.detail().unwrap().files.clone().unwrap();
             let (added, removed) = diff_totals(&files).expect("a text commit has counts");
             assert!(
                 added >= 2,
@@ -1213,8 +1103,7 @@ mod detail_gpui_tests {
 
         // Expanding the body is another branch of the same element.
         app.update_in(&mut vcx, |app, _, cx| {
-            app.scm.detail.as_mut().unwrap().body_expanded = true;
-            cx.notify();
+            app.scm.toggle_detail_body(cx);
         });
         render_probe::arm(10_000);
         app.update_in(&mut vcx, |_, _, cx| cx.notify());
@@ -1253,27 +1142,27 @@ mod detail_gpui_tests {
         let parent = git(&root, &["rev-parse", "HEAD^"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
 
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
         app.update_in(&mut vcx, |app, _, cx| {
-            app.open_commit_detail(repo.clone(), head.clone(), None, cx)
+            app.scm.open_detail(repo.clone(), head.clone(), None, cx)
         });
         settle(&app, &mut vcx, |app, _| {
-            app.scm.detail.as_ref().is_some_and(|d| d.loaded)
+            app.scm.detail().is_some_and(|d| d.loaded)
         });
 
         // What the parent link does: the same call with the other oid, and
         // nothing carried over from the commit that was on screen.
         app.update_in(&mut vcx, |app, _, cx| {
-            app.open_commit_detail(repo.clone(), parent.clone(), None, cx)
+            app.scm.open_detail(repo.clone(), parent.clone(), None, cx)
         });
         app.update_in(&mut vcx, |app, _, _| {
-            let detail = app.scm.detail.as_ref().unwrap();
+            let detail = app.scm.detail().unwrap();
             assert_eq!(detail.oid, parent);
             assert!(detail.commit.is_none(), "the old commit did not linger");
             assert!(!detail.loaded);
         });
         settle(&app, &mut vcx, |app, _| {
-            app.scm.detail.as_ref().is_some_and(|d| d.loaded)
+            app.scm.detail().is_some_and(|d| d.loaded)
         });
         assert_eq!(
             paths(&app, &mut vcx),
@@ -1281,8 +1170,8 @@ mod detail_gpui_tests {
             "a root commit's files are what it added, with no --root needed"
         );
 
-        app.update_in(&mut vcx, |app, _, cx| app.close_commit_detail(cx));
-        assert!(app.update_in(&mut vcx, |app, _, _| app.scm.detail.is_none()));
+        app.update_in(&mut vcx, |app, _, cx| app.scm.close_detail(cx));
+        assert!(app.update_in(&mut vcx, |app, _, _| app.scm.detail().is_none()));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1292,7 +1181,7 @@ mod detail_gpui_tests {
         let root = two_commit_repo("seeded");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
 
         // What the graph hands over: a row it already holds. The subject is
         // deliberately not the real one, so a `git show` behind our back would
@@ -1305,14 +1194,15 @@ mod detail_gpui_tests {
         .expect("the scratch repo answers");
         seed.summary = "what the graph already knew".into();
         app.update_in(&mut vcx, |app, _, cx| {
-            app.open_commit_detail(repo.clone(), head.clone(), Some(seed), cx)
+            app.scm
+                .open_detail(repo.clone(), head.clone(), Some(seed), cx)
         });
         settle(&app, &mut vcx, |app, _| {
-            app.scm.detail.as_ref().is_some_and(|d| d.loaded)
+            app.scm.detail().is_some_and(|d| d.loaded)
         });
 
         app.update_in(&mut vcx, |app, _, _| {
-            let detail = app.scm.detail.as_ref().unwrap();
+            let detail = app.scm.detail().unwrap();
             assert_eq!(
                 detail.commit.as_ref().unwrap().summary,
                 "what the graph already knew",
@@ -1371,12 +1261,12 @@ mod detail_gpui_tests {
         let root = two_commit_repo("fold");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
         app.update_in(&mut vcx, |app, _, cx| {
-            app.open_commit_detail(repo.clone(), head.clone(), None, cx)
+            app.scm.open_detail(repo.clone(), head.clone(), None, cx)
         });
         settle(&app, &mut vcx, |app, _| {
-            app.scm.detail.as_ref().is_some_and(|d| d.loaded)
+            app.scm.detail().is_some_and(|d| d.loaded)
         });
         app.update_in(&mut vcx, |_, _, cx| cx.notify());
         vcx.run_until_parked();
@@ -1405,8 +1295,7 @@ mod detail_gpui_tests {
         assert!(
             app.update_in(&mut vcx, |app, _, _| app
                 .scm
-                .detail
-                .as_ref()
+                .detail()
                 .unwrap()
                 .body_expanded),
             "the click landed"
@@ -1419,8 +1308,7 @@ mod detail_gpui_tests {
         assert!(
             !app.update_in(&mut vcx, |app, _, _| app
                 .scm
-                .detail
-                .as_ref()
+                .detail()
                 .unwrap()
                 .body_expanded),
             "Show less is the same row again"
@@ -1443,15 +1331,47 @@ mod detail_gpui_tests {
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
 
-        app.update_in(&mut vcx, |app, window, cx| {
+        app.update_in(&mut vcx, |app, _window, cx| {
             let stranger = RepoKey {
                 host: HostId::LOCAL,
                 root: PathBuf::from("/no/such/lyrel/repo"),
             };
-            app.open_commit_detail(stranger.clone(), head.clone(), None, cx);
-            let detail = app.scm.detail.clone().unwrap();
-            assert!(app.render_commit_detail(&detail, window, cx).is_none());
-            assert!(app.scm.detail.is_none(), "and it does not come back");
+            app.scm
+                .open_detail(stranger.clone(), head.clone(), None, cx);
+            app.scm.refresh_detail(cx);
+            assert!(app.scm.detail().is_none(), "and it does not come back");
+        });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[gpui_kit::test]
+    fn an_unresolvable_commit_finishes_loading_and_draws_the_missing_state(
+        cx: &mut TestAppContext,
+    ) {
+        crate::core::config::pin_test_config_dir();
+        let root = two_commit_repo("missing");
+        let (app, mut vcx, _pane) = panel_on(cx, &root);
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.scm.open_detail(
+                repo,
+                "0000000000000000000000000000000000000000".into(),
+                None,
+                cx,
+            );
+        });
+        settle(&app, &mut vcx, |app, _| {
+            app.scm.detail().is_some_and(|detail| detail.loaded)
+        });
+        render_probe::arm(10_000);
+        app.update_in(&mut vcx, |_, _, cx| cx.notify());
+        vcx.run_until_parked();
+        assert!(render_probe::draws() > 0, "the missing state was drawn");
+        app.update_in(&mut vcx, |app, _, _| {
+            let detail = app.scm.detail().unwrap();
+            assert!(detail.loaded);
+            assert!(!detail.loading);
+            assert!(detail.commit.is_none());
         });
         let _ = std::fs::remove_dir_all(&root);
     }
