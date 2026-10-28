@@ -3,7 +3,7 @@
 //! context, schedules HostOps work and delivers navigation/clipboard effects.
 use super::menus::menu_row_with_hint;
 use super::{
-    LoopbackPlan, OpenFileRequested, TerminalView, loopback_plan, open_file_path, reveal_file_path,
+    LoopbackPlan, OpenFileRequested, TerminalView, open_file_path, reveal_file_path,
 };
 use crate::core::actions::{
     CopyLinkPathUnderPointer, OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer,
