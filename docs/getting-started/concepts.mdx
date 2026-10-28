@@ -72,7 +72,16 @@ Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor�
 释放锁后才向被替代者发送通知；只有专用连接会被关闭，共享 GUI／Host 连接可继续服务其他工作区。
 `output.rs` 的单一 `Sink` 同步串行化响应与事件，并负责输出退休，不增加输出消费者或锁。
 读取循环退出后，依次关闭工作池、清除 watch、释放工作区、注销 GUI、丢弃机器订阅、退休 Sink、关闭链接；
-不会等待最后一个 worker 持有的 `Arc<Conn>` 释放才清理连接。请求关联、取消、watch／stream 与有界工作池仍使用原有状态和规则。
+不会等待最后一个 worker 持有的 `Arc<Conn>` 释放才清理连接。
+私有 `dispatch.rs` 保留逐项显式的 wire request 分发，借用同一连接的 Host、机器树与 `ConnectionIdentity`；
+`requests.rs` 的 `Requests` 私有持有在途 request ID 与取消标记，负责完成关联、错误编码和 blob 响应。
+取消只放弃回复，不强制终止已经开始的 Host 操作；完成时先释放在途表锁，再经原 `Sink` 输出，错误链与 CLI 退出结果不变。
+`pool.rs` 的 `Pool` 独立持有原有 FIFO 队列、worker 数与唤醒条件：最多 64 个 worker、1024 个排队请求，空闲保温 10 秒；
+连接退休关闭准入并丢弃尚未开始的工作；已经开始的 Host 操作可继续完成，不能因此推迟身份清理与 Sink 退休。
+`subscriptions/watch.rs` 的 `Watches` 拥有目录订阅及按 request ID 暂存的 receiver：只有 `WatchId` 回复成功写出后才转发事件，
+取消或回复失败则释放该订阅。`subscriptions/git.rs` 的 `GitStreams` 拥有原有并发 slot，chunk 仍同步写入同一个 `Sink`，
+保持流内顺序、容量限制及慢接收者的背压；`subscriptions/layout.rs` 负责有界机器通知转发，落后超过原有 1024 条队列时，
+丢弃已过时的 backlog 并发送 `LayoutResync`，不另建 publication authority。这些 owner 不增加锁、输出消费者或第二份连接身份。
 Unix 的 socket 路径、私有权限、残留端点探测与监听属于 `host/server/unix.rs`；Windows 的认证 loopback TCP、
 `control.port` 与存活探测属于 `host/server/windows.rs`。现有公共入口直接暴露真实实现，协议仍为 CONTROL 16／PANE 15，
 协商、错误分类及断开前输出语义不变；Windows TCP、Unix socket、stdio 和真实 SSH 运行证据须分别记录。
