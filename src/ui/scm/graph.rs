@@ -48,9 +48,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, BorderStyle, Bounds, Context, Corners, Edges, Hsla, MouseButton,
-    MouseMoveEvent, MouseUpEvent, Pixels, SharedString, Window, canvas, div, fill, point,
-    prelude::*, px, quad, rems,
+    AnyElement, BorderStyle, Bounds, Context, Corners, Edges, Hsla, MouseButton, MouseMoveEvent,
+    MouseUpEvent, Pixels, SharedString, Window, canvas, div, fill, point, prelude::*, px, quad,
+    rems,
 };
 
 use lyrel_core::core::git::log::{
@@ -676,7 +676,6 @@ impl LyrelApp {
         )
     }
 
-
     /// The filter field, drawn only while it is open.
     ///
     /// At rest the section is a title and a list; a permanently parked search
@@ -686,7 +685,6 @@ impl LyrelApp {
         let input = self.scm.graph().search.clone()?;
         Some(self.panel_search(&input, cx))
     }
-
 }
 
 impl LyrelApp {
@@ -763,7 +761,9 @@ impl LyrelApp {
                 // or the lane line running underneath shows through. The
                 // section is flush on the panel, so that fill is the sidebar's.
                 surface: gpui_kit::rgb(sf.base).into(),
-                selected: self.scm.graph()
+                selected: self
+                    .scm
+                    .graph()
                     .selected
                     .as_deref()
                     .and_then(|oid| page.commits.iter().position(|c| c.oid == oid)),
@@ -904,7 +904,8 @@ impl LyrelApp {
                 let page = page.clone();
                 move |this, _, _, cx| {
                     let seed = page.commits[i].clone();
-                    this.scm.open_graph_commit(repo.clone(), seed.oid.clone(), Some(seed), cx)
+                    this.scm
+                        .open_graph_commit(repo.clone(), seed.oid.clone(), Some(seed), cx)
                 }
             }))
             .context_menu({
@@ -919,7 +920,6 @@ impl LyrelApp {
             .into_any_element()
     }
 }
-
 
 fn commit_tooltip(commit: &Commit, now: i64) -> SharedString {
     SharedString::from(format!(
@@ -1249,7 +1249,6 @@ impl LyrelApp {
             menu
         }
     }
-
 }
 
 fn scope_label(scope: &GraphScope) -> String {
@@ -1301,7 +1300,13 @@ impl LyrelApp {
                     let rev = oid.to_string();
                     move |_, window, cx| {
                         let _ = app.update(cx, |this, cx| {
-                            this.scm.begin_branch_at(repo.clone(), rev.clone(), this.tabs.active_index(), window, cx)
+                            this.scm.begin_branch_at(
+                                repo.clone(),
+                                rev.clone(),
+                                this.tabs.active_index(),
+                                window,
+                                cx,
+                            )
                         });
                     }
                 }),
@@ -1455,7 +1460,6 @@ impl LyrelApp {
 }
 
 impl LyrelApp {
-
     /// The inline "name a branch here" field.
     ///
     /// `xsmall`, like every other inline field in this panel: a 20px box in a
@@ -1813,7 +1817,8 @@ mod tests {
         // Unseeded first: a click that cannot hand a commit over still opens
         // the view, and the read that fills it is dispatched later.
         app.update(&mut vcx, |app, cx| {
-            app.scm.open_graph_commit(repo(), "deadbeef".into(), None, cx)
+            app.scm
+                .open_graph_commit(repo(), "deadbeef".into(), None, cx)
         });
         let (selected, detail) = app.read_with(&vcx, |app, _| {
             (app.scm.graph().selected.clone(), app.scm.detail().cloned())
@@ -1829,7 +1834,8 @@ mod tests {
         // the path every real click takes.
         let seed = commit_named("a subject", "someone", "deadbeef");
         app.update(&mut vcx, |app, cx| {
-            app.scm.open_graph_commit(repo(), "deadbeef".into(), Some(seed.clone()), cx)
+            app.scm
+                .open_graph_commit(repo(), "deadbeef".into(), Some(seed.clone()), cx)
         });
         let detail = app
             .read_with(&vcx, |app, _| app.scm.detail().cloned())
@@ -1840,7 +1846,6 @@ mod tests {
             "the seed spares the view a `git show`"
         );
     }
-
 
     /// A filter you cannot see must not be filtering.
     ///

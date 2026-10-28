@@ -194,7 +194,10 @@ impl LyrelApp {
                 cx,
             ),
             ScmIntent::CreateBranch => self.scm.begin_branch_input(BranchInput::Create, window, cx),
-            ScmIntent::CheckoutBranch => self.scm.begin_branch_input(BranchInput::Checkout, window, cx),
+            ScmIntent::CheckoutBranch => {
+                self.scm
+                    .begin_branch_input(BranchInput::Checkout, window, cx)
+            }
         }
     }
 

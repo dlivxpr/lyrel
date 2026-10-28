@@ -23,7 +23,6 @@ use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::host_registry::HostRegistry;
 use crate::ui::i18n::{L10nKey, t};
 
-
 mod branches;
 mod history;
 

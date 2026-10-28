@@ -502,7 +502,6 @@ impl LyrelApp {
         (count > 0 && choices.contains(current)).then_some(count)
     }
 
-
     fn scm_branch_menu(
         &self,
         repo: &RepoKey,
@@ -555,7 +554,9 @@ impl LyrelApp {
                 .item(PopupMenuItem::new(t(L10nKey::ScmCreateBranch)).on_click({
                     let app = app.clone();
                     move |_, window, cx| {
-                        let _ = app.update(cx, |this, cx| this.scm.begin_branch_input(BranchInput::Create, window, cx));
+                        let _ = app.update(cx, |this, cx| {
+                            this.scm.begin_branch_input(BranchInput::Create, window, cx)
+                        });
                     }
                 }));
             for (label, intent) in [
@@ -605,7 +606,6 @@ impl LyrelApp {
             menu
         }
     }
-
 
     /// The inline "name your branch" row.
     ///
