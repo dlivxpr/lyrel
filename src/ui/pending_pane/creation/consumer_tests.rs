@@ -227,3 +227,64 @@ fn a_replacement_terminal_is_not_overwritten_by_the_previous_requests_result(
         assert_eq!(landed[0].read(cx).pane_id, 94);
     });
 }
+
+#[gpui_kit::test]
+fn a_focused_split_hands_focus_to_its_landed_terminal(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+
+    let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
+    let (waiting, original, parts, _daemon) = app.update_in(&mut vcx, |app, window, cx| {
+        let waiting = pending(app, window, cx);
+        app.tabs.remove(1);
+        app.tabs.select(0);
+        let original = app.tabs[0].pane.first_leaf().unwrap().entity_id();
+        assert!(app.tabs.get_mut(0).unwrap().split_pane(
+            original,
+            gpui_kit::Axis::Horizontal,
+            false,
+            PaneSlot::Connecting(waiting.clone()),
+        ));
+        window.focus(&waiting.read(cx).focus_handle(cx), cx);
+        let (parts, daemon) =
+            crate::terminal::view::quiet_test_shell_parts(96, Some(app.workspace));
+        (waiting, original, parts, daemon)
+    });
+    deliver(&waiting, Ok(parts), &mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert_eq!(app.tabs.len(), 1);
+        let leaves = app.tabs[0].pane.terminals();
+        assert_eq!(leaves.len(), 2);
+        assert!(leaves.iter().any(|leaf| leaf.entity_id() == original));
+        let landed = leaves.iter().find(|leaf| leaf.read(cx).pane_id == 96).unwrap();
+        assert!(landed.read(cx).focus_handle.contains_focused(window, cx));
+        assert_eq!(
+            app.tabs[0].focus_target(cx).unwrap().entity_id(),
+            landed.entity_id(),
+            "the terminal focus observer remembers the installed entity, not the retired slot"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_late_spawn_keeps_the_open_searchs_focus(cx: &mut TestAppContext) {
+    let (app, mut vcx, _original_stream) = test_window::harness_with_pane(cx);
+    let (waiting, parts, _daemon) = app.update_in(&mut vcx, |app, window, cx| {
+        let waiting = pending(app, window, cx);
+        let (parts, daemon) =
+            crate::terminal::view::quiet_test_shell_parts(97, Some(app.workspace));
+        (waiting, parts, daemon)
+    });
+    vcx.dispatch_action(crate::core::actions::TogglePalette);
+    vcx.run_until_parked();
+    let search_focus = vcx.update(|window, cx| {
+        assert!(app.read(cx).search.is_open());
+        window.focused(cx).expect("search owns window focus")
+    });
+    deliver(&waiting, Ok(parts), &mut vcx);
+    vcx.update(|window, cx| {
+        let app = app.read(cx);
+        assert!(app.search.is_open());
+        assert_eq!(app.tabs[1].pane.terminals()[0].read(cx).pane_id, 97);
+        assert_eq!(window.focused(cx), Some(search_focus));
+    });
+}

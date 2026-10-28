@@ -605,7 +605,8 @@ fn adopt(
                 let spec = records
                     .get(&key.pane())
                     .and_then(|pane| pane.ssh_spec.clone());
-                crate::ui::app::attach_sidecar_terminal(
+                LyrelApp::attach_existing_terminal(
+                    None,
                     key.pane(),
                     sidecar.id,
                     app.font_size,
@@ -614,7 +615,7 @@ fn adopt(
                     cx,
                 )
             } else {
-                crate::ui::app::attach_existing_terminal(
+                LyrelApp::attach_existing_terminal(
                     Some(
                         app.window_workspace(cx)
                             .expect("sidecar adoption requires its remote workspace route"),
@@ -627,12 +628,7 @@ fn adopt(
                     cx,
                 )
             };
-            match attached {
-                Ok(slot) => {
-                    slots.insert(key, slot);
-                }
-                Err(error) => log::warn!("could not attach sidecar pane {}: {error:#}", key.pane()),
-            }
+            slots.insert(key, attached);
         }
         let Some(pane) = pane_from_existing(&source.root, &mut slots) else {
             continue;
