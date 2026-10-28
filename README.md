@@ -9,9 +9,11 @@
 
 <sub>纯 Rust · GPUI Kit（GPUI）GPU 渲染 · 正式 Rio VT 内核</sub>
 
+<sub>本项目 fork 自 <a href="https://github.com/l0ng-ai/tty7">l0ng-ai/tty7</a>。</sub>
+
 <br />
 
-[![初始版本](https://img.shields.io/badge/version-0.1.0-3FDD8C)](https://github.com/dlivxpr/lyrel)
+[![最新版本](https://img.shields.io/github/v/release/dlivxpr/lyrel?label=version&color=3FDD8C)](https://github.com/dlivxpr/lyrel/releases/latest)
 [![桌面平台](https://img.shields.io/badge/desktop-macOS%20%C2%B7%20Windows-blue)](https://github.com/dlivxpr/lyrel)
 [![许可证](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
