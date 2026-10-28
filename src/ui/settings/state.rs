@@ -132,9 +132,7 @@ impl SettingsWindow {
             wd_path_input,
             link_file_command_input,
             http_proxy_input,
-            theme_editor: None,
-            theme_draft: None,
-            theme_draft_error: None,
+            theme: theme_edit::ThemeEditing::default(),
             save_error: None,
             saved_config: cx.global::<Config>().clone(),
             menu: None,
@@ -189,6 +187,7 @@ impl SettingsWindow {
             // Arriving on a page with a query live means arriving to look for
             // what the nav badge counted, so take the page to it.
             if moved {
+                s.theme.leave_page();
                 s.reveal_first_hit.set(true);
             }
             if moved {
