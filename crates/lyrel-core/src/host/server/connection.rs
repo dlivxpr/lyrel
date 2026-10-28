@@ -1,8 +1,6 @@
 //! Negotiated connection lifetime; retirement follows the read loop, not Arc drop.
-use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::sync::atomic::{AtomicU64, AtomicUsize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::core::machine;
 use crate::daemon::control::LinkShutdown;
@@ -11,7 +9,9 @@ use crate::host::SharedHost;
 
 use super::attachments::ConnectionIdentity;
 use super::output::Sink;
-use super::{Conn, Pool, Services, negotiation, read_loop, subscribe_machine};
+use super::dispatch::read_loop;
+use super::subscriptions::subscribe_machine;
+use super::{Conn, GitStreams, Pool, Requests, Services, Watches, negotiation};
 
 pub fn serve<D: Duplex>(link: D, host: SharedHost) -> io::Result<()> {
     serve_with(link, host, Services::none())
@@ -77,11 +77,9 @@ where
     let conn = Arc::new(Conn {
         host,
         sink: Arc::clone(&sink),
-        inflight: Mutex::new(HashMap::new()),
-        watches: Mutex::new(HashMap::new()),
-        deferred_watches: Mutex::new(HashMap::new()),
-        next_watch: AtomicU64::new(1),
-        git_streams: Arc::new(AtomicUsize::new(0)),
+        requests: Requests::new(),
+        watches: Watches::new(),
+        git_streams: GitStreams::new(),
         pool: Pool::new(),
         machine: services.machine.clone(),
         machine_origin: machine_sub.as_ref().map(machine::Subscription::id),
@@ -114,10 +112,7 @@ where
     // is intentional: last-Arc drop must not delay peer retirement or GUI release.
 
     conn.pool.close();
-    conn.watches
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
+    conn.watches.clear();
     conn.identity.release_all(conn.machine.as_deref());
     // Every exit path converges here, including EOF and protocol errors.
     conn.identity.unregister_gui();
