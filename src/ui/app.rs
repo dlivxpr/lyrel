@@ -880,13 +880,7 @@ impl LyrelApp {
             loopback_panel,
             sftp_panel,
             right_panel: Default::default(),
-            scm: crate::ui::scm::ScmPanelState {
-                graph: crate::ui::scm::GraphState {
-                    expanded: scm_graph_expanded,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
+            scm: crate::ui::scm::ScmPanelState::new(scm_graph_expanded),
             github: Default::default(),
             diff_probes_inflight: Default::default(),
             diff_probes_restale: Default::default(),
