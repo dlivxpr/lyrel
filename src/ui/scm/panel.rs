@@ -37,7 +37,7 @@ use crate::ui::right_panel::{
 use crate::ui::rounding::{HAIRLINE, ROW_RADIUS, RoundedCorners as _, segment_corners};
 use crate::ui::scm::ScmIntent;
 use crate::ui::scm::path::split_display_path;
-use crate::ui::scm::state::{RepoKey, ScmGroup};
+use crate::ui::scm::state::{BranchInput, RepoKey, ScmGroup};
 use crate::ui::scm::status::{status_color, status_glyph};
 use crate::ui::scm::tree::{TreeRow, normalize_query, path_matches, tree_rows};
 use crate::ui::window_chrome::{CONTENT_INSET, TILE_GLYPH_XS, TILE_SIZE_XS};
@@ -248,12 +248,10 @@ impl LyrelApp {
         pinned.push(buttons);
         // A commit's detail replaces the working tree's, so the two can never
         // be on screen claiming to be the same thing.
-        let detail = self.scm.detail.clone();
-        let body = match detail
-            .as_ref()
-            .and_then(|d| self.render_commit_detail(d, window, cx))
-        {
-            Some(body) => body,
+        self.scm.refresh_detail(cx);
+        let detail = self.scm.detail().cloned();
+        let body = match detail.as_ref() {
+            Some(detail) => self.render_commit_detail(detail, window, cx),
             None if status.is_clean() => self.panel_empty(
                 t(L10nKey::PanelNoChanges),
                 Some(t(L10nKey::PanelNoChangesHint)),
@@ -293,7 +291,7 @@ impl LyrelApp {
         status: &WorkingTreeStatus,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.scm_load_branches(repo, cx);
+        self.scm.load_branches(repo, cx);
         let mono = cx.theme().mono_font_family.clone();
         let theme = cx.theme();
         let (warning, muted, fg) = (theme.warning, theme.muted_foreground, theme.foreground);
@@ -504,50 +502,6 @@ impl LyrelApp {
         (count > 0 && choices.contains(current)).then_some(count)
     }
 
-    /// Read the local branch names, at most once per epoch.
-    fn scm_load_branches(&mut self, repo: &RepoKey, cx: &mut Context<Self>) {
-        let epoch = repo.refresh_epoch(cx);
-        if self
-            .scm
-            .branches
-            .get(repo)
-            .is_some_and(|(at, _)| *at == epoch)
-            || self.scm.branches_loading.contains(repo)
-        {
-            return;
-        }
-        let Some(context) = repo.context(cx) else {
-            return;
-        };
-        let (key, host, _) = context.into_parts();
-        self.scm.branches_loading.insert(repo.clone());
-        let root = repo.root.clone();
-        crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
-            move |h| {
-                // `for-each-ref` rather than `branch`: no porcelain warnings,
-                // no column layout, and one name per line whatever the config.
-                lyrel_core::core::git::git(
-                    h,
-                    &root,
-                    &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-                )
-            },
-            move |this, out, cx| {
-                this.scm.branches_loading.remove(&key);
-                let names = out
-                    .unwrap_or_default()
-                    .lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
-                    .map(str::to_string)
-                    .collect();
-                this.scm.branches.insert(key, (epoch, names));
-                cx.notify();
-            },
-        );
-    }
 
     fn scm_branch_menu(
         &self,
@@ -562,12 +516,7 @@ impl LyrelApp {
             HeadState::Branch { name, .. } | HeadState::Unborn { branch: name } => name.clone(),
             HeadState::Detached { .. } => String::new(),
         };
-        let branches = self
-            .scm
-            .branches
-            .get(&repo)
-            .map(|(_, names)| names.clone())
-            .unwrap_or_default();
+        let branches = self.scm.branches(&repo).to_vec();
         let others = self.scm.repository_choices();
         let unpushable = pushable_branch(&status.head).is_err();
 
@@ -606,7 +555,7 @@ impl LyrelApp {
                 .item(PopupMenuItem::new(t(L10nKey::ScmCreateBranch)).on_click({
                     let app = app.clone();
                     move |_, window, cx| {
-                        let _ = app.update(cx, |this, cx| this.scm_begin_create_branch(window, cx));
+                        let _ = app.update(cx, |this, cx| this.scm.begin_branch_input(BranchInput::Create, window, cx));
                     }
                 }));
             for (label, intent) in [
@@ -657,36 +606,6 @@ impl LyrelApp {
         }
     }
 
-    pub(crate) fn scm_begin_create_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::ScmCreateBranch)));
-        let handle = input.read(cx).focus_handle(cx);
-        self.scm.checkout_branch = None;
-        self.scm.new_branch = Some(input);
-        window.focus(&handle, cx);
-        cx.notify();
-    }
-
-    /// Open the inline "switch to which branch" input.
-    ///
-    /// The branch-name button already drops a menu of every local branch, and
-    /// that is the better way to pick one. This is the other half: the command
-    /// palette entry and its key binding, which have no button to hang a menu
-    /// off. It used to be wired to nothing at all — the action was registered,
-    /// listed and bindable, and invoking it silently did nothing.
-    pub(crate) fn scm_begin_checkout_branch(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::ScmCheckoutBranch)));
-        let handle = input.read(cx).focus_handle(cx);
-        self.scm.new_branch = None;
-        self.scm.checkout_branch = Some(input);
-        window.focus(&handle, cx);
-        cx.notify();
-    }
 
     /// The inline "name your branch" row.
     ///
@@ -694,7 +613,7 @@ impl LyrelApp {
     /// buttons, and the project has no modal component to reach for. The file
     /// tree names new files the same way.
     fn scm_new_branch_row(&mut self, repo: &RepoKey, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let input = self.scm.new_branch.clone()?;
+        let input = self.scm.branch_input(BranchInput::Create).cloned()?;
         let repo = repo.clone();
         Some(
             h_flex()
@@ -710,28 +629,15 @@ impl LyrelApp {
                     cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
                         match ev.keystroke.key.as_str() {
                             "escape" => {
-                                this.scm.new_branch = None;
+                                this.scm.cancel_branch_input(BranchInput::Create);
                                 cx.notify();
                             }
                             "enter" => {
-                                let Some(input) = this.scm.new_branch.take() else {
-                                    return;
-                                };
-                                let name = input.read(cx).value().trim().to_string();
+                                let op = this.scm.submit_branch_input(BranchInput::Create, cx);
                                 cx.notify();
-                                if name.is_empty() {
-                                    return;
+                                if let Some(op) = op {
+                                    this.scm_op(repo.clone(), op, window, cx);
                                 }
-                                this.scm_op(
-                                    repo.clone(),
-                                    GitOp::CreateBranch {
-                                        name,
-                                        start: None,
-                                        checkout: true,
-                                    },
-                                    window,
-                                    cx,
-                                );
                             }
                             _ => {}
                         }
@@ -747,7 +653,7 @@ impl LyrelApp {
         repo: &RepoKey,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let input = self.scm.checkout_branch.clone()?;
+        let input = self.scm.branch_input(BranchInput::Checkout).cloned()?;
         let repo = repo.clone();
         Some(
             h_flex()
@@ -761,29 +667,17 @@ impl LyrelApp {
                     cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
                         match ev.keystroke.key.as_str() {
                             "escape" => {
-                                this.scm.checkout_branch = None;
+                                this.scm.cancel_branch_input(BranchInput::Checkout);
                                 cx.notify();
                             }
                             "enter" => {
-                                let Some(input) = this.scm.checkout_branch.take() else {
-                                    return;
-                                };
-                                let name = input.read(cx).value().trim().to_string();
+                                let op = this.scm.submit_branch_input(BranchInput::Checkout, cx);
                                 cx.notify();
-                                if name.is_empty() {
-                                    return;
+                                // Git still validates the name and reports errors
+                                // through the existing operation/notification path.
+                                if let Some(op) = op {
+                                    this.scm_op(repo.clone(), op, window, cx);
                                 }
-                                // A name that is not a branch is git's to
-                                // reject — `scm_op` surfaces the failure the
-                                // same way it does for every other operation,
-                                // and second-guessing it here would also have
-                                // to know about remote-tracking refs and tags.
-                                this.scm_op(
-                                    repo.clone(),
-                                    GitOp::CheckoutBranch { name },
-                                    window,
-                                    cx,
-                                );
                             }
                             _ => {}
                         }
@@ -3146,7 +3040,7 @@ mod tests {
         // Toggling has to survive the round trip through the config, since the
         // panel reads it back on the next launch.
         app.update(&mut vcx, |app, cx| app.scm_toggle_graph(cx));
-        assert!(app.read_with(&vcx, |app, _| app.scm.graph.expanded));
+        assert!(app.read_with(&vcx, |app, _| app.scm.graph().expanded));
         assert!(vcx.update(|_, cx| {
             cx.global::<crate::core::config::Config>()
                 .scm_graph_expanded

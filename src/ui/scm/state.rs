@@ -23,6 +23,12 @@ use crate::ui::host_ops::{HostId, SharedHost};
 use crate::ui::host_registry::HostRegistry;
 use crate::ui::i18n::{L10nKey, t};
 
+
+mod branches;
+mod history;
+
+pub(crate) use branches::BranchInput;
+
 /// Which working tree a piece of state belongs to.
 ///
 /// The host is part of the key because the same path can exist on this machine
@@ -53,8 +59,8 @@ impl RepoKey {
     }
 }
 
-/// A dispatch snapshot, not another owner or a live selection. Branch, graph
-/// and detail consumers keep their own existing freshness rules.
+/// A dispatch snapshot, not another owner or a live selection. SCM applies
+/// branch, graph and detail results against this captured refresh identity.
 pub(crate) struct RepositoryContext {
     repo: RepoKey,
     host: SharedHost,
@@ -102,14 +108,15 @@ pub(crate) struct ScmPanelState {
     /// Local branch names per repository, with the epoch they were read at.
     /// Anything that could have moved a ref bumps the epoch, so the list in
     /// the switcher is never older than the last operation.
-    pub(crate) branches: HashMap<RepoKey, (u64, Vec<String>)>,
-    pub(crate) branches_loading: HashSet<RepoKey>,
+    branches: HashMap<RepoKey, (u64, Vec<String>)>,
+    branches_loading: HashMap<RepoKey, u64>,
+    branch_generation: u64,
     /// The inline "name your branch" input, present only while it is open.
-    pub(crate) new_branch: Option<Entity<InputState>>,
+    new_branch: Option<Entity<InputState>>,
     /// The inline "switch to which branch" input, present only while it is
     /// open. Never open at the same time as `new_branch` — opening either one
     /// closes the other, since the panel has room for one input row.
-    pub(crate) checkout_branch: Option<Entity<InputState>>,
+    checkout_branch: Option<Entity<InputState>>,
     /// Unsent commit messages, one per working tree.
     drafts: HashMap<RepoKey, String>,
     /// The commit box. `None` until the panel has been rendered once: an
@@ -157,10 +164,11 @@ pub(crate) struct ScmPanelState {
     /// means a command touched the repository and the expensive status is due
     /// another look.
     pub(crate) last_tab_status: Option<crate::terminal::git_status::GitStatus>,
-    pub(crate) graph: GraphState,
+    graph: GraphState,
     /// When set, the panel body is replaced by a single commit's detail view
     /// instead of the working tree.
-    pub(crate) detail: Option<CommitDetailView>,
+    detail: Option<CommitDetailView>,
+    detail_generation: u64,
     pub(crate) scroll: gpui_kit::ScrollHandle,
 }
 
@@ -348,7 +356,8 @@ impl ScmPanelState {
         self.root_lookups.retain(|(h, _)| *h != host);
         self.probe_attempt.retain(|(h, _), _| *h != host);
         self.branches.retain(|k, _| k.host != host);
-        self.branches_loading.retain(|k| k.host != host);
+        self.branches_loading.retain(|k, _| k.host != host);
+        self.invalidate_history_host(host);
         if self.repo_override.as_ref().is_some_and(|k| k.host == host) {
             self.repo_override = None;
             self.override_tab = None;
@@ -406,6 +415,10 @@ pub(crate) struct GraphState {
     /// and shifts under you when a ref moves between pages.
     pub(crate) requested: usize,
     pub(crate) loading: bool,
+    /// The exact in-flight query and its generation; old callbacks cannot
+    /// release a newer load or replace another repository/scope's page.
+    loading_key: Option<(RepoKey, u64, GraphScope, u64)>,
+    generation: u64,
     /// The page the graph is currently drawn from, and which repository and
     /// query produced it. `Arc` because paint reads it while the next page is
     /// being laid out on a worker, and the key so a repository switch shows an
@@ -493,7 +506,7 @@ impl CommitDetailView {
     /// carries every field a detail view needs, so handing it over is what
     /// keeps the common path from running `git show` for a commit that is
     /// literally on screen.
-    pub(crate) fn new(repo: RepoKey, oid: String, seed: Option<Commit>) -> CommitDetailView {
+    fn new(repo: RepoKey, oid: String, seed: Option<Commit>) -> CommitDetailView {
         CommitDetailView {
             repo,
             oid,

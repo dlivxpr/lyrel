@@ -1,8 +1,8 @@
 //! Source control: the panel, its file rows, the commit box, and the graph.
 //!
-//! `ScmPanelState` owns repository selection, commit drafts and commit lifecycle.
-//! Window adapters compose Host work, confirmations and cross-capability intents;
-//! branch, graph and detail keep their existing refresh policies.
+//! `ScmPanelState` owns repository selection, drafts, commit lifecycle and
+//! branch/history/detail transitions. Renderers borrow presentation; window
+//! adapters retain confirmations, configuration and cross-capability intents.
 
 pub(crate) mod actions;
 pub(crate) mod detail;

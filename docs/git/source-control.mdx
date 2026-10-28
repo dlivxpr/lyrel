@@ -85,9 +85,12 @@ description: "在终端旁的面板中暂存、提交、管理分支和推送。
 
 ## SCM 状态与调用接口
 
-窗口直接持有一个 `ScmPanelState`，它是仓库选择、标签页内选择覆盖、提交输入框、逐仓库草稿和提交生命周期的唯一状态所有者，不新增 Entity、锁或通用管理器。工作台只提供窗格／标签页上下文，负责 GPUI 调度、系统确认、通知和跨能力导航；动作、快捷键、按钮仍通过 `ScmIntent` 使用既有 Git 操作。
+窗口直接持有一个 `ScmPanelState`，它是仓库选择、标签页内选择覆盖、提交输入框、逐仓库草稿、提交生命周期、分支缓存、历史图和提交详情的唯一状态所有者，不新增 Entity、锁或通用管理器。面板只读取展示快照并提交语义请求；工作台提供窗格／标签页上下文，保留配置持久化、系统确认、通知和跨能力导航。动作、快捷键、按钮仍通过 `ScmIntent` 使用既有 Git 操作。
 
 - 选择通过 `follow_pane`、`enter_tab`、`select_repository` 更新；消费者通过 `pane_repo` 或 `active_repo` 读取，不直接修改选择字段。
-- `repository_context`／`RepoKey::context` 返回一次调度所捕获的仓库、对应 `SharedHost` 和刷新 epoch。不可用的覆盖选择会被丢弃；Host 与根目录不能分别回退。`RepoKey::refresh_epoch` 支持无需复制路径的刷新身份读取。分支加载已使用这个接口，历史图和详情仍保持各自原有的新鲜度规则。
+- `repository_context`／`RepoKey::context` 返回一次调度所捕获的仓库、对应 `SharedHost` 和刷新 epoch。不可用的覆盖选择会被丢弃；Host 与根目录不能分别回退。`RepoKey::refresh_epoch` 支持无需复制路径的刷新身份读取；分支、历史图和详情都使用同一接口，不增加另一份仓库 authority。
 - `commit_input` 负责保存旧仓库文本、恢复新草稿和合并消息预填；输入 Entity 保持窗口内身份不变。`prepare_commit` 复用可见按钮的验证规则生成操作，但不改变提交状态。
 - 只有实际派发时才调用 `commit_dispatched`；错误回调调用 `commit_failed`。Host I/O 仍由 `HostOps`／既有 Git 数据层执行，破坏性确认仍在窗口中完成。草稿清理留在 SCM 内部，不能从工作台回调直接删除消息。
+- `load_branches` 管理逐仓库缓存和在途读取，`load_graph` 管理 scope、页大小、加载／失败状态和结果应用。历史图仍重查确定性的提交前缀，不使用会随引用移动的 `--skip`；筛选、排序、泳道、滚动与「加载更多」上限不变。切换仓库先撤去旧图，切换 scope 重置页深；同仓库刷新期间可保留原有页面，过期结果不能被标记为当前结果。
+- 分支和历史图的回调在 SCM 内核对 Host、`RepoKey`、刷新 epoch 和请求 generation，历史图另外核对 scope。旧回调不能解除较新请求的加载状态；失败结果保留既有展示和重试规则，不因每帧渲染反复启动 Git。断开 Host 会撤销它的在途读取身份，重连后的新请求不接受旧结果。
+- `open_detail`／`close_detail` 与 `refresh_detail` 管理详情生命周期，`open_graph_commit` 同时记录图中的选中 SHA。详情结果还核对 oid 和打开次数；关闭后重新打开相同提交也不会接受上次打开时的晚到结果。图中已有的提交元数据作为 seed 复用，只读取文件列表；读取失败仍区分「提交不存在」「文件读取失败」与加载中，不把失败伪装成零个文件。文件点击仍由工作台打开原有 diff overlay，破坏性操作仍通过原有确认与错误通知路径。
