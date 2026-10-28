@@ -163,16 +163,16 @@ impl LyrelApp {
             ScmIntent::UnstageAll => self.scm_op(repo, GitOp::UnstageAll, window, cx),
             ScmIntent::DiscardAll => self.scm_discard_all(repo, window, cx),
             ScmIntent::Commit => {
-                let amend = self.scm.amend;
+                let amend = self.scm.amend();
                 self.scm_commit(repo, amend, None, window, cx);
             }
             ScmIntent::CommitAmend => self.scm_commit(repo, true, None, window, cx),
             ScmIntent::CommitAndPush => {
-                let amend = self.scm.amend;
+                let amend = self.scm.amend();
                 self.scm_commit(repo, amend, Some(ScmFollowUp::Push), window, cx);
             }
             ScmIntent::CommitAndSync => {
-                let amend = self.scm.amend;
+                let amend = self.scm.amend();
                 self.scm_commit(repo, amend, Some(ScmFollowUp::Sync), window, cx);
             }
             ScmIntent::Sync => self.scm_sync(repo, window, cx),
@@ -215,55 +215,29 @@ impl LyrelApp {
         let Some(status) = crate::terminal::git_data::status_of(cx, repo.host, &repo.root) else {
             return;
         };
-        let message = self.scm_message(&repo, cx);
-        let plan = crate::ui::scm::panel::commit_plan(&status, amend, &message);
-        if !plan.enabled {
-            // The panel's own button exposes this through disabled + tooltip;
-            // the palette and the key binding have no tooltip to hover, so
-            // the toast has to carry the reason itself — "write a message
-            // first" and "nothing to commit" call for opposite actions, and
-            // answering the first with the second sends the user staging
-            // files they already staged (#546).
-            crate::ui::notification_history::NotificationWindowExt::notify_app(
-                window,
-                t(plan.reason).to_string(),
-                cx,
-            );
-            // The follow-up dies with the commit: "commit and push" with
-            // nothing to commit must not push whatever the branch holds.
-            return;
-        }
-        let all = crate::ui::scm::panel::commit_stages_everything(&status, amend);
+        let op = match self.scm.prepare_commit(&repo, &status, amend, cx) {
+            Ok(op) => op,
+            Err(reason) => {
+                // Buttons expose this as disabled + tooltip; actions need the
+                // same reason in a toast. Rejection also drops the follow-up.
+                crate::ui::notification_history::NotificationWindowExt::notify_app(
+                    window,
+                    t(reason).to_string(),
+                    cx,
+                );
+                return;
+            }
+        };
         // The amend toggle is *not* cleared here: `run_git_op` clears it
-        // where it arms `scm.committing`, at dispatch — after the amend
+        // through `ScmPanelState::commit_dispatched` — after the amend
         // confirmation, not before it — so a cancelled prompt leaves the
         // toggle and the armed flag exactly as the user set them. Clearing
         // here made Cancel quietly switch amend off, and the next Commit
         // became the new-commit the user had just declined to risk. See
-        // `scm_commit_landed`.
-        self.scm_op_then(
-            repo,
-            GitOp::Commit {
-                message,
-                amend,
-                signoff: false,
-                no_verify: false,
-                all,
-            },
-            then,
-            window,
-            cx,
-        );
+        // `ScmPanelState::commit_landed`.
+        self.scm_op_then(repo, op, then, window, cx);
     }
 
-    /// What the commit box holds for a repository, whether or not it is the
-    /// one currently on screen.
-    fn scm_message(&self, repo: &RepoKey, cx: &gpui_kit::App) -> String {
-        match (&self.scm.commit_input, &self.scm.commit_repo) {
-            (Some(input), Some(showing)) if showing == repo => input.read(cx).value().to_string(),
-            _ => self.scm.draft(repo).to_string(),
-        }
-    }
 
     /// Park everything, including the files git does not track yet.
     ///
@@ -275,7 +249,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let message = match self.scm_message(&repo, cx) {
+        let message = match self.scm.message(&repo, cx) {
             m if m.trim().is_empty() => None,
             m => Some(m),
         };
@@ -437,23 +411,6 @@ impl LyrelApp {
         }
     }
 
-    /// A dispatched commit came back with an error: disarm the latch that
-    /// would otherwise clear the message box on the next unrelated HEAD move.
-    /// The message itself stays where the user can see it.
-    pub(crate) fn scm_commit_failed(
-        &mut self,
-        host: lyrel_core::host::HostId,
-        root: &std::path::Path,
-    ) {
-        if self
-            .scm
-            .committing
-            .as_ref()
-            .is_some_and(|(r, _, _)| r.host == host && r.root == root)
-        {
-            self.scm.committing = None;
-        }
-    }
 }
 
 /// What "discard all" actually runs, in order. Pure so a test can hold it up

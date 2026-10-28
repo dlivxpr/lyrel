@@ -1110,18 +1110,17 @@ impl LyrelApp {
         // HEAD move would clear a message that was never committed. The amend
         // toggle follows the same rule — it switches off when the commit
         // actually runs, so cancelling the amend prompt leaves the user in
-        // the mode they had chosen. See `scm_commit_landed`.
+        // the mode they had chosen. See `ScmPanelState::commit_landed`.
         let was_commit = matches!(op, GitOp::Commit { .. });
         if let GitOp::Commit { message, .. } = &op {
-            self.scm.amend = false;
-            self.scm.committing = Some((
+            self.scm.commit_dispatched(
                 crate::ui::scm::state::RepoKey {
                     host: id,
                     root: root.clone(),
                 },
                 head.clone(),
                 message.clone(),
-            ));
+            );
         }
 
         let op_root = root.clone();
@@ -1141,7 +1140,7 @@ impl LyrelApp {
                 app.scm_invalidate(id, &root, cx);
                 let ok = result.is_ok();
                 if was_commit && !ok {
-                    app.scm_commit_failed(id, &root);
+                    app.scm.commit_failed(id, &root);
                 }
                 app.on_git_op_done(result, window, cx);
                 // The second half of a compound verb starts only now, against
