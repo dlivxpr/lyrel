@@ -79,15 +79,7 @@ impl SettingsWindow {
             }),
         );
 
-        let shortcut_search = cx
-            .new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSearchShortcuts)));
-        subs.push(
-            cx.subscribe_in(&shortcut_search, window, |_, _, ev, _, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
+        let shortcuts = shortcuts::ShortcutEditor::new(window, cx);
 
         let ssh_filter = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::FilterHosts))
@@ -116,7 +108,7 @@ impl SettingsWindow {
             usage,
             search: settings_search,
             skills,
-            shortcut_search,
+            shortcuts,
             modified_only: false,
             search_active: false,
             search_return_offset: self.last_settings_location.1,
@@ -142,9 +134,6 @@ impl SettingsWindow {
             menu_hi: 0,
             menu_scroll: gpui_kit::ScrollHandle::new(),
             focused: std::cell::RefCell::new(None),
-            kb_conflict: None,
-            recording: None,
-            rebinding_note: None,
             ssh_form: None,
             ssh_open: None,
             ssh_show_all: false,
@@ -185,7 +174,7 @@ impl SettingsWindow {
         if let Some(s) = self.settings.as_mut() {
             let moved = s.section != target;
             s.section = target;
-            s.recording = None;
+            s.shortcuts.cancel_recording();
             // Arriving on a page with a query live means arriving to look for
             // what the nav badge counted, so take the page to it.
             if moved {
