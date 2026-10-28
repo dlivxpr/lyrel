@@ -12,7 +12,7 @@ use crate::core::config::DiffViewMode;
 use crate::ui::app::LyrelApp;
 use crate::ui::host_registry::HostRegistry;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::scm::state::RepoKey;
+use crate::ui::scm::state::{BranchInput, RepoKey};
 
 /// One entry point for every source control verb.
 ///
@@ -65,8 +65,7 @@ pub(crate) enum ScmFollowUp {
 impl LyrelApp {
     /// Fold the history section open or shut and remember it.
     pub(crate) fn scm_toggle_graph(&mut self, cx: &mut Context<Self>) {
-        let next = !self.scm.graph.expanded;
-        self.scm.graph.expanded = next;
+        let next = self.scm.toggle_graph();
         self.update_config(cx, |cfg| cfg.scm_graph_expanded = next);
         cx.notify();
     }
@@ -194,8 +193,8 @@ impl LyrelApp {
                 window,
                 cx,
             ),
-            ScmIntent::CreateBranch => self.scm_begin_create_branch(window, cx),
-            ScmIntent::CheckoutBranch => self.scm_begin_checkout_branch(window, cx),
+            ScmIntent::CreateBranch => self.scm.begin_branch_input(BranchInput::Create, window, cx),
+            ScmIntent::CheckoutBranch => self.scm.begin_branch_input(BranchInput::Checkout, window, cx),
         }
     }
 
