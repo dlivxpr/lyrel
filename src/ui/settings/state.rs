@@ -70,7 +70,9 @@ impl SettingsWindow {
         subs.push(
             cx.subscribe_in(&settings_search, window, |this, input, ev, _w, cx| {
                 if matches!(ev, InputEvent::Change)
-                    && this.active_settings().is_some_and(|s| s.navigation.accepts(input.entity_id()))
+                    && this
+                        .active_settings()
+                        .is_some_and(|s| s.navigation.accepts(input.entity_id()))
                 {
                     this.autoselect_settings_search(cx);
                     if let Some(s) = this.active_settings() {
@@ -82,8 +84,8 @@ impl SettingsWindow {
 
         let shortcuts = shortcuts::ShortcutEditor::new(window, cx);
 
-
-        let navigation = navigation::SettingsNavigation::new(settings_search, self.last_settings_location);
+        let navigation =
+            navigation::SettingsNavigation::new(settings_search, self.last_settings_location);
         let usage = cx.new(|cx| crate::ui::settings::usage::UsagePage::new(window, cx));
         // Account forms render above the whole settings shell, outside UsagePage.
         subs.push(cx.observe(&usage, |_, _, cx| cx.notify()));
@@ -178,7 +180,11 @@ impl SettingsWindow {
         if let Some(s) = self.settings.as_mut() {
             s.navigation.search_changed(cx);
             s.usage.update(cx, |page, cx| {
-                page.set_visible(s.navigation.section() == SettingsSection::Usage && !s.navigation.is_searching(), cx)
+                page.set_visible(
+                    s.navigation.section() == SettingsSection::Usage
+                        && !s.navigation.is_searching(),
+                    cx,
+                )
             });
         }
         cx.notify();

@@ -1,20 +1,20 @@
 //! SSH 设置的草稿、校验与局部展示状态；窗口只适配 GPUI 与跨页协调。
 use super::*;
-use crate::core::keychain::{CredentialRef, CredentialStore, key_account_from_contents};
 #[cfg(not(test))]
 use crate::core::keychain::OsCredentialStore;
+use crate::core::keychain::{CredentialRef, CredentialStore, key_account_from_contents};
 use crate::core::ssh_profile::{
     Algorithms, AuthMode, ForwardKind, ForwardRule, HostPort, SshProfile, to_connect_string,
 };
+use credentials::{first_readable_key, stored_passphrase, stored_password};
 use gpui_kit::component::input::TextareaState;
 use gpui_kit::component::notification::NotificationType;
-use credentials::{first_readable_key, stored_password, stored_passphrase};
 
 mod credentials;
 mod hosts;
-mod window;
 #[cfg(test)]
 mod tests;
+mod window;
 
 /// 一个设置会话的 SSH 能力。输入、转换及凭据基线随会话一起释放。
 pub(crate) struct SshSettings {
@@ -33,17 +33,31 @@ impl SshSettings {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::FilterHosts)));
         let subscription = cx.subscribe_in(&filter, window, |_, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) { cx.notify(); }
+            if matches!(ev, InputEvent::Change) {
+                cx.notify();
+            }
         });
         #[cfg(not(test))]
         let credentials = std::sync::Arc::new(OsCredentialStore);
         #[cfg(test)]
-        let credentials = std::sync::Arc::new(crate::core::keychain::InMemoryCredentialStore::new());
-        Self { form: None, open: None, show_all: false, confirm_remove: false, copied: None,
-            filter, collapsed_groups: Default::default(), credentials, _subs: vec![subscription] }
+        let credentials =
+            std::sync::Arc::new(crate::core::keychain::InMemoryCredentialStore::new());
+        Self {
+            form: None,
+            open: None,
+            show_all: false,
+            confirm_remove: false,
+            copied: None,
+            filter,
+            collapsed_groups: Default::default(),
+            credentials,
+            _subs: vec![subscription],
+        }
     }
 
-    pub(crate) fn filter(&self) -> &Entity<InputState> { &self.filter }
+    pub(crate) fn filter(&self) -> &Entity<InputState> {
+        &self.filter
+    }
 
     pub(super) fn cancel(&mut self) {
         self.form = None;
@@ -51,7 +65,9 @@ impl SshSettings {
     }
 
     fn toggle_group(&mut self, key: String) {
-        if !self.collapsed_groups.remove(&key) { self.collapsed_groups.insert(key); }
+        if !self.collapsed_groups.remove(&key) {
+            self.collapsed_groups.insert(key);
+        }
     }
 
     fn saved(&mut self, id: Uuid) {
@@ -60,8 +76,12 @@ impl SshSettings {
     }
 
     fn removed(&mut self, id: Uuid) {
-        if self.form.as_ref().is_some_and(|form| form.editing == id) { self.form = None; }
-        if self.open == Some(id) { self.open = None; }
+        if self.form.as_ref().is_some_and(|form| form.editing == id) {
+            self.form = None;
+        }
+        if self.open == Some(id) {
+            self.open = None;
+        }
         self.confirm_remove = false;
     }
 
@@ -75,7 +95,11 @@ impl SshSettings {
         if self.form.as_ref().is_some_and(|form| form.editing == id) {
             return;
         }
-        self.open = if self.open == Some(id) { None } else { Some(id) };
+        self.open = if self.open == Some(id) {
+            None
+        } else {
+            Some(id)
+        };
     }
 
     fn toggle_show_all(&mut self) {
@@ -101,15 +125,24 @@ impl SshSettings {
         cfg.ssh_profile_frecency.remove(&id);
     }
 
-    fn import_profiles(cfg: &mut Config, profiles: Vec<SshProfile>) -> crate::core::ssh_config::MergeStats {
+    fn import_profiles(
+        cfg: &mut Config,
+        profiles: Vec<crate::core::ssh_config::ImportedProfile>,
+    ) -> crate::core::ssh_config::MergeStats {
         crate::core::ssh_config::merge_imported(&mut cfg.ssh_profiles, profiles)
     }
 
-    fn load(&mut self, profile: &SshProfile, window: &mut Window, cx: &mut Context<SettingsWindow>) {
+    fn load(
+        &mut self,
+        profile: &SshProfile,
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) {
         let jump_name = profile
             .jump_host
             .and_then(|id| {
-                cx.global::<Config>().ssh_profiles
+                cx.global::<Config>()
+                    .ssh_profiles
                     .iter()
                     .find(|p| p.id == id)
                     .map(|p| p.name.clone())
@@ -289,7 +322,9 @@ impl SshSettings {
             _subs: subs,
         };
         let editing = form.editing;
-        let known = cx.global::<Config>().ssh_profiles
+        let known = cx
+            .global::<Config>()
+            .ssh_profiles
             .iter()
             .any(|p| p.id == editing);
         self.form = Some(form);
@@ -341,10 +376,7 @@ impl SshSettings {
             compression: raw(&form.compression),
             verify_host_keys: form.verify_host_keys,
         };
-        Some(validate_ssh_draft(
-            draft,
-            profiles,
-        ))
+        Some(validate_ssh_draft(draft, profiles))
     }
 
     fn profile_to_save(&self, profiles: &[SshProfile], cx: &App) -> Option<SshProfile> {
@@ -361,10 +393,7 @@ impl SshSettings {
         let Some(form) = self.form.as_ref() else {
             return false;
         };
-        let saved = profiles
-            .iter()
-            .find(|p| p.id == form.editing)
-            .cloned();
+        let saved = profiles.iter().find(|p| p.id == form.editing).cloned();
         self.collect(profiles, cx).map(|(profile, _)| profile) != saved || form.secrets_changed(cx)
     }
 }

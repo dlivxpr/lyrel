@@ -20,9 +20,13 @@ impl SettingsWindow {
         };
         let search = s.shortcuts.search().clone();
         let query = search.read(cx).value().trim().to_lowercase();
-        let recording = s.shortcuts.recording()
+        let recording = s
+            .shortcuts
+            .recording()
             .map(|(action, chords)| (action.to_string(), chords.to_vec()));
-        let conflict = s.shortcuts.conflict()
+        let conflict = s
+            .shortcuts
+            .conflict()
             .map(|(action, spec, other)| (action.to_string(), spec.to_string(), other.to_string()));
         let note = s.shortcuts.note().map(str::to_string);
 
@@ -231,7 +235,8 @@ impl SettingsWindow {
                         )
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        let already = this.active_settings()
+                        let already = this
+                            .active_settings()
                             .and_then(|s| s.shortcuts.recording())
                             .is_some_and(|(action, _)| action == record_action);
                         if already {
@@ -377,16 +382,20 @@ impl SettingsWindow {
     }
 
     fn on_record_key(&mut self, key: &gpui_kit::Keystroke, cx: &mut Context<Self>) {
-        let Some(s) = self.active_settings_mut() else { return; };
+        let Some(s) = self.active_settings_mut() else {
+            return;
+        };
         match s.shortcuts.capture(key) {
             Capture::Ignored => return,
             Capture::Changed => {}
             Capture::Edit(edit) => self.apply_shortcut_change(Some(edit), cx),
             Capture::Schedule(token) => {
                 cx.spawn(async move |this, cx| {
-                    smol::Timer::after(std::time::Duration::from_millis(RECORD_COMMIT_DELAY_MS)).await;
+                    smol::Timer::after(std::time::Duration::from_millis(RECORD_COMMIT_DELAY_MS))
+                        .await;
                     let _ = this.update(cx, |this, cx| {
-                        let outcome = this.active_settings_mut()
+                        let outcome = this
+                            .active_settings_mut()
                             .map(|s| s.shortcuts.commit(token, cx));
                         match outcome {
                             Some(Commit::Edit(edit)) => this.apply_shortcut_change(Some(edit), cx),
@@ -394,7 +403,8 @@ impl SettingsWindow {
                             Some(Commit::Ignored) | None => {}
                         }
                     });
-                }).detach();
+                })
+                .detach();
             }
         }
         cx.notify();
@@ -409,28 +419,37 @@ impl SettingsWindow {
     }
 
     pub(crate) fn resolve_keybinding_conflict(&mut self, replace: bool, cx: &mut Context<Self>) {
-        let edit = self.active_settings_mut()
+        let edit = self
+            .active_settings_mut()
             .and_then(|s| s.shortcuts.resolve_conflict(replace, cx));
         self.apply_shortcut_change(edit, cx);
     }
 
     pub(crate) fn reset_keybinding(&mut self, action: String, cx: &mut Context<Self>) {
-        let edit = self.active_settings_mut().map(|s| s.shortcuts.reset(action));
+        let edit = self
+            .active_settings_mut()
+            .map(|s| s.shortcuts.reset(action));
         self.apply_shortcut_change(edit, cx);
     }
 
     pub(crate) fn restore_default_keybindings_confirmed(&mut self, cx: &mut Context<Self>) {
-        let edit = self.active_settings_mut().map(|s| s.shortcuts.restore_defaults());
+        let edit = self
+            .active_settings_mut()
+            .map(|s| s.shortcuts.restore_defaults());
         self.apply_shortcut_change(edit, cx);
     }
 
     pub(crate) fn set_keybinding_preset(&mut self, preset: &str, cx: &mut Context<Self>) {
-        let edit = self.active_settings_mut().map(|s| s.shortcuts.set_preset(preset));
+        let edit = self
+            .active_settings_mut()
+            .map(|s| s.shortcuts.set_preset(preset));
         self.apply_shortcut_change(edit, cx);
     }
 
     pub(crate) fn set_keybinding_prefix(&mut self, prefix: &str, cx: &mut Context<Self>) {
-        let edit = self.active_settings_mut().map(|s| s.shortcuts.set_prefix(prefix));
+        let edit = self
+            .active_settings_mut()
+            .map(|s| s.shortcuts.set_prefix(prefix));
         self.apply_shortcut_change(edit, cx);
     }
 }

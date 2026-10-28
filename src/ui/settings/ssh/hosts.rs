@@ -2,8 +2,8 @@
 //! one grouped by where it came from, or whatever a search finds — each of
 //! which opens in place to show its details or to be edited.
 
-use crate::ui::settings::kit::{self, BtnKind, Tk, fs};
 use super::*;
+use crate::ui::settings::kit::{self, BtnKind, Tk, fs};
 
 /// How many hosts the page shows before "Show all".
 const RECENT_HOSTS: usize = 5;

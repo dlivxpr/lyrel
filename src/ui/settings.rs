@@ -26,22 +26,21 @@ use crate::ui::settings_window::{SettingsEvent, SettingsWindow};
 use crate::ui::window_chrome::TITLE_BAR_HEIGHT;
 #[cfg(target_os = "windows")]
 pub(crate) use theme_edit::window_backdrop_label_key;
-pub(crate) use theme_edit::{ThemeEdit, theme_edit_label};
 
 mod agents;
 pub(crate) mod arguments;
 mod catalog;
 use catalog::*;
-mod navigation;
 mod configuration;
 mod editor;
-mod ssh;
 mod inputs;
 pub(crate) mod kit;
+mod navigation;
 mod pages;
 mod shell;
 mod shortcuts;
 pub(crate) mod skills;
+mod ssh;
 mod state;
 pub(crate) mod statistics;
 mod theme_edit;
@@ -289,7 +288,6 @@ impl SettingsSection {
 
 use crate::core::update::{localized_update_install_hint, localized_update_phase};
 
-
 /// The cursor shapes' labels: block, bar, underline.
 pub(crate) fn cursor_shape_labels() -> Vec<String> {
     [
@@ -317,14 +315,12 @@ pub(crate) const PROMPT_CURSOR_SHAPES: [PromptCursorStyle; 4] = [
     PromptCursorStyle::Underline,
 ];
 
-
-
 pub(crate) struct SettingsState {
     pub(crate) focus_handle: gpui_kit::FocusHandle,
     pub(crate) navigation: navigation::SettingsNavigation,
     pub(crate) usage: Entity<usage::UsagePage>,
     pub(crate) skills: skills::SkillsState,
-    pub(crate) shortcuts: shortcuts::ShortcutEditor,
+    pub(super) shortcuts: shortcuts::ShortcutEditor,
     pub(crate) save_error: Option<String>,
     pub(crate) saved_config: Config,
     /// The families the font menus list, read once when the page opens.
@@ -363,7 +359,6 @@ pub(crate) struct SettingsState {
     pub(crate) _subs: Vec<Subscription>,
 }
 
-
 #[derive(Clone)]
 pub(crate) enum AgentHooksView {
     Loading,
@@ -392,8 +387,6 @@ pub(crate) enum ThemeMode {
     Dark,
     System,
 }
-
-
 
 pub(crate) fn font_default_label() -> &'static str {
     t(L10nKey::SettingsFontDefault)
@@ -424,7 +417,6 @@ pub(crate) fn humanize_action(action: &str) -> String {
     out
 }
 
-
 /// A picked path written the way a config file spells it. `~/.ssh/id_ed25519`
 /// keeps meaning the right file on another machine, or after the account is
 /// renamed; the absolute path the system picker hands back does not.
@@ -451,7 +443,6 @@ fn tildify_with(path: &str, home: Option<&str>) -> String {
         _ => path.to_string(),
     }
 }
-
 
 impl SettingsWindow {
     pub(crate) fn with_settings_edits_resolved(
@@ -486,7 +477,10 @@ impl SettingsWindow {
                 return;
             };
             let _ = this.update_in(cx, |this, window, cx| {
-                if !this.active_settings().is_some_and(|s| s.navigation.accepts(session)) {
+                if !this
+                    .active_settings()
+                    .is_some_and(|s| s.navigation.accepts(session))
+                {
                     return;
                 }
                 match choice {
@@ -547,7 +541,8 @@ impl SettingsWindow {
         }
         if let Some(state) = self.active_settings() {
             state
-                .navigation.search()
+                .navigation
+                .search()
                 .clone()
                 .update(cx, |search, cx| search.set_value("", window, cx));
         }
@@ -572,9 +567,10 @@ impl SettingsWindow {
     /// search "ansi" from the bottom of Appearance and every row greys out
     /// with the one answer left above the fold.
     fn first_hit_anchor(&self, label: &str, cx: &Context<Self>) -> Option<gpui_kit::ScrollAnchor> {
-        self.active_settings()?.navigation.first_hit_anchor(label, cx)
+        self.active_settings()?
+            .navigation
+            .first_hit_anchor(label, cx)
     }
-
 
     /// Closing from Escape or the X is the user leaving; every other caller
     /// closes as the tail of something they explicitly chose, and has already
@@ -584,13 +580,11 @@ impl SettingsWindow {
             this.close_settings(window, cx)
         });
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn settings_row_ids_survive_language_changes() {
@@ -608,8 +602,6 @@ mod tests {
         }
         crate::ui::i18n::set_locale("en");
     }
-
-
 
     /// A key picked from the system dialog arrives as an absolute path under
     /// the home directory. Written back that way it names the right file on
@@ -641,7 +633,6 @@ mod tests {
             "/Users/ada/.ssh/id_rsa"
         );
     }
-
 
     #[test]
     fn a_row_stacks_once_its_label_and_control_stop_fitting() {
@@ -743,7 +734,6 @@ mod tests {
         assert!(settings_row_width(1600., large) >= STACK_ROW_BELOW * large);
     }
 
-
     #[test]
     fn settings_row_identity_depends_only_on_its_stable_label() {
         assert_eq!(
@@ -778,7 +768,6 @@ mod tests {
         assert!(window_overrides_active(&blur, false));
     }
 
-
     #[test]
     fn humanize_action_splits_on_capitals() {
         assert_eq!(humanize_action("NewTab"), "New Tab");
@@ -788,7 +777,6 @@ mod tests {
         );
         assert_eq!(humanize_action("Quit"), "Quit");
     }
-
 }
 
 #[cfg(test)]
@@ -797,9 +785,6 @@ mod gpui_tests {
     use crate::core::config::{Config, MouseZoomModifier};
     use crate::ui::settings::test_window::harness;
     use gpui_kit::{TestAppContext, px, size};
-
-
-
 
     #[gpui_kit::test]
     fn failed_settings_writes_remain_visible_until_retry_succeeds(cx: &mut TestAppContext) {
@@ -817,7 +802,6 @@ mod gpui_tests {
         });
         vcx.run_until_parked();
     }
-
 
     #[gpui_kit::test]
     fn appearance_section_lays_out_with_its_rounded_controls(cx: &mut TestAppContext) {
@@ -839,7 +823,11 @@ mod gpui_tests {
         vcx.simulate_resize(size(px(720.), px(560.)));
         vcx.run_until_parked();
 
-        let section = vcx.update(|_, cx| app.read(cx).active_settings().map(|s| s.navigation.section()));
+        let section = vcx.update(|_, cx| {
+            app.read(cx)
+                .active_settings()
+                .map(|s| s.navigation.section())
+        });
         assert!(
             matches!(section, Some(SettingsSection::Appearance)),
             "the page should still be on Appearance after two paint passes",

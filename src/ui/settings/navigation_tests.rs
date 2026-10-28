@@ -69,7 +69,10 @@ fn every_category_and_full_search_can_layout_at_minimum_width(cx: &mut TestAppCo
         vcx.run_until_parked();
     }
     app.update_in(&mut vcx, |app, _, cx| {
-        app.active_settings_mut().unwrap().navigation.set_modified_only(true);
+        app.active_settings_mut()
+            .unwrap()
+            .navigation
+            .set_modified_only(true);
         app.autoselect_settings_search(cx);
     });
     vcx.run_until_parked();
@@ -95,29 +98,46 @@ fn clearing_search_preserves_the_category_and_target_navigation_clears_search(
             window,
             cx,
         );
-        assert!(app.active_settings().unwrap().navigation.section() == SettingsSection::KeyboardMouse);
+        assert!(
+            app.active_settings().unwrap().navigation.section() == SettingsSection::KeyboardMouse
+        );
     });
     vcx.run_until_parked();
 }
 
 #[gpui_kit::test]
-fn search_and_modified_filter_restore_the_page_location_on_clear_and_reopen(cx: &mut TestAppContext) {
+fn search_and_modified_filter_restore_the_page_location_on_clear_and_reopen(
+    cx: &mut TestAppContext,
+) {
     let (app, mut vcx) = harness(cx);
     app.update_in(&mut vcx, |app, window, cx| {
         app.navigate_settings(SettingsSection::Appearance, None, window, cx);
         let offset = gpui_kit::point(px(0.), px(-180.));
         let search = app.active_settings().unwrap().navigation.search().clone();
-        app.active_settings().unwrap().navigation.scroll().set_offset(offset);
+        app.active_settings()
+            .unwrap()
+            .navigation
+            .scroll()
+            .set_offset(offset);
         search.update(cx, |input, cx| input.set_value("font", window, cx));
         app.autoselect_settings_search(cx);
-        app.active_settings_mut().unwrap().navigation.set_modified_only(true);
+        app.active_settings_mut()
+            .unwrap()
+            .navigation
+            .set_modified_only(true);
         app.autoselect_settings_search(cx);
         search.update(cx, |input, cx| input.set_value("", window, cx));
         app.autoselect_settings_search(cx);
         assert!(app.active_settings().unwrap().navigation.is_searching());
-        app.active_settings_mut().unwrap().navigation.set_modified_only(false);
+        app.active_settings_mut()
+            .unwrap()
+            .navigation
+            .set_modified_only(false);
         app.autoselect_settings_search(cx);
-        assert_eq!(app.active_settings().unwrap().navigation.scroll().offset(), offset);
+        assert_eq!(
+            app.active_settings().unwrap().navigation.scroll().offset(),
+            offset
+        );
         search.update(cx, |input, cx| input.set_value("font", window, cx));
         app.autoselect_settings_search(cx);
         app.close_settings(window, cx);
@@ -152,7 +172,10 @@ fn an_unsaved_navigation_answer_cannot_navigate_a_replacement_session(cx: &mut T
     app.update_in(&mut vcx, |app, _, _| {
         let state = app.active_settings().unwrap();
         assert!(state.navigation.section() == SettingsSection::General);
-        assert_eq!(state.save_error.as_deref(), Some("replacement write failed"));
+        assert_eq!(
+            state.save_error.as_deref(),
+            Some("replacement write failed")
+        );
     });
 }
 

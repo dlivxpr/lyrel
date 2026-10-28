@@ -5336,7 +5336,6 @@ mod cursor_blink_gpui_tests {
 #[path = "session_lifecycle/tests_ssh_rebuild.rs"]
 mod ssh_rebuild_gpui_tests;
 
-
 #[cfg(test)]
 mod ui_font_gpui_tests {
     use crate::core::config::Config;

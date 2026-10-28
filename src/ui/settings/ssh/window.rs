@@ -38,11 +38,15 @@ impl SettingsWindow {
     }
 
     pub(super) fn ssh_form_collect(&self, cx: &App) -> Option<(SshProfile, SshFormErrors)> {
-        self.active_settings()?.ssh.collect(&cx.global::<Config>().ssh_profiles, cx)
+        self.active_settings()?
+            .ssh
+            .collect(&cx.global::<Config>().ssh_profiles, cx)
     }
 
     pub(super) fn resync_key_passphrase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(state) = self.settings.as_mut() { state.ssh.resync_key_passphrase(window, cx); }
+        if let Some(state) = self.settings.as_mut() {
+            state.ssh.resync_key_passphrase(window, cx);
+        }
     }
 
     pub(crate) fn save_editing_profile(
@@ -50,7 +54,10 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Uuid> {
-        let profile = self.active_settings()?.ssh.profile_to_save(&cx.global::<Config>().ssh_profiles, cx)?;
+        let profile = self
+            .active_settings()?
+            .ssh
+            .profile_to_save(&cx.global::<Config>().ssh_profiles, cx)?;
         let id = profile.id;
         self.update_config(cx, |cfg| SshSettings::apply_profile(cfg, &profile));
         if self
@@ -59,18 +66,27 @@ impl SettingsWindow {
         {
             return None;
         }
-        let failures = self.settings.as_mut()?.ssh.save_secrets(&profile, cx.global::<Config>(), cx);
-        for line in failures { window.notify_app(line, cx); }
+        let failures =
+            self.settings
+                .as_mut()?
+                .ssh
+                .save_secrets(&profile, cx.global::<Config>(), cx);
+        for line in failures {
+            window.notify_app(line, cx);
+        }
         Some(id)
     }
 
     pub(crate) fn cancel_ssh_form(&mut self, cx: &mut Context<Self>) {
-        if let Some(state) = self.active_settings_mut() { state.ssh.cancel(); }
+        if let Some(state) = self.active_settings_mut() {
+            state.ssh.cancel();
+        }
         cx.notify();
     }
 
     pub(crate) fn ssh_form_dirty(&self, cx: &App) -> bool {
-        self.active_settings().is_some_and(|state| state.ssh.is_dirty(&cx.global::<Config>().ssh_profiles, cx))
+        self.active_settings()
+            .is_some_and(|state| state.ssh.is_dirty(&cx.global::<Config>().ssh_profiles, cx))
     }
 
     pub(crate) fn add_new_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {

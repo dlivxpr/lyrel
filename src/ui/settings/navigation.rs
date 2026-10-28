@@ -6,7 +6,6 @@ pub(super) enum SearchActivation {
     Shortcut(String),
 }
 
-
 pub(crate) struct SettingsNavigation {
     section: SettingsSection,
     search: Entity<InputState>,
@@ -52,30 +51,57 @@ impl SettingsNavigation {
         self.session() == session
     }
 
-    pub(crate) fn section(&self) -> SettingsSection { self.section }
-    pub(crate) fn search(&self) -> &Entity<InputState> { &self.search }
-    pub(crate) fn is_searching(&self) -> bool { self.searching }
-    pub(crate) fn focused_setting(&self) -> Option<L10nKey> { self.focused_setting }
-    pub(super) fn modified_only(&self) -> bool { self.modified_only }
-    pub(super) fn selection(&self) -> usize { self.selection }
-    pub(super) fn scroll(&self) -> &gpui_kit::ScrollHandle { &self.scroll }
-    pub(super) fn anchor(&self) -> gpui_kit::ScrollAnchor { self.anchor.clone() }
+    pub(crate) fn section(&self) -> SettingsSection {
+        self.section
+    }
+    pub(crate) fn search(&self) -> &Entity<InputState> {
+        &self.search
+    }
+    pub(crate) fn is_searching(&self) -> bool {
+        self.searching
+    }
+    pub(crate) fn focused_setting(&self) -> Option<L10nKey> {
+        self.focused_setting
+    }
+    pub(super) fn modified_only(&self) -> bool {
+        self.modified_only
+    }
+    pub(super) fn selection(&self) -> usize {
+        self.selection
+    }
+    pub(super) fn scroll(&self) -> &gpui_kit::ScrollHandle {
+        &self.scroll
+    }
+    pub(super) fn anchor(&self) -> gpui_kit::ScrollAnchor {
+        self.anchor.clone()
+    }
 
     pub(crate) fn location(&self) -> SettingsLocation {
-        (self.section, if self.searching { self.return_offset } else { self.scroll.offset() })
+        (
+            self.section,
+            if self.searching {
+                self.return_offset
+            } else {
+                self.scroll.offset()
+            },
+        )
     }
 
     /// 返回是否换页；page-local retirement 由窗口调用各 owner 的语义 hook。
     pub(super) fn select_section(&mut self, target: SettingsSection) -> bool {
         let moved = self.section != target;
         self.section = target;
-        if moved { self.reveal.set(true); }
+        if moved {
+            self.reveal.set(true);
+        }
         moved
     }
 
     pub(super) fn search_changed(&mut self, cx: &App) {
         let active = !self.search.read(cx).value().trim().is_empty() || self.modified_only;
-        if active && !self.searching { self.return_offset = self.scroll.offset(); }
+        if active && !self.searching {
+            self.return_offset = self.scroll.offset();
+        }
         if active {
             self.scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
             self.focused_setting = None;
@@ -86,18 +112,29 @@ impl SettingsNavigation {
         self.selection = 0;
     }
 
-    pub(super) fn query_edited(&self) { self.reveal.set(true); }
+    pub(super) fn query_edited(&self) {
+        self.reveal.set(true);
+    }
 
-    pub(super) fn set_modified_only(&mut self, modified: bool) { self.modified_only = modified; }
-    pub(super) fn toggle_modified_only(&mut self) { self.modified_only = !self.modified_only; }
+    pub(super) fn set_modified_only(&mut self, modified: bool) {
+        self.modified_only = modified;
+    }
+    pub(super) fn toggle_modified_only(&mut self) {
+        self.modified_only = !self.modified_only;
+    }
 
     pub(super) fn navigate(&mut self, setting: Option<L10nKey>, config: &Config) {
         self.focused_setting = match setting {
             Some(L10nKey::SettingsCustomPath)
                 if config.working_directory.strategy != crate::core::config::WdStrategy::Custom =>
-                Some(L10nKey::SettingsStartIn),
+            {
+                Some(L10nKey::SettingsStartIn)
+            }
             Some(L10nKey::SettingsOpenFilesCommand)
-                if config.file_open_mode() != LinkFileOpen::Command => Some(L10nKey::OpenFilesWith),
+                if config.file_open_mode() != LinkFileOpen::Command =>
+            {
+                Some(L10nKey::OpenFilesWith)
+            }
             other => other,
         };
         self.modified_only = false;
@@ -107,9 +144,15 @@ impl SettingsNavigation {
     }
 
     pub(super) fn move_selection(&mut self, down: bool, count: usize) {
-        if count == 0 { return; }
+        if count == 0 {
+            return;
+        }
         let index = self.selection.min(count - 1);
-        self.selection = if down { (index + 1).min(count - 1) } else { index.saturating_sub(1) };
+        self.selection = if down {
+            (index + 1).min(count - 1)
+        } else {
+            index.saturating_sub(1)
+        };
         self.reveal.set(true);
     }
 
@@ -118,48 +161,70 @@ impl SettingsNavigation {
         let entries = search_result_order(&query, self.modified_only, cx.global::<Config>());
         let actions = search_result_actions(&query, self.modified_only);
         let count = entries.len() + actions.len();
-        if count == 0 { return None; }
+        if count == 0 {
+            return None;
+        }
         let index = self.selection.min(count - 1);
         if key != "enter" {
             self.move_selection(key == "down", count);
             return None;
         }
         if index >= entries.len() {
-            Some(SearchActivation::Shortcut(actions[index - entries.len()].clone()))
+            Some(SearchActivation::Shortcut(
+                actions[index - entries.len()].clone(),
+            ))
         } else {
             let entry = entries[index];
             let target = if entry.title == L10nKey::SettingsSearchKeybindingsTitle {
                 SettingsSection::Keybindings
-            } else { entry.section };
+            } else {
+                entry.section
+            };
             Some(SearchActivation::Setting(target, entry.title))
         }
     }
 
-    pub(super) fn begin_frame(&self) { self.hit_anchored.set(false); }
+    pub(super) fn begin_frame(&self) {
+        self.hit_anchored.set(false);
+    }
 
     pub(super) fn reveal_target(&self, query: &str) -> Option<gpui_kit::ScrollAnchor> {
-        if !self.reveal.replace(false) { return None; }
-        (self.searching || self.focused_setting.is_some()
+        if !self.reveal.replace(false) {
+            return None;
+        }
+        (self.searching
+            || self.focused_setting.is_some()
             || (!query.is_empty() && section_match_count(self.section, query) > 0))
             .then(|| self.anchor())
     }
 
     pub(super) fn first_hit_anchor(&self, label: &str, cx: &App) -> Option<gpui_kit::ScrollAnchor> {
-        if self.searching || self.is_capturing_rows() { return None; }
+        if self.searching || self.is_capturing_rows() {
+            return None;
+        }
         let hit = if let Some(target) = self.focused_setting {
             t(target) == label
         } else {
             let query = self.search.read(cx).value().trim().to_lowercase();
-            !query.is_empty() && section_match_count(self.section, &query) > 0
+            !query.is_empty()
+                && section_match_count(self.section, &query) > 0
                 && row_matches_query(self.section, label, &query)
         };
         (hit && !self.hit_anchored.replace(true)).then(|| self.anchor())
     }
 
-    pub(super) fn is_capturing_rows(&self) -> bool { self.rows.borrow().is_some() }
-    pub(super) fn begin_rows(&self) { *self.rows.borrow_mut() = Some(Vec::new()); }
+    pub(super) fn is_capturing_rows(&self) -> bool {
+        self.rows.borrow().is_some()
+    }
+    pub(super) fn begin_rows(&self) {
+        *self.rows.borrow_mut() = Some(Vec::new());
+    }
     pub(super) fn capture_row(&self, key: L10nKey, row: AnyElement) {
-        self.rows.borrow_mut().as_mut().expect("search row capture is active").push((key, row));
+        self.rows
+            .borrow_mut()
+            .as_mut()
+            .expect("search row capture is active")
+            .push((key, row));
     }
     pub(super) fn finish_rows(&self) -> Vec<(L10nKey, AnyElement)> {
         self.rows.borrow_mut().take().unwrap_or_default()

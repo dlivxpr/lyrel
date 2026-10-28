@@ -29,12 +29,7 @@ pub(super) fn first_readable_key(profile: &SshProfile) -> Option<String> {
 /// the key field as typed, with the host and user beside it filling in `%h`
 /// and `%r`.
 pub(super) fn first_readable_key_in(files: &[String], host: &str, user: &str) -> Option<String> {
-    first_readable_key_or(
-        files,
-        host,
-        user,
-        identity_defaults,
-    )
+    first_readable_key_or(files, host, user, identity_defaults)
 }
 
 /// An empty key field is not "no key": `build_spec_inner` offers the `~/.ssh`
@@ -74,9 +69,13 @@ pub(super) fn stored_passphrase(key_path: &str, store: &dyn CredentialStore) -> 
 // 自动化只允许显式临时 identity；绝不读取个人 ~/.ssh 或系统凭据。
 fn identity_defaults() -> Vec<String> {
     #[cfg(not(test))]
-    { crate::core::ssh_profile::default_identity_candidates() }
+    {
+        crate::core::ssh_profile::default_identity_candidates()
+    }
     #[cfg(test)]
-    { Vec::new() }
+    {
+        Vec::new()
+    }
 }
 
 impl SshSettings {
@@ -113,8 +112,12 @@ impl SshSettings {
         // same address — the keychain accounts by endpoint, not by profile.
         let stranded = plan.drop_old && !old_host.trim().is_empty();
         if stranded
-            && !cfg.ssh_profiles.iter().any(|p| p.id != profile.id && p.user == old_user && p.host == old_host && p.port == old_port)
-            && let Err(e) = self.credentials.delete_password(&old_user, &old_host, old_port)
+            && !cfg.ssh_profiles.iter().any(|p| {
+                p.id != profile.id && p.user == old_user && p.host == old_host && p.port == old_port
+            })
+            && let Err(e) = self
+                .credentials
+                .delete_password(&old_user, &old_host, old_port)
         {
             failures.push(t_fmt(
                 L10nKey::SettingsCouldntForgetPassword,
@@ -127,7 +130,8 @@ impl SshSettings {
         if plan.store
             && !profile.host.trim().is_empty()
             && let Err(e) =
-                self.credentials.set_password(&profile.user, &profile.host, profile.port, &typed)
+                self.credentials
+                    .set_password(&profile.user, &profile.host, profile.port, &typed)
         {
             failures.push(t_fmt(
                 L10nKey::SettingsCouldntSavePassword,
@@ -205,7 +209,11 @@ impl SshSettings {
     /// the box is only ever right about one key at a time. A box the user has
     /// started typing in is left alone — it is the one place where what is on
     /// screen outranks what the keychain holds.
-    pub(super) fn resync_key_passphrase(&mut self, window: &mut Window, cx: &mut Context<SettingsWindow>) {
+    pub(super) fn resync_key_passphrase(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) {
         let Some(form) = self.form.as_ref() else {
             return;
         };
@@ -216,7 +224,10 @@ impl SshSettings {
         if key == form.loaded_key {
             return;
         }
-        let stored = key.as_deref().map(|key| stored_passphrase(key, self.credentials.as_ref())).unwrap_or_default();
+        let stored = key
+            .as_deref()
+            .map(|key| stored_passphrase(key, self.credentials.as_ref()))
+            .unwrap_or_default();
         // A box the user has already typed in keeps what they typed — only
         // the key it will be saved against moves under it.
         let untouched = form.passphrase.read(cx).value().as_ref() == form.loaded_passphrase;

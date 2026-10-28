@@ -1464,7 +1464,8 @@ fn button(
 impl SettingsWindow {
     pub(super) fn usage_form_open(&self, cx: &gpui_kit::App) -> bool {
         self.active_settings().is_some_and(|s| {
-            s.navigation.section() == super::SettingsSection::Usage && s.usage.read(cx).edit.is_some()
+            s.navigation.section() == super::SettingsSection::Usage
+                && s.usage.read(cx).edit.is_some()
         })
     }
 

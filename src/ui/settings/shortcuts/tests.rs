@@ -39,8 +39,11 @@ fn wait_for_conflict(app: &Entity<SettingsWindow>, vcx: &mut VisualTestContext, 
     loop {
         vcx.background_executor.run_until_parked();
         let other = app.update_in(vcx, |app, _, _| {
-            app.active_settings()
-                .and_then(|s| s.shortcuts.conflict().map(|(_, _, other)| other.to_string()))
+            app.active_settings().and_then(|s| {
+                s.shortcuts
+                    .conflict()
+                    .map(|(_, _, other)| other.to_string())
+            })
         });
         if let Some(other) = other {
             assert_eq!(
@@ -229,13 +232,21 @@ fn backspace_removes_the_last_chord_without_unbinding_until_pressed_again(cx: &m
     vcx.simulate_keystrokes("secondary-shift-f9");
     vcx.simulate_keystrokes("x");
     vcx.simulate_keystrokes("backspace");
-    wait_for_binding(&mut vcx, "NewTab", serde_json::json!(["secondary-shift-f9"]));
+    wait_for_binding(
+        &mut vcx,
+        "NewTab",
+        serde_json::json!(["secondary-shift-f9"]),
+    );
     begin_capture(&app, &mut vcx, "NewTab");
     vcx.simulate_keystrokes("secondary-shift-f10");
     vcx.simulate_keystrokes("backspace");
     pump_for(&mut vcx, std::time::Duration::from_millis(800));
     assert!(app.read_with(&vcx, |app, _| app.recording_shortcut()));
-    wait_for_binding(&mut vcx, "NewTab", serde_json::json!(["secondary-shift-f9"]));
+    wait_for_binding(
+        &mut vcx,
+        "NewTab",
+        serde_json::json!(["secondary-shift-f9"]),
+    );
     vcx.simulate_keystrokes("delete");
     wait_for_binding(&mut vcx, "NewTab", serde_json::json!([]));
 }
@@ -252,7 +263,11 @@ fn closing_and_reopening_settings_drops_capture_and_rejects_the_old_timer(cx: &m
         app.start_recording_key("CloseActiveTab".to_string(), window, cx);
     });
     vcx.simulate_keystrokes("secondary-shift-f10");
-    wait_for_binding(&mut vcx, "CloseActiveTab", serde_json::json!(["secondary-shift-f10"]));
+    wait_for_binding(
+        &mut vcx,
+        "CloseActiveTab",
+        serde_json::json!(["secondary-shift-f10"]),
+    );
     pump_for(&mut vcx, std::time::Duration::from_millis(800));
     vcx.update(|_, cx| assert!(!cx.global::<Config>().keybindings.contains_key("NewTab")));
 }
@@ -289,32 +304,49 @@ fn rebuilt_session_rejects_a_matching_generation_from_previous_session(cx: &mut 
         };
         app.apply_shortcut_change(Some(edit), cx);
     });
-    wait_for_binding(&mut vcx, "CloseActiveTab", serde_json::json!(["secondary-shift-f10"]));
+    wait_for_binding(
+        &mut vcx,
+        "CloseActiveTab",
+        serde_json::json!(["secondary-shift-f10"]),
+    );
     vcx.update(|_, cx| assert!(!cx.global::<Config>().keybindings.contains_key("NewTab")));
 }
 
 #[gpui_kit::test]
-fn conflict_cancel_and_replace_preserve_the_actual_workbench_action_target(cx: &mut TestAppContext) {
+fn conflict_cancel_and_replace_preserve_the_actual_workbench_action_target(
+    cx: &mut TestAppContext,
+) {
     let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
     vcx.update(|_, cx| {
         cx.global_mut::<Config>().keybindings = serde_json::from_value(serde_json::json!({
             "ToggleLeftPanel": ["secondary-shift-f9"],
-        })).expect("the binding loads");
+        }))
+        .expect("the binding loads");
         crate::ui::keymap::rebind(cx);
     });
     let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
     begin_capture(&app, &mut vcx, "ToggleRightPanel");
     vcx.simulate_keystrokes("secondary-shift-f9");
     wait_for_conflict(&app, &mut vcx, "ToggleLeftPanel");
-    app.update_in(&mut vcx, |app, _, cx| app.resolve_keybinding_conflict(false, cx));
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.resolve_keybinding_conflict(false, cx)
+    });
     app.update_in(&mut vcx, |app, window, cx| app.close_settings(window, cx));
     vcx.run_until_parked();
     workspace.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
     vcx.run_until_parked();
-    let before = workspace.read_with(&vcx, |app, _| (app.sidebar_collapsed, app.right_panel_visible));
+    let before = workspace.read_with(&vcx, |app, _| {
+        (app.sidebar_collapsed, app.right_panel_visible)
+    });
     vcx.simulate_keystrokes("secondary-shift-f9");
     vcx.run_until_parked();
-    assert_eq!(workspace.read_with(&vcx, |app, _| (app.sidebar_collapsed, app.right_panel_visible)), (!before.0, before.1));
+    assert_eq!(
+        workspace.read_with(&vcx, |app, _| (
+            app.sidebar_collapsed,
+            app.right_panel_visible
+        )),
+        (!before.0, before.1)
+    );
 
     let app = crate::ui::settings::test_window::open(&workspace, &mut vcx);
     begin_capture(&app, &mut vcx, "ToggleRightPanel");
@@ -324,10 +356,18 @@ fn conflict_cancel_and_replace_preserve_the_actual_workbench_action_target(cx: &
     vcx.run_until_parked();
     workspace.update_in(&mut vcx, |app, window, cx| app.focus_active(window, cx));
     vcx.run_until_parked();
-    let before = workspace.read_with(&vcx, |app, _| (app.sidebar_collapsed, app.right_panel_visible));
+    let before = workspace.read_with(&vcx, |app, _| {
+        (app.sidebar_collapsed, app.right_panel_visible)
+    });
     vcx.simulate_keystrokes("secondary-shift-f9");
     vcx.run_until_parked();
-    assert_eq!(workspace.read_with(&vcx, |app, _| (app.sidebar_collapsed, app.right_panel_visible)), (before.0, !before.1));
+    assert_eq!(
+        workspace.read_with(&vcx, |app, _| (
+            app.sidebar_collapsed,
+            app.right_panel_visible
+        )),
+        (before.0, !before.1)
+    );
 }
 
 #[gpui_kit::test]
@@ -340,10 +380,20 @@ fn escape_dismisses_a_conflict_without_installing_or_closing_settings(cx: &mut T
     vcx.run_until_parked();
     app.read_with(&vcx, |app, _| {
         assert!(app.has_settings());
-        assert!(app.active_settings().unwrap().shortcuts.conflict().is_none());
+        assert!(
+            app.active_settings()
+                .unwrap()
+                .shortcuts
+                .conflict()
+                .is_none()
+        );
     });
     vcx.update(|_, cx| {
         assert!(!cx.global::<Config>().keybindings.contains_key("NewTab"));
-        assert!(!cx.global::<Config>().keybindings.contains_key("InsertNewline"));
+        assert!(
+            !cx.global::<Config>()
+                .keybindings
+                .contains_key("InsertNewline")
+        );
     });
 }

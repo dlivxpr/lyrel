@@ -126,61 +126,68 @@ impl LyrelApp {
             &view,
             window,
             |this, source, event, window, cx| {
-                if !this.settings.as_ref().is_some_and(|view| view.entity_id() == source.entity_id()) {
+                if !this
+                    .settings
+                    .as_ref()
+                    .is_some_and(|view| view.entity_id() == source.entity_id())
+                {
                     return;
                 }
                 match event {
-                SettingsEvent::Closed(location) => {
-                    this.last_settings_location = *location;
-                    this.settings = None;
-                    if let Some((settings, owner)) = this.settings_window.take() {
-                        let app = cx.weak_entity();
-                        cx.defer(move |cx| {
-                            let _ = settings.update(cx, |_, window, _| window.remove_window());
-                            let _ = owner.update(cx, |_, window, cx| {
-                                let _ = app.update(cx, |this, cx| {
-                                    if this.settings.is_none() {
-                                        window.activate_window();
-                                        this.focus_previous_content(window, cx);
-                                    }
+                    SettingsEvent::Closed(location) => {
+                        this.last_settings_location = *location;
+                        this.settings = None;
+                        if let Some((settings, owner)) = this.settings_window.take() {
+                            let app = cx.weak_entity();
+                            cx.defer(move |cx| {
+                                let _ = settings.update(cx, |_, window, _| window.remove_window());
+                                let _ = owner.update(cx, |_, window, cx| {
+                                    let _ = app.update(cx, |this, cx| {
+                                        if this.settings.is_none() {
+                                            window.activate_window();
+                                            this.focus_previous_content(window, cx);
+                                        }
+                                    });
                                 });
                             });
-                        });
-                    } else {
-                        this.focus_previous_content(window, cx);
+                        } else {
+                            this.focus_previous_content(window, cx);
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
-                }
-                SettingsEvent::ConnectSsh(id) => {
-                    let id = *id;
-                    cx.defer_in(window, move |this, window, cx| {
-                        this.connect_ssh_profile(id, window, cx)
-                    });
-                }
-                SettingsEvent::OpenFile(host, path) => {
-                    let host = host.clone();
-                    let path = path.clone();
-                    cx.defer_in(window, move |this, window, cx| {
-                        this.editor_open_on_host(host, &path, window, cx)
-                    });
-                }
-                SettingsEvent::RestartDaemon => this.restart_daemon(window, cx),
-                SettingsEvent::RefreshShells => this.refresh_shells(cx),
-                SettingsEvent::TerminalCursorChanged { force_visible } => {
-                    for leaf in this.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
-                        leaf.update(cx, |pane, cx| {
-                            if *force_visible {
-                                pane.show_cursor();
-                            }
-                            cx.notify();
+                    SettingsEvent::ConnectSsh(id) => {
+                        let id = *id;
+                        cx.defer_in(window, move |this, window, cx| {
+                            this.connect_ssh_profile(id, window, cx)
                         });
                     }
-                }
-                SettingsEvent::EditorGitGutter(on) => this.apply_editor_git_gutter(*on, cx),
-                SettingsEvent::LocaleChanged => {
-                    this.refresh_locale_state(window, cx);
-                    crate::ui::windows::WindowRegistry::refresh_locale(cx, Some(this.workspace));
-                }
+                    SettingsEvent::OpenFile(host, path) => {
+                        let host = host.clone();
+                        let path = path.clone();
+                        cx.defer_in(window, move |this, window, cx| {
+                            this.editor_open_on_host(host, &path, window, cx)
+                        });
+                    }
+                    SettingsEvent::RestartDaemon => this.restart_daemon(window, cx),
+                    SettingsEvent::RefreshShells => this.refresh_shells(cx),
+                    SettingsEvent::TerminalCursorChanged { force_visible } => {
+                        for leaf in this.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
+                            leaf.update(cx, |pane, cx| {
+                                if *force_visible {
+                                    pane.show_cursor();
+                                }
+                                cx.notify();
+                            });
+                        }
+                    }
+                    SettingsEvent::EditorGitGutter(on) => this.apply_editor_git_gutter(*on, cx),
+                    SettingsEvent::LocaleChanged => {
+                        this.refresh_locale_state(window, cx);
+                        crate::ui::windows::WindowRegistry::refresh_locale(
+                            cx,
+                            Some(this.workspace),
+                        );
+                    }
                 }
             },
         ));
@@ -276,12 +283,18 @@ impl LyrelApp {
         then: impl FnOnce(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
     ) {
         if let Some(view) = self.settings.clone() {
-            let session = view.read(cx).active_settings().map(|s| s.navigation.session());
+            let session = view
+                .read(cx)
+                .active_settings()
+                .map(|s| s.navigation.session());
             let handle = view.read(cx).window;
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, cx| {
                     view.update(cx, |view, cx| {
-                        if session.is_some_and(|session| view.active_settings().is_some_and(|s| s.navigation.accepts(session))) {
+                        if session.is_some_and(|session| {
+                            view.active_settings()
+                                .is_some_and(|s| s.navigation.accepts(session))
+                        }) {
                             window.activate_window();
                             then(view, window, cx);
                         }

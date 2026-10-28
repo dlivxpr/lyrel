@@ -223,7 +223,11 @@ fn account_modal_blocks_navigation_until_cancelled(cx: &mut TestAppContext) {
         window.click(navigation.clone(), cx);
     });
     assert!(
-        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().navigation.section())
+        app.update_in(&mut vcx, |app, _, _| app
+            .active_settings()
+            .unwrap()
+            .navigation
+            .section())
             == SettingsSection::Usage
     );
     assert_eq!(http.calls.load(Ordering::SeqCst), 0);
@@ -235,7 +239,11 @@ fn account_modal_blocks_navigation_until_cancelled(cx: &mut TestAppContext) {
         window.click(navigation, cx);
     });
     assert!(
-        app.update_in(&mut vcx, |app, _, _| app.active_settings().unwrap().navigation.section())
+        app.update_in(&mut vcx, |app, _, _| app
+            .active_settings()
+            .unwrap()
+            .navigation
+            .section())
             == SettingsSection::General
     );
 }

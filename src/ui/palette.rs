@@ -202,7 +202,12 @@ mod tests {
                 let settings = open(&app, &mut vcx);
                 vcx.run_until_parked();
                 settings.read_with(&vcx, |settings, _| {
-                    settings.active_settings().unwrap().navigation.search().clone()
+                    settings
+                        .active_settings()
+                        .unwrap()
+                        .navigation
+                        .search()
+                        .clone()
                 })
             } else {
                 app.read_with(&vcx, |app, _| app.file_search.clone())

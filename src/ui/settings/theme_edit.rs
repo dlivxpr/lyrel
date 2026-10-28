@@ -491,20 +491,15 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    pub(crate) fn edit_active_theme(
+    fn edit_active_theme(
         &mut self,
+        id: &str,
         edit: ThemeEdit,
         value: gpui_kit::Hsla,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let id = crate::ui::theme::effective_preset_id(cx);
-        self.preview_theme_change(
-            &id,
-            ThemeChange::Color(edit, hsla_to_u32(value)),
-            window,
-            cx,
-        );
+        self.preview_theme_change(id, ThemeChange::Color(edit, hsla_to_u32(value)), window, cx);
     }
 
     pub(crate) fn effective_window_opacity(cx: &App) -> f32 {
@@ -643,21 +638,15 @@ impl SettingsWindow {
                     &state,
                     window,
                     move |this, _picker, ev: &ColorPickerEvent, window, cx| {
+                        let ColorPickerEvent::Change(Some(value)) = ev else {
+                            return;
+                        };
                         let id = crate::ui::theme::effective_preset_id(cx);
-                        if !this
+                        if this
                             .active_settings()
                             .is_some_and(|state| state.theme.accepts(&target, &id))
                         {
-                            return;
-                        }
-                        let ColorPickerEvent::Change(value) = ev;
-                        if let Some(v) = value {
-                            this.preview_theme_change(
-                                &id,
-                                ThemeChange::Color(edit, hsla_to_u32(*v)),
-                                window,
-                                cx,
-                            );
+                            this.edit_active_theme(&id, edit, *value, window, cx);
                         }
                     },
                 ));

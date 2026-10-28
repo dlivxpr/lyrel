@@ -462,7 +462,10 @@ impl SettingsWindow {
         {
             Some(s) => {
                 let query = s.navigation.search().read(cx).value().trim().to_lowercase();
-                let focused = s.navigation.focused_setting().is_some_and(|k| t(k) == label);
+                let focused = s
+                    .navigation
+                    .focused_setting()
+                    .is_some_and(|k| t(k) == label);
                 match query.is_empty() || section_match_count(s.navigation.section(), &query) == 0 {
                     true => (focused, false),
                     false => {
@@ -559,7 +562,10 @@ impl SettingsWindow {
             );
         if capture {
             if let Some(entry) = entry {
-                self.active_settings().unwrap().navigation.capture_row(entry.title, row.into_any_element());
+                self.active_settings()
+                    .unwrap()
+                    .navigation
+                    .capture_row(entry.title, row.into_any_element());
                 return div().id("captured-setting");
             }
         }
@@ -722,14 +728,20 @@ impl SettingsWindow {
         let background_layers = crate::ui::app::overlay_surface_layers(cx);
 
         let (focus_handle, section, search) = match self.active_settings() {
-            Some(s) => (s.focus_handle.clone(), s.navigation.section(), s.navigation.search().clone()),
+            Some(s) => (
+                s.focus_handle.clone(),
+                s.navigation.section(),
+                s.navigation.search().clone(),
+            ),
             None => return div(),
         };
         if let Some(s) = self.active_settings() {
             s.focused.replace(window.focused(cx));
         }
         let query = search.read(cx).value().trim().to_lowercase();
-        let searching = self.active_settings().is_some_and(|s| s.navigation.is_searching());
+        let searching = self
+            .active_settings()
+            .is_some_and(|s| s.navigation.is_searching());
         let menu_open = self.active_settings().is_some_and(|s| s.menu.is_some());
 
         let viewport_w = window.viewport_size().width.as_f32();
@@ -737,9 +749,14 @@ impl SettingsWindow {
         self.settings_viewport_w.set(viewport_w);
         self.settings_row_width
             .set(settings_row_width(viewport_w, scale));
-        if let Some(s) = self.active_settings() { s.navigation.begin_frame(); }
+        if let Some(s) = self.active_settings() {
+            s.navigation.begin_frame();
+        }
 
-        if let Some(anchor) = self.active_settings().and_then(|s| s.navigation.reveal_target(&query)) {
+        if let Some(anchor) = self
+            .active_settings()
+            .and_then(|s| s.navigation.reveal_target(&query))
+        {
             anchor.scroll_to(window, cx);
         }
 
@@ -911,7 +928,8 @@ impl SettingsWindow {
                         s.navigation.set_modified_only(false);
                     }
                     if let Some(s) = this.active_settings() {
-                        s.navigation.search()
+                        s.navigation
+                            .search()
                             .clone()
                             .update(cx, |s, cx| s.set_value("", window, cx));
                     }
@@ -1312,17 +1330,27 @@ impl SettingsWindow {
             return;
         }
         if !searching
-            || !self
-                .active_settings()
-                .is_some_and(|s| s.navigation.search().read(cx).focus_handle(cx).is_focused(window))
+            || !self.active_settings().is_some_and(|s| {
+                s.navigation
+                    .search()
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            })
             || !matches!(key, "up" | "down" | "enter")
         {
             return;
         }
-        let activation = self.active_settings_mut().and_then(|s| s.navigation.search_key(key, cx));
+        let activation = self
+            .active_settings_mut()
+            .and_then(|s| s.navigation.search_key(key, cx));
         match activation {
-            Some(navigation::SearchActivation::Shortcut(action)) => self.open_shortcut_search(action, window, cx),
-            Some(navigation::SearchActivation::Setting(target, title)) => self.navigate_settings(target, Some(title), window, cx),
+            Some(navigation::SearchActivation::Shortcut(action)) => {
+                self.open_shortcut_search(action, window, cx)
+            }
+            Some(navigation::SearchActivation::Setting(target, title)) => {
+                self.navigate_settings(target, Some(title), window, cx)
+            }
             None => cx.notify(),
         }
         cx.stop_propagation();
@@ -1338,7 +1366,8 @@ impl SettingsWindow {
         self.with_settings_edits_resolved(window, cx, move |this, window, cx| {
             this.navigate_settings(SettingsSection::Keybindings, None, window, cx);
             if let Some(s) = this.active_settings() {
-                s.shortcuts.search()
+                s.shortcuts
+                    .search()
                     .clone()
                     .update(cx, |s, cx| s.set_value(action, window, cx));
             }
@@ -1355,7 +1384,13 @@ impl SettingsWindow {
         let Some(state) = self.active_settings() else {
             return (String::new(), None, div().into_any_element());
         };
-        let query = state.navigation.search().read(cx).value().trim().to_lowercase();
+        let query = state
+            .navigation
+            .search()
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
         let modified_only = state.navigation.modified_only();
         let selection = state.navigation.selection();
         state.navigation.begin_rows();
@@ -1605,4 +1640,3 @@ impl SettingsWindow {
             }))
     }
 }
-

@@ -65,17 +65,26 @@ pub(super) enum ShortcutChange {
 impl ShortcutChange {
     pub(super) fn apply(self, cfg: &mut Config) {
         match self {
-            Self::Assign { action, spec, displaced } => {
+            Self::Assign {
+                action,
+                spec,
+                displaced,
+            } => {
                 if let Some((other, rest)) = displaced {
-                    cfg.keybindings.insert(other, KeybindingOverride::Exact(rest));
+                    cfg.keybindings
+                        .insert(other, KeybindingOverride::Exact(rest));
                 }
                 // Recording replaces, whereas a bare string adds to defaults.
-                cfg.keybindings.insert(action, KeybindingOverride::Exact(vec![spec]));
+                cfg.keybindings
+                    .insert(action, KeybindingOverride::Exact(vec![spec]));
             }
             Self::Unbind(action) => {
-                cfg.keybindings.insert(action, KeybindingOverride::Exact(Vec::new()));
+                cfg.keybindings
+                    .insert(action, KeybindingOverride::Exact(Vec::new()));
             }
-            Self::Reset(action) => { cfg.keybindings.remove(&action); }
+            Self::Reset(action) => {
+                cfg.keybindings.remove(&action);
+            }
             Self::RestoreDefaults => cfg.keybindings.clear(),
             Self::Preset(preset) => cfg.keybinding_preset = preset,
             Self::Prefix(prefix) => cfg.prefix = prefix,
@@ -84,10 +93,12 @@ impl ShortcutChange {
 }
 
 impl ShortcutEditor {
-    pub(in crate::ui::settings) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
-        let search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(L10nKey::SettingsSearchShortcuts))
-        });
+    pub(in crate::ui::settings) fn new(
+        window: &mut Window,
+        cx: &mut Context<SettingsWindow>,
+    ) -> Self {
+        let search = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSearchShortcuts)));
         let subscription = cx.subscribe_in(&search, window, |_, _, ev, _, cx| {
             if matches!(ev, InputEvent::Change) {
                 cx.notify();
@@ -103,25 +114,39 @@ impl ShortcutEditor {
         }
     }
 
-    pub(in crate::ui) fn search(&self) -> &Entity<InputState> { &self.search }
+    pub(in crate::ui) fn search(&self) -> &Entity<InputState> {
+        &self.search
+    }
 
-    pub(in crate::ui) fn is_recording(&self) -> bool { self.recording.is_some() }
+    pub(in crate::ui) fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
 
     pub(super) fn recording(&self) -> Option<(&str, &[String])> {
-        self.recording.as_ref().map(|r| (r.action.as_str(), r.chords.as_slice()))
+        self.recording
+            .as_ref()
+            .map(|r| (r.action.as_str(), r.chords.as_slice()))
     }
 
     pub(super) fn conflict(&self) -> Option<(&str, &str, &str)> {
-        self.conflict.as_ref().map(|c| (c.action.as_str(), c.spec.as_str(), c.other.as_str()))
+        self.conflict
+            .as_ref()
+            .map(|c| (c.action.as_str(), c.spec.as_str(), c.other.as_str()))
     }
 
-    pub(super) fn note(&self) -> Option<&str> { self.note.as_deref() }
+    pub(super) fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
 
     pub(super) fn begin(&mut self, action: String, intercept: Subscription) {
         self.cancel_recording();
         self.note = None;
         self.conflict = None;
-        self.recording = Some(Recording { action, chords: Vec::new(), _intercept: intercept });
+        self.recording = Some(Recording {
+            action,
+            chords: Vec::new(),
+            _intercept: intercept,
+        });
     }
 
     pub(in crate::ui) fn cancel_recording(&mut self) {
@@ -129,7 +154,9 @@ impl ShortcutEditor {
         self.recording = None;
     }
 
-    pub(in crate::ui) fn cancel_conflict(&mut self) -> bool { self.conflict.take().is_some() }
+    pub(in crate::ui) fn cancel_conflict(&mut self) -> bool {
+        self.conflict.take().is_some()
+    }
 
     pub(in crate::ui) fn retire(&mut self) {
         self.cancel_recording();
@@ -138,11 +165,16 @@ impl ShortcutEditor {
 
     fn pending_commit(&mut self) -> RecordCommit {
         self.generation = self.generation.wrapping_add(1);
-        RecordCommit { session: self.search.entity_id(), generation: self.generation }
+        RecordCommit {
+            session: self.search.entity_id(),
+            generation: self.generation,
+        }
     }
 
     pub(super) fn capture(&mut self, key: &gpui_kit::Keystroke) -> Capture {
-        let Some(recording) = self.recording.as_mut() else { return Capture::Ignored; };
+        let Some(recording) = self.recording.as_mut() else {
+            return Capture::Ignored;
+        };
         match key.key.as_str() {
             "escape" => {
                 self.cancel_recording();
@@ -181,13 +213,22 @@ impl ShortcutEditor {
         let action = recording.action.clone();
         let spec = recording.chords.join(" ");
         self.cancel_recording();
-        if let Some(other) = effective_chords(cx).into_iter()
+        if let Some(other) = effective_chords(cx)
+            .into_iter()
             .find(|(a, chords)| *a != action && chords.iter().any(|k| same_chord(k, &spec)))
             .map(|(a, _)| a)
-            .or_else(|| extra_bindings(cx).into_iter()
-                .find(|(a, k)| *a != action && same_chord(k, &spec)).map(|(a, _)| a))
+            .or_else(|| {
+                extra_bindings(cx)
+                    .into_iter()
+                    .find(|(a, k)| *a != action && same_chord(k, &spec))
+                    .map(|(a, _)| a)
+            })
         {
-            self.conflict = Some(KeyConflict { action, spec, other });
+            self.conflict = Some(KeyConflict {
+                action,
+                spec,
+                other,
+            });
             Commit::Conflict
         } else {
             Commit::Edit(self.assign(action, spec, cx))
@@ -196,7 +237,9 @@ impl ShortcutEditor {
 
     pub(super) fn resolve_conflict(&mut self, replace: bool, cx: &App) -> Option<ShortcutChange> {
         let conflict = self.conflict.take()?;
-        if !replace { return None; }
+        if !replace {
+            return None;
+        }
         let edit = self.assign(conflict.action, conflict.spec, cx);
         // Replace already explained the displacement in the row.
         self.note = None;
@@ -206,22 +249,45 @@ impl ShortcutEditor {
     fn assign(&mut self, action: String, spec: String, cx: &App) -> ShortcutChange {
         // Compare interpreted chords, not spelling (secondary-} vs secondary-shift-]).
         // Displace only this chord; an extra default follows its owner's first chord.
-        let displaced = effective_chords(cx).into_iter()
+        let displaced = effective_chords(cx)
+            .into_iter()
             .find(|(a, chords)| *a != action && chords.iter().any(|k| same_chord(k, &spec)))
             .map(|(a, chords)| {
-                (a, chords.into_iter().filter(|k| !same_chord(k, &spec)).collect())
+                (
+                    a,
+                    chords
+                        .into_iter()
+                        .filter(|k| !same_chord(k, &spec))
+                        .collect(),
+                )
             })
-            .or_else(|| extra_bindings(cx).into_iter()
-                .find(|(a, k)| *a != action && same_chord(k, &spec))
-                .map(|(a, _)| (a, Vec::new())));
+            .or_else(|| {
+                extra_bindings(cx)
+                    .into_iter()
+                    .find(|(a, k)| *a != action && same_chord(k, &spec))
+                    .map(|(a, _)| (a, Vec::new()))
+            });
         let in_prose = |name: &str| name.trim_end_matches('…').to_string();
         self.note = displaced.as_ref().map(|(other, _)| {
-            t_fmt(L10nKey::AppKeybindingDisplacedNote, &[
-                ("action", &in_prose(&crate::ui::keymap::action_entry(&action).1)),
-                ("previous", &in_prose(&crate::ui::keymap::action_entry(other).1)),
-            ])
+            t_fmt(
+                L10nKey::AppKeybindingDisplacedNote,
+                &[
+                    (
+                        "action",
+                        &in_prose(&crate::ui::keymap::action_entry(&action).1),
+                    ),
+                    (
+                        "previous",
+                        &in_prose(&crate::ui::keymap::action_entry(other).1),
+                    ),
+                ],
+            )
         });
-        ShortcutChange::Assign { action, spec, displaced }
+        ShortcutChange::Assign {
+            action,
+            spec,
+            displaced,
+        }
     }
 
     fn clear_recording_note(&mut self) {
