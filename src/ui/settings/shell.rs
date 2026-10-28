@@ -1035,7 +1035,7 @@ impl SettingsWindow {
         if self.theme_draft_dirty() {
             let error = self
                 .active_settings()
-                .and_then(|s| s.theme_draft_error.clone());
+                .and_then(|s| s.theme.error().map(str::to_owned));
             out.push(
                 v_flex()
                     .gap(px(10.))

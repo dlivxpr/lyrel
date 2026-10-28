@@ -121,9 +121,7 @@ impl SettingsWindow {
             wd_path_input,
             link_file_command_input,
             http_proxy_input,
-            theme_editor: None,
-            theme_draft: None,
-            theme_draft_error: None,
+            theme: theme_edit::ThemeEditing::default(),
             save_error: None,
             saved_config: cx.global::<Config>().clone(),
             menu: None,
@@ -174,6 +172,9 @@ impl SettingsWindow {
         if let Some(s) = self.settings.as_mut() {
             let moved = s.navigation.select_section(target);
             s.recording = None;
+            if moved {
+                s.theme.leave_page();
+            }
             if moved {
                 s.statistics.invalidate();
             }
