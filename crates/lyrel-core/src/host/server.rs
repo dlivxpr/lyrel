@@ -1,22 +1,41 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{self, Read, Write};
-#[cfg(unix)]
+use std::io::{self, Read};
+#[cfg(all(test, unix))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use crate::core::machine::{self, Attachment, MachineStore};
+use crate::core::machine::{self, MachineStore};
 use crate::daemon::control::{
-    CONTROL_VERSION, ControlClientMsg, ControlEvent, ControlHello, ControlHelloOk, ControlReply,
-    ControlRequest, ControlServerMsg, GIT_STREAM_CHUNK, GIT_STREAM_CHUNK_MAX, LinkShutdown,
-    MAX_CONCURRENT_GIT_STREAMS, PaneAgentState, ReplyOk, ServerStatus, WATCH_BURST_CAP, WireError,
-    WireErrorKind, WorkspaceId, feature, server_started,
+    CONTROL_VERSION, ControlClientMsg, ControlEvent, ControlReply, ControlRequest, ControlServerMsg,
+    GIT_STREAM_CHUNK, GIT_STREAM_CHUNK_MAX, MAX_CONCURRENT_GIT_STREAMS, PaneAgentState, ReplyOk,
+    ServerStatus, WATCH_BURST_CAP, WireError, WireErrorKind, server_started,
 };
-use crate::daemon::duplex::{Duplex, Halves};
 use crate::daemon::protocol::PaneInfo;
 use crate::host::{Host, SearchHit, SharedHost, WatchSub};
+
+mod attachments;
+mod connection;
+mod negotiation;
+mod output;
+#[cfg(unix)]
+mod unix;
+#[cfg(windows)]
+mod windows;
+#[cfg(all(test, unix))]
+mod test_support;
+
+pub use attachments::AttachRegistry;
+use attachments::ConnectionIdentity;
+pub use connection::{serve, serve_halves, serve_halves_with, serve_with};
+use output::Sink;
+
+#[cfg(unix)]
+use unix::control_endpoint_display;
+#[cfg(windows)]
+use windows::control_endpoint_display;
 
 pub const MAX_WORKERS: usize = 64;
 
@@ -67,461 +86,6 @@ impl Services {
     }
 }
 
-#[derive(Default)]
-pub struct AttachRegistry {
-    live: Mutex<Vec<Live>>,
-    guis: Mutex<Vec<GuiLive>>,
-    handover: Mutex<()>,
-}
-
-struct Live {
-    workspace: String,
-    conn: u64,
-    token: String,
-    hostname: String,
-    sink: Arc<Sink>,
-    shutdown: Arc<dyn LinkShutdown>,
-    dedicated: bool,
-}
-
-struct Evicted {
-    hostname: String,
-    sink: Arc<Sink>,
-    shutdown: Arc<dyn LinkShutdown>,
-    dedicated: bool,
-}
-
-struct GuiLive {
-    conn: u64,
-    sink: Arc<Sink>,
-}
-
-impl AttachRegistry {
-    fn handover(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.handover.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    pub fn holder(&self, workspace: &str) -> Option<(String, String)> {
-        self.locked()
-            .iter()
-            .find(|l| l.workspace == workspace)
-            .map(|l| (l.token.clone(), l.hostname.clone()))
-    }
-
-    pub fn len(&self) -> usize {
-        self.locked().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn register_gui(&self, conn: u64, sink: Arc<Sink>) {
-        let mut guis = self.guis.lock().unwrap_or_else(|e| e.into_inner());
-        guis.retain(|gui| gui.conn != conn);
-        guis.push(GuiLive { conn, sink });
-    }
-
-    fn unregister_gui(&self, conn: u64) {
-        self.guis
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|gui| gui.conn != conn);
-    }
-
-    fn open_gui(&self, path: Option<String>, workspace: Option<WorkspaceId>) -> bool {
-        // The newest GUI connection belongs to the most recently started app
-        // process. Window recency is resolved inside that process, where GPUI
-        // owns the authoritative focus state.
-        loop {
-            let target = self
-                .guis
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .last()
-                .map(|gui| (gui.conn, Arc::clone(&gui.sink)));
-            let Some((conn, sink)) = target else {
-                return false;
-            };
-            let event = ControlServerMsg::Event(ControlEvent::GuiOpen {
-                path: path.clone(),
-                workspace,
-            });
-            if sink.send(&event).is_ok() {
-                return true;
-            }
-            self.unregister_gui(conn);
-        }
-    }
-
-    fn claim(
-        &self,
-        workspace: &str,
-        conn: u64,
-        holder: &Holder,
-        dedicated: bool,
-    ) -> Option<Evicted> {
-        let mut live = self.locked();
-        let evicted = match live.iter().position(|l| l.workspace == workspace) {
-            Some(i) if live[i].conn == conn => {
-                live[i].token = holder.token.clone();
-                None
-            }
-            Some(i) => {
-                let old = live.remove(i);
-                Some(Evicted {
-                    hostname: old.hostname,
-                    sink: old.sink,
-                    shutdown: old.shutdown,
-                    dedicated: old.dedicated,
-                })
-            }
-            None => None,
-        };
-        if !live.iter().any(|l| l.workspace == workspace) {
-            live.push(Live {
-                workspace: workspace.to_string(),
-                conn,
-                token: holder.token.clone(),
-                hostname: holder.hostname.clone(),
-                sink: Arc::clone(&holder.sink),
-                shutdown: Arc::clone(&holder.shutdown),
-                dedicated,
-            });
-        }
-        evicted
-    }
-
-    fn forget_workspace(&self, workspace: &str) {
-        self.locked().retain(|l| l.workspace != workspace);
-    }
-
-    fn release(&self, workspace: &str, conn: u64) -> bool {
-        let mut live = self.locked();
-        let before = live.len();
-        live.retain(|l| !(l.workspace == workspace && l.conn == conn));
-        live.len() != before
-    }
-
-    fn release_conn(&self, conn: u64) -> Vec<String> {
-        let mut live = self.locked();
-        let mut released = Vec::new();
-        live.retain(|l| {
-            if l.conn == conn {
-                released.push(l.workspace.clone());
-                false
-            } else {
-                true
-            }
-        });
-        released
-    }
-
-    fn locked(&self) -> std::sync::MutexGuard<'_, Vec<Live>> {
-        self.live.lock().unwrap_or_else(|e| e.into_inner())
-    }
-}
-
-struct Holder {
-    token: String,
-    hostname: String,
-    sink: Arc<Sink>,
-    shutdown: Arc<dyn LinkShutdown>,
-}
-
-pub fn serve<D: Duplex>(link: D, host: SharedHost) -> io::Result<()> {
-    serve_with(link, host, Services::none())
-}
-
-pub fn serve_with<D: Duplex>(link: D, host: SharedHost, services: Services) -> io::Result<()> {
-    let label = link.kind_label();
-    let Halves {
-        read,
-        write,
-        shutdown,
-    } = link.split()?;
-    serve_halves_with(read, write, shutdown, host, services, label)
-}
-
-pub fn serve_halves<R, W>(
-    r: R,
-    w: W,
-    shutdown: Arc<dyn LinkShutdown>,
-    host: SharedHost,
-    label: &'static str,
-) -> io::Result<()>
-where
-    R: Read,
-    W: Write + Send + 'static,
-{
-    serve_halves_with(r, w, shutdown, host, Services::none(), label)
-}
-
-pub fn serve_halves_with<R, W>(
-    mut r: R,
-    w: W,
-    shutdown: Arc<dyn LinkShutdown>,
-    host: SharedHost,
-    services: Services,
-    label: &'static str,
-) -> io::Result<()>
-where
-    R: Read,
-    W: Write + Send + 'static,
-{
-    let sink = Arc::new(Sink::new(w));
-
-    let hello = match handshake(&mut r, &sink, &*host, &services) {
-        Ok(Some(hello)) => hello,
-        Ok(None) => {
-            let _ = shutdown.shutdown_link();
-            return Ok(());
-        }
-        Err(e) => {
-            let _ = shutdown.shutdown_link();
-            return if is_disconnect(&e) {
-                log::debug!("control peer ({label}) left during the handshake: {e}");
-                Ok(())
-            } else {
-                Err(e)
-            };
-        }
-    };
-
-    let machine_sub = subscribe_machine(&services, &sink);
-
-    let conn = Arc::new(Conn {
-        host,
-        sink: Arc::clone(&sink),
-        inflight: Mutex::new(HashMap::new()),
-        watches: Mutex::new(HashMap::new()),
-        deferred_watches: Mutex::new(HashMap::new()),
-        next_watch: AtomicU64::new(1),
-        git_streams: Arc::new(AtomicUsize::new(0)),
-        pool: Pool::new(),
-        machine: services.machine.clone(),
-        machine_origin: machine_sub.as_ref().map(machine::Subscription::id),
-        attachments: Arc::clone(&services.attachments),
-        panes: services.panes.clone(),
-        id: NEXT_CONN.fetch_add(1, Ordering::Relaxed),
-        holder: Holder {
-            token: hello.client_token.clone(),
-            hostname: hello.client_hostname.clone(),
-            sink: Arc::clone(&sink),
-            shutdown: Arc::clone(&shutdown),
-        },
-    });
-
-    if hello.gui {
-        // GUI registration starts only after a successful version handshake,
-        // so an incompatible app can never be reported as a live receiver.
-        services
-            .attachments
-            .register_gui(conn.id, Arc::clone(&sink));
-    }
-
-    if let Some(workspace) = hello.workspace.as_deref()
-        && let Err(e) = attach_workspace(&conn, workspace, true)
-    {
-        log::warn!("control peer ({label}) could not attach to workspace {workspace}: {e}");
-    }
-
-    let outcome = read_loop(&mut r, &conn);
-
-    conn.pool.close();
-    conn.watches
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
-    conn.release_all_workspaces();
-    // Every exit path converges here, including EOF and protocol errors.
-    conn.attachments.unregister_gui(conn.id);
-    drop(machine_sub);
-    sink.retire();
-    let _ = shutdown.shutdown_link();
-
-    match outcome {
-        Ok(()) => {
-            log::debug!("control connection ({label}) closed by peer");
-            Ok(())
-        }
-        Err(e) if is_disconnect(&e) => {
-            log::debug!("control connection ({label}) ended: {e}");
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
-}
-
-fn is_disconnect(e: &io::Error) -> bool {
-    matches!(
-        e.kind(),
-        io::ErrorKind::UnexpectedEof
-            | io::ErrorKind::ConnectionReset
-            | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::BrokenPipe
-    )
-}
-
-fn handshake<R: Read>(
-    r: &mut R,
-    sink: &Sink,
-    host: &dyn Host,
-    services: &Services,
-) -> io::Result<Option<ControlHello>> {
-    let hello = match ControlClientMsg::read(r)? {
-        ControlClientMsg::Hello(h) => h,
-        other => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("control peer opened with {other:?} instead of HELLO"),
-            ));
-        }
-    };
-
-    let mut features = vec![
-        feature::CONTROL.to_string(),
-        feature::HOST_RPC.to_string(),
-        feature::READ_LINK.to_string(),
-        feature::STDIO_BRIDGE.to_string(),
-        // Every host this server fronts can search its own files; the
-        // request only needs a name so an older client's peer is never sent
-        // it (see `RemoteHost::search_content`).
-        feature::CONTENT_SEARCH.to_string(),
-        feature::SESSION_OPERATIONS.to_string(),
-        feature::HERMES_HISTORY.to_string(),
-        feature::HERMES_STATISTICS.to_string(),
-        feature::OPENCODE_STATISTICS.to_string(),
-    ];
-    if host.id().is_local() {
-        features.push(feature::HOST_METRICS.to_string());
-    }
-    if host.agent_environment().is_ok() {
-        features.push(feature::AGENT_ENVIRONMENT.to_string());
-    }
-    // Only where there are panes to ask about. A control peer serving no panes
-    // would answer every ask with an empty list, which reads to a client as
-    // "nothing is listening" rather than as "I cannot tell you".
-    if services.panes.is_some() {
-        features.push(feature::PANE_PROCS.to_string());
-    }
-    if services.machine.is_some() {
-        features.push(feature::MACHINE_TREE.to_string());
-    }
-    // A sleeping tab is a mark in the tree *and* stopped panes; a peer that can
-    // do only half of that would leave a tab asleep with its shells running,
-    // or its shells stopped with nothing saying the tab is meant to wake.
-    if services.machine.is_some() && services.panes.is_some() {
-        features.push(feature::TAB_HIBERNATE.to_string());
-        // The same pair for the same reason: a closed tab is an entry in the
-        // tree *and* screens kept by whoever stops the panes.
-        features.push(feature::CLOSED_TABS.to_string());
-    }
-    // The pane daemon's features ride along, same as `protocol_version` above:
-    // a pane connection answers exactly one message, so a client that wanted
-    // them from `ClientMsg::Version` would pay a whole routed connection — for
-    // ssh and WSL, a whole bridge process — per pane. The hello already travels
-    // once per host and is cached on the link, so this is where a client can
-    // afford to learn what the panes it routes here will do (the resize echo
-    // above all). Additive names are safe: every check on either end asks for
-    // a name, never for the exact list.
-    features.extend(crate::daemon::protocol::DaemonVersion::current().features);
-
-    sink.send(&ControlServerMsg::HelloOk(ControlHelloOk {
-        control_version: CONTROL_VERSION,
-        protocol_version: crate::daemon::protocol::PROTOCOL_VERSION,
-        build: env!("CARGO_PKG_VERSION").to_string(),
-        separator: host.separator(),
-        home: home_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        agent_environment: host.agent_environment().ok(),
-        features,
-        instance: crate::daemon::control::server_instance().to_string(),
-    }))?;
-
-    if hello.control_version != CONTROL_VERSION {
-        log::warn!(
-            "control peer speaks v{}, this build speaks v{CONTROL_VERSION}; closing",
-            hello.control_version
-        );
-        return Ok(None);
-    }
-    Ok(Some(hello))
-}
-
-static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
-
-fn attach_workspace(
-    conn: &Arc<Conn>,
-    workspace: &str,
-    dedicated: bool,
-) -> io::Result<Option<String>> {
-    if conn.machine.is_none() {
-        return Err(io::Error::other(
-            "this server does not serve the machine tree",
-        ));
-    }
-    let tree_id: Option<crate::core::session::WorkspaceId> = workspace.parse().ok();
-    let (displaced, evicted) = {
-        let _handover = conn.attachments.handover();
-        let attachment = Attachment::new(conn.holder.token.clone(), conn.holder.hostname.clone());
-        let displaced = match (&conn.machine, tree_id) {
-            (Some(machine), Some(id)) => machine.attach(id, attachment),
-            _ => None,
-        };
-        let evicted = conn
-            .attachments
-            .claim(workspace, conn.id, &conn.holder, dedicated);
-        (displaced, evicted)
-    };
-
-    if let Some(evicted) = evicted {
-        log::info!(
-            "workspace {workspace} taken over by {} from {}",
-            conn.holder.hostname,
-            evicted.hostname
-        );
-        let notice = ControlEvent::Preempted {
-            workspace: workspace.to_string(),
-            by: conn.holder.hostname.clone(),
-        };
-        if let Err(e) = evicted.sink.send(&ControlServerMsg::Event(notice)) {
-            log::debug!("could not tell the displaced session about {workspace}: {e}");
-        }
-        if evicted.dedicated {
-            let _ = evicted.shutdown.shutdown_link();
-        }
-    }
-
-    Ok(displaced
-        .filter(|a| a.token != conn.holder.token)
-        .map(|a| a.hostname))
-}
-
-fn detach_workspace(conn: &Arc<Conn>, workspace: &str) -> io::Result<bool> {
-    if conn.machine.is_none() {
-        return Err(io::Error::other(
-            "this server does not serve the machine tree",
-        ));
-    }
-    let _handover = conn.attachments.handover();
-    let released = conn.attachments.release(workspace, conn.id);
-    let forgotten = match (&conn.machine, workspace.parse().ok()) {
-        (Some(machine), Some(id)) => machine.detach(id, &conn.holder.token),
-        _ => false,
-    };
-    Ok(released || forgotten)
-}
-
-fn home_dir() -> Option<PathBuf> {
-    let pick = |k: &str| {
-        std::env::var_os(k)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    pick("HOME").or_else(|| pick("USERPROFILE"))
-}
 
 fn read_loop<R: Read>(r: &mut R, conn: &Arc<Conn>) -> io::Result<()> {
     loop {
@@ -766,16 +330,16 @@ fn run_request(
 
         ControlRequest::WorkspaceAttach { id } => (
             ReplyOk::Attached {
-                took_over_from: attach_workspace(conn, &id, false)?,
+                took_over_from: conn.identity.attach(conn.machine.as_deref(), &id, false)?,
             },
             Vec::new(),
         ),
         ControlRequest::WorkspaceDetach { id } => {
-            detach_workspace(conn, &id)?;
+            conn.identity.detach(conn.machine.as_deref(), &id)?;
             (ReplyOk::Unit, Vec::new())
         }
         ControlRequest::GuiOpen { path, workspace } => (
-            ReplyOk::Bool(conn.attachments.open_gui(path, workspace)),
+            ReplyOk::Bool(conn.identity.open_gui(path, workspace)),
             Vec::new(),
         ),
 
@@ -827,12 +391,9 @@ fn run_request(
         }
         ControlRequest::WorkspaceRemove { workspace } => {
             let store = conn.machine()?;
-            let panes = {
-                let _handover = conn.attachments.handover();
-                let panes = store.workspace_delete(workspace, conn.machine_origin)?;
-                conn.attachments.forget_workspace(&workspace.to_string());
-                panes
-            };
+            let panes = conn
+                .identity
+                .remove_workspace(store, workspace, conn.machine_origin)?;
             (ReplyOk::Panes(panes), Vec::new())
         }
         ControlRequest::WorkspaceTouch { workspace } => {
@@ -1110,19 +671,6 @@ fn run_request(
     })
 }
 
-#[cfg(unix)]
-fn control_endpoint_display() -> String {
-    control_socket_path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default()
-}
-
-#[cfg(windows)]
-fn control_endpoint_display() -> String {
-    control_endpoint_path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default()
-}
 
 #[cfg(not(any(unix, windows)))]
 fn control_endpoint_display() -> String {
@@ -1137,6 +685,8 @@ fn clamp_usize(v: u64) -> usize {
     usize::try_from(v).unwrap_or(usize::MAX)
 }
 
+// Request/pool/stream state stays here until its own cutover. Lifecycle code
+// uses this private Conn; peer identity and attachment transitions stay opaque.
 struct Conn {
     host: SharedHost,
     sink: Arc<Sink>,
@@ -1148,10 +698,8 @@ struct Conn {
     pool: Pool,
     machine: Option<Arc<MachineStore>>,
     machine_origin: Option<machine::SubscriberId>,
-    attachments: Arc<AttachRegistry>,
+    identity: ConnectionIdentity,
     panes: Option<Arc<dyn PaneDirectory>>,
-    id: u64,
-    holder: Holder,
 }
 
 impl Conn {
@@ -1161,15 +709,6 @@ impl Conn {
             .ok_or_else(|| io::Error::other("this server does not serve the machine tree"))
     }
 
-    fn release_all_workspaces(&self) {
-        let _handover = self.attachments.handover();
-        let released = self.attachments.release_conn(self.id);
-        for workspace in released {
-            if let (Some(machine), Some(id)) = (&self.machine, workspace.parse().ok()) {
-                machine.detach(id, &self.holder.token);
-            }
-        }
-    }
 
     fn is_cancelled(&self, req_id: u64) -> bool {
         self.inflight
@@ -1472,34 +1011,6 @@ enum StreamStop {
     Unencodable,
 }
 
-struct Sink {
-    out: Mutex<Option<Box<dyn Write + Send>>>,
-}
-
-impl Sink {
-    fn new<W: Write + Send + 'static>(w: W) -> Sink {
-        Sink {
-            out: Mutex::new(Some(Box::new(w))),
-        }
-    }
-
-    fn send(&self, msg: &ControlServerMsg) -> io::Result<()> {
-        let (k, payload) = msg.to_frame()?;
-        self.send_frame(k, &payload)
-    }
-
-    fn send_frame(&self, k: u8, payload: &[u8]) -> io::Result<()> {
-        let mut slot = self.out.lock().unwrap_or_else(|e| e.into_inner());
-        let w = slot.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::BrokenPipe, "control connection is closed")
-        })?;
-        crate::daemon::protocol::write_frame(&mut *w, k, payload).and_then(|()| w.flush())
-    }
-
-    fn retire(&self) {
-        *self.out.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    }
-}
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -1617,300 +1128,18 @@ fn worker(inner: Arc<PoolInner>) {
 
 pub const CONTROL_SOCK_ENV: &str = "LYREL_CONTROL_SOCK";
 
-#[cfg(unix)]
-mod sock {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt as _;
-    use std::os::unix::net::{UnixListener, UnixStream};
-
-    const MAX_SOCKET_PATH_BYTES: usize = 100;
-
-    /// The control endpoint, derived from the config dir exactly the way the
-    /// pane endpoint is (`transport::socket_path_for`).
-    ///
-    /// It used to sit in `$XDG_RUNTIME_DIR/lyrel` or `~/.local/share/lyrel`,
-    /// which meant it did not follow `--config-dir` while the pane socket did.
-    /// Two consequences, both real: a `--config-dir` instance published the
-    /// *default* control socket to the shells it spawned, so a CLI inside it
-    /// talked to a different server entirely; and because both endpoints were
-    /// named `daemon.sock`, telling them apart depended on their directories
-    /// differing — so deriving one from the other by filename silently yielded
-    /// the wrong socket. They are siblings now, distinguished by name, which is
-    /// what the Windows arm has always done (`control.port`/`daemon.port`).
-    pub fn control_socket_path() -> io::Result<PathBuf> {
-        if let Some(explicit) = std::env::var_os(CONTROL_SOCK_ENV).filter(|v| !v.is_empty()) {
-            return Ok(PathBuf::from(explicit));
-        }
-
-        let dir = crate::core::config::config_dir_path().ok_or_else(|| {
-            io::Error::other("no config directory to place the control socket in")
-        })?;
-
-        let fallbacks: Vec<PathBuf> = [runtime_dir(), Some(std::env::temp_dir())]
-            .into_iter()
-            .flatten()
-            .collect();
-        socket_path_in(&dir, &fallbacks)
-    }
-
-    pub(super) const CONTROL_SOCK_FILE: &str = "control.sock";
-
-    pub(crate) fn socket_path_in(dir: &Path, fallbacks: &[PathBuf]) -> io::Result<PathBuf> {
-        let inline = dir.join(CONTROL_SOCK_FILE);
-        if fits(&inline) {
-            return Ok(inline);
-        }
-
-        use std::os::unix::ffi::OsStrExt as _;
-        // `-control` keeps this clear of the pane socket's fallback name, which
-        // hashes the same directory and would otherwise land on the same file.
-        let name = format!(
-            "lyrel-{:016x}-control.sock",
-            crate::host::fnv1a64(dir.as_os_str().as_bytes())
-        );
-        for base in fallbacks {
-            let candidate = base.join(&name);
-            if fits(&candidate) {
-                return Ok(candidate);
-            }
-        }
-        Err(io::Error::other(format!(
-            "no directory short enough for a control socket ({MAX_SOCKET_PATH_BYTES}-byte \
-             sun_path limit); set {CONTROL_SOCK_ENV} to one that is"
-        )))
-    }
-
-    fn runtime_dir() -> Option<PathBuf> {
-        std::env::var_os("XDG_RUNTIME_DIR")
-            .filter(|d| !d.is_empty())
-            .map(PathBuf::from)
-    }
-
-    fn fits(p: &Path) -> bool {
-        use std::os::unix::ffi::OsStrExt as _;
-        p.as_os_str().as_bytes().len() <= MAX_SOCKET_PATH_BYTES
-    }
-
-    /// Whether a control server is answering at `path` right now.
-    ///
-    /// This, and not the errno a failed bind carries, is the question that
-    /// matters to a daemon whose listener would not open. [`bind_control_socket`]
-    /// does clear the ordinary leftover — it connects first and unlinks a socket
-    /// nobody is behind — but what it cannot clear it hands back as `AddrInUse`
-    /// all the same: a directory standing where the socket goes, a file owned by
-    /// another user. Those look exactly like a live server in the error, and
-    /// nothing is listening behind either. Only a connect that completes tells
-    /// them apart.
-    pub(crate) fn control_socket_answers(path: &Path) -> bool {
-        UnixStream::connect(path).is_ok()
-    }
-
-    pub fn control_endpoint_answers() -> bool {
-        control_socket_path().is_ok_and(|path| control_socket_answers(&path))
-    }
-
-    pub fn bind_control_socket(path: &Path) -> io::Result<UnixListener> {
-        let parent = path.parent().unwrap_or(Path::new("."));
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)?;
-            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-        }
-
-        if path.exists() {
-            match UnixStream::connect(path) {
-                Ok(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AddrInUse,
-                        format!(
-                            "a control server is already listening on {}",
-                            path.display()
-                        ),
-                    ));
-                }
-                Err(_) => {
-                    let _ = std::fs::remove_file(path);
-                }
-            }
-        }
-
-        let listener = bind_private(path)?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        Ok(listener)
-    }
-
-    pub(super) fn bind_private(path: &Path) -> io::Result<UnixListener> {
-        static UMASK: Mutex<()> = Mutex::new(());
-        let _held = UMASK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let previous = unsafe { libc::umask(0o077) };
-        let bound = UnixListener::bind(path);
-        unsafe { libc::umask(previous) };
-        bound
-    }
-
-    pub fn serve_listener(listener: UnixListener, host: SharedHost) {
-        serve_listener_with(listener, host, Services::none())
-    }
-
-    pub fn serve_listener_with(listener: UnixListener, host: SharedHost, services: Services) {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let host = Arc::clone(&host);
-                    let services = services.clone();
-                    let spawned = std::thread::Builder::new()
-                        .name("lyrel-control-conn".into())
-                        .spawn(move || {
-                            if let Err(e) = serve_with(stream, host, services) {
-                                log::warn!("control connection failed: {e}");
-                            }
-                        });
-                    if let Err(e) = spawned {
-                        log::warn!("could not start a control connection thread: {e}");
-                    }
-                }
-                Err(e) => log::warn!("control accept failed: {e}"),
-            }
-        }
-    }
-
-    pub fn spawn_control_listener(host: SharedHost) -> io::Result<PathBuf> {
-        spawn_control_listener_with(host, Services::none())
-    }
-
-    pub fn spawn_control_listener_with(
-        host: SharedHost,
-        services: Services,
-    ) -> io::Result<PathBuf> {
-        // Anchor uptime here, not at the first Status request. The GUI can host
-        // the control listener too, and there `run_with` never runs — so
-        // without this the OnceLock is first set by whoever asks, and every
-        // answer reports a server that just started.
-        super::server_started();
-        let path = control_socket_path()?;
-        let listener = bind_control_socket(&path)?;
-        std::thread::Builder::new()
-            .name("lyrel-control-listener".into())
-            .spawn(move || serve_listener_with(listener, host, services))?;
-        Ok(path)
-    }
-}
 
 #[cfg(all(unix, test))]
-pub(crate) use sock::socket_path_in;
+pub(crate) use unix::socket_path_in;
 #[cfg(unix)]
-pub use sock::{
+pub use unix::{
     bind_control_socket, control_endpoint_answers, control_socket_path, serve_listener,
     serve_listener_with, spawn_control_listener, spawn_control_listener_with,
 };
 
-#[cfg(windows)]
-mod wsock {
-    use super::*;
-    use crate::daemon::transport;
-    use std::net::TcpListener;
-
-    pub const CONTROL_PORT_FILE: &str = "control.port";
-
-    pub fn control_endpoint_path() -> io::Result<PathBuf> {
-        transport::port_path_named(CONTROL_PORT_FILE).ok_or_else(|| {
-            io::Error::other("no config directory to record the control endpoint in")
-        })
-    }
-
-    pub fn spawn_control_listener_with(
-        host: SharedHost,
-        services: Services,
-    ) -> io::Result<PathBuf> {
-        // See the unix arm: uptime is anchored where the listener opens, so a
-        // GUI-hosted control server does not report itself as freshly started.
-        super::server_started();
-        let path = control_endpoint_path()?;
-        // A control.port left by a dead daemon is stale: connecting to it
-        // would pay the OS's refusal delay for nothing. The pidfile says
-        // whether the daemon that wrote the port is still alive — when it is
-        // gone the port cannot hold a live control server, and the bind below
-        // simply overwrites the stale file.
-        if !crate::daemon::spawn::recorded_daemon_is_dead() {
-            if let Ok(live) = transport::connect_endpoint(CONTROL_PORT_FILE) {
-                drop(live);
-                return Err(io::Error::new(
-                    io::ErrorKind::AddrInUse,
-                    format!(
-                        "a control server is already listening at {}",
-                        transport::endpoint_display_named(CONTROL_PORT_FILE)
-                    ),
-                ));
-            }
-        }
-        let (listener, token) =
-            transport::bind_endpoint(CONTROL_PORT_FILE).map_err(io::Error::other)?;
-        std::thread::Builder::new()
-            .name("lyrel-control-listener".into())
-            .spawn(move || serve_listener_with(listener, token, host, services))?;
-        Ok(path)
-    }
-
-    pub fn spawn_control_listener(host: SharedHost) -> io::Result<PathBuf> {
-        spawn_control_listener_with(host, Services::none())
-    }
-
-    /// See the unix arm: a bind that failed only means "serve panes only" when
-    /// something else is actually answering there.
-    ///
-    /// Gated on the pidfile the same way [`spawn_control_listener_with`] gates
-    /// its own probe, and for the same reason: a TCP connect that completes
-    /// proves only that *something* accepted on the recorded port, and a port a
-    /// dead daemon wrote can have been recycled by a stranger since. When the
-    /// daemon that wrote it is gone, nothing behind that port is ours.
-    pub fn control_endpoint_answers() -> bool {
-        !crate::daemon::spawn::recorded_daemon_is_dead()
-            && transport::connect_endpoint(CONTROL_PORT_FILE).is_ok()
-    }
-
-    pub fn serve_listener_with(
-        listener: TcpListener,
-        token: transport::Token,
-        host: SharedHost,
-        services: Services,
-    ) {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(mut stream) => {
-                    transport::tune(&stream);
-                    let host = Arc::clone(&host);
-                    let services = services.clone();
-                    let spawned = std::thread::Builder::new()
-                        .name("lyrel-control-conn".into())
-                        .spawn(move || {
-                            if let Err(e) = transport::check_endpoint_token(&mut stream, &token) {
-                                log::warn!("control connection rejected: {e}");
-                                return;
-                            }
-                            if let Err(e) = serve_with(stream, host, services) {
-                                log::warn!("control connection failed: {e}");
-                            }
-                        });
-                    if let Err(e) = spawned {
-                        log::warn!("could not start a control connection thread: {e}");
-                    }
-                }
-                Err(e) => log::warn!("control accept failed: {e}"),
-            }
-        }
-    }
-
-    pub fn connect_control() -> io::Result<std::net::TcpStream> {
-        transport::connect_endpoint(CONTROL_PORT_FILE)
-    }
-
-    pub fn remove_control_endpoint() {
-        transport::remove_endpoint(CONTROL_PORT_FILE);
-    }
-}
 
 #[cfg(windows)]
-pub use wsock::{
+pub use windows::{
     CONTROL_PORT_FILE, connect_control, control_endpoint_answers, control_endpoint_path,
     remove_control_endpoint, spawn_control_listener, spawn_control_listener_with,
 };
@@ -1920,6 +1149,7 @@ mod aggregate_tests {
     use super::*;
     use crate::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
     use crate::daemon::control::ControlClient;
+    use crate::daemon::control::{ControlHello, feature};
     use crate::host::local::LocalHost;
     use std::net::{TcpListener, TcpStream};
 
@@ -2536,73 +1766,13 @@ mod pool_tests {
     }
 }
 
-#[cfg(test)]
-mod gui_registry_tests {
-    use super::*;
-    use std::io::Cursor;
-
-    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn gui_open_is_delivered_only_while_a_gui_is_registered() {
-        let registry = AttachRegistry::default();
-        assert!(!registry.open_gui(Some("/work".into()), None));
-
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::new(Sink::new(SharedWriter(Arc::clone(&bytes))));
-        registry.register_gui(7, sink);
-        assert!(registry.open_gui(Some("/work".into()), None));
-
-        let frame = bytes.lock().unwrap().clone();
-        assert_eq!(
-            ControlServerMsg::read(&mut Cursor::new(frame)).unwrap(),
-            ControlServerMsg::Event(ControlEvent::GuiOpen {
-                path: Some("/work".into()),
-                workspace: None,
-            })
-        );
-
-        registry.unregister_gui(7);
-        assert!(!registry.open_gui(None, None));
-    }
-
-    #[test]
-    fn gui_open_carries_the_workspace_the_caller_named() {
-        let registry = AttachRegistry::default();
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::new(Sink::new(SharedWriter(Arc::clone(&bytes))));
-        registry.register_gui(7, sink);
-
-        let made = WorkspaceId::new();
-        assert!(registry.open_gui(None, Some(made)));
-
-        let frame = bytes.lock().unwrap().clone();
-        assert_eq!(
-            ControlServerMsg::read(&mut Cursor::new(frame)).unwrap(),
-            ControlServerMsg::Event(ControlEvent::GuiOpen {
-                path: None,
-                workspace: Some(made),
-            }),
-            "the GUI has to be told which workspace, not left to guess a window"
-        );
-    }
-}
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::daemon::control::{ControlHello, MTime, feature};
+    use super::test_support::*;
+    use std::io::Write;
+    use crate::daemon::control::{ControlHello, MTime};
     use crate::host::local::LocalHost;
     use crate::host::remote::RemoteHost;
     use crate::host::{Entry, HostId, Meta, Output};
@@ -2610,118 +1780,6 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::time::Instant;
 
-    struct Pair {
-        host: Arc<RemoteHost>,
-    }
-
-    fn pair_with(server_host: SharedHost) -> Pair {
-        let (server, client) = UnixStream::pair().unwrap();
-        std::thread::spawn(move || {
-            let _ = serve(server, server_host);
-        });
-        let hello = ControlHello::host_rpc("test-token", "test-host");
-        let host = RemoteHost::over_unix(client, "test:pair", &hello).unwrap();
-        Pair { host }
-    }
-
-    fn pair() -> Pair {
-        pair_with(LocalHost::new())
-    }
-
-    fn raw() -> (UnixStream, ControlHelloOk) {
-        raw_with(Services::none())
-    }
-
-    fn raw_with(services: Services) -> (UnixStream, ControlHelloOk) {
-        raw_hello(services, ControlHello::host_rpc("t", "h")).0
-    }
-
-    fn raw_hello(
-        services: Services,
-        hello: ControlHello,
-    ) -> ((UnixStream, ControlHelloOk), std::thread::JoinHandle<()>) {
-        let (server, mut client) = UnixStream::pair().unwrap();
-        let served = std::thread::spawn(move || {
-            let _ = serve_with(server, LocalHost::new(), services);
-        });
-        ControlClientMsg::Hello(hello).encode(&mut client).unwrap();
-        client.flush().unwrap();
-        let ok = match ControlServerMsg::read(&mut client).unwrap() {
-            ControlServerMsg::HelloOk(ok) => ok,
-            other => panic!("{other:?}"),
-        };
-        ((client, ok), served)
-    }
-
-    fn hello_for(workspace: &str, token: &str, hostname: &str) -> ControlHello {
-        ControlHello {
-            control_version: CONTROL_VERSION,
-            workspace: Some(workspace.to_string()),
-            client_token: token.to_string(),
-            client_hostname: hostname.to_string(),
-            gui: false,
-        }
-    }
-
-    fn round_trip(
-        sock: &mut UnixStream,
-        req_id: u64,
-        req: ControlRequest,
-    ) -> (ControlReply, Vec<ControlEvent>) {
-        ControlClientMsg::Request { req_id, req }
-            .encode(sock)
-            .unwrap();
-        sock.flush().unwrap();
-        let mut events = Vec::new();
-        loop {
-            match ControlServerMsg::read(sock).unwrap() {
-                ControlServerMsg::Response { req_id: got, reply } if got == req_id => {
-                    return (reply, events);
-                }
-                ControlServerMsg::Event(e) => events.push(e),
-                other => panic!("unexpected frame {other:?}"),
-            }
-        }
-    }
-
-    fn await_preempted(sock: &mut UnixStream) -> Option<ControlEvent> {
-        loop {
-            match ControlServerMsg::read(sock) {
-                Ok(ControlServerMsg::Event(e @ ControlEvent::Preempted { .. })) => return Some(e),
-                Ok(_) => continue,
-                Err(_) => return None,
-            }
-        }
-    }
-
-    fn await_holder(registry: &AttachRegistry, workspace: &str, hostname: &str) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while registry.holder(workspace).map(|(_, h)| h).as_deref() != Some(hostname) {
-            assert!(
-                Instant::now() < deadline,
-                "{workspace} is held by {:?}, not {hostname}",
-                registry.holder(workspace)
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    fn workspace_services() -> (Services, tempfile::TempDir) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = MachineStore::open(dir.path().join(machine::MACHINE_FILE));
-        (Services::with_machine(store), dir)
-    }
-
-    fn tree_workspace(services: &Services) -> String {
-        services
-            .machine
-            .as_ref()
-            .expect("workspace_services always carries a tree")
-            .workspace_create(None, None, None)
-            .expect("an empty tree accepts a workspace")
-            .id
-            .to_string()
-    }
 
     struct SlowGit {
         inner: SharedHost,
@@ -2945,89 +2003,6 @@ mod tests {
         slow.join().unwrap();
     }
 
-    #[test]
-    fn the_handshake_describes_this_server() {
-        let p = pair();
-        let peer = p.host.peer();
-        assert_eq!(peer.control_version, CONTROL_VERSION);
-        assert_eq!(
-            peer.protocol_version,
-            crate::daemon::protocol::PROTOCOL_VERSION
-        );
-        assert_eq!(peer.separator, std::path::MAIN_SEPARATOR);
-        assert!(peer.has_feature(feature::CONTROL));
-        assert!(peer.has_feature(feature::HOST_RPC));
-        assert!(peer.has_feature(feature::CONTENT_SEARCH));
-        assert!(
-            !peer.home.is_empty(),
-            "the server's $HOME backs `new workspace in ~`"
-        );
-    }
-
-    #[test]
-    fn the_handshake_advertises_the_pane_daemons_features() {
-        let p = pair();
-        let peer = p.host.peer();
-        for name in crate::daemon::protocol::DaemonVersion::current().features {
-            assert!(
-                peer.has_feature(&name),
-                "the hello must carry the pane feature {name:?}: a pane \
-                 connection answers one message, so this handshake is the \
-                 only affordable place for a client to learn it"
-            );
-        }
-        assert!(
-            peer.has_feature(crate::daemon::protocol::FEATURE_RESIZE_ECHO),
-            "the resize-echo deferral on remote routes hangs off this name"
-        );
-    }
-
-    #[test]
-    fn a_version_mismatch_is_answered_then_closed() {
-        let (server, mut client) = UnixStream::pair().unwrap();
-        std::thread::spawn(move || {
-            let _ = serve(server, LocalHost::new());
-        });
-
-        let mut hello = ControlHello::host_rpc("t", "h");
-        hello.control_version = CONTROL_VERSION + 7;
-        ControlClientMsg::Hello(hello).encode(&mut client).unwrap();
-        client.flush().unwrap();
-
-        match ControlServerMsg::read(&mut client).unwrap() {
-            ControlServerMsg::HelloOk(ok) => assert_eq!(ok.control_version, CONTROL_VERSION),
-            other => panic!("{other:?}"),
-        }
-        let mut buf = [0u8; 1];
-        assert_eq!(
-            client.read(&mut buf).unwrap(),
-            0,
-            "the server should hang up"
-        );
-    }
-
-    #[test]
-    fn the_client_refuses_a_mismatched_peer() {
-        let (server, client) = UnixStream::pair().unwrap();
-        std::thread::spawn(move || {
-            let mut s = server;
-            let _ = ControlClientMsg::read(&mut s);
-            let _ = ControlServerMsg::HelloOk(ControlHelloOk {
-                control_version: CONTROL_VERSION + 1,
-                protocol_version: 3,
-                build: "other".into(),
-                separator: '/',
-                home: "/root".into(),
-                agent_environment: None,
-                features: vec![],
-                instance: "other-instance".into(),
-            })
-            .encode(&mut s);
-        });
-        let hello = ControlHello::host_rpc("t", "h");
-        let err = RemoteHost::over_unix(client, "test:skew", &hello).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported, "{err}");
-    }
 
     #[test]
     fn an_oversized_read_ships_no_bytes() {
@@ -3166,18 +2141,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_unknown_frame_kind_ends_the_connection() {
-        let (mut client, _) = raw();
-        crate::daemon::protocol::write_frame(&mut client, 99, b"junk").unwrap();
-        client.flush().unwrap();
-        let mut buf = [0u8; 1];
-        assert_eq!(
-            client.read(&mut buf).unwrap(),
-            0,
-            "the server should hang up"
-        );
-    }
 
     #[test]
     fn a_cancelled_request_is_answered_with_silence() {
@@ -3388,56 +2351,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_socket_path_honours_its_override() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let sock = dir.path().join("explicit.sock");
-        let listener = bind_control_socket(&sock).unwrap();
-        assert!(sock.exists());
-        use std::os::unix::fs::PermissionsExt as _;
-        assert_eq!(
-            std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777,
-            0o600,
-            "a control socket is the access boundary; it must not be group- or world-reachable"
-        );
-        drop(listener);
-    }
-
-    #[test]
-    fn binding_does_not_re_permission_a_directory_it_did_not_create() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempfile::TempDir::new().unwrap();
-        let shared = dir.path().join("shared");
-        std::fs::create_dir(&shared).unwrap();
-        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o1777)).unwrap();
-
-        let listener = bind_control_socket(&shared.join("s.sock")).unwrap();
-        assert_eq!(
-            std::fs::metadata(&shared).unwrap().permissions().mode() & 0o7777,
-            0o1777,
-            "a directory lyrel did not create must keep its own permissions"
-        );
-        drop(listener);
-    }
-
-    #[test]
-    fn a_bind_is_owner_only_under_a_permissive_umask() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("permissive.sock");
-
-        let previous = unsafe { libc::umask(0) };
-        let bound = sock::bind_private(&path);
-        unsafe { libc::umask(previous) };
-
-        let listener = bound.unwrap();
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o077,
-            0,
-            "bind left a window in which another user could connect"
-        );
-        drop(listener);
-    }
 
     #[test]
     fn a_filename_that_is_not_utf8_costs_only_its_own_hit() {
@@ -3468,136 +2381,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_socket_connection_serves_requests() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let sock = dir.path().join("s.sock");
-        let listener = bind_control_socket(&sock).unwrap();
-        std::thread::spawn(move || serve_listener(listener, LocalHost::new()));
-
-        let stream = UnixStream::connect(&sock).unwrap();
-        let hello = ControlHello::host_rpc("t", "h");
-        let host = RemoteHost::over_unix(stream, "test:sock", &hello).unwrap();
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        host.write_file(&tmp.path().join("x.txt"), b"content")
-            .unwrap();
-        assert_eq!(
-            host.read_file(&tmp.path().join("x.txt"), 1024).unwrap(),
-            b"content"
-        );
-        let entries = host.read_dir(tmp.path(), None).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "x.txt");
-    }
-
-    #[test]
-    fn binding_refuses_a_live_server() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let sock = dir.path().join("s.sock");
-        let _first = bind_control_socket(&sock).unwrap();
-        assert_eq!(
-            bind_control_socket(&sock).unwrap_err().kind(),
-            io::ErrorKind::AddrInUse
-        );
-    }
-
-    #[test]
-    fn a_too_long_socket_path_falls_back_to_one_that_fits() {
-        let short = PathBuf::from("/tmp/rt");
-        let long = PathBuf::from(format!("/tmp/{}", "d".repeat(120)));
-
-        assert_eq!(
-            sock::socket_path_in(&short, &[]).unwrap(),
-            PathBuf::from("/tmp/rt/control.sock")
-        );
-
-        let picked = sock::socket_path_in(&long, &[long.clone(), short.clone()]).unwrap();
-        assert!(picked.starts_with(&short), "{}", picked.display());
-        assert!(picked.to_string_lossy().ends_with(".sock"));
-
-        let other = PathBuf::from(format!("/tmp/{}", "e".repeat(120)));
-        assert_ne!(
-            picked,
-            sock::socket_path_in(&other, std::slice::from_ref(&short)).unwrap()
-        );
-
-        assert_eq!(
-            picked,
-            sock::socket_path_in(&long, &[long.clone(), short.clone()]).unwrap()
-        );
-
-        let err = sock::socket_path_in(&long, std::slice::from_ref(&long)).unwrap_err();
-        assert!(err.to_string().contains(CONTROL_SOCK_ENV), "{err}");
-    }
-
-    /// `run_daemon` keeps serving panes past a control listener it could not
-    /// open only when something else is answering there, and the errno cannot
-    /// make that call. `bind_control_socket` clears the leftovers it can, but a
-    /// path it cannot clear still comes back `AddrInUse` — indistinguishable
-    /// from a live server, with nothing listening behind it. A daemon that read
-    /// the error as "someone else is serving" stayed alive holding the
-    /// single-server lock, answering nothing, forever.
-    #[cfg(unix)]
-    #[test]
-    fn only_a_connect_tells_a_live_server_from_a_blocked_path() {
-        let dir = tempfile::TempDir::new().unwrap();
-
-        let sock = dir.path().join("s.sock");
-        let listener = bind_control_socket(&sock).unwrap();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                drop(stream);
-            }
-        });
-        assert_eq!(
-            bind_control_socket(&sock).unwrap_err().kind(),
-            io::ErrorKind::AddrInUse,
-            "a live server is in use"
-        );
-        assert!(
-            sock::control_socket_answers(&sock),
-            "and it answers, which is what makes it live"
-        );
-
-        // A directory where the socket goes. Nothing is listening, the connect
-        // fails so there is nothing to unlink, and `bind` refuses it in the
-        // same words it used for the live server above.
-        let blocked = dir.path().join("blocked.sock");
-        std::fs::create_dir(&blocked).unwrap();
-        assert_eq!(
-            bind_control_socket(&blocked).unwrap_err().kind(),
-            io::ErrorKind::AddrInUse,
-            "same error, and no server anywhere near it"
-        );
-        assert!(
-            !sock::control_socket_answers(&blocked),
-            "which is the difference the daemon has to act on"
-        );
-    }
-
-    #[test]
-    fn binding_clears_a_socket_a_crash_left_behind() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let sock = dir.path().join("s.sock");
-        let first = bind_control_socket(&sock).unwrap();
-        drop(first);
-        assert!(sock.exists());
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match bind_control_socket(&sock) {
-                Ok(listener) => {
-                    drop(listener);
-                    return;
-                }
-                Err(e) if Instant::now() >= deadline => {
-                    panic!("a stale control socket was never cleared: {e}")
-                }
-                Err(_) => std::thread::sleep(Duration::from_millis(20)),
-            }
-        }
-    }
 
     #[test]
     fn a_stream_slot_comes_back_however_it_leaves() {
@@ -3700,49 +2483,6 @@ mod tests {
         assert!(!got.is_empty(), "this repo has commits");
     }
 
-    fn ask(client: &mut UnixStream, req_id: u64, req: ControlRequest) -> ControlReply {
-        ControlClientMsg::Request { req_id, req }
-            .encode(&mut *client)
-            .unwrap();
-        client.flush().unwrap();
-        loop {
-            match ControlServerMsg::read(&mut *client).unwrap() {
-                ControlServerMsg::Response { req_id: got, reply } if got == req_id => {
-                    return reply;
-                }
-                ControlServerMsg::Event(_) => continue,
-                other => panic!("unexpected frame: {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn a_closed_connection_stops_being_a_subscriber() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = MachineStore::open(dir.path().join(machine::MACHINE_FILE));
-        let served = {
-            let store = Arc::clone(&store);
-            let (server, client) = UnixStream::pair().unwrap();
-            let handle = std::thread::spawn(move || {
-                let _ = serve_with(server, LocalHost::new(), Services::with_machine(store));
-            });
-            let mut client = client;
-            ControlClientMsg::Hello(ControlHello::host_rpc("t", "h"))
-                .encode(&mut client)
-                .unwrap();
-            client.flush().unwrap();
-            let _ = ControlServerMsg::read(&mut client).unwrap();
-            drop(client);
-            handle
-        };
-        served.join().unwrap();
-
-        let ws = store
-            .workspace_create(None, Some("api".into()), None)
-            .unwrap();
-        assert_eq!(store.machine().workspaces.len(), 1);
-        assert_eq!(store.workspace(ws.id).unwrap().name.as_deref(), Some("api"));
-    }
 
     #[test]
     fn concurrent_connections_can_all_write_the_tree() {
@@ -3815,338 +2555,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_second_client_takes_the_workspace_and_the_first_is_told() {
-        let (services, _dir) = workspace_services();
-        let registry = Arc::clone(&services.attachments);
-        let w = tree_workspace(&services);
-
-        let ((mut laptop, _), _laptop_served) =
-            raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
-        await_holder(&registry, &w, "laptop");
-
-        let ((mut desktop, _), _desktop_served) =
-            raw_hello(services.clone(), hello_for(&w, "tok-desktop", "desktop"));
-
-        assert_eq!(
-            await_preempted(&mut laptop),
-            Some(ControlEvent::Preempted {
-                workspace: w.clone(),
-                by: "desktop".to_string(),
-            })
-        );
-        assert_eq!(registry.holder(&w).map(|(_, h)| h), Some("desktop".into()));
-        assert_eq!(
-            services
-                .machine
-                .as_ref()
-                .unwrap()
-                .attachment(w.parse().unwrap())
-                .unwrap()
-                .hostname,
-            "desktop",
-            "the tree's record moves with the live handles"
-        );
-
-        let (reply, _) = round_trip(
-            &mut desktop,
-            1,
-            ControlRequest::WorkspaceAttach { id: w.clone() },
-        );
-        assert_eq!(
-            reply,
-            ControlReply::Ok(ReplyOk::Attached {
-                took_over_from: None
-            }),
-            "re-attaching from the connection that already holds it is not a takeover"
-        );
-    }
-
-    #[test]
-    fn a_dedicated_connection_is_closed_when_its_workspace_is_taken() {
-        let (services, _dir) = workspace_services();
-        let w = tree_workspace(&services);
-        let ((mut laptop, _), _l) =
-            raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
-        await_holder(&services.attachments, &w, "laptop");
-        let ((_desktop, _), _d) =
-            raw_hello(services.clone(), hello_for(&w, "tok-desktop", "desktop"));
-
-        assert!(await_preempted(&mut laptop).is_some());
-        let mut sink = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut laptop, &mut sink);
-        assert!(
-            ControlServerMsg::read(&mut laptop).is_err(),
-            "a dedicated connection is closed once its workspace is gone"
-        );
-    }
-
-    #[test]
-    fn removing_a_workspace_clears_both_attachment_tables() {
-        let (services, _dir) = workspace_services();
-        let registry = Arc::clone(&services.attachments);
-        let machine = services.machine.clone().unwrap();
-        let w = tree_workspace(&services);
-        let id: crate::core::session::WorkspaceId = w.parse().unwrap();
-
-        let ((mut laptop, _), _l) =
-            raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
-        await_holder(&registry, &w, "laptop");
-        assert!(machine.attachment(id).is_some());
-
-        let reply = ask(
-            &mut laptop,
-            1,
-            ControlRequest::WorkspaceRemove { workspace: id },
-        );
-        assert!(
-            matches!(reply, ControlReply::Ok(ReplyOk::Panes(_))),
-            "{reply:?}"
-        );
-
-        assert!(
-            machine.attachment(id).is_none(),
-            "the tree still names a holder for a workspace that is gone"
-        );
-        assert!(
-            registry.holder(&w).is_none(),
-            "the registry still holds a workspace that is gone"
-        );
-    }
-
-    #[test]
-    fn an_attach_moves_both_tables_under_one_lock() {
-        let (services, _dir) = workspace_services();
-        let registry = Arc::clone(&services.attachments);
-        let machine = services.machine.clone().unwrap();
-        let w = tree_workspace(&services);
-        let id: crate::core::session::WorkspaceId = w.parse().unwrap();
-
-        let held = registry.handover();
-        let ((_laptop, _ok), _served) =
-            raw_hello(services.clone(), hello_for(&w, "tok-laptop", "laptop"));
-
-        std::thread::sleep(Duration::from_millis(150));
-        assert!(
-            registry.holder(&w).is_none(),
-            "the registry was moved while a handover was in flight"
-        );
-        assert!(
-            machine.attachment(id).is_none(),
-            "the tree was moved while a handover was in flight"
-        );
-
-        drop(held);
-        await_holder(&registry, &w, "laptop");
-        assert_eq!(
-            machine.attachment(id).map(|a| a.token).as_deref(),
-            Some("tok-laptop"),
-            "both tables have to name the same session once the handover is done"
-        );
-    }
-
-    #[test]
-    fn a_shared_connection_survives_losing_one_of_its_workspaces() {
-        let (services, _dir) = workspace_services();
-        let registry = Arc::clone(&services.attachments);
-        let w1 = tree_workspace(&services);
-        let w2 = tree_workspace(&services);
-
-        let ((mut laptop, _), _l) = raw_hello(
-            services.clone(),
-            ControlHello::host_rpc("tok-laptop", "laptop"),
-        );
-        for (i, id) in [&w1, &w2].iter().enumerate() {
-            let (reply, _) = round_trip(
-                &mut laptop,
-                i as u64 + 1,
-                ControlRequest::WorkspaceAttach { id: (*id).clone() },
-            );
-            assert_eq!(
-                reply,
-                ControlReply::Ok(ReplyOk::Attached {
-                    took_over_from: None
-                })
-            );
-        }
-        assert_eq!(registry.len(), 2);
-
-        let ((_desktop, _), _d) =
-            raw_hello(services.clone(), hello_for(&w1, "tok-desktop", "desktop"));
-        assert_eq!(
-            await_preempted(&mut laptop),
-            Some(ControlEvent::Preempted {
-                workspace: w1.clone(),
-                by: "desktop".to_string(),
-            })
-        );
-
-        let (reply, _) = round_trip(&mut laptop, 9, ControlRequest::Ping);
-        assert_eq!(reply, ControlReply::Ok(ReplyOk::Pong));
-        assert_eq!(
-            registry.holder(&w2).map(|(t, _)| t),
-            Some("tok-laptop".into())
-        );
-        assert_eq!(
-            registry.holder(&w1).map(|(t, _)| t),
-            Some("tok-desktop".into())
-        );
-    }
-
-    /// The machine's own GUI is one more client of its daemon: it claims the
-    /// workspaces its windows show, is taken over like anyone else, and takes
-    /// them back the same way — one window drives a workspace at a time.
-    /// Neither side is hung up on: both are shared (non-dedicated) links.
-    #[test]
-    fn the_machines_own_gui_and_a_remote_client_take_a_workspace_from_each_other() {
-        let (services, _dir) = workspace_services();
-        let registry = Arc::clone(&services.attachments);
-        let w = tree_workspace(&services);
-        let id: crate::core::session::WorkspaceId = w.parse().unwrap();
-
-        let ((mut gui, _), _g) =
-            raw_hello(services.clone(), ControlHello::gui("tok-gui", "studio"));
-        let (reply, _) = round_trip(
-            &mut gui,
-            1,
-            ControlRequest::WorkspaceAttach { id: w.clone() },
-        );
-        assert_eq!(
-            reply,
-            ControlReply::Ok(ReplyOk::Attached {
-                took_over_from: None
-            })
-        );
-
-        // A remote client opens the same workspace.
-        let ((mut laptop, _), _l) = raw_hello(
-            services.clone(),
-            ControlHello::host_rpc("tok-laptop", "laptop"),
-        );
-        let (reply, _) = round_trip(
-            &mut laptop,
-            1,
-            ControlRequest::WorkspaceAttach { id: w.clone() },
-        );
-        assert_eq!(
-            reply,
-            ControlReply::Ok(ReplyOk::Attached {
-                took_over_from: Some("studio".into())
-            }),
-            "the remote is told it took the workspace from the machine itself, by name"
-        );
-        assert_eq!(
-            await_preempted(&mut gui),
-            Some(ControlEvent::Preempted {
-                workspace: w.clone(),
-                by: "laptop".into(),
-            })
-        );
-
-        // What a restored or reconnected local window reads before claiming:
-        // the holder, by name, so it can open taken over instead of grabbing.
-        let (reply, _) = round_trip(&mut gui, 2, ControlRequest::WorkspaceTree { workspace: id });
-        match reply {
-            ControlReply::Ok(ReplyOk::WorkspaceTree(ws)) => {
-                assert_eq!(ws.attachment.map(|a| a.hostname).as_deref(), Some("laptop"));
-            }
-            other => panic!("{other:?}"),
-        }
-        let (reply, _) = round_trip(&mut gui, 3, ControlRequest::Ping);
-        assert_eq!(
-            reply,
-            ControlReply::Ok(ReplyOk::Pong),
-            "a GUI that was taken over keeps its link"
-        );
-
-        // Take Back from the machine's own window.
-        let (reply, _) = round_trip(
-            &mut gui,
-            4,
-            ControlRequest::WorkspaceAttach { id: w.clone() },
-        );
-        assert_eq!(
-            reply,
-            ControlReply::Ok(ReplyOk::Attached {
-                took_over_from: Some("laptop".into())
-            })
-        );
-        assert_eq!(
-            await_preempted(&mut laptop),
-            Some(ControlEvent::Preempted {
-                workspace: w.clone(),
-                by: "studio".into(),
-            })
-        );
-        assert_eq!(registry.holder(&w).map(|(t, _)| t), Some("tok-gui".into()));
-        let (reply, _) = round_trip(&mut laptop, 2, ControlRequest::Ping);
-        assert_eq!(reply, ControlReply::Ok(ReplyOk::Pong));
-    }
-
-    #[test]
-    fn a_displaced_session_tidying_up_does_not_evict_the_new_owner() {
-        let (services, _dir) = workspace_services();
-        let registry = Arc::clone(&services.attachments);
-        let machine = Arc::clone(services.machine.as_ref().unwrap());
-        let w = tree_workspace(&services);
-        let other = tree_workspace(&services);
-
-        let ((mut laptop, _), _l) = raw_hello(
-            services.clone(),
-            ControlHello::host_rpc("tok-laptop", "laptop"),
-        );
-        for (i, id) in [&w, &other].iter().enumerate() {
-            round_trip(
-                &mut laptop,
-                i as u64 + 1,
-                ControlRequest::WorkspaceAttach { id: (*id).clone() },
-            );
-        }
-        let ((_desktop, _), _d) =
-            raw_hello(services.clone(), hello_for(&w, "tok-desktop", "desktop"));
-        assert!(await_preempted(&mut laptop).is_some());
-
-        let (reply, _) = round_trip(
-            &mut laptop,
-            3,
-            ControlRequest::WorkspaceDetach { id: w.clone() },
-        );
-        assert_eq!(reply, ControlReply::Ok(ReplyOk::Unit));
-        assert_eq!(
-            registry.holder(&w).map(|(t, _)| t),
-            Some("tok-desktop".into()),
-            "the displaced session must not release what it no longer holds"
-        );
-        assert_eq!(
-            machine.attachment(w.parse().unwrap()).unwrap().token,
-            "tok-desktop"
-        );
-    }
-
-    #[test]
-    fn a_closed_connection_releases_what_it_held() {
-        let (services, _dir) = workspace_services();
-        let registry = Arc::clone(&services.attachments);
-        let machine = Arc::clone(services.machine.as_ref().unwrap());
-        let w = tree_workspace(&services);
-        {
-            let ((client, _), served) = raw_hello(services.clone(), hello_for(&w, "tok", "laptop"));
-            await_holder(&registry, &w, "laptop");
-            drop(client);
-            served.join().unwrap();
-        }
-        assert!(registry.is_empty(), "the registry outlived the connection");
-        assert_eq!(machine.attachment(w.parse().unwrap()), None);
-    }
-
-    #[test]
-    fn attaching_to_a_server_without_a_tree_is_an_error() {
-        let (mut client, _) = raw_with(Services::none());
-        let (reply, _) = round_trip(
-            &mut client,
-            1,
-            ControlRequest::WorkspaceAttach { id: "w".into() },
-        );
-        assert!(matches!(reply, ControlReply::Err(_)), "{reply:?}");
-    }
 }

@@ -64,6 +64,19 @@ Unix 的 `daemon/pane/lifecycle/inherited.rs` 沿用 exec 继承的 descriptor�
 显式 `native_ssh_lifecycle` 集成用例复用隔离 SSH fixture，验证真实原生 shell channel 的最终输出、单次退出和主动关闭静默语义。
 这些是验证入口，不是本轮已执行的通过声明；Windows、Unix 与真实 SSH 的运行证据需要分别记录。
 
+控制连接继续从 `lyrel-core::host::server` 的 `serve`／`serve_with`／`serve_halves`／`serve_halves_with` 接入。
+私有 `host/server/connection.rs` 负责连接初始化与退出协调，`negotiation.rs` 负责 HELLO 和功能协商；
+握手成功后才建立机器订阅、连接身份、GUI 注册与可选的工作区附着，再进入请求读取循环。
+`attachments.rs` 的 `ConnectionIdentity` 私有持有连接 ID、客户端身份及共享 `AttachRegistry`，统一执行附着、分离、删除与 GUI 注册／注销；
+请求分发只调用这些语义操作，不直接修改附着表。接管仍在同一 handover 锁内先更新机器记录、再更新 live registry，
+释放锁后才向被替代者发送通知；只有专用连接会被关闭，共享 GUI／Host 连接可继续服务其他工作区。
+`output.rs` 的单一 `Sink` 同步串行化响应与事件，并负责输出退休，不增加输出消费者或锁。
+读取循环退出后，依次关闭工作池、清除 watch、释放工作区、注销 GUI、丢弃机器订阅、退休 Sink、关闭链接；
+不会等待最后一个 worker 持有的 `Arc<Conn>` 释放才清理连接。请求关联、取消、watch／stream 与有界工作池仍使用原有状态和规则。
+Unix 的 socket 路径、私有权限、残留端点探测与监听属于 `host/server/unix.rs`；Windows 的认证 loopback TCP、
+`control.port` 与存活探测属于 `host/server/windows.rs`。现有公共入口直接暴露真实实现，协议仍为 CONTROL 16／PANE 15，
+协商、错误分类及断开前输出语义不变；Windows TCP、Unix socket、stdio 和真实 SSH 运行证据须分别记录。
+
 桌面的 `src/terminal/remote/reader.rs` 由 `ReaderTask` 管理单次 reader 生命周期，
 私有 `FrameReader` 同时拥有 parser、键盘／终端模式、回放位置和帧缓冲；连接编排只启动或退休 reader。
 回放与实时文字、尺寸回显、剪贴板请求及图形更新仍由同一线程按流顺序消费，回放期间不重新回答历史查询或重放副作用。
