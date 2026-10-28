@@ -331,7 +331,10 @@ fn statistics_source_and_price_management_workflow(cx: &mut TestAppContext) {
         vcx.update(|window, cx| {
             window.render_frame(cx);
             assert!(window.try_find("statistics-price-save").is_none());
-            assert!(app.read(cx).active_settings().unwrap().section == SettingsSection::Statistics);
+            assert!(
+                app.read(cx).active_settings().unwrap().navigation.section()
+                    == SettingsSection::Statistics
+            );
         });
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();

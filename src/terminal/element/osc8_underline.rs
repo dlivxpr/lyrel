@@ -29,13 +29,14 @@ mod tests {
     use rio_vt::crosswords::pos::{Column, Line, Pos};
     use rio_vt::event::VoidListener;
 
-    use super::super::{
-        CellPainter, GlyphStyle, PaintColors, invert_cursor_cell, tests::test_colors,
-    };
+    use super::super::decorations::invert_cursor_cell;
+    use super::super::snapshot::CellPainter;
+    use super::super::test_support::{painted_term, test_colors};
+    use super::super::{GlyphStyle, PaintColors};
     use super::*;
 
     fn linked(sgr: &str) -> Crosswords<VoidListener> {
-        super::super::tests::painted_term(&format!(
+        painted_term(&format!(
             "\x1b[{sgr}m\x1b]8;;https://example.com/3328\x1b\\#"
         ))
     }

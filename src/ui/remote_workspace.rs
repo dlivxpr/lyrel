@@ -13,20 +13,11 @@ use crate::daemon::control::{ControlEvent, ControlRequest, ReplyOk};
 use crate::daemon::install::InstallDecision;
 use crate::ui::app::LyrelApp;
 use crate::ui::i18n::{L10nKey, t, t_fmt};
-use crate::ui::remote_connect::{self, HostChoice, RemoteWorkspaceRow};
+use crate::ui::remote_connect::{self, RemoteWorkspaceRow};
 
-pub enum ConnectFlow {
-    Connecting { choice: HostChoice },
-    Failed { choice: HostChoice, error: String },
-}
+pub(crate) mod connection;
 
-impl ConnectFlow {
-    pub fn choice(&self) -> Option<&HostChoice> {
-        match self {
-            ConnectFlow::Connecting { choice } | ConnectFlow::Failed { choice, .. } => Some(choice),
-        }
-    }
-}
+use connection::ConnectionState;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteStatus {
@@ -498,7 +489,7 @@ impl LyrelApp {
         };
         let supervised = RemoteLinks::status_of(cx, self.workspace);
         let resolvable = remote_connect::route_resolvable(cx, &own.target);
-        resolve_status(self.connect.as_ref(), &own.target, supervised, resolvable)
+        resolve_status(self.connect.state(), &own.target, supervised, resolvable)
     }
 
     /// The strip's one button: its label, and what pressing it does.
@@ -571,8 +562,8 @@ impl LyrelApp {
             cx.notify();
             return;
         }
-        match &self.connect {
-            Some(ConnectFlow::Failed { choice, .. }) => {
+        match self.connect.state() {
+            Some(ConnectionState::Failed { choice, .. }) => {
                 let choice = choice.clone();
                 self.connect_to_host(choice, cx);
             }
@@ -581,171 +572,8 @@ impl LyrelApp {
         cx.notify();
     }
 
-    pub(crate) fn connect_to_host(&mut self, choice: HostChoice, cx: &mut Context<Self>) {
-        remote_connect::register(cx);
-        // Whatever went wrong last time is about to be answered by this attempt.
-        self.remote_host_errors.remove(&choice.target.to_string());
-        let header = match remote_connect::control_route(&choice.target, cx) {
-            Ok(header) => header,
-            Err(e) => {
-                self.connect = Some(ConnectFlow::Failed { choice, error: e });
-                cx.notify();
-                return;
-            }
-        };
-        let target = choice.target.clone();
-        let label = choice.label.clone();
-        cx.default_global::<RemoteLinks>()
-            .suspended
-            .remove(&choice.target.host_id());
-        self.connect = Some(ConnectFlow::Connecting {
-            choice: choice.clone(),
-        });
-        cx.notify();
-
-        let host_id = choice.target.host_id();
-        remote_connect::clear_install_progress(host_id);
-        self.watch_for_install_consent(host_id, cx);
-        let launch_commands = cx.global::<Config>().agent_launch.clone();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    remote_connect::connect_blocking(&target, header, &label, &launch_commands)
-                })
-                .await;
-            // Retired here rather than in `finish_connect`, which bows out
-            // early whenever `connect` has moved on — a disconnect from the
-            // switcher, or entering another workspace, both of which can land
-            // mid-install. The strip reads this entry with no link state to
-            // temper it, so one left behind freezes a progress bar on every
-            // window pointed at this machine *and* takes away the Update
-            // Server button, which is the one thing that could have fixed it.
-            remote_connect::clear_install_progress(host_id);
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.finish_connect(result, window, cx)
-            });
-        })
-        .detach();
-    }
-
-    fn watch_for_install_consent(&self, host: HostId, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            let mut painted: Option<crate::daemon::install::InstallPhase> = None;
-            loop {
-                let connecting = this
-                    .update(cx, |this, _| {
-                        matches!(this.connect, Some(ConnectFlow::Connecting { .. }))
-                    })
-                    .unwrap_or(false);
-                if !connecting {
-                    return;
-                }
-                if let Some(pending) = remote_connect::take_pending_install() {
-                    let _ = this.update_in(cx, |this, window, cx| {
-                        this.prompt_install_consent(pending, window, cx)
-                    });
-                }
-                let reported = remote_connect::install_progress_for(host);
-                if reported != painted {
-                    painted = reported;
-                    let _ = this.update(cx, |_, cx| cx.notify());
-                }
-                cx.update(pump_auth_sheets);
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(100))
-                    .await;
-            }
-        })
-        .detach();
-    }
-
-    fn finish_connect(
-        &mut self,
-        result: Result<remote_connect::Connected, String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(choice) = self.connect.as_ref().and_then(ConnectFlow::choice).cloned() else {
-            return;
-        };
-        match result {
-            Ok(connected) => {
-                let home = connected.home.clone();
-                let rows = connected.rows.clone();
-                self.host_snapshots.insert(
-                    choice.target.host_id(),
-                    crate::ui::switcher::HostSnapshot {
-                        target: choice.target.clone(),
-                        rows: rows.clone(),
-                    },
-                );
-                remote_connect::HostLinks::insert(cx, connected.host, home.clone());
-                // The listing outlives the link: mirrored into the store so
-                // the switcher still knows this machine's workspaces after a
-                // restart, without a connection.
-                let listing: Vec<(WorkspaceId, String, u64)> = rows
-                    .iter()
-                    .map(|r| (r.id, r.name.clone(), r.last_active))
-                    .collect();
-                WorkspaceStore::sync_remote(cx, &choice.target, &listing);
-                self.prompt_remote_daemon_mismatch_later(cx);
-                self.connect = None;
-                // A create that was waiting on this link (the switcher's form,
-                // asked of a machine that was not connected yet) can now run:
-                // the link just told us the home directory to root it at.
-                if let Some(pending) = self.take_create_waiting_on(&choice.target) {
-                    self.close_switcher(window, cx);
-                    self.create_remote_workspace(pending.target, home, window, cx);
-                    self.name_fresh_workspace(pending.name, window, cx);
-                }
-            }
-            Err(error) => {
-                log::warn!("connect to {} failed: {error}", choice.label);
-                if self
-                    .pending_create
-                    .as_ref()
-                    .is_some_and(|p| p.target == choice.target)
-                {
-                    // A dialect refusal is the one failure with a button on
-                    // it — the "update server" this window is about to offer.
-                    // The create moves aside to wait for that answer instead
-                    // of dying with the attempt, or the update would end in
-                    // nothing and the user would have to ask all over again.
-                    // Every other failure still calls the create off.
-                    if crate::daemon::control::is_dialect_refusal(&error) {
-                        self.parked_create = self.pending_create.take();
-                    } else {
-                        self.pending_create = None;
-                    }
-                }
-                self.connect = Some(ConnectFlow::Failed { choice, error });
-            }
-        }
-        cx.notify();
-    }
-
-    /// The create waiting on this machine's link, wherever it waits: parked on
-    /// the app by the form (`pending_create`), or set aside by a dialect
-    /// refusal until the server over there was updated (`parked_create`).
-    /// Either way it is spent by the connect that finally lands.
-    fn take_create_waiting_on(
-        &mut self,
-        target: &RemoteTarget,
-    ) -> Option<crate::ui::switcher::PendingCreate> {
-        for slot in [&mut self.pending_create, &mut self.parked_create] {
-            if slot.as_ref().is_some_and(|p| &p.target == target) {
-                return slot.take();
-            }
-        }
-        None
-    }
-
-    /// The far end was just cycled into a server this build speaks to — the
-    /// answer a create refused for the dialect has been waiting on. Reconnects
-    /// whatever the restart cut, and connects at the machine again if a create
-    /// is still parked on it, so the workspace the user asked for finally
-    /// exists; `finish_connect` finds the create via `take_create_waiting_on`.
+    /// Machine recovery stays with RemoteLinks; the window owner supplies a
+    /// follow-up attempt only for a create parked on this replacement target.
     fn server_replaced(
         &mut self,
         target: &RemoteTarget,
@@ -754,19 +582,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         reconnect_after_restart(origin, cx);
-        if self
-            .parked_create
-            .as_ref()
-            .is_some_and(|p| &p.target == target)
-        {
-            self.connect_to_host(
-                HostChoice {
-                    target: target.clone(),
-                    label: label.to_string(),
-                    detail: String::new(),
-                },
-                cx,
-            );
+        if let Some(choice) = self.connect.server_replaced(target, label) {
+            self.connect_to_host(choice, cx);
         }
     }
 
@@ -804,7 +621,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.connect = None;
+        self.connect.retire();
         RemoteLinks::ensure_running(cx);
         let previous = self.spawn_host(cx);
         self.switch_workspace(Some(id), window, cx);
@@ -1102,11 +919,7 @@ impl LyrelApp {
     /// whatever this attempt has to say.
     fn clear_remote_host_error(&mut self, target: &RemoteTarget) {
         self.remote_host_errors.remove(&target.to_string());
-        if let Some(ConnectFlow::Failed { choice, .. }) = &self.connect
-            && &choice.target == target
-        {
-            self.connect = None;
-        }
+        self.connect.dismiss_failure(Some(target));
     }
 
     fn report_remote_host_error(
@@ -1189,7 +1002,7 @@ impl LyrelApp {
 /// Everything else keeps the old order, so a connect that is still in flight
 /// still says so while the supervisor is still calling the machine unknown.
 fn resolve_status(
-    connect: Option<&ConnectFlow>,
+    connect: Option<&ConnectionState>,
     own: &RemoteTarget,
     supervised: Option<RemoteStatus>,
     route_resolvable: bool,
@@ -1209,16 +1022,16 @@ fn resolve_status(
         return Some(RemoteStatus::RouteLost);
     }
     match mine {
-        Some(ConnectFlow::Connecting { .. }) => Some(RemoteStatus::Connecting),
+        Some(ConnectionState::Connecting { .. }) => Some(RemoteStatus::Connecting),
         // A connect the user ran by hand fails on the dialect exactly as the
         // supervisor's does, and deserves the same answer — the restatement and
         // the Update Server button, not a Retry that cannot work.
-        Some(ConnectFlow::Failed { error, .. })
+        Some(ConnectionState::Failed { error, .. })
             if crate::daemon::control::is_dialect_refusal(error) =>
         {
             Some(RemoteStatus::ServerMismatch(error.clone()))
         }
-        Some(ConnectFlow::Failed { error, .. }) => Some(RemoteStatus::Failed(error.clone())),
+        Some(ConnectionState::Failed { error, .. }) => Some(RemoteStatus::Failed(error.clone())),
         None => supervised,
     }
 }
@@ -1842,7 +1655,7 @@ fn finish_reclaim(
 
 /// Retire what the *windows* still say about a failed connect to this machine.
 ///
-/// `ConnectFlow::Failed` and `remote_host_errors` belong to whichever window
+/// The window connection failure and `remote_host_errors` belong to whichever window
 /// ran the manual attempt, and the switcher paints both in preference to
 /// anything the supervisor knows. A link the supervisor brought up on its own
 /// therefore leaves the last failure on screen forever, because the window that
@@ -1855,8 +1668,8 @@ fn clear_window_failures_for(cx: &mut gpui_kit::App, target: &RemoteTarget) {
         };
         let key = target.to_string();
         app.update(cx, |app, cx| {
-            let failed = match &app.connect {
-                Some(ConnectFlow::Failed { choice, .. }) if choice.target.host_id() == host => {
+            let failed = match app.connect.state() {
+                Some(ConnectionState::Failed { choice, .. }) if choice.target.host_id() == host => {
                     Some(choice.target.clone())
                 }
                 _ => None,
@@ -2569,6 +2382,7 @@ pub(crate) fn workspace_is_preempted(cx: &gpui_kit::App, workspace: WorkspaceId)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::remote_connect::HostChoice;
 
     /// The per-workspace relink clock: a miss puts the workspace on the next
     /// backoff step, panes all found their way back retires the entry — so a
@@ -2800,6 +2614,35 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn a_late_success_does_not_publish_a_retired_windows_connection(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::VisualContext as _;
+        use lyrel_core::host::Host as _;
+
+        let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let choice = HostChoice {
+            target: RemoteTarget::Alias {
+                alias: "late-box".into(),
+            },
+            label: "late-box".into(),
+            detail: String::new(),
+        };
+        app.update_in(&mut vcx, |app, window, cx| {
+            let old = app.connect.begin(choice.clone());
+            app.connect.retire();
+            let current = app.connect.begin(choice);
+            let connected = fake_connected("lyrel-test-late-box");
+            let host = connected.host.id();
+            app.finish_connect(old, Ok(connected), window, cx);
+            assert!(app.connect.is_connecting(current));
+            assert!(app.host_snapshots.is_empty());
+            assert!(remote_connect::HostLinks::get(cx, host).is_none());
+        });
+    }
+
     /// The regression behind "I clicked update and nothing happened": a create
     /// whose connect was refused for the dialect used to die with the attempt,
     /// so the update the refusal button ran had nothing left to finish and the
@@ -2809,6 +2652,17 @@ mod tests {
     fn a_create_refused_for_dialect_runs_once_the_machine_connects(
         cx: &mut gpui_kit::TestAppContext,
     ) {
+        create_waits_for_its_connection(cx, true);
+    }
+
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn a_delayed_create_runs_once_on_its_intended_machine(cx: &mut gpui_kit::TestAppContext) {
+        create_waits_for_its_connection(cx, false);
+    }
+
+    #[cfg(unix)]
+    fn create_waits_for_its_connection(cx: &mut gpui_kit::TestAppContext, refused: bool) {
         use gpui_kit::VisualContext as _;
 
         let (app, mut vcx) = crate::ui::app::test_window::harness(cx);
@@ -2834,26 +2688,74 @@ mod tests {
         };
 
         app.update_in(&mut vcx, |app, window, cx| {
-            app.pending_create = Some(crate::ui::switcher::PendingCreate {
-                target: target.clone(),
-                name: Some("deploy".into()),
-            });
-            app.connect = Some(ConnectFlow::Connecting {
-                choice: choice.clone(),
-            });
-            app.finish_connect(Err(a_dialect_refusal()), window, cx);
+            app.connect
+                .queue_create(target.clone(), Some("deploy".into()));
+            let attempt = app.connect.begin(choice.clone());
+            if refused {
+                app.finish_connect(attempt, Err(a_dialect_refusal()), window, cx);
+            }
         });
 
-        // The server over there was updated and the machine finally connected —
-        // whether over `server_replaced`'s kick or the band's own retry, it
-        // ends in the same place.
+        // Another machine can connect while this create is waiting. Its success
+        // must not spend the original machine's name or navigate this window.
         app.update_in(&mut vcx, |app, window, cx| {
-            app.finish_connect(Ok(fake_connected("lyrel-test-refused-box")), window, cx);
+            let before = app.workspace;
+            let other = HostChoice {
+                target: RemoteTarget::Alias {
+                    alias: "lyrel-test-other-box".into(),
+                },
+                label: "other-box".into(),
+                detail: String::new(),
+            };
+            let attempt = app.connect.begin(other);
+            app.finish_connect(
+                attempt,
+                Ok(fake_connected("lyrel-test-other-box")),
+                window,
+                cx,
+            );
+            assert_eq!(app.workspace, before);
+            assert_eq!(
+                app.connect
+                    .server_replaced(&target, "refused-box")
+                    .is_some(),
+                refused,
+            );
+        });
+
+        // The intended machine finally connects, either directly or after its
+        // server was replaced. Both paths finish the same creation handoff.
+        app.update_in(&mut vcx, |app, window, cx| {
+            let attempt = app.connect.begin(choice.clone());
+            app.finish_connect(
+                attempt,
+                Ok(fake_connected("lyrel-test-refused-box")),
+                window,
+                cx,
+            );
+            let created = app.workspace;
+            // Neither a duplicate result nor a later legitimate connect may
+            // execute the same intent a second time.
+            app.finish_connect(
+                attempt,
+                Ok(fake_connected("lyrel-test-refused-box")),
+                window,
+                cx,
+            );
+            assert_eq!(app.workspace, created);
+            let later = app.connect.begin(choice.clone());
+            app.finish_connect(
+                later,
+                Ok(fake_connected("lyrel-test-refused-box")),
+                window,
+                cx,
+            );
+            assert_eq!(app.workspace, created);
         });
 
         app.update(cx, |app, cx| {
             let own = WorkspaceStore::remote_ref(cx, app.workspace)
-                .expect("the parked create ran and this window entered its workspace");
+                .expect("the waiting create ran and this window entered its workspace");
             assert_eq!(own.target, target);
             assert_eq!(
                 crate::ui::tree_sync::chosen_name_for(cx, app.workspace).as_deref(),
@@ -2879,14 +2781,9 @@ mod tests {
         };
 
         app.update_in(&mut vcx, |app, window, cx| {
-            app.pending_create = Some(crate::ui::switcher::PendingCreate {
-                target: target.clone(),
-                name: None,
-            });
-            app.connect = Some(ConnectFlow::Connecting {
-                choice: choice.clone(),
-            });
-            app.finish_connect(Err(a_dialect_refusal()), window, cx);
+            app.connect.queue_create(target.clone(), None);
+            let attempt = app.connect.begin(choice.clone());
+            app.finish_connect(attempt, Err(a_dialect_refusal()), window, cx);
         });
 
         app.update(cx, |app, cx| {
@@ -2894,9 +2791,9 @@ mod tests {
             // The old refusal is still `Failed { target }` too, so the target
             // alone proves nothing — what has to change is the failure itself:
             // a fresh attempt ran and left its own outcome in its place.
-            match app.connect.as_ref() {
-                Some(ConnectFlow::Connecting { choice }) => assert_eq!(choice.target, target),
-                Some(ConnectFlow::Failed { choice, error }) => {
+            match app.connect.state() {
+                Some(ConnectionState::Connecting { choice }) => assert_eq!(choice.target, target),
+                Some(ConnectionState::Failed { choice, error }) => {
                     assert_eq!(choice.target, target);
                     assert!(
                         !crate::daemon::control::is_dialect_refusal(error),
@@ -2906,7 +2803,9 @@ mod tests {
                 None => panic!("the replacement kicks a connect at the machine"),
             }
             assert!(
-                app.parked_create.is_some(),
+                app.connect
+                    .server_replaced(&target, "refused-box")
+                    .is_some(),
                 "the create keeps waiting for that connect to land"
             );
         });
@@ -2977,26 +2876,6 @@ mod tests {
         assert!(!RemoteStatus::Disconnected.accepts_input());
         assert!(!RemoteStatus::Connecting.accepts_input());
         assert!(!RemoteStatus::Failed("x".into()).accepts_input());
-    }
-
-    #[test]
-    fn every_flow_state_names_its_machine() {
-        let choice = HostChoice {
-            target: RemoteTarget::Alias {
-                alias: "build-box".into(),
-            },
-            label: "build-box".into(),
-            detail: "me@build-box".into(),
-        };
-        let flow = ConnectFlow::Connecting {
-            choice: choice.clone(),
-        };
-        assert_eq!(flow.choice(), Some(&choice));
-        let flow = ConnectFlow::Failed {
-            choice: choice.clone(),
-            error: "no route to host".into(),
-        };
-        assert_eq!(flow.choice(), Some(&choice));
     }
 
     /// What the comparison itself answers is pinned where it now lives, in
@@ -3694,7 +3573,7 @@ mod tests {
         let target = RemoteTarget::Alias {
             alias: "build-box".into(),
         };
-        let flow = ConnectFlow::Failed {
+        let flow = ConnectionState::Failed {
             choice: HostChoice {
                 target: target.clone(),
                 label: "build-box".into(),
@@ -3732,8 +3611,8 @@ mod tests {
         );
     }
 
-    fn failed_flow(alias: &str) -> ConnectFlow {
-        ConnectFlow::Failed {
+    fn failed_flow(alias: &str) -> ConnectionState {
+        ConnectionState::Failed {
             choice: HostChoice {
                 target: RemoteTarget::Alias {
                     alias: alias.to_string(),

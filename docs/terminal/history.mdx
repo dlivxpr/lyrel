@@ -42,7 +42,9 @@ description: "模糊搜索历史记录，以及是否为每个窗格使用独立
 
 命令历史按本地 shell 或远端目标分开。离开一个已加载的作用域时，窗格保留它的列表；从 SSH 返回后，立即可以用 <kbd>↑</kbd> 召回本地命令，无需等待后台刷新。尚未加载完成的空列表不会作为有效缓存保存，旧作用域或旧 Host 的异步读取结果也不能覆盖当前列表。
 
-`src/terminal/history_session.rs` 的 `TerminalHistory` 统一拥有作用域、有限缓存、频次与目录元数据、排序、导航草稿、末词召回、反向搜索及待写记录。`history.rs` 保留文件格式、加载和持久化；`TerminalView` 仅调度 Host 读取、应用编辑结果与刷新界面。补全通过借用候选切片读取历史，不为跨模块调用复制整份列表。
+`src/terminal/history_session.rs` 的 `TerminalHistory` 统一拥有作用域、有限缓存、频次与目录元数据、排序、导航草稿、末词召回、反向搜索及待写记录。`history.rs` 保留文件格式、加载和持久化；`view/history_adapter.rs` 在原有 `TerminalView` 上调度 Host 读取、应用所有者接受的编辑／加载结果并呈现反向搜索菜单，不另建历史存储或异步消费者。加载结果继续携带原作用域和 Host 身份，pane 交接、退出和焦点生命周期不因适配拆分改变。补全通过借用候选切片读取历史，不为跨模块调用复制整份列表。
+
+历史 consumer tests 按作用域、导航、末词、反向搜索和幽灵建议分组，统一入口为 `cargo test --locked -p lyrel --bin lyrel-app terminal::view::history_adapter::`；共享 socket／window fixture 位于 `view/test_support.rs`，只用于测试。集成后还需在隔离原生窗口检查历史召回后的焦点、Esc 保留草稿、Enter 插入与 Cmd-Enter 执行，并检查 SSH 往返后本地／远端历史不串用；未实际运行的场景不能记为通过。
 
 <a id="one-history-or-one-per-pane"></a>
 

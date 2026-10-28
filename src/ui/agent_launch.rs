@@ -23,9 +23,10 @@ use gpui_kit::{App, Axis, Context, Window};
 use crate::core::cli_agent::{CLIAgent, launch_program, program_on_path};
 use crate::core::config::{Config, ProfileUsage, unix_now};
 use crate::core::session::WorkspaceStore;
-use crate::ui::app::{LyrelApp, SpawnWhere, join_shell_args};
+use crate::ui::app::{LyrelApp, SpawnWhere};
 use crate::ui::i18n::{L10nKey, t_fmt};
 use crate::ui::pane::PaneSlot;
+use crate::ui::settings::arguments::join_shell_args;
 use crate::ui::tab::presentation::SpawnAs;
 
 /// How the keymap spells "launch this agent": `LaunchAgent:omp`.
@@ -580,7 +581,7 @@ mod tests {
         ]);
         let line = launch_line_to_save(CLIAgent::OhMyPi, &run).unwrap();
         assert_eq!(
-            crate::ui::app::split_shell_args(&line).unwrap(),
+            crate::ui::settings::arguments::split_shell_args(&line).unwrap(),
             argv(&[
                 "omp",
                 "--append-system-prompt",

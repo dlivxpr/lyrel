@@ -1,4 +1,5 @@
 use super::*;
+use crate::terminal::view::notices::INTEGRATION_GRACE;
 
 #[gpui_kit::test]
 fn insert_newline_action_extends_the_line_and_enter_submits_it(cx: &mut TestAppContext) {
@@ -18,7 +19,10 @@ fn insert_newline_action_extends_the_line_and_enter_submits_it(cx: &mut TestAppC
             assert_eq!(view.input.editor().text(), "echo a\necho b");
 
             view.handle_editor_key(&key("enter"), cx);
-            assert!(view.input.editor().is_empty(), "Enter submits the whole buffer");
+            assert!(
+                view.input.editor().is_empty(),
+                "Enter submits the whole buffer"
+            );
         })
         .unwrap();
     assert_eq!(
@@ -226,7 +230,11 @@ fn an_unused_find_binding_gives_f3_back_to_the_shell(cx: &mut TestAppContext) {
         window
             .update(cx, |view, _, _| {
                 assert!(view.search.is_none(), "{chord} did not open the find bar");
-                assert_eq!(view.input.editor().text(), "", "{chord} handed the line over");
+                assert_eq!(
+                    view.input.editor().text(),
+                    "",
+                    "{chord} handed the line over"
+                );
             })
             .unwrap();
         assert_eq!(
@@ -261,7 +269,11 @@ fn function_keys_hand_the_line_to_the_shell(cx: &mut TestAppContext) {
             .update(cx, |view, _, cx| {
                 view.input.editor_mut().set("git st");
                 view.handle_editor_key(&key(chord), cx);
-                assert_eq!(view.input.editor().text(), "", "{chord} handed the line over");
+                assert_eq!(
+                    view.input.editor().text(),
+                    "",
+                    "{chord} handed the line over"
+                );
             })
             .unwrap();
         assert_eq!(
@@ -309,7 +321,7 @@ fn history_search_off_sends_ctrl_r_to_the_shell(cx: &mut TestAppContext) {
     window
         .update(cx, |view, _, cx| {
             seed_history(view, ["git status"].into_iter().map(String::from).collect());
-            
+
             view.input.editor_mut().set("gi");
             view.handle_editor_key(&key("ctrl-r"), cx);
             assert!(
@@ -348,7 +360,7 @@ fn prompt_editor_off_hands_typing_and_arrows_to_the_shell(cx: &mut TestAppContex
     window
         .update(cx, |view, window, cx| {
             seed_history(view, ["quit"].into_iter().map(String::from).collect());
-            
+
             view.set_prompt_editor(false, cx);
             assert!(
                 !view.input_active(),
@@ -367,7 +379,11 @@ fn prompt_editor_off_hands_typing_and_arrows_to_the_shell(cx: &mut TestAppContex
             };
             view.on_key_down(&up, window, cx);
 
-            assert_eq!(view.input.editor().text(), "", "nothing was typed into lyrel's editor");
+            assert_eq!(
+                view.input.editor().text(),
+                "",
+                "nothing was typed into lyrel's editor"
+            );
             assert!(
                 !view.history.is_navigating(),
                 "Up never touched lyrel's own history"
@@ -588,7 +604,11 @@ fn a_known_ctrl_chord_stays_in_the_local_editor(cx: &mut TestAppContext) {
         .update(cx, |view, _, cx| {
             view.input.editor_mut().set("echo hi");
             view.handle_editor_key(&key("ctrl-w"), cx);
-            assert_eq!(view.input.editor().text(), "echo ", "⌃W cut the word locally");
+            assert_eq!(
+                view.input.editor().text(),
+                "echo ",
+                "⌃W cut the word locally"
+            );
             assert!(!view.input.has_handoff());
         })
         .unwrap();

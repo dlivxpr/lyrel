@@ -1,6 +1,6 @@
 //! Consumer regressions for agent observations and read marks.
 
-use super::gpui_tests::harness;
+use super::test_support::harness;
 use super::*;
 use crate::daemon::protocol::DaemonMsg;
 use crate::daemon::transport::Stream;

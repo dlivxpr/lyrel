@@ -1,9 +1,4 @@
-use gpui_kit::{App, Bounds, InputHandler, Pixels, UTF16Selection, Window};
 use rio_vt::crosswords::Mode;
-
-use super::view::TerminalView;
-#[cfg(target_os = "macos")]
-use crate::core::config::Config;
 
 /// Everything about the terminal's current state that changes how a keystroke
 /// is encoded: keyboard modes and the PTY that receives the bytes.
@@ -38,6 +33,10 @@ impl KeyFlags {
 
     pub(super) fn kitty_active(self) -> bool {
         self.disambiguate || self.report_all_keys
+    }
+
+    pub(super) fn reports_all_keys(self) -> bool {
+        self.report_all_keys
     }
 
     pub(super) fn legacy_newline_bytes(self) -> &'static [u8] {
@@ -442,137 +441,6 @@ fn legacy_keystroke_to_bytes(ks: &gpui_kit::Keystroke, flags: KeyFlags) -> Optio
         }
     }
     None
-}
-
-pub struct TerminalInputHandler {
-    view: gpui_kit::Entity<TerminalView>,
-    cursor_bounds: Option<Bounds<Pixels>>,
-}
-
-impl TerminalInputHandler {
-    pub fn new(
-        view: gpui_kit::Entity<TerminalView>,
-        cursor_bounds: Option<Bounds<Pixels>>,
-    ) -> Self {
-        Self {
-            view,
-            cursor_bounds,
-        }
-    }
-}
-
-impl InputHandler for TerminalInputHandler {
-    fn selected_text_range(
-        &mut self,
-        _ignore_disabled_input: bool,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: 0..0,
-            reversed: false,
-        })
-    }
-
-    fn marked_text_range(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut App,
-    ) -> Option<std::ops::Range<usize>> {
-        let marked = self.view.read(cx).input.marked();
-        if marked.is_empty() {
-            None
-        } else {
-            Some(0..marked.encode_utf16().count())
-        }
-    }
-
-    fn text_for_range(
-        &mut self,
-        _range_utf16: std::ops::Range<usize>,
-        _adjusted: &mut Option<std::ops::Range<usize>>,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> Option<String> {
-        None
-    }
-
-    fn replace_text_in_range(
-        &mut self,
-        _replacement_range: Option<std::ops::Range<usize>>,
-        text: &str,
-        _window: &mut Window,
-        cx: &mut App,
-    ) {
-        let text = text.to_string();
-        self.view.update(cx, |view, cx| {
-            view.clear_marked_text(cx);
-            view.input_text(&text, cx);
-        });
-    }
-
-    fn replace_and_mark_text_in_range(
-        &mut self,
-        _range_utf16: Option<std::ops::Range<usize>>,
-        new_text: &str,
-        _new_selected_range: Option<std::ops::Range<usize>>,
-        _window: &mut Window,
-        cx: &mut App,
-    ) {
-        let new_text = new_text.to_string();
-        self.view
-            .update(cx, |view, cx| view.set_marked_text(new_text, cx));
-    }
-
-    fn unmark_text(&mut self, _window: &mut Window, cx: &mut App) {
-        self.view.update(cx, |view, cx| view.clear_marked_text(cx));
-    }
-
-    fn bounds_for_range(
-        &mut self,
-        range_utf16: std::ops::Range<usize>,
-        _window: &mut Window,
-        cx: &mut App,
-    ) -> Option<Bounds<Pixels>> {
-        let mut bounds = self.cursor_bounds?;
-        let cell_width = self.view.read(cx).cell_width;
-        bounds.origin.x += cell_width * range_utf16.start as f32;
-        Some(bounds)
-    }
-
-    fn character_index_for_point(
-        &mut self,
-        _point: gpui_kit::Point<Pixels>,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> Option<usize> {
-        None
-    }
-
-    fn apple_press_and_hold_enabled(&mut self) -> bool {
-        false
-    }
-
-    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-    fn prefers_ime_for_printable_keys(&mut self, window: &mut Window, cx: &mut App) -> bool {
-        // The published Kit asks before a keystroke exists, so the option-as-
-        // alt question is answered from the modifiers held right now instead
-        // of the key event's set — the same predicate, read earlier.
-        #[cfg(target_os = "macos")]
-        if meta_modifiers_bypass_ime(
-            &window.modifiers(),
-            cx.global::<Config>().macos_option_as_alt,
-        ) {
-            return false;
-        }
-        if self.view.read(cx).key_flags().report_all_keys {
-            return false;
-        }
-        if window.has_pending_keystrokes() {
-            return false;
-        }
-        true
-    }
 }
 
 #[cfg(test)]

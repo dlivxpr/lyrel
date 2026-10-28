@@ -46,6 +46,16 @@ description: "指针、滚轮和 ^G 各有何行为——以及如何分别调�
   如果在 `vim` 或 `less` 中选择文本时抓到的是应用自己的选择而不是你的选择，请在拖动时按住 <kbd>⇧</kbd>。
 </Tip>
 
+### 链接的实现职责
+
+`src/terminal/link.rs` 的 `LinkInteraction` 是链接状态的唯一所有者，持有悬停范围、修饰键状态、Host／目录上下文、探测缓存、请求 epoch 和右键按下时捕获的目标。`src/terminal/view/links.rs` 是私有 GPUI adapter：将 hover、probe、菜单和 activation 接到同一所有者，为它提供 pane 的 Host／cwd 与配置，并执行通知、剪贴板、URL 打开或 `OpenFileRequested` 导航事件。根视图继续保留终端 attachment、焦点身份和跨能力生命周期，不向链接能力暴露整个可变视图，也不新增 entity 或锁。
+
+右键菜单使用捕获的 Host、路径和行列位置，不在菜单绘制或激活时跟随新指针重新选择目标。远端文件始终交给内置导航；系统默认应用与显示所在文件夹只接受本地目标。终端内再次 SSH 到其他机器时，不用桌面的文件系统解释那台机器的路径。URL 与文件保留各自的打开策略，loopback URL 继续使用现有转发路由；关闭链接检测、全屏程序的修饰键要求，以及鼠标报告模式下的 Shift 覆盖规则均不变。
+
+adapter 通过 `HostOps` 在后台执行 Host 的目录根查询和远端文件探测。返回结果先同步当前上下文，再由 `LinkInteraction` 的 epoch 检查决定是否接受；Host／目录或网格变化后，已退役的结果不能替换新交互的 hover 或菜单目标。实体关闭后的回调、失败通知及后续焦点交接仍遵循原有 GPUI／工作台生命周期。
+
+消费者回归位于 `src/terminal/view/links/consumer_tests.rs`，覆盖 pane cwd、远端隔离、延迟结果、菜单捕获身份、resize、换行与宽字符命中；确定性状态规则仍位于 `src/terminal/link/tests.rs`。原生验收须使用隔离配置，在实际终端上检查 URL、含行列的本地文件、目录与远端文件的 hover、修饰键点击、右键菜单、复制路径和导航后的焦点；Windows、macOS 与真实 SSH 的结果分别记录，自动测试不替代这些运行证据。
+
 ## 字号
 
 | | |

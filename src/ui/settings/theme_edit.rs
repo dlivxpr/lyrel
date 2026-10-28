@@ -4,6 +4,210 @@ use crate::ui::theme::apply_theme;
 use crate::ui::theme::set_menus;
 use gpui_kit::component::color_picker::ColorPickerEvent;
 
+/// One settings session's editable theme and preview. Configuration application
+/// stays on the existing window adapter; draft transitions never borrow it.
+pub(crate) struct ThemeEditing {
+    session: Uuid,
+    editor_generation: u64,
+    image_generation: u64,
+    editor: Option<ThemeEditor>,
+    draft: Option<(presets::Theme, presets::Theme)>,
+    error: Option<String>,
+}
+
+struct ThemeEditor {
+    seed: Vec<(ThemeEdit, Entity<ColorPickerState>)>,
+    ansi: Vec<(ThemeEdit, Entity<ColorPickerState>)>,
+    _subs: Vec<Subscription>,
+}
+
+#[derive(Clone)]
+struct ThemeTarget {
+    session: Uuid,
+    generation: u64,
+    id: String,
+}
+
+struct ImageSelection {
+    target: ThemeTarget,
+    generation: u64,
+}
+
+enum ThemeChange {
+    Color(ThemeEdit, u32),
+    Image(Option<std::path::PathBuf>),
+    ImageOpacity(f32),
+}
+
+impl Default for ThemeEditing {
+    fn default() -> Self {
+        Self {
+            session: Uuid::new_v4(),
+            editor_generation: 0,
+            image_generation: 0,
+            editor: None,
+            draft: None,
+            error: None,
+        }
+    }
+}
+
+impl ThemeEditing {
+    fn select_preset(config: &mut Config, id: &str, system_dark: bool) {
+        if config.theme_follow_system {
+            Self::select_slot(config, system_dark, id);
+        } else {
+            config.theme_preset = id.to_owned();
+        }
+    }
+
+    fn select_slot(config: &mut Config, dark: bool, id: &str) {
+        if dark {
+            config.theme_preset_dark = id.to_owned();
+        } else {
+            config.theme_preset_light = id.to_owned();
+        }
+    }
+
+    fn follow_system(config: &mut Config, manual_dark: bool) {
+        config.theme_follow_system = true;
+        let manual = config.theme_preset.clone();
+        Self::select_slot(config, manual_dark, &manual);
+    }
+
+    fn stop_following_system(config: &mut Config, effective_id: String) {
+        config.theme_follow_system = false;
+        config.theme_preset = effective_id;
+    }
+
+    fn pin_mode(config: &mut Config, mode: ThemeMode) {
+        config.theme_follow_system = false;
+        config.theme_preset = if mode == ThemeMode::Dark {
+            config.theme_preset_dark.clone()
+        } else {
+            config.theme_preset_light.clone()
+        };
+    }
+
+    pub(super) fn is_dirty(&self) -> bool {
+        self.draft.is_some()
+    }
+
+    pub(super) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    pub(super) fn seed(&self) -> Option<&[(ThemeEdit, Entity<ColorPickerState>)]> {
+        self.editor.as_ref().map(|editor| editor.seed.as_slice())
+    }
+
+    pub(super) fn ansi(&self) -> Option<&[(ThemeEdit, Entity<ColorPickerState>)]> {
+        self.editor.as_ref().map(|editor| editor.ansi.as_slice())
+    }
+
+    fn preview(
+        &mut self,
+        mut theme: presets::Theme,
+        change: ThemeChange,
+    ) -> Option<presets::Theme> {
+        if !theme.editable() {
+            return None;
+        }
+        let original = self
+            .draft
+            .as_ref()
+            .filter(|(original, _)| original.id == theme.id)
+            .map(|(original, _)| original.clone())
+            .unwrap_or_else(|| theme.clone());
+        match change {
+            ThemeChange::Color(edit, color) => match edit {
+                ThemeEdit::Background => theme.background = Fill::Solid(color),
+                ThemeEdit::Foreground => theme.foreground = color,
+                ThemeEdit::Accent => theme.accent = color,
+                ThemeEdit::Cursor => theme.caret = Some(color),
+                ThemeEdit::Selection => theme.selection = Some(color),
+                ThemeEdit::Ansi(i) => {
+                    theme.ansi16[i] = ((color >> 16) as u8, (color >> 8) as u8, color as u8);
+                }
+            },
+            ThemeChange::Image(path) => {
+                let opacity = theme
+                    .image
+                    .as_ref()
+                    .map(|image| image.opacity)
+                    .unwrap_or(0.3);
+                theme.image = path.map(|path| presets::Image { path, opacity });
+            }
+            ThemeChange::ImageOpacity(opacity) => {
+                if let Some(image) = theme.image.as_mut() {
+                    image.opacity = opacity.clamp(0.0, 1.0);
+                }
+            }
+        }
+        self.draft = (presets::to_yaml(&original) != presets::to_yaml(&theme))
+            .then(|| (original, theme.clone()));
+        Some(theme)
+    }
+
+    fn save(&mut self) -> std::io::Result<()> {
+        let Some((_, draft)) = self.draft.as_ref() else {
+            return Ok(());
+        };
+        if let Err(error) = presets::write_theme_file(draft) {
+            self.error = Some(error.to_string());
+            return Err(error);
+        }
+        self.draft = None;
+        self.error = None;
+        Ok(())
+    }
+
+    fn discard(&mut self) -> Option<presets::Theme> {
+        self.leave_page();
+        self.error = None;
+        self.draft.take().map(|(original, _)| original)
+    }
+
+    /// Leaving the page invalidates a native image dialog, not the retained
+    /// color controls, which are still used when returning to Appearance.
+    pub(super) fn leave_page(&mut self) {
+        self.image_generation = self.image_generation.wrapping_add(1);
+    }
+
+    fn rebuild(&mut self, id: &str) -> ThemeTarget {
+        self.editor_generation = self.editor_generation.wrapping_add(1);
+        self.leave_page();
+        self.editor = None;
+        ThemeTarget {
+            session: self.session,
+            generation: self.editor_generation,
+            id: id.to_owned(),
+        }
+    }
+
+    fn accepts(&self, target: &ThemeTarget, effective_id: &str) -> bool {
+        self.session == target.session
+            && self.editor_generation == target.generation
+            && target.id == effective_id
+    }
+
+    fn begin_image_selection(&mut self, id: &str) -> ImageSelection {
+        self.leave_page();
+        ImageSelection {
+            target: ThemeTarget {
+                session: self.session,
+                generation: self.editor_generation,
+                id: id.to_owned(),
+            },
+            generation: self.image_generation,
+        }
+    }
+
+    fn accepts_image(&self, selection: &ImageSelection, effective_id: &str) -> bool {
+        self.accepts(&selection.target, effective_id)
+            && self.image_generation == selection.generation
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThemeEdit {
     Background,
@@ -86,14 +290,7 @@ impl SettingsWindow {
             return;
         }
         let dark = crate::ui::theme::system_dark(cx);
-        let cfg = cx.global_mut::<Config>();
-        if !cfg.theme_follow_system {
-            cfg.theme_preset = id.to_owned();
-        } else if dark {
-            cfg.theme_preset_dark = id.to_owned();
-        } else {
-            cfg.theme_preset_light = id.to_owned();
-        }
+        ThemeEditing::select_preset(cx.global_mut::<Config>(), id, dark);
         self.after_theme_change(window, cx);
     }
     pub(crate) fn set_slot_preset(
@@ -110,12 +307,7 @@ impl SettingsWindow {
             });
             return;
         }
-        let cfg = cx.global_mut::<Config>();
-        if dark_slot {
-            cfg.theme_preset_dark = id.to_string();
-        } else {
-            cfg.theme_preset_light = id.to_string();
-        }
+        ThemeEditing::select_slot(cx.global_mut::<Config>(), dark_slot, id);
         self.after_theme_change(window, cx);
     }
 
@@ -132,20 +324,11 @@ impl SettingsWindow {
             return;
         }
         if on {
-            let manual = cx.global::<Config>().theme_preset.clone();
-            let manual_dark = crate::ui::presets::by_id(cx, &manual).dark;
-            let cfg = cx.global_mut::<Config>();
-            cfg.theme_follow_system = true;
-            if manual_dark {
-                cfg.theme_preset_dark = manual;
-            } else {
-                cfg.theme_preset_light = manual;
-            }
+            let manual_dark = presets::by_id(cx, &cx.global::<Config>().theme_preset).dark;
+            ThemeEditing::follow_system(cx.global_mut::<Config>(), manual_dark);
         } else {
             let effective = crate::ui::theme::effective_preset_id(cx);
-            let cfg = cx.global_mut::<Config>();
-            cfg.theme_follow_system = false;
-            cfg.theme_preset = effective;
+            ThemeEditing::stop_following_system(cx.global_mut::<Config>(), effective);
         }
         self.after_theme_change(window, cx);
     }
@@ -172,13 +355,7 @@ impl SettingsWindow {
                 }
             }
             ThemeMode::Light | ThemeMode::Dark => {
-                let cfg = cx.global_mut::<Config>();
-                cfg.theme_follow_system = false;
-                cfg.theme_preset = if mode == ThemeMode::Dark {
-                    cfg.theme_preset_dark.clone()
-                } else {
-                    cfg.theme_preset_light.clone()
-                };
+                ThemeEditing::pin_mode(cx.global_mut::<Config>(), mode);
                 self.after_theme_change(window, cx);
             }
         }
@@ -198,12 +375,7 @@ impl SettingsWindow {
             return;
         }
         if !self.theme_draft_dirty() {
-            let cfg = cx.global_mut::<Config>();
-            if dark_slot {
-                cfg.theme_preset_dark = id.to_string();
-            } else {
-                cfg.theme_preset_light = id.to_string();
-            }
+            ThemeEditing::select_slot(cx.global_mut::<Config>(), dark_slot, id);
         }
         self.set_preset(id, window, cx);
     }
@@ -260,18 +432,14 @@ impl SettingsWindow {
     }
 
     pub(crate) fn theme_draft_dirty(&self) -> bool {
-        self.active_settings()
-            .is_some_and(|s| s.theme_draft.is_some())
+        self.active_settings().is_some_and(|s| s.theme.is_dirty())
     }
 
     pub(crate) fn save_theme_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some((_, draft)) = self.active_settings().and_then(|s| s.theme_draft.clone()) else {
+        let Some(state) = self.active_settings_mut() else {
             return true;
         };
-        if let Err(error) = crate::ui::presets::write_theme_file(&draft) {
-            if let Some(s) = self.active_settings_mut() {
-                s.theme_draft_error = Some(error.to_string());
-            }
+        if let Err(error) = state.theme.save() {
             crate::ui::host_ops::HostOps::notify_err(
                 window,
                 cx,
@@ -280,21 +448,14 @@ impl SettingsWindow {
             );
             return false;
         }
-        if let Some(s) = self.active_settings_mut() {
-            s.theme_draft = None;
-            s.theme_draft_error = None;
-        }
         cx.notify();
         true
     }
 
     pub(crate) fn cancel_theme_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(s) = self.active_settings_mut() {
-            s.theme_draft_error = None;
-        }
-        if let Some((original, _)) = self
+        if let Some(original) = self
             .active_settings_mut()
-            .and_then(|s| s.theme_draft.take())
+            .and_then(|state| state.theme.discard())
         {
             let mut themes = crate::ui::presets::all(cx);
             if let Some(slot) = themes.iter_mut().find(|t| t.id == original.id) {
@@ -307,71 +468,38 @@ impl SettingsWindow {
         }
     }
 
-    fn mutate_active_theme(
+    fn preview_theme_change(
         &mut self,
-        mutate: impl FnOnce(&mut crate::ui::presets::Theme),
+        id: &str,
+        change: ThemeChange,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let id = crate::ui::theme::effective_preset_id(cx);
-        let mut theme = crate::ui::presets::by_id(cx, &id);
-        if !theme.editable() {
+        let theme = crate::ui::presets::by_id(cx, id);
+        let Some(theme) = self
+            .active_settings_mut()
+            .and_then(|state| state.theme.preview(theme, change))
+        else {
             return;
+        };
+        let mut themes = crate::ui::presets::all(cx);
+        if let Some(slot) = themes.iter_mut().find(|t| t.id == id) {
+            *slot = theme;
         }
-        mutate(&mut theme);
-        if let Some(state) = self.active_settings_mut() {
-            let original = state
-                .theme_draft
-                .as_ref()
-                .filter(|(original, _)| original.id == id)
-                .map(|(original, _)| original.clone())
-                .unwrap_or_else(|| crate::ui::presets::by_id(cx, &id));
-            if crate::ui::presets::to_yaml(&original) == crate::ui::presets::to_yaml(&theme) {
-                state.theme_draft = None;
-            } else {
-                state.theme_draft = Some((original, theme.clone()));
-            }
-            let mut themes = crate::ui::presets::all(cx);
-            if let Some(slot) = themes.iter_mut().find(|t| t.id == id) {
-                *slot = theme;
-            }
-            cx.set_global(crate::ui::presets::Themes(themes));
-        } else {
-            if let Err(error) = crate::ui::presets::write_theme_file(&theme) {
-                crate::ui::host_ops::HostOps::notify_err(
-                    window,
-                    cx,
-                    t(L10nKey::ThemeSaveFailed),
-                    &error,
-                );
-                return;
-            }
-            crate::ui::presets::load_registry(cx);
-        }
+        cx.set_global(crate::ui::presets::Themes(themes));
         apply_theme(Some(window), cx);
         cx.notify();
     }
 
-    pub(crate) fn edit_active_theme(
+    fn edit_active_theme(
         &mut self,
+        id: &str,
         edit: ThemeEdit,
         value: gpui_kit::Hsla,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let c = hsla_to_u32(value);
-        self.mutate_active_theme(
-            |theme| match edit {
-                ThemeEdit::Background => theme.background = Fill::Solid(c),
-                ThemeEdit::Foreground => theme.foreground = c,
-                ThemeEdit::Accent => theme.accent = c,
-                ThemeEdit::Cursor => theme.caret = Some(c),
-                ThemeEdit::Selection => theme.selection = Some(c),
-                ThemeEdit::Ansi(i) => theme.ansi16[i] = ((c >> 16) as u8, (c >> 8) as u8, c as u8),
-            },
-            window,
-            cx,
-        );
+        self.preview_theme_change(id, ThemeChange::Color(edit, hsla_to_u32(value)), window, cx);
     }
 
     pub(crate) fn effective_window_opacity(cx: &App) -> f32 {
@@ -419,6 +547,13 @@ impl SettingsWindow {
     }
 
     pub(crate) fn pick_theme_image(&mut self, cx: &mut Context<Self>) {
+        let id = crate::ui::theme::effective_preset_id(cx);
+        let Some(selection) = self
+            .active_settings_mut()
+            .map(|state| state.theme.begin_image_selection(&id))
+        else {
+            return;
+        };
         let rx = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
             files: true,
             directories: false,
@@ -429,16 +564,7 @@ impl SettingsWindow {
             if let Ok(Ok(Some(paths))) = rx.await {
                 if let Some(path) = paths.into_iter().next() {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        this.mutate_active_theme(
-                            |theme| {
-                                let opacity =
-                                    theme.image.as_ref().map(|i| i.opacity).unwrap_or(0.3);
-                                theme.image = Some(crate::ui::presets::Image { path, opacity });
-                            },
-                            window,
-                            cx,
-                        );
-                        this.rebuild_theme_editor(window, cx);
+                        this.apply_theme_image_selection(selection, path, window, cx);
                     });
                 }
             }
@@ -446,8 +572,27 @@ impl SettingsWindow {
         .detach();
     }
 
+    fn apply_theme_image_selection(
+        &mut self,
+        selection: ImageSelection,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = crate::ui::theme::effective_preset_id(cx);
+        if !self
+            .active_settings()
+            .is_some_and(|state| state.theme.accepts_image(&selection, &id))
+        {
+            return;
+        }
+        self.preview_theme_change(&id, ThemeChange::Image(Some(path)), window, cx);
+        self.rebuild_theme_editor(window, cx);
+    }
+
     pub(crate) fn remove_theme_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.mutate_active_theme(|theme| theme.image = None, window, cx);
+        let id = crate::ui::theme::effective_preset_id(cx);
+        self.preview_theme_change(&id, ThemeChange::Image(None), window, cx);
         self.rebuild_theme_editor(window, cx);
     }
 
@@ -457,27 +602,20 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.mutate_active_theme(
-            |theme| {
-                if let Some(img) = theme.image.as_mut() {
-                    img.opacity = v.clamp(0.0, 1.0);
-                }
-            },
-            window,
-            cx,
-        );
+        let id = crate::ui::theme::effective_preset_id(cx);
+        self.preview_theme_change(&id, ThemeChange::ImageOpacity(v), window, cx);
     }
 
     pub(crate) fn rebuild_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings.is_none() {
-            return;
-        }
         let id = crate::ui::theme::effective_preset_id(cx);
+        let Some(target) = self
+            .active_settings_mut()
+            .map(|state| state.theme.rebuild(&id))
+        else {
+            return;
+        };
         let theme = crate::ui::presets::by_id(cx, &id);
         if !theme.editable() {
-            if let Some(s) = self.settings.as_mut() {
-                s.theme_editor = None;
-            }
             return;
         }
 
@@ -495,13 +633,20 @@ impl SettingsWindow {
             |edit: ThemeEdit, value: u32, subs: &mut Vec<Subscription>, cx: &mut Context<Self>| {
                 let eff: gpui_kit::Hsla = gpui_kit::rgb(value).into();
                 let state = cx.new(|cx| ColorPickerState::new(window, cx).default_value(eff));
+                let target = target.clone();
                 subs.push(cx.subscribe_in(
                     &state,
                     window,
                     move |this, _picker, ev: &ColorPickerEvent, window, cx| {
-                        let ColorPickerEvent::Change(value) = ev;
-                        if let Some(v) = value {
-                            this.edit_active_theme(edit, *v, window, cx);
+                        let ColorPickerEvent::Change(Some(value)) = ev else {
+                            return;
+                        };
+                        let id = crate::ui::theme::effective_preset_id(cx);
+                        if this
+                            .active_settings()
+                            .is_some_and(|state| state.theme.accepts(&target, &id))
+                        {
+                            this.edit_active_theme(&id, edit, *value, window, cx);
                         }
                     },
                 ));
@@ -524,7 +669,7 @@ impl SettingsWindow {
             .collect();
 
         if let Some(s) = self.settings.as_mut() {
-            s.theme_editor = Some(ThemeEditor {
+            s.theme.editor = Some(ThemeEditor {
                 seed,
                 ansi,
                 _subs: subs,
@@ -568,3 +713,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "theme_edit_tests.rs"]
+mod consumer_tests;

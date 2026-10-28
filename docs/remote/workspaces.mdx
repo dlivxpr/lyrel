@@ -44,6 +44,48 @@ SSH 窗格在远程机器上运行一个 shell。**远程工作区**则更进一
   </Step>
 </Steps>
 
+### 窗口连接与机器连接的职责
+
+`src/ui/remote_workspace/connection.rs` 的 `WindowConnection` 拥有一个窗口手动连接与延迟创建工作区的状态及转换。
+入口 `connect_to_host` 捕获 `HostChoice` 和不复用的 `AttemptId`；连接结果与安装／认证轮询只对仍在等待的那次尝试生效。
+切换器只读取 `ConnectionState` 来显示进度、错误与目标机器，通过定向 retirement／错误关闭接口结束窗口流程，
+不直接改写连接状态。关闭切换器仍只清除失败显示，不中断正在进行的尝试；进入远程工作区或断开指定机器则结束对应窗口流程。
+
+连接适配仍使用原有 route、后台 SSH 拨号与安装许可路径。成功结果沿用 `HostLinks`、工作区列表镜像和既有 store 同步，
+不会重建已有终端；失败保留原错误与协议不匹配处理。已经退役或被替换的尝试，其迟到结果不能替换当前目标、
+消费另一台机器的创建意图或重新打开工作区；安装进度仍在后台任务结束时清理。
+
+`RemoteLinks` 继续独占共享机器连接的监督、重连、接管与 pane 重新附着，不随某个窗口流程结束而被替换。
+认证仍复用 `SshPrompt`、共享的机器级 `AuthSheetQueue` 和原有 abandoned-request 检查；回答、取消和焦点归还走同一条路径，
+窗口连接 owner 不另建认证队列或保存凭据，也不接收整个可变工作台作为能力 interface。
+
+### 延迟创建的生命周期
+
+切换器继续独占筛选、主机选择、表单与显示；尚无连接时，将用户确认的目标机器和名称交给
+`WindowConnection::queue_create`。owner 私有持有 pending／parked 意图，不在窗口根或切换器保存第二份。
+成功的 `complete` 先核验 `AttemptId`，再只消费同一目标的一个意图，pending 优先于 parked；
+返回的 `ConnectionOutcome::Connected` 将已消费意图交给现有工作区创建、命名与焦点适配。
+工作区身份仍在原创建入口分配，pane 放置、会话生命周期与树同步不由连接 owner 重建。
+
+实际拨号失败时，普通失败丢弃匹配的 pending；协议方言不匹配则将其移入 parked，等待服务器替换。
+拨号前的 route 预检失败仍仅记录连接失败，不丢弃创建请求。`server_replaced` 只为同一机器的 parked
+返回重连选择；无关连接与迟到结果不能消费或清除当前意图，也不会新增重试策略。
+改变表单选择本身不改写已经提交的目标。仍沿用单 pending／单 parked 槽：显式提交新建 B 会替换 pending；
+如果 B 自己也遇到方言拒绝，则按原规则替换 parked，而不是隐式增加多机器创建队列。
+
+关闭切换器只清除失败显示，既不停止正在连接的尝试，也不删除 parked。进入远程工作区仍只退役当前尝试；
+明确断开目标机器会一并清除该机器的 pending／parked，明确关闭拒绝提示则放弃该机器的 parked。
+迟到或重复结果不能重新消费意图；机器恢复、共享重连和 pane 重新附着仍完全由 `RemoteLinks` 负责。
+
+窗格创建与等待中的工作区创建是两条不同的生命周期：`WindowConnection` 只接受机器连接与创建意图，
+不代替 `PendingPane` 的 spawn／attach owner。窗口的 `app/pane_binding.rs` 接收已经确定的工作区路由、
+owner 和目标 slot，通过弱窗口租约启动原 pending 流程；结果领取仍由 `take_installation` 核验工作区与 slot Entity。
+切换标签页不会重定向正在创建的窗格，关闭或替换 slot、离开其工作区后不允许晚到结果落在新位置。
+合法后台 landing 只替换自己的 slot；只有该 pending slot 仍持有焦点时，根才把焦点交给新终端。
+失败继续显示原恢复控件，attach-only 只附着既有 pane；共享重连、会话身份与恢复策略没有移入窗口适配。
+
+
+
 <a id="what-gets-installed"></a>
 ## 安装内容
 

@@ -990,7 +990,7 @@ mod gpui_tests {
                     .advance_clock(std::time::Duration::from_millis(300));
                 settle(&mut vcx);
                 let ready = app.read_with(&vcx, |app, cx| {
-                    app.scm.repo.as_ref().is_some_and(|repo| {
+                    app.scm.pane_repo().is_some_and(|repo| {
                         crate::terminal::git_data::status_of(cx, repo.host, &repo.root)
                             .is_some_and(|status| status.total_entries == expected)
                     })

@@ -1,6 +1,8 @@
 use crate::ui::notification_history::NotificationWindowExt as _;
 use std::collections::{HashMap, HashSet};
 
+use crate::core::ssh_config;
+use gpui_kit::{Context, Window};
 use uuid::Uuid;
 
 use crate::core::config::Config;
@@ -15,7 +17,48 @@ use crate::daemon::protocol::{
 use super::app::{LyrelApp, SpawnWhere};
 use super::tab::presentation::SpawnAs;
 
+pub(crate) mod input;
+
 impl LyrelApp {
+    pub(crate) fn open_typed_ssh_connect(
+        &mut self,
+        input: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match crate::ui::ssh_connect::input::parse_ssh_connect_input(input) {
+            Ok(parsed) => {
+                let (profile, proxy_jump) =
+                    match ssh_config::resolve_alias_to_profile(&parsed.profile.host) {
+                        Some(resolved) => {
+                            let mut p = resolved.profile;
+                            if !parsed.profile.user.is_empty() {
+                                p.user = parsed.profile.user;
+                            }
+                            if parsed.profile.port != 22 {
+                                p.port = parsed.profile.port;
+                            }
+                            if !parsed.profile.identity_files.is_empty() {
+                                p.identity_files = parsed.profile.identity_files;
+                            }
+                            (p, parsed.proxy_jump.or(resolved.proxy_jump))
+                        }
+                        None => (parsed.profile, parsed.proxy_jump),
+                    };
+                let verify = cx.global::<Config>().verify_host_keys;
+                let spec = crate::ui::ssh_connect::native_spec_from_transient_profile(
+                    &profile,
+                    proxy_jump,
+                    &crate::core::keychain::OsCredentialStore,
+                    verify,
+                    &crate::ui::ssh_connect::config_alias_resolver,
+                );
+                self.open_native_ssh_tab(Box::new(spec), None, window, cx);
+            }
+            Err(reason) => self.push_ssh_connect_error(reason, cx),
+        }
+    }
+
     pub(crate) fn native_ssh_spec_for_profile(
         &self,
         profile: &SshProfile,
@@ -1000,6 +1043,31 @@ mod tests {
         assert_eq!(jump.host, "bastion.example.com");
         assert_eq!(jump.user, "jump");
         assert!(jump.jump.is_none());
+    }
+
+    #[test]
+    fn typed_connection_reaches_native_spec_with_target_and_jump_overrides() {
+        let parsed = input::parse_ssh_connect_input(
+            "ssh deploy@box:22 -p2222 -o User=release -J jump@bastion.example:2200",
+        )
+        .unwrap();
+        let store = InMemoryCredentialStore::new();
+        let spec = native_spec_from_transient_profile(
+            &parsed.profile,
+            parsed.proxy_jump,
+            &store,
+            true,
+            &|_| None,
+        );
+        assert_eq!(spec.host, "box");
+        assert_eq!(spec.user, "release");
+        assert_eq!(spec.port, 2222);
+        let jump = spec
+            .jump
+            .expect("the typed jump reaches connection assembly");
+        assert_eq!(jump.host, "bastion.example");
+        assert_eq!(jump.user, "jump");
+        assert_eq!(jump.port, 2200);
     }
 
     #[test]

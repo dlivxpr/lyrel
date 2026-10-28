@@ -48,14 +48,13 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, BorderStyle, Bounds, Context, Corners, Edges, Focusable as _, Hsla, MouseButton,
-    MouseMoveEvent, MouseUpEvent, Pixels, SharedString, Window, canvas, div, fill, point,
-    prelude::*, px, quad, rems,
+    AnyElement, BorderStyle, Bounds, Context, Corners, Edges, Hsla, MouseButton, MouseMoveEvent,
+    MouseUpEvent, Pixels, SharedString, Window, canvas, div, fill, point, prelude::*, px, quad,
+    rems,
 };
 
 use lyrel_core::core::git::log::{
-    Commit, CommitPage, Edge, GRAPH_PAGE, GraphRow, GraphScope, Lane, MAX_GRAPH_COMMITS, RefDeco,
-    RefKind,
+    Commit, CommitPage, Edge, GraphRow, GraphScope, Lane, MAX_GRAPH_COMMITS, RefDeco, RefKind,
 };
 use lyrel_core::core::git::ops::{GitOp, ResetMode};
 
@@ -615,7 +614,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.scm.graph.expanded {
+        if !self.scm.graph().expanded {
             // Folded, the section is one line — but it keeps the rule above it,
             // or it reads as the last row of the file list rather than as a
             // section of its own. It is also the last thing in the window, so
@@ -636,19 +635,19 @@ impl LyrelApp {
                     .into_any_element(),
             );
         }
-        self.scm_load_graph(repo, cx);
+        self.scm.load_graph(repo, cx);
 
-        if self.scm.graph.height.get() <= 0. {
-            self.scm.graph.height.set(GRAPH_H_DEFAULT);
+        if self.scm.graph().height.get() <= 0. {
+            self.scm.graph().height.set(GRAPH_H_DEFAULT);
         }
         let ceiling = (window.viewport_size().height.as_f32() * GRAPH_H_MAX_RATIO).max(GRAPH_H_MIN);
-        let height = self.scm.graph.height.get().clamp(GRAPH_H_MIN, ceiling);
+        let height = self.scm.graph().height.get().clamp(GRAPH_H_MIN, ceiling);
 
-        let page = self.scm.graph.page.clone();
+        let page = self.scm.graph().page.clone();
         let header = self.graph_header(repo, page.as_deref(), GRAPH_HEADER_H, cx);
         let search = self.graph_search(cx);
         let naming = self.graph_naming_row(repo, cx);
-        let query = self.graph_query(cx);
+        let query = self.scm.graph_query(cx);
         let body = match page {
             None => self.panel_empty(t(L10nKey::PanelLoading), None, cx),
             Some(page) if page.commits.is_empty() => {
@@ -677,172 +676,14 @@ impl LyrelApp {
         )
     }
 
-    /// Which refs the current settings walk from.
-    fn graph_scope(&self) -> GraphScope {
-        self.scm.graph.scope.clone()
-    }
-
-    /// Ask for a page, at most once per (repository, scope, size).
-    ///
-    /// Paging grows `requested` and re-runs the query rather than paging with
-    /// `--skip`. The layout is deterministic, so a longer run reproduces the
-    /// same prefix row for row — nothing already on screen moves — where
-    /// `--skip` is O(skip) to walk and slides under you the moment a ref moves.
-    fn scm_load_graph(&mut self, repo: &RepoKey, cx: &mut Context<Self>) {
-        // A page that belongs to another repository must neither be drawn nor
-        // grown from: this runs before the frame reads `page`, so the switch
-        // shows the loading state, never seconds of the previous repository's
-        // history — where a row click would build an op for the new repo with
-        // the old repo's rev. The page size resets with it; how deep someone
-        // read one history says nothing about the next.
-        if self
-            .scm
-            .graph
-            .page_key
-            .as_ref()
-            .is_some_and(|(r, _, _)| r != repo)
-        {
-            self.scm.graph.page = None;
-            self.scm.graph.page_key = None;
-            self.scm.graph.requested = 0;
-        }
-        // `try_global`, never `default_global`: this runs from `render`, and
-        // taking the global mutably there queues a global-observer effect on
-        // every frame, which is a panel that asks for a frame from inside one.
-        let epoch = cx
-            .try_global::<crate::terminal::git_data::ScmData>()
-            .map_or(0, |data| data.epoch(repo.host, &repo.root));
-        let scope = self.graph_scope();
-        // Clamped like `load_page` clamps it: `requested` above the cap with a
-        // page that answers *at* the cap would read as never-fresh, and the
-        // panel would refetch the same full page from every frame's render.
-        let want = self
-            .scm
-            .graph
-            .requested
-            .clamp(GRAPH_PAGE, MAX_GRAPH_COMMITS);
-        let key = (repo.clone(), epoch, scope.clone());
-        let fresh = self.scm.graph.page_key.as_ref() == Some(&key)
-            && self
-                .scm
-                .graph
-                .page
-                .as_ref()
-                .is_some_and(|p| p.requested >= want);
-        // A load that failed is not retried until its key changes — an epoch
-        // bump, a new scope, a new repository. Retrying from render would
-        // spawn git processes in a tight loop for as long as the cause holds.
-        if fresh || self.scm.graph.loading || self.scm.graph.failed_key.as_ref() == Some(&key) {
-            return;
-        }
-        let Some(host) = crate::ui::host_registry::HostRegistry::get(cx, repo.host) else {
-            return;
-        };
-        self.scm.graph.loading = true;
-        let root = repo.root.clone();
-        let query = scope.clone();
-        crate::ui::host_ops::HostOps::run(
-            host,
-            cx,
-            move |h| lyrel_core::core::git::log::load_page(h, &root, &query, want),
-            move |this, page, cx| {
-                this.scm.graph.loading = false;
-                match page {
-                    Some(page) => {
-                        this.scm.graph.failed_key = None;
-                        this.scm.graph.page = Some(Arc::new(page));
-                        this.scm.graph.page_key = Some(key);
-                    }
-                    None => this.scm.graph.failed_key = Some(key),
-                }
-                cx.notify();
-            },
-        );
-    }
-
-    /// Which commit indices the list shows for this page and query, resolved
-    /// through the cache on `GraphState` — see its doc for why it exists.
-    fn graph_visible_rows(
-        &mut self,
-        page: &Arc<CommitPage>,
-        query: Option<&str>,
-    ) -> Arc<Vec<usize>> {
-        if let Some((held_query, held_page, rows)) = &self.scm.graph.filter_cache {
-            if held_page.ptr_eq(&Arc::downgrade(page)) && held_query.as_deref() == query {
-                return rows.clone();
-            }
-        }
-        let rows: Arc<Vec<usize>> = Arc::new(match query {
-            None => (0..page.commits.len()).collect(),
-            Some(q) => (0..page.commits.len())
-                .filter(|i| matches_query(&page.commits[*i], q))
-                .collect(),
-        });
-        self.scm.graph.filter_cache = Some((
-            query.map(str::to_string),
-            Arc::downgrade(page),
-            rows.clone(),
-        ));
-        rows
-    }
-
-    /// The filter box's text, if it has any.
-    fn graph_query(&self, cx: &Context<Self>) -> Option<String> {
-        let input = self.scm.graph.search.as_ref()?;
-        let text = input.read(cx).value().trim().to_lowercase();
-        (!text.is_empty()).then_some(text)
-    }
-
     /// The filter field, drawn only while it is open.
     ///
     /// At rest the section is a title and a list; a permanently parked search
     /// box was a row of chrome above every reading of history, for a thing that
     /// gets used once a session. It lives behind the header's tile now.
     fn graph_search(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let input = self.scm.graph.search.clone()?;
+        let input = self.scm.graph().search.clone()?;
         Some(self.panel_search(&input, cx))
-    }
-
-    /// Show the filter field, or take it away again.
-    ///
-    /// The `InputState` *is* the open flag: there is no second boolean to keep
-    /// in step with it, and closing the field drops the entity, which is what
-    /// answers the question a hidden filter always raises. A query cannot go on
-    /// quietly cutting rows out of the list from behind a closed box, because
-    /// there is nothing left holding the text — `graph_query` reads the input
-    /// or reads nothing. The cost is that reopening starts empty, which is the
-    /// right trade for a filter this shallow: retyping four characters is
-    /// cheaper than wondering why history is missing.
-    ///
-    /// Created here rather than on first render, the way `commit_input` still
-    /// is: an `InputState` needs a real window, and the click that asks for one
-    /// has one in hand.
-    fn graph_toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.scm.graph.search.take().is_some() {
-            self.scm.graph.search_sub = None;
-            cx.notify();
-            return;
-        }
-        let input = cx.new(|cx| {
-            gpui_kit::component::input::InputState::new(window, cx)
-                .placeholder(t(L10nKey::ScmGraphFilterPlaceholder))
-        });
-        // Without this the box would take text the list never sees: an
-        // `InputState` is its own entity, and its changes are its own events.
-        self.scm.graph.search_sub =
-            Some(
-                cx.subscribe_in(&input, window, |_this, _input, ev, _window, cx| {
-                    if matches!(ev, gpui_kit::component::input::InputEvent::Change) {
-                        cx.notify();
-                    }
-                }),
-            );
-        let handle = input.read(cx).focus_handle(cx);
-        self.scm.graph.search = Some(input);
-        // A field that appears without the caret in it is a field you have to
-        // click twice.
-        window.focus(&handle, cx);
-        cx.notify();
     }
 }
 
@@ -874,7 +715,7 @@ impl LyrelApp {
         // So the filter hides the gutter entirely and the list becomes a flat
         // search result — which is what it actually is.
         let filtering = query.is_some();
-        let rows = self.graph_visible_rows(page, query);
+        let rows = self.scm.graph_visible_rows(page, query);
         // No row at the cap either: `load_page` clamps there, so "load more"
         // past it could only refetch what is already on screen.
         let more = query.is_none() && !page.complete && page.commits.len() < MAX_GRAPH_COMMITS;
@@ -886,7 +727,7 @@ impl LyrelApp {
         // full fixed height so the scroll range is unchanged; a top padding
         // stands in for everything scrolled past. The canvas needs no such
         // treatment: its paint is already clipped to the content mask.
-        let scrolled = (-self.scm.graph.scroll.offset().y.as_f32()).max(0.);
+        let scrolled = (-self.scm.graph().scroll.offset().y.as_f32()).max(0.);
         let first = ((scrolled / GRAPH_ROW_H) as usize)
             .saturating_sub(GRAPH_WINDOW_MARGIN)
             .min(rows.len());
@@ -922,7 +763,7 @@ impl LyrelApp {
                 surface: gpui_kit::rgb(sf.base).into(),
                 selected: self
                     .scm
-                    .graph
+                    .graph()
                     .selected
                     .as_deref()
                     .and_then(|oid| page.commits.iter().position(|c| c.oid == oid)),
@@ -952,12 +793,12 @@ impl LyrelApp {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .track_scroll(&self.scm.graph.scroll)
+            .track_scroll(&self.scm.graph().scroll)
             .child(div().px(px(GRAPH_SIDE)).child(stack));
         crate::ui::scrollbar::with_vertical_scrollbar(
             "scm-graph-scrollbar",
             scroller,
-            &self.scm.graph.scroll,
+            &self.scm.graph().scroll,
         )
     }
 
@@ -981,7 +822,7 @@ impl LyrelApp {
         let mono = cx.theme().mono_font_family.clone();
         // The sidebar's surface, because that is the fill this row sits on.
         let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
-        let selected = self.scm.graph.selected.as_deref() == Some(commit.oid.as_str());
+        let selected = self.scm.graph().selected.as_deref() == Some(commit.oid.as_str());
         let (prefix, subject) = split_conventional(&commit.summary);
         let deco = commit.refs.first();
         let extra = commit.refs.len().saturating_sub(1);
@@ -1063,7 +904,8 @@ impl LyrelApp {
                 let page = page.clone();
                 move |this, _, _, cx| {
                     let seed = page.commits[i].clone();
-                    this.graph_open_commit(repo.clone(), seed.oid.clone(), Some(seed), cx)
+                    this.scm
+                        .open_graph_commit(repo.clone(), seed.oid.clone(), Some(seed), cx)
                 }
             }))
             .context_menu({
@@ -1077,47 +919,6 @@ impl LyrelApp {
             })
             .into_any_element()
     }
-}
-
-impl LyrelApp {
-    /// Select a row and hand its commit to the detail view.
-    ///
-    /// `seed` is the commit the row was drawn from. Passing it means the
-    /// detail view opens with its message, author and refs already in hand and
-    /// only reads the file list — a row click costs one git command, not two.
-    fn graph_open_commit(
-        &mut self,
-        repo: RepoKey,
-        oid: String,
-        seed: Option<Commit>,
-        cx: &mut Context<Self>,
-    ) {
-        self.scm.graph.selected = Some(oid.clone());
-        self.open_commit_detail(repo, oid, seed, cx);
-    }
-}
-
-/// One "load more" click's worth of growth, stopped at what `load_page` will
-/// actually answer.
-///
-/// Growing past [`MAX_GRAPH_COMMITS`] would ask for a page the loader clamps:
-/// the answer would never satisfy `requested >= want`, and the panel would
-/// refetch the same full page from every frame's render, forever.
-fn next_page_request(requested: usize) -> usize {
-    requested
-        .max(GRAPH_PAGE)
-        .saturating_add(GRAPH_PAGE)
-        .min(MAX_GRAPH_COMMITS)
-}
-
-/// Whether a commit answers the filter box.
-///
-/// Subject, author and sha, all case-folded. Not the body: a search that
-/// matches on text the row cannot show is a search whose results look wrong.
-fn matches_query(commit: &Commit, query: &str) -> bool {
-    commit.summary.to_lowercase().contains(query)
-        || commit.author.name.to_lowercase().contains(query)
-        || commit.oid.starts_with(query)
 }
 
 fn commit_tooltip(commit: &Commit, now: i64) -> SharedString {
@@ -1251,7 +1052,7 @@ impl LyrelApp {
     /// a host boundary, and scroll-to-load turns one flick of a trackpad into a
     /// burst of concurrent ones.
     fn graph_load_more(&self, gutter: f32, cx: &mut Context<Self>) -> AnyElement {
-        let loading = self.scm.graph.loading;
+        let loading = self.scm.graph().loading;
         h_flex()
             .id("scm-graph-more")
             .items_center()
@@ -1270,7 +1071,7 @@ impl LyrelApp {
                 false => t(L10nKey::ScmGraphLoadMore),
             }))
             .on_click(cx.listener(|this, _, _, cx| {
-                this.scm.graph.requested = next_page_request(this.scm.graph.requested);
+                this.scm.request_more_history();
                 cx.notify();
             }))
             .into_any_element()
@@ -1304,9 +1105,9 @@ impl LyrelApp {
         height: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = self.scm.graph.expanded;
+        let expanded = self.scm.graph().expanded;
         let muted = cx.theme().muted_foreground;
-        let filtering = self.scm.graph.search.is_some();
+        let filtering = self.scm.graph().search.is_some();
         let count = page.map(|p| match p.complete {
             true => p.commits.len().to_string(),
             false => format!("{}+", p.commits.len()),
@@ -1380,7 +1181,7 @@ impl LyrelApp {
                     .rounded(px(4.))
                     .tooltip(t(L10nKey::ScmGraphFilterPlaceholder))
                     .on_click(
-                        cx.listener(|this, _, window, cx| this.graph_toggle_search(window, cx)),
+                        cx.listener(|this, _, window, cx| this.scm.toggle_graph_search(window, cx)),
                     ),
                 )
                 .child(
@@ -1392,7 +1193,7 @@ impl LyrelApp {
                         .h(px(GRAPH_TILE))
                         .rounded(px(4.))
                         .dropdown_caret(true)
-                        .label(scope_label(&self.scm.graph.scope))
+                        .label(scope_label(&self.scm.graph().scope))
                         .text_color(muted)
                         .dropdown_menu_with_anchor(
                             gpui_kit::Anchor::TopRight,
@@ -1410,20 +1211,15 @@ impl LyrelApp {
     ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static + use<>
     {
         let app = cx.entity().downgrade();
-        let branches = self
-            .scm
-            .branches
-            .get(repo)
-            .map(|(_, names)| names.clone())
-            .unwrap_or_default();
-        let scope = self.scm.graph.scope.clone();
+        let branches = self.scm.branches(repo).to_vec();
+        let scope = self.scm.graph().scope.clone();
 
         move |menu, _window, _cx| {
             let mut menu = menu.min_w(px(180.));
             let pick = |app: &gpui_kit::WeakEntity<LyrelApp>, next: GraphScope| {
                 let app = app.clone();
                 move |_: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut gpui_kit::App| {
-                    let _ = app.update(cx, |this, cx| this.graph_set_scope(next.clone(), cx));
+                    let _ = app.update(cx, |this, cx| this.scm.set_graph_scope(next.clone(), cx));
                 }
             };
             for (label, next) in [
@@ -1452,21 +1248,6 @@ impl LyrelApp {
             }
             menu
         }
-    }
-
-    /// Point the graph at a different set of refs, and start it over.
-    ///
-    /// The page count resets with the scope: keeping a grown `requested` would
-    /// make switching to a short branch pull its whole history in one go.
-    fn graph_set_scope(&mut self, scope: GraphScope, cx: &mut Context<Self>) {
-        if self.scm.graph.scope == scope {
-            return;
-        }
-        self.scm.graph.scope = scope;
-        self.scm.graph.requested = GRAPH_PAGE;
-        self.scm.graph.page = None;
-        self.scm.graph.page_key = None;
-        cx.notify();
     }
 }
 
@@ -1519,7 +1300,13 @@ impl LyrelApp {
                     let rev = oid.to_string();
                     move |_, window, cx| {
                         let _ = app.update(cx, |this, cx| {
-                            this.graph_begin_branch_at(repo.clone(), rev.clone(), window, cx)
+                            this.scm.begin_branch_at(
+                                repo.clone(),
+                                rev.clone(),
+                                this.tabs.active_index(),
+                                window,
+                                cx,
+                            )
                         });
                     }
                 }),
@@ -1602,8 +1389,8 @@ impl LyrelApp {
             },
             {
                 let container = container.clone();
-                let height = self.scm.graph.height.clone();
-                let dragging = self.scm.graph.dragging.clone();
+                let height = self.scm.graph().height.clone();
+                let dragging = self.scm.graph().dragging.clone();
                 move |_bounds, _state, window: &mut Window, _cx| {
                     window.on_mouse_event({
                         let container = container.clone();
@@ -1640,7 +1427,7 @@ impl LyrelApp {
         .size_full()
         .into_any_element();
 
-        let active = self.scm.graph.dragging.get();
+        let active = self.scm.graph().dragging.get();
         let handle = div()
             .group("scm-graph-resize")
             .occlude()
@@ -1660,7 +1447,7 @@ impl LyrelApp {
                     .group_hover("scm-graph-resize", |s| s.bg(cx.theme().drag_border)),
             )
             .on_mouse_down(MouseButton::Left, {
-                let dragging = self.scm.graph.dragging.clone();
+                let dragging = self.scm.graph().dragging.clone();
                 move |_ev, window: &mut Window, _cx| {
                     dragging.set(true);
                     window.refresh();
@@ -1673,30 +1460,6 @@ impl LyrelApp {
 }
 
 impl LyrelApp {
-    /// Open the inline "name a branch here" input for one commit.
-    ///
-    /// Its own input rather than the panel's naming row: that row always
-    /// branches from HEAD, and a branch created at the wrong commit is a
-    /// silent mistake rather than a visible one.
-    fn graph_begin_branch_at(
-        &mut self,
-        repo: RepoKey,
-        rev: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let input = cx.new(|cx| {
-            gpui_kit::component::input::InputState::new(window, cx)
-                .placeholder(t(L10nKey::ScmCreateBranchHere))
-        });
-        let handle = input.read(cx).focus_handle(cx);
-        self.scm.graph.naming = Some((input, rev));
-        self.scm.repo_override = Some(repo);
-        self.scm.override_tab = Some(self.tabs.active_index());
-        window.focus(&handle, cx);
-        cx.notify();
-    }
-
     /// The inline "name a branch here" field.
     ///
     /// `xsmall`, like every other inline field in this panel: a 20px box in a
@@ -1704,7 +1467,7 @@ impl LyrelApp {
     /// here would push the list it interrupts down by more than the field is
     /// worth.
     fn graph_naming_row(&mut self, repo: &RepoKey, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (input, rev) = self.scm.graph.naming.clone()?;
+        let input = self.scm.graph().naming.as_ref()?.0.clone();
         let repo = repo.clone();
         Some(
             h_flex()
@@ -1731,32 +1494,15 @@ impl LyrelApp {
                     cx.listener(move |this, ev: &gpui_kit::KeyDownEvent, window, cx| {
                         match ev.keystroke.key.as_str() {
                             "escape" => {
-                                this.scm.graph.naming = None;
+                                this.scm.cancel_branch_at();
                                 cx.notify();
                             }
                             "enter" => {
-                                let Some((input, _)) = this.scm.graph.naming.take() else {
-                                    return;
-                                };
-                                let name = input.read(cx).value().trim().to_string();
+                                let op = this.scm.submit_branch_at(cx);
                                 cx.notify();
-                                if name.is_empty() {
-                                    return;
+                                if let Some(op) = op {
+                                    this.scm_op(repo.clone(), op, window, cx);
                                 }
-                                this.scm_op(
-                                    repo.clone(),
-                                    GitOp::CreateBranch {
-                                        name,
-                                        start: Some(rev.clone()),
-                                        // Naming a branch at an old commit is
-                                        // usually marking a place, not moving to
-                                        // it — and moving would take the working
-                                        // tree with it.
-                                        checkout: false,
-                                    },
-                                    window,
-                                    cx,
-                                );
                             }
                             _ => {}
                         }
@@ -1773,6 +1519,7 @@ mod tests {
     use crate::ui::app::test_window::harness;
     use crate::ui::host_ops::HostId;
     use gpui_kit::TestAppContext;
+    use lyrel_core::core::git::log::GRAPH_PAGE;
     use smallvec::smallvec;
     use std::path::PathBuf;
 
@@ -2053,9 +1800,9 @@ mod tests {
 
         // It starts shut: a panel that unfurls two hundred commits the first
         // time it is opened looks like a mess nobody asked for.
-        assert!(!app.read_with(&vcx, |app, _| app.scm.graph.expanded));
+        assert!(!app.read_with(&vcx, |app, _| app.scm.graph().expanded));
         app.update(&mut vcx, |app, cx| app.scm_toggle_graph(cx));
-        assert!(app.read_with(&vcx, |app, _| app.scm.graph.expanded));
+        assert!(app.read_with(&vcx, |app, _| app.scm.graph().expanded));
         assert!(vcx.update(|_, cx| {
             cx.global::<crate::core::config::Config>()
                 .scm_graph_expanded
@@ -2070,10 +1817,11 @@ mod tests {
         // Unseeded first: a click that cannot hand a commit over still opens
         // the view, and the read that fills it is dispatched later.
         app.update(&mut vcx, |app, cx| {
-            app.graph_open_commit(repo(), "deadbeef".into(), None, cx)
+            app.scm
+                .open_graph_commit(repo(), "deadbeef".into(), None, cx)
         });
         let (selected, detail) = app.read_with(&vcx, |app, _| {
-            (app.scm.graph.selected.clone(), app.scm.detail.clone())
+            (app.scm.graph().selected.clone(), app.scm.detail().cloned())
         });
         assert_eq!(selected.as_deref(), Some("deadbeef"));
         let detail = detail.expect("the row opened a commit");
@@ -2086,118 +1834,17 @@ mod tests {
         // the path every real click takes.
         let seed = commit_named("a subject", "someone", "deadbeef");
         app.update(&mut vcx, |app, cx| {
-            app.graph_open_commit(repo(), "deadbeef".into(), Some(seed.clone()), cx)
+            app.scm
+                .open_graph_commit(repo(), "deadbeef".into(), Some(seed.clone()), cx)
         });
         let detail = app
-            .read_with(&vcx, |app, _| app.scm.detail.clone())
+            .read_with(&vcx, |app, _| app.scm.detail().cloned())
             .expect("the row opened a commit");
         assert_eq!(
             detail.commit.as_deref(),
             Some(&seed),
             "the seed spares the view a `git show`"
         );
-    }
-
-    /// Changing what the graph walks has to throw the page away, not page on
-    /// top of it: the rows of a different scope are a different history.
-    #[gpui_kit::test]
-    fn switching_scope_resets_the_page_and_its_size(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (app, mut vcx) = harness(cx);
-
-        app.update(&mut vcx, |app, cx| {
-            app.scm.graph.requested = GRAPH_PAGE * 3;
-            app.scm.graph.page = Some(Arc::new(empty_page()));
-            app.scm.graph.page_key = Some((repo(), 7, GraphScope::HeadAndUpstream));
-            app.graph_set_scope(GraphScope::All, cx);
-        });
-        app.read_with(&vcx, |app, _| {
-            assert_eq!(app.scm.graph.scope, GraphScope::All);
-            assert_eq!(app.scm.graph.requested, GRAPH_PAGE);
-            assert!(app.scm.graph.page.is_none());
-            assert!(app.scm.graph.page_key.is_none());
-        });
-
-        // Picking the scope that is already showing must not throw the page
-        // away, or every menu open would cost a `git log`.
-        app.update(&mut vcx, |app, cx| {
-            app.scm.graph.page = Some(Arc::new(empty_page()));
-            app.graph_set_scope(GraphScope::All, cx);
-        });
-        assert!(app.read_with(&vcx, |app, _| app.scm.graph.page.is_some()));
-    }
-
-    /// One click at the cap used to loop: `requested` grew past what
-    /// `load_page` clamps to, the answer never satisfied `requested >= want`,
-    /// and the panel refetched the full page from every frame's render.
-    #[test]
-    fn load_more_growth_stops_at_the_cap() {
-        assert_eq!(next_page_request(0), GRAPH_PAGE * 2);
-        assert_eq!(next_page_request(GRAPH_PAGE), GRAPH_PAGE * 2);
-        assert_eq!(
-            next_page_request(MAX_GRAPH_COMMITS - 1),
-            MAX_GRAPH_COMMITS,
-            "the last step lands on the cap, not past it"
-        );
-        assert_eq!(
-            next_page_request(MAX_GRAPH_COMMITS),
-            MAX_GRAPH_COMMITS,
-            "at the cap the click is a no-op, not a bigger ask"
-        );
-    }
-
-    /// A repository switch drops the old page before anything can draw it or
-    /// grow from it: a stale row's context menu would otherwise build an op
-    /// for the new repository with the old repository's rev.
-    #[gpui_kit::test]
-    fn switching_repositories_drops_the_previous_page(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let (app, mut vcx) = harness(cx);
-
-        let other = RepoKey {
-            host: HostId::LOCAL,
-            root: PathBuf::from("/tmp/lyrel-graph-test-other"),
-        };
-        app.update(&mut vcx, |app, cx| {
-            app.scm.graph.requested = GRAPH_PAGE * 3;
-            app.scm.graph.page = Some(Arc::new(empty_page()));
-            app.scm.graph.page_key = Some((repo(), 7, GraphScope::HeadAndUpstream));
-            app.scm_load_graph(&other, cx);
-        });
-        app.read_with(&vcx, |app, _| {
-            assert!(app.scm.graph.page.is_none(), "the old history is gone");
-            assert!(app.scm.graph.page_key.is_none());
-            assert_eq!(
-                app.scm.graph.requested, 0,
-                "page depth does not carry across repositories"
-            );
-        });
-
-        // The same repository keeps its page — this must not turn every
-        // render into a reload.
-        app.update(&mut vcx, |app, cx| {
-            app.scm.graph.page = Some(Arc::new(empty_page()));
-            app.scm.graph.page_key = Some((repo(), 7, GraphScope::HeadAndUpstream));
-            app.scm_load_graph(&repo(), cx);
-        });
-        assert!(app.read_with(&vcx, |app, _| app.scm.graph.page.is_some()));
-    }
-
-    #[test]
-    fn the_filter_matches_what_a_row_can_show() {
-        let commit = commit_named("feat(ui): the graph", "Ada Lovelace", "c0ffee1234");
-        for hit in ["graph", "GRAPH", "feat", "ada", "Lovelace", "c0ffee"] {
-            assert!(
-                matches_query(&commit, &hit.to_lowercase()),
-                "{hit:?} should have matched"
-            );
-        }
-        // The body is deliberately not searched: a hit the row cannot show
-        // looks like a wrong result.
-        assert!(!matches_query(&commit, "rationale"));
-        // A sha matches as a prefix, the way `git show` takes one — not as a
-        // substring, or every query of hex characters would light up.
-        assert!(!matches_query(&commit, "ffee"));
     }
 
     /// A filter you cannot see must not be filtering.
@@ -2215,37 +1862,32 @@ mod tests {
         // At rest there is no field at all, which is what the section looks
         // like every time it is opened.
         app.update(&mut vcx, |app, cx| {
-            assert!(app.scm.graph.search.is_none());
-            assert!(app.graph_query(cx).is_none());
+            assert!(app.scm.graph().search.is_none());
+            assert!(app.scm.graph_query(cx).is_none());
         });
 
         app.update_in(&mut vcx, |app, window, cx| {
-            app.graph_toggle_search(window, cx);
-            assert!(app.scm.graph.search.is_some(), "the tile opens the field");
-            assert!(
-                app.scm.graph.search_sub.is_some(),
-                "and wires typing to a repaint, or the list never sees the text"
-            );
+            app.scm.toggle_graph_search(window, cx);
+            assert!(app.scm.graph().search.is_some(), "the tile opens the field");
         });
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm.graph.search.clone().expect("the field is open");
+            let input = app.scm.graph().search.clone().expect("the field is open");
             input.update(cx, |state, cx| state.set_value("Feat", window, cx));
         });
         assert_eq!(
-            app.update(&mut vcx, |app, cx| app.graph_query(cx)),
+            app.update(&mut vcx, |app, cx| app.scm.graph_query(cx)),
             Some("feat".to_string()),
             "the box filters while it is open"
         );
 
         app.update_in(&mut vcx, |app, window, cx| {
-            app.graph_toggle_search(window, cx)
+            app.scm.toggle_graph_search(window, cx)
         });
         app.update(&mut vcx, |app, cx| {
-            assert!(app.scm.graph.search.is_none());
-            assert!(app.scm.graph.search_sub.is_none());
+            assert!(app.scm.graph().search.is_none());
             assert!(
-                app.graph_query(cx).is_none(),
+                app.scm.graph_query(cx).is_none(),
                 "a closed box went on cutting rows out of the list"
             );
         });
@@ -2271,12 +1913,12 @@ mod tests {
 
         app.update(&mut vcx, |app, _| {
             let long = page_of(3);
-            assert_eq!(*app.graph_visible_rows(&long, None), vec![0, 1, 2]);
+            assert_eq!(*app.scm.graph_visible_rows(&long, None), vec![0, 1, 2]);
             drop(long);
 
             let short = page_of(1);
             assert_eq!(
-                *app.graph_visible_rows(&short, None),
+                *app.scm.graph_visible_rows(&short, None),
                 vec![0],
                 "the shorter page was handed the longer page's rows"
             );
@@ -2419,7 +2061,7 @@ mod render_idle_gpui_tests {
             app.update_in(vcx, |_, _, cx| cx.notify());
             vcx.background_executor.run_until_parked();
             let page = app.update_in(vcx, |app, _, cx| {
-                let graph = &app.scm.graph;
+                let graph = app.scm.graph();
                 if graph.loading {
                     return None;
                 }
@@ -2473,7 +2115,7 @@ mod render_idle_gpui_tests {
         app.update_in(&mut vcx, |app, _, cx| {
             app.right_panel_visible = true;
             app.right_panel_tab = RightPanelTab::Scm;
-            app.scm.graph.expanded = true;
+            app.scm.toggle_graph();
             cx.notify();
         });
 
@@ -2486,9 +2128,9 @@ mod render_idle_gpui_tests {
         // And it is still expanded and still holding the same page, i.e. the
         // zero above is idleness and not the section having quietly vanished.
         app.update_in(&mut vcx, |app, _, _| {
-            assert!(app.scm.graph.expanded);
-            assert!(app.scm.graph.page.is_some());
-            assert!(!app.scm.graph.loading);
+            assert!(app.scm.graph().expanded);
+            assert!(app.scm.graph().page.is_some());
+            assert!(!app.scm.graph().loading);
         });
         let _ = std::fs::remove_dir_all(&root);
     }

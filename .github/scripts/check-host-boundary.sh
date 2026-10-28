@@ -62,10 +62,10 @@ src/ui/notification_history.rs|std::fs::create_dir_all
 # sees the file, only the resulting auth.
 src/ui/ssh_prompt.rs|std::fs::read
 src/ui/ssh_connect.rs|std::fs::read
-src/ui/settings.rs|std::fs::read
+src/ui/settings/ssh/credentials.rs|std::fs::read
 # The host editor asking which of those keys is on this machine before it offers
 # a passphrase box for one — the same client-side key, never a workspace path.
-src/ui/settings.rs|std::fs::metadata
+src/ui/settings/ssh/credentials.rs|std::fs::metadata
 
 # 统计设置只读取 config_path("statistics-settings.json")，不消费工作区路径。
 src/ui/settings/statistics/storage.rs|std::fs::read

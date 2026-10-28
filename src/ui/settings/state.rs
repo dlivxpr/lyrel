@@ -68,41 +68,24 @@ impl SettingsWindow {
             InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::SearchSettings))
         });
         subs.push(
-            cx.subscribe_in(&settings_search, window, |this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
+            cx.subscribe_in(&settings_search, window, |this, input, ev, _w, cx| {
+                if matches!(ev, InputEvent::Change)
+                    && this
+                        .active_settings()
+                        .is_some_and(|s| s.navigation.accepts(input.entity_id()))
+                {
                     this.autoselect_settings_search(cx);
-                    if let Some(s) = this.active_settings_mut() {
-                        s.reveal_first_hit.set(true);
+                    if let Some(s) = this.active_settings() {
+                        s.navigation.query_edited();
                     }
-                    cx.notify();
                 }
             }),
         );
 
-        let shortcut_search = cx
-            .new(|cx| InputState::new(window, cx).placeholder(t(L10nKey::SettingsSearchShortcuts)));
-        subs.push(
-            cx.subscribe_in(&shortcut_search, window, |_, _, ev, _, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
+        let shortcuts = shortcuts::ShortcutEditor::new(window, cx);
 
-        let ssh_filter = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(crate::ui::i18n::L10nKey::FilterHosts))
-        });
-        subs.push(
-            cx.subscribe_in(&ssh_filter, window, |_this, _i, ev, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
-
-        let content_scroll = gpui_kit::ScrollHandle::new();
-        content_scroll.set_offset(self.last_settings_location.1);
-        let search_anchor = gpui_kit::ScrollAnchor::for_handle(content_scroll.clone());
+        let navigation =
+            navigation::SettingsNavigation::new(settings_search, self.last_settings_location);
         let usage = cx.new(|cx| crate::ui::settings::usage::UsagePage::new(window, cx));
         // Account forms render above the whole settings shell, outside UsagePage.
         subs.push(cx.observe(&usage, |_, _, cx| cx.notify()));
@@ -112,29 +95,17 @@ impl SettingsWindow {
 
         self.settings = Some(SettingsState {
             focus_handle: focus_handle.clone(),
-            section: self.last_settings_location.0,
+            navigation,
             usage,
-            search: settings_search,
             skills,
-            shortcut_search,
-            modified_only: false,
-            search_active: false,
-            search_return_offset: self.last_settings_location.1,
-            search_selection: 0,
-            search_rows: std::cell::RefCell::new(None),
-            focused_setting: None,
-            content_scroll,
-            search_anchor,
-            reveal_first_hit: Cell::new(false),
+            shortcuts,
             font_names,
             shell_program_input,
             shell_args_input,
             wd_path_input,
             link_file_command_input,
             http_proxy_input,
-            theme_editor: None,
-            theme_draft: None,
-            theme_draft_error: None,
+            theme: theme_edit::ThemeEditing::default(),
             save_error: None,
             saved_config: cx.global::<Config>().clone(),
             menu: None,
@@ -142,16 +113,7 @@ impl SettingsWindow {
             menu_hi: 0,
             menu_scroll: gpui_kit::ScrollHandle::new(),
             focused: std::cell::RefCell::new(None),
-            kb_conflict: None,
-            recording: None,
-            rebinding_note: None,
-            ssh_form: None,
-            ssh_open: None,
-            ssh_show_all: false,
-            ssh_confirm_remove: false,
-            ssh_copied: None,
-            ssh_filter,
-            ssh_collapsed_groups: std::collections::HashSet::new(),
+            ssh: ssh::SshSettings::new(window, cx),
             agent_hooks_host: crate::ui::host_ops::HostId::LOCAL,
             agent_hooks_states: crate::ui::settings::AgentHooksView::Loading,
             agent_hooks_seq: 0,
@@ -166,7 +128,7 @@ impl SettingsWindow {
         let search_focus = self
             .settings
             .as_ref()
-            .map(|s| s.search.read(cx).focus_handle(cx));
+            .map(|s| s.navigation.search().read(cx).focus_handle(cx));
         match search_focus {
             Some(handle) => window.focus(&handle, cx),
             None => window.focus(&focus_handle, cx),
@@ -183,13 +145,10 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) {
         if let Some(s) = self.settings.as_mut() {
-            let moved = s.section != target;
-            s.section = target;
-            s.recording = None;
-            // Arriving on a page with a query live means arriving to look for
-            // what the nav badge counted, so take the page to it.
+            let moved = s.navigation.select_section(target);
+            s.shortcuts.cancel_recording();
             if moved {
-                s.reveal_first_hit.set(true);
+                s.theme.leave_page();
             }
             if moved {
                 s.statistics.invalidate();
@@ -212,30 +171,21 @@ impl SettingsWindow {
     fn ensure_agent_hooks_loaded(&mut self, cx: &mut Context<Self>) {
         if self
             .active_settings()
-            .is_some_and(|s| s.section == SettingsSection::Agents)
+            .is_some_and(|s| s.navigation.section() == SettingsSection::Agents)
         {
             self.load_agent_hooks_states(cx);
         }
     }
     pub(crate) fn autoselect_settings_search(&mut self, cx: &mut Context<Self>) {
         if let Some(s) = self.settings.as_mut() {
-            let active = !s.search.read(cx).value().trim().is_empty() || s.modified_only;
-            if active && !s.search_active {
-                s.search_return_offset = s.content_scroll.offset();
-            }
-            if active {
-                s.content_scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
-            } else if s.search_active {
-                s.content_scroll.set_offset(s.search_return_offset);
-            }
-            s.search_active = active;
+            s.navigation.search_changed(cx);
             s.usage.update(cx, |page, cx| {
-                page.set_visible(s.section == SettingsSection::Usage && !active, cx)
+                page.set_visible(
+                    s.navigation.section() == SettingsSection::Usage
+                        && !s.navigation.is_searching(),
+                    cx,
+                )
             });
-            s.search_selection = 0;
-            if active {
-                s.focused_setting = None;
-            }
         }
         cx.notify();
     }

@@ -474,7 +474,7 @@ impl SettingsWindow {
             },
             move |this, result: io::Result<ScanSnapshot>, cx| {
                 let Some(s) = this.active_settings_mut().filter(|s| {
-                    s.section == SettingsSection::Skills
+                    s.navigation.section() == SettingsSection::Skills
                         && s.skills.session == session
                         && s.skills.generation == generation
                         && s.skills.host == host_id
@@ -536,7 +536,7 @@ impl SettingsWindow {
             move |host| host.read_dir(&path, None),
             move |this, result, cx| {
                 if let Some(s) = this.active_settings_mut().filter(|s| {
-                    s.section == SettingsSection::Skills
+                    s.navigation.section() == SettingsSection::Skills
                         && s.skills.session == session
                         && s.skills.browser_generation == generation
                         && s.skills.host == host_id

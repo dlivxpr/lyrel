@@ -6,7 +6,7 @@ use crate::core::session::{
     Session, SessionAxis, SessionPane, SessionTab, WorkspaceId, WorkspaceStore,
 };
 use crate::core::window_state::WindowState;
-use crate::ui::app::{LyrelApp, new_terminal, new_terminal_native, restore_agent_in_pane};
+use crate::ui::app::LyrelApp;
 use crate::ui::host_registry::HostId;
 use crate::ui::pane::{Pane, PaneSlot};
 use crate::ui::tab::{Tab, TabSet};
@@ -486,7 +486,7 @@ impl SessionRestore {
                         let resolved = crate::ui::ssh_connect::resolve_persisted_ssh_spec(spec, cx);
                         // A native SSH leaf's recorded cwd is the far shell's own
                         // report, so it is where the redialled shell starts.
-                        let view = new_terminal_native(
+                        let view = LyrelApp::new_terminal_native(
                             font_size,
                             owner,
                             cwd.clone(),
@@ -508,7 +508,7 @@ impl SessionRestore {
                     Some(_) => None,
                     None => cwd.clone(),
                 };
-                let view = match new_terminal(
+                let view = LyrelApp::new_terminal(
                     workspace.cloned(),
                     Some(owner),
                     font_size,
@@ -517,37 +517,17 @@ impl SessionRestore {
                     shell.clone(),
                     window,
                     cx,
-                ) {
-                    Ok(view) => view,
-                    Err(e) => {
-                        log::error!("restoring pane failed: {e}");
-                        return None;
-                    }
-                };
-                match &view {
-                    PaneSlot::Ready(terminal) if !terminal.read(cx).restored() => {
-                        restore_agent_in_pane(
+                );
+                if let PaneSlot::Connecting(pending) = &view {
+                    pending.update(cx, |pending, _| {
+                        pending.resume_agent(
                             *agent,
                             agent_session_id.clone(),
                             agent_launch_argv.clone(),
                             agent_session_scope.clone(),
-                            terminal.clone(),
-                            window,
-                            cx,
+                            false,
                         );
-                    }
-                    PaneSlot::Ready(_) => {}
-                    PaneSlot::Connecting(pending) => {
-                        pending.update(cx, |pending, _| {
-                            pending.resume_agent(
-                                *agent,
-                                agent_session_id.clone(),
-                                agent_launch_argv.clone(),
-                                agent_session_scope.clone(),
-                                false,
-                            );
-                        });
-                    }
+                    });
                 }
                 if same_daemon {
                     remap_presentation_slot(presentation, *pane_id, &view, cx);

@@ -42,8 +42,9 @@ use rio_vt::crosswords::style::StyleFlags;
 use rio_vt::crosswords::{Crosswords, Mode};
 use rio_vt::event::EventListener;
 
+use super::paste::{clipboard_has_paths, pasted_paths_text};
 use super::prompt_input::bytes::types_cleanly;
-use super::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView, pasted_paths_text};
+use super::view::{GRID_PAD_X, GRID_PAD_Y, TerminalView};
 use crate::core::cli_agent::{AgentStatus, CLIAgent};
 use crate::ui::host_ops::{HostId, HostOps};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
@@ -2105,7 +2106,7 @@ impl TerminalView {
                     let Some(item) = cx.read_from_clipboard() else {
                         return;
                     };
-                    if item.text().is_some() && !super::view::clipboard_has_paths(&item) {
+                    if item.text().is_some() && !clipboard_has_paths(&item) {
                         return;
                     }
                     cx.stop_propagation();

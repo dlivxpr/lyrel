@@ -1110,7 +1110,7 @@ mod gpui_tests {
         assert_eq!(crate::ui::app::render_probe::draws(), 0);
 
         app.read_with(&vcx, |app, cx| {
-            assert!(app.scm.repo.is_none(), "Changes was never opened");
+            assert!(app.scm.pane_repo().is_none(), "Changes was never opened");
             assert!(
                 cx.global::<crate::terminal::git_data::ScmData>()
                     .status_for(crate::ui::host_ops::HostId::LOCAL, &root)

@@ -1153,7 +1153,7 @@ impl LyrelApp {
             code.visible = false;
             self.editor.had_focus = None;
             self.editor.dismiss_bar();
-            self.file_tree.editing = None;
+            self.file_tree.cancel_edit();
             self.focus_active(window, cx);
             cx.notify();
             return;
@@ -1864,7 +1864,7 @@ impl LyrelApp {
             code.visible = false;
             self.editor.had_focus = None;
             self.editor.dismiss_bar();
-            self.file_tree.editing = None;
+            self.file_tree.cancel_edit();
             self.focus_active(window, cx);
             cx.notify();
             return true;

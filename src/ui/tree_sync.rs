@@ -2137,7 +2137,7 @@ impl LyrelApp {
                 if let Some(slot) = existing.remove(pane) {
                     return Some(Pane::Leaf(slot));
                 }
-                match crate::ui::app::new_terminal(
+                let slot = Self::new_terminal(
                     self.window_workspace(cx),
                     Some(self.workspace),
                     self.font_size,
@@ -2146,13 +2146,8 @@ impl LyrelApp {
                     None,
                     window,
                     cx,
-                ) {
-                    Ok(slot) => Some(Pane::Leaf(slot)),
-                    Err(e) => {
-                        log::warn!("could not attach pane {pane} from a delta: {e}");
-                        None
-                    }
-                }
+                );
+                Some(Pane::Leaf(slot))
             }
             PaneNode::Split { axis, ratio, a, b } => {
                 let left = self.build_pane_from_tree(a, existing, window, cx);

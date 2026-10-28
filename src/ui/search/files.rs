@@ -12,7 +12,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use gpui_kit::{App, Context, Window};
 
@@ -21,7 +20,8 @@ use super::command::{CommandKind, Item};
 use super::score::fuzzy_score;
 use super::sources::{Row, Section, Source};
 use crate::ui::app::LyrelApp;
-use crate::ui::host_ops::{Host, HostId, HostOps};
+use crate::ui::file_tree::{IndexKey, searchable_roots};
+use crate::ui::host_ops::{Host, HostOps};
 use crate::ui::i18n::{L10nKey, t_fmt};
 
 /// How many entries one walk may return, directories included. A project
@@ -33,11 +33,6 @@ pub(crate) const INDEX_LIMIT: usize = 50_000;
 /// How many directories one walk may open. Bounds a walk over a slow link as
 /// much as it bounds the list: each directory is a round trip on a remote host.
 pub(crate) const INDEX_MAX_DIRS: usize = 20_000;
-
-/// A search that opens again this soon after a walk landed reuses it rather
-/// than walking again. Opening and closing the search in quick succession is
-/// someone looking for the right tab, not a sign the tree changed.
-const REVALIDATE_AFTER: Duration = Duration::from_secs(5);
 
 /// Rows the Files tab shows before anything is typed. A sample, shallowest
 /// first, so the tab is visibly populated; the query is what finds things.
@@ -138,28 +133,6 @@ pub(crate) fn parse_query(query: &str) -> FileQuery<'_> {
         line: nonzero(numbers.first()),
         column: nonzero(numbers.get(1)),
     }
-}
-
-/// The folders to walk, from the ones the panes resolved to.
-///
-/// Home and a filesystem root are left out: neither is a project, and a walk
-/// of either spends the whole budget on caches before it reaches anything
-/// anyone meant to open. A folder inside another one on the list is left out
-/// too — the outer walk already covers it, and listing it twice would put
-/// every file in the results twice.
-pub(crate) fn project_roots(resolved: Vec<PathBuf>, home: Option<&Path>) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for root in resolved {
-        let is_home = home.is_some_and(|home| root == home);
-        let is_fs_root = root.parent().is_none();
-        if is_home || is_fs_root || roots.contains(&root) {
-            continue;
-        }
-        roots.push(root);
-    }
-    let all = roots.clone();
-    roots.retain(|r| !all.iter().any(|other| other != r && r.starts_with(other)));
-    roots
 }
 
 /// The index for `files` found under `roots`.
@@ -338,31 +311,6 @@ impl Source for Files<'_> {
     }
 }
 
-/// Which folders a walk is of: the host, and the directories the active tab's
-/// panes are in. The walk resolves them to their repositories itself, on the
-/// host, so the key is what the UI thread can know without asking.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct IndexKey {
-    host: HostId,
-    cwds: Vec<PathBuf>,
-}
-
-struct Walked {
-    key: IndexKey,
-    list: FileList,
-    at: Instant,
-}
-
-/// The window's file index, kept between openings of the search.
-#[derive(Default)]
-pub(crate) struct FileIndexStore {
-    last: Option<Walked>,
-    /// The walk in flight, if any: its generation and what it is walking.
-    /// A walk that lands after a newer one started is dropped.
-    walking: Option<(u64, IndexKey)>,
-    generation: u64,
-}
-
 /// Walks the project the panes in `cwds` are in, on the host that has it.
 /// Runs off the UI thread.
 pub(crate) fn walk(h: &dyn Host, cwds: &[PathBuf], home: Option<&Path>) -> FileList {
@@ -375,7 +323,7 @@ pub(crate) fn walk(h: &dyn Host, cwds: &[PathBuf], home: Option<&Path>) -> FileL
                 .unwrap_or_else(|| cwd.clone())
         })
         .collect();
-    let roots = project_roots(resolved, home);
+    let roots = searchable_roots(resolved, home);
     if roots.is_empty() {
         return FileList::NoRoots;
     }
@@ -432,93 +380,45 @@ impl LyrelApp {
 
     fn file_index_key(&self, cx: &App) -> IndexKey {
         let host = self.spawn_host(cx);
-        let mut cwds: Vec<PathBuf> = self
-            .tabs
-            .get(self.tabs.active_index())
-            .map(|tab| tab.pane.terminals())
-            .unwrap_or_default()
-            .iter()
-            .filter(|leaf| leaf.read(cx).host_id() == host)
-            // `files_cwd`, for the reason the Files panel roots itself there:
-            // it follows an agent into its worktree, and it spells a WSL
-            // pane's directory the way the host can read it.
-            .filter_map(|leaf| leaf.read(cx).files_cwd())
-            .collect();
-        cwds.sort();
-        cwds.dedup();
-        IndexKey { host, cwds }
+        let cwds = self.file_project_cwds(cx);
+        IndexKey::new(host, cwds)
     }
 
     /// What the Files tab opens on: the last walk, if it was of the folders
     /// the panes are in now.
     pub(crate) fn file_list_now(&self, cx: &App) -> FileList {
-        let key = self.file_index_key(cx);
-        if key.cwds.is_empty() {
-            return FileList::NoRoots;
-        }
-        match &self.file_tree.quick_open.last {
-            Some(last) if last.key == key => last.list.clone(),
-            _ => FileList::Indexing,
-        }
+        self.file_tree.file_list(&self.file_index_key(cx))
     }
 
     /// Walks the project again, unless a walk of it just landed or is
     /// already on its way, and hands the result to the open search.
     pub(crate) fn refresh_file_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = self.file_index_key(cx);
-        if key.cwds.is_empty() {
-            return;
-        }
-        let store = &self.file_tree.quick_open;
-        if store.walking.as_ref().is_some_and(|(_, k)| *k == key) {
-            return;
-        }
-        if store
-            .last
-            .as_ref()
-            .is_some_and(|l| l.key == key && l.at.elapsed() < REVALIDATE_AFTER)
-        {
-            return;
-        }
         let Some(host) = self.active_host(cx) else {
+            return;
+        };
+        let Some(generation) = self.file_tree.begin_file_index(&key) else {
             return;
         };
         // Only this computer's home is known here, and it is the common case:
         // a fresh local tab starts there.
-        let home = key
-            .host
+        let home = host
+            .id()
             .is_local()
             .then(|| std::env::var_os("HOME").map(PathBuf::from))
             .flatten();
-        let store = &mut self.file_tree.quick_open;
-        store.generation += 1;
-        let generation = store.generation;
-        store.walking = Some((generation, key.clone()));
-        let cwds = key.cwds.clone();
+        let cwds = key.cwds().to_vec();
         HostOps::run_in(
             host,
             window,
             cx,
             move |h| walk(h, &cwds, home.as_deref()),
             move |app, list, window, cx| {
-                let store = &mut app.file_tree.quick_open;
-                if store.walking.as_ref().map(|(g, _)| *g) != Some(generation) {
+                if !app
+                    .file_tree
+                    .finish_file_index(generation, key.clone(), list)
+                {
                     return;
-                }
-                store.walking = None;
-                // A revalidation that failed keeps the list it was checking:
-                // yesterday's files are still mostly where they were.
-                let keep_old = matches!(list, FileList::Failed)
-                    && store
-                        .last
-                        .as_ref()
-                        .is_some_and(|l| l.key == key && matches!(l.list, FileList::Ready(_)));
-                if !keep_old {
-                    store.last = Some(Walked {
-                        key: key.clone(),
-                        list,
-                        at: Instant::now(),
-                    });
                 }
                 if app.file_index_key(cx) != key {
                     return;
@@ -534,6 +434,8 @@ impl LyrelApp {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     fn index(paths: &[&str]) -> FileIndex {
@@ -669,7 +571,7 @@ mod tests {
     #[test]
     fn home_and_the_filesystem_root_are_not_projects() {
         let home = PathBuf::from("/home/me");
-        let roots = project_roots(
+        let roots = searchable_roots(
             vec![
                 home.clone(),
                 PathBuf::from("/"),
@@ -685,7 +587,7 @@ mod tests {
             [PathBuf::from("/home/me/repo"), PathBuf::from("/srv/other")],
             "home and / go, a duplicate goes, and a folder inside another is covered by it"
         );
-        assert!(project_roots(vec![home.clone()], Some(&home)).is_empty());
+        assert!(searchable_roots(vec![home.clone()], Some(&home)).is_empty());
     }
 
     /// The walk goes through the host, from the pane's directory up to its

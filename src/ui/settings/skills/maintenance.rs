@@ -163,7 +163,7 @@ impl SettingsWindow {
     ) -> bool {
         let Some(s) = self
             .active_settings_mut()
-            .filter(|s| s.section == SettingsSection::Skills && s.menu.is_none())
+            .filter(|s| s.navigation.section() == SettingsSection::Skills && s.menu.is_none())
         else {
             return false;
         };

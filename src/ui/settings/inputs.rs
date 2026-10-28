@@ -1,6 +1,17 @@
+use super::arguments::{join_shell_args, split_shell_args};
 use super::*;
 use crate::core::config::ShellConfig;
-use crate::ui::app::{join_shell_args, split_shell_args, wd_path_saveable};
+
+/// The one rule the "Start in" custom path lives by (#601): empty means unset
+/// and saves; anything else must name a directory that exists, because the
+/// daemon's picker skips a path that is not one and every new pane then
+/// silently starts somewhere else. Settings refuses to save such a value and
+/// marks it red — both decide through this, so the red line and the not-saved
+/// config always agree. Local on purpose: this is the local daemon's config.
+pub(super) fn wd_path_saveable(path: &str) -> bool {
+    let path = path.trim();
+    path.is_empty() || std::path::Path::new(path).is_dir()
+}
 
 impl SettingsWindow {
     pub(super) fn build_shell_inputs(
@@ -270,5 +281,100 @@ impl SettingsWindow {
 
     pub(crate) fn active_settings_mut(&mut self) -> Option<&mut SettingsState> {
         self.settings.as_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wd_path_saveable;
+    use crate::core::config::{Config, ShellConfig};
+    use crate::ui::settings::{SettingsSection, test_window};
+    use gpui_kit::{Focusable as _, TestAppContext};
+
+    #[test]
+    fn a_start_in_path_saves_only_when_it_names_a_real_directory() {
+        // Empty is "unset", not a broken path.
+        assert!(wd_path_saveable(""));
+        assert!(wd_path_saveable("   "));
+        let real = std::env::temp_dir();
+        let real = real.to_str().expect("temp dir is utf-8 here");
+        assert!(wd_path_saveable(real), "{real} exists");
+        assert!(
+            wd_path_saveable(&format!("  {real}  ")),
+            "the commit trims, so the check trims too"
+        );
+        assert!(!wd_path_saveable("/definitely/not/a/real/dir"));
+        // A file is not a directory the shell can start in.
+        let file = std::env::temp_dir().join("lyrel-wd-saveable-probe");
+        std::fs::write(&file, b"x").expect("write probe file");
+        assert!(!wd_path_saveable(file.to_str().expect("utf-8")));
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[gpui_kit::test]
+    fn shell_field_enter_preserves_argv_and_invalid_drafts(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+        let (workspace, mut vcx) = crate::ui::app::test_window::harness(cx);
+        let args: Vec<String> = [
+            "-c",
+            "echo hi",
+            "",
+            "it's \"quoted\"",
+            r"C:\Program Files\lyrel",
+            "#1",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        vcx.update(|_, cx| {
+            cx.global_mut::<Config>().shell = Some(ShellConfig {
+                program: "lyrel-parser-shell".into(),
+                args: args.clone(),
+            });
+        });
+        let settings = test_window::open(&workspace, &mut vcx);
+        settings.update_in(&mut vcx, |settings, window, cx| {
+            settings.open_settings_section(SettingsSection::Terminal, window, cx);
+            let input = settings.active_settings().unwrap().shell_args_input.clone();
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            assert_eq!(cx.global::<Config>().shell.as_ref().unwrap().args, args);
+        });
+
+        settings.update_in(&mut vcx, |settings, window, cx| {
+            let state = settings.active_settings().unwrap();
+            let program = state.shell_program_input.clone();
+            let input = state.shell_args_input.clone();
+            program.update(cx, |program, cx| {
+                program.set_value("lyrel-parser-replacement", window, cx)
+            });
+            input.update(cx, |input, cx| {
+                input.set_value("-c 'unfinished", window, cx)
+            });
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+        });
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        settings.update_in(&mut vcx, |settings, _, cx| {
+            let shell = cx.global::<Config>().shell.as_ref().unwrap();
+            assert_eq!(shell.program, "lyrel-parser-replacement");
+            assert_eq!(shell.args, args, "invalid arguments retain the saved argv");
+            assert_eq!(
+                settings
+                    .active_settings()
+                    .unwrap()
+                    .shell_args_input
+                    .read(cx)
+                    .value()
+                    .as_str(),
+                "-c 'unfinished",
+                "the invalid draft stays editable"
+            );
+        });
     }
 }

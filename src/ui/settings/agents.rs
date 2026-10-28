@@ -60,7 +60,7 @@ impl SettingsWindow {
         let show_all = s.agent_show_all;
         let touched = s.agent_touched.clone();
         let busy = s.agent_busy.clone();
-        let focused = s.focused_setting;
+        let focused = s.navigation.focused_setting();
         let menu_open = s.menu.clone();
 
         // The machine the hooks below belong to.
