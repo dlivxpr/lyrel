@@ -1691,8 +1691,7 @@ impl LyrelApp {
         });
         let handle = input.read(cx).focus_handle(cx);
         self.scm.graph.naming = Some((input, rev));
-        self.scm.repo_override = Some(repo);
-        self.scm.override_tab = Some(self.tabs.active_index());
+        self.scm.select_repository(repo, self.tabs.active_index());
         window.focus(&handle, cx);
         cx.notify();
     }

@@ -186,12 +186,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.scm_watch_status(cx);
-        // An explicit repository pick should outlive a pane switch inside the
-        // tab it was made on, and not a jump to a different tab.
-        if self.scm.override_tab != Some(self.tabs.active_index()) {
-            self.scm.repo_override = None;
-            self.scm.override_tab = None;
-        }
+        self.scm.enter_tab(self.tabs.active_index());
 
         let Some((host, cwd)) = self.scm_pane_target(window, cx) else {
             let title = self.panel_title(t(L10nKey::PanelScmTitle), None, None, window, cx);
@@ -221,34 +216,16 @@ impl LyrelApp {
             RepoLookup::Root(root) => root,
         };
 
-        self.scm.repo = Some(RepoKey {
+        self.scm.follow_pane(RepoKey {
             host: host.id(),
             root,
         });
-        // An override whose host has left the registry is dropped, not worked
-        // around: falling back to the *pane's* host while keeping the
-        // override's root would probe the wrong machine for that path and
-        // cache the answer under a mismatched key.
-        if self
-            .scm
-            .repo_override
-            .as_ref()
-            .is_some_and(|k| crate::ui::host_registry::HostRegistry::get(cx, k.host).is_none())
-        {
-            self.scm.repo_override = None;
-            self.scm.override_tab = None;
-        }
-        // An explicit pick from the switcher wins over the pane's own
-        // repository, so everything below reads through `active_repo`.
-        let repo = self
-            .scm
-            .active_repo()
-            .cloned()
-            .expect("the pane's repository was just recorded");
-        let host = match crate::ui::host_registry::HostRegistry::get(cx, repo.host) {
-            Some(host) => host,
-            None => host,
+        let Some(context) = self.scm.repository_context(cx) else {
+            let title = self.panel_title(t(L10nKey::PanelScmTitle), None, None, window, cx);
+            let body = self.panel_empty(t(L10nKey::PanelLoading), None, cx);
+            return self.scm_shell(title, body);
         };
+        let (repo, host, _) = context.into_parts();
         self.scm_probe(&host, &repo.root, cx);
         let Some(status) = self.scm_seen_status(repo.host, &repo.root, cx) else {
             let title = self.panel_title(t(L10nKey::PanelScmTitle), None, None, window, cx);
@@ -350,7 +327,7 @@ impl LyrelApp {
         // Armed-amend is a mode you can forget you are in, which puts it in the
         // same class as `detached` and a rebase in progress above — so it gets
         // their tint, not a chip of its own invention.
-        if self.scm.amend {
+        if self.scm.amend() {
             notes.push(info_chip(
                 t(L10nKey::ScmAmendBadge),
                 warning.opacity(0.16),
@@ -522,16 +499,14 @@ impl LyrelApp {
 
     /// How many repositories other than this one the panel could switch to.
     fn scm_other_repos(&self, current: &RepoKey) -> Option<usize> {
-        let choices = self.scm_repo_choices();
+        let choices = self.scm.repository_choices();
         let count = choices.len().saturating_sub(1);
         (count > 0 && choices.contains(current)).then_some(count)
     }
 
     /// Read the local branch names, at most once per epoch.
     fn scm_load_branches(&mut self, repo: &RepoKey, cx: &mut Context<Self>) {
-        let epoch = cx
-            .default_global::<crate::terminal::git_data::ScmData>()
-            .epoch(repo.host, &repo.root);
+        let epoch = repo.refresh_epoch(cx);
         if self
             .scm
             .branches
@@ -541,12 +516,12 @@ impl LyrelApp {
         {
             return;
         }
-        let Some(host) = crate::ui::host_registry::HostRegistry::get(cx, repo.host) else {
+        let Some(context) = repo.context(cx) else {
             return;
         };
+        let (key, host, _) = context.into_parts();
         self.scm.branches_loading.insert(repo.clone());
         let root = repo.root.clone();
-        let key = repo.clone();
         crate::ui::host_ops::HostOps::run(
             host,
             cx,
@@ -593,7 +568,7 @@ impl LyrelApp {
             .get(&repo)
             .map(|(_, names)| names.clone())
             .unwrap_or_default();
-        let others = self.scm_repo_choices();
+        let others = self.scm.repository_choices();
         let unpushable = pushable_branch(&status.head).is_err();
 
         move |menu, _window, _cx| {
@@ -670,8 +645,7 @@ impl LyrelApp {
                         let other = other.clone();
                         move |_, _window, cx| {
                             let _ = app.update(cx, |this, cx| {
-                                this.scm.repo_override = Some(other.clone());
-                                this.scm.override_tab = Some(this.tabs.active_index());
+                                this.scm.select_repository(other.clone(), this.tabs.active_index());
                                 cx.notify();
                             });
                         }
@@ -682,28 +656,6 @@ impl LyrelApp {
         }
     }
 
-    /// Every repository the panel has looked at this session.
-    ///
-    /// Built from the roots it resolved rather than from the open tabs,
-    /// because only a resolved root is safe to act on: the cheap per-tab cache
-    /// knows a repository's *home*, which is a different directory inside a
-    /// linked worktree, and running an operation in the wrong tree is worse
-    /// than not offering the switch.
-    fn scm_repo_choices(&self) -> Vec<RepoKey> {
-        let mut out: Vec<RepoKey> = Vec::new();
-        for ((host, _cwd), (_, root)) in &self.scm.roots {
-            let Some(root) = root else { continue };
-            let key = RepoKey {
-                host: *host,
-                root: root.clone(),
-            };
-            if !out.contains(&key) {
-                out.push(key);
-            }
-        }
-        out.sort_by(|a, b| a.root.cmp(&b.root));
-        out
-    }
 
     pub(crate) fn scm_begin_create_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input =
@@ -860,7 +812,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let input = self.scm_commit_input(repo, status, window, cx);
+        let input = self.scm.commit_input(repo, status, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let sf = cx.global::<crate::ui::presets::Surfaces>().sidebar;
         div()
@@ -901,82 +853,6 @@ impl LyrelApp {
             .into_any_element()
     }
 
-    /// Hand the box the draft belonging to the repository on screen, and keep
-    /// whatever is in it under the repository it was typed for.
-    ///
-    /// Per repository rather than per tab or per pane: a working tree has one
-    /// pending message however many panes are looking at it.
-    fn scm_commit_input(
-        &mut self,
-        repo: &RepoKey,
-        status: &WorkingTreeStatus,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui_kit::Entity<TextareaState> {
-        let input = match self.scm.commit_input.clone() {
-            Some(input) => input,
-            None => {
-                let input = cx.new(|cx| {
-                    TextareaState::new(window, cx)
-                        .auto_grow(MSG_ROWS, MSG_ROWS_MAX)
-                        .placeholder(t(L10nKey::ScmCommitPlaceholder))
-                });
-                self.scm.commit_input = Some(input.clone());
-                input
-            }
-        };
-        let text = input.read(cx).value().to_string();
-
-        if self.scm.commit_repo.as_ref() != Some(repo) {
-            if let Some(previous) = self.scm.commit_repo.take() {
-                self.scm.drafts.insert(previous, text);
-            }
-            let next = match self.scm.drafts.get(repo) {
-                Some(draft) => draft.clone(),
-                // A merge or a cherry-pick leaves git's own message in
-                // `.git/MERGE_MSG`; starting from blank would throw away the
-                // conflict summary the user is about to want.
-                None => status.prefilled_message.clone().unwrap_or_default(),
-            };
-            input.update(cx, |state, cx| state.set_value(next, window, cx));
-            self.scm.commit_repo = Some(repo.clone());
-            return input;
-        }
-
-        if self.scm_commit_landed(repo, status, &text) {
-            input.update(cx, |state, cx| state.set_value("", window, cx));
-            return input;
-        }
-        if self.scm.drafts.get(repo).map(String::as_str) != Some(text.as_str()) {
-            self.scm.drafts.insert(repo.clone(), text);
-        }
-        input
-    }
-
-    /// Whether the commit we dispatched actually happened, and so whether the
-    /// message may be thrown away.
-    ///
-    /// Clearing the box the moment `git commit` is *dispatched* would lose a
-    /// carefully written message to a pre-commit hook that rejects it. HEAD
-    /// moving is the one signal that says the message is now in the
-    /// repository; an edit made in the meantime keeps it too.
-    fn scm_commit_landed(
-        &mut self,
-        repo: &RepoKey,
-        status: &WorkingTreeStatus,
-        text: &str,
-    ) -> bool {
-        let Some((sent_repo, before, message)) = &self.scm.committing else {
-            return false;
-        };
-        if sent_repo != repo || *before == status.head || message != text {
-            return false;
-        }
-        self.scm.committing = None;
-        self.scm.drafts.remove(repo);
-        true
-    }
-
     /// The line under the message box: what is staged on the left, what to do
     /// about it on the right.
     ///
@@ -993,7 +869,7 @@ impl LyrelApp {
         status: &WorkingTreeStatus,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let plan = commit_plan(status, self.scm.amend, self.scm.draft(repo));
+        let plan = commit_plan(status, self.scm.amend(), self.scm.draft(repo));
         let repo_for_button = repo.clone();
         let live = plan.enabled;
         let staged = status.staged().count();
@@ -1076,7 +952,7 @@ impl LyrelApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.scm_commit(
                                     repo_for_button.clone(),
-                                    this.scm.amend,
+                                    this.scm.amend(),
                                     None,
                                     window,
                                     cx,
@@ -1112,7 +988,7 @@ impl LyrelApp {
         ink: gpui_kit::Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let amend = self.scm.amend;
+        let amend = self.scm.amend();
         Button::new("scm-commit-menu")
             .custom(commit_half(ink, cx))
             .icon(Icon::new(IconName::ChevronDown))
@@ -1153,7 +1029,7 @@ impl LyrelApp {
                                 let app = app.clone();
                                 move |_, _window, cx| {
                                     let _ = app.update(cx, |this, cx| {
-                                        this.scm.amend = !this.scm.amend;
+                                        this.scm.toggle_amend();
                                         cx.notify();
                                     });
                                 }
@@ -2080,7 +1956,7 @@ impl LyrelApp {
     /// notification (including the one the probe's *start* fires) into another
     /// `git status`.
     pub(crate) fn right_panel_refresh_changes(&mut self, cx: &mut Context<Self>) {
-        let Some(repo) = self.scm.repo.clone() else {
+        let Some(repo) = self.scm.pane_repo().cloned() else {
             return;
         };
         let Some(seen) = cx
@@ -3052,10 +2928,10 @@ mod tests {
         let status_b = status_of_repo("/b", Vec::new());
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm_commit_input(&a, &status_a, window, cx);
+            let input = app.scm.commit_input(&a, &status_a, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             input.update(cx, |state, cx| state.set_value("wip: a", window, cx));
 
-            let input = app.scm_commit_input(&b, &status_b, window, cx);
+            let input = app.scm.commit_input(&b, &status_b, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(
                 input.read(cx).value(),
                 "",
@@ -3063,7 +2939,7 @@ mod tests {
             );
             input.update(cx, |state, cx| state.set_value("wip: b", window, cx));
 
-            let input = app.scm_commit_input(&a, &status_a, window, cx);
+            let input = app.scm.commit_input(&a, &status_a, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(
                 input.read(cx).value(),
                 "wip: a",
@@ -3082,7 +2958,7 @@ mod tests {
         status.prefilled_message = Some("Merge branch 'topic'".into());
 
         app.update_in(&mut vcx, |app, window, cx| {
-            let input = app.scm_commit_input(&key, &status, window, cx);
+            let input = app.scm.commit_input(&key, &status, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
             assert_eq!(input.read(cx).value(), "Merge branch 'topic'");
         });
     }
@@ -3094,20 +2970,87 @@ mod tests {
         let key = repo("/a");
         let before = status_of_repo("/a", Vec::new());
 
-        app.update(&mut vcx, |app, _cx| {
-            app.scm.committing = Some((key.clone(), before.head.clone(), "wip".into()));
-
-            // A pre-commit hook said no: HEAD has not moved, so the message
-            // the user wrote is still the only copy of it there is.
-            assert!(!app.scm_commit_landed(&key, &before, "wip"));
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.scm.commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            input.update(cx, |state, cx| state.set_value("wip", window, cx));
+            app.scm.commit_dispatched(key.clone(), before.head.clone(), "wip".into());
+            app.scm.commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert_eq!(input.read(cx).value(), "wip", "dispatch alone is not success");
+            app.scm.commit_failed(key.host, &key.root);
 
             let mut after = before.clone();
             after.head = HeadState::Branch {
                 name: "main".into(),
                 oid: "2222222".into(),
             };
-            assert!(app.scm_commit_landed(&key, &after, "wip"));
-            assert_eq!(app.scm.draft(&key), "");
+            app.scm.commit_input(&key, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert_eq!(input.read(cx).value(), "wip", "a later HEAD move cannot clear a failed draft");
+            assert_eq!(app.scm.draft(&key), "wip");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_landed_commit_clears_only_its_unchanged_draft(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+        let (app, mut vcx) = harness(cx);
+        let (a, b) = (repo("/a"), repo("/b"));
+        let before = status_of_repo("/a", Vec::new());
+        let other = status_of_repo("/b", Vec::new());
+        let mut after = before.clone();
+        after.head = HeadState::Branch {
+            name: "main".into(),
+            oid: "2222222".into(),
+        };
+        let mut other_moved = other.clone();
+        other_moved.head = after.head.clone();
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.scm.commit_input(&a, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            input.update(cx, |state, cx| state.set_value("sent", window, cx));
+            app.scm.commit_dispatched(a.clone(), before.head.clone(), "sent".into());
+            let input = app.scm.commit_input(&b, &other, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            input.update(cx, |state, cx| state.set_value("other draft", window, cx));
+            app.scm.commit_input(&b, &other_moved, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert_eq!(input.read(cx).value(), "other draft");
+            app.scm.commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            // Switching restores first; cleanup follows on the next status
+            // reconciliation, exactly as it does in the live panel.
+            app.scm.commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert_eq!(input.read(cx).value(), "");
+            assert_eq!(app.scm.draft(&b), "other draft");
+
+            input.update(cx, |state, cx| state.set_value("sent again", window, cx));
+            app.scm.commit_dispatched(a.clone(), before.head.clone(), "sent again".into());
+            input.update(cx, |state, cx| state.set_value("new edits", window, cx));
+            app.scm.commit_input(&a, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert_eq!(input.read(cx).value(), "new edits");
+            assert_eq!(app.scm.draft(&a), "new edits");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn preparing_or_rejecting_an_amend_does_not_arm_draft_cleanup(cx: &mut TestAppContext) {
+        crate::core::config::pin_test_config_dir();
+        let (app, mut vcx) = harness(cx);
+        let key = repo("/a");
+        let before = status_of_repo("/a", Vec::new());
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app.scm.commit_input(&key, &before, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            input.update(cx, |state, cx| state.set_value("amend draft", window, cx));
+            app.scm.toggle_amend();
+            assert!(app.scm.prepare_commit(&key, &before, true, cx).is_ok());
+            // A cancelled confirmation never reaches commit_dispatched.
+            let mut after = before.clone();
+            after.head = HeadState::Branch {
+                name: "main".into(),
+                oid: "2222222".into(),
+            };
+            app.scm.commit_input(&key, &after, MSG_ROWS..=MSG_ROWS_MAX, window, cx);
+            assert!(app.scm.amend());
+            assert_eq!(input.read(cx).value(), "amend draft");
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+            assert!(app.scm.prepare_commit(&key, &before, false, cx).is_err());
+            assert!(app.scm.amend());
         });
     }
 
@@ -3327,7 +3270,7 @@ mod render_idle_gpui_tests {
 
         let want = root.clone();
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, move |app, cx| {
-            app.scm.repo.as_ref().is_some_and(|r| r.root == want)
+            app.scm.pane_repo().is_some_and(|r| r.root == want)
                 && crate::terminal::git_data::status_of(cx, HostId::LOCAL, &want).is_some()
         });
 
@@ -3335,7 +3278,7 @@ mod render_idle_gpui_tests {
             crate::terminal::git_data::status_of(
                 cx,
                 HostId::LOCAL,
-                &app.scm.repo.clone().unwrap().root,
+                &app.scm.pane_repo().cloned().unwrap().root,
             )
         });
         let status = status.expect("the panel read a status");
@@ -3367,7 +3310,7 @@ mod render_idle_gpui_tests {
             "no root was resolved for a directory that is not a repository"
         );
         assert!(
-            app.update_in(&mut vcx, |app, _, _| app.scm.repo.is_none()),
+            app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().is_none()),
             "and no status was ever asked for"
         );
         assert_eq!(draws_while_idle(&mut vcx), 0);
@@ -3387,7 +3330,7 @@ mod render_idle_gpui_tests {
                 matches!(
                     app.github_target(window, cx),
                     crate::ui::github::GhTarget::Ready { repo, .. } if repo.root == root
-                ) && app.scm.repo.as_ref().is_some_and(|repo| {
+                ) && app.scm.pane_repo().is_some_and(|repo| {
                     repo.root == root
                         && status_of(cx, repo.host, &repo.root).is_some_and(|status| {
                             status
@@ -3407,7 +3350,7 @@ mod render_idle_gpui_tests {
                     "pane root={:?}, panel root={:?}, remote counts={:?}",
                     cx.global::<crate::terminal::git_status::GitStatusCache>()
                         .repo_root_for(HostId::LOCAL, root),
-                    app.scm.repo.as_ref().map(|repo| &repo.root),
+                    app.scm.pane_repo().map(|repo| &repo.root),
                     app.github
                         .remotes
                         .iter()
@@ -3451,7 +3394,7 @@ mod render_idle_gpui_tests {
         }
         let want = root.clone();
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, move |app, _| {
-            app.scm.roots.contains_key(&(HostId::LOCAL, want.clone())) || app.scm.repo.is_some()
+            app.scm.roots.contains_key(&(HostId::LOCAL, want.clone())) || app.scm.pane_repo().is_some()
         });
         if cloned {
             let source = parent.join("source");
@@ -3522,7 +3465,7 @@ mod render_idle_gpui_tests {
             std::fs::canonicalize(temp.path()).unwrap(),
         );
         git(&root, &["init", "--quiet"]);
-        let (app, mut vcx, mut pane) = scm_panel_on(cx, &root, |app, _| app.scm.repo.is_some());
+        let (app, mut vcx, mut pane) = scm_panel_on(cx, &root, |app, _| app.scm.pane_repo().is_some());
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             vcx.run_until_parked();
@@ -3573,7 +3516,7 @@ mod render_idle_gpui_tests {
         // equal to git's spelling of the same directory — see the note on
         // `a_settled_source_control_panel_reaches_render_idle`.
         let (app, mut vcx, _pane) = scm_panel_on(cx, &root, |app, cx| {
-            app.scm.repo.as_ref().is_some_and(|r| {
+            app.scm.pane_repo().is_some_and(|r| {
                 crate::terminal::git_data::status_of(cx, r.host, &r.root)
                     .is_some_and(|s| s.untracked().count() == 3)
             })

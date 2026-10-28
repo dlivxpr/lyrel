@@ -1105,7 +1105,7 @@ mod detail_gpui_tests {
         });
         let want = root.to_path_buf();
         settle(&app, &mut vcx, move |app, _| {
-            app.scm.repo.as_ref().is_some_and(|r| r.root == want)
+            app.scm.pane_repo().is_some_and(|r| r.root == want)
         });
         (app, vcx, pane)
     }
@@ -1150,7 +1150,7 @@ mod detail_gpui_tests {
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
 
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
         app.update_in(&mut vcx, |app, _, cx| {
             app.open_commit_detail(repo.clone(), head.clone(), None, cx)
         });
@@ -1253,7 +1253,7 @@ mod detail_gpui_tests {
         let parent = git(&root, &["rev-parse", "HEAD^"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
 
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
         app.update_in(&mut vcx, |app, _, cx| {
             app.open_commit_detail(repo.clone(), head.clone(), None, cx)
         });
@@ -1292,7 +1292,7 @@ mod detail_gpui_tests {
         let root = two_commit_repo("seeded");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
 
         // What the graph hands over: a row it already holds. The subject is
         // deliberately not the real one, so a `git show` behind our back would
@@ -1371,7 +1371,7 @@ mod detail_gpui_tests {
         let root = two_commit_repo("fold");
         let head = git(&root, &["rev-parse", "HEAD"]);
         let (app, mut vcx, _pane) = panel_on(cx, &root);
-        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.repo.clone().unwrap());
+        let repo = app.update_in(&mut vcx, |app, _, _| app.scm.pane_repo().cloned().unwrap());
         app.update_in(&mut vcx, |app, _, cx| {
             app.open_commit_detail(repo.clone(), head.clone(), None, cx)
         });

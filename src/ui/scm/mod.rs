@@ -1,8 +1,8 @@
 //! Source control: the panel, its file rows, the commit box, and the graph.
 //!
-//! Every file here hangs `impl LyrelApp` blocks, the same shape `sftp.rs` and
-//! `file_tree.rs` use. The directory only keeps the surface from piling into
-//! `right_panel.rs`.
+//! `ScmPanelState` owns repository selection, commit drafts and commit lifecycle.
+//! Window adapters compose Host work, confirmations and cross-capability intents;
+//! branch, graph and detail keep their existing refresh policies.
 
 pub(crate) mod actions;
 pub(crate) mod detail;
@@ -14,4 +14,4 @@ pub(crate) mod status;
 pub(crate) mod tree;
 
 pub(crate) use actions::ScmIntent;
-pub(crate) use state::{GraphState, ScmPanelState};
+pub(crate) use state::ScmPanelState;
