@@ -36,6 +36,7 @@ pub(crate) use theme_edit::window_backdrop_label_key;
 pub(crate) use theme_edit::{ThemeEdit, theme_edit_label};
 
 mod agents;
+pub(crate) mod arguments;
 mod configuration;
 mod editor;
 mod hosts;

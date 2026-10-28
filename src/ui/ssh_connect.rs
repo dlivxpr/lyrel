@@ -15,6 +15,8 @@ use crate::daemon::protocol::{
 use super::app::{LyrelApp, SpawnWhere};
 use super::tab::presentation::SpawnAs;
 
+pub(crate) mod input;
+
 impl LyrelApp {
     pub(crate) fn native_ssh_spec_for_profile(
         &self,
@@ -1000,6 +1002,29 @@ mod tests {
         assert_eq!(jump.host, "bastion.example.com");
         assert_eq!(jump.user, "jump");
         assert!(jump.jump.is_none());
+    }
+
+    #[test]
+    fn typed_connection_reaches_native_spec_with_target_and_jump_overrides() {
+        let parsed = input::parse_ssh_connect_input(
+            "ssh deploy@box:22 -p2222 -o User=release -J jump@bastion.example:2200",
+        )
+        .unwrap();
+        let store = InMemoryCredentialStore::new();
+        let spec = native_spec_from_transient_profile(
+            &parsed.profile,
+            parsed.proxy_jump,
+            &store,
+            true,
+            &|_| None,
+        );
+        assert_eq!(spec.host, "box");
+        assert_eq!(spec.user, "release");
+        assert_eq!(spec.port, 2222);
+        let jump = spec.jump.expect("the typed jump reaches connection assembly");
+        assert_eq!(jump.host, "bastion.example");
+        assert_eq!(jump.user, "jump");
+        assert_eq!(jump.port, 2200);
     }
 
     #[test]
