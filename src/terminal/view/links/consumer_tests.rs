@@ -1,4 +1,8 @@
 use super::*;
+use crate::daemon::protocol::DaemonMsg;
+use crate::terminal::view::test_support::*;
+use gpui_kit::TestAppContext;
+use rio_vt::crosswords::pos::{Column, Line};
 
     #[gpui_kit::test]
     fn a_relative_path_links_against_the_panes_own_directory(cx: &mut TestAppContext) {
@@ -486,4 +490,57 @@ fn late_link_answers_cannot_retarget_a_changed_host_directory_or_grid(cx: &mut T
         assert!(!view.links.land_probes(epoch, answers));
         assert!(view.links.hovered().is_none());
     }).unwrap();
+}
+
+#[gpui_kit::test]
+fn a_remote_menu_keeps_its_host_and_internal_open_after_the_pane_retargets(cx: &mut TestAppContext) {
+    use crate::terminal::link_probe::Existence;
+
+    let (window, mut daemon) = harness(cx);
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    window.update(cx, |_, _, cx| {
+        let view = cx.entity();
+        cx.subscribe(&view, move |_, _, event: &OpenFileRequested, _| {
+            seen.borrow_mut().push((event.host_id, event.path.clone(), event.line, event.column));
+        }).detach();
+    }).unwrap();
+    DaemonMsg::Output(b"/project/notes.rs:3:2\r\n".to_vec()).encode(&mut daemon).unwrap();
+    for _ in 0..200 {
+        if window.update(cx, |view, _, _| {
+            view.terminal.term.lock().grid[Line(0)][Column(1)].c() == 'p'
+        }).unwrap() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let host = window.update(cx, |view, window, cx| {
+        bind_to_a_disconnected_remote_workspace(view, cx);
+        view.set_git_status_cwd_for_test(Some("/project".into()));
+        assert!(!view.hover_link_at(1, 0, true, cx));
+        let (epoch, wanted) = view.links.take_probes();
+        assert!(wanted.contains(&std::path::PathBuf::from("/project/notes.rs")));
+        assert!(view.links.land_probes(epoch, vec![("/project/notes.rs".into(), Existence::File)]));
+        assert!(view.recompute_link_hover(cx));
+        view.record_menu_link(1, 0, cx);
+        let host = view.links.menu().expect("captured remote file").host();
+        assert!(!host.is_local());
+
+        // External-open preferences belong to local files, even when the pane
+        // has changed Host by the time the captured menu action is dispatched.
+        view.set_workspace(None);
+        view.sync_link_location();
+        for mode in [LinkFileOpen::System, LinkFileOpen::Command] {
+            let mut config = cx.global::<Config>().clone();
+            config.link_file_open = Some(mode);
+            config.link_file_command = Some("lyrel-no-such-link-opener {path}".into());
+            cx.set_global(config);
+            view.open_menu_link(window, cx);
+        }
+        host
+    }).unwrap();
+    cx.run_until_parked();
+    assert_eq!(&*opened.borrow(), &[
+        (host, "/project/notes.rs".into(), Some(3), Some(2)),
+        (host, "/project/notes.rs".into(), Some(3), Some(2)),
+    ]);
 }
