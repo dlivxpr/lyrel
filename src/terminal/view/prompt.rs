@@ -2,8 +2,8 @@
 //! Geometry remains a projection of PromptInput and the current terminal grid;
 //! no editor, focus handle, frame buffer, or terminal attachment is recreated.
 
-use super::*;
 use super::history_adapter::{one_line, one_line_char};
+use super::*;
 use crate::terminal::highlight::{self, TokenKind};
 use crate::terminal::prompt_input::layout::{
     before_input, input_cells, input_overflow_shift, input_overlay_rows, input_start,
@@ -143,7 +143,11 @@ impl TerminalView {
         true
     }
 
-    pub(super) fn render_input_bar(&self, focused: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_input_bar(
+        &self,
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let (crow, ccol) = self.cursor_cell().unwrap_or((0, 0));
         let cx_left = px(GRID_PAD_X) + self.cell_width * (ccol as f32);
         let shift = self.input_scroll_rows();
@@ -932,4 +936,3 @@ mod tests {
         assert_eq!(menu_layout(40, 0, 30, 3, 10).2, 0);
     }
 }
-

@@ -202,8 +202,8 @@ pub(super) fn char_string(c: char) -> SharedString {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::test_support::cell;
+    use super::*;
 
     fn run(start: usize, cells: usize, text: &str) -> RowSeg {
         RowSeg::Run {

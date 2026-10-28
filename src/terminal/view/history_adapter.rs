@@ -2,8 +2,8 @@
 //! TerminalHistory owns scope/cache/navigation/search and persistence decisions;
 //! this adapter schedules Host reads and applies only accepted load results.
 
-use super::*;
 use super::prompt::menu_layout;
+use super::*;
 use crate::terminal::history_session::{PromptHistory, unix_now};
 
 const MAX_HISTORY_BYTES: u64 = 4 << 20;
@@ -14,7 +14,10 @@ impl TerminalView {
             return crate::terminal::history::Scope::remote(&ctx.target);
         }
         if !self.host_id.is_local() {
-            return crate::terminal::history::Scope::remote(&format!("host-{:016x}", self.host_id.0));
+            return crate::terminal::history::Scope::remote(&format!(
+                "host-{:016x}",
+                self.host_id.0
+            ));
         }
         crate::terminal::history::Scope::Local
     }
@@ -235,8 +238,8 @@ impl TerminalView {
 #[cfg(test)]
 mod consumer_tests {
     use super::*;
-    use crate::terminal::view::test_support::*;
     use crate::daemon::protocol::DaemonMsg;
+    use crate::terminal::view::test_support::*;
     use gpui_kit::{TestAppContext, point};
     mod history_scope_consumer_tests {
         include!("../history_scope_consumer_tests.rs");
@@ -326,4 +329,3 @@ mod tests {
         assert!(highlight_runs("", &[]).is_empty());
     }
 }
-

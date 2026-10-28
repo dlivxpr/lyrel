@@ -243,7 +243,11 @@ impl TerminalView {
         }
     }
 
-    pub(in crate::terminal) fn drop_files(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+    pub(in crate::terminal) fn drop_files(
+        &mut self,
+        paths: &ExternalPaths,
+        cx: &mut Context<Self>,
+    ) {
         self.paste_local_paths(paths.paths().to_vec(), cx);
     }
 

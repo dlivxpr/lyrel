@@ -511,7 +511,9 @@ pub(super) fn paint_glyphs(
                         let fg = GlyphStyle::of(cell).fg;
                         for piece in ink {
                             match piece {
-                                crate::terminal::boxdraw::Ink::Rect(r) => window.paint_quad(fill(r, fg)),
+                                crate::terminal::boxdraw::Ink::Rect(r) => {
+                                    window.paint_quad(fill(r, fg))
+                                }
                                 crate::terminal::boxdraw::Ink::Shade(r, alpha) => {
                                     let mut c = fg;
                                     c.a *= alpha;
@@ -662,9 +664,9 @@ pub(super) fn paint_glyphs(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::snapshot::CellPainter;
     use super::super::test_support::{cell, painted_term, test_colors};
+    use super::*;
     use rio_vt::config::colors::ColorRgb;
     use rio_vt::crosswords::pos::{Column, Line, Pos};
 

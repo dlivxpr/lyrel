@@ -15,7 +15,12 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn on_key_down(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn on_key_down(
+        &mut self,
+        ev: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let link_dropped_on_a_remote_pane =
             self.workspace().is_some() && !self.terminal.child_exited();
         if self.terminal.exited && !link_dropped_on_a_remote_pane {
@@ -99,7 +104,9 @@ impl TerminalView {
         }
 
         #[cfg(target_os = "macos")]
-        if !window.has_pending_keystrokes() && crate::terminal::input::defer_to_ime(ks, self.key_flags()) {
+        if !window.has_pending_keystrokes()
+            && crate::terminal::input::defer_to_ime(ks, self.key_flags())
+        {
             return;
         }
 
@@ -328,7 +335,10 @@ impl TerminalView {
     /// caret on its own — every redraw, every keystroke it echoes — so without
     /// a push the candidate window stayed wherever the last composition or
     /// the focus-in left it, or at the window's corner (#1131).
-    pub(in crate::terminal) fn ime_anchor_moved(&mut self, anchor: Option<gpui_kit::Bounds<Pixels>>) -> bool {
+    pub(in crate::terminal) fn ime_anchor_moved(
+        &mut self,
+        anchor: Option<gpui_kit::Bounds<Pixels>>,
+    ) -> bool {
         self.input.anchor_moved(anchor)
     }
 
@@ -396,7 +406,13 @@ impl TerminalView {
         self.input.sync_owner(&self.terminal);
     }
 
-    pub(super) fn write_gap_text(&mut self, text: &str, bytes: Vec<u8>, pasted: bool, cx: &mut Context<Self>) {
+    pub(super) fn write_gap_text(
+        &mut self,
+        text: &str,
+        bytes: Vec<u8>,
+        pasted: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(epoch) = self
             .input
             .write_gap_text(&self.terminal, text, bytes, pasted)
@@ -419,7 +435,6 @@ impl TerminalView {
             cx.notify();
         }
     }
-
 
     pub(super) fn insert_newline_action(&mut self, cx: &mut Context<Self>) {
         if !self.input_active() || self.history.search().is_some() {
@@ -553,9 +568,9 @@ impl TerminalView {
 #[cfg(test)]
 mod consumer_tests {
     use super::*;
-    use crate::terminal::view::test_support::*;
     use crate::daemon::protocol::DaemonMsg;
     use crate::terminal::remote::PtySource;
+    use crate::terminal::view::test_support::*;
     use gpui_kit::TestAppContext;
     mod ime_consumer_tests {
         include!("../prompt_input/ime_consumer_tests.rs");
@@ -732,7 +747,6 @@ mod tests {
     }
 }
 
-
 pub(in crate::terminal) struct TerminalInputHandler {
     view: gpui_kit::Entity<TerminalView>,
     cursor_bounds: Option<Bounds<Pixels>>,
@@ -863,4 +877,3 @@ impl InputHandler for TerminalInputHandler {
         true
     }
 }
-

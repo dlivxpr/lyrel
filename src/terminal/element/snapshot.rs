@@ -11,10 +11,13 @@ use rio_vt::crosswords::style::StyleFlags;
 use rio_vt::crosswords::{Crosswords, Mode};
 use rio_vt::selection::SelectionRange;
 
-use super::{GridCursor, GridSnapshot, PaintColors, RenderCell, TerminalElement, UnderlineKind, osc8_underline};
 use super::colors::{dim_cell, dim_fg, resolve, to_hsla};
-use crate::core::config::Config;
 use super::decorations::{cursor_style_from_shape, link_underline_color};
+use super::{
+    GridCursor, GridSnapshot, PaintColors, RenderCell, TerminalElement, UnderlineKind,
+    osc8_underline,
+};
+use crate::core::config::Config;
 
 // A viewport owns its palette and theme for one locked grid snapshot. Reuse
 // only the preceding resolved style; character extras and selection remain
@@ -144,7 +147,10 @@ impl TerminalElement {
     /// line handed back to ZLE/readline. Shell integration has no mark for "a
     /// prompt plugin set this shape", so the one it does report, vi mode, keeps
     /// the shell's own insert/normal shapes.
-    pub(in crate::terminal) fn prompt_cursor_shape(&self, cx: &App) -> Option<crate::core::config::CursorStyle> {
+    pub(in crate::terminal) fn prompt_cursor_shape(
+        &self,
+        cx: &App,
+    ) -> Option<crate::core::config::CursorStyle> {
         let shape = cx.global::<Config>().prompt_cursor_style.shape()?;
         let terminal = &self.view.read(cx).terminal;
         (terminal.at_prompt() && !terminal.shell_vi_mode()).then_some(shape)
@@ -407,9 +413,9 @@ impl TerminalElement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::test_support::{painted_term, test_colors};
     use super::super::is_blank;
+    use super::super::test_support::{painted_term, test_colors};
+    use super::*;
     use gpui_kit::component::ActiveTheme as _;
 
     #[test]

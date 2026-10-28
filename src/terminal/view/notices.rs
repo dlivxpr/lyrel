@@ -4,7 +4,7 @@
 use super::*;
 use gpui_kit::component::ActiveTheme as _;
 
-const INTEGRATION_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
+pub(super) const INTEGRATION_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
 
 const INTEGRATION_NOTICE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -13,7 +13,7 @@ const INTEGRATION_NOTICE_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// Long enough that a command which is over almost as soon as it started never
 /// reaches the label, short enough that one still running is named while the
 /// wait for it is still what the reader is doing.
-const TITLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
+pub(super) const TITLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// What a pane does with a title the program just set — see
 /// `TerminalView::set_title_when_settled`.
@@ -127,7 +127,12 @@ impl TerminalView {
     ///
     /// At most a few per pane every few seconds reach the desktop (pane output
     /// is untrusted), with one note saying the rest were not shown.
-    pub(super) fn show_program_notes(&self, hooks_notify: bool, window: &Window, cx: &mut Context<Self>) {
+    pub(super) fn show_program_notes(
+        &self,
+        hooks_notify: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let notes = self.terminal.take_osc_notes();
         let watched = window.is_window_active() && self.focus_handle.is_focused(window);
         let hooked = self.terminal.agent_session().is_some_and(|s| s.rich);
@@ -184,7 +189,7 @@ impl TerminalView {
 /// Ring the platform's alert sound, reporting whether one was actually made —
 /// `Audible` falls back to a flash when it wasn't, so a silent `false` is the
 /// difference between "you heard the bell" and "you saw it instead".
-fn ring_system_bell() -> bool {
+pub(super) fn ring_system_bell() -> bool {
     #[cfg(target_os = "macos")]
     {
         objc2_app_kit::NSBeep();

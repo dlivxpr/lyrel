@@ -82,8 +82,7 @@ pub(super) fn test_colors() -> PaintColors {
 }
 
 pub(super) fn painted_term(input: &str) -> Crosswords<rio_vt::event::VoidListener> {
-    let mut term =
-        crate::terminal::remote::test_term(crate::terminal::size::TermSize::new(80, 24));
+    let mut term = crate::terminal::remote::test_term(crate::terminal::size::TermSize::new(80, 24));
     rio_vt::performer::handler::Processor::default().advance(&mut term, input.as_bytes());
     term
 }

@@ -16,9 +16,9 @@ use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
-    App, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Font,
-    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollEvent, WeakEntity, Window,
-    actions, div, prelude::*, px,
+    App, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Font, KeyDownEvent,
+    Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollEvent, WeakEntity, Window, actions, div,
+    prelude::*, px,
 };
 use rio_vt::crosswords::Mode;
 use rio_vt::crosswords::grid::Dimensions;
@@ -54,7 +54,6 @@ mod clipboard;
 
 pub(super) const GRID_PAD_X: f32 = 8.;
 pub(super) const GRID_PAD_Y: f32 = 4.;
-
 
 actions!(
     terminal,
@@ -314,12 +313,6 @@ pub struct TerminalView {
     pub(super) dim: f32,
 }
 
-enum LoopbackOpen {
-    Forwarded(String),
-    ForwardFailed(String),
-    NotLoopback,
-}
-
 /// What it takes to open one of a pane's loopback ports from this machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum PortRoute {
@@ -387,13 +380,40 @@ pub(super) fn loopback_plan(
     }
 }
 
+impl TerminalView {
+    /// How forward requests about this pane reach the daemon that owns them —
+    /// through the workspace when there is one, and by pane id when there is
+    /// not. The Ports list and the port watcher build the same thing.
+    pub(crate) fn forward_route(&self) -> crate::ui::forwards::route::ForwardRoute {
+        crate::ui::forwards::route::ForwardRoute::new(self.pane_id, self.workspace.clone())
+    }
+
+    fn loopback_plan(&self, cx: &gpui_kit::App) -> LoopbackPlan {
+        loopback_plan(
+            cx.global::<Config>().ssh_loopback_forward,
+            self.workspace.as_ref(),
+            self.terminal.remote_context().map(|r| r.kind),
+            self.pane_id,
+        )
+    }
+
+    /// How a loopback port this pane is serving can be reached from here.
+    ///
+    /// The Ports list asks this about every listener it found, and it is a
+    /// different question from "is this pane local": a remote pane's :3000 is
+    /// perfectly reachable once a forward exists, and building that forward is
+    /// something this app already knows how to do. Answering only "local or
+    /// not" is what left the list showing a port it refused to open.
+    pub(crate) fn port_route(&self, cx: &gpui_kit::App) -> PortRoute {
+        port_route_of(&self.loopback_plan(cx), self.host_id().is_local())
+    }
+}
+
 enum CmdKey {
     Consumed,
     Bubble,
     FallThrough,
 }
-
-
 
 const OPPORTUNISTIC_GIT_GAP: std::time::Duration = std::time::Duration::from_millis(1500);
 
@@ -401,8 +421,6 @@ const OPPORTUNISTIC_GIT_GAP: std::time::Duration = std::time::Duration::from_mil
 /// before asking again. Discovery can miss temporarily unavailable metadata;
 /// retry without issuing a request on every poll tick.
 const GIT_RETRY_GAP: std::time::Duration = std::time::Duration::from_secs(10);
-
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GitRefresh {
@@ -412,7 +430,6 @@ enum GitRefresh {
     /// yet, or the last probe found no repository. Throttled by [`GIT_RETRY_GAP`].
     Retry,
 }
-
 
 /// The longest command line to put in a confirmation. The shell sends up to
 /// 512 bytes; a dialog asking whether to end your work should still read as a
@@ -454,10 +471,6 @@ fn clamp_command(cmd: &str) -> String {
         ),
     }
 }
-
-
-
-
 
 /// The Windows spelling of a WSL pane's POSIX cwd, for reading rather than
 /// writing: the distro's `\\wsl$` share lets local `read_dir` reach the files.
@@ -533,7 +546,6 @@ fn files_cwd(
         false => Some(cwd),
     }
 }
-
 
 fn fallback_chain(family: &str, configured: &[String]) -> Vec<String> {
     let mut chain = configured.to_vec();
@@ -811,7 +823,6 @@ impl TerminalView {
     pub(crate) fn stated_title(&self) -> Option<&str> {
         stated_title(&self.title)
     }
-
 
     /// Sets how opaque the pane wants this terminal painted; the pane leaf
     /// calls this every frame while rendering, and the terminal element
@@ -1218,10 +1229,6 @@ impl TerminalView {
         self.relink_inflight = false;
     }
 
-
-
-
-
     fn has_selection(&self) -> bool {
         self.terminal.term.lock().selection.is_some()
     }
@@ -1235,9 +1242,6 @@ impl TerminalView {
             || (self.input_active() && self.input.editor().selected_text().is_some())
     }
 
-
-
-
     fn jump_to_prompt(&mut self) {
         let mut term = self.terminal.term.lock();
         self.selection_scroll.jump_to_prompt(&mut term);
@@ -1245,17 +1249,12 @@ impl TerminalView {
         self.terminal.viewport_reporter().report();
     }
 
-
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let mut term = self.terminal.term.lock();
         self.selection_scroll.select_all(&mut term);
         drop(term);
         cx.notify();
     }
-
-
-
-
 
     pub fn mouse_mode(&self) -> bool {
         self.report_mouse
@@ -1380,7 +1379,6 @@ impl TerminalView {
         }
     }
 
-
     pub fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
         let direction = if forward {
             Direction::Right
@@ -1389,8 +1387,6 @@ impl TerminalView {
         };
         self.step_match(direction, cx);
     }
-
-
 
     /// Plain text of the retained buffer, including history and soft-wrapped
     /// Unicode graphemes. Reading it does not alter selection or scroll offset.
@@ -1487,7 +1483,6 @@ impl TerminalView {
         })
     }
 
-
     /// Tell the source control cache that a command just ran here.
     ///
     /// The `.git` watch catches anything that writes the repository, and the
@@ -1514,7 +1509,6 @@ impl TerminalView {
         };
         cx.default_global::<ScmData>().bump(self.host_id, &root);
     }
-
 
     fn refresh_git_status(
         &mut self,
@@ -1582,16 +1576,6 @@ impl TerminalView {
             },
         );
     }
-
-
-
-
-
-
-
-
-
-
 
     pub fn on_select_start(
         &mut self,
@@ -1828,12 +1812,6 @@ impl TerminalView {
             // showing would be the odd one out.
             .child(Scrollbar::vertical(&self.scroll_handle).id("terminal-scrollbar"))
     }
-
-
-
-
-
-
 }
 
 /// Why closing a pane would end work that is still going on.
@@ -1854,8 +1832,6 @@ impl Drop for TerminalView {
         self.flush_pending_history();
     }
 }
-
-
 
 #[derive(Debug, PartialEq)]
 enum WheelRoute {
@@ -1977,7 +1953,6 @@ fn encode_mouse(
     }
 }
 
-
 /// Advance the in-flight scroll animation once per presented frame.
 ///
 /// Registered by the wheel adapter: gpui runs the callback
@@ -2002,8 +1977,6 @@ fn schedule_scroll_anim_frame(view: WeakEntity<TerminalView>, epoch: u64, window
 
 #[cfg(test)]
 mod tests {
-
-
 
     #[test]
     fn a_busy_command_name_undoes_the_shell_escaping() {
@@ -2030,21 +2003,16 @@ mod tests {
         // No dangling space before the ellipsis.
         assert!(!out.contains(" …"), "{out:?}");
     }
-    use super::{
-        LoopbackPlan, PortRoute, WheelRoute, cwd_is_on_host, loopback_plan,
-    };
+    use super::{LoopbackPlan, PortRoute, WheelRoute, cwd_is_on_host, loopback_plan};
+    use super::{encode_mouse, fallback_chain, wheel_route};
     use super::{files_cwd, wsl_share_distro, wsl_share_path};
-    use super::{
-        encode_mouse, fallback_chain, wheel_route,
-    };
     use gpui_kit::Modifiers;
     use rio_vt::crosswords::Mode;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use crate::core::session::{RemoteTarget, WorkspaceId};
     use crate::daemon::protocol::RemoteKind;
     use crate::terminal::PaneWorkspace;
-
 
     fn ws(target: RemoteTarget, with_spec: bool) -> PaneWorkspace {
         PaneWorkspace {
@@ -2190,7 +2158,6 @@ mod tests {
         assert_eq!(wsl_share_distro(None, Some(&ssh), false), None);
         assert_eq!(wsl_share_distro(None, None, true), None);
     }
-
 
     #[test]
     fn a_wsl_cwd_gets_a_windows_spelling_the_completion_engine_can_list() {
@@ -2495,10 +2462,6 @@ mod tests {
         assert_eq!(&last[4..], &[255, 255]);
     }
 
-
-
-
-
     #[test]
     fn only_a_matching_host_may_answer_for_a_panes_paths() {
         assert!(cwd_is_on_host(false, true));
@@ -2690,8 +2653,8 @@ mod agent_activity_tests;
 
 #[cfg(test)]
 mod gpui_tests {
-    use super::*;
     use super::test_support::*;
+    use super::*;
     use crate::core::config::MouseZoomModifier;
     use rio_vt::selection::{Selection, SelectionType};
 
@@ -2703,8 +2666,6 @@ mod gpui_tests {
     use crate::terminal::lifecycle::declare_displayed;
     use crate::terminal::remote::PtySource;
     use gpui_kit::{Bounds, Entity, TestAppContext, point};
-
-
 
     #[gpui_kit::test]
     fn an_agent_that_has_finished_its_turn_is_not_busy(cx: &mut TestAppContext) {
@@ -3652,7 +3613,6 @@ mod gpui_tests {
             .unwrap();
     }
 
-
     #[gpui_kit::test]
     fn a_theme_change_reaches_only_the_panes_that_asked(cx: &mut TestAppContext) {
         let set_background = |cx: &mut TestAppContext, bg: gpui_kit::Hsla| {
@@ -3844,8 +3804,6 @@ mod gpui_tests {
         );
     }
 
-
-
     /// Shaped after what macOS actually delivers, measured on a wheel mouse and
     /// a trackpad: both arrive as pixels, and only the trackpad ever reports a
     /// phase. One wheel detent is ~103px, roughly five lines at a 21px line
@@ -3865,7 +3823,6 @@ mod gpui_tests {
     fn notch(view: &TerminalView, lines: f32) -> ScrollEvent {
         wheel(view, lines, gpui_kit::TouchPhase::Moved)
     }
-
 
     #[gpui_kit::test]
     fn a_disconnected_remote_pane_keeps_the_line_instead_of_handing_it_to_nowhere(
@@ -4060,7 +4017,6 @@ mod gpui_tests {
             "a query reply is the emulator's answer, not the user's typing"
         );
     }
-
 
     /// What the link supervisor's relink sweep keys off: a workspace pane
     /// whose link died asks to come back, until its machine refuses.
@@ -4976,7 +4932,6 @@ mod gpui_tests {
         });
     }
 
-
     #[gpui_kit::test]
     fn hidden_cursor_at_prompt_anchors_the_editor_at_the_real_cell_not_top_left(
         cx: &mut TestAppContext,
@@ -5148,7 +5103,6 @@ mod gpui_tests {
             "a re-attached pane painted its caret over a TUI that reset DECTCEM"
         );
     }
-
 
     #[gpui_kit::test]
     fn ssh_drop_mid_tui_recovers_at_the_next_prompt(cx: &mut TestAppContext) {

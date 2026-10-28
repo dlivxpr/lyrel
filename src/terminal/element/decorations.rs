@@ -2,8 +2,8 @@
 //! The element determines their order relative to text and graphics.
 
 use gpui_kit::{
-    App, BorderStyle, Bounds, Font, Hsla, Pixels, SharedString, TextAlign, TextRun, Window,
-    fill, outline, point, px, size,
+    App, BorderStyle, Bounds, Font, Hsla, Pixels, SharedString, TextAlign, TextRun, Window, fill,
+    outline, point, px, size,
 };
 use rio_vt::ansi::CursorShape;
 
@@ -104,7 +104,12 @@ fn for_each_special_underline(
     }
 }
 
-pub(super) fn paint_special_underlines(window: &mut Window, geom: &CellGeom, buf: &[RenderCell], scale: f32) {
+pub(super) fn paint_special_underlines(
+    window: &mut Window,
+    geom: &CellGeom,
+    buf: &[RenderCell],
+    scale: f32,
+) {
     for row in 0..geom.rows {
         let row_base = row * geom.cols;
         let mut col = 0;
@@ -306,9 +311,9 @@ pub(super) fn paint_marked(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::colors::to_hsla;
     use super::super::test_support::{caret_colors, cell};
+    use super::*;
     use rio_vt::config::colors::ColorRgb;
 
     #[test]

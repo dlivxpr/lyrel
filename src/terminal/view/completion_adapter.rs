@@ -2,8 +2,8 @@
 //! TerminalCompletion alone owns generations, ranking, and cancellation.
 //! Async results are applied against the current input and Host context.
 
-use super::*;
 use super::prompt::menu_layout;
+use super::*;
 use crate::terminal::completion::CandidateKind;
 use crate::terminal::completion::state::{CompletionContext, CompletionWork, RemoteRequest};
 use crate::terminal::prompt_input::layout::input_start;
@@ -51,10 +51,12 @@ impl TerminalView {
                 for pending in scripts {
                     let cwd = cwd.clone();
                     cx.spawn(async move |this, cx| {
-                        let results = cx
-                            .background_executor()
-                            .spawn(async move { crate::terminal::generator::run(&pending.script, &cwd) })
-                            .await;
+                        let results =
+                            cx.background_executor()
+                                .spawn(async move {
+                                    crate::terminal::generator::run(&pending.script, &cwd)
+                                })
+                                .await;
                         let _ = this.update(cx, |view, cx| {
                             let context = view.completion_context();
                             if view.completion.merge(
@@ -150,7 +152,10 @@ impl TerminalView {
         cx.notify();
     }
 
-    pub(super) fn render_completion_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    pub(super) fn render_completion_menu(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
         let items = self.completion.items();
         if items.is_empty() {
             return None;
@@ -306,8 +311,8 @@ impl TerminalView {
 #[cfg(test)]
 mod consumer_tests {
     use super::*;
-    use crate::terminal::view::test_support::*;
     use crate::daemon::protocol::DaemonMsg;
+    use crate::terminal::view::test_support::*;
     use gpui_kit::TestAppContext;
     mod completion_consumer_fixture {
         include!("../completion_consumer_fixture.rs");
@@ -509,4 +514,3 @@ mod tests {
         assert_eq!(description_budget(9., 10, 240.), 11);
     }
 }
-

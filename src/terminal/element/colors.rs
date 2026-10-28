@@ -70,7 +70,10 @@ pub(super) fn dim_fg(fg: Hsla, under: ColorRgb, legible: bool) -> Hsla {
         static LAST: std::cell::Cell<Option<(u32, u32, Option<u32>)>> =
             const { std::cell::Cell::new(None) };
     }
-    let (ink, bg) = (pack_rgb(crate::terminal::palette::hsla_to_rgb(fg)), pack_rgb(under));
+    let (ink, bg) = (
+        pack_rgb(crate::terminal::palette::hsla_to_rgb(fg)),
+        pack_rgb(under),
+    );
     let solved = LAST.with(|last| match last.get() {
         Some((i, b, s)) if i == ink && b == bg => s,
         _ => {
@@ -229,7 +232,10 @@ fn blend_toward(c: Hsla, dim: f32, under: Rgba) -> Hsla {
 }
 
 impl PaintColors {
-    pub(in crate::terminal) fn resolve(theme: &gpui_kit::component::Theme, cx: &gpui_kit::App) -> Self {
+    pub(in crate::terminal) fn resolve(
+        theme: &gpui_kit::component::Theme,
+        cx: &gpui_kit::App,
+    ) -> Self {
         let default_fg = theme.foreground;
         let default_bg = theme.background;
         let caret = theme.caret;
@@ -299,9 +305,9 @@ impl PaintColors {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::snapshot::CellPainter;
     use super::super::test_support::{caret_colors, painted_term, test_colors};
+    use super::*;
     use rio_vt::crosswords::pos::{Column, Line, Pos};
 
     #[test]

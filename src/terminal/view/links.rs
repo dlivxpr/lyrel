@@ -3,8 +3,7 @@
 //! context, schedules HostOps work and delivers navigation/clipboard effects.
 use super::menus::menu_row_with_hint;
 use super::{
-    LoopbackOpen, LoopbackPlan, OpenFileRequested, PortRoute, TerminalView, loopback_plan,
-    open_file_path, port_route_of, reveal_file_path,
+    LoopbackPlan, OpenFileRequested, TerminalView, loopback_plan, open_file_path, reveal_file_path,
 };
 use crate::core::actions::{
     CopyLinkPathUnderPointer, OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer,
@@ -16,6 +15,12 @@ use crate::ui::i18n::{L10nKey, t, t_fmt};
 use crate::ui::notification_history::NotificationWindowExt as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, ClipboardItem, Context, Window, prelude::*, px};
+
+enum LoopbackOpen {
+    Forwarded(String),
+    ForwardFailed(String),
+    NotLoopback,
+}
 
 impl TerminalView {
     /// Same shape as `warn_paste_upload_failed`: one toast per failed open, so
@@ -124,7 +129,11 @@ impl TerminalView {
 
     /// "Open with Default App": the file link under the menu, handed to the
     /// OS association whatever `link_file_open` says "Open" does.
-    pub(super) fn open_menu_link_with_default_app(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_menu_link_with_default_app(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // The menu only offers this for a local pane; a key binding could
         // still fire it on a remote one, where the path means nothing here.
         if !self.links.menu().is_some_and(|link| link.host().is_local()) {
@@ -295,35 +304,8 @@ impl TerminalView {
         }
     }
 
-    /// How forward requests about this pane reach the daemon that owns them —
-    /// through the workspace when there is one, and by pane id when there is
-    /// not. The Ports list and the port watcher build the same thing.
-    pub(crate) fn forward_route(&self) -> crate::ui::forwards::route::ForwardRoute {
-        crate::ui::forwards::route::ForwardRoute::new(self.pane_id, self.workspace.clone())
-    }
-
-    fn loopback_plan(&self, cx: &gpui_kit::App) -> LoopbackPlan {
-        loopback_plan(
-            cx.global::<Config>().ssh_loopback_forward,
-            self.workspace.as_ref(),
-            self.terminal.remote_context().map(|r| r.kind),
-            self.pane_id,
-        )
-    }
-
     fn can_forward_loopback(&self, cx: &gpui_kit::App) -> bool {
         !matches!(self.loopback_plan(cx), LoopbackPlan::Direct)
-    }
-
-    /// How a loopback port this pane is serving can be reached from here.
-    ///
-    /// The Ports list asks this about every listener it found, and it is a
-    /// different question from "is this pane local": a remote pane's :3000 is
-    /// perfectly reachable once a forward exists, and building that forward is
-    /// something this app already knows how to do. Answering only "local or
-    /// not" is what left the list showing a port it refused to open.
-    pub(crate) fn port_route(&self, cx: &gpui_kit::App) -> PortRoute {
-        port_route_of(&self.loopback_plan(cx), self.host_id().is_local())
     }
 
     fn sync_link_location(&mut self) {

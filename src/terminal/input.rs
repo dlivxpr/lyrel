@@ -1,6 +1,5 @@
 use rio_vt::crosswords::Mode;
 
-
 /// Everything about the terminal's current state that changes how a keystroke
 /// is encoded: keyboard modes and the PTY that receives the bytes.
 #[derive(Clone, Copy, Default)]
@@ -443,7 +442,6 @@ fn legacy_keystroke_to_bytes(ks: &gpui_kit::Keystroke, flags: KeyFlags) -> Optio
     }
     None
 }
-
 
 #[cfg(test)]
 mod tests {

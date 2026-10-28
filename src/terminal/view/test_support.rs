@@ -7,19 +7,17 @@ use crate::terminal::remote::PtySource;
 use gpui_kit::{Entity, TestAppContext};
 
 pub(super) fn history_fixture(entries: Vec<String>) -> crate::terminal::history::History {
-crate::terminal::history::History {
-    entries,
-    ..Default::default()
-}
+    crate::terminal::history::History {
+        entries,
+        ..Default::default()
+    }
 }
 
 pub(super) fn seed_history(view: &mut TerminalView, entries: Vec<String>) {
-view.history = TerminalHistory::from_loaded(history_fixture(entries));
+    view.history = TerminalHistory::from_loaded(history_fixture(entries));
 }
 
-pub(super) fn harness(
-    cx: &mut TestAppContext,
-) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
+pub(super) fn harness(cx: &mut TestAppContext) -> (gpui_kit::WindowHandle<TerminalView>, Stream) {
     let pty = if cfg!(windows) {
         PtySource::LocalConpty
     } else {
@@ -43,13 +41,9 @@ pub(super) fn harness_on(
         cx.set_global(Config::default());
     });
     let window = cx.add_window(|window, cx| {
-        let terminal = RemoteTerminal::from_stream_with(
-            client_side,
-            TermSize::new(80, 24),
-            Vec::new(),
-            pty,
-        )
-        .expect("socketpair-backed terminal");
+        let terminal =
+            RemoteTerminal::from_stream_with(client_side, TermSize::new(80, 24), Vec::new(), pty)
+                .expect("socketpair-backed terminal");
         TerminalView::with_terminal(terminal, 1, window, cx)
     });
     (window, daemon_side)
@@ -191,7 +185,11 @@ pub(super) fn next_input_until_timeout(daemon: &mut Stream) -> Option<Vec<u8>> {
 
 /// `next_input_until_timeout` with the executor run between reads: a reply
 /// crosses the reader thread and the view before it is written.
-pub(super) fn pumped_input(cx: &mut TestAppContext, daemon: &mut Stream, tries: usize) -> Option<String> {
+pub(super) fn pumped_input(
+    cx: &mut TestAppContext,
+    daemon: &mut Stream,
+    tries: usize,
+) -> Option<String> {
     (0..tries)
         .find_map(|_| {
             cx.run_until_parked();
@@ -239,9 +237,7 @@ pub(super) fn bind_to_a_disconnected_remote_workspace(
     view: &mut TerminalView,
     cx: &mut Context<TerminalView>,
 ) -> crate::core::session::WorkspaceId {
-    use crate::core::session::{
-        RemoteRef, RemoteTarget, WindowViews, WorkspaceId, WorkspaceStore,
-    };
+    use crate::core::session::{RemoteRef, RemoteTarget, WindowViews, WorkspaceId, WorkspaceStore};
     use crate::terminal::PaneWorkspace;
     let host = RemoteRef::new(
         RemoteTarget::direct("me", "build-box", 22),
@@ -270,4 +266,3 @@ pub(super) fn bind_to_a_disconnected_remote_workspace(
     }));
     id
 }
-

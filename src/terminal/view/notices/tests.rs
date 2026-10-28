@@ -328,8 +328,7 @@ fn a_workspace_pane_answers_to_its_workspaces_name(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_bell_rung_at_key_repeat_rate_holds_one_steady_flash(cx: &mut TestAppContext) {
     let (window, _daemon) = harness(cx);
-    let lit =
-        |cx: &mut TestAppContext| window.update(cx, |view, _, _| view.bell_flash).unwrap();
+    let lit = |cx: &mut TestAppContext| window.update(cx, |view, _, _| view.bell_flash).unwrap();
 
     let repeat = std::time::Duration::from_millis(33);
     let mut dark = Vec::new();
@@ -353,4 +352,3 @@ fn a_bell_rung_at_key_repeat_rate_holds_one_steady_flash(cx: &mut TestAppContext
     cx.run_until_parked();
     assert!(!lit(cx), "the flash outlived the last bell");
 }
-

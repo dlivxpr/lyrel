@@ -2,6 +2,7 @@
 //! Keep pre-match side effects and capability calls ordered; output notification
 //! gating and batched wakeups remain owned by TerminalLifecycle.
 
+use super::notices::ring_system_bell;
 use super::*;
 use gpui_kit::component::ActiveTheme as _;
 

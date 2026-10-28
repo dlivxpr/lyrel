@@ -1,8 +1,8 @@
 use super::*;
-use crate::terminal::view::test_support::*;
 use crate::daemon::protocol::DaemonMsg;
+use crate::terminal::view::test_support::*;
 use gpui_kit::TestAppContext;
-use rio_vt::crosswords::pos::{Line, Column};
+use rio_vt::crosswords::pos::{Column, Line};
 
 #[gpui_kit::test]
 fn pty_write_events_reach_the_daemon_as_input(cx: &mut TestAppContext) {
@@ -14,7 +14,6 @@ fn pty_write_events_reach_the_daemon_as_input(cx: &mut TestAppContext) {
         .unwrap();
     assert_eq!(next_input(&mut daemon), b"ping".to_vec());
 }
-
 
 #[gpui_kit::test]
 fn child_exit_marks_the_view_exited(cx: &mut TestAppContext) {
@@ -65,8 +64,7 @@ fn child_exit_emits_the_close_event_but_disconnect_does_not(cx: &mut TestAppCont
             .unwrap();
         got
     };
-    let wait_exited = |window: &gpui_kit::WindowHandle<TerminalView>,
-                       cx: &mut TestAppContext| {
+    let wait_exited = |window: &gpui_kit::WindowHandle<TerminalView>, cx: &mut TestAppContext| {
         for _ in 0..400 {
             cx.run_until_parked();
             let exited = window

@@ -204,105 +204,105 @@ fn ctrl_c_copy_consumes_the_editor_selection_at_the_prompt(cx: &mut TestAppConte
     assert_eq!(text.as_deref(), Some("echo hi"));
 }
 
-    #[gpui_kit::test]
-    fn allowed_remote_clipboard_image_reaches_the_system_clipboard(cx: &mut TestAppContext) {
-        use gpui_kit::ClipboardEntry;
+#[gpui_kit::test]
+fn allowed_remote_clipboard_image_reaches_the_system_clipboard(cx: &mut TestAppContext) {
+    use gpui_kit::ClipboardEntry;
 
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
+    let (window, mut daemon) = harness(cx);
+    window
+        .update(cx, |view, _, _| {
+            let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
+                r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
+            )
+            .unwrap();
+            spec.remote_clipboard_write = true;
+            view.ssh_spec = Some(Box::new(spec));
+        })
+        .unwrap();
+
+    let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(pixel)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let write = lyrel_core::core::clipboard::ClipboardWrite {
+        mime: "image/png".into(),
+        data: png.clone(),
+        id: Some("copy-1".into()),
+    };
+    DaemonMsg::ClipboardWrite(write.encode_frame())
+        .encode(&mut daemon)
+        .unwrap();
+
+    for _ in 0..400 {
+        cx.run_until_parked();
+        let copied = cx.update(|cx| {
+            cx.read_from_clipboard().and_then(|item| {
+                item.entries().iter().find_map(|entry| match entry {
+                    ClipboardEntry::Image(image) => Some(image.bytes.clone()),
+                    _ => None,
+                })
+            })
+        });
+        if copied.as_deref() == Some(png.as_slice()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let copied = cx.update(|cx| cx.read_from_clipboard());
+    assert!(copied.is_some_and(|item| {
+        item.entries()
+            .iter()
+            .any(|entry| matches!(entry, ClipboardEntry::Image(image) if image.bytes == png))
+    }));
+    assert_eq!(
+        next_input(&mut daemon),
+        lyrel_core::core::clipboard::response(Some("copy-1"), "DONE")
+    );
+}
+
+#[gpui_kit::test]
+fn disabled_remote_clipboard_image_is_rejected_without_overwriting(cx: &mut TestAppContext) {
+    let (window, mut daemon) = harness(cx);
+    window
+        .update(cx, |view, _, _| {
+            view.ssh_spec = Some(Box::new(
+                serde_json::from_str(
                     r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
                 )
-                .unwrap();
-                spec.remote_clipboard_write = true;
-                view.ssh_spec = Some(Box::new(spec));
-            })
-            .unwrap();
+                .unwrap(),
+            ));
+        })
+        .unwrap();
+    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("keep me".into())));
 
-        let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(pixel)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        let write = lyrel_core::core::clipboard::ClipboardWrite {
-            mime: "image/png".into(),
-            data: png.clone(),
-            id: Some("copy-1".into()),
-        };
-        DaemonMsg::ClipboardWrite(write.encode_frame())
-            .encode(&mut daemon)
-            .unwrap();
-
-        for _ in 0..400 {
-            cx.run_until_parked();
-            let copied = cx.update(|cx| {
-                cx.read_from_clipboard().and_then(|item| {
-                    item.entries().iter().find_map(|entry| match entry {
-                        ClipboardEntry::Image(image) => Some(image.bytes.clone()),
-                        _ => None,
-                    })
-                })
-            });
-            if copied.as_deref() == Some(png.as_slice()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+    let write = lyrel_core::core::clipboard::ClipboardWrite {
+        mime: "image/png".into(),
+        data: vec![1, 2, 3],
+        id: Some("copy-2".into()),
+    };
+    DaemonMsg::ClipboardWrite(write.encode_frame())
+        .encode(&mut daemon)
+        .unwrap();
+    let mut reply = None;
+    for _ in 0..100 {
+        cx.run_until_parked();
+        reply = next_input_until_timeout(&mut daemon);
+        if reply.is_some() {
+            break;
         }
-        let copied = cx.update(|cx| cx.read_from_clipboard());
-        assert!(copied.is_some_and(|item| {
-            item.entries()
-                .iter()
-                .any(|entry| matches!(entry, ClipboardEntry::Image(image) if image.bytes == png))
-        }));
-        assert_eq!(
-            next_input(&mut daemon),
-            lyrel_core::core::clipboard::response(Some("copy-1"), "DONE")
-        );
     }
 
-    #[gpui_kit::test]
-    fn disabled_remote_clipboard_image_is_rejected_without_overwriting(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                view.ssh_spec = Some(Box::new(
-                    serde_json::from_str(
-                        r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-                    )
-                    .unwrap(),
-                ));
-            })
-            .unwrap();
-        cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("keep me".into())));
-
-        let write = lyrel_core::core::clipboard::ClipboardWrite {
-            mime: "image/png".into(),
-            data: vec![1, 2, 3],
-            id: Some("copy-2".into()),
-        };
-        DaemonMsg::ClipboardWrite(write.encode_frame())
-            .encode(&mut daemon)
-            .unwrap();
-        let mut reply = None;
-        for _ in 0..100 {
-            cx.run_until_parked();
-            reply = next_input_until_timeout(&mut daemon);
-            if reply.is_some() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            reply,
-            Some(lyrel_core::core::clipboard::response(
-                Some("copy-2"),
-                "EPERM"
-            ))
-        );
-        assert_eq!(
-            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
-                .as_deref(),
-            Some("keep me")
-        );
-    }
+    assert_eq!(
+        reply,
+        Some(lyrel_core::core::clipboard::response(
+            Some("copy-2"),
+            "EPERM"
+        ))
+    );
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+            .as_deref(),
+        Some("keep me")
+    );
+}

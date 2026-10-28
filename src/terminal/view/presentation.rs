@@ -181,11 +181,7 @@ impl Render for TerminalView {
             .children(remote_completion_notice)
             .children(composer_over)
             .context_menu(move |menu, window, cx| {
-                let view = menu_view.read(cx);
-                if !view.links.menu_allowed() {
-                    return menu;
-                }
-                view.append_terminal_menu(menu, has_selection, window, cx)
+                menus::append_terminal_menu(&menu_view, menu, has_selection, window, cx)
             })
     }
 }
