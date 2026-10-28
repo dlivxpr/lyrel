@@ -1,4 +1,8 @@
 use super::*;
+use crate::daemon::protocol::DaemonMsg;
+use crate::terminal::view::test_support::*;
+use gpui_kit::TestAppContext;
+use rio_vt::crosswords::pos::Line;
 
 #[gpui_kit::test]
 fn ctrl_c_copy_consumes_the_selection_so_the_next_press_is_sigint(cx: &mut TestAppContext) {
@@ -142,151 +146,6 @@ fn alternate_paste_asks_the_grid_and_not_the_last_frame(cx: &mut TestAppContext)
     );
 }
 
-/// `Ctrl-^`, which used to die in a hardcoded block that swallowed every
-/// Ctrl+digit off macOS — nothing has claimed those chords since tabs
-/// moved to Alt+1..9.
-#[gpui_kit::test]
-fn ctrl_6_reaches_the_pty_as_rs(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
-    let (window, mut daemon) = harness(cx);
-    cx.update(|cx| crate::ui::keymap::init(cx));
-    window
-        .update(cx, |view, window, cx| {
-            window.activate_window();
-            view.focus_handle.focus(window, cx);
-        })
-        .unwrap();
-
-    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-    vcx.simulate_keystrokes("ctrl-6");
-
-    assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x1e]));
-}
-
-#[cfg(target_os = "macos")]
-#[gpui_kit::test]
-fn cmd_backspace_reaches_a_foreground_tui_as_ctrl_u(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
-    let (window, mut daemon) = harness(cx);
-    window
-        .update(cx, |view, window, cx| {
-            assert!(
-                !view.input_active(),
-                "the foreground process, not lyrel's editor, owns input"
-            );
-            view.on_key_down(
-                &KeyDownEvent {
-                    keystroke: gpui_kit::Keystroke {
-                        modifiers: Modifiers {
-                            platform: true,
-                            ..Modifiers::default()
-                        },
-                        key: "backspace".into(),
-                        key_char: None,
-                    },
-                    is_held: false,
-                    prefer_character_input: false,
-                },
-                window,
-                cx,
-            );
-        })
-        .unwrap();
-
-    assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![0x15]));
-}
-
-#[cfg(target_os = "macos")]
-#[gpui_kit::test]
-fn cmd_navigation_reaches_a_foreground_tui_as_readline_controls(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
-    let (window, mut daemon) = harness(cx);
-
-    for (key, expected) in [("left", 0x01), ("right", 0x05), ("delete", 0x0b)] {
-        window
-            .update(cx, |view, window, cx| {
-                assert!(!view.input_active(), "the foreground TUI owns input");
-                view.on_key_down(
-                    &KeyDownEvent {
-                        keystroke: gpui_kit::Keystroke {
-                            modifiers: Modifiers {
-                                platform: true,
-                                ..Modifiers::default()
-                            },
-                            key: key.into(),
-                            key_char: None,
-                        },
-                        is_held: false,
-                        prefer_character_input: false,
-                    },
-                    window,
-                    cx,
-                );
-            })
-            .unwrap();
-        assert_eq!(next_input_until_timeout(&mut daemon), Some(vec![expected]));
-    }
-}
-
-#[cfg(target_os = "macos")]
-#[gpui_kit::test]
-fn cmd_backspace_releases_held_input_before_ctrl_u(cx: &mut TestAppContext) {
-    crate::core::config::pin_test_config_dir();
-    let (window, mut daemon) = harness(cx);
-    DaemonMsg::Prompt {
-        active: true,
-        at_prompt: false,
-        last_exit: None,
-    }
-    .encode(&mut daemon)
-    .unwrap();
-    for _ in 0..200 {
-        cx.run_until_parked();
-        let gap = window
-            .update(cx, |view, _, _| {
-                view.terminal.shell_active() && !view.terminal.at_prompt()
-            })
-            .unwrap();
-        if gap {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-
-    window
-        .update(cx, |view, window, cx| {
-            view.commit_text("ls", cx);
-            view.on_key_down(
-                &KeyDownEvent {
-                    keystroke: gpui_kit::Keystroke {
-                        modifiers: Modifiers {
-                            platform: true,
-                            ..Modifiers::default()
-                        },
-                        key: "backspace".into(),
-                        key_char: None,
-                    },
-                    is_held: false,
-                    prefer_character_input: false,
-                },
-                window,
-                cx,
-            );
-        })
-        .unwrap();
-
-    assert_eq!(
-        next_input_until_timeout(&mut daemon),
-        Some(b"ls".to_vec()),
-        "held text must reach the PTY before the line-kill"
-    );
-    assert_eq!(
-        next_input_until_timeout(&mut daemon),
-        Some(vec![0x15]),
-        "Ctrl-U must follow the text it clears"
-    );
-}
-
 #[gpui_kit::test]
 fn paste_to_the_pty_consumes_the_selection(cx: &mut TestAppContext) {
     let (window, mut daemon) = harness(cx);
@@ -344,3 +203,106 @@ fn ctrl_c_copy_consumes_the_editor_selection_at_the_prompt(cx: &mut TestAppConte
     let text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(text.as_deref(), Some("echo hi"));
 }
+
+    #[gpui_kit::test]
+    fn allowed_remote_clipboard_image_reaches_the_system_clipboard(cx: &mut TestAppContext) {
+        use gpui_kit::ClipboardEntry;
+
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, _, _| {
+                let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
+                    r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
+                )
+                .unwrap();
+                spec.remote_clipboard_write = true;
+                view.ssh_spec = Some(Box::new(spec));
+            })
+            .unwrap();
+
+        let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(pixel)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let write = lyrel_core::core::clipboard::ClipboardWrite {
+            mime: "image/png".into(),
+            data: png.clone(),
+            id: Some("copy-1".into()),
+        };
+        DaemonMsg::ClipboardWrite(write.encode_frame())
+            .encode(&mut daemon)
+            .unwrap();
+
+        for _ in 0..400 {
+            cx.run_until_parked();
+            let copied = cx.update(|cx| {
+                cx.read_from_clipboard().and_then(|item| {
+                    item.entries().iter().find_map(|entry| match entry {
+                        ClipboardEntry::Image(image) => Some(image.bytes.clone()),
+                        _ => None,
+                    })
+                })
+            });
+            if copied.as_deref() == Some(png.as_slice()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let copied = cx.update(|cx| cx.read_from_clipboard());
+        assert!(copied.is_some_and(|item| {
+            item.entries()
+                .iter()
+                .any(|entry| matches!(entry, ClipboardEntry::Image(image) if image.bytes == png))
+        }));
+        assert_eq!(
+            next_input(&mut daemon),
+            lyrel_core::core::clipboard::response(Some("copy-1"), "DONE")
+        );
+    }
+
+    #[gpui_kit::test]
+    fn disabled_remote_clipboard_image_is_rejected_without_overwriting(cx: &mut TestAppContext) {
+        let (window, mut daemon) = harness(cx);
+        window
+            .update(cx, |view, _, _| {
+                view.ssh_spec = Some(Box::new(
+                    serde_json::from_str(
+                        r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
+                    )
+                    .unwrap(),
+                ));
+            })
+            .unwrap();
+        cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("keep me".into())));
+
+        let write = lyrel_core::core::clipboard::ClipboardWrite {
+            mime: "image/png".into(),
+            data: vec![1, 2, 3],
+            id: Some("copy-2".into()),
+        };
+        DaemonMsg::ClipboardWrite(write.encode_frame())
+            .encode(&mut daemon)
+            .unwrap();
+        let mut reply = None;
+        for _ in 0..100 {
+            cx.run_until_parked();
+            reply = next_input_until_timeout(&mut daemon);
+            if reply.is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            reply,
+            Some(lyrel_core::core::clipboard::response(
+                Some("copy-2"),
+                "EPERM"
+            ))
+        );
+        assert_eq!(
+            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("keep me")
+        );
+    }

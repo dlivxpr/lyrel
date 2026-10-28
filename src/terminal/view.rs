@@ -6,7 +6,7 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
-    App, ClipboardEntry, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Font,
+    App, ClipboardItem, Context, ExternalPaths, FocusHandle, Focusable, Font,
     KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, Pixels, ScrollEvent, WeakEntity, Window,
     actions, div, prelude::*, px,
 };
@@ -29,11 +29,6 @@ use super::element::{GridSnapshot, RenderCell, TerminalElement};
 use super::highlight::{self, TokenKind};
 use super::history_session::{PromptHistory, TerminalHistory, unix_now};
 use super::link::{LinkAt, LinkInteraction};
-use super::paste::{
-    PasteUploads, clipboard_paths, local_path_for_pane, remote_paste_spec, stages_clipboard_image,
-    write_clipboard_image,
-};
-use super::prompt_input::bytes::paste_bytes;
 #[cfg(test)]
 use super::prompt_input::layout::input_char_positions;
 use super::prompt_input::layout::{
@@ -52,9 +47,10 @@ use crate::core::actions::{
     SendBackTab, SendTab, SplitDown, SplitRight, ToggleMaximizePane,
 };
 use crate::core::config::{BellMode, Config, LinkFileOpen};
-use crate::core::shell_quote::quote_for_shell;
 use crate::daemon::protocol::{RemoteContext, ShellSpec};
 use crate::ui::i18n::{L10nKey, t, t_fmt};
+
+mod clipboard;
 
 pub(super) const GRID_PAD_X: f32 = 8.;
 pub(super) const GRID_PAD_Y: f32 = 4.;
@@ -681,41 +677,8 @@ fn ring_system_bell() -> bool {
     }
 }
 
-fn trim_trailing_spaces(text: &str) -> String {
-    text.split('\n')
-        .map(|line| line.trim_end_matches([' ', '\t']))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
-/// Paths as one line of shell words, trailing space included so whatever is
-/// typed next starts a word of its own.
-pub(super) fn pasted_paths_text(paths: &[String], shell: Option<&str>) -> String {
-    let words: Vec<String> = paths.iter().map(|p| quote_for_shell(p, shell)).collect();
-    format!("{} ", words.join(" "))
-}
 
-/// Whether the clipboard carries files rather than (only) text.
-pub(super) fn clipboard_has_paths(item: &ClipboardItem) -> bool {
-    !clipboard_paths(item).is_empty()
-}
-
-/// Whether this pane may hand a remote program's image to the system clipboard.
-///
-/// The daemon is the gate. It holds the `NativeSshSpec` that dialled the host
-/// and answers a write the profile forbids with `EPERM` before a byte of image
-/// reaches this process; a pane it never granted the permission to sends no
-/// `ClipboardWrite` at all. This is a second opinion, and it can only give one
-/// when the pane kept a copy of that spec. A pane restored by attaching to its
-/// id did not keep one — reading that absence as "forbidden" is what put the
-/// permission to sleep on the first restart after the user granted it. So:
-/// refuse what this side can see is forbidden, and defer otherwise.
-fn allows_remote_clipboard_write(
-    workspace: Option<&crate::terminal::PaneWorkspace>,
-    ssh_spec: Option<&crate::daemon::protocol::NativeSshSpec>,
-) -> bool {
-    remote_paste_spec(workspace, ssh_spec).is_none_or(|spec| spec.remote_clipboard_write)
-}
 
 /// The Windows spelling of a WSL pane's POSIX cwd, for reading rather than
 /// writing: the distro's `\\wsl$` share lets local `read_dir` reach the files.
@@ -792,36 +755,6 @@ fn files_cwd(
     }
 }
 
-fn validate_remote_clipboard_image(
-    write: lyrel_core::core::clipboard::ClipboardWrite,
-) -> Result<(gpui_kit::Image, Option<String>), String> {
-    let (gpui_format, image_format) = match write.mime.as_str() {
-        "image/png" => (gpui_kit::ImageFormat::Png, image::ImageFormat::Png),
-        "image/jpeg" | "image/jpg" => (gpui_kit::ImageFormat::Jpeg, image::ImageFormat::Jpeg),
-        "image/gif" => (gpui_kit::ImageFormat::Gif, image::ImageFormat::Gif),
-        "image/webp" => (gpui_kit::ImageFormat::Webp, image::ImageFormat::WebP),
-        _ => return Err("unsupported image MIME type".into()),
-    };
-    if image::guess_format(&write.data).ok() != Some(image_format) {
-        return Err("image signature does not match its MIME type".into());
-    }
-
-    let mut reader =
-        image::ImageReader::with_format(std::io::Cursor::new(&write.data), image_format);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16_384);
-    limits.max_image_height = Some(16_384);
-    limits.max_alloc = Some(256 << 20);
-    reader.limits(limits);
-    reader
-        .decode()
-        .map_err(|e| format!("invalid or oversized image: {e}"))?;
-
-    Ok((
-        gpui_kit::Image::from_bytes(gpui_format, write.data),
-        write.id,
-    ))
-}
 
 fn fallback_chain(family: &str, configured: &[String]) -> Vec<String> {
     let mut chain = configured.to_vec();
@@ -1454,7 +1387,7 @@ impl TerminalView {
 
     /// The shell binary this pane is running, for the path-quoting rules.
     ///
-    /// `None` before the pane has resolved one, which [`quote_for_shell`]
+    /// `None` before the pane has resolved one, which [`crate::core::shell_quote::quote_for_shell`]
     /// answers from the platform — PowerShell on Windows, POSIX elsewhere.
     /// The one pane that guess is wrong for is a cmd.exe pane that has not
     /// reported in yet.
@@ -1552,57 +1485,6 @@ impl TerminalView {
         }
     }
 
-    fn poll_remote_clipboard_write(&mut self, cx: &mut Context<Self>) {
-        if self.remote_clipboard_write_in_flight.is_some() {
-            return;
-        }
-        let write = loop {
-            let Some(write) = self.terminal.pop_clipboard_write() else {
-                return;
-            };
-            if allows_remote_clipboard_write(self.workspace.as_ref(), self.ssh_spec.as_deref()) {
-                break write;
-            }
-            self.terminal.finish_clipboard_write();
-            self.terminal.write(lyrel_core::core::clipboard::response(
-                write.id.as_deref(),
-                "EPERM",
-            ));
-        };
-
-        let generation = self.remote_clipboard_write_generation;
-        self.remote_clipboard_write_in_flight = Some(generation);
-        let request_id = write.id.clone();
-        cx.spawn(async move |view, cx| {
-            let validated = cx
-                .background_spawn(async move { validate_remote_clipboard_image(write) })
-                .await;
-            view.update(cx, |view, cx| {
-                if view.remote_clipboard_write_in_flight != Some(generation) {
-                    return;
-                }
-                view.remote_clipboard_write_in_flight = None;
-                view.terminal.finish_clipboard_write();
-                match validated {
-                    Ok((image, id)) => {
-                        cx.write_to_clipboard(ClipboardItem::new_image(&image));
-                        view.terminal
-                            .write(lyrel_core::core::clipboard::response(id.as_deref(), "DONE"));
-                    }
-                    Err(reason) => {
-                        log::warn!("refusing remote clipboard image: {reason}");
-                        view.terminal.write(lyrel_core::core::clipboard::response(
-                            request_id.as_deref(),
-                            "EINVAL",
-                        ));
-                    }
-                }
-                view.poll_remote_clipboard_write(cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
 
     fn handle_event(&mut self, ev: PaneEvent, cx: &mut Context<Self>) {
         self.terminal.poll_exited();
@@ -1973,25 +1855,6 @@ impl TerminalView {
         context
     }
 
-    /// `AlternatePaste`, with the grid asked again before it pastes.
-    ///
-    /// The `!alt_screen` half of the binding's context comes from the frame
-    /// that was last *painted*, and gpui matches keystrokes against that frame
-    /// — so a program that took the alternate screen after the last paint is
-    /// still "at a prompt" as far as the keymap is concerned. One frame is
-    /// enough: the keystroke that launches a full-screen program and the
-    /// Ctrl+V after it can land either side of a paint. Pasting there is not a
-    /// mistake the user can take back — vim in normal mode runs the clipboard
-    /// as commands — so the last word belongs to the terminal mode, not to the
-    /// frame. Propagating hands the chord on to `on_key_down`, which encodes it
-    /// as the SYN the program is waiting for.
-    fn alternate_paste(&mut self, cx: &mut Context<Self>) {
-        if self.on_alt_screen() {
-            cx.propagate();
-            return;
-        }
-        self.paste_from_clipboard(cx);
-    }
 
     pub(super) fn key_flags(&self) -> super::input::KeyFlags {
         super::input::KeyFlags::from_mode_with_local_conpty(
@@ -2037,37 +1900,6 @@ impl TerminalView {
         }
     }
 
-    pub fn paste(&mut self, text: String, cx: &mut Context<Self>) {
-        if !self.accepts_input(cx) {
-            return;
-        }
-        // The agent's input is under the box, so a paste meant for it goes
-        // into the box — out of sight under it, it would be sent unseen.
-        if self.composer_takes_typing(&text, cx) {
-            return;
-        }
-        // Same reason as `commit_text`: what is pasted lands on the prompt, so
-        // the prompt is what has to be on screen. Neither branch below moved
-        // the viewport, and a paste is a bigger change than a keystroke to
-        // make out of sight. This also clears the selection, which the tail of
-        // this function used to do on its own.
-        self.jump_to_prompt();
-        if self.input_active() {
-            self.input
-                .paste_editor(&text, &mut self.history, &mut self.completion);
-            self.lifecycle.show_cursor();
-            cx.notify();
-            return;
-        }
-        let bracketed = self
-            .terminal
-            .term
-            .lock()
-            .mode()
-            .contains(Mode::BRACKETED_PASTE);
-        self.write_gap_text(&text, paste_bytes(&text, bracketed), true, cx);
-        cx.notify();
-    }
 
     fn flash_bell(&mut self, cx: &mut Context<Self>) {
         self.bell_epoch += 1;
@@ -2226,40 +2058,6 @@ impl TerminalView {
         }
     }
 
-    pub fn copy_selection(&mut self, cx: &mut Context<Self>) {
-        let cfg = cx.global::<Config>();
-        let text = self.terminal.term.lock().selection_to_string();
-        if let Some(mut text) = text {
-            if cfg.clipboard_trim_trailing_spaces {
-                text = trim_trailing_spaces(&text);
-            }
-            if !text.is_empty() {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-            }
-        }
-    }
-
-    pub fn copy_contextual(&mut self, clear_on_copy: bool, cx: &mut Context<Self>) -> bool {
-        if self.input_active() {
-            if let Some(text) = self.input.editor().selected_text() {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                if clear_on_copy {
-                    self.input.editor_mut().clear_selection();
-                    cx.notify();
-                }
-                return true;
-            }
-        }
-        if self.has_selection() {
-            self.copy_selection(cx);
-            if clear_on_copy {
-                self.terminal.term.lock().selection = None;
-                cx.notify();
-            }
-            return true;
-        }
-        false
-    }
 
     pub fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
         let direction = if forward {
@@ -2283,255 +2081,6 @@ impl TerminalView {
         cx.notify();
     }
 
-    pub fn cut_contextual(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.input_active() {
-            return false;
-        }
-        if let Some(text) = self.input.editor().selected_text() {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-            self.input.editor_mut().delete_selection();
-            self.close_completion();
-            self.lifecycle.show_cursor();
-            cx.notify();
-        }
-        true
-    }
-
-    pub fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
-        let Some(item) = cx.read_from_clipboard() else {
-            return;
-        };
-        let paths = clipboard_paths(&item);
-        if !paths.is_empty() {
-            self.paste_local_paths(paths, cx);
-            return;
-        }
-        if let Some(text) = item.text() {
-            self.paste(text, cx);
-            return;
-        }
-        if self.input_active() {
-            return;
-        }
-        if let Some(img) = item.entries().iter().find_map(|e| match e {
-            ClipboardEntry::Image(img) => Some(img),
-            _ => None,
-        }) {
-            self.paste_clipboard_image(img, cx);
-        }
-    }
-
-    pub(super) fn drop_files(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        self.paste_local_paths(paths.paths().to_vec(), cx);
-    }
-
-    /// A row dragged out of a remote Files tree names a file on that remote,
-    /// not here: there is nothing to upload, and the path is pasted as the
-    /// tree spells it.
-    pub(super) fn drop_remote_path(
-        &mut self,
-        drag: &crate::ui::file_tree::RemotePathDrag,
-        cx: &mut Context<Self>,
-    ) {
-        self.paste_paths(vec![drag.path.to_string_lossy().into_owned()], cx);
-    }
-
-    /// Paste paths already spelled the way the pane's host reads them: into
-    /// the composer as attachments when it has the keyboard, and as shell
-    /// words onto the line otherwise. Every route that turns files into
-    /// something to paste — a drop, a copied file, a screenshot, an upload to
-    /// a remote pane — ends here.
-    fn paste_paths(&mut self, spelled: Vec<String>, cx: &mut Context<Self>) {
-        let Some(spelled) = self.composer_takes_paths(spelled, cx) else {
-            return;
-        };
-        let text = pasted_paths_text(&spelled, self.shell_program().as_deref());
-        self.paste(text, cx);
-    }
-
-    /// Paste files that live on this machine so the pane's program can open
-    /// them: uploaded first when the pane runs on an SSH host, renamed for a
-    /// WSL pane, and pasted as they are everywhere else.
-    pub(super) fn paste_local_paths(
-        &mut self,
-        paths: Vec<std::path::PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
-        if paths.is_empty() {
-            return;
-        }
-        // Every step of an upload is a blocking daemon round trip, which a
-        // keystroke handler must not make, so a remote pane pastes from a
-        // background task and this returns without touching the line.
-        if self.upload_for_remote(paths.clone(), cx) {
-            return;
-        }
-        // The upload declined: a local pane, a WSL pane, which needs a rewrite
-        // rather than a transfer, or a workspace with no SSH spec to
-        // piggyback on.
-        let shares_localhost = self
-            .workspace
-            .as_ref()
-            .is_some_and(|w| w.shares_localhost());
-        let spelled: Vec<String> = paths
-            .iter()
-            .map(|p| local_path_for_pane(&p.to_string_lossy(), shares_localhost))
-            .collect();
-        self.paste_paths(spelled, cx);
-    }
-
-    fn paste_clipboard_image(&mut self, img: &gpui_kit::Image, cx: &mut Context<Self>) {
-        // A screenshot pasted into the composer is one of its attachments,
-        // shown as a chip like a copied file. Forwarded as SYN it would land
-        // in the agent's own input, hidden under the box.
-        if self.composer_takes_files()
-            && let Some(path) = write_clipboard_image(img)
-        {
-            self.paste_local_paths(vec![path], cx);
-            return;
-        }
-        if self.paste_clipboard_image_as_path(img, cx) {
-            return;
-        }
-        self.terminal.write(vec![0x16]);
-        self.terminal.term.lock().selection = None;
-        cx.notify();
-    }
-
-    /// Stage the clipboard image and paste a path for it, answering whether
-    /// this took the paste over. `false` leaves the caller forwarding SYN —
-    /// see [`stages_clipboard_image`] for when that is the better path.
-    fn paste_clipboard_image_as_path(
-        &mut self,
-        img: &gpui_kit::Image,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let is_remote =
-            remote_paste_spec(self.workspace.as_ref(), self.ssh_spec.as_deref()).is_some();
-        if !stages_clipboard_image(is_remote) {
-            return false;
-        }
-        let Some(path) = write_clipboard_image(img) else {
-            return false;
-        };
-        // A macOS pane only gets here when it is remote — a local one returned
-        // above — so pasting a path is right on every platform, and staying
-        // silent would be the very no-op this route exists to avoid.
-        self.paste_local_paths(vec![path], cx);
-        true
-    }
-
-    /// Upload local files to the pane's remote host and paste their remote
-    /// paths, all off the UI thread. Answers whether this pane took the paste
-    /// over; `false` means a local, WSL, or spec-less pane the caller should
-    /// paste the local paths for.
-    ///
-    /// The paste lands as soon as the transfers start — Ctrl+V must not stall
-    /// on the wire — and each file appears at its path only once it is whole,
-    /// since the upload writes a temporary name and renames it into place. The
-    /// transfers are watched to the end, and a failure warns the user that the
-    /// path they were handed is dangling.
-    fn upload_for_remote(
-        &mut self,
-        sources: Vec<std::path::PathBuf>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(spec) = remote_paste_spec(self.workspace.as_ref(), self.ssh_spec.as_deref())
-        else {
-            return false;
-        };
-        let host = format!("{}@{}", spec.user, spec.host);
-        let route = crate::ui::sftp::SftpRoute::new(self.pane_id, self.workspace.clone());
-        let prepared = self.remote_paste.prepare(&route, &mut cx.to_async());
-        let pane_id = self.pane_id;
-        cx.spawn(async move |this, cx| {
-            let prepared = prepared.await;
-            let dir = match this.update(cx, |view, _| view.remote_paste.prepared(prepared)) {
-                Ok(Ok(dir)) => dir,
-                Ok(Err(reason)) => {
-                    Self::paste_local_fallback(&this, cx, &sources, &host, &reason);
-                    return;
-                }
-                Err(_) => return,
-            };
-            let started =
-                PasteUploads::start(route.clone(), pane_id, dir, sources.clone(), cx).await;
-            let uploads = match started {
-                Ok(uploads) => uploads,
-                Err(reason) => {
-                    Self::paste_local_fallback(&this, cx, &sources, &host, &reason);
-                    return;
-                }
-            };
-            let spelled = uploads.paths();
-            let pasted = this.update_in(cx, |view, window, cx| {
-                view.paste_paths(spelled, cx);
-                for (local, reason) in uploads.failures() {
-                    view.warn_paste_upload_failed(local, &host, reason, window, cx);
-                }
-            });
-            if pasted.is_err() {
-                return;
-            }
-            for (local, started) in uploads.into_started() {
-                if let Err(reason) = started.watch(route.clone(), cx).await {
-                    let _ = this.update_in(cx, |view, window, cx| {
-                        view.warn_paste_upload_failed(&local, &host, &reason, window, cx);
-                    });
-                }
-            }
-        })
-        .detach();
-        true
-    }
-
-    /// Fall back to the local paths when nothing could be staged on the remote
-    /// — the paste is never dropped — and say why they are local.
-    fn paste_local_fallback(
-        this: &gpui_kit::WeakEntity<Self>,
-        cx: &mut gpui_kit::AsyncApp,
-        sources: &[std::path::PathBuf],
-        host: &str,
-        reason: &str,
-    ) {
-        let spelled: Vec<String> = sources
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-        let _ = this.update_in(cx, |view, window, cx| {
-            view.paste_paths(spelled, cx);
-            if let Some(first) = sources.first() {
-                view.warn_paste_upload_failed(first, host, reason, window, cx);
-            }
-        });
-    }
-
-    /// One notification per failed file — the pane's line already has a path
-    /// in it, and the user is the only one who can tell whether it matters.
-    fn warn_paste_upload_failed(
-        &self,
-        local: &std::path::Path,
-        host: &str,
-        reason: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::warn!(
-            "pasted upload of {} to {host} failed: {reason}",
-            local.display()
-        );
-        let name = local
-            .file_name()
-            .map_or_else(|| local.to_string_lossy(), |n| n.to_string_lossy());
-        window.notify_app(
-            crate::ui::notification_history::Notification::info(crate::ui::i18n::t_fmt(
-                crate::ui::i18n::L10nKey::SftpPasteUploadFailed,
-                &[("name", &name), ("host", host), ("error", reason)],
-            ))
-            .pane(self.owner_workspace(), self.pane_id, &self.pane_route()),
-            cx,
-        );
-    }
 
     /// Same shape as `warn_paste_upload_failed`: one toast per failed open, so
     /// a broken `link_file_command` surfaces as a config problem instead of a
@@ -5658,7 +5207,7 @@ mod tests {
         before_input, description_budget, elide, encode_mouse, expand_file_command_template,
         fallback_chain, fig_icon_emoji, fig_icon_glyph, focus_report_bytes, highlight_runs,
         input_cells, input_char_positions, input_overflow_shift, input_overlay_rows, input_start,
-        menu_layout, trim_trailing_spaces, wheel_route, wrapped_click_index,
+        menu_layout, wheel_route, wrapped_click_index,
     };
     use gpui_kit::Modifiers;
     use gpui_kit::component::IconName;
@@ -5892,43 +5441,6 @@ mod tests {
         assert_eq!(wsl_share_distro(None, None, true), None);
     }
 
-    /// A pane restored by attaching to its id carries no copy of the spec that
-    /// dialled the host. The daemon still has one, and still refuses a write
-    /// the profile forbids — so a missing copy here is not a verdict.
-    #[test]
-    fn a_pane_without_its_own_spec_defers_to_the_daemons_verdict() {
-        let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
-            r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-        )
-        .unwrap();
-        assert!(!super::allows_remote_clipboard_write(None, Some(&spec)));
-        spec.remote_clipboard_write = true;
-        assert!(super::allows_remote_clipboard_write(None, Some(&spec)));
-        assert!(super::allows_remote_clipboard_write(None, None));
-    }
-
-    #[test]
-    fn remote_clipboard_images_must_match_their_declared_mime() {
-        let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(pixel)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-
-        let valid = lyrel_core::core::clipboard::ClipboardWrite {
-            mime: "image/png".into(),
-            data: png.clone(),
-            id: None,
-        };
-        assert!(super::validate_remote_clipboard_image(valid).is_ok());
-
-        let mismatched = lyrel_core::core::clipboard::ClipboardWrite {
-            mime: "image/jpeg".into(),
-            data: png,
-            id: None,
-        };
-        assert!(super::validate_remote_clipboard_image(mismatched).is_err());
-    }
 
     #[test]
     fn a_wsl_cwd_gets_a_windows_spelling_the_completion_engine_can_list() {
@@ -6329,24 +5841,7 @@ mod tests {
         assert_eq!(focus_report_bytes(Mode::MOUSE_MOTION, true), None);
     }
 
-    #[test]
-    fn trim_trailing_spaces_strips_per_line_and_preserves_structure() {
-        assert_eq!(trim_trailing_spaces("a  \nb\t\nc"), "a\nb\nc");
-        assert_eq!(trim_trailing_spaces("a  \n"), "a\n");
-        assert_eq!(trim_trailing_spaces("a  "), "a");
-        assert_eq!(trim_trailing_spaces("  a  "), "  a");
-    }
 
-    #[test]
-    fn pasted_paths_are_shell_quoted_and_space_joined() {
-        assert_eq!(
-            super::pasted_paths_text(
-                &["/Users/me/My File.txt".into(), "/tmp/b.log".into()],
-                Some("zsh"),
-            ),
-            "'/Users/me/My File.txt' /tmp/b.log "
-        );
-    }
 
     #[test]
     fn input_clusters_caret_clicks_and_wraps_match_rio_grid() {
@@ -7091,9 +6586,6 @@ mod gpui_tests {
     }
     mod key_consumer_tests {
         include!("prompt_input/key_consumer_tests.rs");
-    }
-    mod paste_consumer_tests {
-        include!("prompt_input/paste_consumer_tests.rs");
     }
     use super::*;
     use crate::core::config::MouseZoomModifier;
@@ -8572,108 +8064,6 @@ mod gpui_tests {
         );
     }
 
-    #[gpui_kit::test]
-    fn allowed_remote_clipboard_image_reaches_the_system_clipboard(cx: &mut TestAppContext) {
-        use gpui_kit::ClipboardEntry;
-
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                let mut spec: crate::daemon::protocol::NativeSshSpec = serde_json::from_str(
-                    r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-                )
-                .unwrap();
-                spec.remote_clipboard_write = true;
-                view.ssh_spec = Some(Box::new(spec));
-            })
-            .unwrap();
-
-        let pixel = image::RgbaImage::from_pixel(1, 1, image::Rgba([4, 5, 6, 255]));
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(pixel)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        let write = lyrel_core::core::clipboard::ClipboardWrite {
-            mime: "image/png".into(),
-            data: png.clone(),
-            id: Some("copy-1".into()),
-        };
-        DaemonMsg::ClipboardWrite(write.encode_frame())
-            .encode(&mut daemon)
-            .unwrap();
-
-        for _ in 0..400 {
-            cx.run_until_parked();
-            let copied = cx.update(|cx| {
-                cx.read_from_clipboard().and_then(|item| {
-                    item.entries().iter().find_map(|entry| match entry {
-                        ClipboardEntry::Image(image) => Some(image.bytes.clone()),
-                        _ => None,
-                    })
-                })
-            });
-            if copied.as_deref() == Some(png.as_slice()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        let copied = cx.update(|cx| cx.read_from_clipboard());
-        assert!(copied.is_some_and(|item| {
-            item.entries()
-                .iter()
-                .any(|entry| matches!(entry, ClipboardEntry::Image(image) if image.bytes == png))
-        }));
-        assert_eq!(
-            next_input(&mut daemon),
-            lyrel_core::core::clipboard::response(Some("copy-1"), "DONE")
-        );
-    }
-
-    #[gpui_kit::test]
-    fn disabled_remote_clipboard_image_is_rejected_without_overwriting(cx: &mut TestAppContext) {
-        let (window, mut daemon) = harness(cx);
-        window
-            .update(cx, |view, _, _| {
-                view.ssh_spec = Some(Box::new(
-                    serde_json::from_str(
-                        r#"{"host":"build-box","port":22,"user":"me","auth_mode":"auto"}"#,
-                    )
-                    .unwrap(),
-                ));
-            })
-            .unwrap();
-        cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("keep me".into())));
-
-        let write = lyrel_core::core::clipboard::ClipboardWrite {
-            mime: "image/png".into(),
-            data: vec![1, 2, 3],
-            id: Some("copy-2".into()),
-        };
-        DaemonMsg::ClipboardWrite(write.encode_frame())
-            .encode(&mut daemon)
-            .unwrap();
-        let mut reply = None;
-        for _ in 0..100 {
-            cx.run_until_parked();
-            reply = next_input_until_timeout(&mut daemon);
-            if reply.is_some() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            reply,
-            Some(lyrel_core::core::clipboard::response(
-                Some("copy-2"),
-                "EPERM"
-            ))
-        );
-        assert_eq!(
-            cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
-                .as_deref(),
-            Some("keep me")
-        );
-    }
 
     fn wait_for_input_active(
         window: &gpui_kit::WindowHandle<TerminalView>,
