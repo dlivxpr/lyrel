@@ -3,7 +3,7 @@
 use super::*;
 use crate::ui::app::LyrelApp;
 use crate::ui::host_ops::HostOps;
-use gpui_kit::{AppContext as _, Context, Focusable as _};
+use gpui_kit::{Context, Focusable as _};
 use lyrel_core::core::git::ops::GitOp;
 
 #[derive(Clone, Copy)]
@@ -32,7 +32,9 @@ impl ScmPanelState {
         {
             return;
         }
-        let Some(context) = repo.context(cx) else { return };
+        let Some(context) = repo.context(cx) else {
+            return;
+        };
         let (repo, host, epoch) = context.into_parts();
         let load = self.begin_branch_load(repo, epoch);
         let root = load.repo.root.clone();
@@ -56,8 +58,13 @@ impl ScmPanelState {
 
     fn begin_branch_load(&mut self, repo: RepoKey, epoch: u64) -> BranchLoad {
         self.branch_generation = self.branch_generation.wrapping_add(1);
-        self.branches_loading.insert(repo.clone(), self.branch_generation);
-        BranchLoad { repo, epoch, generation: self.branch_generation }
+        self.branches_loading
+            .insert(repo.clone(), self.branch_generation);
+        BranchLoad {
+            repo,
+            epoch,
+            generation: self.branch_generation,
+        }
     }
 
     fn apply_branches(&mut self, load: BranchLoad, out: Option<String>, cx: &App) -> bool {
@@ -70,8 +77,13 @@ impl ScmPanelState {
         {
             // Failure is still an empty list at this epoch, not a retry loop
             // from render. Git-operation errors retain their existing notices.
-            let names = out.unwrap_or_default().lines().map(str::trim)
-                .filter(|name| !name.is_empty()).map(str::to_string).collect();
+            let names = out
+                .unwrap_or_default()
+                .lines()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect();
             self.branches.insert(load.repo, (load.epoch, names));
         }
         true
@@ -120,9 +132,15 @@ impl ScmPanelState {
     pub(crate) fn submit_branch_input(&mut self, kind: BranchInput, cx: &App) -> Option<GitOp> {
         let input = self.take_branch_input(kind)?;
         let name = input.read(cx).value().trim().to_string();
-        if name.is_empty() { return None }
+        if name.is_empty() {
+            return None;
+        }
         Some(match kind {
-            BranchInput::Create => GitOp::CreateBranch { name, start: None, checkout: true },
+            BranchInput::Create => GitOp::CreateBranch {
+                name,
+                start: None,
+                checkout: true,
+            },
             BranchInput::Checkout => GitOp::CheckoutBranch { name },
         })
     }
@@ -133,9 +151,14 @@ mod tests {
     use super::*;
 
     #[gpui_kit::test]
-    fn a_retired_host_read_cannot_release_or_replace_its_reconnected_read(cx: &mut gpui_kit::TestAppContext) {
+    fn a_retired_host_read_cannot_release_or_replace_its_reconnected_read(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         cx.update(|cx| {
-            let repo = RepoKey { host: HostId::LOCAL, root: PathBuf::from("/branch-read") };
+            let repo = RepoKey {
+                host: HostId::LOCAL,
+                root: PathBuf::from("/branch-read"),
+            };
             let mut scm = ScmPanelState::default();
             let old = scm.begin_branch_load(repo.clone(), 0);
             scm.forget_host(repo.host);
@@ -150,11 +173,16 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn an_epoch_change_keeps_the_previous_list_until_a_current_read_lands(cx: &mut gpui_kit::TestAppContext) {
+    fn an_epoch_change_keeps_the_previous_list_until_a_current_read_lands(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         cx.update(|cx| {
             use crate::terminal::git_data::ScmData;
             cx.set_global(ScmData::default());
-            let repo = RepoKey { host: HostId::LOCAL, root: PathBuf::from("/branch-epoch") };
+            let repo = RepoKey {
+                host: HostId::LOCAL,
+                root: PathBuf::from("/branch-epoch"),
+            };
             let mut scm = ScmPanelState::default();
             let initial = scm.begin_branch_load(repo.clone(), 0);
             scm.apply_branches(initial, Some("main\n".into()), cx);
