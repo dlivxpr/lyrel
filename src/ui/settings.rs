@@ -1111,11 +1111,6 @@ pub(crate) fn best_matching_section(query: &str) -> Option<SettingsSection> {
         .or_else(|| (keybinding_match_count(query) > 0).then_some(SettingsSection::KeyboardMouse))
 }
 
-pub(crate) struct ThemeEditor {
-    pub(crate) seed: Vec<(ThemeEdit, Entity<ColorPickerState>)>,
-    pub(crate) ansi: Vec<(ThemeEdit, Entity<ColorPickerState>)>,
-    pub(crate) _subs: Vec<Subscription>,
-}
 
 pub(crate) struct SettingsState {
     pub(crate) focus_handle: gpui_kit::FocusHandle,
@@ -1147,9 +1142,7 @@ pub(crate) struct SettingsState {
     pub(crate) wd_path_input: Entity<InputState>,
     pub(crate) link_file_command_input: Entity<InputState>,
     pub(crate) http_proxy_input: Entity<InputState>,
-    pub(crate) theme_editor: Option<ThemeEditor>,
-    pub(crate) theme_draft: Option<(presets::Theme, presets::Theme)>,
-    pub(crate) theme_draft_error: Option<String>,
+    pub(crate) theme: theme_edit::ThemeEditing,
     /// The one popover open on the page — a dropdown, a theme list, a row's
     /// menu — by the id its trigger was drawn with.
     pub(crate) menu: Option<SharedString>,
@@ -1959,67 +1952,6 @@ mod gpui_tests {
             assert_eq!(cx.global::<Config>().notify_threshold_secs, 73);
         });
         vcx.run_until_parked();
-    }
-
-    #[gpui_kit::test]
-    fn theme_edits_preview_without_writing_and_cancel_restores_original(cx: &mut TestAppContext) {
-        crate::core::config::pin_test_config_dir();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("draft.yaml");
-        let (app, mut vcx) = harness(cx);
-        app.update_in(&mut vcx, |app, window, cx| {
-            let mut theme = crate::ui::presets::all(cx).remove(0);
-            theme.id = "settings-test-theme".into();
-            theme.path = Some(path.clone());
-            crate::ui::presets::write_theme_file(&theme).unwrap();
-            let original_file = std::fs::read(&path).unwrap();
-            let original_color = theme.accent;
-            let mut themes = crate::ui::presets::all(cx);
-            themes.push(theme);
-            cx.set_global(crate::ui::presets::Themes(themes));
-            cx.global_mut::<Config>().theme_follow_system = false;
-            cx.global_mut::<Config>().theme_preset = "settings-test-theme".into();
-            app.open_settings_section(SettingsSection::Appearance, window, cx);
-            app.edit_active_theme(
-                crate::ui::settings::ThemeEdit::Accent,
-                gpui_kit::rgb(0x123456).into(),
-                window,
-                cx,
-            );
-            assert!(app.theme_draft_dirty());
-            assert_eq!(std::fs::read(&path).unwrap(), original_file);
-            app.cancel_theme_draft(window, cx);
-            assert!(!app.theme_draft_dirty());
-            assert_eq!(
-                crate::ui::presets::by_id(cx, "settings-test-theme").accent,
-                original_color
-            );
-            app.edit_active_theme(
-                crate::ui::settings::ThemeEdit::Accent,
-                gpui_kit::rgb(0x654321).into(),
-                window,
-                cx,
-            );
-            assert!(app.save_theme_draft(window, cx));
-            assert_ne!(std::fs::read(&path).unwrap(), original_file);
-            assert!(!app.theme_draft_dirty());
-            app.edit_active_theme(
-                crate::ui::settings::ThemeEdit::Accent,
-                gpui_kit::rgb(0x102030).into(),
-                window,
-                cx,
-            );
-            app.active_settings_mut()
-                .unwrap()
-                .theme_draft
-                .as_mut()
-                .unwrap()
-                .1
-                .path = Some(dir.path().to_path_buf());
-            assert!(!app.save_theme_draft(window, cx));
-            assert!(app.theme_draft_dirty());
-            assert!(app.active_settings().unwrap().theme_draft_error.is_some());
-        });
     }
 
     #[gpui_kit::test]

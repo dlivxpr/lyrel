@@ -555,16 +555,14 @@ impl SettingsWindow {
     /// the sixteen ANSI colors.
     pub(crate) fn render_theme_editor_group(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let tk = Tk::of(cx);
-        let editor = self
-            .active_settings()
-            .and_then(|s| s.theme_editor.as_ref())?;
-        let seed: Vec<(String, Entity<ColorPickerState>)> = editor
-            .seed
+        let editing = &self.active_settings()?.theme;
+        let seed: Vec<(String, Entity<ColorPickerState>)> = editing
+            .seed()?
             .iter()
             .map(|(edit, state)| (theme_edit_label(*edit).to_string(), state.clone()))
             .collect();
         let ansi: Vec<Entity<ColorPickerState>> =
-            editor.ansi.iter().map(|(_, s)| s.clone()).collect();
+            editing.ansi()?.iter().map(|(_, s)| s.clone()).collect();
 
         let theme = presets::by_id(cx, &crate::ui::theme::effective_preset_id(cx));
         let image = theme.image.clone();
