@@ -4108,3 +4108,368 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
+
+#[gpui_kit::test]
+fn structured_math_syntax_matrix_edits_renders_and_reopens_through_workbench(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{Focusable as _, VisualContext as _};
+
+    // Each reference is a simpler expression with independently predictable
+    // geometry. Literal TeX, a loading label, or one fixed placeholder cannot
+    // satisfy the row/column/script relationships below.
+    let fixtures = [
+        ("scripts", r"x_i^2", r"x", true),
+        ("fraction", r"\frac{a+b}{c}", r"a+b", true),
+        ("root", r"\sqrt[3]{x}", r"x", false),
+        ("greek", r"\alpha+\Gamma", r"\alpha", false),
+        ("operators", r"\lim_{x\to0}\sin x+\cos x", r"\sin x", false),
+        ("integral", r"\int_0^1 x\,dx", r"x", true),
+        ("sum", r"\sum_{i=1}^n i", r"i", true),
+        ("matrix", r"\begin{matrix}a&b\\c&d\end{matrix}", r"\begin{matrix}a&b\end{matrix}", true),
+        ("parenthesized-matrix", r"\begin{pmatrix}a&b\\c&d\end{pmatrix}", r"\begin{pmatrix}a&b\end{pmatrix}", true),
+        ("bracketed-matrix", r"\begin{bmatrix}a&b\\c&d\end{bmatrix}", r"\begin{bmatrix}a&b\end{bmatrix}", true),
+        ("matrix-combinations", r"\begin{pmatrix}a_i^2&\frac{1}{x}\\\sqrt{x}&\sum_{i=1}^n i\end{pmatrix}", r"\begin{pmatrix}a&b\end{pmatrix}", true),
+        ("cases", r"f(x)=\begin{cases}x_i^2&\text{if }x>0\\0&\text{otherwise}\end{cases}", r"f(x)=\begin{cases}0&x>0\end{cases}", true),
+        ("aligned", r"\begin{aligned}a_i^2&=\sum_{i=1}^n i\\b&=\int_0^1 x\,dx\end{aligned}", r"\begin{aligned}a&=b\end{aligned}", true),
+        ("text-and-operators", r"x_i^2+\text{when }x>0+\sum_{i=1}^n i", r"x_i^2", false),
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    let ready_bounds = |context: &mut gpui_kit::VisualTestContext, tex: &str| {
+        let id = format!("markdown-math-ready-{tex}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            context.update(|window, cx| window.render_frame(cx));
+            if let Some(bounds) = context.update(|window, _| window.try_find(id.as_str()).map(|image| {
+                assert_eq!(image.label(), Some(format!("Formula: {tex}").as_str()));
+                image.bounds()
+            })) { break bounds; }
+            assert!(std::time::Instant::now() < deadline, "formula did not render: {tex}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+
+    for (name, tex, reference, taller) in fixtures {
+        for block in [false, true] {
+            let path = directory.path().join(format!("{name}-{block}.md"));
+            let delimiter = if block { "$$\n" } else { "$" };
+            let closing = if block { "\n$$" } else { "$" };
+            let separator = if block { "\n\n" } else { " between " };
+            let prose_gap = if block { "\n\n" } else { " " };
+            let source = format!("\u{feff}# Matrix\r\n\r\n前{prose_gap}{delimiter}{tex}{closing}{separator}{delimiter}{reference}{closing}{prose_gap}后  \r\n\n[keep]: target  ");
+            std::fs::write(&path, source.as_bytes()).unwrap();
+            app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let view = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+                assert!(std::time::Instant::now() < deadline, "{name}: workbench did not open");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            let identity = view.read_with(&context, |view, _| view.document().entity_id());
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&view, &mut context);
+            let original_bounds = ready_bounds(&mut context, tex);
+            let reference_bounds = ready_bounds(&mut context, reference);
+            if taller {
+                assert!(original_bounds.size.height > reference_bounds.size.height, "{name}, block={block}: structured rows/scripts must change the rendered height");
+            } else {
+                assert!(original_bounds.size.width > reference_bounds.size.width, "{name}, block={block}: the extra notation must occupy rendered width");
+            }
+            let normalized = source.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+            let start = normalized.find(tex).unwrap();
+            let end = start + tex.len();
+            let after = normalized.find('后').unwrap();
+            view.read_with(&context, |view, cx| {
+                let before_at = normalized.find('前').unwrap();
+                let before = view.range_to_bounds(&(before_at..before_at), cx).unwrap();
+                let after = view.range_to_bounds(&(after..after), cx).unwrap();
+                if block {
+                    assert!(after.top() > original_bounds.top());
+                } else {
+                    assert!(before.left() < original_bounds.left());
+                    assert!(after.left() >= reference_bounds.right());
+                }
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+
+            // Enter through the real image hit target, then replace local TeX
+            // through the focused production input handler, not a converter.
+            context.update(|window, cx| window.click(format!("markdown-math-ready-{tex}").as_str(), cx));
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert!(view.selection().head() >= start - delimiter.len());
+                assert!(view.selection().head() <= end);
+                assert_eq!(view.document().entity_id(), identity);
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            view.update_in(&mut context, |view, window, cx| {
+                view.command(Command::Select(Selection::new(end, start)), window, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            let edited_tex = format!("{tex}+z");
+            context.update(|window, cx| window.input(&edited_tex, cx));
+            context.run_until_parked();
+            let edited_source = source.replacen(tex, &edited_tex, 1);
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(start + edited_tex.len()));
+                assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::new(end, start));
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+            let edited_bounds = ready_bounds(&mut context, &edited_tex);
+            assert!(edited_bounds.size.width > original_bounds.size.width, "{name}: local edit must update image geometry");
+            context.dispatch_action(crate::core::actions::EditorSave);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                context.run_until_parked();
+                if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+                assert!(std::time::Instant::now() < deadline, "{name}: save did not settle");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), edited_source.as_bytes());
+            app.update_in(&mut context, |app, window, cx| {
+                app.editor_close_file(0, window, cx);
+                app.open_file_in_editor(&path, window, cx);
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let reopened = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+                    if view.read_with(&context, |view, _| view.document().entity_id() != identity) { break view; }
+                }
+                assert!(std::time::Instant::now() < deadline, "{name}: saved document did not reopen");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            reopened.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes()));
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&reopened, &mut context);
+            let reopened_bounds = ready_bounds(&mut context, &edited_tex);
+            assert_eq!(reopened_bounds.size, edited_bounds.size, "{name}: reopening must render the edited expression, not the old source");
+            app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+            context.run_until_parked();
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn structured_math_local_invalid_recovery_composition_and_selection_keep_one_history(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestInput, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _, VisualContext as _};
+
+    let fixtures = [
+        r"\begin{pmatrix}a_i^2&\text{old}\\\sqrt{x}&\sum_{i=1}^n i\end{pmatrix}",
+        r"f(x)=\begin{cases}x_i^2&\text{old}\\0&x\le0\end{cases}",
+        r"\begin{aligned}a_i^2&=\text{old}\\b&=\int_0^1 x\,dx\end{aligned}",
+        r"x_i^2+\sum_{i=1}^n i+\text{old}",
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    let await_output = |context: &mut gpui_kit::VisualTestContext, tex: &str, failed: bool| {
+        let id = format!("markdown-math-{}-{tex}", if failed { "error" } else { "ready" });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            context.executor().advance_clock(std::time::Duration::from_millis(100));
+            context.run_until_parked();
+            context.update(|window, cx| window.render_frame(cx));
+            if context.update(|window, _| window.try_find(id.as_str()).is_some()) { break; }
+            assert!(std::time::Instant::now() < deadline, "formula output never settled: {id}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        context.update(|window, _| {
+            let output = window.find(id.as_str());
+            if failed {
+                let prefix = crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMarkdownMathError);
+                let label = output.label().unwrap();
+                assert!(label.starts_with(prefix));
+                assert_ne!(label.trim(), prefix, "a failure must explain its cause");
+                assert!(window.try_find(format!("markdown-math-ready-{tex}").as_str()).is_none());
+            } else {
+                assert_eq!(output.label(), Some(format!("Formula: {tex}").as_str()));
+                assert!(output.bounds().size.width > gpui_kit::px(20.));
+                assert!(output.bounds().size.height > gpui_kit::px(4.));
+            }
+        });
+    };
+
+    for (ix, tex) in fixtures.into_iter().enumerate() {
+        for block in [false, true] {
+            let path = directory.path().join(format!("local-{ix}-{block}.md"));
+            let source = if block {
+                format!("# Local\r\n\r\n前  \r\n\n$$\n{tex}\n$$\n\n后🎉  \r\n[ref]: target  ")
+            } else {
+                format!("# Local\r\n\r\n前 ${tex}$ 后🎉  \r\n\n[ref]: target  ")
+            };
+            std::fs::write(&path, source.as_bytes()).unwrap();
+            app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let view = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&view, &mut context);
+            await_output(&mut context, tex, false);
+            context.update(|window, cx| window.click(format!("markdown-math-ready-{tex}").as_str(), cx));
+            context.run_until_parked();
+            let normalized = source.replace("\r\n", "\n");
+            if block {
+                if let Some(row) = tex.find(r"\\") {
+                    let at = normalized.find(tex).unwrap() + row + 2;
+                    view.update_in(&mut context, |view, window, cx| {
+                        view.select_range(at..at, cx);
+                        view.focus_handle(cx).focus(window, cx);
+                    });
+                    context.update(|window, cx| window.press("enter", cx));
+                    context.run_until_parked();
+                    view.read_with(&context, |view, cx| {
+                        assert_eq!(view.document().read(cx).source().to_string(), normalized.replacen(r"\\", "\\\\\n", 1));
+                        assert_eq!(view.selection(), Selection::caret(at + 1));
+                    });
+                    context.dispatch_action(gpui_kit::component::input::Undo);
+                    context.run_until_parked();
+                    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+                }
+            }
+            let end = normalized.find(tex).unwrap() + tex.len();
+            view.update_in(&mut context, |view, window, cx| {
+                view.select_range(end..end, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            context.update(|window, cx| window.press("backspace", cx));
+            context.run_until_parked();
+            let invalid_tex = &tex[..tex.len() - 1];
+            let invalid_source = source.replacen(tex, invalid_tex, 1);
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(end - 1));
+                assert_eq!(view.document().read(cx).encode().unwrap(), invalid_source.as_bytes());
+            });
+            view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+            await_output(&mut context, invalid_tex, true);
+            // A malformed environment is still clickable local source, not a
+            // dead error panel. Undo recovers both its original source and caret.
+            context.update(|window, cx| window.click(format!("markdown-math-error-{invalid_tex}").as_str(), cx));
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(end));
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), invalid_source.as_bytes()));
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+
+            let start = normalized.find("old").unwrap();
+            let reversed = Selection::new(start + 3, start);
+            view.update_in(&mut context, |view, window, cx| {
+                view.command(Command::Select(reversed), window, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            let utf16_start = normalized[..start].encode_utf16().count();
+            context.update(|window, cx| {
+                window.render_frame(cx);
+                let bounds = window.find("markdown-source").bounds();
+                let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+                let selected = input.selected_text_range(cx).unwrap();
+                assert_eq!(selected.range, utf16_start..utf16_start + 3);
+                assert!(selected.reversed);
+                input.compose_text(None, "ni", Some(2..2), cx);
+                assert_eq!(input.marked_text_range(cx), Some(utf16_start..utf16_start + 2));
+                input.compose_text(None, "", Some(0..0), cx);
+                assert!(input.marked_text_range(cx).is_none());
+            });
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), reversed);
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            // Cancelling preedit must not discard the existing redo branch.
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), invalid_source.as_bytes()));
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.update_in(&mut context, |view, window, cx| {
+                view.command(Command::Select(reversed), window, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            context.update(|window, cx| {
+                window.render_frame(cx);
+                let bounds = window.find("markdown-source").bounds();
+                let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+                input.compose_text(None, "ne", Some(2..2), cx);
+                input.compose_text(None, "new", Some(3..3), cx);
+                assert_eq!(input.marked_text_range(cx), Some(utf16_start..utf16_start + 3));
+                input.commit_text("new", cx);
+                assert!(input.marked_text_range(cx).is_none());
+            });
+            context.run_until_parked();
+            let edited_source = source.replacen("old", "new", 1);
+            let edited_tex = tex.replacen("old", "new", 1);
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), Selection::caret(start + 3));
+                assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes());
+            });
+            // Cross the live/source boundary; composition is still one undo.
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            context.dispatch_action(gpui_kit::component::input::Undo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| {
+                assert_eq!(view.selection(), reversed);
+                assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+            });
+            context.dispatch_action(gpui_kit::component::input::Redo);
+            context.run_until_parked();
+            view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes()));
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
+            await_output(&mut context, &edited_tex, false);
+            context.dispatch_action(crate::core::actions::EditorSave);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                context.run_until_parked();
+                if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), edited_source.as_bytes());
+            app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+            context.run_until_parked();
+            app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let reopened = loop {
+                context.run_until_parked();
+                if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            reopened.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited_source.as_bytes()));
+            context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+            settle_live_geometry(&reopened, &mut context);
+            await_output(&mut context, &edited_tex, false);
+            app.update_in(&mut context, |app, window, cx| app.editor_close_file(0, window, cx));
+            context.run_until_parked();
+        }
+    }
+}
