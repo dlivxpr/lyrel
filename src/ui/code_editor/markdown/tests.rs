@@ -1650,3 +1650,89 @@ fn native_table_at_document_edges_transfers_focus_without_inserting_rows(
         });
     }
 }
+
+#[gpui_kit::test]
+fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_save(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{EntityInputHandler as _, Focusable as _};
+    use gpui_kit::test::{TestInput, TestWindowExt as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("math.md");
+    let formulas = [
+        r"x_i^2", r"\frac{a+b}{c}", r"\sqrt{x}+\sqrt[3]{y}",
+        r"\alpha+\Gamma", r"\lim_{x\to0}\sin x", r"\int_0^1 x\,dx",
+        r"\sum_{i=1}^n i", r"x\quad\text{when }y>0",
+    ];
+    let source = format!("# Math\r\n\r\n前 $x_i^2$ 后  \r\n\n$$\n{}\n$$\n\n错误 $\\unknowncommand{{x}}$\n\n[keep]: target  ", formulas[1..].join(" + "));
+    std::fs::write(&path, source.as_bytes()).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let ready = "markdown-math-ready-x_i^2";
+    loop {
+        context.run_until_parked();
+        context.update(|window, cx| window.render_frame(cx));
+        if context.update(|window, _| window.try_find(ready).is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline, "native formula never became ready");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, _| {
+        assert!(window.find(ready).bounds().size.width > gpui_kit::px(4.));
+        assert!(window.try_find("markdown-math-error-\\unknowncommand{x}").is_some());
+    });
+    let normalized = source.replace("\r\n", "\n");
+    let at = normalized.find("x_i^2").unwrap() + 5;
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        let surface = window.find("markdown-source").bounds();
+        let mut input = gpui_kit::ElementInputHandler::new(surface, view.clone());
+        input.compose_text(None, "ni", Some(2..2), cx);
+        input.compose_text(None, "", Some(0..0), cx);
+        input.commit_text("+1", cx);
+    });
+    context.run_until_parked();
+    let edited = source.replacen("x_i^2", "x_i^2+1", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), edited.replace("\r\n", "\n"));
+        assert_eq!(view.selection(), Selection::caret(at + 2));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), normalized));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.run_until_parked();
+    // Queue another revision before background rendering settles; late output
+    // must never restore its old formula source, selection, or save snapshot.
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(0..0, cx);
+        view.command(Command::Insert("正文\n\n".into()), window, cx);
+    });
+    context.dispatch_action(crate::core::actions::EditorSave);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), format!("正文\r\n\r\n{edited}").as_bytes());
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), normalized));
+}
