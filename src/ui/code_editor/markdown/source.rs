@@ -120,6 +120,7 @@ impl SourcePresentation {
                         == transaction.revision()
                 {
                     this.projection.rebase(doc.source(), transaction, this.live);
+                    if this.live { this.projection.component_sources(doc.source(), &this.mdx_state); }
                     this.rendered_revision = None;
                 }
                 this.sync_inline_reveal();
@@ -262,6 +263,7 @@ impl SourcePresentation {
                     {
                         view.invalidate_layout(cx);
                         view.projection.install(projection);
+                        if live { view.projection.component_sources(view.document.read(cx).source(), &view.mdx_state); }
                         view.sync_inline_reveal();
                         view.state.selection = view.map_live_caret(view.state.selection, cx);
                         view.selection_notification = true;
@@ -554,6 +556,29 @@ impl SourcePresentation {
         self.rendered_revision = None;
         cx.notify();
     }
+    pub(super) fn toggle_component_source(
+        &mut self,
+        id: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command(Command::FinishComposition, window, cx);
+        let Some(component) = self.projection.mdx.components.iter().find(|component| component.id() == id) else { return; };
+        let children = component.children_range();
+        let at = self.state.selection.head.clamp(children.start, children.end);
+        let leaving = self.mdx_state.source_components.contains(&id);
+        self.update_mdx_view_state(|state| {
+            if leaving { state.source_components.remove(&id); }
+            else { state.source_components.insert(id); }
+        }, window, cx);
+        if leaving {
+            self.schedule_parse(cx);
+        } else {
+            self.projection.component_sources(self.document.read(cx).source(), &self.mdx_state);
+        }
+        self.command(Command::Select(Selection::caret(at)), window, cx);
+        self.focus.focus(window, cx);
+    }
     pub(crate) fn is_composing(&self) -> bool {
         self.state.composition.is_some()
     }
@@ -809,6 +834,7 @@ impl SourcePresentation {
                 if self.projection.revision == revision {
                     self.projection
                         .rebase(document.source(), &transaction, self.live);
+                    if self.live { self.projection.component_sources(document.source(), &self.mdx_state); }
                 }
                 self.rendered_revision = None;
                 cx.emit(DocumentEvent::Edited(transaction));

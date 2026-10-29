@@ -82,6 +82,9 @@ fn render_component(context: &FieldContext<'_>, content: AnyElement, window: &mu
     if super::steps::matches(context) {
         return super::steps::render(context, content, window, cx);
     }
+    if super::callouts::matches(context) {
+        return super::callouts::render(context, content, window, cx);
+    }
     render_generic(context, content, cx)
 }
 
@@ -110,8 +113,9 @@ pub(in super::super) fn render_generic(context: &FieldContext<'_>, content: AnyE
         let expansion = context.component.filter(|component| field == Field::Children && component.closing_name_range().is_none()).map(|component| {
             (component.source_range().end - 2..component.source_range().end, context.source.slice(component.name_range()).to_string(), component.is_flow())
         });
-        header = header.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(Button::new(SharedString::from(id)).ghost().xsmall()
+        header = header.child(div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(Button::new(SharedString::from(id)).ghost().small()
             .label(t(key)).accessibility_label(accessibility)
             .on_click(cx.listener(move |this, _, window, cx| {
                 if this.document().read(cx).revision() != revision || this.document().read(cx).grammar() != grammar { return; }

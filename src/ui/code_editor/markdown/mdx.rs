@@ -9,6 +9,7 @@ use std::{
     path::Path,
 };
 
+pub(super) mod callouts;
 pub(super) mod view;
 pub(super) mod cards;
 mod steps;
@@ -326,6 +327,7 @@ impl Index {
 pub(super) struct ViewState {
     pub(super) collapsed: HashSet<ComponentId>,
     pub(super) active_child: HashMap<ComponentId, ComponentId>,
+    pub(super) source_components: HashSet<ComponentId>,
 }
 
 fn jsx(node: &Node) -> Option<(&Option<String>, &[AttributeContent])> {

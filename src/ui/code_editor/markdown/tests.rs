@@ -6359,3 +6359,128 @@ fn native_steps_keyboard_source_activation_finishes_preedit_without_numbering_ed
     context.dispatch_action(gpui_kit::component::input::Redo);
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("'One'", "'中文'", 1).as_bytes()));
 }
+
+fn exercise_native_callout_consumer(cx: &mut gpui_kit::TestAppContext, name: &str) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use super::super::test_host::FileHost;
+    use gpui_kit::test::{TestInput, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("callout.mdx");
+    let original = format!("before  \r\n\n<{name} title='keep' action={{() => {{ throw Error('never execute') }}}}>\r\n\ntext **bold** and *nested*\n\n</{name}>\r\n\n[ref]: /untouched  ");
+    std::fs::write(&path, &original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(725));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("callout-edit-source").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        assert!(window.try_find("mdx-name").is_none(), "callouts are not unknown-component boxes");
+        window.click("mdx-property-title", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "zhong", Some(5..5), cx);
+        input.commit_text("中文", cx);
+    });
+    let property = original.replacen("keep", "中文", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property.as_bytes()));
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        for _ in 0..96 {
+            if window.find("callout-edit-source").focused() == Some(true) { break; }
+            window.press("tab", cx);
+        }
+        assert_eq!(window.find("callout-edit-source").focused(), Some(true), "callout source must be keyboard reachable");
+        assert_eq!(window.find("callout-edit-source").label(), Some(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorCalloutEditSource)));
+        window.press("enter", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property.as_bytes()));
+    let normalized = property.replace("\r\n", "\n");
+    let bold = normalized.find("bold").unwrap();
+    view.update_in(&mut context, |view, _, cx| view.select_range(bold..bold + 4, cx));
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "nei", Some(3..3), cx);
+    });
+    context.update(|window, cx| { window.render_frame(cx); window.click("callout-return-content", cx); });
+    let source_edit = property.replacen("bold", "nei", 1);
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_composing());
+        assert_eq!(view.selection(), Selection::caret(bold + 3));
+        assert_eq!(view.document().read(cx).encode().unwrap(), source_edit.as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    settle_live_geometry(&view, &mut context);
+    let nested = source_edit.replace("\r\n", "\n").find("nested").unwrap();
+    view.update_in(&mut context, |view, window, cx| { view.select_range(nested..nested + 6, cx); view.focus_handle(cx).focus(window, cx); });
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.commit_text("edited", cx);
+    });
+    let expected = source_edit.replacen("nested", "edited", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source_edit.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    for _ in 0..3 { context.dispatch_action(gpui_kit::component::input::Undo); }
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    for _ in 0..3 { context.dispatch_action(gpui_kit::component::input::Redo); }
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.update_in(&mut context, |app, window, cx| { app.editor_close_file(0, window, cx); app.editor_open_on_host(host.clone(), &path, window, cx); });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(725));
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+}
+
+#[gpui_kit::test]
+fn native_callout_note_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Note");
+}
+#[gpui_kit::test]
+fn native_callout_tip_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Tip");
+}
+#[gpui_kit::test]
+fn native_callout_info_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Info");
+}
+#[gpui_kit::test]
+fn native_callout_warning_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Warning");
+}
