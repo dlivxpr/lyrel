@@ -35,6 +35,8 @@ pub(crate) struct SourcePresentation {
     search_matches: Vec<Range<usize>>,
     indent: crate::ui::editor_text::Indent,
     viewport_height: Pixels,
+    reveal_at: Option<usize>,
+    selection_notification: bool,
     _observe: Subscription,
 }
 impl SourcePresentation {
@@ -56,7 +58,10 @@ impl SourcePresentation {
                         doc.boundary(this.state.selection.head, false),
                     );
                 }
-                if this.projection.revision != transaction.revision() {
+                if this.projection.revision != transaction.revision()
+                    && transaction.revision() == doc.revision()
+                    && this.projection.revision.wrapping_add(transaction.edits.len() as u64) == transaction.revision()
+                {
                     this.projection.rebase(doc.source(), transaction, this.live);
                     this.rendered_revision = None;
                 }
@@ -85,6 +90,8 @@ impl SourcePresentation {
             search_matches: Vec::new(),
             indent: crate::ui::editor_text::Indent { hard_tabs: false, size: 4 },
             viewport_height: Pixels::ZERO,
+            reveal_at: None,
+            selection_notification: false,
             _observe: observe,
         }
     }
@@ -113,7 +120,8 @@ impl SourcePresentation {
         cx.notify();
     }
     fn schedule_parse(&mut self, cx: &mut Context<Self>) {
-        if !self.live { return; }
+        if !self.live && self.projection.revision == self.document.read(cx).revision() { return; }
+        let live = self.live;
         let document = self.document.clone();
         let identity = document.entity_id();
         let revision = document.read(cx).revision();
@@ -121,10 +129,10 @@ impl SourcePresentation {
         self.parse_task = Some(cx.spawn(async move |view, cx| {
             cx.background_executor().timer(std::time::Duration::from_millis(45)).await;
             let projection = cx.background_executor().spawn(async move {
-                Projection::parse(&source.to_string(), revision, true)
+                Projection::parse(&source.to_string(), revision, live)
             }).await;
             let _ = view.update(cx, |view, cx| {
-                if view.live && view.document.entity_id() == identity && view.document.read(cx).revision() == revision {
+                if view.live == live && view.document.entity_id() == identity && view.document.read(cx).revision() == revision {
                     view.projection.install(projection);
                     view.rendered_revision = None;
                     view.geometry = None;
@@ -156,6 +164,9 @@ impl SourcePresentation {
         if selection != self.state.selection && !self.extra_selections.contains(&selection) {
             self.extra_selections.push(selection);
         }
+        self.reveal_caret = true;
+        self.reveal_at = Some(selection.head);
+        self.selection_notification = true;
         cx.notify();
     }
     pub(crate) fn set_search_matches(&mut self, matches: Vec<Range<usize>>, cx: &mut Context<Self>) {
@@ -165,6 +176,12 @@ impl SourcePresentation {
     pub(crate) fn select_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         self.extra_selections.clear();
         self.reveal_caret = true;
+        self.reveal_at = None;
+        self.selection_notification = true;
+        if self.is_composing() {
+            for cached in self.blocks.values_mut() { cached.version = u64::MAX; }
+            self.rendered_revision = None;
+        }
         self.document.update(cx, |document, cx| {
             document.command(
                 &mut self.state,
@@ -254,7 +271,9 @@ impl SourcePresentation {
             document.composition_owner = self.state.composition.as_ref().map(|_| own_view);
             let changed = document.revision() != revision;
             if changed {
-                self.projection.rebase(document.source(), &transaction, self.live);
+                if self.projection.revision == revision {
+                    self.projection.rebase(document.source(), &transaction, self.live);
+                }
                 self.rendered_revision = None;
                 cx.emit(DocumentEvent::Edited(transaction));
                 cx.notify();
@@ -265,7 +284,12 @@ impl SourcePresentation {
         });
         if let Some(selections) = after_extra { self.extra_selections = selections; }
         if marked_before != self.state.marked_range() {
-            for cached in self.blocks.values_mut() { cached.version = u64::MAX; }
+            let after = self.state.marked_range();
+            for leaf in &self.projection.leaves {
+                if marked_before.iter().chain(after.iter()).any(|range| range.start <= leaf.range.end && range.end >= leaf.range.start) {
+                    if let Some(cached) = self.blocks.get_mut(&leaf.id) { cached.version = u64::MAX; }
+                }
+            }
             self.rendered_revision = None;
         }
         if changed {
@@ -276,6 +300,7 @@ impl SourcePresentation {
             window.notify_text_selection_changed(&self.focus);
         }
         self.reveal_caret = true;
+        self.reveal_at = None;
         cx.notify();
     }
     fn caret_bounds(&self, byte: usize, cx: &App) -> Option<Bounds<Pixels>> {
@@ -653,7 +678,7 @@ impl EntityInputHandler for SourcePresentation {
 }
 impl Render for SourcePresentation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let revision = self.document.read(cx).revision();
+        let revision = self.projection.revision;
         if self.rendered_revision != Some(revision) {
             self.render_generation += 1;
             for leaf in &self.projection.leaves {
@@ -993,7 +1018,9 @@ impl Element for SourceElement {
                 for range in &view.search_matches {
                     let start = range.start.max(leaf.range.start);
                     let end = range.end.min(leaf.range.end);
-                    if start < end { ranges.push((leaf.display_offset(start)..leaf.display_offset(end), self.color)); }
+                    let mut color = self.color;
+                    color.a *= 0.45;
+                    if start < end { ranges.push((leaf.display_offset(start)..leaf.display_offset(end), color)); }
                 }
                 for selection in std::iter::once(view.state.selection).chain(view.extra_selections.iter().copied()) {
                     let selection = selection.range();
@@ -1006,11 +1033,17 @@ impl Element for SourceElement {
         };
         let (_, geometry) = collect_leaf_geometry(decorations, || self.child.prepaint(window, cx));
         self.view.update(cx, |view, cx| {
+            let previous_caret = view.caret_bounds(view.state.selection.head, cx);
             view.geometry = Some((self.revision, geometry));
             view.viewport_height = bounds.size.height;
+            if view.focus.is_focused(window) && (view.selection_notification || previous_caret != view.caret_bounds(view.state.selection.head, cx)) {
+                view.selection_notification = false;
+                window.notify_text_selection_changed(&view.focus);
+            }
             if view.reveal_caret && view.focus.is_focused(window) {
                 view.reveal_caret = false;
-                if let Some(caret) = view.caret_bounds(view.state.selection.head, cx) {
+                let at = view.reveal_at.take().unwrap_or(view.state.selection.head);
+                if let Some(caret) = view.caret_bounds(at, cx) {
                     let inset = window.rem_size() * 0.75;
                     let delta = if caret.top() < bounds.top() + inset {
                         bounds.top() + inset - caret.top()

@@ -322,7 +322,7 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(cx: &mut 
     use gpui_kit::{ElementInputHandler, EntityInputHandler as _, Focusable as _, MouseButton, VisualContext as _, px, size};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("mapping.md");
-    let source = format!("# Heading\n\nA &amp; e\u{301}🎉\nsoft  \nhard\n\n---\n\n{}", "wrapping words ".repeat(90));
+    let source = format!("# Heading\n\nA &amp; e\u{301}🎉\nsoft  \nhard\n\n\\*literal\\*\n\n---\n\n{}", "wrapping words ".repeat(240));
     std::fs::write(&path, &source).unwrap();
     let (app, mut view_context, _streams) = harness_with_tabs(cx, 1);
     view_context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
@@ -351,6 +351,18 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(cx: &mut 
     view_context.run_until_parked();
     presentation.read_with(&view_context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), source.replacen("&amp;", "", 1)));
     view_context.dispatch_action(gpui_kit::component::input::Undo);
+    view_context.run_until_parked();
+    view_context.update(|window, cx| {
+        window.render_frame(cx);
+        let after_escape = presentation.read(cx).range_to_bounds(&(42..42), cx).unwrap().center();
+        window.pointer_down(after_escape, MouseButton::Left, cx);
+        window.pointer_up(after_escape, MouseButton::Left, cx);
+        window.press("backspace", cx);
+    });
+    view_context.run_until_parked();
+    presentation.read_with(&view_context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), source.replacen("\\*literal", "literal", 1)));
+    view_context.dispatch_action(gpui_kit::component::input::Undo);
+    view_context.run_until_parked();
     presentation.update_in(&mut view_context, |view, window, cx| {
         view.select_range(22..22, cx);
         view.focus_handle(cx).focus(window, cx);
@@ -363,6 +375,33 @@ fn native_live_break_mapping_resize_and_composition_keep_source_ranges(cx: &mut 
     let identity = presentation.read_with(&view_context, |view, _| view.document().entity_id());
     let window_handle = view_context.window_handle();
     cx.simulate_window_resize(window_handle, size(px(720.), px(640.)));
+    view_context.update(|window, cx| {
+        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(18.));
+        window.refresh();
+    });
+    presentation.update_in(&mut view_context, |view, window, cx| {
+        view.select_range(158..158, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    view_context.update(|window, cx| {
+        window.render_frame(cx);
+        window.render_frame(cx);
+        window.scroll("markdown-source", gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-64.))), cx);
+        assert!(presentation.read(cx).scroll_offset().y < px(0.));
+        let caret = presentation.read(cx).range_to_bounds(&(158..158), cx).unwrap();
+        let native = presentation.update(cx, |view, cx| view.character_index_for_point(caret.center(), window, cx)).unwrap();
+        assert_eq!(native, source[..158].encode_utf16().count());
+        window.pointer_down(caret.center(), MouseButton::Left, cx);
+        window.pointer_up(caret.center(), MouseButton::Left, cx);
+        window.press("left", cx);
+        window.input("X", cx);
+    });
+    view_context.run_until_parked();
+    presentation.read_with(&view_context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), format!("{}X{}", &source[..157], &source[157..]));
+    });
+    view_context.dispatch_action(gpui_kit::component::input::Undo);
+    view_context.run_until_parked();
     presentation.update_in(&mut view_context, |view, window, cx| {
         view.select_range(22..22, cx);
         view.focus_handle(cx).focus(window, cx);
