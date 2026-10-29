@@ -42,9 +42,10 @@ impl FileHost {
         host
     }
     fn path(&self, path: &Path) -> PathBuf {
-        self.root.as_ref().map_or_else(|| path.to_path_buf(), |root| {
-            root.join(path.to_string_lossy().trim_start_matches('/'))
-        })
+        self.root.as_ref().map_or_else(
+            || path.to_path_buf(),
+            |root| root.join(path.to_string_lossy().trim_start_matches('/')),
+        )
     }
 
     pub(super) fn pause_next_read(&self) -> mpsc::Sender<()> {
@@ -67,10 +68,18 @@ impl Host for FileHost {
         self.id
     }
     fn separator(&self) -> char {
-        if self.root.is_some() { '/' } else { self.inner.separator() }
+        if self.root.is_some() {
+            '/'
+        } else {
+            self.inner.separator()
+        }
     }
     fn is_absolute(&self, p: &Path) -> bool {
-        if self.root.is_some() { p.to_string_lossy().starts_with('/') } else { self.inner.is_absolute(p) }
+        if self.root.is_some() {
+            p.to_string_lossy().starts_with('/')
+        } else {
+            self.inner.is_absolute(p)
+        }
     }
     fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
         self.inner.read_dir(p, root)
@@ -89,8 +98,12 @@ impl Host for FileHost {
     }
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
         if self.root.is_some() {
-            self.inner.canonicalize(&self.path(p)).map(|_| p.to_path_buf())
-        } else { self.inner.canonicalize(p) }
+            self.inner
+                .canonicalize(&self.path(p))
+                .map(|_| p.to_path_buf())
+        } else {
+            self.inner.canonicalize(p)
+        }
     }
     fn search(
         &self,

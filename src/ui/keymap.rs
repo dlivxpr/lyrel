@@ -77,6 +77,12 @@ pub fn init(cx: &mut App) {
 fn fixed_bindings(cx: &App) -> Vec<KeyBinding> {
     let mut bindings = vec![
         load_binding("secondary-+", IncreaseFontSize, None, cx),
+        load_binding(
+            "secondary-enter",
+            ToggleMarkdownTask,
+            Some("Input && Markdown"),
+            cx,
+        ),
         KeyBinding::new("tab", SendTab, Some("Terminal")),
         KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
     ];

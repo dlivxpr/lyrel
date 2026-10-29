@@ -13,9 +13,9 @@ mod projection;
 mod regions;
 mod source;
 mod tables;
-pub(super) use source::SourcePresentation;
 #[cfg(test)]
 pub(super) use source::FollowLink;
+pub(super) use source::SourcePresentation;
 #[cfg(test)]
 mod tests;
 
@@ -128,10 +128,19 @@ pub(crate) enum Command {
     ParagraphBreak {
         hard: bool,
     },
-    ListBreak { hard: bool, at: Option<usize> },
+    ListBreak {
+        hard: bool,
+        at: Option<usize>,
+    },
     ListBackspace,
-    ListIndent { outdent: bool, width: usize, at: Option<usize> },
-    ToggleTask { at: usize },
+    ListIndent {
+        outdent: bool,
+        width: usize,
+        at: Option<usize>,
+    },
+    ToggleTask {
+        at: usize,
+    },
     Replace {
         range: Range<usize>,
         text: String,
@@ -599,7 +608,9 @@ impl MarkdownDocument {
                     }
                     Command::ListBreak { hard, at } => lists::line_break(self, state, hard, at),
                     Command::ListBackspace => lists::backspace(self, state),
-                    Command::ListIndent { outdent, width, at } => lists::indent(self, state, outdent, width, at),
+                    Command::ListIndent { outdent, width, at } => {
+                        lists::indent(self, state, outdent, width, at)
+                    }
                     Command::ToggleTask { at } => lists::toggle(self, state, at),
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),

@@ -1324,19 +1324,58 @@ fn list_commands_continue_split_exit_and_undo_without_reformatting_neighbors() {
     let original = "* root\n  7) **child** tail\n+ neighbor\n\n> > quote";
     let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
     let mut state = PresentationState::new(Selection::caret(21));
-    document.command(&mut state, Command::ListBreak { hard: false, at: None });
-    assert_eq!(document.source().to_string(), "* root\n  7) **child**\n  8)  tail\n+ neighbor\n\n> > quote");
+    document.command(
+        &mut state,
+        Command::ListBreak {
+            hard: false,
+            at: None,
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "* root\n  7) **child**\n  8)  tail\n+ neighbor\n\n> > quote"
+    );
     assert_eq!(state.selection(), Selection::caret(27));
     document.command(&mut state, Command::Undo);
     assert_eq!(document.source().to_string(), original);
     assert_eq!(state.selection(), Selection::caret(21));
-    document.command(&mut state, Command::Select(Selection::caret(original.len())));
-    document.command(&mut state, Command::ListBreak { hard: false, at: None });
-    assert_eq!(document.source().to_string(), "* root\n  7) **child** tail\n+ neighbor\n\n> > quote\n> > ");
-    document.command(&mut state, Command::ListBreak { hard: false, at: None });
-    assert_eq!(document.source().to_string(), "* root\n  7) **child** tail\n+ neighbor\n\n> > quote\n> ");
-    document.command(&mut state, Command::ListBreak { hard: false, at: None });
-    assert_eq!(document.source().to_string(), "* root\n  7) **child** tail\n+ neighbor\n\n> > quote\n");
+    document.command(
+        &mut state,
+        Command::Select(Selection::caret(original.len())),
+    );
+    document.command(
+        &mut state,
+        Command::ListBreak {
+            hard: false,
+            at: None,
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "* root\n  7) **child** tail\n+ neighbor\n\n> > quote\n> > "
+    );
+    document.command(
+        &mut state,
+        Command::ListBreak {
+            hard: false,
+            at: None,
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "* root\n  7) **child** tail\n+ neighbor\n\n> > quote\n> "
+    );
+    document.command(
+        &mut state,
+        Command::ListBreak {
+            hard: false,
+            at: None,
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "* root\n  7) **child** tail\n+ neighbor\n\n> > quote\n"
+    );
 }
 
 #[gpui_kit::test]
@@ -1344,7 +1383,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     cx: &mut gpui_kit::TestAppContext,
 ) {
     use crate::ui::app::test_window::harness_with_tabs;
-    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestInput, TestWindowExt as _};
+    use gpui_kit::test::{TestEventExt as _, TestInput, TestQueryExt as _, TestWindowExt as _};
     use gpui_kit::{ElementInputHandler, Focusable as _, MouseButton};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("lists.md");
@@ -1353,11 +1392,16 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     let normalized = original.replace("\r\n", "\n");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) {
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
             break view;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -1372,10 +1416,20 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     });
     context.update(|window, cx| window.press("enter", cx));
     context.run_until_parked();
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), "* root\n  7) [ ] **child**\n  8) [ ] \n+ neighbor\n\n> > *quote*\n"));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).source().to_string(),
+            "* root\n  7) [ ] **child**\n  8) [ ] \n+ neighbor\n\n> > *quote*\n"
+        )
+    });
     context.update(|window, cx| window.press("enter", cx));
     context.run_until_parked();
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), "* root\n  7) [ ] **child**\n8) [ ] \n+ neighbor\n\n> > *quote*\n"));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).source().to_string(),
+            "* root\n  7) [ ] **child**\n8) [ ] \n+ neighbor\n\n> > *quote*\n"
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
@@ -1388,7 +1442,10 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     });
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).source().to_string(), "* root\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n");
+        assert_eq!(
+            view.document().read(cx).source().to_string(),
+            "* root\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n"
+        );
         assert_eq!(view.selection(), selection);
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
@@ -1397,12 +1454,27 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
         assert_eq!(view.document().read(cx).source().to_string(), normalized);
         assert_eq!(view.selection(), selection);
     });
+    context.update(|_, cx| crate::ui::keymap::init(cx));
     view.update_in(&mut context, |view, window, cx| {
         view.focus_handle(cx).focus(window, cx);
     });
-    context.update(|window, cx| window.press("secondary-enter", cx));
+    context.update(|window, cx| {
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-enter"
+            } else {
+                "ctrl-enter"
+            },
+            cx,
+        )
+    });
     context.run_until_parked();
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), "* root\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n"));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).source().to_string(),
+            "* root\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n"
+        )
+    });
     let at = normalized.find("*quote*").unwrap() + 1;
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(at..at, cx);
@@ -1418,27 +1490,44 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     });
     context.run_until_parked();
     let expected = "* root\n  7) [x] **child**\n+ neighbor\n\n> > *中文quote*\n";
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), expected));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), expected)
+    });
     context.dispatch_action(crate::core::actions::EditorSave);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert_eq!(std::fs::read(&path).unwrap(), "* root\r\n  7) [x] **child**\n+ neighbor\r\n\n> > *中文quote*\n".as_bytes());
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        "* root\r\n  7) [x] **child**\n+ neighbor\r\n\n> > *中文quote*\n".as_bytes()
+    );
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
         app.open_file_in_editor(&path, window, cx);
     });
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(&context, |app, cx| {
-        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        let reopened = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
         assert_eq!(reopened.document().read(cx).source().to_string(), expected);
     });
 }
@@ -1449,14 +1538,31 @@ fn list_indent_moves_only_the_target_subtree_and_restores_selection_on_undo() {
     let at = original.find("target").unwrap();
     let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
     let mut state = PresentationState::new(Selection::caret(at));
-    document.command(&mut state, Command::ListIndent { outdent: false, width: 4, at: None });
-    assert_eq!(document.source().to_string(), "- first\n  + target\n    4) **nested**\n* neighbor\n");
+    document.command(
+        &mut state,
+        Command::ListIndent {
+            outdent: false,
+            width: 4,
+            at: None,
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "- first\n  + target\n    4) **nested**\n* neighbor\n"
+    );
     assert_eq!(state.selection(), Selection::caret(at + 2));
     document.command(&mut state, Command::Undo);
     assert_eq!(document.source().to_string(), original);
     assert_eq!(state.selection(), Selection::caret(at));
     document.command(&mut state, Command::Redo);
-    document.command(&mut state, Command::ListIndent { outdent: true, width: 4, at: None });
+    document.command(
+        &mut state,
+        Command::ListIndent {
+            outdent: true,
+            width: 4,
+            at: None,
+        },
+    );
     assert_eq!(document.source().to_string(), original);
     assert_eq!(state.selection(), Selection::caret(at));
 }
@@ -1468,18 +1574,27 @@ fn list_backspace_outdents_then_joins_and_task_toggle_is_one_history_entry() {
     let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
     let mut state = PresentationState::new(Selection::caret(at));
     document.command(&mut state, Command::ToggleTask { at });
-    assert_eq!(document.source().to_string(), "* first\n  + [ ] **task**\n- last");
+    assert_eq!(
+        document.source().to_string(),
+        "* first\n  + [ ] **task**\n- last"
+    );
     assert_eq!(state.selection(), Selection::caret(at));
     document.command(&mut state, Command::Undo);
     assert_eq!(document.source().to_string(), original);
     assert_eq!(state.selection(), Selection::caret(at));
     document.command(&mut state, Command::ListBackspace);
-    assert_eq!(document.source().to_string(), "* first\n+ [X] **task**\n- last");
+    assert_eq!(
+        document.source().to_string(),
+        "* first\n+ [X] **task**\n- last"
+    );
     assert_eq!(state.selection(), Selection::caret(at - 2));
     document.command(&mut state, Command::ListBackspace);
     assert_eq!(document.source().to_string(), "* first**task**\n- last");
     document.command(&mut state, Command::Undo);
-    assert_eq!(document.source().to_string(), "* first\n+ [X] **task**\n- last");
+    assert_eq!(
+        document.source().to_string(),
+        "* first\n+ [X] **task**\n- last"
+    );
     assert_eq!(state.selection(), Selection::caret(at - 2));
     document.command(&mut state, Command::Undo);
     assert_eq!(document.source().to_string(), original);
@@ -1488,14 +1603,36 @@ fn list_backspace_outdents_then_joins_and_task_toggle_is_one_history_entry() {
 
 #[test]
 fn quote_inside_list_continues_without_creating_a_sibling_and_exits_one_layer() {
-    let mut document = MarkdownDocument::new("- > **quote**\n+ untouched".into(), TextFormat::default());
+    let mut document =
+        MarkdownDocument::new("- > **quote**\n+ untouched".into(), TextFormat::default());
     let mut state = PresentationState::new(Selection::caret(13));
-    document.command(&mut state, Command::ListBreak { hard: false, at: None });
-    assert_eq!(document.source().to_string(), "- > **quote**\n  > \n+ untouched");
-    document.command(&mut state, Command::ListBreak { hard: false, at: None });
-    assert_eq!(document.source().to_string(), "- > **quote**\n\n+ untouched");
+    document.command(
+        &mut state,
+        Command::ListBreak {
+            hard: false,
+            at: None,
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "- > **quote**\n  > \n+ untouched"
+    );
+    document.command(
+        &mut state,
+        Command::ListBreak {
+            hard: false,
+            at: None,
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "- > **quote**\n\n+ untouched"
+    );
     document.command(&mut state, Command::Undo);
-    assert_eq!(document.source().to_string(), "- > **quote**\n  > \n+ untouched");
+    assert_eq!(
+        document.source().to_string(),
+        "- > **quote**\n  > \n+ untouched"
+    );
     assert_eq!(state.selection(), Selection::caret(18));
 }
 
@@ -1516,7 +1653,10 @@ fn list_backspace_keeps_quote_ancestry_and_does_not_join_into_a_fence() {
     assert_eq!(document.source().to_string(), "```rust\ncode\n```\ntask");
     document.command(&mut state, Command::Undo);
     assert_eq!(document.source().to_string(), original);
-    assert_eq!(state.selection(), Selection::caret(original.find("task").unwrap()));
+    assert_eq!(
+        state.selection(),
+        Selection::caret(original.find("task").unwrap())
+    );
 }
 
 #[test]
@@ -1526,13 +1666,32 @@ fn editing_a_list_continuation_keeps_its_owning_item_and_neighbor_markers() {
     let owner = original.find("+ target").unwrap();
     let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
     let mut state = PresentationState::new(Selection::caret(at));
-    document.command(&mut state, Command::ListBreak { hard: false, at: Some(owner) });
-    assert_eq!(document.source().to_string(), "- first\n+ target\n  continued\n+ \n  * nested\n* neighbor");
+    document.command(
+        &mut state,
+        Command::ListBreak {
+            hard: false,
+            at: Some(owner),
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "- first\n+ target\n  continued\n+ \n  * nested\n* neighbor"
+    );
     document.command(&mut state, Command::Undo);
     assert_eq!(document.source().to_string(), original);
     assert_eq!(state.selection(), Selection::caret(at));
-    document.command(&mut state, Command::ListIndent { outdent: false, width: 4, at: Some(owner) });
-    assert_eq!(document.source().to_string(), "- first\n  + target\n    continued\n    * nested\n* neighbor");
+    document.command(
+        &mut state,
+        Command::ListIndent {
+            outdent: false,
+            width: 4,
+            at: Some(owner),
+        },
+    );
+    assert_eq!(
+        document.source().to_string(),
+        "- first\n  + target\n    continued\n    * nested\n* neighbor"
+    );
     assert_eq!(state.selection(), Selection::caret(at + 4));
     document.command(&mut state, Command::Undo);
     assert_eq!(document.source().to_string(), original);
@@ -1797,6 +1956,7 @@ fn native_table_cell_escapes_wrapping_unicode_and_preedit_share_the_document_map
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    view.update_in(&mut context, |view, _, cx| view.set_soft_wrap(true, cx));
     settle_live_geometry(&view, &mut context);
     for (token, removed) in [("\\| &amp;", "\\|"), ("&amp;", "&amp;"), ("x\\|y", "\\|")] {
         let at = original.find(token).unwrap() + usize::from(token == "x\\|y") + removed.len();
@@ -2036,11 +2196,18 @@ fn edit_link_destination_when_ready(
     use gpui_kit::test::TestWindowExt as _;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         context.dispatch_action(super::source::EditLinkDestination);
-        if view.read_with(context, |view, _| view.selection().range() == expected) { break; }
-        assert!(std::time::Instant::now() < deadline, "link destination command did not become available");
+        if view.read_with(context, |view, _| view.selection().range() == expected) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "link destination command did not become available"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -2058,13 +2225,18 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
         if let Some(view) = app.read_with(&context, |app, _| {
-            app.active_editor_input().and_then(|input| input.markdown().cloned())
-        }) { break view; }
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
@@ -2073,67 +2245,122 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
     let one = original.find("one").unwrap();
     let auto = original.find("<https").unwrap();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.range_to_bounds(&(one - 1..one - 1), cx), view.range_to_bounds(&(one..one), cx));
-        assert_eq!(view.range_to_bounds(&(auto..auto), cx), view.range_to_bounds(&(auto + 1..auto + 1), cx));
+        assert_eq!(
+            view.range_to_bounds(&(one - 1..one - 1), cx),
+            view.range_to_bounds(&(one..one), cx)
+        );
+        assert_eq!(
+            view.range_to_bounds(&(auto..auto), cx),
+            view.range_to_bounds(&(auto + 1..auto + 1), cx)
+        );
         for syntax in ["[Ref][]", "[Ref] <mail"] {
             let at = original.find(syntax).unwrap();
-            assert_eq!(view.range_to_bounds(&(at..at), cx), view.range_to_bounds(&(at + 1..at + 1), cx));
+            assert_eq!(
+                view.range_to_bounds(&(at..at), cx),
+                view.range_to_bounds(&(at + 1..at + 1), cx)
+            );
         }
     });
     context.update(|window, cx| {
-        let point = view.read(cx).range_to_bounds(&(one + 1..one + 1), cx).unwrap().center();
+        let point = view
+            .read(cx)
+            .range_to_bounds(&(one + 1..one + 1), cx)
+            .unwrap()
+            .center();
         window.pointer_down(point, MouseButton::Left, cx);
         window.pointer_up(point, MouseButton::Left, cx);
     });
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(one + 1));
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
     context.update(|window, cx| window.input("中", cx));
     context.run_until_parked();
     let label_edited = original.replacen("one", "o中ne", 1);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), label_edited.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            label_edited.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     settle_live_geometry(&view, &mut context);
     let destination = original.find("old.md").unwrap();
     edit_link_destination_when_ready(&view, &mut context, destination..destination + 6);
-    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::new(destination, destination + 6)));
+    view.read_with(&context, |view, _| {
+        assert_eq!(
+            view.selection(),
+            Selection::new(destination, destination + 6)
+        )
+    });
     context.update(|window, cx| window.input("new.md", cx));
     context.run_until_parked();
     let edited = original.replacen("old.md", "new.md", 1);
     view.read_with(&context, |view, cx| {
         assert!(view.is_live());
-        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        );
     });
     context.update(|window, cx| assert!(view.read(cx).focus_handle(cx).is_focused(window)));
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.run_until_parked();
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.selection(), Selection::new(destination, destination + 6));
-        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+        assert_eq!(
+            view.selection(),
+            Selection::new(destination, destination + 6)
+        );
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
     });
-    view.update_in(&mut context, |view, _, cx| view.select_range(one + 1..one + 1, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(one + 1..one + 1, cx)
+    });
     edit_link_destination_when_ready(&view, &mut context, destination..destination + 6);
-    view.update_in(&mut context, |view, _, cx| view.select_range(one + 1..one + 1, cx));
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(one + 1..one + 1, cx)
+    });
     context.update(|window, cx| {
         window.render_frame(cx);
         window.render_frame(cx);
         window.click("markdown-link-destination", cx);
-        assert_eq!(view.read(cx).selection().range(), destination..destination + 6);
+        assert_eq!(
+            view.read(cx).selection().range(),
+            destination..destination + 6
+        );
         assert!(view.read(cx).focus_handle(cx).is_focused(window));
     });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Redo);
     context.run_until_parked();
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&view, &mut context);
     for (label_at, target, replacement) in [
         (original.find("文").unwrap(), "next.md", "other.md"),
         (auto + 3, "https://example.com", "https://example.org"),
-        (original.find("mail@").unwrap() + 2, "mail@example.com", "other@example.com"),
-        (original.find("www.").unwrap() + 2, "www.example.net", "www.example.org"),
+        (
+            original.find("mail@").unwrap() + 2,
+            "mail@example.com",
+            "other@example.com",
+        ),
+        (
+            original.find("www.").unwrap() + 2,
+            "www.example.net",
+            "www.example.org",
+        ),
     ] {
         view.update_in(&mut context, |view, window, cx| {
             view.select_range(label_at..label_at, cx);
@@ -2141,10 +2368,17 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
         });
         let start = original.find(target).unwrap();
         edit_link_destination_when_ready(&view, &mut context, start..start + target.len());
-        view.read_with(&context, |view, _| assert_eq!(view.selection().range(), start..start + target.len()));
+        view.read_with(&context, |view, _| {
+            assert_eq!(view.selection().range(), start..start + target.len())
+        });
         context.update(|window, cx| window.input(replacement, cx));
         context.run_until_parked();
-        view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen(target, replacement, 1).as_bytes()));
+        view.read_with(&context, |view, cx| {
+            assert_eq!(
+                view.document().read(cx).encode().unwrap(),
+                original.replacen(target, replacement, 1).as_bytes()
+            )
+        });
         context.dispatch_action(gpui_kit::component::input::Undo);
         view.update_in(&mut context, |view, _, cx| view.select_range(0..0, cx));
         settle_live_geometry(&view, &mut context);
@@ -2159,7 +2393,12 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -2171,15 +2410,32 @@ fn native_links_edit_labels_and_reference_destinations_in_shared_history(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, cx| app.active_editor_input().is_some_and(|input| input.read(cx).text().to_string() == edited)) { break; }
+        if app.read_with(&context, |app, cx| {
+            app.active_editor_input()
+                .is_some_and(|input| input.read(cx).text().to_string() == edited)
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let reopened = app.read_with(&context, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let reopened = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     settle_live_geometry(&reopened, &mut context);
     reopened.read_with(&context, |view, cx| {
-        assert_eq!(view.range_to_bounds(&(one - 1..one - 1), cx), view.range_to_bounds(&(one..one), cx));
-        assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes());
+        assert_eq!(
+            view.range_to_bounds(&(one - 1..one - 1), cx),
+            view.range_to_bounds(&(one..one), cx)
+        );
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        );
     });
 }

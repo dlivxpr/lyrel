@@ -415,7 +415,7 @@ impl EditorBuffers {
                         edited(view, id, cx);
                     }
                     markdown::DocumentEvent::PresentationChanged => cx.notify(),
-                    markdown::DocumentEvent::FollowLink { .. } => {},
+                    markdown::DocumentEvent::FollowLink { .. } => {}
                 },
             );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
