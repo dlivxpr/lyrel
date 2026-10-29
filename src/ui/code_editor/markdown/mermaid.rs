@@ -4,21 +4,12 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::{ActiveTheme as _, button::ButtonVariants as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use merman::{Engine, MermaidConfig, OperationControl, ParseOptions, RenderOutput, RenderTarget, Renderer, SvgEnvironment, SvgRequest};
 use merman::resources::{InputResourcePolicy, ResourceProfile};
-use merman::svg::{SvgPipeline, SvgPostprocessContext, SvgPostprocessor};
-use merman::{
-    Engine, MermaidConfig, OperationControl, ParseOptions, RenderOutput, RenderRequest, Renderer,
-    SvgRequest,
-};
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    ops::Range,
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use merman::svg::{DeterministicTextMeasurer, MeasurementProfileId, SvgPipeline, SvgPostprocessContext, SvgPostprocessor, TextMeasurementPolicy, TextMeasurementProfile, TextMeasurementProfileIdentity};
+use std::{borrow::Cow, collections::HashMap, ops::Range, sync::{Arc, LazyLock}, time::Duration};
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(super) struct Style {
     family: SharedString,
     size: f32,
@@ -26,30 +17,87 @@ pub(super) struct Style {
     background: Hsla,
     border: Hsla,
     dark: bool,
+    text_system: Arc<TextSystem>,
+}
+impl PartialEq for Style {
+    fn eq(&self, other: &Self) -> bool {
+        self.family == other.family && self.size == other.size
+            && self.foreground == other.foreground && self.background == other.background
+            && self.border == other.border && self.dark == other.dark
+            && Arc::ptr_eq(&self.text_system, &other.text_system)
+    }
 }
 impl Style {
     pub(super) fn current(cx: &App) -> Self {
         let theme = cx.theme();
-        Self {
-            family: theme.font_family.clone(),
-            size: theme.font_size.into(),
-            foreground: theme.foreground,
-            background: theme.background,
-            border: theme.border,
-            dark: theme.is_dark(),
-        }
+        Self { family: theme.font_family.clone(), size: theme.font_size.into(), foreground: theme.foreground,
+            background: theme.background, border: theme.border, dark: theme.is_dark(), text_system: cx.text_system().clone() }
     }
     fn engine(&self) -> Engine {
         let css = |color: Hsla| format!("#{:06x}", u32::from(color.to_rgb()) >> 8);
+        let family = self.svg_family();
         Engine::new().with_site_config(MermaidConfig::from_value(serde_json::json!({
-            "securityLevel": "strict", "theme": "base", "fontFamily": self.family.as_ref(), "fontSize": self.size,
+            "securityLevel": "strict", "theme": "base", "fontFamily": family, "fontSize": self.size,
             "secure": ["secure", "securityLevel", "fontFamily", "fontSize", "theme", "themeVariables", "themeCSS"],
-            "themeVariables": { "darkMode": self.dark, "fontFamily": self.family.as_ref(),
+            "themeVariables": { "darkMode": self.dark, "fontFamily": family,
                 "fontSize": format!("{}px", self.size), "primaryColor": css(self.background),
                 "primaryTextColor": css(self.foreground), "primaryBorderColor": css(self.border),
                 "lineColor": css(self.foreground), "textColor": css(self.foreground),
                 "background": css(self.background) }
         })))
+    }
+    fn svg_family(&self) -> String {
+        use std::fmt::Write as _;
+        // GPUI's virtual system family is not an SVG/CSS family. Match the
+        // existing parked-deck resolver and quote before Merman XML-escapes it.
+        #[cfg(target_os = "windows")]
+        let system = "Segoe UI";
+        #[cfg(target_os = "macos")]
+        let system = ".AppleSystemUIFont";
+        let family = font_name_with_fallbacks(&self.family, system);
+        let mut css = String::with_capacity(family.len() + 64);
+        css.push('\'');
+        for ch in family.chars() {
+            match ch {
+                '\\' | '\'' => { css.push('\\'); css.push(ch); }
+                ch if ch.is_control() => { write!(css, "\\{:x} ", ch as u32).expect("writing to String"); }
+                ch => css.push(ch),
+            }
+        }
+        css.push_str("', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif");
+        css
+    }
+    fn measurement(&self) -> TextMeasurementPolicy {
+        // Shaping and font discovery stay on the existing background job.
+        // This uses the host text stack (including Unicode fallback), not a
+        // per-character width guess. SVG uses the matching named system font;
+        // browser bbox/baseline and custom CSS font differences remain limits.
+        let text_system = WindowTextSystem::new(self.text_system.clone());
+        let family = self.family.clone();
+        let measurer = DeterministicTextMeasurer::default().with_width_callback(move |text, style| {
+            if text.is_empty() { return 0.; }
+            let mut font = font(family.clone());
+            font.weight = match style.font_weight.as_deref() {
+                Some("bold" | "bolder") => FontWeight::BOLD,
+                Some(value) => value.parse::<f32>().map(FontWeight).unwrap_or(FontWeight::NORMAL),
+                None => FontWeight::NORMAL,
+            };
+            font.style = match style.font_style.as_deref() {
+                Some("italic") => FontStyle::Italic,
+                Some("oblique") => FontStyle::Oblique,
+                _ => FontStyle::Normal,
+            };
+            text.split('\n').map(|line| {
+                text_system.shape_line(SharedString::from(line), px(style.font_size as f32),
+                    &[TextRun { len: line.len(), font: font.clone(), ..Default::default() }], None)
+                    .width.as_f32() as f64
+            }).fold(0., f64::max)
+        });
+        let identity = TextMeasurementProfileIdentity::new(
+            MeasurementProfileId::new("lyrel.native-text").expect("static profile id"),
+            format!("gpui-kit-0.8.1:{}", self.family),
+        ).expect("nonempty native measurement version");
+        TextMeasurementPolicy::uniform(TextMeasurementProfile::new(identity, measurer))
     }
 }
 #[derive(Clone, PartialEq)]
@@ -249,10 +297,16 @@ impl State {
             );
         }
         block = block.child(
-            Button::new(("markdown-mermaid-edit", leaf.id))
-                .ghost()
-                .label(t(L10nKey::EditorMarkdownMermaidEdit))
-                .on_click(edit),
+            div()
+                // Do not let the source surface move the caret/reflow the
+                // button between its press and click. Source text still bubbles.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Button::new(("markdown-mermaid-edit", leaf.id))
+                        .ghost()
+                        .label(t(L10nKey::EditorMarkdownMermaidEdit))
+                        .on_click(edit),
+                ),
         );
         if active || error.is_some() || entry.is_none() {
             block = block
@@ -295,38 +349,22 @@ impl Job {
             let renderer = Renderer::new()
                 .with_engine(key.style.engine())
                 .with_parse_options(ParseOptions::strict())
-                .with_resource_policy(InputResourcePolicy::for_profile(
-                    ResourceProfile::Interactive,
-                ));
+                .with_resource_policy(InputResourcePolicy::for_profile(ResourceProfile::Interactive));
             let request = SvgRequest {
-                pipeline: Some(
-                    SvgPipeline::resvg_safe().with_postprocessor(RejectExternalResources),
-                ),
+                environment: SvgEnvironment::deterministic().with_text_measurement_policy(key.style.measurement()),
+                pipeline: Some(SvgPipeline::resvg_safe().with_postprocessor(RejectExternalResources)),
                 ..Default::default()
             };
             let result = (|| {
-                let output = renderer
-                    .render(RenderRequest::svg(
-                        &key.source,
-                        self.control.child().with_deadline(Duration::from_secs(5)),
-                        request,
-                    ))
-                    .map_err(|error| {
-                        let message = match error {
-                            merman::RenderError::Parse(diagnostic) => {
-                                diagnostic.terminal_safe_message()
-                            }
-                            error => merman::normalize_terminal_diagnostic(&error.to_string()),
-                        };
-                        if message.contains("lyrel-external-resource") {
-                            Failure::External
-                        } else {
-                            Failure::Diagnostic(message)
-                        }
-                    })?;
-                let RenderOutput::Svg(Some(output)) = output else {
-                    return Err(Failure::Empty);
-                };
+                let semantic = renderer.prepare_semantic(&key.source, self.control.child().with_deadline(Duration::from_secs(5)))
+                    .map_err(render_failure)?.ok_or(Failure::Empty)?;
+                // `error` is a released primary boundary, not a supported
+                // diagram. Never publish its error-picture as successful art.
+                if semantic.diagram_type() == "error" {
+                    return Err(Failure::Diagnostic("Merman error diagram is diagnostic output, not a rendered diagram family.".into()));
+                }
+                let output = semantic.render(RenderTarget::Svg(request)).map_err(render_failure)?;
+                let RenderOutput::Svg(Some(output)) = output else { return Err(Failure::Empty); };
                 // This parser is used only for preallocation dimensions. GPUI's
                 // public renderer below resolves all labels with its own fonts.
                 let dimensions = resvg::usvg::Tree::from_data(
@@ -362,6 +400,15 @@ impl Job {
         }
         Batch(batch)
     }
+}
+
+fn render_failure(error: merman::RenderError) -> Failure {
+    let message = match error {
+        merman::RenderError::Parse(diagnostic) => diagnostic.terminal_safe_message(),
+        error => merman::normalize_terminal_diagnostic(&error.to_string()),
+    };
+    if message.contains("lyrel-external-resource") { Failure::External }
+    else { Failure::Diagnostic(message) }
 }
 
 struct RejectExternalResources;

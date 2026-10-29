@@ -1611,7 +1611,12 @@ fn markdown_local_relative_link_uses_its_document_directory(cx: &mut TestAppCont
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.host.id(), HostId::LOCAL);
-        assert_eq!(file.path, std::fs::canonicalize(&destination).unwrap());
+        assert_eq!(
+            file.path,
+            lyrel_core::host::local::LocalHost::new()
+                .canonicalize(&destination)
+                .unwrap()
+        );
         assert_eq!(file.input.read(cx).text().to_string(), "local destination");
         assert_eq!(
             view.read(cx).document().read(cx).encode().unwrap(),
@@ -1685,4 +1690,49 @@ fn markdown_external_image_drop_writes_and_reads_virtual_paths_only_on_owning_ho
         read_owned(&host, Path::new("/docs/assets/capture.png")).unwrap(),
         png
     );
+}
+
+#[gpui_kit::test]
+fn markdown_late_image_layout_preserves_visible_caret_and_newer_edit(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("late-layout.md");
+    let original = format!("# Document\n\n![tall](tall.png)\n\nactive paragraph\n\n{}", "tail paragraph\n\n".repeat(500));
+    std::fs::write(&path, &original).unwrap();
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(32, 480, image::Rgba([4, 5, 6, 255])))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    std::fs::write(dir.path().join("tall.png"), png).unwrap();
+    let host = FileHost::new(HostId(722));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    let view = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let release = host.pause_next_read();
+    vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    let at = original.find("active paragraph").unwrap();
+    view.update_in(&mut vcx, |view, window, cx| {
+        view.select_range(at..at, cx);
+        view.focus_handle(cx).focus(window, cx);
+        view.command(markdown::Command::Insert("new ".into()), window, cx);
+    });
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.try_find("markdown-image:tall.png").is_some_and(|status| status.label() == Some(t(L10nKey::EditorImageLoaded).as_ref()))
+    }));
+    // Allow the height correction and its anchored frame to paint, without
+    // bypassing the production resource loader or adding a renderer test seam.
+    for _ in 0..4 { vcx.update(|window, cx| window.render_frame(cx)); vcx.run_until_parked(); }
+    vcx.update(|window, cx| {
+        let caret = view.read(cx).range_to_bounds(&(at + 4..at + 4), cx).unwrap();
+        assert!(caret.top() >= gpui_kit::px(0.) && caret.bottom() <= window.viewport_size().height);
+        assert_eq!(view.read(cx).selection(), markdown::Selection::caret(at + 4));
+        assert_eq!(view.read(cx).document().read(cx).source().to_string(), original.replacen("active paragraph", "new active paragraph", 1));
+    });
+    vcx.dispatch_action(gpui_kit::component::input::Undo);
+    vcx.run_until_parked();
+    view.read_with(&vcx, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
 }
