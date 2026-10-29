@@ -1593,8 +1593,12 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorMarkdownMermaidEdit => "编辑图表源码",
         L10nKey::EditorMarkdownMermaidError => "图表无法渲染，源码已保留，可继续编辑。",
         L10nKey::EditorMarkdownMermaidEmpty => "未检测到 Mermaid 图表，请在保留的源码中输入图表。",
-        L10nKey::EditorMarkdownMermaidExternal => "不允许图表加载外部资源，请使用自包含的标签和形状。",
-        L10nKey::EditorMarkdownMermaidRasterLimit => "图表超过原生图片限制（单边 4096 像素或总计 800 万像素），请简化或拆分图表。",
+        L10nKey::EditorMarkdownMermaidExternal => {
+            "不允许图表加载外部资源，请使用自包含的标签和形状。"
+        }
+        L10nKey::EditorMarkdownMermaidRasterLimit => {
+            "图表超过原生图片限制（单边 4096 像素或总计 800 万像素），请简化或拆分图表。"
+        }
         L10nKey::EditorMarkdownMetadataRegion => "元数据源码",
         L10nKey::EditorMarkdownHtmlRegion => "HTML 源码 · 不执行，也不还原 HTML/CSS 效果",
         L10nKey::EditorMarkdownMathLoading => "正在渲染公式",
