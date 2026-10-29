@@ -717,3 +717,241 @@ fn sparse_replacements_preserve_between_match_bytes_and_undo_as_one_command() {
         b"kitten\r\n* keep  \nkitten\r\n[ref]: /target\nkitten"
     );
 }
+
+#[gpui_kit::test]
+fn native_code_regions_keep_line_breaks_fences_and_shared_history(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("code.md");
+    let source = "# Heading\n\n```rust\nlet x = 1;\n```\n\n    one\n    \n    two\n\nlast";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let identity = view.read_with(&context, |view, _| view.document().entity_id());
+    let code_at = source.find("let").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(code_at..code_at, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        use gpui_kit::test::TestInput;
+        use gpui_kit::ElementInputHandler;
+        window.render_frame(cx);
+        let code_line = view.read(cx).range_to_bounds(&(code_at..code_at), cx).unwrap();
+        let fence_at = source.find("```\n\n").unwrap();
+        let closing_fence = view.read(cx).range_to_bounds(&(fence_at..fence_at), cx).unwrap();
+        assert!(closing_fence.top() > code_line.top(), "code newlines must retain distinct visual lines");
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "ni", Some(2..2), cx);
+        assert!(input.marked_text_range(cx).is_some());
+        input.compose_text(None, "", Some(0..0), cx);
+        assert!(input.marked_text_range(cx).is_none());
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), source));
+    for (at, removed, insertion) in [
+        (source.find("let").unwrap() + 4, 0, "\n"),
+        (source.find("one").unwrap() + 3, 0, "\n    "),
+        (source.find("    \n").unwrap() + 4, 4, "\n"),
+        (source.find("```\n\n").unwrap() + 3, 0, "\n\n"),
+    ] {
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(at..at, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        context.update(|window, cx| window.press("enter", cx));
+        context.run_until_parked();
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().read(cx).source().to_string(),
+                format!("{}{}{}", &source[..at - removed], insertion, &source[at..]));
+        });
+        context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+        context.dispatch_action(gpui_kit::component::input::Undo);
+        context.run_until_parked();
+        view.read_with(&context, |view, cx| {
+            assert_eq!(view.document().entity_id(), identity);
+            assert_eq!(view.document().read(cx).source().to_string(), source);
+        });
+        context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+        settle_live_geometry(&view, &mut context);
+    }
+    let boundary = source.find("last").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(boundary..boundary, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.press("backspace", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source.replacen("\n\nlast", "\nlast", 1));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    let from = source.find("```rust").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(from..source.len(), cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.press("secondary-x", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some(&source[from..]));
+    });
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), "# Heading\n\n"));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    let at = source.find("one").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at + 3, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("中🎉", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source.replacen("one", "中🎉", 1));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), source));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    let expected = source.replacen("one", "中🎉", 1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).source().to_string(), expected);
+    });
+}
+
+#[gpui_kit::test]
+fn native_metadata_html_and_invalid_regions_edit_save_and_reopen_without_source_loss(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestInput, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source-regions.md");
+    let source = "---\r\ntitle: demo\n---\r\n\n# Heading\n\n<script>neverRun()</script>\n\n<Unknown value={projectCode()} />\n\n[broken](\n";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    let normalized = source.replace("\r\n", "\n");
+    let heading = normalized.find("# Heading").unwrap();
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        context.update(|window, cx| window.render_frame(cx));
+        if view.read_with(&context, |view, cx| {
+            view.range_to_bounds(&(heading..heading), cx).is_some()
+                && view.range_to_bounds(&(heading..heading), cx)
+                    == view.range_to_bounds(&(heading + 2..heading + 2), cx)
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let at = normalized.find("demo").unwrap() + 4;
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.press("enter", cx);
+        window.input("author: writer", cx);
+    });
+    context.run_until_parked();
+    let metadata_edit = normalized.replacen("title: demo", "title: demo\nauthor: writer", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), metadata_edit));
+    let at = metadata_edit.find("neverRun").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(at..at + 8, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "ni", Some(2..2), cx);
+        assert!(input.marked_text_range(cx).is_some());
+        input.commit_text("保留🎉", cx);
+        assert!(input.marked_text_range(cx).is_none());
+    });
+    context.run_until_parked();
+    let expected = metadata_edit.replacen("neverRun", "保留🎉", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), expected));
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), metadata_edit));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), source.replacen("title: demo", "title: demo\nauthor: writer", 1).replacen("neverRun", "保留🎉", 1).as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).source().to_string(), expected);
+    });
+}

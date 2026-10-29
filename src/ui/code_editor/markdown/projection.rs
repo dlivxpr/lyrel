@@ -7,6 +7,9 @@ pub(super) enum Kind {
     Prose,
     Heading(u8),
     Rule,
+    Code(super::regions::Code),
+    Metadata,
+    Html,
     Source,
 }
 #[derive(Clone)]
@@ -134,7 +137,11 @@ impl Projection {
         if live {
             let mut options = markdown::ParseOptions::gfm();
             options.constructs.frontmatter = document_start;
-            if let Ok(root) = markdown::to_mdast(source, &options) {
+            if super::regions::unfinished_metadata(source, document_start) {
+                let mut leaf = Leaf::new(0..source.len(), Kind::Metadata);
+                leaf.raw(source, 0..source.len());
+                leaves.push(leaf);
+            } else if let Ok(root) = markdown::to_mdast(source, &options) {
                 let mut cursor = 0;
                 for node in root.children().into_iter().flatten() {
                     let Some(position) = node.position() else {
@@ -142,12 +149,7 @@ impl Projection {
                     };
                     let range = position.start.offset..position.end.offset;
                     Self::gap(source, cursor..range.start, &mut leaves);
-                    let kind = match node {
-                        Node::Paragraph(_) => Kind::Prose,
-                        Node::Heading(heading) => Kind::Heading(heading.depth),
-                        Node::ThematicBreak(_) => Kind::Rule,
-                        _ => Kind::Source,
-                    };
+                    let kind = super::regions::classify(node, &source[range.clone()]);
                     let mut leaf = Leaf::new(range.clone(), kind);
                     if matches!(kind, Kind::Prose | Kind::Heading(_)) {
                         if let Some(children) = node.children() {

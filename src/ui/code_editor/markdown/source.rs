@@ -2,7 +2,7 @@ use super::projection::{Kind, Projection};
 use super::*;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::text::editor_host::{
-    BlockNode, FlowPosition, InlineNode, LeafGeometry, Paragraph, RenderContext, TextMark,
+    BlockNode, CodeBlock, FlowPosition, InlineNode, LeafGeometry, Paragraph, RenderContext, TextMark,
     collect_leaf_geometry,
 };
 use gpui_kit::component::{ActiveTheme as _, input as actions};
@@ -693,6 +693,27 @@ impl SourcePresentation {
                 .map_or(leaf.content_end(), |other| other.content_start())
         }
     }
+    fn enter(&mut self, hard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let mut range = self.state.selection.range();
+        let region = self.live.then(|| self.projection.leaf_at(range.start)).flatten()
+            .filter(|leaf| !matches!(leaf.kind, Kind::Prose | Kind::Heading(_) | Kind::Rule));
+        let command = if let Some(leaf) = region {
+            let (prefix, text) = super::regions::line_break(leaf.kind, &leaf.text, leaf.display_offset(range.start));
+            if range.is_empty() {
+                range.start -= prefix;
+            }
+            Command::Replace {
+                range,
+                text,
+                kind: EditKind::Command,
+            }
+        } else if self.live {
+            Command::ParagraphBreak { hard }
+        } else {
+            Command::Insert("\n".into())
+        };
+        self.command(command, window, cx);
+    }
     fn delete_prose(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !self.live
             || !self.state.selection.range().is_empty()
@@ -713,6 +734,10 @@ impl SourcePresentation {
         let Some(leaf) = self.projection.leaf_at(at) else {
             return;
         };
+        if super::regions::label(leaf.kind).is_some() {
+            self.command(if backward { Command::Backspace } else { Command::Delete }, window, cx);
+            return;
+        }
         let other = if backward && at <= leaf.content_start() {
             self.projection
                 .leaves
@@ -722,7 +747,13 @@ impl SourcePresentation {
                     other.range.end < leaf.range.start
                         && (!other.text.is_empty() || other.kind == Kind::Rule)
                 })
-                .map(|other| other.content_end()..leaf.content_start())
+                .map(|other| {
+                    if super::regions::label(other.kind).is_some() {
+                        self.document.read(cx).previous(at)..at
+                    } else {
+                        other.content_end()..leaf.content_start()
+                    }
+                })
         } else if !backward && at >= leaf.content_end() {
             self.projection
                 .leaves
@@ -731,7 +762,13 @@ impl SourcePresentation {
                     other.range.start > leaf.range.end
                         && (!other.text.is_empty() || other.kind == Kind::Rule)
                 })
-                .map(|other| leaf.content_end()..other.content_start())
+                .map(|other| {
+                    if super::regions::label(other.kind).is_some() {
+                        at..self.document.read(cx).next(at)
+                    } else {
+                        leaf.content_end()..other.content_start()
+                    }
+                })
         } else {
             let next = self.visible_step(at, backward);
             Some(next.min(at)..next.max(at))
@@ -935,6 +972,15 @@ impl Render for SourcePresentation {
                     node: BlockNode::Unknown,
                 });
                 if cached.version != leaf.version {
+                    if self.live && matches!(leaf.kind, Kind::Code(_)) {
+                        cached.node = BlockNode::CodeBlock(
+                            CodeBlock::from_code(leaf.text.clone(), None::<SharedString>)
+                                .with_leaf_key(leaf.id),
+                        );
+                        cached.version = leaf.version;
+                        cached.seen = self.render_generation;
+                        continue;
+                    }
                     let mut paragraph = Paragraph::default().with_leaf_key(leaf.id);
                     let marks = self
                         .state
@@ -995,7 +1041,7 @@ impl Render for SourcePresentation {
                     .id(("markdown-block", leaf.id))
                     .w_full()
                     .when(
-                        self.live && leaf.kind == Kind::Source && !leaf.text.is_empty(),
+                        self.live && super::regions::label(leaf.kind).is_some() && !leaf.text.is_empty(),
                         |block| {
                             block
                                 .font_family(cx.theme().mono_font_family.clone())
@@ -1004,7 +1050,7 @@ impl Render for SourcePresentation {
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(crate::ui::i18n::t(
-                                            crate::ui::i18n::L10nKey::EditorMarkdownSourceRegion,
+                                            super::regions::label(leaf.kind).expect("source region label"),
                                         )),
                                 )
                         },
@@ -1121,15 +1167,7 @@ impl Render for SourcePresentation {
                     this.delete_prose(false, window, cx)
                 }))
                 .on_action(cx.listener(|this, action: &actions::Enter, window, cx| {
-                    this.command(
-                        if this.live {
-                            Command::ParagraphBreak { hard: action.shift }
-                        } else {
-                            Command::Insert("\n".into())
-                        },
-                        window,
-                        cx,
-                    )
+                    this.enter(action.shift, window, cx)
                 }))
                 .on_action(cx.listener(|this, _: &actions::Indent, window, cx| {
                     this.indent_selection(false, window, cx)

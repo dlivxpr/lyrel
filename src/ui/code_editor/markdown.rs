@@ -8,6 +8,7 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod projection;
+mod regions;
 mod source;
 pub(super) use source::SourcePresentation;
 #[cfg(test)]
