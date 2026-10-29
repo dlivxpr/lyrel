@@ -108,6 +108,11 @@ impl EditorPanelState {
         self.prompt_epoch = self.prompt_epoch.wrapping_add(1);
         self.unsaved_prompt_open = false;
         self.waiters.clear();
+        for file in self.buffers.iter() {
+            if let Some((_, cancelled)) = &file.asset_location {
+                cancelled.set(true);
+            }
+        }
         self.dismiss_bar();
     }
 
@@ -202,6 +207,7 @@ impl EditorPanelState {
                 }
                 match outcome {
                     SaveOutcome::Saved(mtime) => {
+                        file.asset_save_required = false;
                         file.disk_mtime = mtime;
                         file.saved = written;
                         file.saved_format = format;
@@ -423,8 +429,14 @@ impl EditorPanelState {
             return;
         }
         let file = self.buffers.get_mut(id).unwrap();
+        file.asset_save_required = true;
         file.path = path;
         file.untitled = None;
+        if let Some(view) = file.input.markdown() {
+            view.read(cx).document().clone().update(cx, |document, cx| {
+                document.set_resource_context(file.host.clone(), Some(file.path.clone()), cx);
+            });
+        }
         file.conflict = None;
         let language = file.language();
         file.input.set_highlighter(language, cx);
@@ -706,6 +718,9 @@ impl EditorPanelState {
     }
 
     pub(super) fn saves_failed(&mut self, id: BufferId) {
+        if let Some((_, cancelled)) = self.buffers.get_mut(id).and_then(|file| file.asset_location.take()) {
+            cancelled.set(true);
+        }
         self.waiters.retain(|waiter| !waiter.ids.contains(&id));
     }
 

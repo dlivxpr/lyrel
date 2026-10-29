@@ -7,12 +7,17 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
+mod images;
+pub(super) mod resources;
+mod mermaid;
 pub(super) mod links;
 mod lists;
+mod math;
 mod projection;
 mod regions;
 mod source;
 mod tables;
+pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 pub(super) use source::FollowLink;
 pub(super) use source::SourcePresentation;
@@ -119,6 +124,7 @@ pub(crate) enum EditKind {
     Command,
 }
 pub(crate) enum Command {
+    Table(tables::Operation),
     Reload {
         text: String,
         format: TextFormat,
@@ -224,6 +230,8 @@ pub(crate) struct MarkdownDocument {
     // The marked range, original text and selection stay in that presentation.
     composition_owner: Option<gpui_kit::WeakEntity<SourcePresentation>>,
     pending_changes: smallvec::SmallVec<[SourceChange; 1]>,
+    resources: Option<resources::ResourceContext>,
+    images: images::Images,
 }
 impl MarkdownDocument {
     pub(crate) fn new(source: String, format: TextFormat) -> Self {
@@ -237,6 +245,8 @@ impl MarkdownDocument {
             typing_end: None,
             composition_owner: None,
             pending_changes: smallvec::SmallVec::new(),
+            resources: None,
+            images: images::Images::default(),
         }
     }
     pub(crate) fn source(&self) -> &Rope {
@@ -512,6 +522,23 @@ impl MarkdownDocument {
 
     fn apply_command(&mut self, state: &mut PresentationState, command: Command) {
         match command {
+            Command::Table(operation) => {
+                self.finish_composition(state, false);
+                if let Some((range, text, caret)) = tables::edit(&self.source.to_string(), state.selection, operation) {
+                    let removed = self.source_text(range.clone());
+                    let inserted = SourceText::from_input(text, LineEnding::Lf);
+                    if removed != inserted {
+                        let before = state.selection;
+                        self.replace(range.clone(), &inserted);
+                        state.selection = Selection::caret(caret);
+                        self.record(Change {
+                            edits: smallvec::smallvec![ReplacedSource { start: range.start, removed, inserted }],
+                            before,
+                            after: state.selection,
+                        }, EditKind::Command, state.id);
+                    }
+                }
+            }
             Command::Compose {
                 range,
                 text,
@@ -661,6 +688,12 @@ impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
 pub(super) enum DocumentEvent {
     Edited(Transaction),
     PresentationChanged,
+    RequestAssetLocation {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        cancelled: std::rc::Rc<std::cell::Cell<bool>>,
+    },
+    ResourceContextChanged,
+    ImagesChanged,
     FollowLink {
         presentation: gpui_kit::EntityId,
         revision: u64,
