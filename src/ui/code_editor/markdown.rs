@@ -136,7 +136,7 @@ pub(crate) enum Command {
         closing: Option<Range<usize>>,
         name: String,
     },
-    ExpandComponent { ending: Range<usize>, name: String },
+    ExpandComponent { ending: Range<usize>, name: String, block: bool },
     Insert(String),
     ParagraphBreak {
         hard: bool,
@@ -680,9 +680,10 @@ impl MarkdownDocument {
                         edits.push((opening, name));
                         self.batch_edit_selected(state, edits, EditKind::Command, Some(after));
                     }
-                    Command::ExpandComponent { ending, name } => {
-                        let after = Selection::caret(ending.start + 2);
-                        self.batch_edit_selected(state, vec![(ending, format!(">\n\n</{name}>"))], EditKind::Command, Some(after));
+                    Command::ExpandComponent { ending, name, block } => {
+                        let after = Selection::caret(ending.start + if block { 2 } else { 1 });
+                        let text = if block { format!(">\n\n</{name}>") } else { format!("></{name}>") };
+                        self.batch_edit_selected(state, vec![(ending, text)], EditKind::Command, Some(after));
                     }
                     Command::Insert(text) => {
                         self.edit(state, state.selection.range(), text, EditKind::Typing)

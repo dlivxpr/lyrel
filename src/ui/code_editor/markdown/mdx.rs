@@ -119,6 +119,7 @@ pub(super) struct Component {
     children: Range<usize>,
     properties: Vec<Property>,
     child_ids: Vec<ComponentId>,
+    flow: bool,
 }
 impl Component {
     pub(super) fn id(&self) -> ComponentId { self.id }
@@ -126,6 +127,7 @@ impl Component {
     pub(super) fn name_range(&self) -> Range<usize> { self.name.clone() }
     pub(super) fn closing_name_range(&self) -> Option<Range<usize>> { self.closing.clone() }
     pub(super) fn properties(&self) -> &[Property] { &self.properties }
+    pub(super) fn is_flow(&self) -> bool { self.flow }
     pub(super) fn children_range(&self) -> Range<usize> { self.children.clone() }
     pub(super) fn child_ids(&self) -> &[ComponentId] { &self.child_ids }
 }
@@ -285,7 +287,7 @@ fn component(source: &str, node: &Node) -> Option<Component> {
     };
     let closing = (!self_closing).then(|| closing_start + 2..closing_start + 2 + name.as_ref().map_or(0, String::len));
     Some(Component { id: ComponentId(base as u64 + 1), source: range, name: name_range, closing,
-        opener_end, children: opener_end..closing_start, properties, child_ids: Vec::new() })
+        opener_end, children: opener_end..closing_start, properties, child_ids: Vec::new(), flow: matches!(node, Node::MdxJsxFlowElement(_)) })
 }
 
 pub(super) fn project(source: &str, node: &Node, images: &std::sync::Arc<super::images::Definitions>, leaves: &mut Vec<Leaf>) -> bool {

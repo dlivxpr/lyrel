@@ -15,6 +15,8 @@ pub(in super::super) struct FieldContext<'a> {
     state: &'a ViewState,
     revision: u64,
     grammar: Grammar,
+    index: &'a super::Index,
+    range: std::ops::Range<usize>,
 }
 impl<'a> FieldContext<'a> {
     pub(in super::super) fn new(projection: &'a Projection, leaf: &Leaf, source: &'a gpui_kit::base::input::Rope, state: &'a ViewState) -> Self {
@@ -24,7 +26,11 @@ impl<'a> FieldContext<'a> {
             .filter(|component| component.source_range().start <= leaf.range.start && leaf.range.end <= component.source_range().end)
             .min_by_key(|component| component.source_range().len()));
         Self { component, property: own.and_then(|(_, property)| property), field,
-            source, state, revision: projection.revision, grammar: projection.grammar }
+            source, state, revision: projection.revision, grammar: projection.grammar,
+            index: &projection.mdx, range: match leaf.kind {
+                Kind::TableCell(cell) => cell.table().start..cell.table().end,
+                _ => leaf.range.clone(),
+            } }
     }
     pub(in super::super) fn component(&self) -> Option<&Component> { self.component }
     pub(in super::super) fn property(&self) -> Option<&Property> { self.property }
@@ -40,7 +46,32 @@ impl<'a> FieldContext<'a> {
 /// Markdown child has field=None; metadata-only Children marks the child boundary.
 /// Returning content unchanged preserves its native continuous surface.
 pub(in super::super) fn render_field(context: &FieldContext<'_>, content: AnyElement, _: &mut Window, cx: &mut Context<SourcePresentation>) -> AnyElement {
-    render_generic(context, content, cx)
+    if context.field.is_some() { return render_generic(context, content, cx); }
+    // JSX inside headings, formatted spans or table cells keeps that leaf's
+    // native geometry. Its structure controls select the positioned source in
+    // the same input handler instead of installing another nested editor.
+    let mut embedded = context.index.components.iter().filter(|component| {
+        let range = component.source_range();
+        context.range.start <= range.start && range.end <= context.range.end
+    }).peekable();
+    if embedded.peek().is_none() { return content; }
+    let mut controls = div().w_full().flex().flex_col().gap_1();
+    for component in embedded {
+        let mut fields = div().id(("mdx-component", component.id().value())).w_full();
+        let field_context = |field, property| FieldContext {
+            component: Some(component), property, field: Some(field),
+            source: context.source, state: context.state, revision: context.revision,
+            grammar: context.grammar, index: context.index, range: component.source_range(),
+        };
+        fields = fields.child(render_generic(&field_context(Field::Name, None), div().into_any_element(), cx));
+        for property in component.properties() {
+            fields = fields.child(div().id(("mdx-property", property.source_range().start as u64))
+                .child(render_generic(&field_context(Field::Property(property.kind()), Some(property)), div().into_any_element(), cx)));
+        }
+        fields = fields.child(render_generic(&field_context(Field::Children, None), div().into_any_element(), cx));
+        controls = controls.child(fields);
+    }
+    controls.child(content).into_any_element()
 }
 
 fn render_generic(context: &FieldContext<'_>, content: AnyElement, cx: &mut Context<SourcePresentation>) -> AnyElement {
@@ -66,15 +97,15 @@ fn render_generic(context: &FieldContext<'_>, content: AnyElement, cx: &mut Cont
         let revision = context.revision;
         let grammar = context.grammar;
         let expansion = context.component.filter(|component| field == Field::Children && component.closing_name_range().is_none()).map(|component| {
-            (component.source_range().end - 2..component.source_range().end, context.source.slice(component.name_range()).to_string())
+            (component.source_range().end - 2..component.source_range().end, context.source.slice(component.name_range()).to_string(), component.is_flow())
         });
         header = header.child(Button::new(SharedString::from(id)).ghost().xsmall()
             .label(t(key)).accessibility_label(accessibility)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
                 if this.document().read(cx).revision() != revision || this.document().read(cx).grammar() != grammar { return; }
-                if let Some((ending, name)) = &expansion {
-                    this.command(Command::ExpandComponent { ending: ending.clone(), name: name.clone() }, window, cx);
+                if let Some((ending, name, block)) = &expansion {
+                    this.command(Command::ExpandComponent { ending: ending.clone(), name: name.clone(), block: *block }, window, cx);
                 } else { this.command(Command::Select(Selection::new(range.start, range.end)), window, cx); }
                 this.focus_handle(cx).focus(window, cx);
                 cx.stop_propagation();
