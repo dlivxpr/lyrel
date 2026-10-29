@@ -108,6 +108,11 @@ impl EditorPanelState {
         self.prompt_epoch = self.prompt_epoch.wrapping_add(1);
         self.unsaved_prompt_open = false;
         self.waiters.clear();
+        for file in self.buffers.iter() {
+            if let Some((_, cancelled)) = &file.asset_location {
+                cancelled.set(true);
+            }
+        }
         self.dismiss_bar();
     }
 
@@ -706,6 +711,9 @@ impl EditorPanelState {
     }
 
     pub(super) fn saves_failed(&mut self, id: BufferId) {
+        if let Some((_, cancelled)) = self.buffers.get_mut(id).and_then(|file| file.asset_location.take()) {
+            cancelled.set(true);
+        }
         self.waiters.retain(|waiter| !waiter.ids.contains(&id));
     }
 

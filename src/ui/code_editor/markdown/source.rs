@@ -10,6 +10,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::collections::HashMap;
 
+#[path = "assets.rs"]
+mod assets;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -37,6 +40,7 @@ pub(crate) struct SourcePresentation {
     viewport_height: Pixels,
     reveal_at: Option<usize>,
     selection_notification: bool,
+    assets: assets::InsertionState,
     _observe: Subscription,
 }
 impl SourcePresentation {
@@ -47,6 +51,7 @@ impl SourcePresentation {
     ) -> Self {
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if let DocumentEvent::Edited(transaction) = event {
+                this.assets.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -103,6 +108,7 @@ impl SourcePresentation {
             viewport_height: Pixels::ZERO,
             reveal_at: None,
             selection_notification: false,
+            assets: assets::InsertionState::default(),
             _observe: observe,
         }
     }
@@ -852,7 +858,16 @@ impl SourcePresentation {
         }
     }
     fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        let Some(item) = cx.read_from_clipboard() else { return };
+        let images = item.entries().iter().filter_map(|entry| match entry {
+            ClipboardEntry::Image(image) => Some(assets::IncomingImage::Clipboard(image.clone())),
+            _ => None,
+        }).collect::<Vec<_>>();
+        if !images.is_empty() {
+            self.insert_images(images, window, cx);
+            return;
+        }
+        if let Some(text) = item.text() {
             // New clipboard line breaks follow the current codec's LF insertion
             // convention; this does not rewrite any existing document region.
             let text = if text.contains("\r\n") {
@@ -1146,6 +1161,11 @@ impl Render for SourcePresentation {
                         cx.stop_propagation();
                     }
                 }))
+                .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drag_border.opacity(0.12)))
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                    this.drop_images(paths, window, cx);
+                    cx.stop_propagation();
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -1351,6 +1371,10 @@ impl Render for SourcePresentation {
                         cx.propagate();
                     }
                 }))
+                .when_some(self.assets.status(), |root, status| root.child(
+                    div().id("markdown-image-insertion-status").test_support().role(Role::Status)
+                        .aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
+                ))
                 .child(crate::ui::scrollbar::with_vertical_scrollbar(
                     "markdown-source-scrollbar",
                     div()

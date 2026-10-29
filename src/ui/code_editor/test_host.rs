@@ -20,6 +20,7 @@ pub(super) struct FileHost {
     pub(super) entered: Arc<AtomicBool>,
     pub(super) writes: std::sync::atomic::AtomicUsize,
     write_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    fail_write: AtomicBool,
 }
 
 impl FileHost {
@@ -31,8 +32,13 @@ impl FileHost {
             entered: Arc::new(AtomicBool::new(false)),
             writes: std::sync::atomic::AtomicUsize::new(0),
             write_gate: Mutex::new(None),
+            fail_write: AtomicBool::new(false),
         })
     }
+    pub(super) fn fail_next_write(&self) {
+        self.fail_write.store(true, Ordering::SeqCst);
+    }
+
 
     pub(super) fn pause_next_read(&self) -> mpsc::Sender<()> {
         let (tx, rx) = mpsc::channel();
@@ -96,6 +102,9 @@ impl Host for FileHost {
         self.inner.search_content(roots, query, limits)
     }
     fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> {
+        if self.fail_write.swap(false, Ordering::SeqCst) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected Host write failure"));
+        }
         let gate = self.write_gate.lock().unwrap().take();
         if let Some(gate) = gate {
             self.entered.store(true, Ordering::SeqCst);
