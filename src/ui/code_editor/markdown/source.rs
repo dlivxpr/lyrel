@@ -627,14 +627,37 @@ impl SourcePresentation {
         self.command(Command::Select(Selection::new(anchor, at)), window, cx);
     }
     fn vertical_target(&self, at: usize, lines: f32, cx: &App) -> Option<usize> {
-        let (_, geometry) = self.geometry.as_ref()?;
+        let (revision, geometry) = self.geometry.as_ref()?;
+        if *revision != self.document.read(cx).revision() {
+            return None;
+        }
         let mapped = self.projection.leaf_at(at)?;
+        let current_id = mapped.id;
         let leaf = geometry.get(&mapped.id)?;
         let caret = leaf.position_for_index(mapped.display_offset(at));
-        self.point_offset(
-            point(caret.x, caret.y + leaf.line_height() * (lines + 0.25)),
-            cx,
-        )
+        let backward = lines < 0.;
+        // A sample just past a short row can still hit that row when the next
+        // block has a margin (or a tall image). Search the current frame's
+        // shaped rows, not source line numbers or absent/unlaid-out leaves.
+        self.projection.leaves.iter().filter_map(|mapped| {
+            let leaf = geometry.get(&mapped.id)?;
+            let y = if mapped.id == current_id {
+                caret.y + leaf.line_height() * (lines + 0.25)
+            } else {
+                leaf.position_for_index(if backward { mapped.text.len() } else { 0 }).y
+                    + leaf.line_height() * 0.25
+            };
+            let display = leaf.index_for_position(point(caret.x, y));
+            let position = leaf.position_for_index(display);
+            let dy = if backward { caret.y - position.y } else { position.y - caret.y };
+            (dy > Pixels::ZERO).then(|| (
+                mapped.source_offset(display),
+                dy,
+                (position.x - caret.x).abs(),
+            ))
+        }).min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)))
+            .map(|(at, _, _)| at)
     }
     fn visual_line_edge(&self, at: usize, end: bool, cx: &App) -> Option<usize> {
         let (_, geometry) = self.geometry.as_ref()?;
@@ -775,6 +798,14 @@ impl SourcePresentation {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if delete && !self.state.selection.range().is_empty() {
+            self.command(Command::Replace {
+                range: self.state.selection.range(),
+                text: String::new(),
+                kind: EditKind::Command,
+            }, window, cx);
+            return;
+        }
         let doc = self.document.read(cx);
         let at = self.state.selection.head;
         let row = doc.source().offset_to_point(at).row;
@@ -791,6 +822,11 @@ impl SourcePresentation {
                 .find(|(ix, word)| start + ix + word.len() > at)
                 .map_or_else(|| doc.next(end), |(ix, word)| start + ix + word.len())
         };
+        let target = if self.live && self.projection.revision == doc.revision() {
+            self.projection.leaf_at(target).map_or(target, |leaf| {
+                leaf.atomic_boundary(target, !backward)
+            })
+        } else { target };
         if delete {
             self.command(
                 Command::Replace {
