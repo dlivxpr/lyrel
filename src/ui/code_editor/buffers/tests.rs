@@ -855,6 +855,12 @@ fn markdown_tab_uses_editorconfig_in_each_shared_presentation(cx: &mut TestAppCo
         )
     });
 }
+fn read_owned(host: &Arc<FileHost>, path: &Path) -> std::io::Result<Vec<u8>> {
+    let host = host.clone();
+    let path = path.to_path_buf();
+    std::thread::spawn(move || host.read_file(&path, 1024 * 1024)).join().unwrap()
+}
+
 
 fn screenshot_bytes() -> Vec<u8> {
     let mut png = Vec::new();
@@ -895,24 +901,24 @@ fn markdown_screenshot_paste_creates_owned_unique_asset_and_survives_history_sav
         app.active_buffer().unwrap().input.read(cx).text().to_string() == inserted
     }));
     let asset = dir.path().join("assets/screenshot-1.png");
-    assert_eq!(host.read_file(&asset, 1024 * 1024).unwrap(), png);
+    assert_eq!(read_owned(&host, &asset).unwrap(), png);
     assert_eq!(std::fs::read(dir.path().join("assets/screenshot.png")).unwrap(), b"unrelated asset");
     vcx.dispatch_action(Undo);
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "before\n"));
-    assert_eq!(host.read_file(&asset, 1024 * 1024).unwrap(), png);
+    assert_eq!(read_owned(&host, &asset).unwrap(), png);
     vcx.dispatch_action(Redo);
     vcx.run_until_parked();
     vcx.dispatch_action(crate::core::actions::EditorSave);
     wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| !app.active_buffer().unwrap().dirty && !app.active_buffer().unwrap().saving));
-    assert_eq!(host.read_file(&path, 1024 * 1024).unwrap(), inserted.as_bytes());
+    assert_eq!(read_owned(&host, &path).unwrap(), inserted.as_bytes());
     app.update_in(&mut vcx, |app, window, cx| {
         app.editor_close_file(0, window, cx);
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), inserted));
-    assert_eq!(host.read_file(&asset, 1024 * 1024).unwrap(), png);
+    assert_eq!(read_owned(&host, &asset).unwrap(), png);
 }
 
 fn paste_screenshot(vcx: &mut VisualTestContext, png: &[u8]) {
@@ -960,13 +966,13 @@ fn markdown_external_drop_uses_owning_host_and_discard_keeps_the_resource(cx: &m
     }));
     assert_eq!(host.writes.load(Ordering::SeqCst), 1);
     let asset = dir.path().join("assets/external.png");
-    assert_eq!(host.read_file(&asset, 1024 * 1024).unwrap(), png);
+    assert_eq!(read_owned(&host, &asset).unwrap(), png);
     app.update_in(&mut vcx, |app, window, cx| app.editor_close_file(0, window, cx));
     wait_until(&mut vcx, |vcx| vcx.has_pending_prompt());
     vcx.simulate_prompt_answer(t(L10nKey::EditorDiscard));
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_none());
-    assert_eq!(host.read_file(&asset, 1024 * 1024).unwrap(), png);
-    assert_eq!(host.read_file(&path, 1024 * 1024).unwrap(), b"original");
+    assert_eq!(read_owned(&host, &asset).unwrap(), png);
+    assert_eq!(read_owned(&host, &path).unwrap(), b"original");
 }
 
 #[gpui_kit::test]
@@ -1027,10 +1033,10 @@ fn markdown_failed_asset_write_has_no_link_and_late_write_cannot_touch_replaceme
     app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &replacement, window, cx));
     wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, _| app.active_buffer().unwrap().path == replacement));
     release.send(()).unwrap();
-    wait_until(&mut vcx, |_| host.writes.load(Ordering::SeqCst) >= 1);
+    wait_until(&mut vcx, |_| read_owned(&host, &dir.path().join("assets/screenshot-1.png")).is_ok_and(|bytes| bytes == png));
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "replacement"));
-    assert_eq!(host.read_file(&dir.path().join("assets/screenshot-1.png"), 1024 * 1024).unwrap(), png);
+    assert_eq!(read_owned(&host, &dir.path().join("assets/screenshot-1.png")).unwrap(), png);
 }
 
 #[gpui_kit::test]
@@ -1056,7 +1062,7 @@ fn markdown_delayed_image_write_rebases_while_typing_without_losing_text(cx: &mu
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.run_until_parked();
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "typedoriginal"));
-    assert_eq!(host.read_file(&dir.path().join("assets/screenshot.png"), 1024 * 1024).unwrap(), png);
+    assert_eq!(read_owned(&host, &dir.path().join("assets/screenshot.png")).unwrap(), png);
 }
 
 #[gpui_kit::test]
@@ -1085,7 +1091,7 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), ""));
     release.send(()).unwrap();
     wait_until(&mut vcx, |vcx| app.read_with(vcx, |app, cx| app.active_buffer().unwrap().input.read(cx).text().to_string() == "![screenshot](assets/screenshot.png)"));
-    assert_eq!(host.read_file(&dir.path().join("assets/screenshot.png"), 1024 * 1024).unwrap(), screenshot_bytes());
+    assert_eq!(read_owned(&host, &dir.path().join("assets/screenshot.png")).unwrap(), screenshot_bytes());
 
     // A second untitled document exercises the same real Save As bar but a
     // failed document write. No asset directory is created at its destination.
@@ -1112,4 +1118,30 @@ fn markdown_untitled_host_save_must_finish_before_assets_and_failed_save_never_c
     assert!(!failed_dir.path().join("assets").exists());
     assert!(!failed.exists());
     app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), ""));
+}
+
+#[gpui_kit::test]
+fn markdown_image_completion_never_replaces_text_typed_over_pending_selection(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("selection.md");
+    std::fs::write(&path, "original selection").unwrap();
+    let host = FileHost::new(HostId(720));
+    let png = screenshot_bytes();
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    vcx.update(|window, cx| window.press("secondary-a", cx));
+    let release = host.pause_next_write();
+    paste_screenshot(&mut vcx, &png);
+    wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
+    vcx.update(|window, cx| window.input("new author text", cx));
+    vcx.run_until_parked();
+    release.send(()).unwrap();
+    wait_until(&mut vcx, |vcx| vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.try_find("markdown-image-insertion-status").is_some_and(|status| status.label().is_some_and(|label| label == t(L10nKey::MarkdownImageSelectionChanged)))
+    }));
+    app.read_with(&vcx, |app, cx| assert_eq!(app.active_buffer().unwrap().input.read(cx).text().to_string(), "new author text"));
+    assert_eq!(read_owned(&host, &dir.path().join("assets/screenshot.png")).unwrap(), png);
 }

@@ -1680,6 +1680,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownImageChooseLocation => "Choose a save location before inserting the image",
         L10nKey::MarkdownImageWriting => "Writing image to document assets…",
         L10nKey::MarkdownImageWriteFailed => "Could not write image to document assets",
+        L10nKey::MarkdownImageSelectionChanged => "The image was saved, but the selected text changed. No link was inserted.",
         L10nKey::FileTreeContextShowDotfiles => "Show Dotfiles",
         L10nKey::FileDropIntoItself => "A folder cannot be copied into itself.",
         L10nKey::FileDropNotHere => "Not on this machine.",

@@ -1271,6 +1271,7 @@ l10n_keys! {
     MarkdownImageChooseLocation,
     MarkdownImageWriting,
     MarkdownImageWriteFailed,
+    MarkdownImageSelectionChanged,
     FileTreeContextShowDotfiles,
     FileDropIntoItself,
     FileDropNotHere,

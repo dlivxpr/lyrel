@@ -926,11 +926,11 @@ impl SourcePresentation {
     }
     fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else { return };
-        let images = item.entries().iter().filter_map(|entry| match entry {
-            ClipboardEntry::Image(image) => Some(assets::IncomingImage::Clipboard(image.clone())),
-            _ => None,
-        }).collect::<Vec<_>>();
-        if !images.is_empty() {
+        if item.entries().iter().any(|entry| matches!(entry, ClipboardEntry::Image(_))) {
+            let images = item.entries.into_iter().filter_map(|entry| match entry {
+                ClipboardEntry::Image(image) => Some(assets::IncomingImage::Clipboard(image)),
+                _ => None,
+            }).collect();
             self.insert_images(images, window, cx);
             return;
         }

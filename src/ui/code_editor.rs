@@ -1106,7 +1106,13 @@ impl LyrelApp {
             let document = source.read(cx).document().clone();
             let subscription = cx.subscribe_in(&document, window, move |app, _, event, window, cx| {
                 if let markdown::DocumentEvent::RequestAssetLocation { presentation, cancelled } = event {
-                    if app.tab_code().and_then(TabCode::active_id) != Some(id) { return; }
+                    let current = app.active_editor_input().and_then(|input| input.markdown().cloned());
+                    if app.tab_code().and_then(TabCode::active_id) != Some(id)
+                        || !current.is_some_and(|current| current == *presentation)
+                    {
+                        cancelled.set(true);
+                        return;
+                    }
                     app.editor_save_as(id, window, cx);
                     if let Some(file) = app.editor.buffers.get_mut(id) {
                         file.asset_location = Some((presentation.clone(), cancelled.clone()));
@@ -1585,7 +1591,10 @@ impl LyrelApp {
                     self.scm_invalidate_cwd(host, &directory, cx);
                 }
                 if let Some((source, cancelled)) = self.editor.buffers.get_mut(id).and_then(|file| file.asset_location.take()) {
-                    if self.tab_code().and_then(TabCode::active_id) != Some(id) {
+                    let current = self.active_editor_input().and_then(|input| input.markdown().cloned());
+                    if self.tab_code().and_then(TabCode::active_id) != Some(id)
+                        || !current.is_some_and(|current| current == source)
+                    {
                         cancelled.set(true);
                         return;
                     }

@@ -18,11 +18,12 @@ pub(super) enum IncomingImage {
 pub(super) struct InsertionState {
     serial: u64,
     pending: Option<PendingInsertion>,
-    error: Option<String>,
+    error: Option<SharedString>,
 }
 struct PendingInsertion {
     serial: u64,
     selection: Selection,
+    replaced: String,
     inputs: Option<Vec<IncomingImage>>,
     cancelled: std::rc::Rc<std::cell::Cell<bool>>,
 }
@@ -32,9 +33,9 @@ impl InsertionState {
             pending.selection = transaction.map_selection(pending.selection);
         }
     }
-    pub(super) fn status(&self) -> Option<String> {
+    pub(super) fn status(&self) -> Option<SharedString> {
         self.error.clone().or_else(|| self.pending.as_ref().filter(|pending| !pending.cancelled.get()).map(|pending| {
-            t(if pending.inputs.is_some() { L10nKey::MarkdownImageChooseLocation } else { L10nKey::MarkdownImageWriting }).to_string()
+            t(if pending.inputs.is_some() { L10nKey::MarkdownImageChooseLocation } else { L10nKey::MarkdownImageWriting }).into()
         }))
     }
 }
@@ -59,6 +60,7 @@ impl SourcePresentation {
         self.assets.pending = Some(PendingInsertion {
             serial: self.assets.serial,
             selection: self.state.selection,
+            replaced: self.document.read(cx).source().slice(self.state.selection.range()).to_string(),
             inputs: Some(inputs),
             cancelled: cancelled.clone(),
         });
@@ -88,16 +90,22 @@ impl SourcePresentation {
             move |view, result, window, cx| {
                 if !view.assets.pending.as_ref().is_some_and(|pending| pending.serial == serial) { return; }
                 let pending = view.assets.pending.take().unwrap();
-                if pending.cancelled.get() || !resources.is_current(view.document.read(cx).resources()) {
+                if pending.cancelled.get() || !view.focus.is_focused(window)
+                    || !resources.is_current(view.document.read(cx).resources()) {
                     cx.notify();
                     return;
                 }
                 match result {
                     Ok(source) => {
+                        if !view.document.read(cx).source().slice(pending.selection.range()).chars().eq(pending.replaced.chars()) {
+                            view.assets.error = Some(t(L10nKey::MarkdownImageSelectionChanged).into());
+                            cx.notify();
+                            return;
+                        }
                         view.command(Command::Replace { range: pending.selection.range(), text: source, kind: EditKind::Paste }, window, cx);
                     }
                     Err(error) => {
-                        view.assets.error = Some(format!("{}: {error}", t(L10nKey::MarkdownImageWriteFailed)));
+                        view.assets.error = Some(format!("{}: {error}", t(L10nKey::MarkdownImageWriteFailed)).into());
                     }
                 }
                 cx.notify();
