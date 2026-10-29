@@ -9,8 +9,8 @@ const RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(20
 /// a `root = true` somewhere above it is not one worth stalling an open for.
 const EDITORCONFIG_DEPTH: usize = 16;
 
-/// Buffer identity and I/O lifetime. Tabs only retain presentation IDs.
-/// This is ordinary editor state: the retained identity remains EditorState.
+/// Document identity and I/O lifetime. Tabs only retain presentation relations;
+/// replacing an editing presentation does not replace the document.
 pub(super) struct EditorBuffers {
     files: Vec<OpenFile>,
     next_untitled: u32,
@@ -369,6 +369,7 @@ impl EditorBuffers {
         let wrap = cfg.editor_soft_wrap;
         let preview = cfg.editor_markdown_preview && language == "markdown";
         let saved = Fingerprint::of_str(&text);
+        let id = BufferId::new();
         let input = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(language)
@@ -382,7 +383,6 @@ impl EditorBuffers {
                 .default_value(text)
         });
         let popups = cx.new(|cx| crate::ui::lsp::popups::EditorPopups::new(&input, window, cx));
-        let id = input.entity_id();
         let sub = cx.subscribe_in(&input, window, move |view, _, ev, _, cx| {
             if matches!(ev, InputEvent::Change) {
                 access(view).note_edit(id, cx);
@@ -391,6 +391,7 @@ impl EditorBuffers {
         });
         let observe = cx.observe(&input, |_, _, cx| cx.notify());
         self.files.push(OpenFile {
+            id,
             path,
             untitled,
             host,

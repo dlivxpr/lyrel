@@ -1143,7 +1143,7 @@ mod tests {
     fn closed_untitled_buffers_can_be_dropped() {
         let mut h = NavHistory::default();
         let mut untitled = at("", 3);
-        untitled.buffer = Some(gpui_kit::EntityId::from(7u64));
+        untitled.buffer = Some(BufferId::new());
         h.push(untitled);
         h.push(at("a.rs", 0));
         h.retain(|l| l.buffer.is_none());

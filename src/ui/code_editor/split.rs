@@ -9,9 +9,9 @@
 //! exists. The header's strip is the focused group's; the other group shows
 //! its file in front and its breadcrumbs.
 //!
-//! **The same file in both groups.** A buffer is one `OpenFile` with one
-//! `InputState`, which is what the language servers, the gutter markers, the
-//! undo history and every hook in `code_editor.rs` key on. A second
+//! **The same file in both groups.** A buffer is one `OpenFile` with a
+//! document-owned `BufferId` and one `EditorState`; language servers, gutter
+//! markers and asynchronous work retain the document ID. A second
 //! `InputState` mirroring the first would need every one of those attached to
 //! it twice, and edits copied back and forth without echoing — a lot of
 //! surface for two views of one text. So the text is drawn once: in the group
@@ -518,7 +518,7 @@ mod tests {
     use super::*;
 
     fn ids(n: u64) -> Vec<BufferId> {
-        (1..=n).map(gpui_kit::EntityId::from).collect()
+        (0..n).map(|_| BufferId::new()).collect()
     }
 
     fn code(files: &[BufferId], active: usize) -> TabCode {

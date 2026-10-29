@@ -119,11 +119,13 @@ GitHub 上的 Markdown 来自陌生人，因此渲染时有两项限制：只加
 
 同一窗口中，同一 Host 上的同一文件在多个标签页之间共享一个 buffer、编辑内容和撤销历史；关闭其中一个展示位置不会丢弃其他标签页仍在使用的文档。不同 Host 上即使路径相同，也保持独立。外部监视只跟随当前工作区 Host 的文件；SFTP 文件仍在保存时检查远端版本，不用本机同名文件代替。文件链接、搜索和前后导航携带的行列位置随打开请求一起保留，已经失效的请求不会落到切换后的标签页或工作区。
 
-实现中，`src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 持有 buffer registry、Host-aware 打开、待定位光标、外部监视和重载规则；标签页只保留展示关系。`src/ui/code_editor/saving.rs` 将保存规则、Host 写入、另存为、行内输入条、提示生命周期和 save waiters 的转换集中到 `EditorPanelState`；工作台只通过 `EditorBridge` 取得编辑器所有者并接收 `EditorEvent`，负责文件树／LSP、导航、有效内容焦点及最终窗口操作，不向保存实现交出整个工作台。
+实现中，`src/ui/code_editor/buffers.rs` 的 `EditorBuffers` 持有 buffer registry、Host-aware 打开、待定位光标、外部监视和重载规则；标签页只保留展示关系。每个文档分配独立的 `BufferId`，不再借用 `EditorState` 的 entity identity；保存、关闭等待、导航、Git gutter 与 LSP 请求均携带该文档身份，路径或编辑呈现不构成另一条身份通道。普通代码仍由原来的 `EditorState` 编辑。`src/ui/code_editor/saving.rs` 将保存规则、Host 写入、另存为、行内输入条、提示生命周期和 save waiters 的转换集中到 `EditorPanelState`；工作台只通过 `EditorBridge` 取得编辑器所有者并接收 `EditorEvent`，负责文件树／LSP、导航、有效内容焦点及最终窗口操作，不向保存实现交出整个工作台。
 
 关闭文件、窗格、标签页、窗口或应用时，保存成功才允许执行当时捕获的 `AfterUnsaved`。文件关闭还记住原标签页、buffer 和稳定的编辑组身份，而不是左右位置；切换焦点或折叠另一组不改变目标，原组关闭后即使在同一侧重新分组，也不会关闭新组的文档。失败、编码问题、外部版本冲突、取消另存为或重复打开的目标都会撤销原来的等待；之后独立保存成功也不会重新执行那次关闭。冲突时仍显示既有覆盖确认；选择覆盖只保存文档，不恢复已经撤销的关闭。工作区切换会退役旧提示及关闭等待，原文件的已发出写入仍使用它自己的 Host。
 
 ### 保存与关闭的原生验收
+
+文档身份解耦已在 Windows 隔离实例中验证普通文本的打开、输入、未保存关闭提示、选择保存、关闭及重开，并核对磁盘内容。此结果不代表下列完整清单、macOS、真实 SSH 或 Markdown 实时编辑已通过验收。
 
 以下步骤需在 `cargo dev` 的隔离配置与临时工作区中逐项实际执行；它们是本次职责迁移的待执行场景，不表示已经通过。Windows 与 macOS 分别记录焦点和窗口行为；真实远端场景需要测试 SSH Host，不能用本机同名文件代替。
 

@@ -41,9 +41,17 @@ mod test_host;
 
 pub(crate) use nav::KEY_CONTEXT as NAV_KEY_CONTEXT;
 
-/// An open buffer is named by its input's entity id: unique, stable for the
-/// buffer's life, and already what every async landing looks it up by.
-pub(crate) type BufferId = gpui_kit::EntityId;
+/// Retained document identity, independent of any editing presentation or path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct BufferId(u64);
+
+impl BufferId {
+    pub(crate) fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 /// What a buffer's text looked like the last time it matched the disk.
 ///
@@ -96,6 +104,7 @@ pub(crate) enum DiskConflict {
 /// saving either silently threw the other's away. Now a tab only lists which
 /// buffers it shows, and the text lives here once.
 pub(crate) struct OpenFile {
+    id: BufferId,
     pub(crate) path: PathBuf,
     /// Set for a file that has never been saved; `path` is empty until then.
     untitled: Option<u32>,
@@ -135,7 +144,7 @@ pub(crate) struct OpenFile {
 
 impl OpenFile {
     fn id(&self) -> BufferId {
-        self.input.entity_id()
+        self.id
     }
 
     fn label(&self) -> SharedString {
@@ -3063,7 +3072,7 @@ mod tests {
 
     #[test]
     fn a_strip_opens_new_files_beside_the_current_one_and_closes_toward_the_right() {
-        let ids: Vec<BufferId> = (1..=4u64).map(gpui_kit::EntityId::from).collect();
+        let ids: Vec<BufferId> = (0..4).map(|_| BufferId::new()).collect();
         let mut code = TabCode::new();
         code.show(ids[0]);
         code.show(ids[1]);
@@ -3100,7 +3109,7 @@ mod tests {
 
     #[test]
     fn files_arriving_in_the_background_keep_their_order_and_the_front_file() {
-        let ids: Vec<BufferId> = (1..=4u64).map(gpui_kit::EntityId::from).collect();
+        let ids: Vec<BufferId> = (0..4).map(|_| BufferId::new()).collect();
         let mut code = TabCode::new();
         code.show(ids[0]);
         // A restore lists files in the order they were recorded; showing each

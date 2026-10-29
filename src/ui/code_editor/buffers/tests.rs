@@ -59,7 +59,7 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
             .text()
             .to_string()
     });
-    assert!(edited.contains("edited"));
+    assert_eq!(edited, "first\nseeditedcond\nthird\n");
     app.update_in(&mut vcx, |app, window, cx| {
         app.activate(1, window, cx);
         app.open_file_in_editor(&path, window, cx);
@@ -82,6 +82,28 @@ fn opening_across_tabs_shares_edits_and_closing_one_presentation_keeps_them(
             edited
         );
         assert_eq!(app.editor_unsaved(), vec![first]);
+    });
+    app.update_in(&mut vcx, |app, window, cx| app.focus_editor(window, cx));
+    vcx.update(|window, cx| window.render_frame(cx));
+    vcx.dispatch_action(crate::core::actions::EditorSave);
+    wait_until(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.active_buffer()
+                .is_some_and(|file| !file.dirty && !file.saving)
+        })
+    });
+    assert_eq!(std::fs::read(&path).unwrap(), edited.as_bytes());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
+    app.read_with(&vcx, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_ne!(file.id(), first);
+        assert_eq!(file.host.id(), HostId::LOCAL);
+        assert_eq!(file.input.read(cx).text().to_string(), edited);
+        assert!(app.editor_unsaved().is_empty());
     });
 }
 
