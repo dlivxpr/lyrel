@@ -2735,7 +2735,8 @@ impl Element for SourceElement {
                 view.geometry = None;
                 return;
             }
-            let layout = (bounds.size.width, window.rem_size());
+            let viewport = view.scroll.bounds();
+            let layout = (viewport.size.width, window.rem_size());
             let reflow = view.viewport.layout.is_some_and(|old| old != layout);
             if reflow {
                 view.viewport.heights.clear();
@@ -2768,7 +2769,7 @@ impl Element for SourceElement {
                 .viewport
                 .frame
                 .iter()
-                .find(|(_, _, row)| row.bottom() > bounds.top())
+                .find(|(_, _, row)| row.bottom() > viewport.top())
                 .map(|(id, _, row)| (*id, row.top()));
             view.viewport.offset = offset;
             if reflow {
@@ -2780,8 +2781,8 @@ impl Element for SourceElement {
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
             view.table_geometry = super::tables::geometry(&view.projection.leaves, &geometry);
             view.geometry = Some((self.revision, geometry));
-            view.viewport_height = bounds.size.height;
-            view.viewport.bounds = Some(bounds);
+            view.viewport_height = viewport.size.height;
+            view.viewport.bounds = Some(viewport);
             if view.focus.is_focused(window)
                 && (view.selection_notification
                     || previous_caret != view.caret_bounds(view.state.selection.head, cx))
@@ -2792,31 +2793,42 @@ impl Element for SourceElement {
             if view.reveal_caret && view.focus.is_focused(window) {
                 let at = view.reveal_at.unwrap_or(view.state.selection.head);
                 if let Some(caret) = view.caret_bounds(at, cx) {
-                    view.reveal_caret = false;
-                    view.reveal_at = None;
                     let inset = window.rem_size() * 0.75;
-                    let delta = if caret.top() < bounds.top() + inset {
-                        bounds.top() + inset - caret.top()
-                    } else if caret.bottom() > bounds.bottom() - inset {
-                        bounds.bottom() - inset - caret.bottom()
+                    let delta = if caret.top() < viewport.top() + inset {
+                        viewport.top() + inset - caret.top()
+                    } else if caret.bottom() > viewport.bottom() - inset {
+                        viewport.bottom() - inset - caret.bottom()
                     } else {
                         px(0.)
                     };
-                    let delta_x = if caret.left() < bounds.left() + inset {
-                        bounds.left() + inset - caret.left()
-                    } else if caret.right() > bounds.right() - inset {
-                        bounds.right() - inset - caret.right()
+                    let delta_x = if caret.left() < viewport.left() + inset {
+                        viewport.left() + inset - caret.left()
+                    } else if caret.right() > viewport.right() - inset {
+                        viewport.right() - inset - caret.right()
                     } else {
                         px(0.)
                     };
-                    if delta != px(0.) || delta_x != px(0.) {
+                    if caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom()
+                        && caret.left() >= viewport.left() && caret.right() <= viewport.right() {
+                        // Completion is observable only in a frame laid out at
+                        // the final offset, not the frame requesting that offset.
+                        view.reveal_caret = false;
+                        view.reveal_at = None;
+                    } else {
                         let offset = view.scroll.offset();
-                        view.scroll.set_offset(point(
-                            (offset.x + delta_x).min(px(0.)),
-                            (offset.y + delta).min(px(0.)),
-                        ));
-                        view.geometry = None;
-                        window.refresh();
+                        let maximum = view.scroll.max_offset();
+                        let next = point(
+                            (offset.x + delta_x).clamp(-maximum.x, Pixels::ZERO),
+                            (offset.y + delta).clamp(-maximum.y, Pixels::ZERO),
+                        );
+                        if next != offset {
+                            view.scroll.set_offset(next);
+                            view.geometry = None;
+                            // Window::refresh ignores calls during drawing.
+                            // Notify the owning entity so virtualization rebuilds
+                            // for the new offset and verifies the pending reveal.
+                            cx.notify();
+                        }
                     }
                 }
             }
@@ -2851,11 +2863,12 @@ impl Element for SourceElement {
             ElementInputHandler::new(bounds, self.view.clone()),
             cx,
         );
+        let viewport = self.view.read(cx).scroll.bounds();
         for caret in carets {
-            if caret.top() >= bounds.top()
-                && caret.bottom() <= bounds.bottom()
-                && caret.left() >= bounds.left()
-                && caret.right() <= bounds.right()
+            if caret.top() >= viewport.top()
+                && caret.bottom() <= viewport.bottom()
+                && caret.left() >= viewport.left()
+                && caret.right() <= viewport.right()
             {
                 window.paint_quad(fill(caret, self.caret));
             }

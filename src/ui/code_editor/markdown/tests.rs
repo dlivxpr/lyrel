@@ -6066,7 +6066,10 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "current source position must reenter the viewport"
+                "current source position {at} must reenter the viewport; selection={:?}, offset={:?}, caret={:?}",
+                view.read_with(context, |view, _| view.selection()),
+                view.read_with(context, |view, _| view.scroll_offset()),
+                view.read_with(context, |view, cx| view.range_to_bounds(&(at..at), cx))
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
