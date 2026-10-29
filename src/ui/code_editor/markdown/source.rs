@@ -1178,7 +1178,9 @@ impl SourcePresentation {
                 .leaves
                 .iter()
                 .rev()
-                .find(|other| other.range.end < leaf.range.start)
+                // Adjacent table cells can share a source-range boundary.
+                .skip_while(|other| other.id != leaf.id)
+                .nth(1)
                 .map_or(leaf.content_start(), |other| other.content_end())
         } else {
             if let Some((ix, _)) = leaf
@@ -1194,7 +1196,8 @@ impl SourcePresentation {
             self.projection
                 .leaves
                 .iter()
-                .find(|other| other.range.start > leaf.range.end)
+                .skip_while(|other| other.id != leaf.id)
+                .nth(1)
                 .map_or(leaf.content_end(), |other| other.content_start())
         }
     }

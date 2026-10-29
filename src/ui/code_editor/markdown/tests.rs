@@ -3552,6 +3552,15 @@ fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
                 view.read(cx).document().read(cx).source().to_string(),
                 source
             );
+            window.press(
+                if key == "shift-right" {
+                    "shift-left"
+                } else {
+                    "shift-right"
+                },
+                cx,
+            );
+            assert_eq!(view.read(cx).selection(), Selection::caret(from));
         });
     }
     // A new edit after undo replaces the cut/delete branch, not earlier history.
