@@ -143,10 +143,10 @@ impl Host for FileHost {
         self.inner.write_file(&self.path(p), bytes)
     }
     fn create_file_new(&self, p: &Path) -> io::Result<()> {
-        self.inner.create_file_new(p)
+        self.inner.create_file_new(&self.path(p))
     }
     fn create_dir(&self, p: &Path, recursive: bool) -> io::Result<()> {
-        self.inner.create_dir(p, recursive)
+        self.inner.create_dir(&self.path(p), recursive)
     }
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.inner.rename(from, to)

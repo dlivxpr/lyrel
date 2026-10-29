@@ -2680,6 +2680,9 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
     let release = host.pause_next_read();
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if host.entered.load(Ordering::SeqCst) {
             break;
@@ -2701,6 +2704,9 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
     });
     context.update(|window, cx| window.input("new.png", cx));
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         let loaded = context.update(|window, cx| {
             window.render_frame(cx);
@@ -2728,6 +2734,9 @@ fn native_document_images_read_owning_host_and_reject_old_link_results(
         app.editor_path_moved(lyrel_core::host::HostId(114), &path, &moved, cx);
     });
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
@@ -2794,6 +2803,9 @@ fn local_image_references_follow_document_rename_without_moving_assets(
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
@@ -2818,6 +2830,9 @@ fn local_image_references_follow_document_rename_without_moving_assets(
         app.editor_path_moved(host, &path, &moved, cx);
     });
     loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
         if context.update(|window, cx| {
             window.render_frame(cx);
