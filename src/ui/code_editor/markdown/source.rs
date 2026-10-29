@@ -483,6 +483,23 @@ impl SourcePresentation {
         self.rendered_revision = None;
         cx.notify();
     }
+    pub(super) fn toggle_mdx_accordion(
+        &mut self,
+        id: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command(Command::FinishComposition, window, cx);
+        // FinishComposition may rebase the projection. Resolve the stable ID
+        // now instead of retaining a preedit-era byte range in the callback.
+        let Some(component) = self.projection.mdx.components.iter().find(|component| component.id() == id) else { return; };
+        let header = component.name_range().start;
+        self.command(Command::Select(Selection::caret(header)), window, cx);
+        self.update_mdx_view_state(|state| {
+            if !state.collapsed.remove(&id) { state.collapsed.insert(id); }
+        }, window, cx);
+        self.focus.focus(window, cx);
+    }
     pub(crate) fn is_composing(&self) -> bool {
         self.state.composition.is_some()
     }
@@ -1770,6 +1787,9 @@ impl Render for SourcePresentation {
                     .iter()
                     .enumerate()
                     .filter_map(|(ix, leaf)| {
+                        if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(
+                            &self.projection, leaf, &component_source, &self.mdx_state,
+                        )) { return None; }
                         if matches!(leaf.kind, Kind::TableCell(_))
                             && !self.tables.contains_key(&leaf.id)
                         {
