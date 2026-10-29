@@ -1597,6 +1597,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::EditorMdxTabsGroup => "标签页组",
         L10nKey::EditorMdxTabsUntitled => "未命名标签页",
         L10nKey::EditorMdxTabsEmpty => "尚无 Tab 子组件，可编辑子内容添加标签页。",
+        L10nKey::EditorMdxTabsKeyboard => "正文中按 Alt+Page Up／Page Down 切换标签页",
         L10nKey::EditorMarkdownCodeRegion => "代码源码",
         L10nKey::EditorMarkdownMermaidSource => "Mermaid 源码",
         L10nKey::EditorMarkdownMermaidLoading => "正在渲染图表…",

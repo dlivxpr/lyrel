@@ -6031,6 +6031,17 @@ fn native_tabs_switch_preserves_hidden_edits_history_composition_and_host_bytes(
         assert_eq!(view.read(cx).document().read(cx).encode().unwrap(), original.as_bytes());
     });
     app.read_with(&context, |app, _| assert!(!app.active_buffer().unwrap().dirty));
+    context.update(|window, cx| {
+        // The continuous editor keeps Tab for indentation/table navigation.
+        // Its explicit tab-switch keys use the same native control operation.
+        window.press("alt-pageup", cx);
+        assert!(has(window, "mdx-tabs-panel", "One"));
+        assert!(!has(window, "mdx-tabs-panel", "Two"));
+        window.press("alt-pagedown", cx);
+        assert!(has(window, "mdx-tabs-panel", "Two"));
+        assert!(!has(window, "mdx-tabs-panel", "One"));
+        assert_eq!(view.read(cx).document().read(cx).revision(), revision);
+    });
     // A switch is not an undo item, including the clean initial state.
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).revision(), revision));

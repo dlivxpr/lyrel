@@ -52,6 +52,18 @@ pub(in super::super) fn reveal_selection(components: &[Component], source: &Rope
     changed
 }
 
+pub(in super::super) fn adjacent(components: &[Component], source: &Rope, state: &ViewState, selection: Selection, backward: bool) -> Option<(ComponentId, ComponentId)> {
+    let group = components.iter().filter(|group| {
+        let range = group.source_range();
+        named(group, source, "Tabs") && range.start <= selection.head() && selection.head() < range.end
+    }).min_by_key(|group| group.source_range().len())?;
+    let selected = active(components, source, state, group)?;
+    let count = children(components, source, group).count();
+    let ix = children(components, source, group).position(|child| child.id() == selected)?;
+    let next = if backward { (ix + count - 1) % count } else { (ix + 1) % count };
+    children(components, source, group).nth(next).map(|child| (group.id(), child.id()))
+}
+
 fn label(component: &Component, source: &Rope) -> SharedString {
     component.properties().iter().find(|property| {
         property.name_range().is_some_and(|range| source.slice(range).chars().eq("title".chars()))
@@ -66,7 +78,7 @@ pub(in super::super) fn render(context: &FieldContext<'_>, content: AnyElement, 
     if context.field().is_none() {
         if is_group { return content; }
         let title = label(component, context.source());
-        return div().id(("mdx-tabs-panel", component.id().value())).test_support().aria_label(title)
+        return div().id("mdx-tabs-panel").test_support().aria_label(title)
             .w_full().pl_3().border_l_1().border_color(cx.theme().border)
             .child(content).into_any_element();
     }
@@ -82,26 +94,27 @@ pub(in super::super) fn render(context: &FieldContext<'_>, content: AnyElement, 
         let mut strip = div().id(("mdx-tabs-strip", group.value())).flex().flex_wrap().gap_1()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         let choices: Vec<_> = children(context.components(), context.source(), component).collect();
-        let ids: Vec<_> = choices.iter().map(|child| child.id()).collect();
         for (ix, child) in choices.iter().enumerate() {
             let id = child.id();
             let title = label(child, context.source());
             let selector = title.clone();
-            let keys = ids.clone();
+            let previous = choices[(ix + choices.len() - 1) % choices.len()].id();
+            let next = choices[(ix + 1) % choices.len()].id();
+            let first = choices[0].id();
+            let last = choices[choices.len() - 1].id();
             // Each published Tab is scoped by a stable component ID rather
             // than TabBar's positional child identity. Base owns activation,
             // focus-visible and AX tab role; the document owns the selection.
             strip = strip.child(div().id(("mdx-tabs-choice", id.value()))
-                .test_support().aria_label(selector)
+                .child(div().id("mdx-tabs-choice").test_support().aria_label(selector)
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                     let next = match event.keystroke.key.as_str() {
-                        "left" => Some((ix + keys.len() - 1) % keys.len()),
-                        "right" => Some((ix + 1) % keys.len()),
-                        "home" => Some(0), "end" => Some(keys.len() - 1),
+                        "left" => Some(previous), "right" => Some(next),
+                        "home" => Some(first), "end" => Some(last),
                         _ => None,
                     };
                     if let Some(next) = next {
-                        this.activate_mdx_tab(group, keys[next], window, cx);
+                        this.activate_mdx_tab(group, next, window, cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -110,11 +123,12 @@ pub(in super::super) fn render(context: &FieldContext<'_>, content: AnyElement, 
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_mdx_tab(group, id, window, cx);
                         cx.stop_propagation();
-                    }))));
+                    })))));
         }
         if choices.is_empty() {
             result = result.child(div().text_xs().text_color(cx.theme().muted_foreground).child(t(L10nKey::EditorMdxTabsEmpty)));
         } else { result = result.child(strip); }
+        result = result.child(div().text_xs().text_color(cx.theme().muted_foreground).child(t(L10nKey::EditorMdxTabsKeyboard)));
     }
     // Existing name/property/children commands always target the one input.
     result.child(view::render_generic(context, content, cx)).into_any_element()

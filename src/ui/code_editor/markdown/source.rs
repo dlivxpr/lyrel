@@ -2278,6 +2278,16 @@ impl Render for SourcePresentation {
                     }
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    let key = &event.keystroke;
+                    if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
+                        && matches!(key.key.as_str(), "pageup" | "pagedown") {
+                        let target = super::mdx::tabs::adjacent(&this.projection.mdx.components, this.document.read(cx).source(), &this.mdx_state, this.state.selection, key.key == "pageup");
+                        if let Some((group, child)) = target {
+                            this.activate_mdx_tab(group, child, window, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
                     if event.keystroke.key == "escape" && this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
                         cx.stop_propagation();

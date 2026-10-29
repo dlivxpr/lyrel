@@ -1743,6 +1743,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMdxTabsGroup => "Tabs",
         L10nKey::EditorMdxTabsUntitled => "Untitled tab",
         L10nKey::EditorMdxTabsEmpty => "No Tab children. Edit children to add a tab.",
+        L10nKey::EditorMdxTabsKeyboard => "In content: Alt+Page Up / Page Down switches tabs",
         L10nKey::EditorMarkdownCodeRegion => "Code source",
         L10nKey::EditorMarkdownMermaidSource => "Mermaid source",
         L10nKey::EditorMarkdownMermaidLoading => "Rendering diagram…",

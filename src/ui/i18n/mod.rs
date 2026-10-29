@@ -1323,6 +1323,7 @@ l10n_keys! {
     EditorMdxTabsGroup,
     EditorMdxTabsUntitled,
     EditorMdxTabsEmpty,
+    EditorMdxTabsKeyboard,
     EditorMarkdownCodeRegion,
     EditorMarkdownMermaidSource,
     EditorMarkdownMermaidLoading,
