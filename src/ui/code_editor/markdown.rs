@@ -10,6 +10,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 mod projection;
 mod regions;
 mod source;
+mod tables;
 pub(super) use source::SourcePresentation;
 #[cfg(test)]
 mod tests;

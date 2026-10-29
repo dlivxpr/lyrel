@@ -63,6 +63,12 @@ memchr = "2"
 unicode-segmentation = "1"
 # Source-position-aware parser shared with gpui-base's released Markdown renderer.
 markdown = "=1.0.0"
+# Native formula SVG shares RaTeX with Mermaid labels; glyph paths embed its fonts.
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
+# Enable every released diagram family without browser or ELK runtime integration.
+merman = { version = "=0.9.2", default-features = false, features = ["all-diagrams", "complete-svg"] }
 # Scalar widths remain needed by preedit ink detection and copy unwrapping.
 # Input-bar cluster widths instead use lyrel-core's optional terminal-width.
 rio-unicode.workspace = true
