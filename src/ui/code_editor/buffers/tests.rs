@@ -1697,18 +1697,34 @@ fn markdown_late_image_layout_preserves_visible_caret_and_newer_edit(cx: &mut Te
     use gpui_kit::Focusable as _;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("late-layout.md");
-    let original = format!("# Document\n\n![tall](tall.png)\n\nactive paragraph\n\n{}", "tail paragraph\n\n".repeat(500));
+    let original = format!(
+        "# Document\n\n![tall](tall.png)\n\nactive paragraph\n\n{}",
+        "tail paragraph\n\n".repeat(500)
+    );
     std::fs::write(&path, &original).unwrap();
     let mut png = Vec::new();
-    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(32, 480, image::Rgba([4, 5, 6, 255])))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        32,
+        480,
+        image::Rgba([4, 5, 6, 255]),
+    ))
+    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+    .unwrap();
     std::fs::write(dir.path().join("tall.png"), png).unwrap();
     let host = FileHost::new(HostId(722));
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
-    app.update_in(&mut vcx, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
     wait_until(&mut vcx, |vcx| active_id(&app, vcx).is_some());
-    let view = app.read_with(&vcx, |app, _| app.active_editor_input().unwrap().markdown().unwrap().clone());
+    let view = app.read_with(&vcx, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
     let release = host.pause_next_read();
     vcx.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     wait_until(&mut vcx, |_| host.entered.load(Ordering::SeqCst));
@@ -1719,20 +1735,43 @@ fn markdown_late_image_layout_preserves_visible_caret_and_newer_edit(cx: &mut Te
         view.command(markdown::Command::Insert("new ".into()), window, cx);
     });
     release.send(()).unwrap();
-    wait_until(&mut vcx, |vcx| vcx.update(|window, cx| {
-        window.render_frame(cx);
-        window.try_find("markdown-image:tall.png").is_some_and(|status| status.label() == Some(t(L10nKey::EditorImageLoaded).as_ref()))
-    }));
+    wait_until(&mut vcx, |vcx| {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find("markdown-image:tall.png")
+                .is_some_and(|status| {
+                    status.label() == Some(t(L10nKey::EditorImageLoaded).as_ref())
+                })
+        })
+    });
     // Allow the height correction and its anchored frame to paint, without
     // bypassing the production resource loader or adding a renderer test seam.
-    for _ in 0..4 { vcx.update(|window, cx| window.render_frame(cx)); vcx.run_until_parked(); }
+    for _ in 0..4 {
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.run_until_parked();
+    }
     vcx.update(|window, cx| {
-        let caret = view.read(cx).range_to_bounds(&(at + 4..at + 4), cx).unwrap();
+        let caret = view
+            .read(cx)
+            .range_to_bounds(&(at + 4..at + 4), cx)
+            .unwrap();
         assert!(caret.top() >= gpui_kit::px(0.) && caret.bottom() <= window.viewport_size().height);
-        assert_eq!(view.read(cx).selection(), markdown::Selection::caret(at + 4));
-        assert_eq!(view.read(cx).document().read(cx).source().to_string(), original.replacen("active paragraph", "new active paragraph", 1));
+        assert_eq!(
+            view.read(cx).selection(),
+            markdown::Selection::caret(at + 4)
+        );
+        assert_eq!(
+            view.read(cx).document().read(cx).source().to_string(),
+            original.replacen("active paragraph", "new active paragraph", 1)
+        );
     });
     vcx.dispatch_action(gpui_kit::component::input::Undo);
     vcx.run_until_parked();
-    view.read_with(&vcx, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&vcx, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
 }
