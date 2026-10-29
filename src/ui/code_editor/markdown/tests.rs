@@ -2470,7 +2470,7 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
         r"\alpha+\Gamma", r"\lim_{x\to0}\sin x", r"\int_0^1 x\,dx",
         r"\sum_{i=1}^n i", r"x\quad\text{when }y>0",
     ];
-    let source = format!("# Math\r\n\r\n前 $x_i^2$ 后  \r\n\n$$\n{}\n$$\n\n错误 $\\unknowncommand{{x}}$ 与 $\\frac{{a}}$\n\n[keep]: target  ", formulas[1..].join(" + "));
+    let source = format!("# Math\r\n\r\n前 $x_i^2$ 后 $x$  \r\n\n$$\n{}\n$$\n\n错误 $\\unknowncommand{{x}}$ 与 $\\frac{{a}}$\n\n[keep]: target  ", formulas[1..].join(" + "));
     std::fs::write(&path, source.as_bytes()).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
@@ -2502,6 +2502,10 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
     });
     let normalized = source.replace("\r\n", "\n");
     let at = normalized.find("x_i^2").unwrap() + 5;
+    let short = normalized.find("$x$").unwrap();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.range_to_bounds(&(short..short), cx), view.range_to_bounds(&(short + 1..short + 1), cx));
+    });
     context.update(|window, cx| {
         let point = window.find(ready).bounds().center();
         window.pointer_down(point, MouseButton::Left, cx);
