@@ -21,6 +21,8 @@ impl Grammar {
     pub(super) fn options(self, document_start: bool) -> markdown::ParseOptions {
         let mut options = markdown::ParseOptions::gfm();
         options.constructs.frontmatter = document_start;
+        options.constructs.math_flow = true;
+        options.constructs.math_text = true;
         if self == Self::Mdx {
             let constructs = &mut options.constructs;
             constructs.html_flow = false;
@@ -156,17 +158,28 @@ impl Index {
         })
     }
     pub(super) fn rebase(&mut self, transaction: &super::Transaction) {
-        let map = |at| transaction.map_selection(super::Selection::caret(at)).head();
+        // Starts stay before inserted field text, ends follow it. In particular,
+        // typing another character at a component-name end must extend both
+        // name ranges before the debounced AST result is available.
+        let map = |mut at, after| {
+            for edit in &transaction.edits {
+                if at < edit.range.start || (at == edit.range.start && !after) { continue; }
+                at = if at >= edit.range.end {
+                    at - edit.range.len() + edit.inserted_len
+                } else { edit.range.start + edit.inserted_len };
+            }
+            at
+        };
         for component in &mut self.components {
-            component.source = map(component.source.start + 1).saturating_sub(1)..map(component.source.end);
-            component.name = map(component.name.start)..map(component.name.end);
-            component.closing = component.closing.take().map(|range| map(range.start)..map(range.end));
-            component.opener_end = map(component.opener_end);
-            component.children = map(component.children.start)..map(component.children.end);
+            component.source = map(component.source.start, true)..map(component.source.end, true);
+            component.name = map(component.name.start, false)..map(component.name.end, true);
+            component.closing = component.closing.take().map(|range| map(range.start, false)..map(range.end, true));
+            component.opener_end = map(component.opener_end, true);
+            component.children = map(component.children.start, false)..map(component.children.end, true);
             for property in &mut component.properties {
-                property.source = map(property.source.start)..map(property.source.end);
-                property.name = property.name.take().map(|range| map(range.start)..map(range.end));
-                property.value = map(property.value.start)..map(property.value.end);
+                property.source = map(property.source.start, false)..map(property.source.end, true);
+                property.name = property.name.take().map(|range| map(range.start, false)..map(range.end, true));
+                property.value = map(property.value.start, false)..map(property.value.end, true);
             }
         }
     }

@@ -20,6 +20,7 @@ pub(super) struct FileHost {
     pub(super) entered: Arc<AtomicBool>,
     pub(super) writes: std::sync::atomic::AtomicUsize,
     write_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    fail_write: AtomicBool,
     root: Option<PathBuf>,
 }
 
@@ -32,6 +33,7 @@ impl FileHost {
             entered: Arc::new(AtomicBool::new(false)),
             writes: std::sync::atomic::AtomicUsize::new(0),
             write_gate: Mutex::new(None),
+            fail_write: AtomicBool::new(false),
             root: None,
         })
     }
@@ -42,10 +44,15 @@ impl FileHost {
         host
     }
     fn path(&self, path: &Path) -> PathBuf {
-        self.root.as_ref().map_or_else(|| path.to_path_buf(), |root| {
-            root.join(path.to_string_lossy().trim_start_matches('/'))
-        })
+        self.root.as_ref().map_or_else(
+            || path.to_path_buf(),
+            |root| root.join(path.to_string_lossy().trim_start_matches('/')),
+        )
     }
+    pub(super) fn fail_next_write(&self) {
+        self.fail_write.store(true, Ordering::SeqCst);
+    }
+
 
     pub(super) fn pause_next_read(&self) -> mpsc::Sender<()> {
         let (tx, rx) = mpsc::channel();
@@ -67,10 +74,18 @@ impl Host for FileHost {
         self.id
     }
     fn separator(&self) -> char {
-        if self.root.is_some() { '/' } else { self.inner.separator() }
+        if self.root.is_some() {
+            '/'
+        } else {
+            self.inner.separator()
+        }
     }
     fn is_absolute(&self, p: &Path) -> bool {
-        if self.root.is_some() { p.to_string_lossy().starts_with('/') } else { self.inner.is_absolute(p) }
+        if self.root.is_some() {
+            p.to_string_lossy().starts_with('/')
+        } else {
+            self.inner.is_absolute(p)
+        }
     }
     fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
         self.inner.read_dir(p, root)
@@ -89,8 +104,12 @@ impl Host for FileHost {
     }
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
         if self.root.is_some() {
-            self.inner.canonicalize(&self.path(p)).map(|_| p.to_path_buf())
-        } else { self.inner.canonicalize(p) }
+            self.inner
+                .canonicalize(&self.path(p))
+                .map(|_| p.to_path_buf())
+        } else {
+            self.inner.canonicalize(p)
+        }
     }
     fn search(
         &self,
@@ -111,6 +130,9 @@ impl Host for FileHost {
         self.inner.search_content(roots, query, limits)
     }
     fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> {
+        if self.fail_write.swap(false, Ordering::SeqCst) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected Host write failure"));
+        }
         let gate = self.write_gate.lock().unwrap().take();
         if let Some(gate) = gate {
             self.entered.store(true, Ordering::SeqCst);

@@ -1677,6 +1677,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::FileTreeContextRename => "Rename",
         L10nKey::FileTreeContextCopyPath => "Copy Path",
         L10nKey::FileTreeContextHideDotfiles => "Hide Dotfiles",
+        L10nKey::MarkdownImageChooseLocation => "Choose a save location before inserting the image",
+        L10nKey::MarkdownImageWriting => "Writing image to document assets…",
+        L10nKey::MarkdownImageWriteFailed => "Could not write image to document assets",
+        L10nKey::MarkdownImageSelectionChanged => {
+            "The image was saved, but the selected text changed. No link was inserted."
+        }
         L10nKey::FileTreeContextShowDotfiles => "Show Dotfiles",
         L10nKey::FileDropIntoItself => "A folder cannot be copied into itself.",
         L10nKey::FileDropNotHere => "Not on this machine.",
@@ -1735,19 +1741,51 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::EditorMdxClosing => "End component",
         L10nKey::EditorMdxParseError => "Invalid MDX · edit the retained source to recover",
         L10nKey::EditorMarkdownCodeRegion => "Code source",
+        L10nKey::EditorMarkdownMermaidSource => "Mermaid source",
+        L10nKey::EditorMarkdownMermaidLoading => "Rendering diagram…",
+        L10nKey::EditorMarkdownMermaidEdit => "Edit diagram source",
+        L10nKey::EditorMarkdownMermaidError => {
+            "Diagram could not render. Source is retained and editable."
+        }
+        L10nKey::EditorMarkdownMermaidEmpty => {
+            "No Mermaid diagram detected. Enter a diagram in the retained source."
+        }
+        L10nKey::EditorMarkdownMermaidExternal => {
+            "External diagram resources are not allowed. Use self-contained labels and shapes."
+        }
+        L10nKey::EditorMarkdownMermaidRasterLimit => {
+            "Diagram exceeds the native image limit (4096 pixels per side or 8 million pixels). Simplify or split the diagram."
+        }
         L10nKey::EditorMarkdownMetadataRegion => "Metadata source",
         L10nKey::EditorMarkdownHtmlRegion => "HTML source · not executed or rendered as HTML/CSS",
+        L10nKey::EditorMarkdownMathLoading => "Rendering formula",
+        L10nKey::EditorMarkdownMathError => {
+            "Couldn’t render formula. Click to edit its source. Reason:"
+        }
         L10nKey::EditorLoadImages => "Load document images",
         L10nKey::EditorImageUnloaded => "Image not loaded",
         L10nKey::EditorImageLoading => "Loading image",
         L10nKey::EditorImageLoaded => "Image loaded",
         L10nKey::EditorImageFailed => "Couldn’t load image",
+        L10nKey::EditorTableCommands => "Table…",
+        L10nKey::EditorTableInsertRowBefore => "Table: Insert row above",
+        L10nKey::EditorTableInsertRowAfter => "Table: Insert row below",
+        L10nKey::EditorTableDeleteRow => "Table: Delete row",
+        L10nKey::EditorTableInsertColumnBefore => "Table: Insert column before",
+        L10nKey::EditorTableInsertColumnAfter => "Table: Insert column after",
+        L10nKey::EditorTableDeleteColumn => "Table: Delete column",
+        L10nKey::EditorTableAlignDefault => "Table: Default alignment",
+        L10nKey::EditorTableAlignLeft => "Table: Align left",
+        L10nKey::EditorTableAlignCenter => "Table: Align center",
+        L10nKey::EditorTableAlignRight => "Table: Align right",
         L10nKey::MarkdownEditLinkDestination => "Edit link destination",
         L10nKey::MarkdownEditReferenceDestination => "Edit reference destination",
         L10nKey::MarkdownFollowLink => "Open link",
         L10nKey::MarkdownLinkOpenFailed => "Couldn’t open link: {reason}",
         L10nKey::MarkdownLinkInvalidDestination => "The destination is not a valid path or URL",
-        L10nKey::MarkdownLinkUnsupportedScheme => "This link scheme is not supported on the document’s Host",
+        L10nKey::MarkdownLinkUnsupportedScheme => {
+            "This link scheme is not supported on the document’s Host"
+        }
         L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
         L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
         L10nKey::EditorWrapOn => "Wrap: on",

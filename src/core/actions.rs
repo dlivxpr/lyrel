@@ -131,6 +131,7 @@ actions!(
         DocumentWidthTwoThirds,
         ToggleDocumentPreview,
         ToggleDocumentWrap,
+        ToggleMarkdownTask,
         EditorSave,
         EditorSaveAs,
         EditorGoToLine,

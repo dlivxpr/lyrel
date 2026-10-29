@@ -31,6 +31,8 @@ impl<'a> FieldContext<'a> {
     pub(in super::super) fn field(&self) -> Option<Field> { self.field }
     pub(in super::super) fn source(&self) -> &gpui_kit::base::input::Rope { self.source }
     pub(in super::super) fn state(&self) -> &ViewState { self.state }
+    pub(in super::super) fn revision(&self) -> u64 { self.revision }
+    pub(in super::super) fn grammar(&self) -> Grammar { self.grammar }
 }
 
 /// Dedicated family modules attach here: choose the family from the positioned

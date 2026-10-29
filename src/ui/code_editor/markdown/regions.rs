@@ -15,10 +15,17 @@ pub(super) fn classify(node: &Node, source: &str) -> Kind {
         Node::Paragraph(_) => Kind::Prose,
         Node::Heading(heading) => Kind::Heading(heading.depth),
         Node::ThematicBreak(_) => Kind::Rule,
-        Node::Code(_) => {
+        Node::Math(_) => Kind::Math,
+        Node::Code(code) => {
             let opening = source.lines().next().unwrap_or_default().trim_start();
             let marker = opening.as_bytes().first().copied().unwrap_or_default();
             let width = opening.bytes().take_while(|byte| *byte == marker).count();
+            if code.lang.as_deref() == Some("mermaid")
+                && matches!(marker, b'`' | b'~')
+                && width >= 3
+            {
+                return Kind::Mermaid(Code::Fenced { marker, width });
+            }
             Kind::Code(if matches!(marker, b'`' | b'~') && width >= 3 {
                 Code::Fenced { marker, width }
             } else {
@@ -49,6 +56,7 @@ pub(super) fn label(kind: Kind) -> Option<crate::ui::i18n::L10nKey> {
     use crate::ui::i18n::L10nKey;
     match kind {
         Kind::Code(_) => Some(L10nKey::EditorMarkdownCodeRegion),
+        Kind::Mermaid(_) => Some(L10nKey::EditorMarkdownMermaidSource),
         Kind::Metadata => Some(L10nKey::EditorMarkdownMetadataRegion),
         Kind::Html => Some(L10nKey::EditorMarkdownHtmlRegion),
         Kind::Source => Some(L10nKey::EditorMarkdownSourceRegion),
@@ -64,7 +72,9 @@ pub(super) fn line_break(kind: Kind, text: &str, offset: usize) -> (usize, Strin
         .find('\n')
         .map_or(text.len(), |ix| offset + ix);
     let line = &text[start..end];
-    if let Kind::Code(Code::Fenced { marker, width }) = kind {
+    if let Kind::Code(Code::Fenced { marker, width })
+    | Kind::Mermaid(Code::Fenced { marker, width }) = kind
+    {
         let trimmed = line.trim_start();
         let count = trimmed.bytes().take_while(|byte| *byte == marker).count();
         if start > 0 && count >= width && trimmed[count..].trim().is_empty() && offset == end {

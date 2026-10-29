@@ -8,17 +8,20 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod images;
-pub(super) mod resources;
 pub(super) mod links;
 mod lists;
 mod mdx;
+mod math;
+mod mermaid;
 mod projection;
 mod regions;
+pub(super) mod resources;
 mod source;
 mod tables;
-pub(super) use source::SourcePresentation;
 #[cfg(test)]
 pub(super) use source::FollowLink;
+pub(super) use source::SourcePresentation;
+pub(crate) use tables::bindings as table_bindings;
 #[cfg(test)]
 mod tests;
 
@@ -122,6 +125,7 @@ pub(crate) enum EditKind {
     Command,
 }
 pub(crate) enum Command {
+    Table(tables::Operation),
     Reload {
         text: String,
         format: TextFormat,
@@ -137,10 +141,19 @@ pub(crate) enum Command {
     ParagraphBreak {
         hard: bool,
     },
-    ListBreak { hard: bool, at: Option<usize> },
+    ListBreak {
+        hard: bool,
+        at: Option<usize>,
+    },
     ListBackspace,
-    ListIndent { outdent: bool, width: usize, at: Option<usize> },
-    ToggleTask { at: usize },
+    ListIndent {
+        outdent: bool,
+        width: usize,
+        at: Option<usize>,
+    },
+    ToggleTask {
+        at: usize,
+    },
     Replace {
         range: Range<usize>,
         text: String,
@@ -553,6 +566,33 @@ impl MarkdownDocument {
                 });
                 self.apply_command(state, Command::Compose { range: Some(range), text, selected });
             }
+            Command::Table(operation) => {
+                self.finish_composition(state, false);
+                if let Some((range, text, caret)) =
+                    tables::edit(&self.source.to_string(), state.selection, operation)
+                {
+                    let removed = self.source_text(range.clone());
+                    let inserted = SourceText::from_input(text, LineEnding::Lf);
+                    if removed != inserted {
+                        let before = state.selection;
+                        self.replace(range.clone(), &inserted);
+                        state.selection = Selection::caret(caret);
+                        self.record(
+                            Change {
+                                edits: smallvec::smallvec![ReplacedSource {
+                                    start: range.start,
+                                    removed,
+                                    inserted
+                                }],
+                                before,
+                                after: state.selection,
+                            },
+                            EditKind::Command,
+                            state.id,
+                        );
+                    }
+                }
+            }
             Command::Compose {
                 range,
                 text,
@@ -657,7 +697,9 @@ impl MarkdownDocument {
                     }
                     Command::ListBreak { hard, at } => lists::line_break(self, state, hard, at),
                     Command::ListBackspace => lists::backspace(self, state),
-                    Command::ListIndent { outdent, width, at } => lists::indent(self, state, outdent, width, at),
+                    Command::ListIndent { outdent, width, at } => {
+                        lists::indent(self, state, outdent, width, at)
+                    }
                     Command::ToggleTask { at } => lists::toggle(self, state, at),
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),
@@ -708,6 +750,10 @@ impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
 pub(super) enum DocumentEvent {
     Edited(Transaction),
     PresentationChanged,
+    RequestAssetLocation {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        cancelled: std::rc::Rc<std::cell::Cell<bool>>,
+    },
     ResourceContextChanged,
     ImagesChanged,
     FollowLink {

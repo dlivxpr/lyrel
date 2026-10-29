@@ -26,6 +26,8 @@ pub(super) enum Kind {
     Quote(super::lists::Structure),
     Rule,
     Code(super::regions::Code),
+    Mermaid(super::regions::Code),
+    Math,
     Metadata,
     Html,
     Source,
@@ -42,6 +44,7 @@ struct Segment {
     raw: Option<String>,
     verbatim: bool,
     image: Option<super::images::Image>,
+    math: Option<super::math::Formula>,
 }
 #[derive(Clone)]
 pub(super) struct Leaf {
@@ -120,13 +123,14 @@ impl Leaf {
             raw,
             verbatim: false,
             image: None,
+            math: None,
         });
     }
     fn rebuild(&mut self, marked: Option<&Range<usize>>) {
         self.text.clear();
         for segment in &mut self.segments {
             let start = self.text.len();
-            if segment.image.is_none() {
+            if segment.image.is_none() && segment.math.is_none() {
                 segment.verbatim = segment.raw.is_some()
                     && marked.is_some_and(|range| {
                         range.start < segment.source.end && range.end > segment.source.start
@@ -164,22 +168,30 @@ impl Leaf {
             span.revealed = revealed;
         }
         for segment in &mut self.segments {
-            if segment.image.is_some() {
+            if segment.image.is_some() || segment.math.is_some() {
                 let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
                     let range = selection.range();
-                    if range.is_empty() { segment.source.start < range.start && range.start < segment.source.end }
-                    else { range.start < segment.source.end && range.end > segment.source.start }
-                }) || marked.is_some_and(|range| range.start < segment.source.end && range.end > segment.source.start);
+                    // Crossing the whole image selects its original Markdown as
+                    // one atom. Reveal only when an editing endpoint is inside
+                    // its syntax; otherwise reverse Shift navigation must cross
+                    // the same boundary instead of entering the image URL.
+                    segment.source.start < range.start && range.start < segment.source.end
+                        || segment.source.start < range.end && range.end < segment.source.end
+                }) || marked.is_some_and(|range| {
+                    range.start < segment.source.end && range.end > segment.source.start
+                });
                 changed |= segment.verbatim != revealed;
                 segment.verbatim = revealed;
             }
         }
         changed |= self.segments.iter().any(|segment| {
-            segment.image.is_none() && segment.verbatim
-                != (segment.raw.is_some()
-                    && marked.is_some_and(|range| {
-                        range.start < segment.source.end && range.end > segment.source.start
-                    }))
+            segment.image.is_none()
+                && segment.math.is_none()
+                && segment.verbatim
+                    != (segment.raw.is_some()
+                        && marked.is_some_and(|range| {
+                            range.start < segment.source.end && range.end > segment.source.start
+                        }))
         });
         if changed {
             self.rebuild(marked);
@@ -190,6 +202,9 @@ impl Leaf {
         self.spans
             .iter()
             .any(|span| span.source.start <= at && at <= span.source.end)
+            || self.segments.iter().any(|segment| {
+                segment.math.is_some() && segment.source.start <= at && at <= segment.source.end
+            })
     }
     pub fn marks(
         &self,
@@ -209,10 +224,12 @@ impl Leaf {
                 italic: style.italic,
                 strikethrough: style.strikethrough,
                 code: style.code,
-                link: style.link.map(|ix| gpui_kit::base::text::editor_host::LinkMark {
-                    url: self.spans[ix].target.clone().unwrap_or_default(),
-                    ..Default::default()
-                }),
+                link: style
+                    .link
+                    .map(|ix| gpui_kit::base::text::editor_host::LinkMark {
+                        url: self.spans[ix].target.clone().unwrap_or_default(),
+                        ..Default::default()
+                    }),
                 ..Default::default()
             };
             let range = segment.display.clone();
@@ -241,31 +258,67 @@ impl Leaf {
         marks
     }
     pub fn image_urls(&self) -> impl Iterator<Item = &str> {
-        self.segments.iter().filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
+        self.segments
+            .iter()
+            .filter_map(|segment| segment.image.as_ref().map(|image| image.url.as_str()))
     }
-    pub fn inline_nodes(&self, marked: Option<&Range<usize>>) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
-        use gpui_kit::base::text::editor_host::{InlineNode, ImageNode};
+    pub fn inline_nodes(
+        &self,
+        marked: Option<&Range<usize>>,
+        math: &super::math::State,
+    ) -> Vec<gpui_kit::base::text::editor_host::InlineNode> {
+        use gpui_kit::base::text::editor_host::{ImageNode, InlineNode};
         let marks = self.marks(marked);
-        self.segments.iter().filter(|segment| !segment.display.is_empty()).map(|segment| {
-            if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
-                let mut node = ImageNode::default();
-                node.url = image.url.clone().into();
-                node.alt = Some(image.alt.clone().into());
-                node.title = image.title.clone().map(Into::into);
-                // Reserve geometry before loading, so completion cannot move the
-                // caret or scroll anchor. Images fit inside this native atom.
-                node.width = Some(gpui_kit::rems(12.).into());
-                node.height = Some(gpui_kit::rems(8.).into());
-                InlineNode::image(node)
-            } else {
-                let range = &segment.display;
-                InlineNode::new(self.text[range.clone()].to_owned()).marks(marks.iter().filter_map(|(mark_range, mark)| {
-                    let start = range.start.max(mark_range.start);
-                    let end = range.end.min(mark_range.end);
-                    (start < end).then(|| (start - range.start..end - range.start, mark.clone()))
-                }).collect())
-            }
-        }).collect()
+        self.segments
+            .iter()
+            .filter(|segment| !segment.display.is_empty())
+            .map(|segment| {
+                if let Some(image) = segment.image.as_ref().filter(|_| !segment.verbatim) {
+                    let mut node = ImageNode::default();
+                    node.url = image.url.clone().into();
+                    node.alt = Some(image.alt.clone().into());
+                    node.title = image.title.clone().map(Into::into);
+                    // Reserve geometry before loading, so completion cannot move the
+                    // caret or scroll anchor. Images fit inside this native atom.
+                    node.width = Some(gpui_kit::rems(12.).into());
+                    node.height = Some(gpui_kit::rems(8.).into());
+                    InlineNode::image(node)
+                } else if let Some(formula) = segment.math.as_ref().filter(|_| !segment.verbatim) {
+                    math.inline_node(formula)
+                } else {
+                    let range = &segment.display;
+                    InlineNode::new(self.text[range.clone()].to_owned()).marks(
+                        marks
+                            .iter()
+                            .filter_map(|(mark_range, mark)| {
+                                let start = range.start.max(mark_range.start);
+                                let end = range.end.min(mark_range.end);
+                                (start < end)
+                                    .then(|| (start - range.start..end - range.start, mark.clone()))
+                            })
+                            .collect(),
+                    )
+                }
+            })
+            .collect()
+    }
+    pub fn formulas(&self) -> impl Iterator<Item = &super::math::Formula> {
+        self.segments
+            .iter()
+            .filter_map(|segment| segment.math.as_ref())
+    }
+    pub fn math_source(&self, display: usize) -> Option<usize> {
+        self.segments
+            .iter()
+            .find(|segment| {
+                segment.math.is_some() && !segment.verbatim && segment.display.contains(&display)
+            })
+            .map(|segment| segment.source.start + 1)
+    }
+    pub fn editing_math(&self, at: usize) -> bool {
+        self.segments.iter().any(|segment| {
+            segment.math.is_some() && segment.source.start < at && at < segment.source.end
+        })
     }
     fn same_inline(&self, other: &Self) -> bool {
         self.content == other.content
@@ -273,7 +326,9 @@ impl Leaf {
             && self.spans == other.spans
     }
     fn prefix(&mut self, source: &str, range: Range<usize>) {
-        if range.is_empty() { return; }
+        if range.is_empty() {
+            return;
+        }
         let ix = self.spans.len();
         self.spans.push(InlineSpan {
             source: range.clone(),
@@ -285,6 +340,24 @@ impl Leaf {
     pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
     }
+    pub fn atomic_boundary(&self, at: usize, forward: bool) -> usize {
+        self.segments
+            .iter()
+            .find(|segment| {
+                segment.source.start < at
+                    && at < segment.source.end
+                    && !segment.display.is_empty()
+                    && (segment.source.len() != segment.display.len()
+                        || segment.math.is_some() && !segment.verbatim)
+            })
+            .map_or(at, |segment| {
+                if forward {
+                    segment.source.end
+                } else {
+                    segment.source.start
+                }
+            })
+    }
     pub fn display_offset(&self, source: usize) -> usize {
         for span in &self.segments {
             if source <= span.source.start {
@@ -292,7 +365,9 @@ impl Leaf {
             }
             if source < span.source.end {
                 return span.display.start
-                    + if span.source.len() == span.display.len() {
+                    + if span.source.len() == span.display.len()
+                        && !(span.math.is_some() && !span.verbatim)
+                    {
                         source - span.source.start
                     } else {
                         0
@@ -327,7 +402,8 @@ impl Leaf {
                 },
                 |s| {
                     s.source.start
-                        + if s.source.len() == s.display.len() {
+                        + if s.source.len() == s.display.len() && !(s.math.is_some() && !s.verbatim)
+                        {
                             display.saturating_sub(s.display.start)
                         } else {
                             0
@@ -419,10 +495,17 @@ impl Projection {
             leaves.push(Leaf::new(0..0, Kind::Prose));
         }
         let next_id = leaves.len() as u64 + 1;
-        let targets: std::collections::HashMap<_, _> = links.links.iter().map(|link| (link.source.start, link)).collect();
+        let targets: std::collections::HashMap<_, _> = links
+            .links
+            .iter()
+            .map(|link| (link.source.start, link))
+            .collect();
         for (ix, leaf) in leaves.iter_mut().enumerate() {
             for span in &mut leaf.spans {
-                if let Some(link) = targets.get(&span.source.start).filter(|link| link.source == span.source) {
+                if let Some(link) = targets
+                    .get(&span.source.start)
+                    .filter(|link| link.source == span.source)
+                {
                     span.target = Some(link.target.clone().into());
                 }
             }
@@ -446,13 +529,17 @@ impl Projection {
         for node in nodes {
             let Some(position) = node.position() else { continue; };
             let range = position.start.offset..position.end.offset;
-            Self::gap(source, cursor..range.start, leaves);
+            let start = if matches!(node, Node::List(_) | Node::Blockquote(_)) {
+                source[..range.start].rfind('\n').map_or(0, |ix| ix + 1)
+            } else { range.start };
+            Self::gap(source, cursor..start, leaves);
             if super::mdx::project(source, node, images, leaves) {
                 cursor = range.end;
                 continue;
             }
             if matches!(node, Node::List(_) | Node::Blockquote(_)) {
-                let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
+                // Include the original indentation and marker, not a duplicate
+                // source-gap leaf for the same prefix.
                 Self::container(source, node, 0, 0, range.start, start..range.end, images, leaves);
             } else if !super::tables::project(source, node, images, leaves) {
                 let kind = match node {
@@ -466,6 +553,8 @@ impl Projection {
                         for child in children { Self::inline(source, child, &mut leaf); }
                     }
                     if leaf.segments.is_empty() { leaf.insertion = range.end; }
+                } else if kind == Kind::Math {
+                    Self::inline(source, node, &mut leaf);
                 } else if kind != Kind::Rule { leaf.raw(source, range.clone()); }
                 leaves.push(leaf);
             }
@@ -480,15 +569,37 @@ impl Projection {
             Node::List(_) | Node::Blockquote(_) | Node::ListItem(_) => {
                 let depth = depth + usize::from(matches!(node, Node::List(_)));
                 let quotes = quotes + usize::from(matches!(node, Node::Blockquote(_)));
-                let owner = if matches!(node, Node::ListItem(_)) || (depth == 0 && matches!(node, Node::Blockquote(_))) { range.start } else { owner };
+                let owner = if matches!(node, Node::ListItem(_))
+                    || (depth == 0 && matches!(node, Node::Blockquote(_)))
+                {
+                    range.start
+                } else {
+                    owner
+                };
                 if let Some(children) = node.children().filter(|children| !children.is_empty()) {
                     for child in children {
-                        Self::container(source, child, depth, quotes, owner, container.clone(), images, leaves);
+                        Self::container(
+                            source,
+                            child,
+                            depth,
+                            quotes,
+                            owner,
+                            container.clone(),
+                            images,
+                            leaves,
+                        );
                     }
                 } else {
                     let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
                     let style = super::lists::style(source, range.start, depth, quotes, owner);
-                    let mut leaf = Leaf::new(start..range.end, if depth > 0 { Kind::List(style) } else { Kind::Quote(style) });
+                    let mut leaf = Leaf::new(
+                        start..range.end,
+                        if depth > 0 {
+                            Kind::List(style)
+                        } else {
+                            Kind::Quote(style)
+                        },
+                    );
                     leaf.container = Some(container);
                     leaf.prefix(source, start..range.end);
                     leaf.insertion = range.end;
@@ -496,13 +607,27 @@ impl Projection {
                 }
             }
             _ => {
+                let first = leaves.len();
+                if super::mdx::project(source, node, images, leaves) {
+                    for leaf in &mut leaves[first..] { leaf.container_range(container.clone()); }
+                    return;
+                }
                 let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
                 let style = super::lists::style(source, range.start, depth, quotes, owner);
                 let prose = matches!(node, Node::Paragraph(_) | Node::Heading(_));
                 let kind = if prose {
-                    if depth > 0 { Kind::List(style) } else { Kind::Quote(style) }
-                } else { super::regions::classify(node, &source[range.clone()]) };
-                if let Some(previous) = leaves.last().filter(|previous| previous.range.end + 1 < start) {
+                    if depth > 0 {
+                        Kind::List(style)
+                    } else {
+                        Kind::Quote(style)
+                    }
+                } else {
+                    super::regions::classify(node, &source[range.clone()])
+                };
+                if let Some(previous) = leaves
+                    .last()
+                    .filter(|previous| previous.range.end + 1 < start)
+                {
                     Self::gap(source, previous.range.end..start, leaves);
                 }
                 let mut leaf = Leaf::new(start..range.end, kind);
@@ -511,10 +636,19 @@ impl Projection {
                 if prose {
                     leaf.prefix(source, start..range.start);
                     if let Some(children) = node.children() {
-                        for child in children { Self::inline(source, child, &mut leaf); }
+                        for child in children {
+                            Self::inline(source, child, &mut leaf);
+                        }
                     }
-                    if leaf.segments.is_empty() { leaf.insertion = range.end; }
-                } else { leaf.raw(source, start..range.end); }
+                    if leaf.segments.is_empty() {
+                        leaf.insertion = range.end;
+                    }
+                } else if kind == Kind::Math {
+                    leaf.prefix(source, start..range.start);
+                    Self::inline(source, node, &mut leaf);
+                } else {
+                    leaf.raw(source, start..range.end);
+                }
                 leaves.push(leaf);
             }
         }
@@ -555,6 +689,11 @@ impl Projection {
         if let Some(image) = super::images::image(node, &leaf.image_definitions) {
             leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
             leaf.segments.last_mut().unwrap().image = Some(image);
+            return;
+        }
+        if let Some(formula) = super::math::Formula::from_node(node, &source[range.clone()]) {
+            leaf.push_normalized(range.clone(), "\u{FFFC}", &source[range]);
+            leaf.segments.last_mut().unwrap().math = Some(formula);
             return;
         }
         match node {
@@ -731,14 +870,26 @@ impl Projection {
                     revealed: false,
                     target: None,
                 });
-                leaf.push_segment(range.start..label.start, &source[range.start..label.start], Some(ix), None);
+                leaf.push_segment(
+                    range.start..label.start,
+                    &source[range.start..label.start],
+                    Some(ix),
+                    None,
+                );
                 let before = leaf.style;
                 leaf.style.link = Some(ix);
                 if let Some(children) = node.children() {
-                    for child in children { Self::inline(source, child, leaf); }
+                    for child in children {
+                        Self::inline(source, child, leaf);
+                    }
                 }
                 leaf.style = before;
-                leaf.push_segment(label.end..range.end, &source[label.end..range.end], Some(ix), None);
+                leaf.push_segment(
+                    label.end..range.end,
+                    &source[label.end..range.end],
+                    Some(ix),
+                    None,
+                );
             }
             // Other inline objects retain their source until their editing slice.
             _ => leaf.raw(source, range),
