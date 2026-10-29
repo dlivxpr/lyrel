@@ -3155,7 +3155,10 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
     use gpui_kit::test::TestWindowExt as _;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("diagram.md");
-    let original = b"# Heading\r\n\r\n~~~~mermaid extra\r\nflowchart LR\r\nA[Start] --> B[End]\r\n~~~~\n\n[ref]: untouched  \r\ntail";
+    // The released default minNodeWidth=120 makes Start and Changed equally
+    // wide. This fixture explicitly measures labels, rather than mistaking a
+    // valid minimum-width layout for a stale raster.
+    let original = b"# Heading\r\n\r\n~~~~mermaid extra\r\n%%{init: {\"flowchart\": {\"minNodeWidth\": 0, \"wrappingWidth\": 1000, \"useMaxWidth\": false}}}%%\r\nflowchart LR\r\nA[Start] --> B[End]\r\n~~~~\n\n[ref]: untouched  \r\ntail";
     std::fs::write(&path, original).unwrap();
     let source = String::from_utf8(original.to_vec())
         .unwrap()
@@ -3217,7 +3220,7 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
         window.render_frame(cx);
     });
     view.read_with(&context, |view, cx| {
-        let body = source.find("flowchart").unwrap();
+        let body = source.find("%%{init:").unwrap();
         assert_eq!(view.selection(), Selection::caret(body));
         assert!(view.range_to_bounds(&(body..body), cx).is_some());
     });
@@ -3227,13 +3230,19 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
         view.focus_handle(cx).focus(window, cx);
     });
     context.update(|window, cx| window.input("Changed", cx));
-    settle(&mut context, &image_id);
-    context.update(|window, _| {
-        assert!(
-            window.find(image_id.clone()).bounds().size.width > original_size.width,
-            "the longer edited label must update the actual native graph, not retain its old raster"
-        );
-    });
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        let rendered_size = context.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find(error_id.clone()).is_none(), "edited flowchart must remain a rendered diagram");
+            window.try_find(image_id.clone()).map(|image| image.bounds().size)
+        });
+        if rendered_size.is_some_and(|size| size.width > original_size.width) { break; }
+        assert!(std::time::Instant::now() < deadline,
+            "the edited label must update the actual native graph: original={original_size:?}, observed={rendered_size:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(at + 7));
         assert_eq!(
@@ -3241,7 +3250,7 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
             source.replacen("Start", "Changed", 1)
         );
     });
-    let graph = source.find("flowchart").unwrap();
+    let graph = source.find("\nflowchart LR\n").unwrap() + 1;
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(graph..graph + 9, cx);
         view.focus_handle(cx).focus(window, cx);
