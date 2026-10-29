@@ -7,11 +7,14 @@ use gpui_kit::base::{
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
+pub(super) mod links;
 mod projection;
 mod regions;
 mod source;
 mod tables;
 pub(super) use source::SourcePresentation;
+#[cfg(test)]
+pub(super) use source::FollowLink;
 #[cfg(test)]
 mod tests;
 
@@ -626,4 +629,9 @@ impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
 pub(super) enum DocumentEvent {
     Edited(Transaction),
     PresentationChanged,
+    FollowLink {
+        presentation: gpui_kit::EntityId,
+        revision: u64,
+        target: String,
+    },
 }
