@@ -1611,7 +1611,12 @@ fn markdown_local_relative_link_uses_its_document_directory(cx: &mut TestAppCont
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.host.id(), HostId::LOCAL);
-        assert_eq!(file.path, std::fs::canonicalize(&destination).unwrap());
+        assert_eq!(
+            file.path,
+            lyrel_core::host::local::LocalHost::new()
+                .canonicalize(&destination)
+                .unwrap()
+        );
         assert_eq!(file.input.read(cx).text().to_string(), "local destination");
         assert_eq!(
             view.read(cx).document().read(cx).encode().unwrap(),
