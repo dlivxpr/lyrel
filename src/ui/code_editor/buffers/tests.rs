@@ -1578,6 +1578,13 @@ fn markdown_local_relative_link_uses_its_document_directory(cx: &mut TestAppCont
     let destination = dir.path().join("next doc.md");
     std::fs::write(&source, "[next](../next%20doc.md)").unwrap();
     std::fs::write(&destination, "local destination").unwrap();
+    let canonical_destination = std::thread::scope(|scope| {
+        scope
+            .spawn(|| lyrel_core::host::local::LocalHost::new().canonicalize(&destination))
+            .join()
+            .unwrap()
+            .unwrap()
+    });
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|_, cx| cx.set_global(MarkdownWorkbench));
     app.update_in(&mut vcx, |app, window, cx| {
@@ -1611,12 +1618,7 @@ fn markdown_local_relative_link_uses_its_document_directory(cx: &mut TestAppCont
     app.read_with(&vcx, |app, cx| {
         let file = app.active_buffer().unwrap();
         assert_eq!(file.host.id(), HostId::LOCAL);
-        assert_eq!(
-            file.path,
-            lyrel_core::host::local::LocalHost::new()
-                .canonicalize(&destination)
-                .unwrap()
-        );
+        assert_eq!(file.path, canonical_destination);
         assert_eq!(file.input.read(cx).text().to_string(), "local destination");
         assert_eq!(
             view.read(cx).document().read(cx).encode().unwrap(),
