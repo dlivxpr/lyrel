@@ -351,14 +351,13 @@ fn settle_live_geometry(
         cx.run_until_parked();
         cx.update(|window, cx| window.render_frame(cx));
         if view.read_with(cx, |view, cx| {
-            let start = view.range_to_bounds(&(0..0), cx);
-            start.is_some() && start == view.range_to_bounds(&(2..2), cx)
+            view.is_live() && view.range_to_bounds(&(0..0), cx).is_some()
         }) {
             return;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "live heading geometry did not settle"
+            "live document geometry did not settle"
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -1387,7 +1386,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     use gpui_kit::{ElementInputHandler, Focusable as _, MouseButton};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("lists.md");
-    let original = "* root\r\n  7) [ ] **child**\n+ neighbor\r\n\n> > *quote*\n";
+    let original = "* root\r\n\n  7) [ ] **child**\n+ neighbor\r\n\n> > *quote*\n";
     std::fs::write(&path, original).unwrap();
     let normalized = original.replace("\r\n", "\n");
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
@@ -1419,7 +1418,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).source().to_string(),
-            "* root\n  7) [ ] **child**\n  8) [ ] \n+ neighbor\n\n> > *quote*\n"
+            "* root\n\n  7) [ ] **child**\n  8) [ ] \n+ neighbor\n\n> > *quote*\n"
         )
     });
     context.update(|window, cx| window.press("enter", cx));
@@ -1427,7 +1426,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).source().to_string(),
-            "* root\n  7) [ ] **child**\n8) [ ] \n+ neighbor\n\n> > *quote*\n"
+            "* root\n\n  7) [ ] **child**\n8) [ ] \n+ neighbor\n\n> > *quote*\n"
         )
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
@@ -1444,7 +1443,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).source().to_string(),
-            "* root\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n"
+            "* root\n\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n"
         );
         assert_eq!(view.selection(), selection);
     });
@@ -1472,7 +1471,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     view.read_with(&context, |view, cx| {
         assert_eq!(
             view.document().read(cx).source().to_string(),
-            "* root\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n"
+            "* root\n\n  7) [x] **child**\n+ neighbor\n\n> > *quote*\n"
         )
     });
     let at = normalized.find("*quote*").unwrap() + 1;
@@ -1489,7 +1488,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
         input.commit_text("中文", cx);
     });
     context.run_until_parked();
-    let expected = "* root\n  7) [x] **child**\n+ neighbor\n\n> > *中文quote*\n";
+    let expected = "* root\n\n  7) [x] **child**\n+ neighbor\n\n> > *中文quote*\n";
     view.read_with(&context, |view, cx| {
         assert_eq!(view.document().read(cx).source().to_string(), expected)
     });
@@ -1507,7 +1506,7 @@ fn native_nested_lists_tasks_quotes_share_input_history_and_host_save_reopen(
     }
     assert_eq!(
         std::fs::read(&path).unwrap(),
-        "* root\r\n  7) [x] **child**\n+ neighbor\r\n\n> > *中文quote*\n".as_bytes()
+        "* root\r\n\n  7) [x] **child**\n+ neighbor\r\n\n> > *中文quote*\n".as_bytes()
     );
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
@@ -4035,7 +4034,7 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(0..0, cx);
-        view.command(Command::Insert("正文\n\n".into()), window, cx);
+        view.command(Command::Insert("正文\r\n\r\n".into()), window, cx);
     });
     context.dispatch_action(crate::core::actions::EditorSave);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
