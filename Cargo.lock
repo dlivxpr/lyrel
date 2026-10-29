@@ -1158,6 +1158,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "castaway"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1429,6 +1438,19 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
+]
+
+[[package]]
+name = "compact_str"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79fcda08c33bb58b97008b2cdada6622500e949e060f5913361763121abd2416"
+dependencies = [
+ "castaway",
+ "cfg-if",
+ "itoa",
+ "static_assertions",
+ "zmij",
 ]
 
 [[package]]
@@ -5938,6 +5960,9 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "ox_content_allocator",
+ "ox_content_ast",
+ "ox_content_parser",
  "parking_lot",
  "percent-encoding",
  "plist",
@@ -7185,6 +7210,39 @@ name = "owo-colors"
 version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
+
+[[package]]
+name = "ox_content_allocator"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc0446527206fef683cc28d84b141af9a5284478a0ede781b50d72673debe60c"
+dependencies = [
+ "bumpalo",
+]
+
+[[package]]
+name = "ox_content_ast"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c7246a253325be8ed5b9804425acd8da944711fd2491833cef964dce5f00f65"
+dependencies = [
+ "ox_content_allocator",
+]
+
+[[package]]
+name = "ox_content_parser"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4fc91e19e7528ab84ef180cf6b8de0b884d295c62e29f71d3ac4c73e145fc7e"
+dependencies = [
+ "compact_str",
+ "memchr",
+ "ox_content_allocator",
+ "ox_content_ast",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "p256"

@@ -61,8 +61,11 @@ memchr = "2"
 # emoji, and half a flag renders as a bare letter. Already in the tree via
 # gpui, so this pins no new code.
 unicode-segmentation = "1"
-# Source-position-aware parser shared with gpui-base's released Markdown renderer.
+# Markdown AST data stays compatible with gpui-base; MDX uses its own native parser.
 markdown = "=1.0.0"
+ox_content_allocator = "=3.4.0"
+ox_content_ast = "=3.4.0"
+ox_content_parser = "=3.4.0"
 # Native formula SVG shares RaTeX with Mermaid labels; glyph paths embed its fonts.
 ratex-parser = "=0.1.14"
 ratex-layout = "=0.1.14"

@@ -5862,12 +5862,14 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{Focusable as _, test::TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("cards.mdx");
-    let target = directory.path().join("next&one.md");
-    std::fs::write(&target, "# Host destination\n").unwrap();
+    let path = std::path::PathBuf::from("/docs/cards.mdx");
+    let target = std::path::PathBuf::from("/docs/next&one.md");
+    let disk = directory.path().join("docs");
+    std::fs::create_dir(&disk).unwrap();
+    std::fs::write(disk.join("next&one.md"), "# Host destination\n").unwrap();
     let original = "<CardGroup cols=\"2\">\r\n\n<Card title='Guide' href='./unused.md' icon='book' run={() => { throw Error('never execute') }}>\n\nchild **bold**\r\n\n</Card>\n\n</CardGroup>\r\n\n[keep]: /unchanged  ";
-    std::fs::write(&path, original).unwrap();
-    let host = FileHost::new(lyrel_core::host::HostId(726));
+    std::fs::write(disk.join("cards.mdx"), original).unwrap();
+    let host = FileHost::mapped(lyrel_core::host::HostId(726), directory.path());
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
     app.update_in(&mut context, |app, window, cx| {
@@ -5992,7 +5994,7 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert_eq!(std::fs::read(disk.join("cards.mdx")).unwrap(), expected.as_bytes());
     assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {

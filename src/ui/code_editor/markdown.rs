@@ -13,6 +13,7 @@ mod lists;
 mod math;
 mod mdx;
 mod mermaid;
+mod parser;
 mod projection;
 mod regions;
 pub(super) mod resources;

@@ -199,6 +199,9 @@ Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.
 
 RaTeX 代码使用 MIT，内嵌的 20 个 KaTeX 字体 face 使用 SIL OFL 1.1，不可合并写成 MIT。根 `LICENSE` 保留 Merman 本体、翻译／适配来源、RaTeX、字体版权及 Reserved Font Names；同一文件继续进入桌面 `LICENSE.txt` 与 server 的 `--license` 输出。具体功能通过显式隔离入口验收，未切换生产默认；编译依赖不代表所有数学语法、图形家族、离线或平台输入已通过运行验收。
 
+隔离工作台的 `.mdx` 路径使用正式 `ox_content_parser`、`ox_content_ast`、`ox_content_allocator =3.4.0`，只解析源码、字节区间和表达式文本，不编译或执行项目 JavaScript。其公开 AST 转换为现有投影使用的 `mdast` 数据；普通 `.md` 继续使用正式 `markdown =1.0.0`，同一文档不会让两个解析器竞争。YAML/TOML 元数据作为原始前缀分区，后续 AST 区间重定位到同一源码，不做输入占位或改写。上述 Ox Content 版本声明 Rust `1.95.0`；这是新增依赖的构建下限，不是从本机版本推导的项目要求。Ox Content 及其新增字符串／arena 依赖的 MIT 版权与许可保留在根 `LICENSE`。
+
+
 
 ## 在专用工作树中手动打包
 

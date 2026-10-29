@@ -499,13 +499,12 @@ impl Projection {
         let mut mdx = super::mdx::Index::default();
         let mut error = None;
         if live {
-            let options = grammar.options(document_start);
             if super::regions::unfinished_metadata(source, document_start) {
                 let mut leaf = Leaf::new(0..source.len(), Kind::Metadata);
                 leaf.raw(source, 0..source.len());
                 leaves.push(leaf);
             } else {
-                match markdown::to_mdast(source, &options) {
+                match super::parser::parse(source, grammar, document_start) {
                     Ok(root) => {
                         let image_definitions =
                             std::sync::Arc::new(super::images::definitions(&root));

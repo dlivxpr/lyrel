@@ -38,37 +38,7 @@ impl Grammar {
         options.constructs.frontmatter = document_start;
         options.constructs.math_flow = true;
         options.constructs.math_text = true;
-        if self == Self::Mdx {
-            let constructs = &mut options.constructs;
-            constructs.html_flow = false;
-            constructs.html_text = false;
-            constructs.autolink = false;
-            constructs.code_indented = false;
-            constructs.mdx_jsx_flow = true;
-            constructs.mdx_jsx_text = true;
-            constructs.mdx_expression_flow = true;
-            constructs.mdx_expression_text = true;
-            constructs.mdx_esm = true;
-            options.mdx_expression_parse = Some(Box::new(|source, _| shape_signal(source)));
-            options.mdx_esm_parse = Some(Box::new(shape_signal));
-        }
         options
-    }
-}
-
-/// A lexical shape check, not a JavaScript parser or runtime. Incomplete shapes
-/// ask markdown-rs for more source; errors remain editable source in the view.
-fn shape_signal(source: &str) -> markdown::MdxSignal {
-    if balanced_end(source.as_bytes(), 0, None).is_some()
-        && !source.trim_end().ends_with([',', '=', '.', ':'])
-    {
-        markdown::MdxSignal::Ok
-    } else {
-        markdown::MdxSignal::Eof(
-            "Incomplete JavaScript source".into(),
-            Box::new("lyrel".into()),
-            Box::new("source-shape".into()),
-        )
     }
 }
 
