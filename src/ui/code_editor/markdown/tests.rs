@@ -4460,3 +4460,190 @@ fn native_mdx_embedded_in_heading_exposes_property_edits_without_replacing_its_s
     context.dispatch_action(gpui_kit::component::input::Undo);
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property.as_bytes()));
 }
+
+#[gpui_kit::test]
+fn native_steps_edit_properties_nested_content_source_history_and_host_reopen(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use super::super::test_host::FileHost;
+    use gpui_kit::{Focusable as _, MouseButton, test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _}};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("procedure.mdx");
+    let original = "before  \r\n\n<Steps compact>\r\n\n<Step title='Install' icon='terminal'>\n\nfirst **nested** text\r\n\n</Step>\n\n<Step title=\"Run\" value={two}>\r\n\n## Finish\n\nsecond `code`\r\n\n</Step>\n\n</Steps>\r\n\n[ref]: /keep  ";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(728));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find_all_by_label("Edit step title").len() == 2
+        }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        assert!(window.find_by_label("Step 1").visible());
+        assert!(window.find_by_label("Step 2").visible());
+        let target = window.find_all_by_label("Edit step title")[1].bounds().center();
+        window.pointer_down(target, MouseButton::Left, cx);
+        window.pointer_up(target, MouseButton::Left, cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        window.input("R", cx);
+    });
+    let titled = original.replacen("title=\"Run\"", "title=\"R\"", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    // A second property uses the common property control, not another editor.
+    context.update(|window, cx| { window.click("mdx-property-icon", cx); window.input("i", cx); });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.replacen("icon='terminal'", "icon='i'", 1).as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    let normalized = titled.replace("\r\n", "\n");
+    let nested = normalized.find("nested").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(nested..nested + 6, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("N", cx));
+    let nested_edit = titled.replacen("**nested**", "**N**", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), nested_edit.as_bytes()));
+    // Contextual source activation selects only the second Step in the same
+    // input and changes presentation without creating a document edit.
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.find_all_by_label("Edit step source").len() == 2 }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    let revision = view.read_with(&context, |view, cx| view.document().read(cx).revision());
+    context.update(|window, cx| {
+        let target = window.find_all_by_label("Edit step source")[1].bounds().center();
+        window.pointer_down(target, MouseButton::Left, cx);
+        window.pointer_up(target, MouseButton::Left, cx);
+        let view = view.read(cx);
+        assert!(!view.is_live());
+        assert_eq!(view.document().read(cx).revision(), revision);
+        assert_eq!(view.document().read(cx).source().slice(view.selection().range()).to_string(), "<Step title=\"R\" value={two}>\n\n## Finish\n\nsecond `code`\n\n</Step>");
+    });
+    let dynamic = nested_edit.replace("\r\n", "\n").find("two").unwrap();
+    view.update_in(&mut context, |view, _, cx| view.select_range(dynamic..dynamic + 3, cx));
+    context.update(|window, cx| window.input("3", cx));
+    let expected = nested_edit.replacen("{two}", "{3}", 1);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), nested_edit.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    for _ in 0..3 { context.dispatch_action(gpui_kit::component::input::Redo); }
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(728));
+        let view = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+}
+
+#[gpui_kit::test]
+fn native_steps_keyboard_source_activation_finishes_preedit_without_numbering_edits(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{ElementInputHandler, Focusable as _, test::{TestInput, TestQueryExt as _, TestWindowExt as _}};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("keyboard-steps.mdx");
+    let original = "<Steps>\n\n<Step title='One'>\n\n**body**\n\n</Step>\n\n</Steps>\n\nkeep  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find_by_label("Edit step title").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).revision(), 0);
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes());
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(1..6, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        // Tab reaches the real Button, Enter selects the title in the single
+        // document input. No test-only callback or duplicate field state.
+        view.read(cx).focus_handle(cx).focus(window, cx);
+        for _ in 0..24 {
+            window.press("tab", cx);
+            if window.find_by_label("Edit step title").focused() == Some(true) { break; }
+        }
+        assert_eq!(window.find_by_label("Edit step title").focused(), Some(true));
+        window.press("enter", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let title = original.find("One").unwrap();
+        assert_eq!(view.read(cx).selection().range(), title..title + 3);
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "中文", Some(2..2), cx);
+        assert!(input.marked_text_range(cx).is_some());
+    });
+    context.update(|window, cx| {
+        for _ in 0..24 {
+            window.press("tab", cx);
+            if window.find_by_label("Edit step source").focused() == Some(true) { break; }
+        }
+        assert_eq!(window.find_by_label("Edit step source").focused(), Some(true));
+        window.press("enter", cx);
+        let view = view.read(cx);
+        assert!(!view.is_live());
+        assert!(!view.is_composing());
+        assert!(view.focus_handle(cx).is_focused(window));
+        assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("'One'", "'中文'", 1).as_bytes());
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.replacen("'One'", "'中文'", 1).as_bytes()));
+}

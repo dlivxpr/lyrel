@@ -6,6 +6,7 @@ use markdown::mdast::{AttributeContent, AttributeValue, Node};
 use std::{collections::{HashMap, HashSet}, ops::Range, path::Path};
 
 pub(super) mod view;
+mod steps;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Grammar {
     #[default]

@@ -1041,6 +1041,16 @@ impl SourcePresentation {
         true
     }
     fn indent_selection(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // JSX fields expose native command controls, not indentation widgets.
+        // Keep ordinary source/code/list/table Tab behavior unchanged while
+        // allowing keyboard users to leave the single input for those controls.
+        if self.live && self.document.read(cx).grammar() == super::mdx::Grammar::Mdx
+            && (!self.focus.is_focused(window) || self.projection.leaf_at(self.state.selection.head)
+                .is_some_and(|leaf| matches!(leaf.kind, Kind::Mdx(_)))) {
+            self.command(Command::FinishComposition, window, cx);
+            if outdent { window.focus_prev(cx); } else { window.focus_next(cx); }
+            return;
+        }
         if self.navigate_table(
             super::tables::Navigation::Cell { backward: outdent },
             window,
