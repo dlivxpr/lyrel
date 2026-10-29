@@ -160,7 +160,12 @@ impl OpenFile {
     }
 
     fn representation_fingerprint(&self, cx: &gpui_kit::App) -> Option<u64> {
-        self.input.markdown().map(|view| view.read(cx).document().read(cx).representation_fingerprint())
+        self.input.markdown().map(|view| {
+            view.read(cx)
+                .document()
+                .read(cx)
+                .representation_fingerprint()
+        })
     }
 
     fn set_format(&mut self, format: TextFormat, cx: &mut gpui_kit::App) {

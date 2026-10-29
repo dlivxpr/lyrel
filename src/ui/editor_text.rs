@@ -163,18 +163,36 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<Decoded> {
 /// Markdown retains every decoded terminator. Declared encodings must be valid:
 /// refusing a damaged file keeps replacement characters from reaching a save.
 pub(crate) fn decode_source(bytes: &[u8]) -> std::io::Result<Option<Decoded>> {
-    let invalid = || std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        "invalid source bytes in the declared encoding",
-    );
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid source bytes in the declared encoding",
+        )
+    };
     let (text, encoding, bom) = if let Some(body) = bytes.strip_prefix(UTF8_BOM) {
-        (std::str::from_utf8(body).map_err(|_| invalid())?.to_owned(), UTF_8, true)
+        (
+            std::str::from_utf8(body).map_err(|_| invalid())?.to_owned(),
+            UTF_8,
+            true,
+        )
     } else if let Some(body) = bytes.strip_prefix(UTF16LE_BOM) {
-        (UTF_16LE.decode_without_bom_handling_and_without_replacement(body)
-            .ok_or_else(invalid)?.into_owned(), UTF_16LE, true)
+        (
+            UTF_16LE
+                .decode_without_bom_handling_and_without_replacement(body)
+                .ok_or_else(invalid)?
+                .into_owned(),
+            UTF_16LE,
+            true,
+        )
     } else if let Some(body) = bytes.strip_prefix(UTF16BE_BOM) {
-        (UTF_16BE.decode_without_bom_handling_and_without_replacement(body)
-            .ok_or_else(invalid)?.into_owned(), UTF_16BE, true)
+        (
+            UTF_16BE
+                .decode_without_bom_handling_and_without_replacement(body)
+                .ok_or_else(invalid)?
+                .into_owned(),
+            UTF_16BE,
+            true,
+        )
     } else if bytes[..bytes.len().min(BINARY_SNIFF_LEN)].contains(&0) {
         return Ok(None);
     } else if let Ok(text) = std::str::from_utf8(bytes) {
@@ -183,10 +201,17 @@ pub(crate) fn decode_source(bytes: &[u8]) -> std::io::Result<Option<Decoded>> {
         let (text, encoding) = decode_legacy(bytes);
         (text, encoding, false)
     };
-    let format = TextFormat { encoding, bom, line_ending: detect_line_ending(&text) };
+    let format = TextFormat {
+        encoding,
+        bom,
+        line_ending: detect_line_ending(&text),
+    };
     // Legacy guessing is accepted only when it is byte-reversible. This also
     // guards any future change in the codec's character mapping.
-    let unchanged = TextFormat { line_ending: LineEnding::Lf, ..format };
+    let unchanged = TextFormat {
+        line_ending: LineEnding::Lf,
+        ..format
+    };
     if encode(&text, &unchanged).map_err(|_| invalid())? != bytes {
         return Err(invalid());
     }
