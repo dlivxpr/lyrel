@@ -5744,7 +5744,7 @@ fn native_generic_mdx_edits_names_properties_children_and_saves_without_executio
     std::fs::write(directory.path().join("trap.js"),
         "import { writeFileSync } from 'node:fs'; writeFileSync(new URL('./executed', import.meta.url), 'bad'); export default () => { throw Error('executed'); };"
     ).unwrap();
-    let source = "import Trap from './trap.js'\r\n\n<Mystery title='a&amp;b' action={() => Trap()} {...props}>\r\n\n# Child\n\ntext **bold**\r\n\n{() => Trap()}\n\n</Mystery>\r\n\n[ref]: /keep  ";
+    let source = "---\r\nreview: preserve\n---\r\n\nimport Trap from './trap.js'\r\n\n  <Mystery title='a&amp;b' action={() => Trap()} {...props}>\r\n\n  # Child\n\n  text **bold**\r\n\n  {() => Trap()}\n\n  </Mystery>\r\n\n[ref]: /keep  ";
     std::fs::write(&path, source).unwrap();
     let host = FileHost::new(lyrel_core::host::HostId(724));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);

@@ -130,7 +130,15 @@ fn slug(text: &str) -> String {
 /// Only scans within an AST-identified link/definition, never searches rendered text.
 pub(super) fn label_range(source: &str, node: &Node) -> Option<Range<usize>> {
     let position = node.position()?;
-    let range = position.start.offset..position.end.offset;
+    let mut range = position.start.offset..position.end.offset;
+    // Definition positions include their permitted leading indentation in
+    // both grammars; inspect only that AST-owned region, not rendered labels.
+    if matches!(node, Node::Definition(_)) {
+        range.start += source[range.clone()]
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count();
+    }
     if source.as_bytes().get(range.start) != Some(&b'[') {
         return None;
     }

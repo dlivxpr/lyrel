@@ -221,7 +221,37 @@ impl<'a> Adapter<'a> {
                 | N::MdxjsEsm(_)
                 | N::MdxFlowExpression(_)
         );
-        let range = self.range(node.span(), block);
+        let mut range = self.range(node.span(), block);
+        let row = self.lines.partition_point(|start| *start <= range.start) - 1;
+        let line_prefix = self.source[self.lines[row]..range.start]
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'));
+        let inline = matches!(
+            node,
+            N::Text(_)
+                | N::Emphasis(_)
+                | N::Strong(_)
+                | N::InlineCode(_)
+                | N::InlineMath(_)
+                | N::Link(_)
+                | N::Image(_)
+                | N::Delete(_)
+                | N::MdxJsxTextElement(_)
+                | N::MdxTextExpression(_)
+        );
+        // Dedented JSX children map their first offset to the physical line
+        // start. Delimiters and text begin after that original indentation.
+        if (inline && line_prefix)
+            || matches!(
+                node,
+                N::MdxJsxFlowElement(_) | N::MdxjsEsm(_) | N::MdxFlowExpression(_) | N::Heading(_)
+            )
+        {
+            range.start += self.source[range.clone()]
+                .bytes()
+                .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                .count();
+        }
         let position = Some(self.position(range.clone()));
         Ok(match node {
             N::Paragraph(value) => md::Node::Paragraph(md::Paragraph {
@@ -432,7 +462,7 @@ fn identifier(label: &str) -> String {
                 value.push(' ');
                 space = false;
             }
-            value.extend(character.to_uppercase());
+            value.extend(character.to_lowercase().flat_map(char::to_uppercase));
         }
     }
     value

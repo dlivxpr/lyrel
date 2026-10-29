@@ -1777,3 +1777,64 @@ fn markdown_late_image_layout_preserves_visible_caret_and_newer_edit(cx: &mut Te
         )
     });
 }
+
+#[gpui_kit::test]
+fn mdx_unicode_reference_with_indented_definition_opens_on_its_document_host(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("docs")).unwrap();
+    let path = directory.path().join("docs/source.mdx");
+    let destination = directory.path().join("target doc.md");
+    let source = "---\r\ntitle: Unicode\n---\r\n\n[jump][ẞ]\r\n\n  [ẞ]: ../target%20doc.md  ";
+    std::fs::write(&path, source).unwrap();
+    std::fs::write(&destination, "reference destination").unwrap();
+    let canonical = std::thread::scope(|scope| {
+        scope
+            .spawn(|| lyrel_core::host::local::LocalHost::new().canonicalize(&destination))
+            .join()
+            .unwrap()
+            .unwrap()
+    });
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    wait_until(&mut context, |cx| active_id(&app, cx).is_some());
+    let source_id = active_id(&app, &context).unwrap();
+    let view = app.read_with(&context, |app, _| {
+        app.active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .clone()
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    let at = source.replace("\r\n", "\n").find("jump").unwrap();
+    wait_until(&mut context, |cx| {
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+        });
+        view.read_with(cx, |view, cx| view.range_to_bounds(&(at..at), cx).is_some())
+    });
+    view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
+    context.dispatch_action(markdown::FollowLink);
+    wait_until(&mut context, |cx| {
+        active_id(&app, cx).is_some_and(|id| id != source_id)
+    });
+    app.read_with(&context, |app, cx| {
+        let file = app.active_buffer().unwrap();
+        assert_eq!(file.host.id(), HostId::LOCAL);
+        assert_eq!(file.path, canonical);
+        assert_eq!(
+            file.input.read(cx).text().to_string(),
+            "reference destination"
+        );
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            source.as_bytes()
+        );
+    });
+}
