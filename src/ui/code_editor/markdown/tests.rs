@@ -3077,7 +3077,7 @@ fn native_table_structure_actions_share_undo_and_save_reopen(cx: &mut gpui_kit::
     context.run_until_parked();
     settle_live_geometry(&view, &mut context);
     view.read_with(&context, |view, cx| {
-        assert_eq!(view.document().read(cx).encode().unwrap(), b"before  \r\n\n| **A** |  | B |\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\r\n\n[ref]: target  ");
+        assert_eq!(view.document().read(cx).encode().unwrap(), b"before  \r\n\n| **A** |  | B |\r\n| --- | :---: | ---: |\n| x\\|y |  | `z` |\r\n\n[ref]: target  ");
         assert!(view.range_to_bounds(&view.selection().range(), cx).is_some());
     });
     context.dispatch_action(gpui_kit::component::input::Undo);
@@ -3196,17 +3196,12 @@ fn table_command(
         true,
         document.grammar(),
     );
-    let range = projection
-        .leaves
-        .iter()
-        .find_map(|leaf| match leaf.kind {
-            super::projection::Kind::TableCell(cell)
-                if leaf.range.contains(&state.selection().head()) =>
-            {
-                Some(cell.table())
-            }
-            _ => None,
-        })
+    let at = state.selection().head();
+    let range = projection.leaf_at(at).and_then(|leaf| match leaf.kind {
+        super::projection::Kind::TableCell(cell)
+            if leaf.range.start <= at && at <= leaf.range.end => Some(cell.table()),
+        _ => None,
+    })
         .expect("owning table cell");
     document.command(
         state,
@@ -3313,6 +3308,21 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
     assert_eq!(document.encode().unwrap(), b"| aX |\r\n| --- |\n| b |");
     document.command(&mut state, Command::Undo);
     assert_eq!(document.encode().unwrap(), source.as_bytes());
+    // Empty cells and content-end carets are legal editable insertion sites.
+    for (source, at, expected) in [
+        ("|  |\r\n| --- |\n|  |", 2, "|  |  |\r\n| --- | --- |\n|  |  |"),
+        ("| a |\r\n| --- |\n| b |", 3, "| a |  |\r\n| --- | --- |\n| b |  |"),
+    ] {
+        let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+        let mut state = PresentationState::new(Selection::caret(at));
+        table_command(&mut document, &mut state, Operation::InsertColumnAfter);
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
+        document.command(&mut state, Command::Undo);
+        assert_eq!(document.encode().unwrap(), source.as_bytes());
+        assert_eq!(state.selection(), Selection::caret(at));
+        document.command(&mut state, Command::Redo);
+        assert_eq!(document.encode().unwrap(), expected.as_bytes());
+    }
     for (source, token, operation, expected) in [
         (
             "| a |\r\n| --- |\n| b |\r\n| c |",
