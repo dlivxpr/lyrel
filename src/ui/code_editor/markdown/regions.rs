@@ -20,7 +20,10 @@ pub(super) fn classify(node: &Node, source: &str) -> Kind {
             let opening = source.lines().next().unwrap_or_default().trim_start();
             let marker = opening.as_bytes().first().copied().unwrap_or_default();
             let width = opening.bytes().take_while(|byte| *byte == marker).count();
-            if code.lang.as_deref() == Some("mermaid") && matches!(marker, b'`' | b'~') && width >= 3 {
+            if code.lang.as_deref() == Some("mermaid")
+                && matches!(marker, b'`' | b'~')
+                && width >= 3
+            {
                 return Kind::Mermaid(Code::Fenced { marker, width });
             }
             Kind::Code(if matches!(marker, b'`' | b'~') && width >= 3 {
@@ -69,7 +72,9 @@ pub(super) fn line_break(kind: Kind, text: &str, offset: usize) -> (usize, Strin
         .find('\n')
         .map_or(text.len(), |ix| offset + ix);
     let line = &text[start..end];
-    if let Kind::Code(Code::Fenced { marker, width }) | Kind::Mermaid(Code::Fenced { marker, width }) = kind {
+    if let Kind::Code(Code::Fenced { marker, width })
+    | Kind::Mermaid(Code::Fenced { marker, width }) = kind
+    {
         let trimmed = line.trim_start();
         let count = trimmed.bytes().take_while(|byte| *byte == marker).count();
         if start > 0 && count >= width && trimmed[count..].trim().is_empty() && offset == end {
