@@ -8,6 +8,7 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 pub(super) mod links;
+mod lists;
 mod projection;
 mod regions;
 mod source;
@@ -127,6 +128,10 @@ pub(crate) enum Command {
     ParagraphBreak {
         hard: bool,
     },
+    ListBreak { hard: bool, at: Option<usize> },
+    ListBackspace,
+    ListIndent { outdent: bool, width: usize, at: Option<usize> },
+    ToggleTask { at: usize },
     Replace {
         range: Range<usize>,
         text: String,
@@ -406,8 +411,17 @@ impl MarkdownDocument {
     fn batch_edit(
         &mut self,
         state: &mut PresentationState,
+        edits: Vec<(Range<usize>, String)>,
+        kind: EditKind,
+    ) {
+        self.batch_edit_selected(state, edits, kind, None);
+    }
+    fn batch_edit_selected(
+        &mut self,
+        state: &mut PresentationState,
         mut edits: Vec<(Range<usize>, String)>,
         kind: EditKind,
+        selection: Option<Selection>,
     ) {
         for (range, _) in &mut edits {
             *range = self.safe_range(range.clone());
@@ -431,6 +445,9 @@ impl MarkdownDocument {
             });
         }
         if !changes.is_empty() {
+            if let Some(selection) = selection {
+                state.selection = selection;
+            }
             self.record(
                 Change {
                     edits: changes,
@@ -580,6 +597,10 @@ impl MarkdownDocument {
                             EditKind::Command,
                         );
                     }
+                    Command::ListBreak { hard, at } => lists::line_break(self, state, hard, at),
+                    Command::ListBackspace => lists::backspace(self, state),
+                    Command::ListIndent { outdent, width, at } => lists::indent(self, state, outdent, width, at),
+                    Command::ToggleTask { at } => lists::toggle(self, state, at),
                     Command::Replace { range, text, kind } => self.edit(state, range, text, kind),
                     Command::BatchReplace { edits, kind } => self.batch_edit(state, edits, kind),
                     Command::Backspace | Command::Delete => {
