@@ -395,13 +395,13 @@ impl EditorBuffers {
         let cfg = cx.global::<crate::core::config::Config>();
         let wrap = cfg.editor_soft_wrap;
         let native_markdown = cx.try_global::<MarkdownWorkbench>().is_some()
-            && matches!(
+            && (untitled.is_some() || matches!(
                 path.extension()
                     .and_then(|ext| ext.to_str())
                     .map(str::to_ascii_lowercase)
                     .as_deref(),
                 Some("md" | "markdown" | "mdx")
-            );
+            ));
         let preview = !native_markdown && cfg.editor_markdown_preview && language == "markdown";
         let id = BufferId::new();
         let (input, popups, sub, observe) = if native_markdown {
@@ -420,7 +420,8 @@ impl EditorBuffers {
                     markdown::DocumentEvent::PresentationChanged
                     | markdown::DocumentEvent::ResourceContextChanged
                     | markdown::DocumentEvent::ImagesChanged => cx.notify(),
-                    markdown::DocumentEvent::FollowLink { .. } => {},
+                    markdown::DocumentEvent::FollowLink { .. }
+                    | markdown::DocumentEvent::RequestAssetLocation { .. } => {},
                 },
             );
             let presentation = cx.new(|cx| markdown::SourcePresentation::new(document, wrap, cx));
@@ -482,6 +483,9 @@ impl EditorBuffers {
             preview_scroll: gpui_kit::ScrollHandle::new(),
             gutter: gutter::BufferGutter::default(),
             popups,
+            _assets_sub: None,
+            asset_location: None,
+            asset_save_required: untitled.is_some(),
             _sub: sub,
             _observe: observe,
             _links_sub: None,

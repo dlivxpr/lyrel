@@ -144,6 +144,10 @@ pub(crate) struct OpenFile {
     /// Git change markers — see `gutter`.
     gutter: gutter::BufferGutter,
     popups: Option<Entity<crate::ui::lsp::popups::EditorPopups>>,
+    _assets_sub: Option<Subscription>,
+    asset_location: Option<(gpui_kit::WeakEntity<markdown::SourcePresentation>, std::rc::Rc<std::cell::Cell<bool>>)>,
+    /// Save As changing a path does not authorize assets until its write succeeds.
+    asset_save_required: bool,
     _sub: Subscription,
     _observe: Subscription,
     _links_sub: Option<Subscription>,
@@ -1142,6 +1146,35 @@ impl LyrelApp {
         self.editor
             .nav
             .track_buffer(id, input.read(cx).text().clone());
+        if let Some(source) = input.markdown() {
+            let document = source.read(cx).document().clone();
+            let subscription = cx.subscribe_in(&document, window, move |app, _, event, window, cx| {
+                if let markdown::DocumentEvent::RequestAssetLocation { presentation, cancelled } = event {
+                    let current = app.active_editor_input().and_then(|input| input.markdown().cloned());
+                    if app.tab_code().and_then(TabCode::active_id) != Some(id)
+                        || !current.is_some_and(|current| current == *presentation)
+                    {
+                        cancelled.set(true);
+                        return;
+                    }
+                    let Some(file) = app.editor.buffers.get(id) else { cancelled.set(true); return };
+                    if !file.asset_save_required {
+                        if let Some(source) = presentation.upgrade() {
+                            source.update(cx, |source, cx| source.resume_pending_image(window, cx));
+                        }
+                        return;
+                    }
+                    let saving = file.saving;
+                    if !saving {
+                        app.editor_save_as(id, window, cx);
+                    }
+                    if let Some(file) = app.editor.buffers.get_mut(id) {
+                        file.asset_location = Some((presentation.clone(), cancelled.clone()));
+                    }
+                }
+            });
+            self.editor.buffers.get_mut(id).unwrap()._assets_sub = Some(subscription);
+        }
         if let Some(presentation) = input.markdown() {
             let document = presentation.read(cx).document().clone();
             let subscription = cx.subscribe_in(&document, window, move |app, _, event, window, cx| {
@@ -1644,6 +1677,20 @@ impl LyrelApp {
                 self.editor_gutter_refetch(id);
                 if let Some(directory) = directory {
                     self.scm_invalidate_cwd(host, &directory, cx);
+                }
+                if let Some((source, cancelled)) = self.editor.buffers.get_mut(id).and_then(|file| file.asset_location.take()) {
+                    let current = self.active_editor_input().and_then(|input| input.markdown().cloned());
+                    if self.tab_code().and_then(TabCode::active_id) != Some(id)
+                        || !current.is_some_and(|current| current == source)
+                    {
+                        cancelled.set(true);
+                        return;
+                    }
+                    let Some(source) = source.upgrade() else { return };
+                    source.update(cx, |source, cx| {
+                        source.focus_handle(cx).focus(window, cx);
+                        source.resume_pending_image(window, cx);
+                    });
                 }
             }
             EditorEvent::IdentityChanged => self.editor_rebuild_watcher(cx),

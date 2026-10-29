@@ -13,6 +13,9 @@ gpui_kit::actions!(markdown_images, [LoadImages]);
 
 actions!(markdown_links, [EditLinkDestination, FollowLink]);
 
+#[path = "assets.rs"]
+mod assets;
+
 struct CachedBlock {
     version: u64,
     seen: u64,
@@ -42,6 +45,7 @@ pub(crate) struct SourcePresentation {
     viewport_height: Pixels,
     reveal_at: Option<usize>,
     selection_notification: bool,
+    assets: assets::InsertionState,
     _observe: Subscription,
 }
 impl SourcePresentation {
@@ -59,6 +63,7 @@ impl SourcePresentation {
                 return;
             }
             if let DocumentEvent::Edited(transaction) = event {
+                this.assets.rebase(transaction);
                 this.state.rebase(transaction);
                 if transaction.origin != this.state.id {
                     for selection in &mut this.extra_selections {
@@ -117,6 +122,7 @@ impl SourcePresentation {
             viewport_height: Pixels::ZERO,
             reveal_at: None,
             selection_notification: false,
+            assets: assets::InsertionState::default(),
             _observe: observe,
         }
     }
@@ -1018,7 +1024,16 @@ impl SourcePresentation {
         }
     }
     fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        let Some(item) = cx.read_from_clipboard() else { return };
+        if item.entries().iter().any(|entry| matches!(entry, ClipboardEntry::Image(_))) {
+            let images = item.entries.into_iter().filter_map(|entry| match entry {
+                ClipboardEntry::Image(image) => Some(assets::IncomingImage::Clipboard(image)),
+                _ => None,
+            }).collect();
+            self.insert_images(images, window, cx);
+            return;
+        }
+        if let Some(text) = item.text() {
             // New clipboard line breaks follow the current codec's LF insertion
             // convention; this does not rewrite any existing document region.
             let text = if text.contains("\r\n") {
@@ -1396,7 +1411,8 @@ impl Render for SourcePresentation {
                 .id("markdown-source")
                 .test_support()
                 .size_full()
-                .flex().flex_col()
+                .flex()
+                .flex_col()
                 .min_h_0()
                 .key_context(key_context)
                 .track_focus(&self.focus)
@@ -1446,6 +1462,11 @@ impl Render for SourcePresentation {
                         this.command(Command::CancelComposition, window, cx);
                         cx.stop_propagation();
                     }
+                }))
+                .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drag_border.opacity(0.12)))
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                    this.drop_images(paths, window, cx);
+                    cx.stop_propagation();
                 }))
                 .on_action(cx.listener(|view, _: &LoadImages, _, cx| view.refresh_images(true, cx)))
                 .on_action(cx.listener(|this, _: &EditLinkDestination, window, cx| {
@@ -1682,6 +1703,10 @@ impl Render for SourcePresentation {
                         cx.propagate();
                     }
                 }))
+                .when_some(self.assets.status(), |root, status| root.child(
+                    div().id("markdown-image-insertion-status").test_support().role(Role::Status)
+                        .shrink_0().aria_label(status.clone()).text_sm().text_color(cx.theme().muted_foreground).child(status)
+                ))
                 .child(image_status)
                 .when(self.live && self.projection.links.at(self.state.selection.head()).is_some(), |root| {
                     use gpui_kit::component::button::{Button, ButtonVariants as _};

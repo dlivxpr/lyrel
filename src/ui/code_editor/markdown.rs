@@ -656,6 +656,10 @@ impl gpui_kit::EventEmitter<DocumentEvent> for MarkdownDocument {}
 pub(super) enum DocumentEvent {
     Edited(Transaction),
     PresentationChanged,
+    RequestAssetLocation {
+        presentation: gpui_kit::WeakEntity<SourcePresentation>,
+        cancelled: std::rc::Rc<std::cell::Cell<bool>>,
+    },
     ResourceContextChanged,
     ImagesChanged,
     FollowLink {
