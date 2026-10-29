@@ -4788,3 +4788,379 @@ mermaid_matrix_case!(native_mermaid_matrix_flowchart_math_labels,
 mermaid_matrix_case!(native_mermaid_matrix_flowchart_click_callbacks_are_inert,
     "flowchart LR\nA[Original] --> B\nclick A mustNotExecute \"Callback\"",
     "flowchart LR\nA[Edited label] --> B\nclick A mustNotExecute \"Changed callback\"");
+
+#[test]
+fn mdx_component_rename_is_sparse_atomic_and_restores_selection() {
+    let source = "before  \n\n<Mystery title='a&amp;b' {...props}>child</Mystery>\n\nafter";
+    let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
+    let mut state = PresentationState::new(Selection::new(11, 18));
+    document.command(&mut state, Command::RenameComponent {
+        opening: 11..18, closing: Some(source.rfind("Mystery").unwrap()..source.rfind("Mystery").unwrap() + 7), name: "Box".into(),
+    });
+    assert_eq!(document.source().to_string(), "before  \n\n<Box title='a&amp;b' {...props}>child</Box>\n\nafter");
+    assert_eq!(state.selection(), Selection::caret(14));
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.source().to_string(), source);
+    assert_eq!(state.selection(), Selection::new(11, 18));
+    document.command(&mut state, Command::Redo);
+    assert_eq!(document.encode().unwrap(), b"before  \n\n<Box title='a&amp;b' {...props}>child</Box>\n\nafter");
+}
+
+#[gpui_kit::test]
+fn native_generic_mdx_edits_names_properties_children_and_saves_without_execution(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use super::super::test_host::FileHost;
+    use gpui_kit::test::{TestInput, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("generic.mdx");
+    let marker = directory.path().join("executed");
+    std::fs::write(directory.path().join("trap.js"),
+        "import { writeFileSync } from 'node:fs'; writeFileSync(new URL('./executed', import.meta.url), 'bad'); export default () => { throw Error('executed'); };"
+    ).unwrap();
+    let source = "import Trap from './trap.js'\r\n\n<Mystery title='a&amp;b' action={() => Trap()} {...props}>\r\n\n# Child\n\ntext **bold**\r\n\n{() => Trap()}\n\n</Mystery>\r\n\n[ref]: /keep  ";
+    std::fs::write(&path, source).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(724));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        let ready = context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-name").is_some()
+        });
+        if ready { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        window.click("mdx-name", cx);
+        window.input("B", cx);
+        assert_eq!(view.read(cx).document().read(cx).source().to_string(), source.replace("\r\n", "\n").replace("Mystery", "B"));
+        window.input("ox", cx);
+    });
+    let renamed = source.replace("Mystery", "Box");
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), renamed.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    // Each native character is one paired transaction, never two independent tag edits.
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        let ready = context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-property-title").is_some() });
+        if ready { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        window.click("mdx-name", cx);
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "ming", Some(4..4), cx);
+        input.commit_text("Panel", cx);
+    });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.replace("Mystery", "Panel").as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), renamed.as_bytes()));
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("mdx-name", cx);
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "cancel", Some(6..6), cx);
+        input.compose_text(None, "", None, cx);
+    });
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), renamed.as_bytes()));
+    context.update(|window, cx| {
+        window.click("mdx-property-title", cx);
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "zhong", Some(5..5), cx);
+        assert!(input.marked_text_range(cx).is_some());
+        input.commit_text("中文🎉", cx);
+        assert!(input.marked_text_range(cx).is_none());
+    });
+    let property_edit = renamed.replacen("a&amp;b", "中文🎉", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property_edit.as_bytes()));
+    let normalized = property_edit.replace("\r\n", "\n");
+    let child = normalized.find("text ").unwrap() + 5;
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(child..child, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("nested ", cx));
+    let expected = property_edit.replacen("text **bold**", "text nested **bold**", 1);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property_edit.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!marker.exists(), "opening/editing MDX must not execute its module or expressions");
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(724));
+        let view = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+    });
+    assert!(!marker.exists());
+}
+
+#[test]
+fn mdx_name_preedit_commit_cancel_and_undo_keep_both_tags_coherent() {
+    let original = "<Box title='keep'>child</Box>";
+    let closing = original.rfind("Box").unwrap();
+    let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
+    let mut state = PresentationState::new(Selection::new(1, 4));
+    document.command(&mut state, Command::ComposePaired {
+        range: 1..4, mirror: closing..closing + 3, text: "ming".into(), selected: Some(4..4),
+    });
+    assert_eq!(document.source().to_string(), "<ming title='keep'>child</ming>");
+    document.command(&mut state, Command::Commit("名称".into()));
+    assert_eq!(document.source().to_string(), "<名称 title='keep'>child</名称>");
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.source().to_string(), "<Box title='keep'>child</Box>");
+    assert_eq!(state.selection(), Selection::new(1, 4));
+    document.command(&mut state, Command::Redo);
+    assert_eq!(document.source().to_string(), "<名称 title='keep'>child</名称>");
+    document.command(&mut state, Command::Undo);
+    document.command(&mut state, Command::ComposePaired {
+        range: 1..4, mirror: closing..closing + 3, text: "cancel".into(), selected: None,
+    });
+    document.command(&mut state, Command::CancelComposition);
+    assert_eq!(document.source().to_string(), "<Box title='keep'>child</Box>");
+    assert_eq!(state.selection(), Selection::new(1, 4));
+}
+
+#[test]
+fn mdx_self_closing_children_expand_without_rewriting_properties() {
+    let original = "<Box title='&amp;' {...dynamic} />\nkeep  ";
+    let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
+    let at = original.find("/>").unwrap();
+    let mut state = PresentationState::new(Selection::caret(at));
+    document.command(&mut state, Command::ExpandComponent { ending: at..at + 2, name: "Box".into(), block: true });
+    assert_eq!(document.source().to_string(), "<Box title='&amp;' {...dynamic} >\n\n</Box>\nkeep  ");
+    assert_eq!(state.selection(), Selection::caret(at + 2));
+    document.command(&mut state, Command::Insert("child **Markdown**".into()));
+    assert_eq!(document.source().to_string(), "<Box title='&amp;' {...dynamic} >\nchild **Markdown**\n</Box>\nkeep  ");
+    document.command(&mut state, Command::Undo);
+    document.command(&mut state, Command::Undo);
+    assert_eq!(document.source().to_string(), original);
+    assert_eq!(state.selection(), Selection::caret(at));
+}
+
+#[gpui_kit::test]
+fn native_mdx_grammar_follows_rename_save_as_and_recovers_invalid_property_source(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("grammar.md");
+    let renamed = directory.path().join("grammar.mdx");
+    let saved = directory.path().join("saved.md");
+    let source = "<Box title='keep'>\n\n# Child\n\n</Box>\n";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    // Change grammar without changing revision, while the Markdown parse is queued.
+    std::fs::rename(&path, &renamed).unwrap();
+    app.update_in(&mut context, |app, _, cx| {
+        let host = app.active_buffer().unwrap().host.id();
+        app.editor_path_moved(host, &path, &renamed, cx);
+    });
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-property-title").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).revision(), 0);
+        assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes());
+    });
+    context.update(|window, cx| { window.click("mdx-property-title", cx); window.input("broken'", cx); });
+    let invalid = source.replacen("keep", "broken'", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), invalid));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    // Native character typing is grouped after the initial replacement; undo
+    // both the appended characters and the initial selection replacement.
+    if view.read_with(&context, |view, cx| view.document().read(cx).source().to_string() != source) {
+        context.dispatch_action(gpui_kit::component::input::Undo);
+    }
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-property-title").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+    context.dispatch_action(crate::core::actions::EditorSaveAs);
+    context.run_until_parked();
+    cx.simulate_new_path_selection(|_| Some(saved.clone()));
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| buffer.path == saved && !buffer.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.executor().advance_clock(std::time::Duration::from_millis(200));
+    context.run_until_parked();
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("mdx-name").is_none());
+    });
+    assert_eq!(std::fs::read(&saved).unwrap(), source.as_bytes());
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), source.as_bytes()));
+}
+
+#[gpui_kit::test]
+fn native_nested_mdx_keeps_dynamic_source_and_expands_children_in_shared_history(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{Focusable as _, MouseButton, test::{TestEventExt as _, TestWindowExt as _}};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("nested.mdx");
+    let original = "export const data = {\n  title: '} preserved',\n}\n\n<Outer flag {...data}>\n\n<Mystery title='&amp;' run={() => ({ text: '}' })} />\n\ntext **bold**\n\n</Outer>\n\nkeep  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.find_all("mdx-name").len() == 2 }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        // The nested editor is a field of this same surface, not another input.
+        let target = window.find_all("mdx-name")[1].bounds().center();
+        window.pointer_down(target, MouseButton::Left, cx);
+        window.pointer_up(target, MouseButton::Left, cx);
+        window.input("Inner", cx);
+    });
+    let renamed = original.replacen("Mystery", "Inner", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), renamed.as_bytes()));
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.find_all("mdx-children").len() == 2 }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        let target = window.find_all("mdx-children")[1].bounds().center();
+        window.pointer_down(target, MouseButton::Left, cx);
+        window.pointer_up(target, MouseButton::Left, cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        window.input("child **Markdown**", cx);
+    });
+    let expanded = renamed.replacen(" />", " >\nchild **Markdown**\n</Inner>", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expanded.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), renamed.as_bytes()));
+    // The spread and expression remain normal editable source at the command seam.
+    let dynamic = renamed.find("text: '}'").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(dynamic..dynamic + 9, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("text: '中文'", cx));
+    let edited = renamed.replacen("text: '}'", "text: '中文'", 1);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), edited.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), renamed.as_bytes()));
+}
+
+#[gpui_kit::test]
+fn native_mdx_embedded_in_heading_exposes_property_edits_without_replacing_its_surface(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestWindowExt as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("inline.mdx");
+    let original = "# Heading **<Mystery title='keep' />** tail\n\nuntouched  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-property-title").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| { window.click("mdx-property-title", cx); window.input("changed", cx); });
+    let property = original.replacen("keep", "changed", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property.as_bytes()));
+    loop {
+        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-children").is_some() }) { break; }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| { window.click("mdx-children", cx); window.input("child", cx); });
+    let expected = property.replacen(" />", " >child</Mystery>", 1);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes()));
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), property.as_bytes()));
+}

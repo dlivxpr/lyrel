@@ -10,6 +10,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 mod images;
 pub(super) mod links;
 mod lists;
+mod mdx;
 mod math;
 mod mermaid;
 mod projection;
@@ -130,6 +131,12 @@ pub(crate) enum Command {
         format: TextFormat,
     },
     Select(Selection),
+    RenameComponent {
+        opening: Range<usize>,
+        closing: Option<Range<usize>>,
+        name: String,
+    },
+    ExpandComponent { ending: Range<usize>, name: String, block: bool },
     Insert(String),
     ParagraphBreak {
         hard: bool,
@@ -166,6 +173,12 @@ pub(crate) enum Command {
         text: String,
         selected: Option<Range<usize>>,
     },
+    ComposePaired {
+        range: Range<usize>,
+        mirror: Range<usize>,
+        text: String,
+        selected: Option<Range<usize>>,
+    },
     Commit(String),
     FinishComposition,
     CancelComposition,
@@ -175,6 +188,12 @@ struct Composition {
     range: Range<usize>,
     original: SourceText,
     selection: Selection,
+    mirror: Option<CompositionMirror>,
+}
+struct CompositionMirror {
+    range: Range<usize>,
+    original_start: usize,
+    original: SourceText,
 }
 #[derive(Clone)]
 struct Change {
@@ -257,6 +276,9 @@ impl MarkdownDocument {
     }
     pub(crate) fn format(&self) -> TextFormat {
         self.format
+    }
+    pub(super) fn grammar(&self) -> mdx::Grammar {
+        mdx::Grammar::for_path(self.resources.as_ref().and_then(|resources| resources.path()))
     }
     pub(crate) fn set_format(&mut self, format: TextFormat) {
         if format.line_ending != self.format.line_ending {
@@ -478,31 +500,42 @@ impl MarkdownDocument {
             );
         }
     }
+    fn replace_preedit(&mut self, state: &mut PresentationState, range: Range<usize>, text: &SourceText) {
+        if let Some(mirror) = state.composition.as_mut().and_then(|composition| composition.mirror.as_mut()) {
+            self.replace(mirror.range.clone(), text);
+            let start = mirror.range.start - range.len() + text.text.len();
+            mirror.range = start..start + text.text.len();
+        }
+        self.replace(range.clone(), text);
+        state.composition.as_mut().unwrap().range = range.start..range.start + text.text.len();
+    }
     fn finish_composition(&mut self, state: &mut PresentationState, cancel: bool) {
         let Some(composition) = state.composition.take() else {
             return;
         };
         self.typing_end = None;
         let inserted = self.source_text(composition.range.clone());
+        let mirror = composition.mirror.map(|mirror| {
+            let inserted = self.source_text(mirror.range.clone());
+            (mirror, inserted)
+        });
         if cancel {
-            if inserted != composition.original {
-                self.replace(composition.range, &composition.original);
+            // Restore in reverse transaction order, so the original closing-tag
+            // coordinate is valid again after restoring the opening name.
+            if inserted != composition.original { self.replace(composition.range, &composition.original); }
+            if let Some((mirror, inserted)) = mirror {
+                if inserted != mirror.original {
+                    self.replace(mirror.original_start..mirror.original_start + inserted.text.len(), &mirror.original);
+                }
             }
             state.selection = composition.selection;
         } else if inserted != composition.original {
-            self.record(
-                Change {
-                    edits: smallvec::smallvec![ReplacedSource {
-                        start: composition.range.start,
-                        removed: composition.original,
-                        inserted,
-                    }],
-                    before: composition.selection,
-                    after: state.selection,
-                },
-                EditKind::Command,
-                state.id,
-            );
+            let mut edits = smallvec::SmallVec::new();
+            if let Some((mirror, inserted)) = mirror {
+                edits.push(ReplacedSource { start: mirror.original_start, removed: mirror.original, inserted });
+            }
+            edits.push(ReplacedSource { start: composition.range.start, removed: composition.original, inserted });
+            self.record(Change { edits, before: composition.selection, after: state.selection }, EditKind::Command, state.id);
         }
     }
     /// All editing consumers use this command boundary. Native ranges are converted
@@ -522,6 +555,17 @@ impl MarkdownDocument {
 
     fn apply_command(&mut self, state: &mut PresentationState, command: Command) {
         match command {
+            Command::ComposePaired { range, mirror, text, selected } => {
+                self.finish_composition(state, false);
+                let range = self.safe_range(range);
+                let mirror = self.safe_range(mirror);
+                if mirror.start < range.end { return; }
+                state.composition = Some(Composition {
+                    range: range.clone(), original: self.source_text(range.clone()), selection: state.selection,
+                    mirror: Some(CompositionMirror { original_start: mirror.start, original: self.source_text(mirror.clone()), range: mirror }),
+                });
+                self.apply_command(state, Command::Compose { range: Some(range), text, selected });
+            }
             Command::Table(operation) => {
                 self.finish_composition(state, false);
                 if let Some((range, text, caret)) =
@@ -577,12 +621,11 @@ impl MarkdownDocument {
                         range: range.clone(),
                         original: self.source_text(range.clone()),
                         selection: state.selection,
+                        mirror: None,
                     });
                 }
                 let text = SourceText::from_input(text, self.format.line_ending);
-                self.replace(range.clone(), &text);
-                state.composition.as_mut().unwrap().range =
-                    range.start..range.start + text.text.len();
+                self.replace_preedit(state, range.clone(), &text);
                 let selected = selected.unwrap_or_else(|| {
                     let end = text.text.encode_utf16().count();
                     end..end
@@ -603,9 +646,7 @@ impl MarkdownDocument {
             Command::Commit(text) => {
                 if let Some(range) = state.marked_range() {
                     let text = SourceText::from_input(text, self.format.line_ending);
-                    self.replace(range.clone(), &text);
-                    state.composition.as_mut().unwrap().range =
-                        range.start..range.start + text.text.len();
+                    self.replace_preedit(state, range.clone(), &text);
                     state.selection =
                         Selection::caret(self.boundary(range.start + text.text.len(), true));
                     self.finish_composition(state, false);
@@ -631,6 +672,18 @@ impl MarkdownDocument {
                             self.boundary(selection.anchor, false),
                             self.boundary(selection.head, false),
                         );
+                    }
+                    Command::RenameComponent { opening, closing, name } => {
+                        let after = Selection::caret(opening.start + name.len());
+                        let mut edits = Vec::with_capacity(2);
+                        if let Some(closing) = closing { edits.push((closing, name.clone())); }
+                        edits.push((opening, name));
+                        self.batch_edit_selected(state, edits, EditKind::Command, Some(after));
+                    }
+                    Command::ExpandComponent { ending, name, block } => {
+                        let after = Selection::caret(ending.start + if block { 2 } else { 1 });
+                        let text = if block { format!(">\n\n</{name}>") } else { format!("></{name}>") };
+                        self.batch_edit_selected(state, vec![(ending, text)], EditKind::Command, Some(after));
                     }
                     Command::Insert(text) => {
                         self.edit(state, state.selection.range(), text, EditKind::Typing)

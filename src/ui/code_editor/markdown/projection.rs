@@ -32,6 +32,7 @@ pub(super) enum Kind {
     Html,
     Source,
     TableCell(super::tables::Cell),
+    Mdx(super::mdx::Field),
 }
 #[derive(Clone, PartialEq, Eq)]
 struct Segment {
@@ -81,6 +82,9 @@ impl Leaf {
         if self.segments.is_empty() {
             self.insertion = at;
         }
+    }
+    pub(super) fn container_range(&mut self, range: Range<usize>) {
+        self.container = Some(range);
     }
     fn push(&mut self, source: Range<usize>, text: &str) {
         self.push_segment(source, text, None, None);
@@ -333,7 +337,7 @@ impl Leaf {
         });
         self.push_segment(range.clone(), &source[range], Some(ix), None);
     }
-    fn raw(&mut self, source: &str, range: Range<usize>) {
+    pub(super) fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
     }
     pub fn atomic_boundary(&self, at: usize, forward: bool) -> usize {
@@ -447,82 +451,43 @@ pub(super) struct Projection {
     pub revision: u64,
     pub leaves: Vec<Leaf>,
     pub links: super::links::Index,
+    pub grammar: super::mdx::Grammar,
+    pub mdx: super::mdx::Index,
+    pub error: Option<String>,
+    live: bool,
     next_id: u64,
 }
 impl Projection {
-    pub fn source(source: &Rope, revision: u64) -> Self {
+    pub fn source(source: &Rope, revision: u64, grammar: super::mdx::Grammar) -> Self {
         let text = source.to_string();
-        Self::parse(&text, revision, false)
+        Self::parse(&text, revision, false, grammar)
     }
-    pub fn parse(source: &str, revision: u64, live: bool) -> Self {
-        Self::parse_fragment(source, revision, live, true)
+    pub fn parse(source: &str, revision: u64, live: bool, grammar: super::mdx::Grammar) -> Self {
+        Self::parse_fragment(source, revision, live, true, grammar)
     }
-    fn parse_fragment(source: &str, revision: u64, live: bool, document_start: bool) -> Self {
+    fn parse_fragment(source: &str, revision: u64, live: bool, document_start: bool, grammar: super::mdx::Grammar) -> Self {
         let mut leaves = Vec::new();
         let mut links = super::links::Index::default();
+        let mut mdx = super::mdx::Index::default();
+        let mut error = None;
         if live {
-            let mut options = markdown::ParseOptions::gfm();
-            options.constructs.frontmatter = document_start;
-            options.constructs.math_flow = true;
-            options.constructs.math_text = true;
+            let options = grammar.options(document_start);
             if super::regions::unfinished_metadata(source, document_start) {
                 let mut leaf = Leaf::new(0..source.len(), Kind::Metadata);
                 leaf.raw(source, 0..source.len());
                 leaves.push(leaf);
-            } else if let Ok(root) = markdown::to_mdast(source, &options) {
-                let image_definitions = std::sync::Arc::new(super::images::definitions(&root));
-                links = super::links::Index::from_ast(source, &root);
-                let mut cursor = 0;
-                for node in root.children().into_iter().flatten() {
-                    let Some(position) = node.position() else {
-                        continue;
-                    };
-                    let range = position.start.offset..position.end.offset;
-                    if matches!(node, Node::List(_) | Node::Blockquote(_)) {
-                        let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
-                        Self::gap(source, cursor..start, &mut leaves);
-                        Self::container(
-                            source,
-                            node,
-                            0,
-                            0,
-                            range.start,
-                            start..range.end,
-                            &image_definitions,
-                            &mut leaves,
-                        );
-                        cursor = range.end;
-                        continue;
-                    }
-                    Self::gap(source, cursor..range.start, &mut leaves);
-                    if super::tables::project(source, node, &image_definitions, &mut leaves) {
-                        cursor = range.end;
-                        continue;
-                    }
-                    let kind = super::regions::classify(node, &source[range.clone()]);
-                    let mut leaf = Leaf::new(range.clone(), kind);
-                    leaf.image_definitions = image_definitions.clone();
-                    if matches!(kind, Kind::Prose | Kind::Heading(_)) {
-                        if let Some(children) = node.children() {
-                            for child in children {
-                                Self::inline(source, child, &mut leaf);
-                            }
-                        }
-                        if leaf.segments.is_empty() {
-                            leaf.insertion = range.end;
-                        }
-                    } else if kind == Kind::Math {
-                        Self::inline(source, node, &mut leaf);
-                    } else if kind != Kind::Rule {
-                        leaf.raw(source, range.clone());
-                    }
-                    leaves.push(leaf);
-                    cursor = range.end;
+            } else { match markdown::to_mdast(source, &options) {
+                Ok(root) => {
+                    let image_definitions = std::sync::Arc::new(super::images::definitions(&root));
+                    links = super::links::Index::from_ast(source, &root);
+                    mdx = super::mdx::Index::from_ast(source, &root);
+                    Self::project_nodes(source, root.children().map_or(&[], Vec::as_slice), 0..source.len(), &image_definitions, &mut leaves);
                 }
-                Self::gap(source, cursor..source.len(), &mut leaves);
-            } else {
-                Self::source_lines(source, 0, &mut leaves);
-            }
+                Err(reason) => {
+                    error = Some(reason.to_string());
+                    Self::source_lines(source, 0, &mut leaves);
+                }
+            }}
         } else {
             Self::source_lines(source, 0, &mut leaves);
         }
@@ -553,21 +518,52 @@ impl Projection {
             leaves,
             next_id,
             links,
+            grammar,
+            mdx,
+            error,
+            live,
         }
     }
-    fn container(
-        source: &str,
-        node: &Node,
-        depth: usize,
-        quotes: usize,
-        owner: usize,
-        container: Range<usize>,
-        images: &std::sync::Arc<super::images::Definitions>,
-        leaves: &mut Vec<Leaf>,
-    ) {
-        let Some(position) = node.position() else {
-            return;
-        };
+    pub(super) fn project_nodes(source: &str, nodes: &[Node], bounds: Range<usize>, images: &std::sync::Arc<super::images::Definitions>, leaves: &mut Vec<Leaf>) {
+        let mut cursor = bounds.start;
+        for node in nodes {
+            let Some(position) = node.position() else { continue; };
+            let range = position.start.offset..position.end.offset;
+            let start = if matches!(node, Node::List(_) | Node::Blockquote(_)) {
+                source[..range.start].rfind('\n').map_or(0, |ix| ix + 1)
+            } else { range.start };
+            Self::gap(source, cursor..start, leaves);
+            if super::mdx::project(source, node, images, leaves) {
+                cursor = range.end;
+                continue;
+            }
+            if matches!(node, Node::List(_) | Node::Blockquote(_)) {
+                // Include the original indentation and marker, not a duplicate
+                // source-gap leaf for the same prefix.
+                Self::container(source, node, 0, 0, range.start, start..range.end, images, leaves);
+            } else if !super::tables::project(source, node, images, leaves) {
+                let kind = match node {
+                    Node::MdxjsEsm(_) | Node::MdxFlowExpression(_) | Node::MdxTextExpression(_) => Kind::Mdx(super::mdx::Field::Dynamic),
+                    _ => super::regions::classify(node, &source[range.clone()]),
+                };
+                let mut leaf = Leaf::new(range.clone(), kind);
+                leaf.image_definitions = images.clone();
+                if matches!(kind, Kind::Prose | Kind::Heading(_)) {
+                    if let Some(children) = node.children() {
+                        for child in children { Self::inline(source, child, &mut leaf); }
+                    }
+                    if leaf.segments.is_empty() { leaf.insertion = range.end; }
+                } else if kind == Kind::Math {
+                    Self::inline(source, node, &mut leaf);
+                } else if kind != Kind::Rule { leaf.raw(source, range.clone()); }
+                leaves.push(leaf);
+            }
+            cursor = range.end;
+        }
+        Self::gap(source, cursor..bounds.end, leaves);
+    }
+    fn container(source: &str, node: &Node, depth: usize, quotes: usize, owner: usize, container: Range<usize>, images: &std::sync::Arc<super::images::Definitions>, leaves: &mut Vec<Leaf>) {
+        let Some(position) = node.position() else { return; };
         let range = position.start.offset..position.end.offset;
         match node {
             Node::List(_) | Node::Blockquote(_) | Node::ListItem(_) => {
@@ -611,6 +607,11 @@ impl Projection {
                 }
             }
             _ => {
+                let first = leaves.len();
+                if super::mdx::project(source, node, images, leaves) {
+                    for leaf in &mut leaves[first..] { leaf.container_range(container.clone()); }
+                    return;
+                }
                 let start = source[..range.start].rfind('\n').map_or(0, |ix| ix + 1);
                 let style = super::lists::style(source, range.start, depth, quotes, owner);
                 let prose = matches!(node, Node::Paragraph(_) | Node::Heading(_));
@@ -907,6 +908,14 @@ impl Projection {
             .or_else(|| self.leaves.iter().rev().find(|leaf| leaf.range.end <= at))
     }
     pub fn install(&mut self, mut newer: Self) {
+        if newer.error.is_some() && self.revision == newer.revision && self.grammar == newer.grammar {
+            self.error = newer.error;
+            return;
+        }
+        if self.grammar == newer.grammar {
+            if newer.live { newer.mdx.reconcile(&self.mdx, &mut self.next_id); }
+            else { newer.mdx = std::mem::take(&mut self.mdx); }
+        }
         let old_by_start: std::collections::HashMap<_, _> = self
             .leaves
             .iter()
@@ -945,6 +954,7 @@ impl Projection {
         // Absolute destinations and definitions must never be rebased against a
         // fragment. The revision-checked background parse restores this index.
         self.links = super::links::Index::default();
+        self.mdx.rebase(transaction);
         // Only affected leaves and their immediate neighbours are reparsed on
         // input. The debounced background parse resolves larger syntax changes.
         let mut old = transaction
@@ -999,12 +1009,12 @@ impl Projection {
         };
         let first_start = match self.leaves[first].kind {
             Kind::TableCell(cell) => cell.table().start,
-            _ => self.leaves[first].range.start,
+            _ => self.leaves[first].range.start.min(old.start),
         };
         let start = map(first_start);
         let mut end = match self.leaves[last - 1].kind {
             Kind::TableCell(cell) => cell.table().end,
-            _ => self.leaves[last - 1].range.end,
+            _ => self.leaves[last - 1].range.end.max(old.end),
         };
         for edit in &transaction.edits {
             end = if end < edit.range.start {
@@ -1029,7 +1039,7 @@ impl Projection {
             leaf.shift(leaf.range.start, map(leaf.range.start));
         }
         let fragment = source.slice(start..end).to_string();
-        let mut patch = Self::parse_fragment(&fragment, transaction.revision(), live, start == 0);
+        let mut patch = Self::parse_fragment(&fragment, transaction.revision(), live, start == 0, self.grammar);
         for leaf in &mut patch.leaves {
             leaf.shift(0, start);
             leaf.id = identities
