@@ -289,6 +289,8 @@ impl State {
             block = block.child(
                 div()
                     .id(format!("markdown-mermaid-error-{}", leaf.range.start))
+                    .role(Role::Alert)
+                    .aria_label(diagnostic.map_or_else(|| t(key).to_owned(), |message| format!("{} {message}", t(key))))
                     .test_support()
                     .text_sm()
                     .text_color(cx.theme().danger)

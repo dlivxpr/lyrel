@@ -4137,7 +4137,9 @@ fn mermaid_matrix_workbench(
             let ready = context.update(|window, cx| {
                 window.render_frame(cx);
                 if image {
-                    assert!(window.try_find(error_id.clone()).is_none(), "{name}: actual native renderer reported an error; source/error display is not support");
+                    if let Some(error) = window.try_find(error_id.clone()) {
+                        panic!("{name}: actual native renderer reported {:?}; source/error display is not support", error.label());
+                    }
                     window.try_find(image_id.clone()).is_some_and(|image| {
                         let size = image.bounds().size;
                         size.width > gpui_kit::px(1.) && size.height > gpui_kit::px(1.)
