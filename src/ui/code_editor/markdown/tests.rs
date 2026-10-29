@@ -2834,3 +2834,315 @@ fn native_mermaid_resource_constructs_fail_visibly_but_url_label_text_renders(
     wait_for(&mut context, "image");
     view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).source().to_string(), original));
 }
+
+#[gpui_kit::test]
+fn native_mixed_selection_drag_cut_history_and_mixed_ending_save_reopen(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::TestEventExt as _;
+    use gpui_kit::{Focusable as _, MouseButton};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mixed-selection.md");
+    let original = "# Heading\r\n\nalpha \\* &amp; 中e\u{301} 👩‍💻\r\n\n* root\n  7) nested\r\n\n> quoted\n\n```rust\r\nlet x = 1;\n```\r\n\n| Name | Value |\n| :--- | ---: |\r\n| one | two |\n\n![引用][picture]\r\n\ntail  \n\n[picture]: missing.png \"title\"\r\n";
+    let source = original.replace("\r\n", "\n");
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(1100.), gpui_kit::px(1800.)));
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let start = source.find("alpha").unwrap();
+    let end = source.find("tail").unwrap() + 2;
+    for reverse in [false, true] {
+        context.update(|window, cx| {
+            window.render_frame(cx);
+            let a = view.read(cx).range_to_bounds(&(start..start), cx).unwrap().center();
+            let b = view.read(cx).range_to_bounds(&(end..end), cx).unwrap().center();
+            let (from, to) = if reverse { (b, a) } else { (a, b) };
+            window.pointer_down(from, MouseButton::Left, cx);
+            window.pointer_move(to, Some(MouseButton::Left), cx);
+            window.pointer_up(to, MouseButton::Left, cx);
+            assert_eq!(view.read(cx).selection(), if reverse {
+                Selection::new(end, start)
+            } else { Selection::new(start, end) });
+            window.press("secondary-c", cx);
+            assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(source[start..end].into()));
+        });
+    }
+    context.update(|window, cx| window.press("secondary-x", cx));
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), "# Heading\n\nil  \n\n[picture]: missing.png \"title\"\n");
+        assert_eq!(view.selection(), Selection::caret(start));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source);
+        assert_eq!(view.selection(), Selection::new(end, start));
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), "# Heading\n\nil  \n\n[picture]: missing.png \"title\"\n");
+        assert_eq!(view.selection(), Selection::caret(start));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.update(|window, cx| {
+        window.press("secondary-c", cx);
+        assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(source[start..end].into()));
+        window.press("delete", cx);
+    });
+    context.run_until_parked();
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let image = source.find("![引用]").unwrap();
+    let image_end = source.find("\n\ntail").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(image..image, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        window.press("shift-right", cx);
+        assert_eq!(view.read(cx).selection(), Selection::new(image, image_end));
+        window.press("secondary-c", cx);
+        assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some("![引用][picture]".into()));
+        window.press("shift-left", cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(image));
+        window.press("right", cx);
+        window.press("shift-left", cx);
+        assert_eq!(view.read(cx).selection(), Selection::new(image_end, image));
+        window.press("shift-right", cx);
+        assert_eq!(view.read(cx).selection(), Selection::caret(image_end));
+    });
+    let one_end = source.find("one").unwrap() + 3;
+    let two = source.find("two").unwrap();
+    for (from, to, key) in [(one_end, two, "shift-right"), (two, one_end, "shift-left")] {
+        view.update_in(&mut context, |view, _, cx| view.select_range(from..from, cx));
+        context.update(|window, cx| {
+            window.press(key, cx);
+            assert_eq!(view.read(cx).selection(), Selection::new(from, to));
+            window.press("secondary-c", cx);
+            assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(" | ".into()));
+            assert_eq!(view.read(cx).document().read(cx).source().to_string(), source);
+        });
+    }
+    // A new edit after undo replaces the cut/delete branch, not earlier history.
+    view.update_in(&mut context, |view, _, cx| view.select_range(start..start + 5, cx));
+    context.update(|window, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("changed".into()));
+        window.press("secondary-v", cx);
+    });
+    context.run_until_parked();
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source.replacen("alpha", "changed", 1));
+        assert_eq!(view.selection(), Selection::caret(start + 7));
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|file| !file.dirty && !file.saving)) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), original.replacen("alpha", "changed", 1).as_bytes());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.open_file_in_editor(&path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) { break; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
+        assert_eq!(reopened.document().read(cx).source().to_string(), source.replacen("alpha", "changed", 1));
+    });
+}
+
+#[gpui_kit::test]
+fn native_mixed_shift_navigation_crosses_wrapped_rows_tables_and_image_atoms_both_ways(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mixed-keyboard.md");
+    let source = "# Heading\n\nstart 中e\u{301} 👩‍💻 escaped \\* &amp; text that wraps when the editor is narrow and continues on another visual row\n\n* root\n  + nested\n\n> quoted\n\n```\ncode\n```\n\n| Left | Right |\n| --- | --- |\n| one | two |\n\n![图](missing.png)\n\ntail";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    cx.simulate_window_resize(context.window_handle(), gpui_kit::size(gpui_kit::px(720.), gpui_kit::px(1400.)));
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let start = source.find("start").unwrap();
+    let end = source.len();
+    for (from, to, key) in [(start, end, "shift-right"), (end, start, "shift-left")] {
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(from..from, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        context.update(|window, cx| {
+            for _ in 0..source.len() {
+                if view.read(cx).selection().head() == to { break; }
+                let previous = view.read(cx).selection();
+                window.press(key, cx);
+                let selection = view.read(cx).selection();
+                assert_ne!(selection, previous, "navigation must not stop at a structure boundary");
+                assert!(source.is_char_boundary(selection.head()));
+                assert_ne!(selection.head(), source.find("e\u{301}").unwrap() + 1, "a combining grapheme is indivisible");
+                let emoji = source.find("👩‍💻").unwrap();
+                assert!(!(emoji + 1..emoji + "👩‍💻".len()).contains(&selection.head()), "a joined emoji is indivisible");
+            }
+            assert_eq!(view.read(cx).selection(), Selection::new(from, to));
+            window.press("secondary-c", cx);
+            assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some(source[start..end].into()));
+        });
+    }
+    // Up/down follow actual shaped rows, including the row after a tall image.
+    let tail = source.find("tail").unwrap();
+    for (from, key, forward) in [(start, "shift-down", true), (tail, "shift-up", false)] {
+        view.update_in(&mut context, |view, window, cx| {
+            view.select_range(from..from, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        context.update(|window, cx| {
+            for _ in 0..32 {
+                let at = view.read(cx).selection().head();
+                if (forward && at >= tail) || (!forward && at <= start) { break; }
+                window.press(key, cx);
+                assert_ne!(view.read(cx).selection().head(), at, "vertical navigation must cross block margins and image height");
+            }
+            let selection = view.read(cx).selection();
+            assert_eq!(selection, Selection::new(from, selection.head()));
+            assert!(if forward { selection.head() >= tail } else { selection.head() <= start });
+            assert_eq!(view.read(cx).document().read(cx).source().to_string(), source);
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn native_word_selection_keeps_image_and_entity_source_boundaries(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::Focusable as _;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("word-atoms.md");
+    let source = "# Heading\n\nbefore ![图](missing.png) &amp; after\n\n| A | B |\n| --- | --- |\n| x | y |\n\ntail\n";
+    std::fs::write(&path, source).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input().and_then(|input| input.markdown().cloned())
+        }) { break view; }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    settle_live_geometry(&view, &mut context);
+    let image = source.find("![图]").unwrap();
+    let image_end = source.find(" &amp;").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(image..image, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.dispatch_action(gpui_kit::component::input::SelectToNextWordEnd);
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::new(image, image_end)));
+    context.dispatch_action(gpui_kit::component::input::SelectToPreviousWordStart);
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::caret(image)));
+    let entity = source.find("&amp;").unwrap();
+    view.update_in(&mut context, |view, _, cx| view.select_range(entity..entity, cx));
+    context.dispatch_action(gpui_kit::component::input::SelectToNextWordEnd);
+    context.run_until_parked();
+    view.read_with(&context, |view, _| assert_eq!(view.selection(), Selection::new(entity, entity + 5)));
+    // Word-delete with an existing cross-structure selection deletes that
+    // selection, not an unrelated word beside its active endpoint.
+    let tail = source.find("tail").unwrap();
+    view.update_in(&mut context, |view, _, cx| view.select_range(image..tail, cx));
+    context.dispatch_action(gpui_kit::component::input::DeleteToPreviousWordStart);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), "# Heading\n\nbefore tail\n");
+        assert_eq!(view.selection(), Selection::caret(image));
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.run_until_parked();
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).source().to_string(), source);
+        assert_eq!(view.selection(), Selection::new(image, tail));
+    });
+}
+
+#[test]
+fn mixed_reverse_replacement_and_composition_share_history_and_original_bytes() {
+    let original = "before\r\n\n* root\n  7) nested\r\n\n> quote\n\n```\r\ncode\n```\r\n\n| A | B |\n| --- | --- |\r\n| one | two |\n\n![图][p]\r\n\nafter  \n\n[p]: missing.png\r\n";
+    let source = original.replace("\r\n", "\n");
+    let mut document = MarkdownDocument::new(original.into(), TextFormat::default());
+    let mut live = PresentationState::default();
+    let mut other = PresentationState::default();
+    let start = source.find("before").unwrap() + 3;
+    let end = source.find("\n\nafter").unwrap();
+    document.command(&mut live, Command::Select(Selection::new(end, start)));
+    document.command(&mut live, Command::Replace {
+        range: start..end, text: "replacement".into(), kind: EditKind::Paste,
+    });
+    assert_eq!(document.source().to_string(), "befreplacement\n\nafter  \n\n[p]: missing.png\n");
+    assert_eq!(live.selection(), Selection::caret(start + 11));
+    document.command(&mut other, Command::Undo);
+    assert_eq!(document.source().to_string(), source);
+    assert_eq!(other.selection(), Selection::new(end, start));
+    assert_eq!(document.encode().unwrap(), original.as_bytes());
+    document.command(&mut live, Command::Redo);
+    assert_eq!(document.source().to_string(), "befreplacement\n\nafter  \n\n[p]: missing.png\n");
+    assert_eq!(live.selection(), Selection::caret(start + 11));
+    document.command(&mut live, Command::Undo);
+    document.command(&mut live, Command::Compose { range: None, text: "ni".into(), selected: Some(2..2) });
+    document.command(&mut live, Command::CancelComposition);
+    assert_eq!(document.source().to_string(), source);
+    assert_eq!(live.selection(), Selection::new(end, start));
+    assert_eq!(document.encode().unwrap(), original.as_bytes());
+    document.command(&mut live, Command::Insert("new".into()));
+    document.command(&mut other, Command::Redo);
+    assert_eq!(document.source().to_string(), "befnew\n\nafter  \n\n[p]: missing.png\n");
+    document.command(&mut other, Command::Undo);
+    assert_eq!(document.source().to_string(), source);
+    assert_eq!(other.selection(), Selection::new(end, start));
+    assert_eq!(document.encode().unwrap(), original.as_bytes());
+}

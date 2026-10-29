@@ -163,9 +163,12 @@ impl Leaf {
         for segment in &mut self.segments {
             if segment.image.is_some() {
                 let revealed = std::iter::once(&selection).chain(extra).any(|selection| {
-                    let range = selection.range();
-                    if range.is_empty() { segment.source.start < range.start && range.start < segment.source.end }
-                    else { range.start < segment.source.end && range.end > segment.source.start }
+                    // Crossing the whole image selects its original Markdown as
+                    // one atom. Reveal only when an editing endpoint is inside
+                    // its syntax; otherwise reverse Shift navigation must cross
+                    // the same boundary instead of entering the image URL.
+                    segment.source.start < range.start && range.start < segment.source.end
+                        || segment.source.start < range.end && range.end < segment.source.end
                 }) || marked.is_some_and(|range| range.start < segment.source.end && range.end > segment.source.start);
                 changed |= segment.verbatim != revealed;
                 segment.verbatim = revealed;
@@ -281,6 +284,15 @@ impl Leaf {
     }
     fn raw(&mut self, source: &str, range: Range<usize>) {
         self.push(range.clone(), &source[range]);
+    }
+    pub fn atomic_boundary(&self, at: usize, forward: bool) -> usize {
+        self.segments.iter().find(|segment| {
+            segment.source.start < at && at < segment.source.end
+                && !segment.display.is_empty()
+                && segment.source.len() != segment.display.len()
+        }).map_or(at, |segment| {
+            if forward { segment.source.end } else { segment.source.start }
+        })
     }
     pub fn display_offset(&self, source: usize) -> usize {
         for span in &self.segments {
