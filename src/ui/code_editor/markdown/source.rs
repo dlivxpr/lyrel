@@ -22,6 +22,16 @@ struct CachedBlock {
     seen: u64,
     node: BlockNode,
 }
+
+#[derive(Default)]
+struct Viewport {
+    heights: HashMap<u64, (u64, Pixels)>,
+    frame: Vec<(u64, u64, Bounds<Pixels>)>,
+    layout: Option<(Pixels, Pixels)>,
+    anchor: Option<(u64, Pixels)>,
+    offset: Point<Pixels>,
+    bounds: Option<Bounds<Pixels>>,
+}
 /// A native editing presentation. It never owns a second text buffer or history.
 pub(crate) struct SourcePresentation {
     document: Entity<MarkdownDocument>,
@@ -31,6 +41,7 @@ pub(crate) struct SourcePresentation {
     geometry: Option<(u64, HashMap<u64, LeafGeometry>)>,
     table_geometry: HashMap<u64, Bounds<Pixels>>,
     dragging: bool,
+    pointer_link: Option<(u64, String)>,
     reveal_caret: bool,
     wrap: bool,
     live: bool,
@@ -40,6 +51,7 @@ pub(crate) struct SourcePresentation {
     rendered_revision: Option<u64>,
     render_generation: u64,
     parse_task: Option<Task<()>>,
+    parse_pending: Option<(Rope, u64, bool, super::mdx::Grammar)>,
     mermaid: super::mermaid::State,
     mermaid_task: Option<Task<()>>,
     _mermaid_theme: Subscription,
@@ -48,6 +60,7 @@ pub(crate) struct SourcePresentation {
     search_matches: Vec<Range<usize>>,
     indent: crate::ui::editor_text::Indent,
     viewport_height: Pixels,
+    viewport: Viewport,
     reveal_at: Option<usize>,
     selection_notification: bool,
     assets: assets::InsertionState,
@@ -61,17 +74,24 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) -> Self {
         let observe = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
-            if matches!(event, DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged) {
+            if matches!(
+                event,
+                DocumentEvent::ResourceContextChanged | DocumentEvent::ImagesChanged
+            ) {
                 if matches!(event, DocumentEvent::ResourceContextChanged) {
                     let document = this.document.read(cx);
                     if this.projection.grammar != document.grammar() {
-                        this.projection.install(Projection::source(document.source(), document.revision(), document.grammar()));
+                        this.projection.install(Projection::source(
+                            document.source(),
+                            document.revision(),
+                            document.grammar(),
+                        ));
                         this.rendered_revision = None;
                         this.schedule_parse(cx);
                     }
                 }
                 this.refresh_images(false, cx);
-                this.geometry = None;
+                this.invalidate_layout(cx);
                 cx.notify();
                 return;
             }
@@ -109,10 +129,16 @@ impl SourcePresentation {
                 cx.notify();
             }
         });
-        let projection = Projection::source(document.read(cx).source(), document.read(cx).revision(), document.read(cx).grammar());
+        let projection = Projection::source(
+            document.read(cx).source(),
+            document.read(cx).revision(),
+            document.read(cx).grammar(),
+        );
         let mermaid_theme = cx.observe_global::<gpui_kit::component::Theme>(|this, cx| {
             this.schedule_mermaid(cx);
             cx.notify();
+            this.invalidate_layout(cx);
+            this.viewport.layout = None;
         });
         Self {
             document,
@@ -122,6 +148,7 @@ impl SourcePresentation {
             geometry: None,
             table_geometry: HashMap::new(),
             dragging: false,
+            pointer_link: None,
             reveal_caret: false,
             wrap,
             live: false,
@@ -131,6 +158,7 @@ impl SourcePresentation {
             rendered_revision: None,
             render_generation: 0,
             parse_task: None,
+            parse_pending: None,
             mermaid: super::mermaid::State::default(),
             mermaid_task: None,
             _mermaid_theme: mermaid_theme,
@@ -142,6 +170,7 @@ impl SourcePresentation {
                 size: 4,
             },
             viewport_height: Pixels::ZERO,
+            viewport: Viewport::default(),
             reveal_at: None,
             selection_notification: false,
             assets: assets::InsertionState::default(),
@@ -170,7 +199,7 @@ impl SourcePresentation {
         self.live = !self.live;
         self.geometry = None;
         self.rendered_revision = None;
-        self.parse_task = None;
+        self.parse_pending = None;
         self.mermaid.cancel();
         if self.live {
             self.schedule_parse(cx);
@@ -187,43 +216,73 @@ impl SourcePresentation {
         cx.notify();
     }
     fn schedule_parse(&mut self, cx: &mut Context<Self>) {
-        if !self.live && self.projection.revision == self.document.read(cx).revision()
-            && self.projection.grammar == self.document.read(cx).grammar() {
+        if !self.live
+            && self.projection.revision == self.document.read(cx).revision()
+            && self.projection.grammar == self.document.read(cx).grammar()
+        {
             return;
         }
-        let live = self.live;
-        let document = self.document.clone();
-        let identity = document.entity_id();
-        let revision = document.read(cx).revision();
-        let grammar = document.read(cx).grammar();
-        let source = document.read(cx).source().clone();
+        let document = self.document.read(cx);
+        self.parse_pending = Some((
+            document.source().clone(),
+            document.revision(),
+            self.live,
+            document.grammar(),
+        ));
+        if self.parse_task.is_some() {
+            return;
+        }
+        let identity = self.document.entity_id();
         self.parse_task = Some(cx.spawn(async move |view, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(45))
-                .await;
-            let projection = cx
-                .background_executor()
-                .spawn(async move { Projection::parse(&source.to_string(), revision, live, grammar) })
-                .await;
-            let _ = view.update(cx, |view, cx| {
-                if view.live == live
-                    && view.document.entity_id() == identity
-                    && view.document.read(cx).revision() == revision
-                    && view.document.read(cx).grammar() == grammar
-                {
-                    view.projection.install(projection);
-                    view.reveal_mdx_selection(cx);
-                    view.sync_inline_reveal();
-                    view.state.selection = view.map_live_caret(view.state.selection, cx);
-                    view.selection_notification = true;
-                    view.rendered_revision = None;
-                    view.geometry = None;
-                    view.refresh_images(false, cx);
-                    view.schedule_mermaid(cx);
-                    view.schedule_math(cx);
-                    cx.notify();
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(45))
+                    .await;
+                let request = view.update(cx, |view, _| {
+                    let request = view.parse_pending.take();
+                    if request.is_none() {
+                        view.parse_task = None;
+                    }
+                    request
+                });
+                let Ok(Some((source, revision, live, grammar))) = request else {
+                    break;
+                };
+                let projection = cx
+                    .background_executor()
+                    .spawn(async move {
+                        Projection::parse(&source.to_string(), revision, live, grammar)
+                    })
+                    .await;
+                let next = view.update(cx, |view, cx| {
+                    if view.live == live
+                        && view.document.entity_id() == identity
+                        && view.document.read(cx).revision() == revision
+                        && view.document.read(cx).grammar() == grammar
+                    {
+                        view.invalidate_layout(cx);
+                        view.projection.install(projection);
+                        view.reveal_mdx_selection(cx);
+                        view.sync_inline_reveal();
+                        view.state.selection = view.map_live_caret(view.state.selection, cx);
+                        view.selection_notification = true;
+                        view.rendered_revision = None;
+                        view.geometry = None;
+                        view.refresh_images(false, cx);
+                        view.schedule_mermaid(cx);
+                        view.schedule_math(cx);
+                        cx.notify();
+                    }
+                    let next = view.parse_pending.is_some();
+                    if !next {
+                        view.parse_task = None;
+                    }
+                    next
+                });
+                if !matches!(next, Ok(true)) {
+                    break;
                 }
-            });
+            }
         }));
     }
     fn refresh_images(&mut self, consent: bool, cx: &mut Context<Self>) {
@@ -269,6 +328,7 @@ impl SourcePresentation {
                     .await;
                 let next = view.update(cx, |view, cx| {
                     if view.live && view.projection.revision == view.document.read(cx).revision() {
+                        view.invalidate_layout(cx);
                         view.mermaid.install(
                             batch,
                             &view.projection,
@@ -342,6 +402,7 @@ impl SourcePresentation {
                     && view.projection.revision == revision
                     && view.math.style == Some(style)
                 {
+                    view.invalidate_layout(cx);
                     let current: std::collections::HashSet<_> = view
                         .projection
                         .leaves
@@ -366,6 +427,16 @@ impl SourcePresentation {
                 view.schedule_math(cx);
             });
         }));
+    }
+    fn invalidate_layout(&mut self, cx: &App) {
+        if let (Some(viewport), Some(caret)) = (
+            self.viewport.bounds,
+            self.caret_bounds(self.state.selection.head, cx),
+        ) {
+            self.reveal_caret |=
+                caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom();
+        }
+        self.geometry = None;
     }
     // Display-boundary insertion has right affinity after a hidden opening
     // delimiter and left affinity before a hidden closing delimiter.
@@ -481,6 +552,8 @@ impl SourcePresentation {
     ) {
         self.command(Command::FinishComposition, window, cx);
         update(&mut self.mdx_state);
+        self.viewport.anchor = None;
+        self.viewport.layout = None;
         self.geometry = None;
         self.rendered_revision = None;
         cx.notify();
@@ -492,6 +565,8 @@ impl SourcePresentation {
         if !self.live || self.projection.revision != self.document.read(cx).revision() { return; }
         let source = self.document.read(cx).source();
         if super::mdx::tabs::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection) {
+            self.viewport.anchor = None;
+            self.viewport.layout = None;
             self.geometry = None;
             self.rendered_revision = None;
         }
@@ -532,6 +607,8 @@ impl SourcePresentation {
     pub(crate) fn set_soft_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
         self.wrap = wrap;
         self.geometry = None;
+        self.viewport.layout = None;
+        self.reveal_caret = true;
         cx.notify();
     }
     pub(crate) fn scroll_offset(&self) -> Point<Pixels> {
@@ -539,6 +616,7 @@ impl SourcePresentation {
     }
     pub(crate) fn set_scroll_offset(&mut self, offset: Point<Pixels>, cx: &mut Context<Self>) {
         self.scroll.set_offset(offset);
+        self.viewport.anchor = None;
         self.geometry = None;
         self.reveal_caret = false;
         cx.notify();
@@ -635,10 +713,20 @@ impl SourcePresentation {
         cx: &mut Context<Self>,
     ) {
         self.state.selection = self.map_live_caret(self.state.selection, cx);
-        let command = if self.live && self.extra_selections.is_empty() && self.projection.grammar == self.document.read(cx).grammar()
-            && self.projection.revision == self.document.read(cx).revision() {
-            super::mdx::name_command(&self.projection.mdx, self.document.read(cx), &self.state, command)
-        } else { command };
+        let command = if self.live
+            && self.extra_selections.is_empty()
+            && self.projection.grammar == self.document.read(cx).grammar()
+            && self.projection.revision == self.document.read(cx).revision()
+        {
+            super::mdx::name_command(
+                &self.projection.mdx,
+                self.document.read(cx),
+                &self.state,
+                command,
+            )
+        } else {
+            command
+        };
         let command = match command {
             Command::Select(selection) => Command::Select(self.map_live_caret(selection, cx)),
             command => command,
@@ -824,6 +912,30 @@ impl SourcePresentation {
         );
         self.focus.focus(window, cx);
     }
+    fn pointer_link_target(&self, position: Point<Pixels>, cx: &App) -> Option<&str> {
+        if !self.live || self.projection.revision != self.document.read(cx).revision() {
+            return None;
+        }
+        let at = self.point_offset(position, cx)?;
+        let link = self.projection.links.at(at)?;
+        (link.label.start <= at && at <= link.label.end).then_some(link.target.as_str())
+    }
+    fn finish_pointer_link(
+        &mut self,
+        position: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((revision, target)) = self.pointer_link.take() else {
+            return;
+        };
+        if link_modifier(modifiers)
+            && self.document.read(cx).revision() == revision
+            && self.pointer_link_target(position, cx) == Some(target.as_str())
+        {
+            self.follow_link(target, cx);
+        }
+    }
     fn follow_link(&mut self, target: String, cx: &mut Context<Self>) {
         if self.projection.revision != self.document.read(cx).revision() {
             return;
@@ -945,7 +1057,18 @@ impl SourcePresentation {
             })
         } else if vertical != 0 {
             self.vertical_target(current, vertical as f32, cx)
-                .unwrap_or(current)
+                .unwrap_or_else(|| {
+                    let point = doc.source().offset_to_point(current);
+                    let last = doc.source().offset_to_point(doc.source().len()).row;
+                    let row = if vertical < 0 {
+                        point.row.saturating_sub(1)
+                    } else {
+                        (point.row + 1).min(last)
+                    };
+                    let start = doc.source().line_start_offset(row);
+                    let end = doc.source().line_end_offset(row);
+                    doc.boundary((start + point.column as usize).min(end), false)
+                })
         } else if !extend && !self.state.selection.range().is_empty() {
             if horizontal < 0 {
                 self.state.selection.range().start
@@ -953,7 +1076,7 @@ impl SourcePresentation {
                 self.state.selection.range().end
             }
         } else if self.live {
-            self.visible_step(current, horizontal < 0)
+            self.visible_step(current, horizontal < 0, cx)
         } else if horizontal < 0 {
             doc.previous(current)
         } else {
@@ -1015,7 +1138,10 @@ impl SourcePresentation {
             .map(|(at, _, _)| at)
     }
     fn visual_line_edge(&self, at: usize, end: bool, cx: &App) -> Option<usize> {
-        let (_, geometry) = self.geometry.as_ref()?;
+        let (revision, geometry) = self.geometry.as_ref()?;
+        if *revision != self.document.read(cx).revision() {
+            return None;
+        }
         let mapped = self.projection.leaf_at(at)?;
         let leaf = geometry.get(&mapped.id)?;
         let caret = leaf.position_for_index(mapped.display_offset(at));
@@ -1230,10 +1356,18 @@ impl SourcePresentation {
             self.add_selection(offset..offset, cx);
         }
     }
-    fn visible_step(&self, at: usize, backward: bool) -> usize {
+    fn visible_step(&self, at: usize, backward: bool, cx: &App) -> usize {
         let Some(leaf) = self.projection.leaf_at(at) else {
             return at;
         };
+        if leaf.deferred {
+            let document = self.document.read(cx);
+            return if backward {
+                document.previous(at)
+            } else {
+                document.next(at)
+            };
+        }
         let display = leaf.display_offset(at);
         if backward {
             if let Some((ix, _)) = leaf
@@ -1248,7 +1382,9 @@ impl SourcePresentation {
                 .leaves
                 .iter()
                 .rev()
-                .find(|other| other.range.end < leaf.range.start)
+                // Adjacent table cells can share a source-range boundary.
+                .skip_while(|other| other.id != leaf.id)
+                .nth(1)
                 .map_or(leaf.content_start(), |other| other.content_end())
         } else {
             if let Some((ix, _)) = leaf
@@ -1264,7 +1400,8 @@ impl SourcePresentation {
             self.projection
                 .leaves
                 .iter()
-                .find(|other| other.range.start > leaf.range.end)
+                .skip_while(|other| other.id != leaf.id)
+                .nth(1)
                 .map_or(leaf.content_end(), |other| other.content_start())
         }
     }
@@ -1406,7 +1543,7 @@ impl SourcePresentation {
                     }
                 })
         } else {
-            let next = self.visible_step(at, backward);
+            let next = self.visible_step(at, backward, cx);
             Some(next.min(at)..next.max(at))
         };
         if let Some(range) = other.filter(|range| !range.is_empty()) {
@@ -1627,10 +1764,94 @@ impl Render for SourcePresentation {
             self.rendered_revision = None;
             self.schedule_math(cx);
         }
+        if self.viewport.layout.is_none() {
+            self.viewport.heights.clear();
+        }
+        // Heights are derived, versioned layout hints, never source ownership.
+        // Tables occupy one virtual row so cell geometry is collected together.
+        let mut before = Pixels::ZERO;
+        let mut through = Pixels::ZERO;
+        let mut ix = 0;
+        let mut y = Pixels::ZERO;
+        let screen = self.viewport_height.max(window.rem_size() * 40.);
+        let top = -self.scroll.offset().y;
+        let mut visible = None;
+        let mut caret_row = None;
+        let component_source = self.document.read(cx).source().clone();
+        while ix < self.projection.leaves.len() {
+            let leaf = &self.projection.leaves[ix];
+            let mut end = ix + 1;
+            if let Kind::TableCell(cell) = leaf.kind {
+                while end < self.projection.leaves.len()
+                    && matches!(self.projection.leaves[end].kind, Kind::TableCell(other) if other.table() == cell.table())
+                {
+                    end += 1;
+                }
+            }
+            if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
+                ix = end;
+                continue;
+            }
+            let height = self
+                .viewport
+                .heights
+                .get(&leaf.id)
+                .filter(|(version, _)| *version == leaf.version)
+                .map_or_else(
+                    || {
+                        let lines = if leaf.deferred && self.wrap {
+                            let width = self
+                                .viewport
+                                .bounds
+                                .map_or(window.rem_size() * 40., |bounds| bounds.size.width);
+                            let columns =
+                                (f32::from(width) / f32::from(window.rem_size()) * 1.5).max(1.);
+                            (leaf.range.len() as f32 / columns).ceil().max(1.)
+                        } else {
+                            1.
+                        };
+                        window.rem_size() * (lines * 1.5 + 0.5)
+                    },
+                    |(_, height)| *height,
+                );
+            if y + height >= top - screen && y <= top + screen * 2. {
+                if visible.is_none() {
+                    before = y;
+                }
+                through = y + height;
+                let range = visible.get_or_insert(ix..end);
+                range.end = end;
+            }
+            let at = self.reveal_at.unwrap_or(self.state.selection.head);
+            if self.projection.leaves[ix..end]
+                .iter()
+                .any(|leaf| leaf.range.start <= at && at <= leaf.range.end)
+            {
+                caret_row = Some((ix..end, y, height));
+            }
+            y += height;
+            ix = end;
+        }
+        let mut visible = visible.unwrap_or(0..0);
+        if self.reveal_caret {
+            if let Some((range, y, height)) = caret_row {
+                if range.start < visible.start || range.end > visible.end {
+                    self.scroll.set_offset(point(self.scroll.offset().x, -y));
+                    self.viewport.anchor = None;
+                    visible = range;
+                    before = y;
+                    through = y + height;
+                }
+            }
+        }
+        let after = (y - through).max(Pixels::ZERO);
         let revision = self.projection.revision;
-        if self.rendered_revision != Some(revision) {
+        for leaf in &mut self.projection.leaves[visible.clone()] {
+            leaf.materialize(self.document.read(cx).source());
+        }
+        {
             self.render_generation += 1;
-            for leaf in &self.projection.leaves {
+            for leaf in &self.projection.leaves[visible.clone()] {
                 let cached = self.blocks.entry(leaf.id).or_insert_with(|| CachedBlock {
                     version: u64::MAX,
                     seen: 0,
@@ -1700,8 +1921,8 @@ impl Render for SourcePresentation {
             self.blocks
                 .retain(|_, cached| cached.seen == self.render_generation);
             self.tables.clear();
-            let mut ix = 0;
-            while ix < self.projection.leaves.len() {
+            let mut ix = visible.start;
+            while ix < visible.end {
                 let leaf = &self.projection.leaves[ix];
                 if let Kind::TableCell(cell) = leaf.kind {
                     let end = ix + self.projection.leaves[ix..].iter().take_while(|leaf| {
@@ -1749,26 +1970,12 @@ impl Render for SourcePresentation {
                     |image| ImageSource::Render(image.clone()),
                 )
             })
-            .on_link_click(move |target, event, _, cx| {
+            .on_link_click(move |_, event, _, cx| {
                 let _ = view.update(cx, |view, cx| {
                     view.dragging = false;
-                    if view.document.read(cx).revision() != revision
-                        || view.projection.revision != revision
-                    {
-                        return;
-                    }
                     if let ClickEvent::Mouse(click) = event {
-                        if click.up.button == MouseButton::Left && link_modifier(click.up.modifiers)
-                        {
-                            if view
-                                .projection
-                                .links
-                                .links
-                                .iter()
-                                .any(|link| link.target == target.as_ref())
-                            {
-                                view.follow_link(target.to_string(), cx);
-                            }
+                        if click.up.button == MouseButton::Left {
+                            view.finish_pointer_link(click.up.position, click.up.modifiers, cx);
                         }
                     }
                 });
@@ -1791,23 +1998,26 @@ impl Render for SourcePresentation {
         } else {
             context
         };
-        let references: Vec<_> = self
-            .projection
-            .leaves
+        let references: Vec<_> = self.projection.leaves[visible.clone()]
             .iter()
             .map(|leaf| &self.blocks[&leaf.id].node)
             .collect();
-        let component_source = self.document.read(cx).source().clone();
         let block = div()
             .w_full()
             .when_some(self.projection.error.as_ref(), |block, error| {
-                block.child(div().text_sm().text_color(cx.theme().danger)
-                    .child(crate::ui::i18n::t(crate::ui::i18n::L10nKey::EditorMdxParseError))
-                    .child(div().text_xs().child(error.clone())))
+                block.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(crate::ui::i18n::t(
+                            crate::ui::i18n::L10nKey::EditorMdxParseError,
+                        ))
+                        .child(div().text_xs().child(error.clone())),
+                )
             })
+            .child(div().h(before).flex_none())
             .children(
-                self.projection
-                    .leaves
+                self.projection.leaves[visible.clone()]
                     .iter()
                     .enumerate()
                     .filter_map(|(ix, leaf)| {
@@ -1852,11 +2062,21 @@ impl Render for SourcePresentation {
                             rendered.into_any_element()
                         };
                         let rendered = if self.live {
-                            let field = super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state);
+                            let field = super::mdx::view::FieldContext::new(
+                                &self.projection,
+                                leaf,
+                                &component_source,
+                                &self.mdx_state,
+                            );
                             super::mdx::view::render_field(&field, rendered, window, cx)
-                        } else { rendered };
-                        Some(
-                            div()
+                        } else {
+                            rendered
+                        };
+                        Some(MeasuredBlock {
+                            view: cx.entity(),
+                            id: leaf.id,
+                            version: leaf.version,
+                            child: div()
                                 .id(("markdown-block", leaf.id))
                                 .w_full()
                                 .when(
@@ -1936,10 +2156,12 @@ impl Render for SourcePresentation {
                                     } else {
                                         rendered
                                     }
-                                }),
-                        )
+                                })
+                                .into_any_element(),
+                        })
                     }),
-            );
+            )
+            .child(div().h(after).flex_none());
         let image_status = if self.live {
             use crate::ui::i18n::{L10nKey, t};
             use gpui_kit::component::{
@@ -2079,9 +2301,11 @@ impl Render for SourcePresentation {
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
                         this.focus.focus(window, cx);
-                        if link_modifier(event.modifiers)
-                            && this.point_offset(event.position, cx).is_some_and(|at| this.projection.links.at(at).is_some_and(|link| link.label.start <= at && at <= link.label.end))
-                        {
+                        this.pointer_link = link_modifier(event.modifiers)
+                            .then(|| this.pointer_link_target(event.position, cx))
+                            .flatten()
+                            .map(|target| (this.projection.revision, target.to_owned()));
+                        if this.pointer_link.is_some() {
                             this.dragging = false;
                         } else {
                             this.dragging = true;
@@ -2097,11 +2321,20 @@ impl Render for SourcePresentation {
                 }))
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| this.dragging = false),
+                    cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                        this.dragging = false;
+                        // editor_host may consume a rendered link's mouse-up.
+                        // Otherwise the editing surface completes the same
+                        // captured gesture; neither path navigates twice.
+                        this.finish_pointer_link(event.position, event.modifiers, cx);
+                    }),
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| this.dragging = false),
+                    cx.listener(|this, _, _, _| {
+                        this.dragging = false;
+                        this.pointer_link = None;
+                    }),
                 )
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowBefore, window, cx| this.table_command(super::tables::Operation::InsertRowBefore, window, cx)))
                 .on_action(cx.listener(|this, _: &super::tables::InsertRowAfter, window, cx| this.table_command(super::tables::Operation::InsertRowAfter, window, cx)))
@@ -2360,13 +2593,31 @@ impl Render for SourcePresentation {
                         .overflow_y_scroll()
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
+                        .on_scroll_wheel(cx.listener(|view, _, _, cx| {
+                            view.geometry = None;
+                            view.reveal_caret = false;
+                            cx.notify();
+                        }))
                         .child(
                             div()
                                 .p_3()
                                 .capture_any_mouse_down(cx.listener(
                                     |this, event: &MouseDownEvent, window, cx| {
-                                        if event.button != MouseButton::Left {
+                                        if event.button != MouseButton::Left
+                                            || !this.geometry.as_ref().is_some_and(|(revision, geometry)| {
+                                                *revision == this.document.read(cx).revision()
+                                                    && geometry.values().any(|leaf| leaf.bounds().contains(&event.position))
+                                            })
+                                        {
                                             return;
+                                        }
+                                        if link_modifier(event.modifiers) {
+                                            this.pointer_link = this.pointer_link_target(event.position, cx)
+                                                .map(|target| (this.projection.revision, target.to_owned()));
+                                            if this.pointer_link.is_some() {
+                                                this.dragging = false;
+                                                return;
+                                            }
                                         }
                                         this.focus.focus(window, cx);
                                         this.dragging = true;
@@ -2390,6 +2641,64 @@ impl Render for SourcePresentation {
             color: cx.theme().selection,
             caret: cx.theme().caret,
         }
+    }
+}
+
+struct MeasuredBlock {
+    child: AnyElement,
+    view: Entity<SourcePresentation>,
+    id: u64,
+    version: u64,
+}
+impl IntoElement for MeasuredBlock {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+impl Element for MeasuredBlock {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.child.request_layout(window, cx), ())
+    }
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.prepaint(window, cx);
+        self.view.update(cx, |view, _| {
+            view.viewport.frame.push((self.id, self.version, bounds))
+        });
+    }
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
     }
 }
 struct SourceElement {
@@ -2432,11 +2741,13 @@ impl Element for SourceElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.view.update(cx, |view, _| view.viewport.frame.clear());
         let decorations = {
             let view = self.view.read(cx);
             view.projection
                 .leaves
                 .iter()
+                .filter(|leaf| view.blocks.contains_key(&leaf.id))
                 .map(|leaf| {
                     let mut ranges = Vec::new();
                     for range in &view.search_matches {
@@ -2470,10 +2781,59 @@ impl Element for SourceElement {
         };
         let (_, geometry) = collect_leaf_geometry(decorations, || self.child.prepaint(window, cx));
         self.view.update(cx, |view, cx| {
+            if view.document.read(cx).revision() != self.revision
+                || view.projection.revision != self.revision
+            {
+                view.geometry = None;
+                return;
+            }
+            let layout = (bounds.size.width, window.rem_size());
+            let reflow = view.viewport.layout.is_some_and(|old| old != layout);
+            if reflow {
+                view.viewport.heights.clear();
+            }
+            view.viewport.layout = Some(layout);
+            let mut measured = false;
+            for (id, version, bounds) in &view.viewport.frame {
+                let height = bounds.size.height.max(window.rem_size());
+                measured |= view.viewport.heights.insert(*id, (*version, height))
+                    != Some((*version, height));
+            }
+            // Anchor a source leaf, not a document-wide pixel offset. Only
+            // compensate layout changes, never an explicit user scroll.
+            let offset = view.scroll.offset();
+            if offset == view.viewport.offset && !view.reveal_caret {
+                if let Some((id, y)) = view.viewport.anchor {
+                    if let Some((_, _, row)) =
+                        view.viewport.frame.iter().find(|(key, _, _)| *key == id)
+                    {
+                        let delta = y - row.top();
+                        if delta.abs() > px(0.5) {
+                            view.scroll
+                                .set_offset(point(offset.x, (offset.y + delta).min(Pixels::ZERO)));
+                            measured = true;
+                        }
+                    }
+                }
+            }
+            view.viewport.anchor = view
+                .viewport
+                .frame
+                .iter()
+                .find(|(_, _, row)| row.bottom() > bounds.top())
+                .map(|(id, _, row)| (*id, row.top()));
+            view.viewport.offset = offset;
+            if reflow {
+                view.invalidate_layout(cx);
+            }
+            if measured || reflow {
+                cx.notify();
+            }
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
             view.table_geometry = super::tables::geometry(&view.projection.leaves, &geometry);
             view.geometry = Some((self.revision, geometry));
             view.viewport_height = bounds.size.height;
+            view.viewport.bounds = Some(bounds);
             if view.focus.is_focused(window)
                 && (view.selection_notification
                     || previous_caret != view.caret_bounds(view.state.selection.head, cx))
@@ -2482,9 +2842,10 @@ impl Element for SourceElement {
                 window.notify_text_selection_changed(&view.focus);
             }
             if view.reveal_caret && view.focus.is_focused(window) {
-                view.reveal_caret = false;
-                let at = view.reveal_at.take().unwrap_or(view.state.selection.head);
+                let at = view.reveal_at.unwrap_or(view.state.selection.head);
                 if let Some(caret) = view.caret_bounds(at, cx) {
+                    view.reveal_caret = false;
+                    view.reveal_at = None;
                     let inset = window.rem_size() * 0.75;
                     let delta = if caret.top() < bounds.top() + inset {
                         bounds.top() + inset - caret.top()
