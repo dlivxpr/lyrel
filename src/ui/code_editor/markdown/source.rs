@@ -318,26 +318,46 @@ impl SourcePresentation {
             command => command,
         };
         let cell_input = |range: &Range<usize>, text: String, selected| {
-            if self.live && self.projection.leaf_at(range.start).is_some_and(|leaf| {
-                matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
-            }) {
+            if self.live
+                && self.projection.leaf_at(range.start).is_some_and(|leaf| {
+                    matches!(leaf.kind, Kind::TableCell(_)) && range.end <= leaf.range.end
+                })
+            {
                 super::tables::input(self.document.read(cx).source(), range, text, selected)
             } else {
                 (text, selected)
             }
         };
         let command = match command {
-            Command::Insert(text) => Command::Insert(cell_input(&self.state.selection.range(), text, None).0),
+            Command::Insert(text) => {
+                Command::Insert(cell_input(&self.state.selection.range(), text, None).0)
+            }
             Command::Commit(text) => {
-                let range = self.state.marked_range().unwrap_or_else(|| self.state.selection.range());
+                let range = self
+                    .state
+                    .marked_range()
+                    .unwrap_or_else(|| self.state.selection.range());
                 Command::Commit(cell_input(&range, text, None).0)
             }
-            Command::Compose { range, text, selected } => {
-                let target = range.clone().or_else(|| self.state.marked_range()).unwrap_or_else(|| self.state.selection.range());
+            Command::Compose {
+                range,
+                text,
+                selected,
+            } => {
+                let target = range
+                    .clone()
+                    .or_else(|| self.state.marked_range())
+                    .unwrap_or_else(|| self.state.selection.range());
                 let (text, selected) = cell_input(&target, text, selected);
-                Command::Compose { range, text, selected }
+                Command::Compose {
+                    range,
+                    text,
+                    selected,
+                }
             }
-            Command::Replace { range, text, kind } if matches!(kind, EditKind::Typing | EditKind::Paste) => {
+            Command::Replace { range, text, kind }
+                if matches!(kind, EditKind::Typing | EditKind::Paste) =>
+            {
                 let (text, _) = cell_input(&range, text, None);
                 Command::Replace { range, text, kind }
             }
@@ -481,7 +501,11 @@ impl SourcePresentation {
         }
         let (id, leaf) = geometry.iter().min_by(|(a_id, a), (b_id, b)| {
             let distance = |id: &u64, leaf: &LeafGeometry| {
-                let bounds = self.table_geometry.get(id).copied().unwrap_or_else(|| leaf.bounds());
+                let bounds = self
+                    .table_geometry
+                    .get(id)
+                    .copied()
+                    .unwrap_or_else(|| leaf.bounds());
                 let dy = if point.y < bounds.top() {
                     bounds.top() - point.y
                 } else if point.y > bounds.bottom() {
@@ -621,11 +645,22 @@ impl SourcePresentation {
             }
         }
     }
-    fn navigate_table(&mut self, backward: bool, exit: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn navigate_table(
+        &mut self,
+        backward: bool,
+        exit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.live || self.projection.revision != self.document.read(cx).revision() {
             return false;
         }
-        let Some(target) = super::tables::navigate(&self.projection.leaves, self.state.selection.head, backward, exit) else {
+        let Some(target) = super::tables::navigate(
+            &self.projection.leaves,
+            self.state.selection.head,
+            backward,
+            exit,
+        ) else {
             return false;
         };
         self.command(Command::FinishComposition, window, cx);
@@ -1125,12 +1160,17 @@ impl Render for SourcePresentation {
                     let end = ix + self.projection.leaves[ix..].iter().take_while(|leaf| {
                         matches!(leaf.kind, Kind::TableCell(other) if other.table() == cell.table())
                     }).count();
-                    self.tables.insert(leaf.id, super::tables::block(
-                        self.projection.leaves[ix..end].iter().filter_map(|leaf| {
-                            let Kind::TableCell(cell) = leaf.kind else { return None; };
-                            Some((cell, &self.blocks[&leaf.id].node))
-                        }),
-                    ));
+                    self.tables.insert(
+                        leaf.id,
+                        super::tables::block(self.projection.leaves[ix..end].iter().filter_map(
+                            |leaf| {
+                                let Kind::TableCell(cell) = leaf.kind else {
+                                    return None;
+                                };
+                                Some((cell, &self.blocks[&leaf.id].node))
+                            },
+                        )),
+                    );
                     ix = end;
                 } else {
                     ix += 1;
@@ -1147,52 +1187,67 @@ impl Render for SourcePresentation {
             .collect();
         let block = div()
             .w_full()
-            .children(self.projection.leaves.iter().enumerate().filter_map(|(ix, leaf)| {
-                if matches!(leaf.kind, Kind::TableCell(_)) && !self.tables.contains_key(&leaf.id) {
-                    return None;
-                }
-                let node = self.tables.get(&leaf.id).unwrap_or(&self.blocks[&leaf.id].node);
-                let rendered = node.render_with_id(
-                    ("markdown-leaf", leaf.id),
-                    FlowPosition::at(&references, ix, ix + 1 == references.len())
-                        .first(true)
-                        .last(true),
-                    &context,
-                    window,
-                    cx,
-                );
-                Some(div()
-                    .id(("markdown-block", leaf.id))
-                    .w_full()
-                    .when(
-                        self.live
-                            && super::regions::label(leaf.kind).is_some()
-                            && !leaf.text.is_empty(),
-                        |block| {
-                            block
-                                .font_family(cx.theme().mono_font_family.clone())
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(crate::ui::i18n::t(
-                                            super::regions::label(leaf.kind)
-                                                .expect("source region label"),
-                                        )),
-                                )
-                        },
-                    )
-                    .when(self.live && leaf.kind == Kind::Rule, |block| {
-                        block.child(BlockNode::HorizontalRule { span: None }.render_with_id(
-                            ("markdown-rule", leaf.id),
-                            FlowPosition::at(&references, ix, true),
+            .children(
+                self.projection
+                    .leaves
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, leaf)| {
+                        if matches!(leaf.kind, Kind::TableCell(_))
+                            && !self.tables.contains_key(&leaf.id)
+                        {
+                            return None;
+                        }
+                        let node = self
+                            .tables
+                            .get(&leaf.id)
+                            .unwrap_or(&self.blocks[&leaf.id].node);
+                        let rendered = node.render_with_id(
+                            ("markdown-leaf", leaf.id),
+                            FlowPosition::at(&references, ix, ix + 1 == references.len())
+                                .first(true)
+                                .last(true),
                             &context,
                             window,
                             cx,
-                        ))
-                    })
-                    .child(rendered))
-            }));
+                        );
+                        Some(
+                            div()
+                                .id(("markdown-block", leaf.id))
+                                .w_full()
+                                .when(
+                                    self.live
+                                        && super::regions::label(leaf.kind).is_some()
+                                        && !leaf.text.is_empty(),
+                                    |block| {
+                                        block
+                                            .font_family(cx.theme().mono_font_family.clone())
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(crate::ui::i18n::t(
+                                                        super::regions::label(leaf.kind)
+                                                            .expect("source region label"),
+                                                    )),
+                                            )
+                                    },
+                                )
+                                .when(self.live && leaf.kind == Kind::Rule, |block| {
+                                    block.child(
+                                        BlockNode::HorizontalRule { span: None }.render_with_id(
+                                            ("markdown-rule", leaf.id),
+                                            FlowPosition::at(&references, ix, true),
+                                            &context,
+                                            window,
+                                            cx,
+                                        ),
+                                    )
+                                })
+                                .child(rendered),
+                        )
+                    }),
+            );
         let key_context =
             KeyContext::parse("Input mode=editor").expect("static editor key context");
         let root =

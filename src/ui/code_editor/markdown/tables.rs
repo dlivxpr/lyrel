@@ -87,10 +87,14 @@ pub(super) fn block<'a>(cells: impl Iterator<Item = (Cell, &'a BlockNode)>) -> B
 /// Escape/Enter exit forward immediately; Shift+Enter exits backward. At a
 /// cell edge Backspace/Delete move without deleting table syntax. Source mode
 /// retains ordinary indentation and literal source editing.
-pub(super) fn navigate(leaves: &[Leaf], at: usize, backward: bool, exit: bool) -> Option<Option<usize>> {
+pub(super) fn navigate(
+    leaves: &[Leaf],
+    at: usize,
+    backward: bool,
+    exit: bool,
+) -> Option<Option<usize>> {
     let ix = leaves.iter().position(|leaf| {
-        matches!(leaf.kind, Kind::TableCell(_))
-            && leaf.range.start <= at && at <= leaf.range.end
+        matches!(leaf.kind, Kind::TableCell(_)) && leaf.range.start <= at && at <= leaf.range.end
     })?;
     let Kind::TableCell(cell) = leaves[ix].kind else {
         return None;
@@ -103,7 +107,13 @@ pub(super) fn navigate(leaves: &[Leaf], at: usize, backward: bool, exit: bool) -
     } else {
         leaves[ix + 1..].iter().find(eligible)
     };
-    Some(target.map(|leaf| if backward { leaf.content_end() } else { leaf.content_start() }))
+    Some(target.map(|leaf| {
+        if backward {
+            leaf.content_end()
+        } else {
+            leaf.content_start()
+        }
+    }))
 }
 
 /// A typed pipe is cell content, not a new column. Keep already escaped input
@@ -119,8 +129,16 @@ pub(super) fn input(
     }
     use gpui_kit::base::input::RopeExt as _;
     let line = source.offset_to_point(range.start).row;
-    let before = source.slice(source.line_start_offset(line)..range.start).to_string();
-    let mut escaped = before.bytes().rev().take_while(|byte| *byte == b'\\').count() % 2 != 0;
+    let before = source
+        .slice(source.line_start_offset(line)..range.start)
+        .to_string();
+    let mut escaped = before
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == b'\\')
+        .count()
+        % 2
+        != 0;
     let mut output = String::with_capacity(text.len());
     let mut selected = selected;
     let mut offset = 0;
@@ -152,16 +170,36 @@ pub(super) fn geometry(
     let mut rows: HashMap<(usize, usize), Bounds<Pixels>> = HashMap::new();
     let mut columns: HashMap<(usize, usize), Bounds<Pixels>> = HashMap::new();
     for leaf in leaves {
-        let Kind::TableCell(cell) = leaf.kind else { continue; };
-        let Some(layout) = geometry.get(&leaf.id) else { continue; };
+        let Kind::TableCell(cell) = leaf.kind else {
+            continue;
+        };
+        let Some(layout) = geometry.get(&leaf.id) else {
+            continue;
+        };
         let bounds = layout.bounds();
-        rows.entry((cell.start, cell.row)).and_modify(|row| *row = row.union(&bounds)).or_insert(bounds);
-        columns.entry((cell.start, cell.column)).and_modify(|column| *column = column.union(&bounds)).or_insert(bounds);
+        rows.entry((cell.start, cell.row))
+            .and_modify(|row| *row = row.union(&bounds))
+            .or_insert(bounds);
+        columns
+            .entry((cell.start, cell.column))
+            .and_modify(|column| *column = column.union(&bounds))
+            .or_insert(bounds);
     }
-    leaves.iter().filter_map(|leaf| {
-        let Kind::TableCell(cell) = leaf.kind else { return None; };
-        let row = rows.get(&(cell.start, cell.row))?;
-        let column = columns.get(&(cell.start, cell.column))?;
-        Some((leaf.id, Bounds::new(point(column.left(), row.top()), size(column.size.width, row.size.height))))
-    }).collect()
+    leaves
+        .iter()
+        .filter_map(|leaf| {
+            let Kind::TableCell(cell) = leaf.kind else {
+                return None;
+            };
+            let row = rows.get(&(cell.start, cell.row))?;
+            let column = columns.get(&(cell.start, cell.column))?;
+            Some((
+                leaf.id,
+                Bounds::new(
+                    point(column.left(), row.top()),
+                    size(column.size.width, row.size.height),
+                ),
+            ))
+        })
+        .collect()
 }
