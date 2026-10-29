@@ -1,4 +1,5 @@
 //! Link syntax and destinations are derived from the document's positioned AST.
+use crate::ui::host_ops::Host;
 use crate::ui::i18n::L10nKey;
 use markdown::mdast::Node;
 use std::{
@@ -217,7 +218,8 @@ pub(crate) enum Target {
     Anchor,
 }
 /// Resolve against the owning Host, without filesystem access on the UI thread.
-pub(crate) fn resolve(owner: &Path, local: bool, target: &str) -> Result<Target, L10nKey> {
+pub(crate) fn resolve(owner: &Path, host: &dyn Host, target: &str) -> Result<Target, L10nKey> {
+    let local = host.id().is_local();
     if target.starts_with('#') {
         return Ok(Target::Anchor);
     }
@@ -246,7 +248,7 @@ pub(crate) fn resolve(owner: &Path, local: bool, target: &str) -> Result<Target,
     }
     if local {
         let path = Path::new(decoded.as_ref());
-        let path = if path.is_absolute() {
+        let path = if host.is_absolute(path) {
             path.to_path_buf()
         } else {
             owner

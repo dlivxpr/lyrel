@@ -1271,7 +1271,7 @@ impl LyrelApp {
             return;
         };
         let host = file.host.clone();
-        let destination = markdown::links::resolve(&file.path, host.id().is_local(), target);
+        let destination = markdown::links::resolve(&file.path, host.as_ref(), target);
         match destination {
             Ok(markdown::links::Target::External(url)) => cx.open_url(&url),
             Ok(markdown::links::Target::File(path)) => {

@@ -3197,11 +3197,16 @@ fn table_command(
         document.grammar(),
     );
     let at = state.selection().head();
-    let range = projection.leaf_at(at).and_then(|leaf| match leaf.kind {
-        super::projection::Kind::TableCell(cell)
-            if leaf.range.start <= at && at <= leaf.range.end => Some(cell.table()),
-        _ => None,
-    })
+    let range = projection
+        .leaf_at(at)
+        .and_then(|leaf| match leaf.kind {
+            super::projection::Kind::TableCell(cell)
+                if leaf.range.start <= at && at <= leaf.range.end =>
+            {
+                Some(cell.table())
+            }
+            _ => None,
+        })
         .expect("owning table cell");
     document.command(
         state,
@@ -3310,8 +3315,16 @@ fn table_structure_commands_preserve_cells_boundaries_and_atomic_selection() {
     assert_eq!(document.encode().unwrap(), source.as_bytes());
     // Empty cells and content-end carets are legal editable insertion sites.
     for (source, at, expected) in [
-        ("|  |\r\n| --- |\n|  |", 2, "|  |  |\r\n| --- | --- |\n|  |  |"),
-        ("| a |\r\n| --- |\n| b |", 3, "| a |  |\r\n| --- | --- |\n| b |  |"),
+        (
+            "|  |\r\n| --- |\n|  |",
+            2,
+            "|  |  |\r\n| --- | --- |\n|  |  |",
+        ),
+        (
+            "| a |\r\n| --- |\n| b |",
+            3,
+            "| a |  |\r\n| --- | --- |\n| b |  |",
+        ),
     ] {
         let mut document = MarkdownDocument::new(source.into(), TextFormat::default());
         let mut state = PresentationState::new(Selection::caret(at));
@@ -4404,7 +4417,7 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
     use gpui_kit::test::{TestEventExt as _, TestInput, TestWindowExt as _};
     use gpui_kit::{Focusable as _, MouseButton};
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("math.md");
+    let path = directory.path().join("math.mdx");
     let formulas = [
         r"x_i^2",
         r"\frac{a+b}{c}",
@@ -4416,7 +4429,7 @@ fn native_math_renders_glyph_atoms_and_local_source_uses_document_history_and_sa
         r"x\quad\text{when }y>0",
     ];
     let source = format!(
-        "# Math\r\n\r\n前 $x_i^2$ 后 $x$  \r\n\n$$\n{}\n$$\n\n错误 $\\unknowncommand{{x}}$ 与 $\\frac{{a}}$\n\n[keep]: target  ",
+        "# Math\r\n\r\n前 **$x_i^2$** 后 $x$  \r\n\n$$\n{}\n$$\n\n错误 $\\unknowncommand{{x}}$ 与 $\\frac{{a}}$\n\n[keep]: target  ",
         formulas[1..].join(" + ")
     );
     std::fs::write(&path, source.as_bytes()).unwrap();
@@ -6570,8 +6583,7 @@ fn native_cards_add_missing_properties_expand_children_and_never_follow_dynamic_
     use gpui_kit::test::TestWindowExt as _;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("empty-cards.mdx");
-    let original =
-        "<CardGroup>\n\n<Card href={chooseDestination()} {...props} />\n\n</CardGroup>\n\nkeep  ";
+    let original = "<CardGroup>\n\n<Card href={chooseDestination()} {...props} />  \r\n\n</CardGroup>\n\nkeep  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));

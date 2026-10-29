@@ -39,7 +39,7 @@ pub(super) fn parse(
         ox_content_parser::Parser::with_options(&allocator, &source[context.base..], options)
             .parse()
             .map_err(|error| error.to_string())?;
-    children.extend(context.children(&document.children)?);
+    children.extend(context.children(&document.children, true)?);
     Ok(md::Node::Root(md::Root {
         children,
         position: Some(context.position(0..source.len())),
@@ -110,12 +110,12 @@ impl<'a> Adapter<'a> {
         }
         None
     }
-    fn children(&self, nodes: &[ox::Node<'_>]) -> Result<Vec<md::Node>, String> {
-        nodes.iter().map(|node| self.node(node)).collect()
+    fn children(&self, nodes: &[ox::Node<'_>], flow: bool) -> Result<Vec<md::Node>, String> {
+        nodes.iter().map(|node| self.node(node, flow)).collect()
     }
     fn item(&self, item: &ox::ListItem<'_>) -> Result<md::Node, String> {
         Ok(md::Node::ListItem(md::ListItem {
-            children: self.children(&item.children)?,
+            children: self.children(&item.children, true)?,
             position: Some(self.position(self.range(item.span, true))),
             spread: item.spread,
             checked: item.checked,
@@ -202,26 +202,75 @@ impl<'a> Adapter<'a> {
         };
         Some((kind, identifier(label)))
     }
-    fn node(&self, node: &ox::Node<'_>) -> Result<md::Node, String> {
+    fn emphasis_range(&self, children: &[md::Node], width: usize) -> Result<Range<usize>, String> {
+        let first = children
+            .first()
+            .and_then(md::Node::position)
+            .ok_or("Emphasis has no positioned content")?;
+        let last = children
+            .last()
+            .and_then(md::Node::position)
+            .ok_or("Emphasis has no positioned content")?;
+        let start = first
+            .start
+            .offset
+            .checked_sub(width)
+            .ok_or("Emphasis begins before its opening delimiter")?;
+        let end = last.end.offset + width;
+        let raw = self
+            .source
+            .get(start..end)
+            .ok_or("Emphasis extends outside its source")?
+            .as_bytes();
+        let marker = raw.first().copied().unwrap_or_default();
+        if !matches!(marker, b'*' | b'_')
+            || raw.len() < width * 2
+            || !raw[..width].iter().all(|byte| *byte == marker)
+            || !raw[raw.len() - width..].iter().all(|byte| *byte == marker)
+        {
+            return Err("Emphasis does not match its original delimiters".into());
+        }
+        Ok(start..end)
+    }
+    fn node(&self, node: &ox::Node<'_>, flow: bool) -> Result<md::Node, String> {
         use ox::Node as N;
-        let block = matches!(
-            node,
-            N::Paragraph(_)
-                | N::Heading(_)
-                | N::ThematicBreak(_)
-                | N::BlockQuote(_)
-                | N::List(_)
-                | N::ListItem(_)
-                | N::CodeBlock(_)
-                | N::MathBlock(_)
-                | N::Table(_)
-                | N::Definition(_)
-                | N::FootnoteDefinition(_)
-                | N::MdxJsxFlowElement(_)
-                | N::MdxjsEsm(_)
-                | N::MdxFlowExpression(_)
-        );
-        let mut range = self.range(node.span(), block);
+        // Ox omits extension children when measuring emphasis. Convert those
+        // children first and derive only their enclosing delimiter span.
+        let marked_children = match node {
+            N::Emphasis(value) => Some(self.children(&value.children, false)?),
+            N::Strong(value) => Some(self.children(&value.children, false)?),
+            _ => None,
+        };
+        let block = (flow && matches!(node, N::Html(_)))
+            || matches!(
+                node,
+                N::Paragraph(_)
+                    | N::Heading(_)
+                    | N::ThematicBreak(_)
+                    | N::BlockQuote(_)
+                    | N::List(_)
+                    | N::ListItem(_)
+                    | N::CodeBlock(_)
+                    | N::MathBlock(_)
+                    | N::Table(_)
+                    | N::Definition(_)
+                    | N::FootnoteDefinition(_)
+                    | N::MdxJsxFlowElement(_)
+                    | N::MdxjsEsm(_)
+                    | N::MdxFlowExpression(_)
+            );
+        let mut range = if let Some(children) = &marked_children {
+            self.emphasis_range(children, if matches!(node, N::Strong(_)) { 2 } else { 1 })?
+        } else {
+            self.range(node.span(), block)
+        };
+        if matches!(node, N::MdxJsxFlowElement(_)) {
+            while range.end > range.start
+                && matches!(self.source.as_bytes()[range.end - 1], b' ' | b'\t')
+            {
+                range.end -= 1;
+            }
+        }
         let row = self.lines.partition_point(|start| *start <= range.start) - 1;
         let line_prefix = self.source[self.lines[row]..range.start]
             .bytes()
@@ -255,17 +304,17 @@ impl<'a> Adapter<'a> {
         let position = Some(self.position(range.clone()));
         Ok(match node {
             N::Paragraph(value) => md::Node::Paragraph(md::Paragraph {
-                children: self.children(&value.children)?,
+                children: self.children(&value.children, false)?,
                 position,
             }),
             N::Heading(value) => md::Node::Heading(md::Heading {
-                children: self.children(&value.children)?,
+                children: self.children(&value.children, false)?,
                 position,
                 depth: value.depth,
             }),
             N::ThematicBreak(_) => md::Node::ThematicBreak(md::ThematicBreak { position }),
             N::BlockQuote(value) => md::Node::Blockquote(md::Blockquote {
-                children: self.children(&value.children)?,
+                children: self.children(&value.children, true)?,
                 position,
             }),
             N::List(value) => md::Node::List(md::List {
@@ -286,11 +335,17 @@ impl<'a> Adapter<'a> {
                 lang: value.lang.map(str::to_owned),
                 meta: value.meta.map(str::to_owned),
             }),
-            N::MathBlock(value) => md::Node::Math(md::Math {
-                value: value.value.into(),
-                position,
-                meta: None,
-            }),
+            N::MathBlock(value) => {
+                // The renderer's mdast contract excludes the fence-line EOLs;
+                // keep every interior blank line and all source bytes intact.
+                let tex = value.value.strip_prefix('\n').unwrap_or(value.value);
+                let tex = tex.strip_suffix('\n').unwrap_or(tex);
+                md::Node::Math(md::Math {
+                    value: tex.into(),
+                    position,
+                    meta: None,
+                })
+            }
             N::Html(value) => md::Node::Html(md::Html {
                 value: value.value.into(),
                 position,
@@ -306,7 +361,7 @@ impl<'a> Adapter<'a> {
                                 .iter()
                                 .map(|cell| {
                                     Ok(md::Node::TableCell(md::TableCell {
-                                        children: self.children(&cell.children)?,
+                                        children: self.children(&cell.children, false)?,
                                         position: Some(self.position(self.range(cell.span, false))),
                                     }))
                                 })
@@ -331,12 +386,12 @@ impl<'a> Adapter<'a> {
                 value: value.value.into(),
                 position,
             }),
-            N::Emphasis(value) => md::Node::Emphasis(md::Emphasis {
-                children: self.children(&value.children)?,
+            N::Emphasis(_) => md::Node::Emphasis(md::Emphasis {
+                children: marked_children.ok_or("Missing emphasis content")?,
                 position,
             }),
-            N::Strong(value) => md::Node::Strong(md::Strong {
-                children: self.children(&value.children)?,
+            N::Strong(_) => md::Node::Strong(md::Strong {
+                children: marked_children.ok_or("Missing strong emphasis content")?,
                 position,
             }),
             N::InlineCode(value) => md::Node::InlineCode(md::InlineCode {
@@ -349,7 +404,7 @@ impl<'a> Adapter<'a> {
             }),
             N::Break(_) => md::Node::Break(md::Break { position }),
             N::Link(value) => {
-                let children = self.children(&value.children)?;
+                let children = self.children(&value.children, false)?;
                 if let Some((reference_kind, identifier)) = self.reference(
                     range,
                     children
@@ -392,7 +447,7 @@ impl<'a> Adapter<'a> {
                 }
             }
             N::Delete(value) => md::Node::Delete(md::Delete {
-                children: self.children(&value.children)?,
+                children: self.children(&value.children, false)?,
                 position,
             }),
             N::FootnoteReference(value) => md::Node::FootnoteReference(md::FootnoteReference {
@@ -408,19 +463,19 @@ impl<'a> Adapter<'a> {
                 label: value.label.map(str::to_owned),
             }),
             N::FootnoteDefinition(value) => md::Node::FootnoteDefinition(md::FootnoteDefinition {
-                children: self.children(&value.children)?,
+                children: self.children(&value.children, true)?,
                 position,
                 identifier: identifier(value.identifier),
                 label: value.label.map(str::to_owned),
             }),
             N::MdxJsxFlowElement(value) => md::Node::MdxJsxFlowElement(md::MdxJsxFlowElement {
-                children: self.children(&value.children)?,
+                children: self.children(&value.children, true)?,
                 position,
                 name: value.name.map(str::to_owned),
                 attributes: self.attributes(&value.attributes),
             }),
             N::MdxJsxTextElement(value) => md::Node::MdxJsxTextElement(md::MdxJsxTextElement {
-                children: self.children(&value.children)?,
+                children: self.children(&value.children, false)?,
                 position,
                 name: value.name.map(str::to_owned),
                 attributes: self.attributes(&value.attributes),

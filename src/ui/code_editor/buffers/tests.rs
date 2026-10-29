@@ -1817,7 +1817,10 @@ fn mdx_unicode_reference_with_indented_definition_opens_on_its_document_host(
             window.render_frame(cx);
             window.render_frame(cx);
         });
-        view.read_with(cx, |view, cx| view.range_to_bounds(&(at..at), cx).is_some())
+        view.read_with(cx, |view, cx| {
+            let label = view.range_to_bounds(&(at..at), cx);
+            label.is_some() && label == view.range_to_bounds(&(at - 1..at - 1), cx)
+        })
     });
     view.update_in(&mut context, |view, _, cx| view.select_range(at..at, cx));
     context.dispatch_action(markdown::FollowLink);
