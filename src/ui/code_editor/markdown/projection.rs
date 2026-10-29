@@ -25,6 +25,7 @@ pub(super) enum Kind {
     Metadata,
     Html,
     Source,
+    TableCell(super::tables::Cell),
 }
 #[derive(Clone, PartialEq, Eq)]
 struct Segment {
@@ -50,7 +51,7 @@ pub(super) struct Leaf {
     style: InlineStyle,
 }
 impl Leaf {
-    fn new(range: Range<usize>, kind: Kind) -> Self {
+    pub(super) fn new(range: Range<usize>, kind: Kind) -> Self {
         Self {
             id: 0,
             version: 0,
@@ -62,6 +63,11 @@ impl Leaf {
             content: String::new(),
             spans: Vec::new(),
             style: InlineStyle::default(),
+        }
+    }
+    pub(super) fn empty_insertion(&mut self, at: usize) {
+        if self.segments.is_empty() {
+            self.insertion = at;
         }
     }
     fn push(&mut self, source: Range<usize>, text: &str) {
@@ -283,6 +289,9 @@ impl Leaf {
         for span in &mut self.spans {
             span.source = shift(span.source.start)..shift(span.source.end);
         }
+        if let Kind::TableCell(cell) = &mut self.kind {
+            cell.shift(shift);
+        }
     }
 }
 
@@ -318,6 +327,10 @@ impl Projection {
                     };
                     let range = position.start.offset..position.end.offset;
                     Self::gap(source, cursor..range.start, &mut leaves);
+                    if super::tables::project(source, node, &mut leaves) {
+                        cursor = range.end;
+                        continue;
+                    }
                     let kind = super::regions::classify(node, &source[range.clone()]);
                     let mut leaf = Leaf::new(range.clone(), kind);
                     if matches!(kind, Kind::Prose | Kind::Heading(_)) {
@@ -385,7 +398,7 @@ impl Projection {
             leaves.push(Leaf::new(range.end..range.end, Kind::Prose));
         }
     }
-    fn inline(source: &str, node: &Node, leaf: &mut Leaf) {
+    pub(super) fn inline(source: &str, node: &Node, leaf: &mut Leaf) {
         let Some(position) = node.position() else {
             return;
         };
@@ -520,17 +533,22 @@ impl Projection {
                     Some(ix),
                     None,
                 );
-                for (offset, ch) in source[start..end].char_indices() {
-                    let at = start + offset;
+                let mut at = start;
+                while at < end {
+                    if matches!(leaf.kind, Kind::TableCell(_))
+                        && source[at..end].starts_with("\\|")
+                    {
+                        leaf.push_normalized(at..at + 2, "|", "\\|");
+                        at += 2;
+                        continue;
+                    }
+                    let ch = source[at..end].chars().next().unwrap();
                     leaf.push_normalized(
                         at..at + ch.len_utf8(),
-                        if ch == '\n' {
-                            " "
-                        } else {
-                            &source[at..at + ch.len_utf8()]
-                        },
+                        if ch == '\n' { " " } else { &source[at..at + ch.len_utf8()] },
                         &source[at..at + ch.len_utf8()],
                     );
+                    at += ch.len_utf8();
                 }
                 leaf.push_segment(end..range.end, &source[end..range.end], Some(ix), None);
                 leaf.style = before;
@@ -589,26 +607,45 @@ impl Projection {
             .map(|edit| edit.range.clone())
             .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
             .unwrap();
-        let first = self
+        let mut first = self
             .leaves
             .iter()
             .position(|leaf| leaf.range.end >= old.start)
             .unwrap_or(0)
             .saturating_sub(1);
-        let last = (self
+        let mut last = (self
             .leaves
             .iter()
             .rposition(|leaf| leaf.range.start <= old.end)
             .unwrap_or(first)
             + 2)
         .min(self.leaves.len());
+        // A cell fragment is not a standalone GFM table. Reparse its entire
+        // owning table, retaining the delimiter row and neighboring context.
+        if let Kind::TableCell(cell) = self.leaves[first].kind {
+            while first > 0 && matches!(self.leaves[first - 1].kind, Kind::TableCell(other) if other.table() == cell.table()) {
+                first -= 1;
+            }
+        }
+        if let Kind::TableCell(cell) = self.leaves[last - 1].kind {
+            while last < self.leaves.len() && matches!(self.leaves[last].kind, Kind::TableCell(other) if other.table() == cell.table()) {
+                last += 1;
+            }
+        }
         let map = |at| {
             transaction
                 .map_selection(super::Selection::caret(at))
                 .head()
         };
-        let start = map(self.leaves[first].range.start);
-        let mut end = self.leaves[last - 1].range.end;
+        let first_start = match self.leaves[first].kind {
+            Kind::TableCell(cell) => cell.table().start,
+            _ => self.leaves[first].range.start,
+        };
+        let start = map(first_start);
+        let mut end = match self.leaves[last - 1].kind {
+            Kind::TableCell(cell) => cell.table().end,
+            _ => self.leaves[last - 1].range.end,
+        };
         for edit in &transaction.edits {
             end = if end < edit.range.start {
                 end
