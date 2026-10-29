@@ -204,6 +204,8 @@ Windows 已运行文档事务、共享呈现及既有工作台的定向回归；
 
 新增的确定性回归覆盖已观察到的混合换行归一化问题、局部输入、删除、组合输入取消、稀疏批量替换、撤销／重做、编码失败，以及经已有工作台与 Host 保存后关闭重开并逐字节比较。Windows 集成运行的编辑器回归 129 项、codec 回归 37 项均通过。真实原生窗口分别打开本机与一次性 SSH Host 的同一份 72 字节 UTF-8 BOM 文档（4 个 CRLF、2 个 LF、尾部双空格、无末尾换行）：无编辑保存不变；插入 `new\n` 仅增加 `new\r\n` 的 5 字节；撤销保存与关闭重开均恢复原始字节。远端保存没有改写同名本机文件；两处 `.editorconfig` 的去尾空白、补末尾换行及转 LF 规则均未作用于普通 Markdown 保存。该实窗结果不覆盖其他编码的逐项 UI 验收、资源流程、live 模式或 macOS。
 
+同一 Windows source 模式另已实测 UTF-16LE BOM 中文文档的局部输入与撤销保存，逐字节结果符合原编码；Windows-1252 文档输入不可编码的 emoji 后出现原生转换／取消提示，取消不改磁盘字节，撤销后可用原编码保存。损坏的已声明 UTF-8 BOM 文件被拒绝打开并显示错误，未生成替代字符文档或修改原文件，见 [#105 原生编码错误记录](https://github.com/dlivxpr/lyrel/issues/105#issuecomment-6495240023)。
+
 #### 原生实现路线与候选依赖
 
 自建源码保真的 Markdown 编辑模块，复用 GPUI Kit 的公开渲染接口，不直接采用会重新序列化文档的富文本模型。当前锁定的 `gpui-kit 0.8.1` 已包含 `gpui_kit::base::text::editor_host`；它提供块渲染与文字几何信息，但不提供完整编辑内核。文档身份、源码映射、编辑事务、撤销、选择、焦点、原生输入法接入和无障碍仍由编辑模块负责，见 [GPUI Kit 的 editor host 职责](https://github.com/longbridge/gpui-kit/blob/main/docs/ARCHITECTURE.md)。
