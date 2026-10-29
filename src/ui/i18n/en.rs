@@ -1764,7 +1764,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MarkdownFollowLink => "Open link",
         L10nKey::MarkdownLinkOpenFailed => "Couldn’t open link: {reason}",
         L10nKey::MarkdownLinkInvalidDestination => "The destination is not a valid path or URL",
-        L10nKey::MarkdownLinkUnsupportedScheme => "This link scheme is not supported on the document’s Host",
+        L10nKey::MarkdownLinkUnsupportedScheme => {
+            "This link scheme is not supported on the document’s Host"
+        }
         L10nKey::MarkdownLinkSaveFirst => "Save the document before opening a relative link",
         L10nKey::MarkdownLinkRemotePath => "A remote destination must use a POSIX path",
         L10nKey::EditorWrapOn => "Wrap: on",

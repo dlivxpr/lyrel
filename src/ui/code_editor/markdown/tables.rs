@@ -82,6 +82,22 @@ pub(super) fn block<'a>(cells: impl Iterator<Item = (Cell, &'a BlockNode)>) -> B
     BlockNode::Table(Table::new(rows, aligns))
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Navigation {
+    Cell { backward: bool },
+    Exit { backward: bool },
+    Boundary { backward: bool },
+}
+impl Navigation {
+    pub fn backward(self) -> bool {
+        match self {
+            Self::Cell { backward } | Self::Exit { backward } | Self::Boundary { backward } => {
+                backward
+            }
+        }
+    }
+}
+
 /// Tab visits actual cells in source row order (header first), never the
 /// delimiter row, and never creates rows. At either edge it selects the nearest
 /// document leaf outside the table; a document edge transfers workbench focus.
@@ -91,9 +107,10 @@ pub(super) fn block<'a>(cells: impl Iterator<Item = (Cell, &'a BlockNode)>) -> B
 pub(super) fn navigate(
     leaves: &[Leaf],
     at: usize,
-    backward: bool,
-    exit: bool,
+    navigation: Navigation,
 ) -> Option<Option<usize>> {
+    let backward = navigation.backward();
+    let exit = matches!(navigation, Navigation::Exit { .. });
     let ix = leaves.iter().position(|leaf| {
         matches!(leaf.kind, Kind::TableCell(_)) && leaf.range.start <= at && at <= leaf.range.end
     })?;
@@ -109,7 +126,10 @@ pub(super) fn navigate(
         leaves[ix + 1..].iter().find(eligible)
     };
     Some(target.map(|leaf| {
-        if backward {
+        if backward
+            && (matches!(navigation, Navigation::Boundary { .. })
+                || !matches!(leaf.kind, Kind::TableCell(_)))
+        {
             leaf.content_end()
         } else {
             leaf.content_start()
