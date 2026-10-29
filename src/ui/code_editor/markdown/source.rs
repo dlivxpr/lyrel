@@ -120,6 +120,7 @@ impl SourcePresentation {
                         == transaction.revision()
                 {
                     this.projection.rebase(doc.source(), transaction, this.live);
+                    if this.live { this.projection.component_sources(doc.source(), &this.mdx_state); }
                     this.rendered_revision = None;
                 }
                 this.sync_inline_reveal();
@@ -262,6 +263,8 @@ impl SourcePresentation {
                     {
                         view.invalidate_layout(cx);
                         view.projection.install(projection);
+                        if live { view.projection.component_sources(view.document.read(cx).source(), &view.mdx_state); }
+                        view.reveal_mdx_selection(cx);
                         view.sync_inline_reveal();
                         view.state.selection = view.map_live_caret(view.state.selection, cx);
                         view.selection_notification = true;
@@ -525,6 +528,7 @@ impl SourcePresentation {
             );
             cx.emit(DocumentEvent::PresentationChanged);
         });
+        self.reveal_mdx_selection(cx);
         self.state.selection = self.map_live_caret(self.state.selection, cx);
         self.sync_inline_reveal();
         cx.notify();
@@ -550,9 +554,93 @@ impl SourcePresentation {
     ) {
         self.command(Command::FinishComposition, window, cx);
         update(&mut self.mdx_state);
+        self.viewport.anchor = None;
+        self.viewport.layout = None;
         self.geometry = None;
         self.rendered_revision = None;
         cx.notify();
+    }
+    pub(super) fn toggle_component_source(
+        &mut self,
+        id: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command(Command::FinishComposition, window, cx);
+        let Some(component) = self.projection.mdx.components.iter().find(|component| component.id() == id) else { return; };
+        let children = component.children_range();
+        let at = self.state.selection.head.clamp(children.start, children.end);
+        let leaving = self.mdx_state.source_components.contains(&id);
+        self.update_mdx_view_state(|state| {
+            if leaving { state.source_components.remove(&id); }
+            else { state.source_components.insert(id); }
+        }, window, cx);
+        if leaving {
+            self.schedule_parse(cx);
+        } else {
+            self.projection.component_sources(self.document.read(cx).source(), &self.mdx_state);
+        }
+        self.command(Command::Select(Selection::caret(at)), window, cx);
+        self.focus.focus(window, cx);
+    }
+    pub(super) fn toggle_mdx_accordion(
+        &mut self,
+        id: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command(Command::FinishComposition, window, cx);
+        // Resolve the stable identity after composition may rebase the source.
+        let Some(component) = self.projection.mdx.components.iter().find(|component| component.id() == id) else { return; };
+        let header = component.name_range().start;
+        self.command(Command::Select(Selection::caret(header)), window, cx);
+        self.update_mdx_view_state(|state| {
+            if !state.collapsed.remove(&id) { state.collapsed.insert(id); }
+        }, window, cx);
+        self.focus.focus(window, cx);
+    }
+    /// Source/undo selections reveal only their enclosing presentation state.
+    /// Collapsing controls first select their own visible header, so they do not
+    /// immediately reopen themselves through this hook.
+    fn reveal_mdx_selection(&mut self, cx: &App) {
+        if !self.live || self.projection.revision != self.document.read(cx).revision()
+            || self.projection.grammar != self.document.read(cx).grammar() { return; }
+        let source = self.document.read(cx).source();
+        let tabs_changed = super::mdx::tabs::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection);
+        let accordions_changed = super::mdx::accordions::reveal_selection(&self.projection.mdx.components, source, &mut self.mdx_state, self.state.selection);
+        if tabs_changed || accordions_changed {
+            self.viewport.anchor = None;
+            self.viewport.layout = None;
+            self.geometry = None;
+            self.rendered_revision = None;
+        }
+    }
+    pub(super) fn activate_mdx_tab(
+        &mut self,
+        group: super::mdx::ComponentId,
+        child: super::mdx::ComponentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Finalizing preedit can rebase every range. Resolve the stable IDs
+        // afterwards, never select a range captured by the previous frame.
+        self.command(Command::FinishComposition, window, cx);
+        if !self.live || self.document.read(cx).grammar() != super::mdx::Grammar::Mdx { return; }
+        let valid = self.projection.mdx.components.iter().any(|component| component.id() == group && component.child_ids().contains(&child));
+        if !valid { return; }
+        self.update_mdx_view_state(|state| { state.active_child.insert(group, child); }, window, cx);
+        let target = {
+            let source = self.document.read(cx).source();
+            let component = self.projection.mdx.components.iter().find(|component| component.id() == child).expect("validated tab child");
+            let range = component.children_range();
+            self.projection.leaves.iter().find(|leaf| {
+                range.start <= leaf.range.start && leaf.range.end <= range.end
+                    && !matches!(leaf.kind, Kind::Mdx(_))
+                    && super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, source, &self.mdx_state))
+            }).map_or(component.name_range().start, |leaf| leaf.content_start())
+        };
+        self.command(Command::Select(Selection::caret(target)), window, cx);
+        self.focus.focus(window, cx);
     }
     pub(crate) fn is_composing(&self) -> bool {
         self.state.composition.is_some()
@@ -809,6 +897,7 @@ impl SourcePresentation {
                 if self.projection.revision == revision {
                     self.projection
                         .rebase(document.source(), &transaction, self.live);
+                    if self.live { self.projection.component_sources(document.source(), &self.mdx_state); }
                 }
                 self.rendered_revision = None;
                 cx.emit(DocumentEvent::Edited(transaction));
@@ -836,6 +925,7 @@ impl SourcePresentation {
             }
             self.rendered_revision = None;
         }
+        self.reveal_mdx_selection(cx);
         self.sync_inline_reveal();
         if changed {
             self.geometry = None;
@@ -1168,6 +1258,16 @@ impl SourcePresentation {
             window,
             cx,
         ) {
+            return;
+        }
+        // JSX fields expose native command controls, not indentation widgets.
+        // Keep ordinary source/code/list/table Tab behavior unchanged while
+        // allowing keyboard users to leave the single input for those controls.
+        if self.live && self.document.read(cx).grammar() == super::mdx::Grammar::Mdx
+            && (!self.focus.is_focused(window) || self.projection.leaf_at(self.state.selection.head)
+                .is_some_and(|leaf| matches!(leaf.kind, Kind::Mdx(_)))) {
+            self.command(Command::FinishComposition, window, cx);
+            if outdent { window.focus_prev(cx); } else { window.focus_next(cx); }
             return;
         }
         let structure = self
@@ -1732,6 +1832,7 @@ impl Render for SourcePresentation {
         let top = -self.scroll.offset().y;
         let mut visible = None;
         let mut caret_row = None;
+        let component_source = self.document.read(cx).source().clone();
         while ix < self.projection.leaves.len() {
             let leaf = &self.projection.leaves[ix];
             let mut end = ix + 1;
@@ -1741,6 +1842,10 @@ impl Render for SourcePresentation {
                 {
                     end += 1;
                 }
+            }
+            if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
+                ix = end;
+                continue;
             }
             let height = self
                 .viewport
@@ -1952,7 +2057,6 @@ impl Render for SourcePresentation {
             .iter()
             .map(|leaf| &self.blocks[&leaf.id].node)
             .collect();
-        let component_source = self.document.read(cx).source().clone();
         let block = div()
             .w_full()
             .when_some(self.projection.error.as_ref(), |block, error| {
@@ -1972,6 +2076,9 @@ impl Render for SourcePresentation {
                     .iter()
                     .enumerate()
                     .filter_map(|(ix, leaf)| {
+                        if self.live && !super::mdx::view::visible_field(&super::mdx::view::FieldContext::new(&self.projection, leaf, &component_source, &self.mdx_state)) {
+                            return None;
+                        }
                         if matches!(leaf.kind, Kind::TableCell(_))
                             && !self.tables.contains_key(&leaf.id)
                         {
@@ -2226,6 +2333,16 @@ impl Render for SourcePresentation {
                     }
                 })
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    let key = &event.keystroke;
+                    if this.live && key.modifiers.alt && !key.modifiers.control && !key.modifiers.platform
+                        && matches!(key.key.as_str(), "pageup" | "pagedown") {
+                        let target = super::mdx::tabs::adjacent(&this.projection.mdx.components, this.document.read(cx).source(), &this.mdx_state, this.state.selection, key.key == "pageup");
+                        if let Some((group, child)) = target {
+                            this.activate_mdx_tab(group, child, window, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
                     if event.keystroke.key == "escape" && this.state.composition.is_some() {
                         this.command(Command::CancelComposition, window, cx);
                         cx.stop_propagation();
@@ -2735,7 +2852,8 @@ impl Element for SourceElement {
                 view.geometry = None;
                 return;
             }
-            let layout = (bounds.size.width, window.rem_size());
+            let viewport = view.scroll.bounds();
+            let layout = (viewport.size.width, window.rem_size());
             let reflow = view.viewport.layout.is_some_and(|old| old != layout);
             if reflow {
                 view.viewport.heights.clear();
@@ -2768,7 +2886,7 @@ impl Element for SourceElement {
                 .viewport
                 .frame
                 .iter()
-                .find(|(_, _, row)| row.bottom() > bounds.top())
+                .find(|(_, _, row)| row.bottom() > viewport.top())
                 .map(|(id, _, row)| (*id, row.top()));
             view.viewport.offset = offset;
             if reflow {
@@ -2780,8 +2898,8 @@ impl Element for SourceElement {
             let previous_caret = view.caret_bounds(view.state.selection.head, cx);
             view.table_geometry = super::tables::geometry(&view.projection.leaves, &geometry);
             view.geometry = Some((self.revision, geometry));
-            view.viewport_height = bounds.size.height;
-            view.viewport.bounds = Some(bounds);
+            view.viewport_height = viewport.size.height;
+            view.viewport.bounds = Some(viewport);
             if view.focus.is_focused(window)
                 && (view.selection_notification
                     || previous_caret != view.caret_bounds(view.state.selection.head, cx))
@@ -2792,31 +2910,42 @@ impl Element for SourceElement {
             if view.reveal_caret && view.focus.is_focused(window) {
                 let at = view.reveal_at.unwrap_or(view.state.selection.head);
                 if let Some(caret) = view.caret_bounds(at, cx) {
-                    view.reveal_caret = false;
-                    view.reveal_at = None;
                     let inset = window.rem_size() * 0.75;
-                    let delta = if caret.top() < bounds.top() + inset {
-                        bounds.top() + inset - caret.top()
-                    } else if caret.bottom() > bounds.bottom() - inset {
-                        bounds.bottom() - inset - caret.bottom()
+                    let delta = if caret.top() < viewport.top() + inset {
+                        viewport.top() + inset - caret.top()
+                    } else if caret.bottom() > viewport.bottom() - inset {
+                        viewport.bottom() - inset - caret.bottom()
                     } else {
                         px(0.)
                     };
-                    let delta_x = if caret.left() < bounds.left() + inset {
-                        bounds.left() + inset - caret.left()
-                    } else if caret.right() > bounds.right() - inset {
-                        bounds.right() - inset - caret.right()
+                    let delta_x = if caret.left() < viewport.left() + inset {
+                        viewport.left() + inset - caret.left()
+                    } else if caret.right() > viewport.right() - inset {
+                        viewport.right() - inset - caret.right()
                     } else {
                         px(0.)
                     };
-                    if delta != px(0.) || delta_x != px(0.) {
+                    if caret.top() >= viewport.top() && caret.bottom() <= viewport.bottom()
+                        && caret.left() >= viewport.left() && caret.right() <= viewport.right() {
+                        // Completion is observable only in a frame laid out at
+                        // the final offset, not the frame requesting that offset.
+                        view.reveal_caret = false;
+                        view.reveal_at = None;
+                    } else {
                         let offset = view.scroll.offset();
-                        view.scroll.set_offset(point(
-                            (offset.x + delta_x).min(px(0.)),
-                            (offset.y + delta).min(px(0.)),
-                        ));
-                        view.geometry = None;
-                        window.refresh();
+                        let maximum = view.scroll.max_offset();
+                        let next = point(
+                            (offset.x + delta_x).clamp(-maximum.x, Pixels::ZERO),
+                            (offset.y + delta).clamp(-maximum.y, Pixels::ZERO),
+                        );
+                        if next != offset {
+                            view.scroll.set_offset(next);
+                            view.geometry = None;
+                            // Window::refresh ignores calls during drawing.
+                            // Notify the owning entity so virtualization rebuilds
+                            // for the new offset and verifies the pending reveal.
+                            cx.notify();
+                        }
                     }
                 }
             }
@@ -2851,11 +2980,12 @@ impl Element for SourceElement {
             ElementInputHandler::new(bounds, self.view.clone()),
             cx,
         );
+        let viewport = self.view.read(cx).scroll.bounds();
         for caret in carets {
-            if caret.top() >= bounds.top()
-                && caret.bottom() <= bounds.bottom()
-                && caret.left() >= bounds.left()
-                && caret.right() <= bounds.right()
+            if caret.top() >= viewport.top()
+                && caret.bottom() <= viewport.bottom()
+                && caret.left() >= viewport.left()
+                && caret.right() <= viewport.right()
             {
                 window.paint_quad(fill(caret, self.caret));
             }

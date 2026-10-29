@@ -3155,7 +3155,10 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
     use gpui_kit::test::TestWindowExt as _;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("diagram.md");
-    let original = b"# Heading\r\n\r\n~~~~mermaid extra\r\nflowchart LR\r\nA[Start] --> B[End]\r\n~~~~\n\n[ref]: untouched  \r\ntail";
+    // The released default minNodeWidth=120 makes Start and Changed equally
+    // wide. This fixture explicitly measures labels, rather than mistaking a
+    // valid minimum-width layout for a stale raster.
+    let original = b"# Heading\r\n\r\n~~~~mermaid extra\r\n%%{init: {\"flowchart\": {\"minNodeWidth\": 0, \"wrappingWidth\": 1000, \"useMaxWidth\": false}}}%%\r\nflowchart LR\r\nA[Start] --> B[End]\r\n~~~~\n\n[ref]: untouched  \r\ntail";
     std::fs::write(&path, original).unwrap();
     let source = String::from_utf8(original.to_vec())
         .unwrap()
@@ -3217,7 +3220,7 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
         window.render_frame(cx);
     });
     view.read_with(&context, |view, cx| {
-        let body = source.find("flowchart").unwrap();
+        let body = source.find("%%{init:").unwrap();
         assert_eq!(view.selection(), Selection::caret(body));
         assert!(view.range_to_bounds(&(body..body), cx).is_some());
     });
@@ -3227,13 +3230,30 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
         view.focus_handle(cx).focus(window, cx);
     });
     context.update(|window, cx| window.input("Changed", cx));
-    settle(&mut context, &image_id);
-    context.update(|window, _| {
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        let rendered_size = context.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.try_find(error_id.clone()).is_none(),
+                "edited flowchart must remain a rendered diagram"
+            );
+            window
+                .try_find(image_id.clone())
+                .map(|image| image.bounds().size)
+        });
+        if rendered_size.is_some_and(|size| size.width > original_size.width) {
+            break;
+        }
         assert!(
-            window.find(image_id.clone()).bounds().size.width > original_size.width,
-            "the longer edited label must update the actual native graph, not retain its old raster"
+            std::time::Instant::now() < deadline,
+            "the edited label must update the actual native graph: original={original_size:?}, observed={rendered_size:?}"
         );
-    });
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     view.read_with(&context, |view, cx| {
         assert_eq!(view.selection(), Selection::caret(at + 7));
         assert_eq!(
@@ -3241,7 +3261,7 @@ fn native_mermaid_fence_edit_failure_history_and_save_keep_source_bytes(
             source.replacen("Start", "Changed", 1)
         );
     });
-    let graph = source.find("flowchart").unwrap();
+    let graph = source.find("\nflowchart LR\n").unwrap() + 1;
     view.update_in(&mut context, |view, window, cx| {
         view.select_range(graph..graph + 9, cx);
         view.focus_handle(cx).focus(window, cx);
@@ -4753,7 +4773,9 @@ fn mermaid_matrix_workbench(
             let ready = context.update(|window, cx| {
                 window.render_frame(cx);
                 if image {
-                    assert!(window.try_find(error_id.clone()).is_none(), "{name}: actual native renderer reported an error; source/error display is not support");
+                    if let Some(error) = window.try_find(error_id.clone()) {
+                        panic!("{name}: actual native renderer reported {:?}; source/error display is not support", error.label());
+                    }
                     window.try_find(image_id.clone()).is_some_and(|image| {
                         let size = image.bounds().size;
                         size.width > gpui_kit::px(1.) && size.height > gpui_kit::px(1.)
@@ -5073,6 +5095,13 @@ mermaid_matrix_case!(
     native_mermaid_matrix_usecase,
     "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Original\")\nend\nCustomer --> Checkout",
     "usecase-beta\nactor Customer(\"Customer\")\nsystemBoundary \"Order system\"\n Checkout(\"Edited label\")\nend\nCustomer --> Checkout"
+);
+// Keep the boundary fixture above: the flat released registry example is an
+// additional discriminator for parser/family admission versus compound layout.
+mermaid_matrix_case!(
+    native_mermaid_matrix_usecase_flat,
+    "usecase-beta\nactor Customer(\"Customer\")\nCheckout(\"Original\")\nCustomer --> Checkout",
+    "usecase-beta\nactor Customer(\"Customer\")\nCheckout(\"Edited label\")\nCustomer --> Checkout"
 );
 mermaid_matrix_case!(
     native_mermaid_matrix_venn,
@@ -5829,8 +5858,8 @@ fn native_mdx_embedded_in_heading_exposes_property_edits_without_replacing_its_s
 fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     cx: &mut gpui_kit::TestAppContext,
 ) {
-    use crate::ui::app::test_window::harness_with_tabs;
     use super::super::test_host::FileHost;
+    use crate::ui::app::test_window::harness_with_tabs;
     use gpui_kit::{Focusable as _, test::TestWindowExt as _};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cards.mdx");
@@ -5841,19 +5870,33 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     let host = FileHost::new(lyrel_core::host::HostId(726));
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
-    app.update_in(&mut context, |app, window, cx| app.editor_open_on_host(host.clone(), &path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
-        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-title").is_some() }) { break; }
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-card-title").is_some()
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -5863,25 +5906,55 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
         window.input("中文", cx);
     });
     let titled = original.replacen("Guide", "中文", 1);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.as_bytes()
+        )
+    });
     assert!(app.read_with(&context, |app, _| app.active_buffer().unwrap().path == path));
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
-        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-href").is_some() }) { break; }
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-card-href").is_some()
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
     }
-    context.update(|window, cx| { window.click("mdx-card-href", cx); window.input("./next&#38;one.md", cx); });
+    context.update(|window, cx| {
+        window.click("mdx-card-href", cx);
+        window.input("./next&#38;one.md", cx);
+    });
     let titled = titled.replacen("./unused.md", "./next&#38;one.md", 1);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.as_bytes()
+        )
+    });
     assert!(app.read_with(&context, |app, _| app.active_buffer().unwrap().path == path));
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
-        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-cols").is_some() }) { break; }
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-card-cols").is_some()
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
     }
-    context.update(|window, cx| { window.click("mdx-card-cols", cx); window.input("3", cx); });
+    context.update(|window, cx| {
+        window.click("mdx-card-cols", cx);
+        window.input("3", cx);
+    });
     let grouped = titled.replacen("cols=\"2\"", "cols=\"3\"", 1);
     let child = grouped.replace("\r\n", "\n").find("child ").unwrap() + 6;
     view.update_in(&mut context, |view, window, cx| {
@@ -5892,15 +5965,30 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     let expected = grouped.replacen("child **bold**", "child nested **bold**", 1);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), grouped.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            grouped.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Redo);
     context.dispatch_action(gpui_kit::component::input::Redo);
     context.dispatch_action(crate::core::actions::EditorSave);
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| !buffer.dirty && !buffer.saving)) { break; }
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|buffer| !buffer.dirty && !buffer.saving)
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -5908,9 +5996,16 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
-        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-follow").is_some() }) { break; }
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-card-follow").is_some()
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
     }
     // Selecting the href only edits; the separate native button follows it.
@@ -5919,24 +6014,50 @@ fn native_cards_edit_properties_children_follow_host_links_and_save_reopen(
     context.update(|window, cx| window.click("mdx-card-follow", cx));
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| buffer.path == target)) { break; }
-        assert!(std::time::Instant::now() < deadline, "relative card link did not open through the document Host");
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|buffer| buffer.path == target)
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "relative card link did not open through the document Host"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    app.read_with(&context, |app, _| assert_eq!(app.active_buffer().unwrap().host.id(), lyrel_core::host::HostId(726)));
+    app.read_with(&context, |app, _| {
+        assert_eq!(
+            app.active_buffer().unwrap().host.id(),
+            lyrel_core::host::HostId(726)
+        )
+    });
     app.update_in(&mut context, |app, window, cx| {
         app.editor_close_file(0, window, cx);
         app.editor_open_on_host(host.clone(), &path, window, cx);
     });
     loop {
         context.run_until_parked();
-        if app.read_with(&context, |app, _| app.active_buffer().is_some_and(|buffer| buffer.path == path)) { break; }
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|buffer| buffer.path == path)
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     app.read_with(&context, |app, cx| {
-        let view = app.active_editor_input().unwrap().markdown().unwrap().read(cx);
-        assert_eq!(view.document().read(cx).encode().unwrap(), expected.as_bytes());
+        let view = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
     });
 }
 
@@ -5948,58 +6069,121 @@ fn native_cards_add_missing_properties_expand_children_and_never_follow_dynamic_
     use gpui_kit::test::TestWindowExt as _;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("empty-cards.mdx");
-    let original = "<CardGroup>\n\n<Card href={chooseDestination()} {...props} />\n\n</CardGroup>\n\nkeep  ";
+    let original =
+        "<CardGroup>\n\n<Card href={chooseDestination()} {...props} />\n\n</CardGroup>\n\nkeep  ";
     std::fs::write(&path, original).unwrap();
     let (app, mut context, _streams) = harness_with_tabs(cx, 1);
     context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
-    app.update_in(&mut context, |app, window, cx| app.open_file_in_editor(&path, window, cx));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let view = loop {
         context.run_until_parked();
-        if let Some(view) = app.read_with(&context, |app, _| app.active_editor_input().and_then(|input| input.markdown().cloned())) { break view; }
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
-        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-add-title").is_some() }) { break; }
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-card-add-title").is_some()
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     context.update(|window, cx| {
-        assert!(window.try_find("mdx-card-follow").is_none(), "dynamic href is source, not an executable destination");
+        assert!(
+            window.try_find("mdx-card-follow").is_none(),
+            "dynamic href is source, not an executable destination"
+        );
         window.click("mdx-card-add-title", cx);
         window.input("Title", cx);
     });
     let titled = original.replacen("{...props}", "{...props} title=\"Title\"", 1);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), titled.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.as_bytes()
+        )
+    });
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), original.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
-        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-add-cols").is_some() }) { break; }
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-card-add-cols").is_some()
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
     }
-    context.update(|window, cx| { window.click("mdx-card-add-cols", cx); window.input("2", cx); });
+    context.update(|window, cx| {
+        window.click("mdx-card-add-cols", cx);
+        window.input("2", cx);
+    });
     let grouped = original.replacen("<CardGroup>", "<CardGroup cols=\"2\">", 1);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), grouped.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            grouped.as_bytes()
+        )
+    });
     loop {
-        context.executor().advance_clock(std::time::Duration::from_millis(100));
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
         context.run_until_parked();
-        if context.update(|window, cx| { window.render_frame(cx); window.try_find("mdx-card-children").is_some() }) { break; }
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("mdx-card-children").is_some()
+        }) {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
     }
-    context.update(|window, cx| { window.click("mdx-card-children", cx); window.input("nested **child**", cx); });
+    context.update(|window, cx| {
+        window.click("mdx-card-children", cx);
+        window.input("nested **child**", cx);
+    });
     let expanded = grouped.replacen(" />", " >\nnested **child**\n</Card>", 1);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), expanded.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expanded.as_bytes()
+        )
+    });
     context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
     context.dispatch_action(gpui_kit::component::input::Undo);
     context.dispatch_action(gpui_kit::component::input::Undo);
-    view.read_with(&context, |view, cx| assert_eq!(view.document().read(cx).encode().unwrap(), grouped.as_bytes()));
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            grouped.as_bytes()
+        )
+    });
 }
 
 #[gpui_kit::test]
@@ -6057,7 +6241,10 @@ fn native_long_document_scroll_return_reflow_and_pending_parse_keep_selection_an
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "current source position must reenter the viewport"
+                "current source position {at} must reenter the viewport; selection={:?}, offset={:?}, caret={:?}",
+                view.read_with(context, |view, _| view.selection()),
+                view.read_with(context, |view, _| view.scroll_offset()),
+                view.read_with(context, |view, cx| view.range_to_bounds(&(at..at), cx))
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -6156,4 +6343,1199 @@ fn wide_single_line_transactions_keep_chunk_crossing_graphemes_atomic() {
     );
     document.command(&mut state, Command::Undo);
     assert_eq!(document.encode().unwrap(), source.as_bytes());
+}
+
+#[gpui_kit::test]
+fn native_steps_edit_properties_nested_content_source_history_and_host_reopen(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use super::super::test_host::FileHost;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{
+        Focusable as _, MouseButton,
+        test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("procedure.mdx");
+    let original = "before  \r\n\n<Steps compact>\r\n\n<Step title='Install' icon='terminal'>\n\nfirst **nested** text\r\n\n</Step>\n\n<Step title=\"Run\" value={two}>\r\n\n## Finish\n\nsecond `code`\r\n\n</Step>\n\n</Steps>\r\n\n[ref]: /keep  ";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(728));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    cx.simulate_window_resize(
+        context.window_handle(),
+        gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1400.)),
+    );
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find_all_by_label("Edit step title").len() == 2
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    context.update(|window, cx| {
+        assert!(window.find_by_label("Step 1").visible());
+        assert!(window.find_by_label("Step 2").visible());
+        let target = window.find_all_by_label("Edit step title")[1]
+            .bounds()
+            .center();
+        window.pointer_down(target, MouseButton::Left, cx);
+        window.pointer_up(target, MouseButton::Left, cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        window.input("R", cx);
+    });
+    let titled = original.replacen("title=\"Run\"", "title=\"R\"", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.as_bytes()
+        )
+    });
+    // A second property uses the common property control, not another editor.
+    context.update(|window, cx| {
+        window.click("mdx-property-icon", cx);
+        window.input("i", cx);
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.replacen("icon='terminal'", "icon='i'", 1).as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.as_bytes()
+        )
+    });
+    let normalized = titled.replace("\r\n", "\n");
+    let nested = normalized.find("nested").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(nested..nested + 6, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("N", cx));
+    let nested_edit = titled.replacen("**nested**", "**N**", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            nested_edit.as_bytes()
+        )
+    });
+    // Contextual source activation selects only the second Step in the same
+    // input and changes presentation without creating a document edit.
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.find_all_by_label("Edit step source").len() == 2
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    let revision = view.read_with(&context, |view, cx| view.document().read(cx).revision());
+    context.update(|window, cx| {
+        let target = window.find_all_by_label("Edit step source")[1]
+            .bounds()
+            .center();
+        window.pointer_down(target, MouseButton::Left, cx);
+        window.pointer_up(target, MouseButton::Left, cx);
+        let view = view.read(cx);
+        assert!(!view.is_live());
+        assert_eq!(view.document().read(cx).revision(), revision);
+        assert_eq!(
+            view.document()
+                .read(cx)
+                .source()
+                .slice(view.selection().range())
+                .to_string(),
+            "<Step title=\"R\" value={two}>\n\n## Finish\n\nsecond `code`\n\n</Step>"
+        );
+    });
+    let dynamic = nested_edit.replace("\r\n", "\n").find("two").unwrap();
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(dynamic..dynamic + 3, cx)
+    });
+    context.update(|window, cx| window.input("3", cx));
+    let expected = nested_edit.replacen("{two}", "{3}", 1);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            nested_edit.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            titled.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    for _ in 0..3 {
+        context.dispatch_action(gpui_kit::component::input::Redo);
+    }
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|buffer| !buffer.dirty && !buffer.saving)
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        assert_eq!(
+            app.active_buffer().unwrap().host.id(),
+            lyrel_core::host::HostId(728)
+        );
+        let view = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn native_steps_keyboard_source_activation_finishes_preedit_without_numbering_edits(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{
+        ElementInputHandler, Focusable as _,
+        test::{TestInput, TestQueryExt as _, TestWindowExt as _},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("keyboard-steps.mdx");
+    let original = "<Steps>\n\n<Step title='One'>\n\n**body**\n\n</Step>\n\n</Steps>\n\nkeep  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    cx.simulate_window_resize(
+        context.window_handle(),
+        gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1000.)),
+    );
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find_by_label("Edit step title").is_some()
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).revision(), 0);
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(1..6, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        // Tab reaches the real Button, Enter selects the title in the single
+        // document input. No test-only callback or duplicate field state.
+        view.read(cx).focus_handle(cx).focus(window, cx);
+        for _ in 0..24 {
+            window.press("tab", cx);
+            if window.find_by_label("Edit step title").focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(
+            window.find_by_label("Edit step title").focused(),
+            Some(true)
+        );
+        window.press("enter", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let title = original.find("One").unwrap();
+        assert_eq!(view.read(cx).selection().range(), title..title + 3);
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "中文", Some(2..2), cx);
+        assert!(input.marked_text_range(cx).is_some());
+    });
+    context.update(|window, cx| {
+        for _ in 0..24 {
+            window.press("tab", cx);
+            if window.find_by_label("Edit step source").focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(
+            window.find_by_label("Edit step source").focused(),
+            Some(true)
+        );
+        window.press("enter", cx);
+        let view = view.read(cx);
+        assert!(!view.is_live());
+        assert!(!view.is_composing());
+        assert!(view.focus_handle(cx).is_focused(window));
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("'One'", "'中文'", 1).as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.replacen("'One'", "'中文'", 1).as_bytes()
+        )
+    });
+}
+
+fn exercise_native_callout_consumer(cx: &mut gpui_kit::TestAppContext, name: &str) {
+    use super::super::test_host::FileHost;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestInput, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("callout.mdx");
+    let original = format!(
+        "before  \r\n\n<{name} title='keep' action={{() => {{ throw Error('never execute') }}}}>\r\n\ntext **bold** and *nested*\n\n</{name}>\r\n\n[ref]: /untouched  "
+    );
+    std::fs::write(&path, &original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(725));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window.try_find("callout-edit-source").is_some()
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        assert!(
+            window.try_find("mdx-name").is_none(),
+            "callouts are not unknown-component boxes"
+        );
+        window.click("mdx-property-title", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "zhong", Some(5..5), cx);
+        input.commit_text("中文", cx);
+    });
+    let property = original.replacen("keep", "中文", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            property.as_bytes()
+        )
+    });
+    settle_live_geometry(&view, &mut context);
+    context.update(|window, cx| {
+        for _ in 0..96 {
+            if window.find("callout-edit-source").focused() == Some(true) {
+                break;
+            }
+            window.press("tab", cx);
+        }
+        assert_eq!(
+            window.find("callout-edit-source").focused(),
+            Some(true),
+            "callout source must be keyboard reachable"
+        );
+        assert_eq!(
+            window.find("callout-edit-source").label(),
+            Some(crate::ui::i18n::t(
+                crate::ui::i18n::L10nKey::EditorCalloutEditSource
+            ))
+        );
+        window.press("enter", cx);
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            property.as_bytes()
+        )
+    });
+    let normalized = property.replace("\r\n", "\n");
+    let bold = normalized.find("bold").unwrap();
+    view.update_in(&mut context, |view, _, cx| {
+        view.select_range(bold..bold + 4, cx)
+    });
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "nei", Some(3..3), cx);
+    });
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("callout-return-content", cx);
+    });
+    let source_edit = property.replacen("bold", "nei", 1);
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_composing());
+        assert_eq!(view.selection(), Selection::caret(bold + 3));
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source_edit.as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            property.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    settle_live_geometry(&view, &mut context);
+    let nested = source_edit.replace("\r\n", "\n").find("nested").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(nested..nested + 6, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.commit_text("edited", cx);
+    });
+    let expected = source_edit.replacen("nested", "edited", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            source_edit.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    for _ in 0..3 {
+        context.dispatch_action(gpui_kit::component::input::Undo);
+    }
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    for _ in 0..3 {
+        context.dispatch_action(gpui_kit::component::input::Redo);
+    }
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        )
+    });
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|buffer| !buffer.dirty && !buffer.saving)
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), expected.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, cx| {
+        assert_eq!(
+            app.active_buffer().unwrap().host.id(),
+            lyrel_core::host::HostId(725)
+        );
+        let reopened = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
+        assert_eq!(
+            reopened.document().read(cx).encode().unwrap(),
+            expected.as_bytes()
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn native_callout_note_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Note");
+}
+#[gpui_kit::test]
+fn native_callout_tip_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Tip");
+}
+#[gpui_kit::test]
+fn native_callout_info_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Info");
+}
+#[gpui_kit::test]
+fn native_callout_warning_edits_source_history_and_host_reopen(cx: &mut gpui_kit::TestAppContext) {
+    exercise_native_callout_consumer(cx, "Warning");
+}
+
+#[gpui_kit::test]
+fn native_accordions_preserve_hidden_children_focus_history_and_host_save(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use super::super::test_host::FileHost;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestInput, TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{ElementInputHandler, Focusable as _, MouseButton};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("accordions.mdx");
+    let marker = directory.path().join("executed");
+    std::fs::write(directory.path().join("trap.js"),
+        "import {writeFileSync} from 'node:fs'; writeFileSync(new URL('./executed', import.meta.url), 'bad'); export default () => {throw Error('executed')};"
+    ).unwrap();
+    let original = "import Trap from './trap.js'\r\n\n<AccordionGroup>\r\n\n<Accordion title='Outer' icon='book' defaultOpen action={() => Trap()}>\n\nouter **bold**\r\n\n<Accordion title='Inner'>\n\nsecret child\r\n\n</Accordion>\n\n</Accordion>\r\n\n</AccordionGroup>\n\n[ref]: /keep  ";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(729));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find_by_label("Collapse accordion: Outer")
+                .is_some()
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    // Drive the real named disclosure, not ViewState or parser metadata.
+    context.update(|window, cx| {
+        let at = window
+            .find_by_label("Collapse accordion: Outer")
+            .bounds()
+            .center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+        assert!(
+            window
+                .try_find_by_label("Collapse accordion: Inner")
+                .is_none()
+        );
+        assert!(
+            window
+                .try_find_by_label("Expand accordion: Inner")
+                .is_none()
+        );
+        let hidden = original.replace("\r\n", "\n").find("secret child").unwrap();
+        assert!(
+            view.read(cx)
+                .range_to_bounds(&(hidden..hidden), cx)
+                .is_none()
+        );
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        let at = window
+            .find_by_label("Expand accordion: Outer")
+            .bounds()
+            .center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+    });
+    context.update(|window, cx| {
+        // Traverse the real focus order, then activate the native Button by key.
+        for _ in 0..128 {
+            window.focus_next(cx);
+            window.render_frame(cx);
+            if window.find_by_label("Collapse accordion: Outer").focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(
+            window.find_by_label("Collapse accordion: Outer").focused(),
+            Some(true)
+        );
+        assert_eq!(
+            window.find_by_label("Collapse accordion: Outer").expanded(),
+            Some(true)
+        );
+        window.press("enter", cx);
+        assert_eq!(
+            window.find_by_label("Expand accordion: Outer").expanded(),
+            Some(false)
+        );
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        for _ in 0..128 {
+            window.focus_next(cx);
+            window.render_frame(cx);
+            if window.find_by_label("Expand accordion: Outer").focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(
+            window.find_by_label("Expand accordion: Outer").focused(),
+            Some(true)
+        );
+        window.press("space", cx);
+        assert!(
+            window
+                .try_find_by_label("Collapse accordion: Inner")
+                .is_some()
+        );
+    });
+    app.read_with(&context, |app, _| {
+        assert!(!app.active_buffer().unwrap().dirty)
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    // Property editing and nested prose use the one document/input/history.
+    context.update(|window, cx| {
+        let at = window.find_all("mdx-property-title")[0].bounds().center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+        window.input("Changed", cx);
+    });
+    let property = original.replacen("title='Outer'", "title='Changed'", 1);
+    let normalized = property.replace("\r\n", "\n");
+    let child = normalized.find("secret child").unwrap() + "secret ".len();
+    view.update_in(&mut context, |view, window, cx| {
+        view.select_range(child..child, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("edited ", cx));
+    let edited = property.replacen("secret child", "secret edited child", 1);
+    // A native handler preedit is finalized before hiding its active descendant.
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "preedit", Some(7..7), cx);
+        assert!(input.marked_text_range(cx).is_some());
+    });
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find_by_label("Collapse accordion: Changed")
+                .is_some()
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        let at = window
+            .find_by_label("Collapse accordion: Changed")
+            .bounds()
+            .center();
+        window.pointer_down(at, MouseButton::Left, cx);
+        window.pointer_up(at, MouseButton::Left, cx);
+        assert!(!view.read(cx).is_composing());
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        assert!(
+            window
+                .try_find_by_label("Collapse accordion: Inner")
+                .is_none()
+        );
+        // Input after collapse goes to the visible header, never the old child.
+        let selection = view.read(cx).selection();
+        let source = view.read(cx).document().read(cx).source().to_string();
+        assert_eq!(
+            selection.range(),
+            source.find("Accordion title='Changed'").unwrap()
+                ..source.find("Accordion title='Changed'").unwrap()
+        );
+    });
+    let composed = edited.replacen("secret edited child", "secret edited preeditchild", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            composed.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .try_find_by_label("Collapse accordion: Inner")
+                .is_some(),
+            "undo into hidden children must reveal every collapsed ancestor"
+        );
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            property.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|buffer| !buffer.dirty && !buffer.saving)
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), edited.as_bytes());
+    assert!(!marker.exists());
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, cx| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+                .is_some_and(|view| {
+                    view.read(cx).document().read(cx).encode().unwrap() == edited.as_bytes()
+                })
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(&context, |app, _| {
+        assert_eq!(
+            app.active_buffer().unwrap().host.id(),
+            lyrel_core::host::HostId(729)
+        )
+    });
+    assert!(!marker.exists());
+}
+
+#[gpui_kit::test]
+fn native_tabs_switch_preserves_hidden_edits_history_composition_and_host_bytes(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use super::super::test_host::FileHost;
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::{
+        ElementInputHandler, Focusable as _,
+        test::{TestEventExt as _, TestInput, TestWindowExt as _},
+    };
+    let has = |window: &gpui_kit::Window, kind: &'static str, label: &str| {
+        window
+            .find_all(kind)
+            .iter()
+            .any(|target| target.label() == Some(label))
+    };
+    let choose = |window: &mut gpui_kit::Window, cx: &mut gpui_kit::App, label: &str| {
+        let target = window
+            .find_all("mdx-tabs-choice")
+            .into_iter()
+            .find(|target| target.label() == Some(label))
+            .unwrap()
+            .bounds()
+            .center();
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("tabs.mdx");
+    let original = "before  \r\n\n<Tabs syncKey='keep'>\n\n<Tab title='One'>\n\nfirst **bold**\r\n\n</Tab>\n\n<Tab title='Two'>\n\nsecond 🎉\r\n\n</Tab>\n\n</Tabs>\r\n\n[ref]: /keep  ";
+    std::fs::write(&path, original).unwrap();
+    let host = FileHost::new(lyrel_core::host::HostId(727));
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_open_on_host(host.clone(), &path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            has(window, "mdx-tabs-choice", "Two")
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    let revision = view.read_with(&context, |view, cx| view.document().read(cx).revision());
+    context.update(|window, cx| {
+        assert!(has(window, "mdx-tabs-panel", "One"));
+        assert!(!has(window, "mdx-tabs-panel", "Two"));
+        choose(window, cx, "Two");
+        window.render_frame(cx);
+        assert!(!has(window, "mdx-tabs-panel", "One"));
+        assert!(has(window, "mdx-tabs-panel", "Two"));
+        assert!(view.read(cx).focus_handle(cx).is_focused(window));
+        assert_eq!(view.read(cx).document().read(cx).revision(), revision);
+        assert_eq!(
+            view.read(cx).document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        );
+    });
+    app.read_with(&context, |app, _| {
+        assert!(!app.active_buffer().unwrap().dirty)
+    });
+    context.update(|window, cx| {
+        // The continuous editor keeps Tab for indentation/table navigation.
+        // Its explicit tab-switch keys use the same native control operation.
+        window.press("alt-pageup", cx);
+        assert!(has(window, "mdx-tabs-panel", "One"));
+        assert!(!has(window, "mdx-tabs-panel", "Two"));
+        window.press("alt-pagedown", cx);
+        assert!(has(window, "mdx-tabs-panel", "Two"));
+        assert!(!has(window, "mdx-tabs-panel", "One"));
+        assert_eq!(view.read(cx).document().read(cx).revision(), revision);
+    });
+    // A switch is not an undo item, including the clean initial state.
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(view.document().read(cx).revision(), revision)
+    });
+    let at = original.replace("\r\n", "\n").find("second").unwrap();
+    view.update_in(&mut context, |view, window, cx| {
+        view.command(Command::Select(Selection::caret(at)), window, cx);
+        view.focus_handle(cx).focus(window, cx);
+    });
+    context.update(|window, cx| window.input("edited ", cx));
+    let edited = original.replacen("second", "edited second", 1);
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        choose(window, cx, "One");
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            has(window, "mdx-tabs-panel", "Two"),
+            "undo restores the edited child as a visible input target"
+        );
+        assert!(!has(window, "mdx-tabs-panel", "One"));
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            has(window, "mdx-tabs-choice", "One")
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "cancel", Some(6..6), cx);
+        input.compose_text(None, "", None, cx);
+        assert!(!view.read(cx).is_composing());
+    });
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
+    context.update(|window, cx| {
+        let bounds = window.find("markdown-source").bounds();
+        let mut input = TestInput::new(ElementInputHandler::new(bounds, view.clone()), window);
+        input.compose_text(None, "中文", Some(2..2), cx);
+    });
+    context.update(|window, cx| {
+        window.render_frame(cx);
+        choose(window, cx, "One");
+    });
+    let committed = edited.replacen("edited second", "edited 中文second", 1);
+    view.read_with(&context, |view, cx| {
+        assert!(!view.is_composing());
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            committed.as_bytes()
+        );
+    });
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
+    context.dispatch_action(gpui_kit::component::input::Redo);
+    context.dispatch_action(crate::core::actions::EditorSave);
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| {
+            app.active_buffer()
+                .is_some_and(|buffer| !buffer.dirty && !buffer.saving)
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), committed.as_bytes());
+    assert_eq!(host.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    app.update_in(&mut context, |app, window, cx| {
+        app.editor_close_file(0, window, cx);
+        app.editor_open_on_host(host.clone(), &path, window, cx);
+    });
+    loop {
+        context.run_until_parked();
+        if app.read_with(&context, |app, _| app.active_buffer().is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    app.read_with(&context, |app, cx| {
+        let reopened = app
+            .active_editor_input()
+            .unwrap()
+            .markdown()
+            .unwrap()
+            .read(cx);
+        assert_eq!(
+            reopened.document().read(cx).encode().unwrap(),
+            committed.as_bytes()
+        );
+        assert_eq!(
+            app.active_buffer().unwrap().host.id(),
+            lyrel_core::host::HostId(727)
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn native_tabs_nested_ancestor_visibility_and_property_undo_restore_the_right_child(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use crate::ui::app::test_window::harness_with_tabs;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("nested-tabs.mdx");
+    let original = "<Tabs>\n\n<Tab title='Outer'>\n\n<Tabs>\n\n<Tab title='Inner'>\n\nvisible **inner**\n\n</Tab>\n\n<Tab title='Hidden'>\n\nkept hidden\n\n</Tab>\n\n</Tabs>\n\n</Tab>\n\n<Tab title='Other'>\n\nother child\n\n</Tab>\n\n</Tabs>\n\nkeep  ";
+    std::fs::write(&path, original).unwrap();
+    let (app, mut context, _streams) = harness_with_tabs(cx, 1);
+    context.update(|_, cx| cx.set_global(super::super::MarkdownWorkbench));
+    app.update_in(&mut context, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let view = loop {
+        context.run_until_parked();
+        if let Some(view) = app.read_with(&context, |app, _| {
+            app.active_editor_input()
+                .and_then(|input| input.markdown().cloned())
+        }) {
+            break view;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let has = |window: &gpui_kit::Window, kind: &'static str, label: &str| {
+        window
+            .find_all(kind)
+            .iter()
+            .any(|target| target.label() == Some(label))
+    };
+    let choose = |window: &mut gpui_kit::Window, cx: &mut gpui_kit::App, label: &str| {
+        let target = window
+            .find_all("mdx-tabs-choice")
+            .into_iter()
+            .find(|target| target.label() == Some(label))
+            .unwrap()
+            .bounds()
+            .center();
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+        window.render_frame(cx);
+    };
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            has(window, "mdx-tabs-choice", "Hidden")
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        assert!(has(window, "mdx-tabs-panel", "Inner"));
+        assert!(!has(window, "mdx-tabs-panel", "Hidden"));
+        choose(window, cx, "Hidden");
+        assert!(has(window, "mdx-tabs-panel", "Hidden"));
+        assert!(!has(window, "mdx-tabs-panel", "Inner"));
+        choose(window, cx, "Other");
+        assert!(has(window, "mdx-tabs-panel", "Other"));
+        assert!(!has(window, "mdx-tabs-panel", "Hidden"));
+        assert!(
+            !has(window, "mdx-tabs-choice", "Hidden"),
+            "inactive ancestor hides its whole nested strip"
+        );
+        choose(window, cx, "Outer");
+        assert!(
+            has(window, "mdx-tabs-panel", "Hidden"),
+            "nested active child survives ancestor switching"
+        );
+        assert!(!has(window, "mdx-tabs-panel", "Inner"));
+        // Only the outer and selected nested Tab expose property controls.
+        let target = window
+            .find_all("mdx-property-title")
+            .last()
+            .unwrap()
+            .bounds()
+            .center();
+        window.pointer_down(target, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Left, cx);
+        window.input("Renamed", cx);
+    });
+    let edited = original.replacen("title='Hidden'", "title='Renamed'", 1);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            edited.as_bytes()
+        )
+    });
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            has(window, "mdx-tabs-choice", "Renamed")
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, cx| {
+        assert!(
+            has(window, "mdx-tabs-panel", "Renamed"),
+            "editing a title does not replace active stable identity"
+        );
+        choose(window, cx, "Other");
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    context.dispatch_action(gpui_kit::component::input::Undo);
+    view.read_with(&context, |view, cx| {
+        assert_eq!(
+            view.document().read(cx).encode().unwrap(),
+            original.as_bytes()
+        )
+    });
+    context.dispatch_action(crate::core::actions::ToggleDocumentPreview);
+    loop {
+        context
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        context.run_until_parked();
+        if context.update(|window, cx| {
+            window.render_frame(cx);
+            has(window, "mdx-tabs-panel", "Hidden")
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    context.update(|window, _| {
+        assert!(!has(window, "mdx-tabs-panel", "Other"));
+        assert!(!has(window, "mdx-tabs-panel", "Inner"));
+    });
 }

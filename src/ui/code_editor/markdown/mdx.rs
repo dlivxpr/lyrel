@@ -9,8 +9,12 @@ use std::{
     path::Path,
 };
 
+pub(super) mod callouts;
 pub(super) mod view;
 pub(super) mod cards;
+mod steps;
+pub(super) mod accordions;
+pub(super) mod tabs;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Grammar {
     #[default]
@@ -325,6 +329,7 @@ impl Index {
 pub(super) struct ViewState {
     pub(super) collapsed: HashSet<ComponentId>,
     pub(super) active_child: HashMap<ComponentId, ComponentId>,
+    pub(super) source_components: HashSet<ComponentId>,
 }
 
 fn jsx(node: &Node) -> Option<(&Option<String>, &[AttributeContent])> {
