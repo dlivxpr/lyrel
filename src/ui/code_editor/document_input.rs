@@ -224,7 +224,12 @@ impl MarkdownPresentations {
         } else {
             let document = input.read(cx).document().clone();
             let wrap = input.read(cx).is_soft_wrap();
-            cx.new(|cx| SourcePresentation::new(document, wrap, cx))
+            let indent = input.read(cx).indent();
+            cx.new(|cx| {
+                let mut view = SourcePresentation::new(document, wrap, cx);
+                view.set_indent(indent, cx);
+                view
+            })
         };
         views.push((tab, group, view.clone(), None));
         view

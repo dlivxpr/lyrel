@@ -126,6 +126,7 @@ pub(crate) struct OpenFile {
     /// Ordinary code retains its codec metadata here. Markdown owns it in its document.
     format: Option<TextFormat>,
     saved_format: TextFormat,
+    saved_representation: Option<u64>,
     config: EditorConfig,
     indent: Indent,
     disk_mtime: Option<MTime>,
@@ -157,6 +158,10 @@ impl OpenFile {
             .markdown()
             .map(|view| view.read(cx).document().read(cx).format())
             .unwrap_or_else(|| self.format.expect("code document representation"))
+    }
+
+    fn representation_fingerprint(&self, cx: &gpui_kit::App) -> Option<u64> {
+        self.input.markdown().map(|view| view.read(cx).document().read(cx).representation_fingerprint())
     }
 
     fn set_format(&mut self, format: TextFormat, cx: &mut gpui_kit::App) {
